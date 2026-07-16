@@ -9,15 +9,16 @@ accounts: one orchestration Bot and three AI persona Bots. The persona Bots
 produce initial opinions, revised proposals, and votes; the orchestration Bot
 manages the workflow and publishes the mechanically calculated result.
 
-The requirements, basic design, and detailed design are complete; application
-code, dependencies, containers, GitHub automation, AWS resources, and Discord
-Applications are not yet implemented. Approved decisions are recorded in the
-project index and decision record; do not silently promote historical options
-to requirements.
+The requirements, basic design, and detailed design are complete. The
+Python/uv project foundation and initial domain state machine are implemented;
+application use cases, adapters, containers, GitHub automation, AWS resources,
+and Discord Applications are not yet implemented. Approved decisions are
+recorded in the project index and decision record; do not silently promote
+historical options to requirements.
 
 ## Authoritative Documents
 
-The 13 public-safe design notes in the operator's Obsidian Vault are the source
+The 14 public-safe project notes in the operator's Obsidian Vault are the source
 of truth. Set `SHITTIM_DOCS_SOURCE` to that directory; never commit its local
 absolute path. Repository `docs/` is the public, read-only mirror.
 
@@ -36,6 +37,14 @@ operator note and versioned SSM parameters.
 After meaningful architecture changes, implementation milestones, validation
 results, or operational findings, update the project hub and relevant design
 note so the external build memo stays current. Never put secrets in Obsidian.
+
+After every implementation slice, append a record to
+`20_実装・試験・検証記録.md`. Include the slice ID and scope, branch/base,
+tool versions, exact validation commands, summarized results, coverage,
+security/package evidence, exclusions, unresolved findings, and PR/CI evidence
+when available. Record failed and superseded runs instead of silently replacing
+them. Never include credentials, private runtime configuration, Discord user
+content, or raw model output.
 
 ## Approved MVP Decisions
 
@@ -99,7 +108,7 @@ Unless an approved decision explicitly changes them:
 - Do not claim that three personas using one underlying model are independent
   verification unless evaluation evidence supports that claim.
 
-## Planned Technology
+## Technology Baseline
 
 The finalized design assumes the following baseline as of 2026-07-16:
 
@@ -123,6 +132,29 @@ dependencies with compatible major ranges and lock every resolved version in
 `uv.lock`. CI and container builds must use `uv sync --frozen` or
 `uv run --frozen`. Do not invent commands that depend on tooling that has not
 yet been implemented.
+
+## Implemented Python Commands
+
+Run these commands from the repository root. Keep uv at the version required by
+`pyproject.toml` and use the locked environment for every validation command.
+
+```sh
+uv lock --check
+uv sync --frozen --all-groups
+uv run --frozen ruff format --check .
+uv run --frozen ruff check .
+uv run --frozen mypy
+uv run --frozen pytest
+uv export --quiet --frozen --all-groups --no-emit-project --no-annotate \
+  --output-file /tmp/shittim-chest-audit-requirements.txt
+uv run --frozen pip-audit --strict --require-hashes \
+  --requirement /tmp/shittim-chest-audit-requirements.txt
+uv build --no-sources
+```
+
+The current domain slice must retain 90% or greater line/branch coverage and
+must exercise every phase pair, checkpoint/recovery boundary, retry attempt
+boundary, UUIDv7 boundary, UTC timestamp rule, and immutable-state invariant.
 
 ## Expected Project Structure
 

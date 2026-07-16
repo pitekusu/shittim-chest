@@ -13,6 +13,8 @@ updated: 2026-07-16
 
 The Shittim ChestのPython application内部構造、公開interface、状態遷移、非同期制御、設定、終了処理を定義する。Discord、OpenAI、DynamoDB固有処理はadapterへ隔離し、本書と矛盾する実装を行わない。
 
+2026-07-16の最初の実装sliceではPython/uv project基盤とdomainの識別子・attempt単位の状態機械を実装した。Application interface、外部adapter、async orchestration、shutdown連携は後続sliceで実装する。
+
 ## 2. Package構成
 
 ```text
@@ -41,8 +43,13 @@ tools/
 
 | 型 | 仕様 |
 |---|---|
-| `DebateId` | `uuid.UUID`。`uuid.uuid7()`で生成する |
+| `DebateId` | UUIDv7だけを受理するfrozen/slots value object。`uuid.uuid7()`で生成する |
+| `AttemptId` | 1回のimmutable実行attemptを識別するUUIDv7 value object。同じdebate内でもretryごとに新規生成する |
 | `DebatePhase` | `StrEnum`。状態遷移表以外から変更しない |
+| `DebateState` | debate/attempt ID、phase、`recovery_state`、`retry_of`、`failed_from_phase`、UTC更新時刻、正の`schema_version`を持つimmutable state |
+| `InvalidPhaseTransition` | 未定義phase edgeを副作用前に拒否する安定code付きdomain error |
+| `InvalidRecoveryTransition` | checkpoint/resume不変条件違反を拒否する安定code付きdomain error |
+| `InvalidRetryTransition` | FAILED以外からのretryとsource attempt ID再利用を拒否する安定code付きdomain error |
 | `DebateErrorCode` | user向け表示と再試行可否を分離した安定code |
 | `BotIdentity` | private runtime config由来のapplication ID、slot、表示名、role |
 | `PersonaSpec` | slot、config version、schema version、prompt hash。prompt本文は保持しない |
@@ -74,7 +81,13 @@ ACCEPTED
   -> COMPLETED
 ```
 
-`SELECTING_WINNER`は匿名投票の収集、検証、tie-breakを含む。任意の進行状態から`CANCELLED`、回復不能errorから`FAILED`へ遷移できる。Spot停止は状態ではなく`recovery_state=checkpointed`として保存し、後続taskが同じphaseを再開する。遷移はexpected phaseとfencing tokenを条件にしたrepository operationで行い、不一致時は副作用を発生させない。本節を`DebatePhase`の唯一の定義とする。
+`SELECTING_WINNER`は匿名投票の収集、検証、tie-breakを含む。1 attempt内では7つの進行状態それぞれから`CANCELLED`または`FAILED`へ遷移できるため、通常7 edgeとcancel/fail 14 edgeの合計21 edgeだけを許可する。terminal状態からの遷移、自己遷移、phaseの飛び越し、逆行を禁止する。
+
+Spot停止は状態ではなく`recovery_state=checkpointed`として保存し、後続taskが同じphaseを再開する。checkpointは非terminalかつ`recovery_state=none`の場合だけ許可し、checkpoint中のphase遷移、二重checkpoint、checkpointなしのresume、terminal checkpointを拒否する。state更新時刻はtimezone-aware UTCかつ直前時刻以上とし、同一時刻を許容する。`debate_id`と`schema_version`は全遷移で不変とする。
+
+`FAILED`への遷移時は直前の進行phaseを`failed_from_phase`へ保存する。retryはFAILEDから元phaseへ戻すedgeではなく、同じ`DebateId`の下に新しい`AttemptId`を持つstateを作るfactory operationである。新attemptの`retry_of`は直前attempt ID、初期phaseは直前の`failed_from_phase`とし、元FAILED stateを変更しない。domainはsource attempt ID再利用とFAILED以外からのretryを拒否し、debate内の全attempt IDの一意性はrepositoryの条件付きPutで保証する。
+
+遷移はexpected phaseとfencing tokenを条件にしたrepository operationで行い、不一致時は副作用を発生させない。本節を`DebatePhase`とretry aggregate境界の唯一の定義とする。
 
 ## 6. 非同期制御
 
@@ -88,7 +101,8 @@ ACCEPTED
 ## 7. Cancel・retry・shutdown
 
 - cancel可能者は開始userまたは`Manage Messages`保持者。新規OpenAI callと未送信outboxを止め、完了済み成果物を保持して`CANCELLED`へ遷移する。
-- retry可能状態は`FAILED`だけ。保存済みartifactを再利用し、未完了operationだけを再実行する。
+- retry可能状態は`FAILED`だけ。元attemptをimmutableに保ち、同じdebate/threadへ`retry_of=<直前attempt-id>`の新attemptを作る。保存済みartifactを参照し、`failed_from_phase`の未完了operationだけを再実行する。日次開始quotaは増やさず、global leaseは新attempt用に取得する。
+- repository readerは旧recordを現行domain schemaへup-convertし、必要な条件付きlazy migrationを完了してからstate-changing use caseへ渡す。`new_retry_attempt()`が継承する`schema_version`はこの現行versionであり、旧versionのまま新Attempt METAを書かない。
 - SIGTERM受信時はREADY gateを閉じ、TaskGroupをcancelし、checkpointとoutboxをflushして120秒以内に終了する。
 - SIGKILLでflushできなくても、lease期限、fencing token、outbox reconciliationで回復できることを前提とする。
 
@@ -110,7 +124,8 @@ bootstrapへ渡す非秘密設定はenvironment、model ID、table名、log leve
 
 | 確認日 | 対象version/service | 公式資料 | 設計への反映 |
 |---|---|---|---|
-| 2026-07-16 | Python 3.14.6 | https://www.python.org/downloads/ | runtime基準version |
+| 2026-07-16 | Python 3.14.6 | https://www.python.org/downloads/release/python-3146/ | runtime基準version |
+| 2026-07-16 | Python 3.14 UUID/enum/dataclass/datetime | https://docs.python.org/3.14/library/uuid.html、https://docs.python.org/3.14/library/enum.html、https://docs.python.org/3.14/library/dataclasses.html、https://docs.python.org/3.14/library/datetime.html | UUIDv7、StrEnum、frozen/slots、aware UTCの実装境界 |
 | 2026-07-16 | asyncio | https://docs.python.org/3/library/asyncio-task.html | TaskGroup、timeout、cancellation |
-| 2026-07-16 | uv | https://docs.astral.sh/uv/concepts/projects/sync/ | lockと`--frozen` |
+| 2026-07-16 | uv/uv_build 0.11.29 | https://docs.astral.sh/uv/concepts/projects/sync/、https://docs.astral.sh/uv/concepts/build-backend/ | lock、`--frozen`、pure Python package build |
 | 2026-07-16 | boto3 1.43.49 | https://boto3.amazonaws.com/v1/documentation/api/latest/index.html | client再利用、typed exception、thread隔離 |
