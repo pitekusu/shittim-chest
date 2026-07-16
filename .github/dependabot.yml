@@ -1,6 +1,7 @@
 version: 2
 
 updates:
+  # Keep [tool.uv].required-version compatible with the updater's embedded uv.
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
