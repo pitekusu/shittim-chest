@@ -1,0 +1,36 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, production identifiers, private persona configuration, or user content.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Describe what happened using redacted data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide minimal steps and relevant versions.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Public information check
+      options:
+        - label: I removed secrets, private identifiers, persona configuration, and user content.
+          required: true
+

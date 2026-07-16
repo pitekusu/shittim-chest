@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/pitekusu/shittim-chest/security/advisories/new
+    about: Do not report security vulnerabilities in a public Issue.
+

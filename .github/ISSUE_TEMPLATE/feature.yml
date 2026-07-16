@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose an implementation or design improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or operational problem.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the desired behavior, not private deployment values.
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Tradeoffs and sources
+      description: Include security, cost, maintenance impact, and current official references when relevant.
+
