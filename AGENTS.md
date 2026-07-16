@@ -16,6 +16,45 @@ and Discord Applications are not yet implemented. Approved decisions are
 recorded in the project index and decision record; do not silently promote
 historical options to requirements.
 
+## Current Implementation Boundary
+
+STEP-01, the Python domain foundation, was squash-merged through PR `#1` as
+commit `7fa642e` on 2026-07-17. Treat this as a rules-and-state foundation, not
+as a runnable Discord Bot or a production-ready service.
+
+The implemented domain foundation is responsible for:
+
+- reproducible Python 3.14.6 and uv project metadata, dependency locking,
+  source/wheel packaging, and typed-package markers;
+- UUIDv7 `DebateId` values for one logical debate and UUIDv7 `AttemptId` values
+  for each immutable execution or retry attempt;
+- the only valid debate phase order, with exactly 21 allowed normal,
+  cancellation, and failure edges;
+- rejection of phase skipping, reverse/self transitions, terminal-state
+  transitions, invalid UTC timestamps, and invalid schema versions;
+- Spot interruption checkpoints represented separately as
+  `recovery_state=checkpointed`, with resume at the same phase;
+- immutable failure history: a retry creates a new attempt in the same debate,
+  links it with `retry_of`, and starts from the recorded `failed_from_phase`;
+- stable domain errors for invalid phase, recovery, and retry operations; and
+- deterministic unit/property tests that do not require Discord, OpenAI, AWS,
+  or network access.
+
+The domain foundation does not yet orchestrate a full debate, calculate votes,
+post Discord messages, call OpenAI, persist DynamoDB records, acquire leases,
+publish an outbox, handle real process signals, build a container, or provision
+AWS resources. Those capabilities must be added in later isolated slices and
+must depend on the domain rules rather than reimplementing them in adapters.
+
+The STEP-01 acceptance snapshot is 66 passing tests, 100% domain line/branch
+coverage, Ruff and mypy strict success, zero known locked-dependency
+vulnerabilities, a clean public-surface scan, and successful GitHub-managed
+CodeQL and GitGuardian checks. The next implementation slice is STEP-02:
+GitHub CI, trusted-main dependency submission, and managed Dependency
+Graph/SBOM checks. Update this section and
+`20_実装・試験・検証記録.md` after each later slice so the boundary does not
+become stale.
+
 ## Authoritative Documents
 
 The 14 public-safe project notes in the operator's Obsidian Vault are the source
