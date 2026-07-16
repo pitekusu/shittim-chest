@@ -55,6 +55,33 @@ Graph/SBOM checks. Update this section and
 `20_実装・試験・検証記録.md` after each later slice so the boundary does not
 become stale.
 
+## GitHub Tooling Policy
+
+For `pitekusu/shittim-chest`, use the connected GitHub App only for read-only
+repository, Pull Request, review, comment, and status inspection. Its current
+token can read this public repository but GitHub rejects Pull Request creation
+and merge with `403 Resource not accessible by integration`; there is no
+user-approvable write-permission update for the installed App.
+
+Use the authenticated GitHub CLI (`gh`) as the default path for every GitHub
+write operation in this repository, rather than first attempting the GitHub App
+and falling back after a predictable 403. This repository-specific rule
+overrides connector-first plugin guidance for write actions only.
+
+- Run `gh auth status` before a write workflow and stop if the active account is
+  not `pitekusu` or authentication is invalid. Never print or persist its token.
+- Use local `git` for branch creation, explicit staging, commit, and push. Use
+  `gh` for Pull Request creation/update, ready state, comments, labels, checks,
+  review metadata, and merge actions.
+- Keep `main` protected: publish through a Pull Request, use squash merge, and
+  verify required checks and unresolved review threads before merging.
+- Bind merge operations to the inspected head with
+  `gh pr merge --match-head-commit <full-sha>` and delete the remote feature
+  branch after a successful merge.
+- Continue to prefer GitHub-managed CodeQL, Secret scanning, Dependabot, and
+  other managed services; this CLI policy changes only the control path used by
+  Codex for GitHub mutations.
+
 ## Authoritative Documents
 
 The 14 public-safe project notes in the operator's Obsidian Vault are the source
