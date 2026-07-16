@@ -27,6 +27,7 @@ EXPECTED_FILES = (
     "17_運用保守・監視・障害対応設計.md",
     "18_試験・品質保証設計.md",
     "19_実装計画・トレーサビリティ.md",
+    "20_実装・試験・検証記録.md",
 )
 ALLOWED_DESTINATION_EXTRAS = {"LICENSE.md", "README.md"}
 SECRET_PATTERNS = {
@@ -38,7 +39,7 @@ SECRET_PATTERNS = {
     ),
     "private key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "absolute home path": re.compile(rb"(?m)(?:/var)?/home/[A-Za-z0-9._-]+/"),
-    "Discord snowflake": re.compile(rb"(?<![0-9])[0-9]{17,20}(?![0-9])"),
+    "Discord snowflake": re.compile(rb"(?<![A-Za-z0-9])[0-9]{17,20}(?![A-Za-z0-9])"),
     "email address": re.compile(
         rb"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"
     ),
@@ -130,8 +131,7 @@ def main() -> int:
         configured_source = args.source or os.environ.get(SOURCE_ENVIRONMENT_VARIABLE)
         if configured_source is None:
             raise SyncError(
-                "source is required: pass --source or set "
-                f"{SOURCE_ENVIRONMENT_VARIABLE}"
+                f"source is required: pass --source or set {SOURCE_ENVIRONMENT_VARIABLE}"
             )
         source = Path(configured_source).expanduser().absolute()
         documents = source_documents(source)

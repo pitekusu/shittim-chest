@@ -33,13 +33,21 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 
 1. uv lock check、Ruff format/check、mypy strict、import-linter。
 2. pytest unit/contract、domain/application coverage 90%以上。
-3. pip-audit、gitleaks、CycloneDX SBOM、public surface scan。
+3. pip-audit、gitleaks、public surface scan、`uv export --frozen --format cyclonedx1.5`で生成したCycloneDX SBOMのschema検証。
 4. wheel buildとinstall smoke test。
 5. TypeScript typecheck/test、CDK assertion、`cdk synth --strict`、cdk-nag。
 6. ARM64 container buildとhealth command test。paid/network integrationは実行しない。
 7. Obsidian mirror、Markdown、Wiki link、license scopeを検証する。
 
 fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-hosted runnerを渡さない。fork codeを扱う`pull_request_target`は禁止する。外部contributorのworkflowは毎回maintainer承認を要求する。
+
+### Dependency graph・source SBOM
+
+- GitHubの対応package manager一覧に`uv.lock`が含まれない間は、repository scanだけでPython dependencyを網羅できると仮定しない。
+- Pull RequestではlockからCycloneDX 1.5 JSONを生成・検証するだけとし、Dependency Submission APIへのwriteは行わない。
+- trustedな`main` push jobで、試験済みの同一`uv.lock`から解決済みdependency snapshotをDependency Submission APIへ送信する。job permissionは当該jobだけ`contents: write`とし、fork codeや未試験artifactを入力にしない。
+- GitHub Dependency Graphをrepository単位のmanaged dependency inventoryとし、GitHubのSBOM export endpointからSPDX 2.3 JSONを取得できることを定期確認する。lock更新時は送信snapshot、Graph、CycloneDXの直接dependencyとversion差分を検査する。
+- GitHub SBOM exportはrepository dependency inventoryの出力であり、container OS packageを網羅するrelease image SBOMの代替にはしない。
 
 ## 4. Production release
 
@@ -50,14 +58,17 @@ Private Free向けの二つのrelease workflowは使用せず、`release.yml`へ
 - `workflow_dispatch`かつmain上のcommit SHAだけを受け付ける。ref、immutable repository ID、対象commitのCI成功をfail closedで検証する。
 - release imageを1回だけbuild・試験・ECR pushし、commit SHA tagとdigestを確定する。deploy jobでは再buildしない。
 - commit SHA、image digest、SBOM hash、scan result、CDK template hash、CloudFormation change set ARN、version付きSSM parameter名をrelease manifestへ保存する。
-- release image、SBOM、manifestへGitHub Artifact attestationを生成する。頻繁なtest buildやsource file単体にはattestationを生成しない。
+- push済みの最終image digestからOS packageとPython runtime dependencyを含むSPDX JSON SBOMを生成する。
+- imageにはbuild provenanceとSBOMを別々のattestationとして、full SHAへpinした`actions/attest`で生成する。deprecatedな`actions/attest-sbom`は新規利用しない。
+- release manifestにもprovenance attestationを生成する。頻繁なtest buildやsource file単体にはattestationを生成しない。
 - 初回は`CDK bootstrap → Stateful/ECR change set実行 → image push → Runtime → Operations`、通常releaseは既存ECRへのpush後に全stackのchange setをprepareする。
 
 ### Deploy job
 
 - `production` Environmentを参照し、reviewer `pitekusu`の承認後だけ開始する。単独運用のためself-reviewは許可するが、独立した四眼承認ではないことを明記する。
 - Environmentのdeployment branchは`main`だけ、administrator bypassは禁止、wait timerは0とする。
-- plan jobと同一runのmanifestを取得し、attestation、repository identity、commit、digest、SBOM、change set ARNを再検証する。
+- plan jobと同一runのmanifestを取得し、GitHub artifact attestationのsubject digest、repository identity、commit、image digest、SBOM hash、change set ARNを再検証する。
+- ECRへattestationをregistry referrerとしてpushできることをintegration testする。利用中の組合せで未対応ならGitHub artifact attestationへ保持したままdeployを停止し、格納先やverificationをADRで再設計する。
 - change setを再生成せず実行し、READY/Discord/OpenAI/AWS connectivity smoke test後にresultとdigestをdeployment summaryへ記録する。
 - production専用`concurrency`は`cancel-in-progress=false`、job timeoutを設定する。
 
@@ -84,6 +95,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 - Secret scanning、Push protection、CodeQL default setup APIの`query_suite=extended`、Dependency graph、Dependabot alerts/security updatesを有効にする。
 - CodeQLは現在Pythonを対象とし、CDK実装時にJavaScript/TypeScriptを追加する。
 - uv、Docker、GitHub Actions、npm/CDKを週次更新する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
+- Dependency GraphのGitHub管理SBOM、PRのCycloneDX source SBOM、release imageのSPDX SBOMを用途別に併用する。互いを代替扱いせず、生成元、commit、image digestをrelease manifestへ記録する。
 
 ## 7. Image・artifact・rollback
 
@@ -114,4 +126,9 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-16 | Secret scanning | https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning | public repositoryのautomatic scan |
 | 2026-07-16 | CodeQL | https://docs.github.com/en/code-security/concepts/code-scanning/codeql/codeql-code-scanning | Python default setup |
 | 2026-07-16 | Artifact attestations | https://docs.github.com/en/actions/concepts/security/artifact-attestations | release provenance、verify必須 |
+| 2026-07-16 | Dependency graph SBOM export | https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/export-dependencies-as-sbom | GitHub管理inventoryをSPDXでexport |
+| 2026-07-16 | Supported package ecosystems | https://docs.github.com/en/code-security/reference/supply-chain-security/dependency-graph-supported-package-ecosystems | `uv.lock`はsubmissionで補完 |
+| 2026-07-16 | Dependency submission API | https://docs.github.com/en/rest/dependency-graph/dependency-submission | trusted mainだけがsnapshotを送信 |
+| 2026-07-16 | Artifact attestations action v4 | https://github.com/actions/attest | provenanceとSBOM attestationを生成 |
+| 2026-07-16 | uv 0.11.29 export | https://docs.astral.sh/uv/concepts/projects/export/ | CycloneDX 1.5 exportはpreviewとしてschema検証を必須化 |
 | 2026-07-16 | Secure Actions use | https://docs.github.com/en/actions/reference/security/secure-use | fork PR、最小権限、full SHA pin |
