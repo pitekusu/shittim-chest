@@ -24,29 +24,29 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 - Pull Requestを必須とし、単独管理のためrequired approvalは0とする。
 - conversation resolutionとlinear historyを必須とし、force pushとbranch削除を禁止する。
 - bypass actorは設けない。merge methodはsquashだけを許可し、merge後にhead branchを自動削除する。
-- CI実装前は存在しないcheckをrequiredにしない。各checkがmainで1回成功した後、`quality`、`tests`、`security`、`package`、`cdk`、`container-arm64`、`docs-public-safety`をrequired status checksへ追加する。
+- CI実装前は存在しないcheckをrequiredにしない。STEP-02のmain run成功後、`quality`、`tests`、`security`、`package`、`docs-public-safety`をGitHub Actions App由来に限定してrequired status checksへ追加し、strict checkを有効にする。`cdk`と`container-arm64`は各実装stepのmain成功後に追加する。CodeQLはstatus名ではなくcode scanning result ruleでHigh以上を保護する。
 - emergency時もrulesetをbypassせず、修正PRとProduction Environment承認を使用する。
 
 ## 3. Pull Request CI
 
 `ci.yml`はPull Requestとmain pushで実行し、job既定権限を`contents: read`だけにする。PR単位の`concurrency`で古いcommitのCIだけをcancelし、jobごとに固定check名と`timeout-minutes`を定義する。
 
-1. uv lock check、Ruff format/check、mypy strict、import-linter。
+1. uv lock check、Ruff format/check、mypy strict。import-linterはapplication境界を導入するSTEP-03で追加する。
 2. pytest unit/contract、domain/application coverage 90%以上。
-3. pip-audit、gitleaks、public surface scan、`uv export --frozen --format cyclonedx1.5`で生成したCycloneDX SBOMのschema検証。
+3. pip-audit、Gitleaks、public surface scan、Dependency Review、`uv export --frozen --all-groups --format cyclonedx1.5`で生成したCycloneDX SBOMのstrict schema、project、`uv.lock`完全一致検証。
 4. wheel buildとinstall smoke test。
-5. TypeScript typecheck/test、CDK assertion、`cdk synth --strict`、cdk-nag。
-6. ARM64 container buildとhealth command test。paid/network integrationは実行しない。
-7. Obsidian mirror、Markdown、Wiki link、license scopeを検証する。
+5. Markdown/frontmatter/fence/Wiki link/heading、license scope、public file、GitHub workflow syntaxを検証する。非公開Obsidian正本とのbyte一致はlocal pre-PRでのみ検証する。
+6. TypeScript typecheck/test、CDK assertion、`cdk synth --strict`、cdk-nagはSTEP-09で追加する。
+7. ARM64 container buildとhealth command testはSTEP-08で追加する。paid/network integrationは実行しない。
 
 fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-hosted runnerを渡さない。fork codeを扱う`pull_request_target`は禁止する。外部contributorのworkflowは毎回maintainer承認を要求する。
 
 ### Dependency graph・source SBOM
 
-- GitHubの対応package manager一覧に`uv.lock`が含まれない間は、repository scanだけでPython dependencyを網羅できると仮定しない。
-- Pull RequestではlockからCycloneDX 1.5 JSONを生成・検証するだけとし、Dependency Submission APIへのwriteは行わない。
-- trustedな`main` push jobで、試験済みの同一`uv.lock`から解決済みdependency snapshotをDependency Submission APIへ送信する。job permissionは当該jobだけ`contents: write`とし、fork codeや未試験artifactを入力にしない。
-- GitHub Dependency Graphをrepository単位のmanaged dependency inventoryとし、GitHubのSBOM export endpointからSPDX 2.3 JSONを取得できることを定期確認する。lock更新時は送信snapshot、Graph、CycloneDXの直接dependencyとversion差分を検査する。
+- GitHubのstatic parser一覧に`uv.lock`はないが、Python repositoryではDependabot graph jobがfull transitive snapshotを生成する。2026-07-17のlive SPDX 2.3 exportとDependency Review APIで、`uv.lock`の全42 external packageとRuff更新差分が認識されることを確認した。
+- Pull RequestではlockからCycloneDX 1.5 JSONを生成し、公式strict schema、root name/version、全PyPI package name/version、dependency refを検証する。source SBOMは30日artifactとして保持する。
+- GitHub managed graphが完全な間はcustom Dependency Submissionを行わない。user submissionはDependabot graph jobより優先され、重複、上書き、`contents: write`権限を増やすためである。managed inventoryに欠落・停滞が再現した場合だけADRでfallbackを再検討する。
+- `dependency-graph.yml`をDependabot更新時刻と毎時開始時のActions混雑を避けた毎週火曜12:17 JSTと手動でmain上だけ実行し、GitHub SBOM export endpointのSPDX 2.3 PyPI package集合と、checkoutしたmainのCycloneDX/`uv.lock`集合をread-onlyで照合する。GitHub SPDX export自体にはcommit SHAがないため、比較前後にmain SHAが`GITHUB_SHA`から動いていないことを確認する。移動時は検証済みを示すgreenにせず明示失敗し、最新mainで再実行する。managed graph反映遅延は30秒間隔・最大10回のbounded pollingで吸収し、stable mainで収束しなければ失敗する。同じrefの重複runは非cancel型concurrencyで直列化し、pendingが複数なら最新確認を優先する。
 - GitHub SBOM exportはrepository dependency inventoryの出力であり、container OS packageを網羅するrelease image SBOMの代替にはしない。
 
 ## 4. Production release
@@ -91,10 +91,10 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 ## 6. Actions・supply chain settings
 
 - repository既定`GITHUB_TOKEN`はread-only、Pull Request approval権限なしとする。
-- GitHub-owned Actionと明示allowlistしたActionだけを許可し、全Actionをfull commit SHAへpinする。DependabotにSHA更新を行わせ、version tagだけのpinは禁止する。
+- GitHub-owned Actionと明示allowlistしたActionだけを許可し、全Actionをfull commit SHAへpinする。Dependabotに同一行のversion commentを使ってSHA更新させ、version tagだけのpinは禁止する。Gitleaks 8.30.1とactionlint 1.7.12は公式release archiveとSHA-256を固定し、Action allowlistや実行時latestへ依存しない。
 - Secret scanning、Push protection、CodeQL default setup APIの`query_suite=extended`、Dependency graph、Dependabot alerts/security updatesを有効にする。
 - CodeQLは現在Pythonを対象とし、CDK実装時にJavaScript/TypeScriptを追加する。
-- uv、Docker、GitHub Actions、npm/CDKを週次更新する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
+- uvとGitHub Actionsを週次更新する。Docker、npm/CDKはmanifest導入時に追加する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
 - Dependabot uv updaterがprojectの`required-version`を満たさない場合はversion update全体が`tool_version_not_supported`で停止する。開発・CIはuv 0.11.29へpinしたまま、projectの互換範囲はDependabot公式imageの0.11.8を含む`>=0.11.8,<0.12`とする。updater更新後に下限を上げる場合は公式Dockerfileとlock/update試験を再確認する。
 - Dependency GraphのGitHub管理SBOM、PRのCycloneDX source SBOM、release imageのSPDX SBOMを用途別に併用する。互いを代替扱いせず、生成元、commit、image digestをrelease manifestへ記録する。
 
@@ -114,7 +114,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabot manifestのuv週次更新は実装済みで、Docker、GitHub Actions、npm/CDKは対応manifest導入時に追加する。application workflow、AWS OIDC role、AWS resourceは未実装であり、それぞれの実装工程で本書に従う。
+Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv更新は運用済みで、STEP-02にGitHub Actions更新を追加した。read-only CIとmanaged SBOM照合workflowは実装中であり、PR/main run合格後に5 checkとCodeQL ruleをRulesetへ設定する。application workflow、AWS OIDC role、AWS resourceは未実装である。
 
 ## 10. 公式資料確認記録
 
@@ -128,10 +128,15 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-16 | CodeQL | https://docs.github.com/en/code-security/concepts/code-scanning/codeql/codeql-code-scanning | Python default setup |
 | 2026-07-16 | Artifact attestations | https://docs.github.com/en/actions/concepts/security/artifact-attestations | release provenance、verify必須 |
 | 2026-07-16 | Dependency graph SBOM export | https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/establish-provenance-and-integrity/export-dependencies-as-sbom | GitHub管理inventoryをSPDXでexport |
-| 2026-07-16 | Supported package ecosystems | https://docs.github.com/en/code-security/reference/supply-chain-security/dependency-graph-supported-package-ecosystems | `uv.lock`はsubmissionで補完 |
-| 2026-07-16 | Dependency submission API | https://docs.github.com/en/rest/dependency-graph/dependency-submission | trusted mainだけがsnapshotを送信 |
+| 2026-07-17 | Supported package ecosystems | https://docs.github.com/en/code-security/reference/supply-chain-security/dependency-graph-supported-package-ecosystems | static parser一覧に`uv.lock`はないためmanaged graphを実測検証 |
+| 2026-07-17 | Dependency submission API | https://docs.github.com/en/rest/dependency-graph/dependency-submission | user submissionがmanaged graphより優先されるため、現状はfallbackに限定 |
 | 2026-07-16 | Artifact attestations action v4 | https://github.com/actions/attest | provenanceとSBOM attestationを生成 |
 | 2026-07-16 | uv 0.11.29 export | https://docs.astral.sh/uv/concepts/projects/export/ | CycloneDX 1.5 exportはpreviewとしてschema検証を必須化 |
 | 2026-07-16 | Secure Actions use | https://docs.github.com/en/actions/reference/security/secure-use | fork PR、最小権限、full SHA pin |
 | 2026-07-17 | Dependabot uv updater 0.11.8 | https://github.com/dependabot/dependabot-core/blob/main/uv/Dockerfile | 公式updaterの実uv versionをproject互換範囲と照合 |
 | 2026-07-17 | uv required version・versioning | https://docs.astral.sh/uv/reference/settings/#required-version、https://docs.astral.sh/uv/reference/policies/versioning/ | PEP 440範囲と同一minor patch互換を採用 |
+| 2026-07-17 | Python Dependabot graph job | https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph-data | full transitive managed snapshotをcustom submissionより優先 |
+| 2026-07-17 | Dependency Review API 2026-03-10 | https://docs.github.com/en/rest/dependency-graph/dependency-review | `uv.lock`全packageと更新差分をlive APIで確認 |
+| 2026-07-17 | uv CycloneDX 1.5 preview | https://docs.astral.sh/uv/concepts/projects/export/ | strict schemaとlock inventory gateを追加 |
+| 2026-07-17 | setup-uv v8.3.2 | https://github.com/astral-sh/setup-uv/releases/tag/v8.3.2 | uv 0.11.29、Python 3.14.6をfull SHA固定Actionで導入 |
+| 2026-07-17 | Scheduled workflow | https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule | 毎時開始を避け火曜12:17 JST、default branch、遅延/dropを監視 |

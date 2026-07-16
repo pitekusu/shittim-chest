@@ -1,6 +1,28 @@
 version: 2
 
 updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    assignees:
+      - "pitekusu"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      actions-minor-and-patch:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
   # Keep [tool.uv].required-version compatible with the updater's embedded uv.
   - package-ecosystem: "uv"
     directory: "/"

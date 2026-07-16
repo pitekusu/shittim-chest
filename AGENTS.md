@@ -10,9 +10,10 @@ produce initial opinions, revised proposals, and votes; the orchestration Bot
 manages the workflow and publishes the mechanically calculated result.
 
 The requirements, basic design, and detailed design are complete. The
-Python/uv project foundation and initial domain state machine are implemented;
-application use cases, adapters, containers, GitHub automation, AWS resources,
-and Discord Applications are not yet implemented. Approved decisions are
+Python/uv project foundation and initial domain state machine are implemented.
+STEP-02 adds GitHub CI, source-SBOM validation, managed Dependency Graph checks,
+and public-document validation; application use cases, adapters, containers,
+AWS resources, and Discord Applications are not yet implemented. Approved decisions are
 recorded in the project index and decision record; do not silently promote
 historical options to requirements.
 
@@ -49,11 +50,22 @@ must depend on the domain rules rather than reimplementing them in adapters.
 The STEP-01 acceptance snapshot is 66 passing tests, 100% domain line/branch
 coverage, Ruff and mypy strict success, zero known locked-dependency
 vulnerabilities, a clean public-surface scan, and successful GitHub-managed
-CodeQL and GitGuardian checks. The next implementation slice is STEP-02:
-GitHub CI, trusted-main dependency submission, and managed Dependency
-Graph/SBOM checks. Update this section and
-`20_実装・試験・検証記録.md` after each later slice so the boundary does not
-become stale.
+CodeQL and GitGuardian checks.
+
+STEP-02 is implemented on `agent/implement-step-02-ci` and remains incomplete
+until its Pull Request and first `main` run succeed. It adds five read-only PR
+checks (`quality`, `tests`, `security`, `package`, `docs-public-safety`), strict
+CycloneDX 1.5 schema and `uv.lock` inventory validation, a 30-day source-SBOM
+artifact, Dependency Review, pinned Gitleaks/actionlint binaries, isolated wheel
+installation, and a weekly/manual comparison with GitHub's managed SPDX 2.3
+export. GitHub's Python Dependabot graph job already supplies the complete uv
+dependency snapshot, so STEP-02 intentionally does not submit a higher-priority
+custom snapshot or grant `contents: write`.
+
+The next application slice after STEP-02 acceptance is STEP-03: application
+Protocols, use cases, voting/tie rules, deadlines, cancellation, and tests.
+Update this section and `20_実装・試験・検証記録.md` after each later slice so
+the boundary does not become stale.
 
 ## GitHub Tooling Policy
 
@@ -186,7 +198,7 @@ The finalized design assumes the following baseline as of 2026-07-16:
 - `boto3` and `boto3-stubs` 1.43.49;
 - Amazon ECS on ARM64 Fargate Spot, ECR, DynamoDB, SSM Parameter Store, and
   CloudWatch Logs;
-- Ruff 0.15.21, mypy 2.3.0, pytest 9.1.1, import-linter 2.13, Hypothesis,
+- Ruff 0.15.22, mypy 2.3.0, pytest 9.1.1, import-linter 2.13, Hypothesis,
   respx, pip-audit, and the other versions recorded in the detailed design.
 
 These are design inputs, not permission to create cloud resources. Do not
@@ -219,6 +231,12 @@ uv run --frozen ruff format --check .
 uv run --frozen ruff check .
 uv run --frozen mypy
 uv run --frozen pytest
+uv run --frozen python tools/check_public_surface.py
+uv run --frozen python -m tools.check_docs
+uv export --quiet --frozen --all-groups --format cyclonedx1.5 \
+  --output-file /tmp/shittim-chest-source-sbom.cdx.json
+uv run --frozen python tools/check_sbom.py validate \
+  /tmp/shittim-chest-source-sbom.cdx.json
 uv export --quiet --frozen --all-groups --no-emit-project --no-annotate \
   --output-file /tmp/shittim-chest-audit-requirements.txt
 uv run --frozen pip-audit --strict --require-hashes \
@@ -473,9 +491,17 @@ Add tests in proportion to each implemented slice. At minimum, cover:
   fencing, outbox reconciliation, and resume without duplicate Discord posts;
 - secret and full-content redaction in logs.
 
-CI must eventually verify the uv lock, Ruff, mypy strict, import-linter,
-pytest, pip-audit, gitleaks, wheel build, ARM64 container build, and a CycloneDX
-SBOM. It must also run `python tools/sync_docs.py --check`.
+CI verifies the uv lock, Ruff, mypy strict, pytest, pip-audit, Gitleaks, wheel
+build/install, CycloneDX source SBOM, public repository surface, Markdown
+structure, Wiki links, and workflow syntax. Import-linter becomes enforceable
+when STEP-03 introduces application boundaries; the ARM64 container gate is
+added in STEP-08.
+
+The GitHub-hosted runner cannot access the private Obsidian Vault. Run
+`python tools/sync_docs.py --check` locally against `SHITTIM_DOCS_SOURCE` before
+publishing documentation changes; CI runs `python -m tools.check_docs` against
+the public mirror instead. Never give a public PR Vault credentials or mount the
+Vault on a self-hosted runner.
 Keep domain/application coverage at 90% or higher. Use DynamoDB Local for
 transactions, conditional writes, GSIs, migrations, and outbox tests, with
 separate contract tests for behavior it cannot emulate.
