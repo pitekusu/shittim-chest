@@ -193,6 +193,14 @@ These are design inputs, not permission to create cloud resources. Do not
 provision AWS resources, create Discord Applications, register commands in a
 real Guild, or make paid API calls unless the task explicitly requests it.
 
+Use uv 0.11.29 for local development, CI, packaging, and release work. The
+`[tool.uv].required-version` compatibility range is intentionally
+`>=0.11.8,<0.12` because GitHub's Dependabot uv updater currently embeds
+0.11.8. Do not tighten that setting to the local exact version unless the
+Dependabot image supports it; keep `uv_build>=0.11.29,<0.12` and the normal
+tooling baseline at 0.11.29. Recheck the official Dependabot updater image
+before changing the compatibility floor.
+
 Use `requires-python = ">=3.14,<3.15"` and Ruff target `py314`. Declare direct
 dependencies with compatible major ranges and lock every resolved version in
 `uv.lock`. CI and container builds must use `uv sync --frozen` or

@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-16
+updated: 2026-07-17
 ---
 
 # アプリケーション・Python詳細設計
@@ -114,7 +114,7 @@ bootstrapへ渡す非秘密設定はenvironment、model ID、table名、log leve
 
 ## 9. Coding規約
 
-- Python 3.14.6通常GIL build、`requires-python = ">=3.14,<3.15"`、uv lock固定。
+- Python 3.14.6通常GIL build、`requires-python = ">=3.14,<3.15"`、uv lock固定。開発・CI・releaseはuv 0.11.29を使い、`required-version = ">=0.11.8,<0.12"`で同一minorのDependabot updaterを許可する。`uv_build` lower boundは0.11.29を維持する。
 - 全function、method、attributeを型付けし`mypy --strict`を通す。
 - Ruffだけをformatter/import sorter/linterとして使い、100文字、double quote、`E,F,I,UP,B,SIM,ASYNC,RUF,S`を基準とする。
 - cyclomatic complexityは10以下。naive datetime、mutable default、application層の`dict[str, Any]`は禁止する。
@@ -128,4 +128,5 @@ bootstrapへ渡す非秘密設定はenvironment、model ID、table名、log leve
 | 2026-07-16 | Python 3.14 UUID/enum/dataclass/datetime | https://docs.python.org/3.14/library/uuid.html、https://docs.python.org/3.14/library/enum.html、https://docs.python.org/3.14/library/dataclasses.html、https://docs.python.org/3.14/library/datetime.html | UUIDv7、StrEnum、frozen/slots、aware UTCの実装境界 |
 | 2026-07-16 | asyncio | https://docs.python.org/3/library/asyncio-task.html | TaskGroup、timeout、cancellation |
 | 2026-07-16 | uv/uv_build 0.11.29 | https://docs.astral.sh/uv/concepts/projects/sync/、https://docs.astral.sh/uv/concepts/build-backend/ | lock、`--frozen`、pure Python package build |
+| 2026-07-17 | uv `required-version`・versioning | https://docs.astral.sh/uv/reference/settings/#required-version、https://docs.astral.sh/uv/reference/policies/versioning/ | PEP 440互換範囲を使用し、0.11.8 updaterと0.11.29開発基準を両立 |
 | 2026-07-16 | boto3 1.43.49 | https://boto3.amazonaws.com/v1/documentation/api/latest/index.html | client再利用、typed exception、thread隔離 |
