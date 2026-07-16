@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-16
+updated: 2026-07-17
 ---
 
 # GitHub・CI-CD詳細設計
@@ -95,6 +95,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 - Secret scanning、Push protection、CodeQL default setup APIの`query_suite=extended`、Dependency graph、Dependabot alerts/security updatesを有効にする。
 - CodeQLは現在Pythonを対象とし、CDK実装時にJavaScript/TypeScriptを追加する。
 - uv、Docker、GitHub Actions、npm/CDKを週次更新する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
+- Dependabot uv updaterがprojectの`required-version`を満たさない場合はversion update全体が`tool_version_not_supported`で停止する。開発・CIはuv 0.11.29へpinしたまま、projectの互換範囲はDependabot公式imageの0.11.8を含む`>=0.11.8,<0.12`とする。updater更新後に下限を上げる場合は公式Dockerfileとlock/update試験を再確認する。
 - Dependency GraphのGitHub管理SBOM、PRのCycloneDX source SBOM、release imageのSPDX SBOMを用途別に併用する。互いを代替扱いせず、生成元、commit、image digestをrelease manifestへ記録する。
 
 ## 7. Image・artifact・rollback
@@ -113,7 +114,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成する。application workflow、Dependabot manifest更新、AWS OIDC role、AWS resourceは未実装であり、それぞれの実装工程で本書に従う。
+Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabot manifestのuv週次更新は実装済みで、Docker、GitHub Actions、npm/CDKは対応manifest導入時に追加する。application workflow、AWS OIDC role、AWS resourceは未実装であり、それぞれの実装工程で本書に従う。
 
 ## 10. 公式資料確認記録
 
@@ -132,3 +133,5 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-16 | Artifact attestations action v4 | https://github.com/actions/attest | provenanceとSBOM attestationを生成 |
 | 2026-07-16 | uv 0.11.29 export | https://docs.astral.sh/uv/concepts/projects/export/ | CycloneDX 1.5 exportはpreviewとしてschema検証を必須化 |
 | 2026-07-16 | Secure Actions use | https://docs.github.com/en/actions/reference/security/secure-use | fork PR、最小権限、full SHA pin |
+| 2026-07-17 | Dependabot uv updater 0.11.8 | https://github.com/dependabot/dependabot-core/blob/main/uv/Dockerfile | 公式updaterの実uv versionをproject互換範囲と照合 |
+| 2026-07-17 | uv required version・versioning | https://docs.astral.sh/uv/reference/settings/#required-version、https://docs.astral.sh/uv/reference/policies/versioning/ | PEP 440範囲と同一minor patch互換を採用 |
