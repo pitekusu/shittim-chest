@@ -58,9 +58,15 @@ application側のgraceful shutdown deadlineは90秒とし、`stopTimeout=120`の
 - `awslogs` modeは`blocking`を明示し、secret・質問・回答全文をstdoutへ出さない。
 - 一時書込みは容量制限した`/tmp` mountだけに許可する。平常imageはECS Execだけのためにshell utilityを追加しない。
 
+STEP-08AではPython `3.14.6-slim-trixie`とuv `0.11.29`のmulti-architecture image index digestを固定したmulti-stage `Dockerfile`を実装する。production imageはnumeric UID/GID `10001`、exec形式entrypoint、`SIGTERM` stop signalを使用し、uv、build cache、raw source、testを含めない。event loop ownerが5秒ごとにPID付きheartbeatを`/tmp/shittim-chest/heartbeat`へatomic更新し、health commandは20秒以内の更新、PID形式、process生存だけを本文出力なしで検査する。
+
+Fargate task definitionは`tmpfs`をsupportしないため、productionの`/tmp`はSTEP-09で容量制限したtask bind mountとして定義する。local container試験では同等のtmpfsを使う。`initProcessEnabled=true`もtask definition側のSTEP-09で設定し、STEP-08A imageだけで設定済みとは扱わない。
+
 ### 5.1 Break-glass task definition
 
 通常のlog/metric調査で不足し承認されたincidentだけ、stop-before-startでbreak-glass revisionへ切り替える。break-glass版はroot filesystemを書込み可能にし、ECS Exec、`/bin/sh`、`script`、`cat`、4つの`ssmmessages` action、専用CloudWatch Logs書込権限を有効にする。sessionはroot実行であることを前提に、`logging=OVERRIDE`、専用90日log group、開始理由・操作者・開始終了時刻を記録する。調査終了後は平常revisionへ戻し、Exec agentがないtaskへ置換されたことを確認する。
+
+STEP-08Aの`break-glass` image targetはproduction runtimeへ`/bin/sh`、`cat`、`script`、`ps`だけを追加し、application実行時は引き続きUID/GID `10001`とする。root filesystem書込み可否、Exec agent、IAM、log group、承認workflowはimageではなくSTEP-09/10のbreak-glass task revisionで制御する。
 
 ## 6. ECR
 
@@ -118,3 +124,8 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-16 | VPC pricing | https://aws.amazon.com/vpc/pricing/ | Public IPv4費用 |
 | 2026-07-17 | Fargate Spot termination | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | SIGTERM後にconfigured stopTimeoutでSIGKILL、singletonはcapacity復帰まで停止する前提を再確認 |
 | 2026-07-17 | ECS ContainerDefinition | https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ContainerDefinition.html | Fargate `stopTimeout=120`を明示し、application内部deadlineを90秒へ設定 |
+| 2026-07-17 | ECS task definition parameters | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | ARM64、512 CPU/1024 MiB、health、read-only root、`stopTimeout=120`のtask境界を再確認 |
+| 2026-07-17 | Fargate task differences | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html | Fargateで`tmpfs`非対応のためtask bind volumeへ分離 |
+| 2026-07-17 | Python official image 3.14.6 | https://hub.docker.com/_/python | slim-trixieのamd64/arm64 multi-arch index digestを固定 |
+| 2026-07-17 | Docker build best practices | https://docs.docker.com/build/building/best-practices/ | multi-stage、最小runtime、digest固定、`.dockerignore` |
+| 2026-07-17 | uv Docker integration 0.11.29 | https://docs.astral.sh/uv/guides/integration/docker/ | uv image digest固定、`uv sync --frozen --no-dev --no-editable`、cache非同梱 |

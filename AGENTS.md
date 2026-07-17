@@ -50,7 +50,9 @@ acceptance gate, Guild-scoped `/shittim`, immediate ephemeral defer,
 starter/Public Thread/control panel provisioning and reconciliation,
 attempt-bound cancel/retry, and owned debate tasks. Live Discord operations,
 restart recovery composition, and Discord Applications remain unimplemented.
-Containers for the application, AWS resources, and Discord Applications are not yet implemented.
+STEP-08A implements the local production/break-glass container foundation and
+event-loop heartbeat health check. Native ARM64 CI, container fault injection,
+image SBOM, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
 
@@ -229,8 +231,15 @@ exactly four Discord clients. Runtime configuration must not select a model;
 production remains fixed to Luna standard. Close Discord, OpenAI, and DynamoDB
 clients deterministically and idempotently. Real subprocess tests must keep
 covering SIGTERM checkpoint/cleanup and SIGKILL replacement-process recovery.
-STEP-08 owns container-boundary fault injection and production container work.
 STEP-07C was merged in PR #35 at commit `e863ae3`; PR and main CI/CodeQL passed.
+
+STEP-08A adds the digest-pinned Python 3.14.6/uv multi-stage `Dockerfile`, a
+numeric UID/GID 10001 production runtime, a separately selectable break-glass
+target, and an event-loop heartbeat health command. Validate image security
+locally with a read-only root filesystem, a writable `/tmp`, all capabilities
+dropped, and no-new-privileges. Fargate task-definition settings, native ARM64
+CI, container-level fault injection, and final-image SBOM remain STEP-08B/09
+work; do not describe them as already implemented.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
@@ -688,8 +697,8 @@ CI verifies the uv lock, Ruff, mypy strict, import-linter, pytest, pip-audit, Be
 full-history and generated-fixture contracts, wheel
 build/install, CycloneDX source SBOM, public repository surface, Markdown
 structure, Wiki links, and workflow syntax. STEP-03 makes import-linter
-enforceable in the existing `quality` check; the ARM64 container gate is added
-in STEP-08.
+enforceable in the existing `quality` check; the native ARM64 container gate is
+added in STEP-08B.
 
 The GitHub-hosted runner cannot access the private Obsidian Vault. Run
 `python tools/sync_docs.py --check` locally against `SHITTIM_DOCS_SOURCE` before
