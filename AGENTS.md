@@ -12,8 +12,10 @@ manages the workflow and publishes the mechanically calculated result.
 The requirements, basic design, and detailed design are complete. The
 Python/uv project foundation, initial domain state machine, and STEP-02 GitHub
 quality/supply-chain gates are implemented. The STEP-02B Betterleaks migration
-gate and STEP-02C Gitleaks retirement are complete.
-Application use cases, adapters,
+gate and STEP-02C Gitleaks retirement are complete. STEP-03 application core is
+implemented on its isolated Pull Request branch with voting rules, Protocols,
+accept/run/cancel/retry/resume use cases, deadlines, checkpoint-aware
+cancellation, and fake-based async tests. External adapters,
 containers, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -77,8 +79,10 @@ Gitleaks after the parallel PR/main observation, generated contract, full-histor
 scan, Sigstore verification, and latest-release workflow all passed. Reintroduce
 a second scanner only through a later ADR with a concrete coverage gap.
 
-The next application slice is STEP-03: application
-Protocols, use cases, voting/tie rules, deadlines, cancellation, and tests.
+The current slice is STEP-03 application core. Treat it as SDK-independent until
+its Pull Request merges. The next slice after merge is STEP-04 persistence:
+DynamoDB serialization, conditional transactions, lease slots, outbox, schema
+migration, and DynamoDB Local tests.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
@@ -245,6 +249,7 @@ uv sync --frozen --all-groups
 uv run --frozen ruff format --check .
 uv run --frozen ruff check .
 uv run --frozen mypy
+uv run --frozen lint-imports
 uv run --frozen pytest
 uv run --frozen python tools/check_public_surface.py
 uv run --frozen python -m tools.check_docs
@@ -508,12 +513,12 @@ Add tests in proportion to each implemented slice. At minimum, cover:
   fencing, outbox reconciliation, and resume without duplicate Discord posts;
 - secret and full-content redaction in logs.
 
-CI verifies the uv lock, Ruff, mypy strict, pytest, pip-audit, Betterleaks
+CI verifies the uv lock, Ruff, mypy strict, import-linter, pytest, pip-audit, Betterleaks
 full-history and generated-fixture contracts, wheel
 build/install, CycloneDX source SBOM, public repository surface, Markdown
-structure, Wiki links, and workflow syntax. Import-linter becomes enforceable
-when STEP-03 introduces application boundaries; the ARM64 container gate is
-added in STEP-08.
+structure, Wiki links, and workflow syntax. STEP-03 makes import-linter
+enforceable in the existing `quality` check; the ARM64 container gate is added
+in STEP-08.
 
 The GitHub-hosted runner cannot access the private Obsidian Vault. Run
 `python tools/sync_docs.py --check` locally against `SHITTIM_DOCS_SOURCE` before

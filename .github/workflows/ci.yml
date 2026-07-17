@@ -46,6 +46,8 @@ jobs:
             .github/tool-versions.json
       - name: Check strict typing
         run: uv run --frozen mypy
+      - name: Check architecture boundaries
+        run: uv run --frozen lint-imports
 
   tests:
     name: tests
