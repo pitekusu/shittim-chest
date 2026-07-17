@@ -5,7 +5,13 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
-from tools.run_container_gate import ContainerGateError, validate_image_configuration
+from tools.run_container_gate import (
+    NON_TERMINAL_PHASES,
+    ContainerGateError,
+    validate_image_configuration,
+)
+
+from shittim_chest.domain.debate_state import NORMAL_PHASE_FLOW
 
 
 def _inspect() -> list[object]:
@@ -30,6 +36,10 @@ def _inspect() -> list[object]:
 
 def test_native_arm64_image_configuration_is_accepted() -> None:
     validate_image_configuration(_inspect(), "arm64")
+
+
+def test_fault_gate_covers_every_non_terminal_domain_phase() -> None:
+    assert tuple(phase.value for phase in NORMAL_PHASE_FLOW[:-1]) == NON_TERMINAL_PHASES
 
 
 @pytest.mark.parametrize(

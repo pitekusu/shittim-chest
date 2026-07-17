@@ -15,11 +15,18 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-from shittim_chest.domain.debate_state import NORMAL_PHASE_FLOW
-
 IMAGE_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 EXPECTED_USER: Final = "10001:10001"
 MAXIMUM_STOP_SECONDS: Final = 120.0
+NON_TERMINAL_PHASES: Final = (
+    "accepted",
+    "preparing_evidence",
+    "collecting_initial_opinions",
+    "discussing",
+    "collecting_final_proposals",
+    "selecting_winner",
+    "generating_decision",
+)
 FORCED_BOUNDARIES: Final = (
     "transaction-before",
     "transaction-after",
@@ -190,21 +197,21 @@ def _exit_code(name: str) -> int:
 
 
 def _test_phase_sigterm(image: str, root: Path) -> None:
-    for phase in NORMAL_PHASE_FLOW[:-1]:
-        state = root / f"phase-{phase.value}"
+    for phase in NON_TERMINAL_PHASES:
+        state = root / f"phase-{phase}"
         state.mkdir(mode=0o777)
         state.chmod(0o777)
-        name = _start_fault_container(image, state, f"phase:{phase.value}")
+        name = _start_fault_container(image, state, f"phase:{phase}")
         try:
             _wait_for(state / "ready")
             started = time.monotonic()
             _docker("stop", "--time", "120", name)
             elapsed = time.monotonic() - started
             if elapsed >= MAXIMUM_STOP_SECONDS or _exit_code(name) != 0:
-                raise ContainerGateError(f"SIGTERM shutdown failed at phase {phase.value}")
+                raise ContainerGateError(f"SIGTERM shutdown failed at phase {phase}")
             recovery = (state / "recovery").read_text(encoding="utf-8").strip()
-            if recovery != f"checkpointed:{phase.value}":
-                raise ContainerGateError(f"checkpoint missing at phase {phase.value}")
+            if recovery != f"checkpointed:{phase}":
+                raise ContainerGateError(f"checkpoint missing at phase {phase}")
         finally:
             _remove(name)
 
