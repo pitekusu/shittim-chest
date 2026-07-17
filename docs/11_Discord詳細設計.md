@@ -109,6 +109,6 @@ panelはphase、active elapsed、recovery状態、開始者を表示する。com
 
 ## 10. STEP-06分割境界
 
-- STEP-06A（実装・PR前）: SDK非依存runtime/identity/error/outbox/panel契約、決定的message split、UUIDv7 nonce、SHA-256、custom ID codec、Discord context binding、schema v5。
+- STEP-06A（PR `#27`）: SDK非依存runtime/identity/error/outbox/panel契約、決定的message split、UUIDv7 nonce、SHA-256、custom ID codec、Discord context binding、schema v5。
 - STEP-06B（未実装）: discord.py publisher、outbox claim/send/complete、`allowed_mentions`、`enforce_nonce`、長時間停止後reconciliation。
 - STEP-06C（未実装）: 4 client、READY gate、Guild Command、3秒以内defer、starter/thread/panel、Cancel/Retry Interaction。
