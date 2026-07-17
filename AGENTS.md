@@ -10,12 +10,11 @@ produce initial opinions, revised proposals, and votes; the orchestration Bot
 manages the workflow and publishes the mechanically calculated result.
 
 The requirements, basic design, and detailed design are complete. The
-Python/uv project foundation and initial domain state machine are implemented.
-STEP-02 adds GitHub CI, source-SBOM validation, managed Dependency Graph checks,
-and public-document validation; application use cases, adapters, containers,
-AWS resources, and Discord Applications are not yet implemented. Approved decisions are
-recorded in the project index and decision record; do not silently promote
-historical options to requirements.
+Python/uv project foundation, initial domain state machine, and STEP-02 GitHub
+quality/supply-chain gates are implemented. Application use cases, adapters,
+containers, AWS resources, and Discord Applications are not yet implemented.
+Approved decisions are recorded in the project index and decision record; do
+not silently promote historical options to requirements.
 
 ## Current Implementation Boundary
 
@@ -52,9 +51,11 @@ coverage, Ruff and mypy strict success, zero known locked-dependency
 vulnerabilities, a clean public-surface scan, and successful GitHub-managed
 CodeQL and GitGuardian checks.
 
-STEP-02 is implemented on `agent/implement-step-02-ci` and remains incomplete
-until its Pull Request and first `main` run succeed. It adds five read-only PR
-checks (`quality`, `tests`, `security`, `package`, `docs-public-safety`), strict
+STEP-02 was squash-merged through PR `#10` as commit `e2fdaad` on 2026-07-17.
+Its Pull Request and first `main` run passed, the managed CycloneDX/SPDX comparison
+passed, and the active main Ruleset now requires five strict GitHub Actions checks
+(`quality`, `tests`, `security`, `package`, `docs-public-safety`) plus CodeQL results
+with high-or-higher security alerts blocking merge. STEP-02 provides strict
 CycloneDX 1.5 schema and `uv.lock` inventory validation, a 30-day source-SBOM
 artifact, Dependency Review, pinned Gitleaks/actionlint binaries, isolated wheel
 installation, and a weekly/manual comparison with GitHub's managed SPDX 2.3
@@ -62,7 +63,7 @@ export. GitHub's Python Dependabot graph job already supplies the complete uv
 dependency snapshot, so STEP-02 intentionally does not submit a higher-priority
 custom snapshot or grant `contents: write`.
 
-The next application slice after STEP-02 acceptance is STEP-03: application
+The next application slice is STEP-03: application
 Protocols, use cases, voting/tie rules, deadlines, cancellation, and tests.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
