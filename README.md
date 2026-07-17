@@ -1,5 +1,7 @@
 # The Shittim Chest
 
+[![CI](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml)
+
 The Shittim Chest is a Discord multi-agent debate Bot under incremental
 development. A moderator
 coordinates three configurable participant slots, shared evidence, revised
@@ -12,7 +14,10 @@ Requirements and detailed design are available in the
 [design-document mirror](https://github.com/pitekusu/shittim-chest/tree/main/docs).
 The Python 3.14.6/uv project foundation, UUIDv7 debate/attempt identifiers,
 immutable phase and Spot-recovery state machine, retry attempt boundary, and
-domain tests are implemented.
+domain tests are implemented. Pull requests are checked with read-only GitHub
+Actions jobs for quality, tests, security, packaging, source SBOM, and public
+documentation safety. GitHub's managed Dependency Graph is compared with the
+tested uv inventory on a weekly schedule.
 Application use cases, external adapters, Discord Applications, AWS resources,
 containers, and production workflows have not been implemented yet.
 
@@ -31,6 +36,12 @@ uv run --frozen ruff format --check .
 uv run --frozen ruff check .
 uv run --frozen mypy
 uv run --frozen pytest
+uv run --frozen python tools/check_public_surface.py
+uv run --frozen python -m tools.check_docs
+uv export --quiet --frozen --all-groups --format cyclonedx1.5 \
+  --output-file /tmp/shittim-chest-source-sbom.cdx.json
+uv run --frozen python tools/check_sbom.py validate \
+  /tmp/shittim-chest-source-sbom.cdx.json
 uv export --quiet --frozen --all-groups --no-emit-project --no-annotate \
   --output-file /tmp/shittim-chest-audit-requirements.txt
 uv run --frozen pip-audit --strict --require-hashes \

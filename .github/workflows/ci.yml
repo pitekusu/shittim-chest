@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.14.6"
+  UV_VERSION: "0.11.29"
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Verify and synchronize the lock
+        run: |
+          uv lock --check
+          uv sync --frozen --all-groups
+      - name: Check formatting and lint
+        run: |
+          uv run --frozen ruff format --check .
+          uv run --frozen ruff check .
+      - name: Check strict typing
+        run: uv run --frozen mypy
+
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Synchronize the locked environment
+        run: uv sync --frozen --all-groups
+      - name: Run unit and property tests
+        run: uv run --frozen pytest
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the complete tested history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Synchronize the locked environment
+        run: uv sync --frozen --all-groups
+      - name: Audit locked Python dependencies
+        run: |
+          uv export --quiet --frozen --all-groups --no-emit-project --no-annotate \
+            --output-file "${RUNNER_TEMP}/audit-requirements.txt"
+          uv run --frozen pip-audit --strict --require-hashes \
+            --requirement "${RUNNER_TEMP}/audit-requirements.txt"
+      - name: Scan the public repository surface
+        run: uv run --frozen python tools/check_public_surface.py
+      - name: Scan Git history with pinned Gitleaks
+        env:
+          GITLEAKS_ARCHIVE_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          archive="${RUNNER_TEMP}/gitleaks.tar.gz"
+          curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          printf '%s  %s\n' "${GITLEAKS_ARCHIVE_SHA256}" "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" gitleaks
+          "${RUNNER_TEMP}/gitleaks" git --redact --no-banner --verbose .
+      - name: Review dependency changes
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: low
+          fail-on-scopes: runtime, development, unknown
+          show-openssf-scorecard: true
+      - name: Generate and validate the source SBOM
+        run: |
+          uv export --quiet --frozen --all-groups --format cyclonedx1.5 \
+            --output-file "${RUNNER_TEMP}/source-sbom.cdx.json"
+          uv run --frozen python tools/check_sbom.py validate \
+            "${RUNNER_TEMP}/source-sbom.cdx.json"
+      - name: Retain the source SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ runner.temp }}/source-sbom.cdx.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Build source and wheel distributions
+        run: uv build --no-sources
+      - name: Install and import only the built wheel
+        run: |
+          environment="${RUNNER_TEMP}/wheel-smoke"
+          expected_version=$(uv run --frozen python -c \
+            'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          export EXPECTED_VERSION="${expected_version}"
+          mapfile -t wheels < <(find dist -maxdepth 1 -type f -name '*.whl' -print)
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            printf 'expected exactly one wheel, found %s\n' "${#wheels[@]}" >&2
+            exit 1
+          fi
+          uv venv --python "${PYTHON_VERSION}" "${environment}"
+          uv pip install --python "${environment}/bin/python" --no-index \
+            --only-binary=:all: "${wheels[0]}"
+          cd "${RUNNER_TEMP}"
+          "${environment}/bin/python" -I -c \
+            'import importlib.metadata, os, pathlib, shittim_chest, sys; package = pathlib.Path(shittim_chest.__file__).resolve().parent; assert importlib.metadata.version("shittim-chest") == os.environ["EXPECTED_VERSION"]; assert package.is_relative_to(pathlib.Path(sys.prefix).resolve()); assert (package / "py.typed").is_file()'
+
+  docs-public-safety:
+    name: docs-public-safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the complete tested history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Synchronize the locked environment
+        run: uv sync --frozen --all-groups
+      - name: Validate public files and documentation
+        run: |
+          uv run --frozen python tools/check_public_surface.py
+          uv run --frozen python -m tools.check_docs
+      - name: Validate GitHub Actions workflows
+        env:
+          ACTIONLINT_ARCHIVE_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "${ACTIONLINT_ARCHIVE_SHA256}" "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
+      - name: Check changed lines for whitespace errors
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git diff --check "${BASE_SHA}" "${GITHUB_SHA}"
+          elif git cat-file -e "${GITHUB_SHA}^" 2>/dev/null; then
+            git diff --check "${GITHUB_SHA}^" "${GITHUB_SHA}"
+          else
+            git diff --check
+          fi

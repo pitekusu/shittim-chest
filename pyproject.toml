@@ -16,6 +16,7 @@ Repository = "https://github.com/pitekusu/shittim-chest"
 
 [dependency-groups]
 dev = [
+    "cyclonedx-python-lib[json-validation]>=11.11.0,<12",
     "hypothesis>=6.156.6,<7",
     "mypy>=2.3.0,<3",
     "pip-audit>=2.10.1,<3",
