@@ -123,7 +123,10 @@ migrates the immediately previous v2. STEP-05C was merged through PR `#22` as
 commit `a6f43cb` and adds shadow-only deterministic escalation signals, immutable Luna/Terra/pro generation policies,
 schema v4 persistence, and an opt-in blind A/B evaluator. It must not enable
 production auto-escalation or paid evaluation without a later explicit operator
-decision. Discord integration and CloudWatch emission remain out of scope.
+decision. STEP-05C.1A adds separate scorer/key output trees, safe per-run failure
+capture, strict human-score validation, and content-free policy aggregation.
+It still does not authorize or execute paid evaluation. Discord integration and
+CloudWatch emission remain out of scope.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
