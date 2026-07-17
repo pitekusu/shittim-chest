@@ -4,15 +4,16 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-16
+updated: 2026-07-17
 ---
 
 # OpenAI・プロンプト詳細設計
 
 ## 1. Client・model
 
-- `openai==2.45.0`の`AsyncOpenAI`をprocess単位で1つ生成して再利用する。
-- Responses APIと`responses.parse()`を使用し、`store=false`を明示する。
+- `openai>=2.46.0,<3`の`AsyncOpenAI`をprocess単位で1つ生成して再利用する。lock上の実versionは`2.46.0`とする。
+- stable Responses APIと`responses.parse()`を使用し、`store=false`を明示する。
+- Responses API Multi-agent betaは使用しない。`client.beta.responses`、`multi_agent`、`OpenAI-Beta`ヘッダをrequestに含めず、Python application層が各personaの並列実行、checkpoint、投票、再開を管理する。
 - 既定modelは`gpt-5.6-luna`。deploy前に実projectで利用可能か再確認する。
 - request、response、structured schemaをadapter内で扱い、applicationへSDK型を返さない。
 - process全体のOpenAI同時実行は6、HTTP connection poolは6以上とする。
@@ -33,13 +34,14 @@ updated: 2026-07-16
 
 | Schema | 必須field |
 |---|---|
-| `OpinionOutputV1` | `summary`, `proposal`, `assumptions`, `risks` |
-| `FinalProposalOutputV1` | `title`, `proposal`, `rationale`, `tradeoffs`, `evidence_refs` |
+| `OpinionOutputV1` | `summary`, `proposal` |
+| `FinalProposalOutputV1` | `title`, `proposal` |
 | `VoteOutputV1` | `candidate_id`, `accuracy_score`, `usefulness_score`, `safety_score`, `reason` |
 | `DecisionOutputV1` | `decision`, `actions`, `caveats` |
-| `EvidenceDigestV1` | `items[source_url,title,source_metadata,summary,retrieved_at,content_hash]`, `required_search_satisfied` |
 
-Pydanticでfield、length、score範囲、candidate IDを検証した後、domain invariantで自己投票、重複、未知IDを拒否する。`refusal`、`incomplete`、`output_parsed is None`は別error codeへ変換する。
+Pydanticでfield、length、score範囲、candidate IDをstrictに検証し、未知fieldを拒否した後、domain invariantで自己投票、重複、未知IDを拒否する。`refusal`、`incomplete`、`output_parsed is None`は別error codeへ変換する。
+
+STEP-05Aでは現行domainとDynamoDB schemaに1対1で保存できるfieldだけをschemaに含める。旧設計の`assumptions`、`risks`、`rationale`、`tradeoffs`、`evidence_refs`を応答させて破棄することはしない。これらが必要な場合はdomain型、serializer、DynamoDB schema、Discord表示、試験を同時に変更する別sliceとする。`EvidenceDigestV1`とWeb searchはEvidence Routerを実装するSTEP-05Bで確定する。
 
 ## 4. Persona prompt
 
@@ -64,6 +66,10 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 - winner判定はPythonだけで行う。
 - 決定事項promptはwinning proposalの意味変更、新情報追加、他案への差替えを禁止する。
 
+## 6.1 LunaからTerraへの条件付き昇格
+
+STEP-05Aでは実装しない。難易度、人格間の重大な対立、schemaは正しいが品質不足な結果を何がどの時点で判定し、どのphaseだけをTerraで再実行するかは未決定である。実現方式、予算、deadline、決定性、利用者表示、evaluation thresholdを[[02_議論事項・意思決定記録#未決議論: LunaからTerraへの条件付き昇格（STEP-05C候補）]]で決定し、別sliceの承認前にoperatorへ相談する。provider refusalやpolicy blockの回避には使用しない。
+
 ## 7. Safety・privacy・cost
 
 - provider refusalを尊重し、別promptで回避しない。
@@ -83,3 +89,11 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 | 2026-07-16 | OpenAI Python | https://github.com/openai/openai-python | Async client再利用、error分類 |
 | 2026-07-16 | Web search | https://developers.openai.com/api/docs/guides/tools-web-search | 共通Evidence取得 |
 | 2026-07-16 | Data controls | https://developers.openai.com/api/docs/guides/your-data | `store=false`、abuse monitoring最大30日 |
+| 2026-07-17 | OpenAI Python 2.46.0 | https://pypi.org/project/openai/、https://github.com/openai/openai-python | `AsyncOpenAI.responses.parse`の引数、SDK retry、Python 3.14互換を照合 |
+| 2026-07-17 | Structured Outputs | https://developers.openai.com/api/docs/guides/structured-outputs | Pydantic parse、refusal、strict schemaを実装 |
+| 2026-07-17 | GPT-5.6 | https://developers.openai.com/api/docs/guides/latest-model | 高頻度処理の既定をLunaに維持 |
+| 2026-07-17 | Responses Multi-agent beta | https://developers.openai.com/api/docs/guides/responses-multi-agent | beta client/header/fieldを採用せずPython orchestrationを維持 |
+
+## 9. Implementation status
+
+STEP-05Aで初回意見、最終案、投票、決定事項のstable Responses adapter、strict schema、private persona検証、最大6並列、SDK error変換、本文を含まないusage/failure記録をlocal実装した。公式SDKとmock HTTP transportのcontract testでrequest shape、正常系、refusal、incomplete、invalid output、429、認証失敗、domain再検証を確認した。OpenAI実API接続、Web search、Terra昇格、Discord結合、CloudWatch出力は未実施である。

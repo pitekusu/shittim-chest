@@ -27,12 +27,20 @@ documentation safety. GitHub's managed Dependency Graph is compared with the
 tested uv inventory on a weekly schedule. Betterleaks scans the complete Git
 history; release assets are digest-pinned and its checksums are verified with
 Sigstore. The persistence suite runs against digest-pinned DynamoDB Local and
-SDK Stubber; the STEP-04B baseline is 163 tests with 92.40% domain/application
-line and branch coverage.
+SDK Stubber. STEP-05A adds an OpenAI adapter for initial opinions, final
+proposals, voting, and final decisions using the stable Responses API, strict
+Pydantic schemas, private persona configuration, bounded concurrency,
+content-free usage records, and domain-safe error mapping. Its contract tests
+use the official SDK with a mock HTTP transport and make no paid API calls. The
+current local baseline is 178 tests with 92.40% domain/application line and
+branch coverage.
 
-OpenAI and Discord adapters, runtime recovery wiring, Discord Applications,
-containers, CDK/AWS resources, and production workflows have not been
-implemented yet. No production AWS service is contacted by the current tests.
+Web search/Evidence routing, Luna-to-Terra escalation, the Discord adapter,
+runtime recovery wiring, Discord Applications, containers, CDK/AWS resources,
+and production workflows have not been implemented yet. Responses API
+Multi-agent beta is intentionally not used; Python application orchestration
+remains the authority for persona concurrency, voting, checkpoints, and resume.
+No production AWS or OpenAI service is contacted by the current tests.
 
 The planned runtime uses Python, Discord, the OpenAI Responses API, DynamoDB,
 and one ARM64 ECS Fargate Spot task in the Tokyo Region. Fargate Spot
