@@ -13,7 +13,7 @@ The requirements, basic design, and detailed design are complete. The
 Python/uv project foundation, initial domain state machine, and STEP-02 GitHub
 quality/supply-chain gates are implemented. The STEP-02B Betterleaks migration
 gate and STEP-02C Gitleaks retirement are complete. STEP-03 application core is
-implemented on its isolated Pull Request branch with voting rules, Protocols,
+implemented on draft PR `#15` with voting rules, Protocols,
 accept/run/cancel/retry/resume use cases, deadlines, checkpoint-aware
 cancellation, and fake-based async tests. External adapters,
 containers, AWS resources, and Discord Applications are not yet implemented.
