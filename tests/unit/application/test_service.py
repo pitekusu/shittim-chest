@@ -79,6 +79,7 @@ def make_application(
     *,
     session_timeout: float = 300.0,
     phase_timeout: float = 60.0,
+    lease_renewal: float = 20.0,
 ) -> DebateApplication:
     clock, ids, metrics, discord, evidence, openai, repository, orderer = dependencies
     return DebateApplication(
@@ -93,6 +94,7 @@ def make_application(
         lease_owner="worker-1",
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
+        lease_renewal_seconds=lease_renewal,
     )
 
 
@@ -139,6 +141,30 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert [item.state.phase for item in repository.history[accepted.debate_id]] == list(
         DebatePhase
     )[:8]
+
+
+@pytest.mark.asyncio
+async def test_run_renews_lease_while_a_phase_is_in_progress(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies, lease_renewal=0.001)
+    _, _, _, _, evidence, _, repository, _ = dependencies
+    evidence.delay = 0.01
+
+    accepted = await app.accept_debate(request())
+    await app.run_debate(accepted.debate_id)
+
+    assert repository.renew_calls
+    assert repository.current[accepted.debate_id].state.phase is DebatePhase.COMPLETED
 
 
 @pytest.mark.asyncio

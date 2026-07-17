@@ -19,8 +19,11 @@ cancellation, and fake-based async tests. STEP-04A persistence contracts were
 merged through PR `#16`: Guild/channel and
 operation identity preservation, fenced lease types, idempotent repository
 operations, vertically partitioned DynamoDB-native records, schema v1-to-v2
-up-conversion, and outbox/panel serialization. boto3 calls, DynamoDB Local
-transactions, containers, AWS resources, and Discord Applications are not yet implemented.
+up-conversion, and outbox/panel serialization. STEP-04B is implemented locally
+on `step-04b-dynamodb-adapter`: boto3 transactions, three lease slots, durable
+operation results, outbox state changes, GSI pagination, DynamoDB Local, and SDK
+stub tests pass. Commit, Pull Request, and GitHub CI evidence are still pending.
+Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
 
@@ -85,10 +88,13 @@ a second scanner only through a later ADR with a concrete coverage gap.
 
 STEP-03 was squash-merged through PR `#15` as commit `34ccc54` on 2026-07-17.
 STEP-04A was squash-merged through PR `#16` as commit `54948d7` on 2026-07-17.
-It intentionally remains SDK-independent: native-value serialization and
-repository semantics may not import boto3 or connect to AWS. The next slice is
-STEP-04B, which adds the boto3 adapter, conditional
-transactions, three lease slots, outbox state changes, and DynamoDB Local tests.
+Its serializer remains SDK-independent. STEP-04B adds boto3 1.43.50 at the
+adapter boundary, marshals validated native values explicitly, executes all SDK
+calls in worker threads, and uses a strongly readable `OPERATION#<id>/RESULT`
+item rather than a GSI as the idempotency authority. Local validation passed
+163 tests with 92.40% domain/application line/branch coverage using pinned
+DynamoDB Local 3.3.0 plus SDK Stubber. Do not describe STEP-04B as merged until
+its Pull Request and main checks have completed.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
@@ -220,7 +226,7 @@ The finalized design assumes the following baseline as of 2026-07-16:
 - `discord.py` 2.7.1 with four async client instances;
 - `openai` 2.45.0, `httpx` 0.28.1, the Responses API, Pydantic Structured
   Outputs, and `gpt-5.6-luna` as the deploy-time-verified default;
-- `boto3` and `boto3-stubs` 1.43.49;
+- `boto3` and `boto3-stubs` 1.43.50;
 - Amazon ECS on ARM64 Fargate Spot, ECR, DynamoDB, SSM Parameter Store, and
   CloudWatch Logs;
 - Ruff 0.15.22, mypy 2.3.0, pytest 9.1.1, import-linter 2.13, Hypothesis,
