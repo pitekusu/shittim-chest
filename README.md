@@ -42,6 +42,10 @@ STEP-05C adds deterministic post-vote shadow quality signals,
 SDK-independent Luna standard, Terra standard, and Luna pro policies, schema v4
 persistence, and an explicitly gated blind A/B evaluation tool. Shadow mode
 does not make an additional OpenAI request.
+STEP-05C.1A hardens that evaluator by separating the scorer artifact from the
+policy key and performance metrics, preserving per-policy refusals and
+operational failures without aborting the complete run, validating human
+rubric scores, and producing a content-free aggregate recommendation.
 
 Production auto-escalation, the Discord adapter, runtime recovery wiring,
 Discord Applications, containers, CDK/AWS resources,
@@ -51,8 +55,11 @@ remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
 
 The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
-raw A/B artifacts only outside the repository, and is not run by CI. Its model
-prices must be supplied at execution time rather than being hard-coded.
+the scorer artifact and unblinding key to separate repository-external directory
+trees, and is not run by CI. Its model prices must be supplied at execution
+time rather than being hard-coded. After blind scoring, `tools/score_escalation.py`
+validates every 1-to-5 rubric value and creates a content-free policy summary.
+No paid evaluation has been run yet.
 
 The planned runtime uses Python, Discord, the OpenAI Responses API, DynamoDB,
 and one ARM64 ECS Fargate Spot task in the Tokyo Region. Fargate Spot

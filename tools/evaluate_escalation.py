@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -13,6 +14,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
+from uuid import uuid4
 
 from shittim_chest.adapters.openai import (
     OpenAIAdapterConfig,
@@ -23,6 +25,7 @@ from shittim_chest.adapters.openai import (
     PersonaPrompts,
     create_openai_client,
 )
+from shittim_chest.adapters.openai.errors import OpenAIAdapterError
 from shittim_chest.application import LUNA_PRO, TERRA_STANDARD, GenerationPolicy
 from shittim_chest.domain import (
     PARTICIPANTS,
@@ -43,12 +46,13 @@ RUBRIC_AXES = ("accuracy", "safety", "usefulness", "instruction_following", "coh
 @dataclass(slots=True)
 class UsageCollector:
     usages: list[OpenAIUsageRecord] = field(default_factory=list)
+    failures: list[OpenAIFailureRecord] = field(default_factory=list)
 
     def record_usage(self, record: OpenAIUsageRecord) -> None:
         self.usages.append(record)
 
     def record_failure(self, record: OpenAIFailureRecord) -> None:
-        del record
+        self.failures.append(record)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +66,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", help="acknowledge paid live API calls")
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--scorer-output-dir", type=Path, required=True)
+    parser.add_argument("--key-output-dir", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--terra-input-usd-per-million", type=float)
     parser.add_argument("--terra-output-usd-per-million", type=float)
@@ -87,6 +92,16 @@ def validate_output_directory(path: Path) -> Path:
     if resolved == REPOSITORY_ROOT or REPOSITORY_ROOT in resolved.parents:
         raise ValueError("raw evaluation output must be outside the repository")
     return resolved
+
+
+def validate_separate_output_directories(scorer_path: Path, key_path: Path) -> tuple[Path, Path]:
+    """Keep blinded material and the unblinding key in separate directories."""
+
+    scorer = validate_output_directory(scorer_path)
+    key = validate_output_directory(key_path)
+    if scorer == key or scorer in key.parents or key in scorer.parents:
+        raise ValueError("scorer output and policy key must use separate directory trees")
+    return scorer, key
 
 
 def load_cases(path: Path, *, limit: int) -> tuple[EvaluationCase, ...]:
@@ -194,6 +209,8 @@ async def evaluate(
             ),
             recorder,
         )
+    evaluation_id = str(uuid4())
+    fixture_sha256 = hashlib.sha256(args.fixture.read_bytes()).hexdigest()
     blind_cases: list[dict[str, object]] = []
     key_cases: list[dict[str, object]] = []
     policies = (TERRA_STANDARD, LUNA_PRO)
@@ -201,35 +218,104 @@ async def evaluate(
         for index, case in enumerate(cases):
             ordered = policies if index % 2 == 0 else tuple(reversed(policies))
             blind: dict[str, object] = {"case_id": case.case_id, "question": case.question}
-            key: dict[str, object] = {"case_id": case.case_id, "mapping": {}}
+            key: dict[str, object] = {
+                "case_id": case.case_id,
+                "mapping": {},
+                "metrics": {},
+            }
             for label, policy in zip(("A", "B"), ordered, strict=True):
                 service, recorder = runners[policy.policy_id.value]
-                decision, usages, elapsed_ms = await run_policy(
-                    case,
-                    service=service,
-                    recorder=recorder,
-                )
-                totals = _usage_totals(usages, args, policy)
-                blind[label] = {
-                    "decision": decision.decision,
-                    "actions": list(decision.actions),
-                    "caveats": list(decision.caveats),
-                    "metrics": {**totals, "elapsed_ms": elapsed_ms},
-                    "rubric": {axis: None for axis in RUBRIC_AXES},
-                }
+                usage_start = len(recorder.usages)
+                failure_start = len(recorder.failures)
+                started = monotonic()
+                try:
+                    decision, usages, elapsed_ms = await run_policy(
+                        case,
+                        service=service,
+                        recorder=recorder,
+                    )
+                except Exception as error:
+                    adapter_errors = _adapter_errors(error)
+                    if not adapter_errors:
+                        raise
+                    if any(item.code == "openai_configuration" for item in adapter_errors):
+                        raise ValueError(
+                            "evaluation configuration failed; verify model access and credentials"
+                        ) from error
+                    failures = recorder.failures[failure_start:]
+                    recorded_codes = tuple(item.code for item in failures)
+                    error_codes = recorded_codes or tuple(item.code for item in adapter_errors)
+                    failure_code = _representative_failure_code(error_codes)
+                    safe_metrics = {
+                        **_usage_totals(tuple(recorder.usages[usage_start:]), args, policy),
+                        "elapsed_ms": round((monotonic() - started) * 1_000),
+                    }
+                    blind[label] = {
+                        "status": "failed",
+                        "failure": {
+                            "code": failure_code,
+                            "category": _failure_category(failure_code),
+                        },
+                        "rubric": {axis: None for axis in RUBRIC_AXES},
+                    }
+                else:
+                    safe_metrics = {**_usage_totals(usages, args, policy), "elapsed_ms": elapsed_ms}
+                    blind[label] = {
+                        "status": "succeeded",
+                        "decision": decision.decision,
+                        "actions": list(decision.actions),
+                        "caveats": list(decision.caveats),
+                        "rubric": {axis: None for axis in RUBRIC_AXES},
+                    }
                 mapping = key["mapping"]
                 if not isinstance(mapping, dict):
                     raise ValueError("internal evaluation mapping is invalid")
                 mapping[label] = policy.policy_id.value
+                metrics = key["metrics"]
+                if not isinstance(metrics, dict):
+                    raise ValueError("internal evaluation metrics are invalid")
+                metrics[label] = safe_metrics
             blind["preference"] = None
             blind_cases.append(blind)
             key_cases.append(key)
     finally:
         await client.close()
     return (
-        {"version": "escalation-blind-v1", "rubric_scale": "1-5", "cases": blind_cases},
-        {"version": "escalation-key-v1", "cases": key_cases},
+        {
+            "version": "escalation-blind-v2",
+            "evaluation_id": evaluation_id,
+            "fixture_sha256": fixture_sha256,
+            "rubric_scale": "1-5",
+            "cases": blind_cases,
+        },
+        {
+            "version": "escalation-key-v2",
+            "evaluation_id": evaluation_id,
+            "fixture_sha256": fixture_sha256,
+            "cases": key_cases,
+        },
     )
+
+
+def _failure_category(code: str) -> str:
+    if code in {"openai_refusal", "openai_incomplete", "openai_invalid_output"}:
+        return "major"
+    return "operational"
+
+
+def _adapter_errors(error: BaseException) -> tuple[OpenAIAdapterError, ...]:
+    if isinstance(error, OpenAIAdapterError):
+        return (error,)
+    if isinstance(error, BaseExceptionGroup):
+        return tuple(item for nested in error.exceptions for item in _adapter_errors(nested))
+    return ()
+
+
+def _representative_failure_code(codes: tuple[str, ...]) -> str:
+    if not codes:
+        raise ValueError("at least one evaluation failure code is required")
+    operational = sorted(code for code in codes if _failure_category(code) == "operational")
+    return operational[0] if operational else sorted(codes)[0]
 
 
 def _usage_totals(
@@ -266,21 +352,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parse_args(argv)
         api_key = require_live_access(live=args.live, environment=os.environ)
-        destination = validate_output_directory(args.output_dir)
+        scorer_destination, key_destination = validate_separate_output_directories(
+            args.scorer_output_dir,
+            args.key_output_dir,
+        )
         blind, key = asyncio.run(evaluate(args, api_key))
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / "blind-results.json").write_text(
+        scorer_destination.mkdir(parents=True, exist_ok=True)
+        key_destination.mkdir(parents=True, exist_ok=True)
+        (scorer_destination / "blind-results.json").write_text(
             json.dumps(blind, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        (destination / "policy-key.json").write_text(
+        (key_destination / "policy-key.json").write_text(
             json.dumps(key, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(str(error), file=sys.stderr)
         return 1
-    print(f"wrote blinded evaluation artifacts to {destination}")
+    print(f"wrote blinded scoring artifact to {scorer_destination}")
+    print(f"wrote policy key to separate directory {key_destination}")
     return 0
 
 
