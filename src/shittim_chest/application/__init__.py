@@ -11,6 +11,7 @@ from shittim_chest.application.errors import (
 from shittim_chest.application.generation_policy import (
     LUNA_PRO,
     LUNA_STANDARD,
+    PRODUCTION_POLICY,
     TERRA_STANDARD,
     GenerationPolicy,
     GenerationPolicyId,
@@ -33,6 +34,7 @@ from shittim_chest.application.service import DebateApplication
 __all__ = (
     "LUNA_PRO",
     "LUNA_STANDARD",
+    "PRODUCTION_POLICY",
     "TERRA_STANDARD",
     "AcceptDebateRequest",
     "AcceptedDebate",

@@ -557,6 +557,7 @@ def test_config_and_persona_prompts_fail_closed() -> None:
         OpenAIAdapterConfig(max_concurrency=7)
     with pytest.raises(ValueError, match="model"):
         OpenAIAdapterConfig(policy=replace(LUNA_STANDARD, model=" "))
+    assert OpenAIAdapterConfig().policy is LUNA_STANDARD
 
 
 @pytest.mark.asyncio

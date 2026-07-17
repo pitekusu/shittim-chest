@@ -49,7 +49,15 @@ content-free aggregate recommendation. STEP-05C.1B uses preference-only blind
 review because requiring 100 independent rubric scores was not operationally
 reasonable for one maintainer.
 
-Production auto-escalation, the Discord adapter, runtime recovery wiring,
+Production is fixed to Luna standard for every generation phase. Terra standard
+and Luna pro remain evaluation-only policies and cannot be selected by runtime
+configuration or Discord operations. The shadow assessment remains observable
+with `executed=false` and never causes another model request. Response variety
+comes from three private, versioned persona prompts with distinct practical,
+verification/safety, and creative/alternative lenses while sharing the same
+evidence, safety constraints, and structured-output schema.
+
+The Discord adapter, runtime recovery wiring,
 Discord Applications, containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
@@ -68,9 +76,9 @@ cost and p95 latency when preferences tie.
 
 The 2026-07-17 STEP-05C.1B run completed 10 cases and 20 successful policy
 runs. Blind preference review produced 4 wins for Luna pro, 2 wins for Terra
-standard, and 4 ties, so Luna pro is the measured candidate. This result does
-not enable production auto-escalation; an operator decision and runtime limits
-remain required.
+standard, and 4 ties. The operator subsequently chose the simpler production
+policy: Luna standard only, with no escalation. The result is retained solely
+as evaluation history.
 
 The planned runtime uses Python, Discord, the OpenAI Responses API, DynamoDB,
 and one ARM64 ECS Fargate Spot task in the Tokyo Region. Fargate Spot

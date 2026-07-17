@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from shittim_chest.application.generation_policy import (
-    LUNA_STANDARD,
+    PRODUCTION_POLICY,
     GenerationPolicy,
     PhaseBudget,
 )
@@ -20,7 +20,7 @@ PhaseSettings = PhaseBudget
 class OpenAIAdapterConfig:
     """Non-secret settings shared by one process-level OpenAI client."""
 
-    policy: GenerationPolicy = LUNA_STANDARD
+    policy: GenerationPolicy = PRODUCTION_POLICY
     max_concurrency: int = 6
 
     def __post_init__(self) -> None:
