@@ -252,6 +252,11 @@ weekly release-tool workflow, and emits a 30-day SPDX JSON artifact containing
 both Debian OS and production Python packages. The fault fixture is copied only
 into the `fault-test` target; never push or deploy that target. Fargate
 task-definition settings and release attestations remain STEP-09/10 work.
+STEP-08B was merged in PR #39 at commit `2cca51a`; PR/main native ARM64 CI,
+CodeQL, image SPDX validation, and the `container-arm64` Ruleset requirement
+passed. The first PR run exposed a Python 3.12 host/Python 3.14 domain import;
+keep the host-side gate standard-library-only and preserve the unit assertion
+that its phase list matches the domain state machine.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
