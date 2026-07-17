@@ -126,8 +126,17 @@ production auto-escalation or paid evaluation without a later explicit operator
 decision. STEP-05C.1A was merged through PR `#24` as commit `1360411` and adds
 separate scorer/key output trees, safe per-run failure capture, strict
 human-score validation, and content-free policy aggregation.
-It still does not authorize or execute paid evaluation. Discord integration and
-CloudWatch emission remain out of scope.
+STEP-05C.1B paid blind answer generation was explicitly approved and completed
+on 2026-07-17 with 10 cases and 20 successful answers. Human review uses one
+A/B/tie preference per case; do not require the impractical 100-value rubric
+for this operator evaluation. `tools/review_escalation.py` must preserve blind
+model identity, save after every choice, and support resume. Policy aggregation
+uses preference wins first and cost then p95 latency only for a preference tie.
+The completed blind review produced Luna pro 4 wins, Terra standard 2 wins, and
+4 ties. Luna pro is an evaluation candidate, not an approved production policy:
+production auto-escalation, thresholds, token/deadline limits, and user-facing
+behavior remain disabled until an explicit operator decision. Discord
+integration and CloudWatch emission remain out of scope.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 

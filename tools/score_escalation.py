@@ -51,6 +51,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--blind-results", type=Path, required=True)
     parser.add_argument("--policy-key", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--preference-only",
+        action="store_true",
+        help="rank policies from blind A/B/tie choices without rubric scores",
+    )
     parser.add_argument("--quality-tie-margin", type=float, default=0.05)
     parser.add_argument("--max-p95-ms", type=int)
     parser.add_argument("--max-total-usd", type=float)
@@ -71,6 +76,7 @@ def aggregate(
     quality_tie_margin: float,
     max_p95_ms: int | None,
     max_total_usd: float | None,
+    preference_only: bool = False,
 ) -> dict[str, object]:
     if quality_tie_margin < 0:
         raise ValueError("quality tie margin must not be negative")
@@ -102,7 +108,13 @@ def aggregate(
             if not isinstance(metrics, dict):
                 raise ValueError(f"{case_id} policy key is missing metrics for {label}")
             records[policy].append(
-                _validated_result(result, metrics=metrics, case_id=case_id, label=label)
+                _validated_result(
+                    result,
+                    metrics=metrics,
+                    case_id=case_id,
+                    label=label,
+                    preference_only=preference_only,
+                )
             )
         preference = case.get("preference")
         if preference == "tie":
@@ -120,9 +132,11 @@ def aggregate(
         quality_tie_margin=quality_tie_margin,
         max_p95_ms=max_p95_ms,
         max_total_usd=max_total_usd,
+        preference_only=preference_only,
     )
     return {
         "version": "escalation-summary-v1",
+        "scoring_mode": "preference_only" if preference_only else "rubric",
         "evaluation_id": blind["evaluation_id"],
         "fixture_sha256": blind["fixture_sha256"],
         "case_count": len(_cases(blind)),
@@ -171,6 +185,7 @@ def _validated_result(
     metrics: Mapping[str, object],
     case_id: str,
     label: str,
+    preference_only: bool,
 ) -> ScoredResult:
     status = result.get("status")
     rubric = result.get("rubric")
@@ -180,7 +195,12 @@ def _validated_result(
     if set(rubric) != set(RUBRIC_AXES):
         raise ValueError(f"{case_id} result {label} has an invalid rubric")
     if status == "succeeded":
-        if not all(
+        if preference_only:
+            if any(value is not None for value in values):
+                raise ValueError(
+                    f"{case_id} result {label} preference-only rubric must remain unscored"
+                )
+        elif not all(
             isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 5
             for value in values
         ):
@@ -237,6 +257,7 @@ def _recommend(
     quality_tie_margin: float,
     max_p95_ms: int | None,
     max_total_usd: float | None,
+    preference_only: bool,
 ) -> dict[str, object]:
     if set(summaries) != POLICIES:
         return {"status": "needs_operator", "reason": "both policies require results"}
@@ -247,7 +268,7 @@ def _recommend(
         policy: summary
         for policy, summary in summaries.items()
         if summary.major_failures == minimum_major
-        and summary.quality_mean is not None
+        and (preference_only or summary.quality_mean is not None)
         and (max_p95_ms is None or summary.p95_latency_ms <= max_p95_ms)
         and (
             max_total_usd is None
@@ -259,6 +280,29 @@ def _recommend(
     }
     if not eligible:
         return {"status": "needs_operator", "reason": "no policy meets operational limits"}
+    if preference_only:
+        ranked_by_preference = sorted(
+            eligible.items(), key=lambda item: item[1].preference_wins, reverse=True
+        )
+        if len(ranked_by_preference) == 1:
+            return {
+                "status": "candidate",
+                "policy": ranked_by_preference[0][0],
+                "reason": "only eligible policy",
+            }
+        first, second = ranked_by_preference
+        if first[1].preference_wins > second[1].preference_wins:
+            return {
+                "status": "candidate",
+                "policy": first[0],
+                "reason": "more blind preference wins",
+            }
+        cheaper = _cheaper_or_faster(first, second)
+        return {
+            "status": "candidate",
+            "policy": cheaper,
+            "reason": "preference tie; lower cost or latency",
+        }
     ranked = sorted(eligible.items(), key=lambda item: item[1].quality_mean or 0.0, reverse=True)
     if len(ranked) == 1:
         return {"status": "candidate", "policy": ranked[0][0], "reason": "only eligible policy"}
@@ -320,6 +364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             quality_tie_margin=args.quality_tie_margin,
             max_p95_ms=args.max_p95_ms,
             max_total_usd=args.max_total_usd,
+            preference_only=args.preference_only,
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
