@@ -32,10 +32,12 @@ from shittim_chest.domain import (
     DebateState,
     EvidenceBundle,
     EvidenceItem,
+    EvidenceSearchStatus,
     FinalDecision,
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    SearchRequirement,
     Vote,
 )
 
@@ -91,6 +93,10 @@ def snapshot() -> DebateSnapshot:
                 ),
             ),
             required_search_satisfied=True,
+            summary="Source-backed summary",
+            search_requirement=SearchRequirement.OPTIONAL,
+            search_status=EvidenceSearchStatus.COMPLETED,
+            search_response_id="resp_evidence",
         ),
         initial_opinions=opinions,
         final_proposals=proposals,
@@ -143,9 +149,14 @@ def test_terminal_snapshot_removes_recoverable_index() -> None:
 
 
 def test_empty_evidence_bundle_is_distinct_from_missing_evidence() -> None:
-    source = replace(snapshot(), evidence=EvidenceBundle((), False))
+    unavailable = EvidenceBundle(
+        required_search_satisfied=False,
+        search_requirement=SearchRequirement.OPTIONAL,
+        search_status=EvidenceSearchStatus.OPTIONAL_UNAVAILABLE,
+    )
+    source = replace(snapshot(), evidence=unavailable)
     restored = deserialize_snapshot(serialize_snapshot(source))
-    assert restored.evidence == EvidenceBundle((), False)
+    assert restored.evidence == unavailable
 
     without_evidence = replace(source, evidence=None)
     assert deserialize_snapshot(serialize_snapshot(without_evidence)).evidence is None
@@ -153,7 +164,7 @@ def test_empty_evidence_bundle_is_distinct_from_missing_evidence() -> None:
 
 def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> None:
     current = serialize_snapshot(snapshot())
-    previous = tuple({**item, "schema_version": 1} for item in current)
+    previous = tuple({**item, "schema_version": 2} for item in current)
     restored = deserialize_snapshot(previous)
     assert restored.state.schema_version == CURRENT_SCHEMA_VERSION
     assert all(migrate_item(item)["schema_version"] == CURRENT_SCHEMA_VERSION for item in previous)
@@ -227,7 +238,7 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
     assert outbox_item["SK"] == f"ATTEMPT#{source.state.attempt_id}#OUTBOX#post-decision-0001"
     assert panel_item["PK"] == "OPERATION#retry-operation"
     assert panel_item["SK"] == "RESULT"
-    assert outbox_item["schema_version"] == panel_item["schema_version"] == 2
+    assert outbox_item["schema_version"] == panel_item["schema_version"] == CURRENT_SCHEMA_VERSION
     assert deserialize_outbox(outbox_item) == outbox
     assert deserialize_panel_operation(panel_item) == panel
     with pytest.raises(PersistenceFormatError, match="not an outbox"):

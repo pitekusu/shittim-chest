@@ -14,6 +14,7 @@ from shittim_chest.application import (
     DebateNotFound,
     InvalidApplicationOperation,
     RequestNotAllowed,
+    RequiredEvidenceUnavailable,
     RetryDebateCommand,
     RuntimeNotReady,
 )
@@ -434,6 +435,29 @@ async def test_session_timeout_has_distinct_stable_error_code(
     await app.run_debate(accepted.debate_id)
 
     assert repository.current[accepted.debate_id].error_code == "session_deadline_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_required_evidence_failure_has_distinct_stable_error_code(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    dependencies[4].error = RequiredEvidenceUnavailable("search failed")
+    repository = dependencies[6]
+    app = make_application(dependencies)
+    accepted = await app.accept_debate(request())
+
+    await app.run_debate(accepted.debate_id)
+
+    assert repository.current[accepted.debate_id].error_code == "required_evidence_unavailable"
 
 
 @pytest.mark.asyncio

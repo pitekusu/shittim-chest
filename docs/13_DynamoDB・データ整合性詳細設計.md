@@ -12,7 +12,7 @@ updated: 2026-07-17
 ## 1. Table設定
 
 - 単一table、on-demand、PK/SKはstring、PITR 35日、deletion protection有効、`RETAIN`とする。
-- 全itemに`schema_version`、`created_at`、`updated_at`をUTCで保存する。STEP-04Aのcurrent record schemaは`2`とし、readerはschema `1`を構造検証後に`2`へup-convertする。未知versionはfail closedとする。
+- 全itemに`schema_version`、`created_at`、`updated_at`をUTCで保存する。STEP-05Bのcurrent record schemaは`3`とし、readerは直前schema `2`を構造検証後に`3`へup-convertする。未知versionはfail closedとする。
 - debate本文とDiscord threadは自動期限なしで保存し、TTLを設定しない。「永久保存」は自動削除しない意味であり、過去状態への復旧保証はPITRの35日までとする。AWS Backupは採用しない。
 - TTLは期限切れ補助recordだけに使用し、lease解放やsecurity処理へ依存しない。
 
@@ -96,7 +96,7 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 - Queryは1MB paginationを考慮し、Scanを通常pathで使用しない。
 - floatを保存せず、必要な数値はintまたは`Decimal`を使用する。
 
-STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 1.43.50、明示AttributeValue変換、typed transaction error mapping、`asyncio.to_thread`隔離、強整合read、1MB pagination、3-slot fencing、20秒heartbeat、outbox状態更新を実装した。phase更新はAttempt METAのlease属性を上書きしない条件付き`Update`とし、並行renew後のexpiryを古いsnapshotで巻き戻さない。DynamoDB Local 3.3.0でtransaction/GSI/outboxを、SDK StubberでLocalが再現しないtransaction cancelを検証する。
+STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidence METAへ要約、検索要否、検索状態、Responses response ID、router rules version、routing reasonを追加しschema v3へ更新した。source itemはURL/title/canonical metadata/UTC取得時刻/metadata SHA-256を保持する。DynamoDB Localでtransaction/GSI/outboxを、serializer contractでv2→v3 migrationとEvidence round-tripを検証する。
 
 ## 10. Schema migration
 

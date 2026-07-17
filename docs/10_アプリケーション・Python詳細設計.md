@@ -53,7 +53,7 @@ tools/
 | `DebateErrorCode` | user向け表示と再試行可否を分離した安定code |
 | `BotIdentity` | private runtime config由来のapplication ID、slot、表示名、role |
 | `PersonaSpec` | slot、config version、schema version、prompt hash。prompt本文は保持しない |
-| `EvidenceBundle` | immutable tuple。source URL/title/metadata、取得時刻、content hashを含む |
+| `EvidenceBundle` | immutable。要約、`none/optional/required`、router rules version/reason、検索状態、response ID、source URL/title/canonical metadata、UTC取得時刻、metadata SHA-256を含む |
 | `OutboxOperation` | operation ID、Bot ID、22文字nonce、content hash、claim/retry/chunk状態 |
 
 domain modelは原則`@dataclass(frozen=True, slots=True)`とし、時刻はtimezone-aware UTC、永続化recordには`schema_version`を必須とする。
@@ -68,7 +68,7 @@ async def retry_debate(command: RetryDebateCommand) -> AcceptedRetry: ...
 async def resume_recoverable() -> None: ...
 ```
 
-Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに1回だけimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher`は永続化済みoutbox operation以外を投稿してはならない。
+Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに最大1つのResponses requestでimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher`は永続化済みoutbox operation以外を投稿してはならない。必須Evidence取得不能は`required_evidence_unavailable`としてFAILEDへ保存し、任意取得不能は`optional_unavailable`を保存して続行する。
 
 STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。STEP-04Aでは`DebateSnapshot`へGuild/channel、debate/attempt作成時刻、Discord starter/thread ID、`LeaseGrant`を追加し、受付時にDiscord operation IDを失わない。cancel/retryも永続化済みoperation IDで再実行結果を返し、別request/debateへのoperation ID再利用を拒否する。
 

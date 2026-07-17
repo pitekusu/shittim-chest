@@ -114,6 +114,11 @@ def _proposal_for(
 def _evidence(bundle: EvidenceBundle) -> dict[str, object]:
     return {
         "required_search_satisfied": bundle.required_search_satisfied,
+        "summary": bundle.summary,
+        "search_requirement": bundle.search_requirement.value,
+        "search_status": bundle.search_status.value,
+        "router_rules_version": bundle.router_rules_version,
+        "routing_reason": bundle.routing_reason,
         "items": [
             {
                 "source_url": item.source_url,

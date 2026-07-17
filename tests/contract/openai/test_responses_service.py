@@ -20,6 +20,7 @@ from shittim_chest.adapters.openai import (
     OpenAIInvalidOutput,
     OpenAIRateLimited,
     OpenAIRefusal,
+    OpenAIRequestLimiter,
     OpenAIResponsesService,
     OpenAIUnavailable,
     OpenAIUsageRecord,
@@ -116,7 +117,7 @@ async def service_for(
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=max_retries)
     observer = RecordingObserver()
     return (
-        OpenAIResponsesService(client, personas(), recorder=observer),
+        OpenAIResponsesService(client, personas(), OpenAIRequestLimiter(), recorder=observer),
         server,
         observer,
         http_client,
@@ -403,7 +404,7 @@ async def test_transport_errors_are_retryable_unavailable_failures(
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(failing_handler))
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=0)
     observer = RecordingObserver()
-    service = OpenAIResponsesService(client, personas(), recorder=observer)
+    service = OpenAIResponsesService(client, personas(), OpenAIRequestLimiter(), recorder=observer)
     try:
         with pytest.raises(OpenAIUnavailable) as raised:
             await service.generate_initial_opinion(
@@ -446,7 +447,7 @@ async def test_process_concurrency_never_exceeds_configured_limit() -> None:
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(blocking_handler))
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=0)
-    service = OpenAIResponsesService(client, personas())
+    service = OpenAIResponsesService(client, personas(), OpenAIRequestLimiter())
     try:
         async with asyncio.TaskGroup() as group:
             for _ in range(7):
@@ -481,7 +482,7 @@ async def test_cancellation_is_rethrown_without_failure_telemetry() -> None:
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(blocking_handler))
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=0)
     observer = RecordingObserver()
-    service = OpenAIResponsesService(client, personas(), recorder=observer)
+    service = OpenAIResponsesService(client, personas(), OpenAIRequestLimiter(), recorder=observer)
     task = asyncio.create_task(
         service.generate_initial_opinion(
             participant=ParticipantSlot.PARTICIPANT_A,

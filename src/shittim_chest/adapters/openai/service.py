@@ -35,6 +35,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIRefusal,
     OpenAIUnavailable,
 )
+from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     NullOpenAIUsageRecorder,
     OpenAIFailureRecord,
@@ -92,12 +93,9 @@ class OpenAIResponsesService:
 
     client: AsyncOpenAI
     personas: PersonaPrompts
+    limiter: OpenAIRequestLimiter
     config: OpenAIAdapterConfig = field(default_factory=OpenAIAdapterConfig)
     recorder: OpenAIUsageRecorder = field(default_factory=NullOpenAIUsageRecorder)
-    _semaphore: asyncio.Semaphore = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self._semaphore = asyncio.Semaphore(self.config.max_concurrency)
 
     async def generate_initial_opinion(
         self,
@@ -189,7 +187,7 @@ class OpenAIResponsesService:
     ) -> _OutputT:
         started = monotonic()
         try:
-            async with self._semaphore:
+            async with self.limiter.slot():
                 response = await self.client.responses.parse(
                     model=self.config.model,
                     instructions=instructions,

@@ -10,6 +10,8 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIRefusal,
     OpenAIUnavailable,
 )
+from shittim_chest.adapters.openai.evidence import OpenAIWebEvidenceService
+from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     NullOpenAIUsageRecorder,
     OpenAIFailureRecord,
@@ -17,6 +19,7 @@ from shittim_chest.adapters.openai.observability import (
     OpenAIUsageRecorder,
 )
 from shittim_chest.adapters.openai.service import OpenAIResponsesService, create_openai_client
+from shittim_chest.application.errors import RequiredEvidenceUnavailable
 
 __all__ = (
     "NullOpenAIUsageRecorder",
@@ -28,10 +31,13 @@ __all__ = (
     "OpenAIInvalidOutput",
     "OpenAIRateLimited",
     "OpenAIRefusal",
+    "OpenAIRequestLimiter",
     "OpenAIResponsesService",
     "OpenAIUnavailable",
     "OpenAIUsageRecord",
     "OpenAIUsageRecorder",
+    "OpenAIWebEvidenceService",
     "PersonaPrompts",
+    "RequiredEvidenceUnavailable",
     "create_openai_client",
 )

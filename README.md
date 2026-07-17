@@ -31,12 +31,17 @@ SDK Stubber. STEP-05A adds an OpenAI adapter for initial opinions, final
 proposals, voting, and final decisions using the stable Responses API, strict
 Pydantic schemas, private persona configuration, bounded concurrency,
 content-free usage records, and domain-safe error mapping. Its contract tests
-use the official SDK with a mock HTTP transport and make no paid API calls. The
-current local baseline is 178 tests with 92.40% domain/application line and
-branch coverage.
+use the official SDK with a mock HTTP transport and make no paid API calls.
+STEP-05B adds a fail-safe deterministic question router and hosted
+Responses API Web search boundary. It classifies searches as none, optional,
+or required, defaults unknown wording to optional search, and stores the router
+version/reason with one immutable summary and source set for every participant;
+persists optional search failure while continuing; and fails closed when
+current evidence is required. Evidence persistence uses schema v3 with v2
+reader migration.
 
-Web search/Evidence routing, Luna-to-Terra escalation, the Discord adapter,
-runtime recovery wiring, Discord Applications, containers, CDK/AWS resources,
+Luna-to-Terra escalation, the Discord adapter, runtime recovery wiring,
+Discord Applications, containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
