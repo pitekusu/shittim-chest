@@ -46,6 +46,7 @@ from shittim_chest.runtime import (
     Uuid7IdGenerator,
     lease_owner_id,
 )
+from shittim_chest.runtime.health import EventLoopHeartbeat
 
 _LOGGER = logging.getLogger("shittim_chest")
 
@@ -59,17 +60,19 @@ class ProductionRuntime:
     openai_client: AsyncOpenAI
     dynamodb_client: DynamoDBClient
     telemetry: ContentFreeTelemetry
+    heartbeat: EventLoopHeartbeat = field(default_factory=EventLoopHeartbeat)
     _closed: bool = field(default=False, init=False)
 
     async def run(self) -> None:
         """Run the lifecycle and always close every process-scoped client."""
 
-        self.telemetry.runtime_event("application_started")
-        try:
-            await self.lifecycle.run()
-        finally:
-            await self.aclose()
-            self.telemetry.runtime_event("application_stopped")
+        async with self.heartbeat:
+            self.telemetry.runtime_event("application_started")
+            try:
+                await self.lifecycle.run()
+            finally:
+                await self.aclose()
+                self.telemetry.runtime_event("application_stopped")
 
     async def aclose(self) -> None:
         """Idempotently release Discord, OpenAI, and DynamoDB client resources."""

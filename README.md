@@ -118,13 +118,26 @@ verification/safety, and creative/alternative lenses while sharing the same
 evidence, safety constraints, and structured-output schema.
 
 The Discord interaction, lifecycle, outbox-recovery, production-composition,
-and process-signal runtimes are implemented and offline-tested. They have not
-been connected to real Bot tokens or external services. Container-level fault
-injection, Discord Applications, containers, CDK/AWS resources, and production
-workflows have not been implemented yet. Responses API
+and process-signal runtimes are implemented and offline-tested. STEP-08A adds a
+digest-pinned multi-stage production container, a separately selectable
+break-glass target, numeric non-root execution, and a content-free event-loop
+heartbeat health check. The local amd64 security boundary has been validated
+with a read-only root filesystem, a writable temporary mount, all Linux
+capabilities dropped, and no-new-privileges. They have not been connected to
+real Bot tokens or external services. Native ARM64 CI, container fault
+injection, final-image SBOM, Discord Applications, CDK/AWS resources, and
+production workflows remain for later slices. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
+
+Build the two local image targets with Docker-format metadata so the health
+configuration is retained:
+
+```sh
+podman build --format docker --target production -t shittim-chest:production .
+podman build --format docker --target break-glass -t shittim-chest:break-glass .
+```
 
 The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
 the scorer artifact and unblinding key to separate repository-external directory
