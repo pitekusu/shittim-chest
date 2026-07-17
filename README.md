@@ -14,14 +14,16 @@ proposals, anonymous voting, and a mechanically calculated result through the
 Requirements and detailed design are available in the
 [design-document mirror](https://github.com/pitekusu/shittim-chest/tree/main/docs).
 The Python 3.14.6/uv project foundation, UUIDv7 debate/attempt identifiers,
-immutable phase and Spot-recovery state machine, retry attempt boundary, and
-domain tests are implemented. Pull requests are checked with read-only GitHub
+immutable phase and Spot-recovery state machine, deterministic voting, and the
+SDK-independent application core are implemented. The application layer exposes
+typed accept/run/cancel/retry/resume use cases through Protocol boundaries and
+fake-based async tests. Pull requests are checked with read-only GitHub
 Actions jobs for quality, tests, security, packaging, source SBOM, and public
 documentation safety. GitHub's managed Dependency Graph is compared with the
 tested uv inventory on a weekly schedule. Betterleaks scans the complete Git
 history; release assets are digest-pinned and its checksums are verified with
 Sigstore.
-Application use cases, external adapters, Discord Applications, AWS resources,
+External adapters, concrete persistence, Discord Applications, AWS resources,
 containers, and production workflows have not been implemented yet.
 
 The planned runtime uses Python, Discord, the OpenAI Responses API, DynamoDB,
@@ -38,6 +40,7 @@ uv sync --frozen --all-groups
 uv run --frozen ruff format --check .
 uv run --frozen ruff check .
 uv run --frozen mypy
+uv run --frozen lint-imports
 uv run --frozen pytest
 uv run --frozen python tools/check_public_surface.py
 uv run --frozen python -m tools.check_docs

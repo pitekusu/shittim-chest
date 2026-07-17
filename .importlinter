@@ -1,0 +1,9 @@
+[importlinter]
+root_package = shittim_chest
+
+[importlinter:contract:domain-application-layers]
+name = Application may depend on domain, never the reverse
+type = layers
+layers =
+    shittim_chest.application
+    shittim_chest.domain
