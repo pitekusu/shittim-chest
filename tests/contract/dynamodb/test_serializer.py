@@ -225,7 +225,8 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
     panel_item = serialize_panel_operation(panel)
 
     assert outbox_item["SK"] == f"ATTEMPT#{source.state.attempt_id}#OUTBOX#post-decision-0001"
-    assert panel_item["SK"] == "PANEL#retry-operation"
+    assert panel_item["PK"] == "OPERATION#retry-operation"
+    assert panel_item["SK"] == "RESULT"
     assert outbox_item["schema_version"] == panel_item["schema_version"] == 2
     assert deserialize_outbox(outbox_item) == outbox
     assert deserialize_panel_operation(panel_item) == panel

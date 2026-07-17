@@ -28,6 +28,14 @@ class RepositoryConflict(Exception):
     """Raised when a conditional repository operation loses its expected state."""
 
 
+class RepositoryBusy(Exception):
+    """Raised when all three global execution slots are leased."""
+
+
+class RepositoryQuotaExceeded(Exception):
+    """Raised when a Guild has consumed its daily acceptance quota."""
+
+
 class Clock(Protocol):
     """Provide timezone-aware UTC wall-clock timestamps."""
 

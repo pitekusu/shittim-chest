@@ -305,8 +305,8 @@ def serialize_panel_operation(operation: PanelOperation) -> DynamoItem:
     """Serialize one idempotency and authorization binding for a Discord operation."""
 
     item: DynamoItem = {
-        "PK": f"DEBATE#{operation.debate_id}",
-        "SK": f"PANEL#{operation.operation_id}",
+        "PK": f"OPERATION#{operation.operation_id}",
+        "SK": "RESULT",
         "record_type": "panel_operation",
         "schema_version": CURRENT_SCHEMA_VERSION,
         "operation_id": operation.operation_id,

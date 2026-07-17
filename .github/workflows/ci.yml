@@ -66,7 +66,22 @@ jobs:
           enable-cache: true
       - name: Synchronize the locked environment
         run: uv sync --frozen --all-groups
-      - name: Run unit and property tests
+      - name: Start pinned DynamoDB Local
+        run: |
+          docker run --detach --rm --name dynamodb-local --publish 127.0.0.1:8000:8000 \
+            amazon/dynamodb-local@sha256:d89f8fcc6b1a39cb35976c248ed42a28c66ae00dc043099210f5571e42648ab4 \
+            -jar DynamoDBLocal.jar -inMemory -sharedDb
+          for _ in {1..30}; do
+            if curl --silent --output /dev/null http://127.0.0.1:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs dynamodb-local
+          exit 1
+      - name: Run unit, property, and persistence tests
+        env:
+          DYNAMODB_ENDPOINT_URL: http://127.0.0.1:8000
         run: uv run --frozen pytest
 
   security:
@@ -192,8 +207,13 @@ jobs:
             exit 1
           fi
           uv venv --python "${PYTHON_VERSION}" "${environment}"
-          uv pip install --python "${environment}/bin/python" --no-index \
-            --only-binary=:all: "${wheels[0]}"
+          uv export --quiet --frozen --no-dev --no-emit-project --no-annotate \
+            --output-file "${RUNNER_TEMP}/runtime-requirements.txt"
+          uv pip install --python "${environment}/bin/python" --require-hashes \
+            --only-binary=:all: \
+            --requirement "${RUNNER_TEMP}/runtime-requirements.txt"
+          uv pip install --python "${environment}/bin/python" --no-deps --no-index \
+            "${wheels[0]}"
           cd "${RUNNER_TEMP}"
           "${environment}/bin/python" -I -c \
             'import importlib.metadata, os, pathlib, shittim_chest, sys; package = pathlib.Path(shittim_chest.__file__).resolve().parent; assert importlib.metadata.version("shittim-chest") == os.environ["EXPECTED_VERSION"]; assert package.is_relative_to(pathlib.Path(sys.prefix).resolve()); assert (package / "py.typed").is_file()'

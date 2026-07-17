@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.14,<3.15"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = []
+dependencies = [
+    "boto3>=1.43.50,<2",
+]
 
 [project.urls]
 Homepage = "https://github.com/pitekusu/shittim-chest"
@@ -16,6 +18,7 @@ Repository = "https://github.com/pitekusu/shittim-chest"
 
 [dependency-groups]
 dev = [
+    "boto3-stubs[dynamodb]>=1.43.50,<2",
     "cyclonedx-python-lib[json-validation]>=11.11.0,<12",
     "hypothesis>=6.156.6,<7",
     "import-linter>=2.13,<3",

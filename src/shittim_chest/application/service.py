@@ -72,8 +72,9 @@ class DebateApplication:
         lease_owner: str,
         session_timeout_seconds: float = 300.0,
         phase_timeout_seconds: float = 60.0,
+        lease_renewal_seconds: float = 20.0,
     ) -> None:
-        if session_timeout_seconds <= 0 or phase_timeout_seconds <= 0:
+        if session_timeout_seconds <= 0 or phase_timeout_seconds <= 0 or lease_renewal_seconds <= 0:
             raise ValueError("timeouts must be positive")
         if not lease_owner.strip():
             raise ValueError("lease owner must not be empty")
@@ -88,6 +89,7 @@ class DebateApplication:
         self._lease_owner = lease_owner
         self._session_timeout_seconds = session_timeout_seconds
         self._phase_timeout_seconds = phase_timeout_seconds
+        self._lease_renewal_seconds = lease_renewal_seconds
 
     async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate:
         """Validate readiness and atomically persist a new accepted debate."""
@@ -137,7 +139,7 @@ class DebateApplication:
         await self._require_snapshot(debate_id)
         try:
             async with asyncio.timeout(self._session_timeout_seconds):
-                await self._run_phases(debate_id)
+                await self._run_with_lease_heartbeat(debate_id)
         except asyncio.CancelledError:
             await self._checkpoint_current(debate_id)
             raise
@@ -147,6 +149,45 @@ class DebateApplication:
             await self._fail_current(debate_id, error_code="session_deadline_exceeded")
         except Exception:
             await self._fail_current(debate_id, error_code="phase_failed")
+
+    async def _run_with_lease_heartbeat(self, debate_id: DebateId) -> None:
+        phase_task = asyncio.create_task(self._run_phases(debate_id), name=f"phases:{debate_id}")
+        heartbeat_task = asyncio.create_task(
+            self._renew_lease_until_stopped(debate_id),
+            name=f"lease:{debate_id}",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (phase_task, heartbeat_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done:
+                phase_task.cancel()
+                await asyncio.gather(phase_task, return_exceptions=True)
+                await heartbeat_task
+            else:
+                heartbeat_task.cancel()
+                await asyncio.gather(heartbeat_task, return_exceptions=True)
+                await phase_task
+        finally:
+            for task in (phase_task, heartbeat_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(phase_task, heartbeat_task, return_exceptions=True)
+
+    async def _renew_lease_until_stopped(self, debate_id: DebateId) -> None:
+        while True:
+            await asyncio.sleep(self._lease_renewal_seconds)
+            snapshot = await self._require_snapshot(debate_id)
+            if snapshot.state.phase.is_terminal:
+                return
+            try:
+                await self._repository.renew_lease(expected=snapshot, at=self._clock.now())
+            except RepositoryConflict:
+                current = await self._require_snapshot(debate_id)
+                if current.state.phase.is_terminal:
+                    return
+                raise
 
     async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate:
         """Conditionally move an active debate to the cancelled terminal state."""

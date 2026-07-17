@@ -1,0 +1,1 @@
+"""DynamoDB Local integration tests."""

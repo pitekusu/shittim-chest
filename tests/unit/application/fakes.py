@@ -186,6 +186,7 @@ class FakeRepository:
         self.recoverable: tuple[DebateId, ...] = ()
         self.operations: dict[str, DebateSnapshot] = {}
         self.next_fencing_token = 1
+        self.renew_calls: list[tuple[DebateId, datetime]] = []
 
     async def get_operation_result(self, operation_id: str) -> DebateSnapshot | None:
         return self.operations.get(operation_id)
@@ -230,9 +231,14 @@ class FakeRepository:
         if operation_id is not None and operation_id in self.operations:
             return self.operations[operation_id]
         debate_id = expected.state.debate_id
-        if self.current.get(debate_id) != expected:
+        current = self.current.get(debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
             raise RepositoryConflict
-        persisted = replace(updated, lease=None) if updated.state.phase.is_terminal else updated
+        persisted = (
+            replace(updated, lease=None)
+            if updated.state.phase.is_terminal
+            else replace(updated, lease=current.lease)
+        )
         self.current[debate_id] = persisted
         self.history[debate_id].append(persisted)
         if operation_id is not None:
@@ -280,6 +286,18 @@ class FakeRepository:
         current = self.current.get(expected.state.debate_id)
         if current != expected or expected.lease is None:
             raise RepositoryConflict
+        self.renew_calls.append((expected.state.debate_id, at))
         renewed = replace(expected.lease, expires_at=at + timedelta(seconds=60))
         self.current[expected.state.debate_id] = replace(expected, lease=renewed)
         return renewed
+
+
+def _same_snapshot_version(current: DebateSnapshot, expected: DebateSnapshot) -> bool:
+    if current.lease is None or expected.lease is None:
+        return current == expected
+    same_lease_identity = (
+        current.lease.owner_id == expected.lease.owner_id
+        and current.lease.slot == expected.lease.slot
+        and current.lease.fencing_token == expected.lease.fencing_token
+    )
+    return same_lease_identity and replace(current, lease=expected.lease) == expected

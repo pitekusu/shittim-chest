@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-16
+updated: 2026-07-17
 ---
 
 # DynamoDB・データ整合性詳細設計
@@ -28,7 +28,7 @@ updated: 2026-07-16
 | 投票 | `DEBATE#<uuid7>` | `ATTEMPT#<attempt-uuid7>#VOTE#<agent>` |
 | 決定事項 | `DEBATE#<uuid7>` | `ATTEMPT#<attempt-uuid7>#DECISION` |
 | outbox | `DEBATE#<uuid7>` | `ATTEMPT#<attempt-uuid7>#OUTBOX#<operation-id>` |
-| panel operation | `DEBATE#<uuid7>` | `PANEL#<operation-id>` |
+| operation result | `OPERATION#<operation-id>` | `RESULT` |
 | global slot | `CONTROL#GLOBAL` | `SLOT#0..2` |
 | Guild quota | `QUOTA#GUILD#<guild-id>` | `DAY#<JST-YYYY-MM-DD>` |
 
@@ -54,17 +54,19 @@ Debate METAは`debate_id`、Guild/channel/thread/message/user ID、question、`c
 2. 期限切れまたは空いている3 slotの1つへowner、expiry、fencing tokenを設定。
 3. Debate METAをcurrent attempt付きで作成し、既存PKを拒否。
 4. 初回Attempt METAを`ACCEPTED`、`retry_of=null`で作成する。
+5. operation resultを専用itemへ条件付き作成し、debate/attempt/request bindingを保存する。
 
 transaction cancel理由は`QUOTA_EXCEEDED`、`NO_SLOT_AVAILABLE`、`DUPLICATE_DEBATE`へ変換する。
+operation resultはoperation IDからstrongly consistent `GetItem`できる専用keyとし、eventually consistent GSIや`ClientRequestToken`の10分だけへ冪等性を依存しない。SDK tokenにはtable、operation、aggregate、slot/fencingを含む入力のhashを使い、同一AWS account内の別tableや別transactionとの衝突を防ぐ。
 
 ## 6. Retry transaction
 
 FAILED retryは事前のstrongly consistent read後、1つの成功した`TransactWriteItems`で更新部分を原子的に実行する。
 
-1. 事前にpanel operationをstrongly consistent readし、完了済みなら保存済みnew attempt IDを返す。
+1. 事前にoperation resultをstrongly consistent readし、完了済みなら保存済みnew attempt IDを返す。
 2. Debate METAの`current_attempt_id`が対象FAILED attemptと一致することを確認する。
 3. 対象Attempt METAが`FAILED`かつ`failed_from_phase`を持つことを確認する。
-4. panel operation IDが未処理であることを条件に、あらかじめ生成したnew attempt IDとともに記録する。
+4. operation IDが未処理であることを条件に、あらかじめ生成したnew attempt IDとともに専用result itemへ記録する。
 5. 期限切れまたは空きglobal slotを1つ取得し、新fencing tokenを割り当てる。
 6. 同じdebate ID、同じthread、`retry_of=<failed-attempt-id>`、new attempt ID、phase=`failed_from_phase`のAttempt METAを`attribute_not_exists(PK) AND attribute_not_exists(SK)`条件付きでPutする。
 7. Debate METAの`current_attempt_id`を条件付きでnew attemptへ更新する。
@@ -88,13 +90,13 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 
 ## 9. boto3 adapter
 
-- DynamoDB resource interfaceとnative Python型を優先する。
-- transaction等resourceで不足する操作はresourceの`.meta.client`を使用する。
+- serializerまではnative Python型を唯一のrecord表現とし、SDK境界で`TypeSerializer`/`TypeDeserializer`によりAttributeValueへ明示変換する。floatと非整数Decimalは拒否する。
+- 複数item transactionが主要write pathであるため、STEP-04Bは1個の低level `DynamoDBClient`を再利用し、`GetItem`、paginated `Query`、`TransactWriteItems`を同じ型付き境界へ集約する。
 - typed service exceptionをadapterでdomain errorへ変換し、`ClientError`はtop-level境界だけで扱う。
 - Queryは1MB paginationを考慮し、Scanを通常pathで使用しない。
 - floatを保存せず、必要な数値はintまたは`Decimal`を使用する。
 
-STEP-04Aはboto3を依存へ追加せず、resource interfaceへ渡せるstring/int/bool/null/list/mapだけのnative-value itemを生成・検証・復元する。snapshot、outbox、panel operationの読書きを同じschema境界でfail closedにする。低level AttributeValue変換、API error mapping、thread隔離はSTEP-04Bで実装する。
+STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 1.43.50、明示AttributeValue変換、typed transaction error mapping、`asyncio.to_thread`隔離、強整合read、1MB pagination、3-slot fencing、20秒heartbeat、outbox状態更新を実装した。phase更新はAttempt METAのlease属性を上書きしない条件付き`Update`とし、並行renew後のexpiryを古いsnapshotで巻き戻さない。DynamoDB Local 3.3.0でtransaction/GSI/outboxを、SDK StubberでLocalが再現しないtransaction cancelを検証する。
 
 ## 10. Schema migration
 
@@ -116,3 +118,6 @@ STEP-04Aはboto3を依存へ追加せず、resource interfaceへ渡せるstring/
 | 2026-07-17 | Item size calculation | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/CapacityUnitCalculations.html | 属性名と値を含む400KB境界をcontract test化 |
 | 2026-07-17 | TransactWriteItems API | https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html | 同一item複数action禁止、10分tokenだけへ冪等性を依存しない |
 | 2026-07-17 | DynamoDB Local差異 | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.UsageNotes.html | Localで再現しないtransaction conflictはSTEP-04BのSDK stub testへ分離 |
+| 2026-07-17 | boto3/boto3-stubs 1.43.50 | https://pypi.org/project/boto3/、https://pypi.org/project/boto3-stubs/ | Python 3.14対応、client/型定義をlock |
+| 2026-07-17 | Query API・pagination | https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html、https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html | 1MBごとのLastEvaluatedKey処理、base tableだけstrong consistency |
+| 2026-07-17 | DynamoDB Local 3.3.0 | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.DownloadingAndRunning.html、https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocalHistory.html | 公式imageをdigest固定しCI persistence testへ使用 |

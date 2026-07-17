@@ -6,6 +6,11 @@ from shittim_chest.adapters.dynamodb.models import (
     PanelOperation,
     PanelOperationKind,
 )
+from shittim_chest.adapters.dynamodb.outbox import DynamoDbOutboxRepository
+from shittim_chest.adapters.dynamodb.repository import (
+    DynamoDbDebateRepository,
+    create_dynamodb_client,
+)
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     ItemTooLarge,
@@ -21,12 +26,15 @@ from shittim_chest.adapters.dynamodb.serializer import (
 
 __all__ = (
     "CURRENT_SCHEMA_VERSION",
+    "DynamoDbDebateRepository",
+    "DynamoDbOutboxRepository",
     "ItemTooLarge",
     "OutboxOperation",
     "OutboxStatus",
     "PanelOperation",
     "PanelOperationKind",
     "PersistenceFormatError",
+    "create_dynamodb_client",
     "deserialize_outbox",
     "deserialize_panel_operation",
     "deserialize_snapshot",
