@@ -119,8 +119,8 @@ routes, with `tool_choice=required`, `max_tool_calls=4`, source inclusion,
 `store=false`, and the same immutable Evidence for all participants. Optional
 failure is persisted and continues; required failure becomes
 `required_evidence_unavailable`. Evidence META is schema v3 and its reader
-migrates the immediately previous v2. STEP-05C adds local shadow-only
-deterministic escalation signals, immutable Luna/Terra/pro generation policies,
+migrates the immediately previous v2. STEP-05C was merged through PR `#22` as
+commit `a6f43cb` and adds shadow-only deterministic escalation signals, immutable Luna/Terra/pro generation policies,
 schema v4 persistence, and an opt-in blind A/B evaluator. It must not enable
 production auto-escalation or paid evaluation without a later explicit operator
 decision. Discord integration and CloudWatch emission remain out of scope.
