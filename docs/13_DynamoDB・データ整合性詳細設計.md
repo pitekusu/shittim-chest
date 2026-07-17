@@ -83,7 +83,7 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 ## 8. Outbox algorithm
 
 1. operation ID、generic Bot slot、22文字nonce、content hash、thread ID、chunk sequence、status=`PREPARED`、attempt=`0`を`ConditionCheck(META)+Put`で保存する。
-2. publisherは`PREPARED`またはclaim期限切れだけを条件付きclaimし、claim owner、claim expiry、attempt、next retryを保存してDiscordへ送信する。
+2. publisherは`PREPARED`またはclaim期限切れだけを条件付きclaimし、claim owner、claim expiry、attempt、next retryを保存してDiscordへ送信する。claimはapplication共有定数`OUTBOX_CLAIM_SECONDS=60`を唯一の定義とし、Discord channel解決、履歴照合、sendの45秒timeoutより長くする。
 3. 成功時は`ConditionCheck(META)+Update`でmessage ID、sent_at、status=`SENT`を保存する。
 4. 送信成功・更新失敗時、または数分を超える停止後はnonce、content hash、chunk sequence、thread履歴を照合し、既存messageを採用する。
 5. 内容hashが異なる同一operation IDは`OUTBOX_CONFLICT`として停止する。chunkはsequence昇順で送信し、前chunkが`SENT`になるまで次chunkをclaimしない。
@@ -96,7 +96,7 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 - Queryは1MB paginationを考慮し、Scanを通常pathで使用しない。
 - floatを保存せず、必要な数値はintまたは`Decimal`を使用する。
 
-STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidenceを追加してschema v3へ更新した。STEP-05Cは`escalation_assessment` itemへrules version、3つのsignal、UTC評価時刻、再実行開始phase、実行有無、Policy ID、最大1回の実行回数を保存しschema v4へ更新した。STEP-06Aはcontrol panel message IDをstarter message IDから分離し、outboxの実Application ID依存をgeneric Bot slotへ置換してschema v5へ更新した。readerは直前v4の欠落panel IDを`None`、旧`bot_id`を対応するgeneric slotとしてup-convertする。
+STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidenceを追加してschema v3へ更新した。STEP-05Cは`escalation_assessment` itemへrules version、3つのsignal、UTC評価時刻、再実行開始phase、実行有無、Policy ID、最大1回の実行回数を保存しschema v4へ更新した。STEP-06Aはcontrol panel message IDをstarter message IDから分離し、outboxの実Application ID依存をgeneric Bot slotへ置換してschema v5へ更新した。readerは直前v4の欠落panel IDを`None`、旧`bot_id`を対応するgeneric slotとしてup-convertする。STEP-06Bは既存schemaを変更せず、`DiscordOutboxRepository`の`get/claim/reschedule/mark_sent`をdiscord.py publisherから利用する。Discord処理はclaimより短い45秒で打ち切るが、`mark_sent`はtimeout外のfenced transactionとして行う。送信成功後の`mark_sent`競合ではmessageを再送せず、claim expiry後の次回claimでthread履歴を照合する。
 
 ## 10. Schema migration
 

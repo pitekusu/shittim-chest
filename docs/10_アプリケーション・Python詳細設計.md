@@ -69,7 +69,7 @@ async def retry_debate(command: RetryDebateCommand) -> AcceptedRetry: ...
 async def resume_recoverable() -> None: ...
 ```
 
-Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`DiscordOutboxRepository`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに最大1つのResponses requestでimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher`は永続化済みoutbox operation以外を投稿してはならない。必須Evidence取得不能は`required_evidence_unavailable`としてFAILEDへ保存し、任意取得不能は`optional_unavailable`を保存して続行する。
+Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`DiscordOutboxRepository`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに最大1つのResponses requestでimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher.publish_persisted`はexpected leased `DebateSnapshot`とattempt内operation IDを受け、永続化・claim済みoutbox operation以外を投稿してはならない。既に`SENT`なら同じrecord、claim不能なら`None`、成功または履歴照合成功なら`SENT` recordを返す。必須Evidence取得不能は`required_evidence_unavailable`としてFAILEDへ保存し、任意取得不能は`optional_unavailable`を保存して続行する。
 
 STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。STEP-04Aでは`DebateSnapshot`へGuild/channel、debate/attempt作成時刻、Discord starter/thread ID、`LeaseGrant`を追加した。STEP-06Aではstarter message、thread、control panel messageを別fieldに分離し、`ACCEPTED`中だけ3 IDを一括bindingでき、同一値の再送は同じ結果、部分bindingまたは別値へのrebindは副作用なしで拒否する。cancel/retryも永続化済みoperation IDで再実行結果を返し、別request/debateへのoperation ID再利用を拒否する。
 

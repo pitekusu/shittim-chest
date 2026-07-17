@@ -38,8 +38,14 @@ message IDs are separate and can be bound only while `ACCEPTED`; identical
 replay is idempotent and rebinding is rejected. DynamoDB schema v5 migrates the
 immediately previous v4 record and maps old `bot_id` to generic `bot_slot`.
 Local validation passed 221 tests with 5 opt-in skips and 92.70%
-domain/application line/branch coverage. discord.py, live Discord operations,
-four-client runtime wiring, and Discord Applications remain unimplemented.
+domain/application line/branch coverage. STEP-06B is implemented locally with
+discord.py 2.7.1, fenced outbox publication, safe allowed mentions, enforced
+nonce delivery, SDK-owned rate-limit handling, and history reconciliation.
+Each client must use `max_ratelimit_timeout=30`; Discord delivery is bounded to
+45 seconds, shorter than the shared 60-second outbox claim. Its full locked
+suite passes 245 tests at 92.74% coverage. Live Discord
+operations, four-client interaction runtime wiring, and Discord Applications
+remain unimplemented.
 Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -155,6 +161,18 @@ depend on each other. The `DiscordOutboxRepository` Protocol owns the delivery
 boundary. `bind_discord_context` persists starter, thread, and control-panel
 IDs as three distinct fields only before debate work begins. Schema v5 reads
 only the immediately previous v4 and fails closed on unknown versions.
+STEP-06B adds `DiscordPyPublisher`. It requires exactly four distinct clients,
+publishes only a persisted and fenced operation, uses
+`discord.AllowedMentions.none()` and a nonce, and relies on discord.py 2.7.1 to
+emit `enforce_nonce=true` and honor `Retry-After`. It does not implement a
+second request retry loop. Reclaimed deliveries scan at most 500 messages after
+the outbox creation time and adopt the oldest exact Bot-author/nonce/content
+match. A same-nonce content mismatch fails closed. Locked threads are never
+unlocked automatically. Configure all clients with
+`max_ratelimit_timeout=30`; the adapter's 45-second Discord-operation timeout
+must remain shorter than `OUTBOX_CLAIM_SECONDS=60` so a blocked SDK wait cannot
+outlive claim ownership. The publisher contract receives the expected leased
+`DebateSnapshot` because an operation ID is scoped to its debate attempt.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 

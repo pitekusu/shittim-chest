@@ -22,12 +22,14 @@ from shittim_chest.adapters.dynamodb.serializer import (
     deserialize_outbox,
     serialize_outbox,
 )
-from shittim_chest.application.discord import OutboxOperation, OutboxStatus
+from shittim_chest.application.discord import (
+    OUTBOX_CLAIM_SECONDS,
+    OutboxOperation,
+    OutboxStatus,
+)
 from shittim_chest.application.models import DebateSnapshot
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.domain import AttemptId, DebateId
-
-CLAIM_SECONDS = 60
 
 
 class DynamoDbOutboxRepository:
@@ -183,7 +185,7 @@ class DynamoDbOutboxRepository:
         if not self._prior_chunks_sent(operation):
             return None
 
-        expiry = at + timedelta(seconds=CLAIM_SECONDS)
+        expiry = at + timedelta(seconds=OUTBOX_CLAIM_SECONDS)
         values = marshal_item(
             {
                 ":prepared": OutboxStatus.PREPARED.value,
