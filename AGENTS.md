@@ -24,6 +24,12 @@ PR `#18` as commit `9aafe6e` with boto3 transactions, three lease slots, durable
 operation results, outbox state changes, GSI pagination, DynamoDB Local, and SDK
 stub tests. The PR checks and the merge commit's CI, CodeQL, and managed
 Dependency Graph run all passed.
+STEP-05A is implemented locally and awaiting Pull Request publication. It adds
+the stable OpenAI Responses adapter for initial opinions, final proposals,
+votes, and decisions; strict Pydantic schemas; private persona validation;
+bounded concurrency; content-free usage/failure records; and stable domain-safe
+error mapping. The full local suite passes 178 tests at 92.40% coverage. The
+Responses API Multi-agent beta is explicitly not used.
 Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -98,6 +104,18 @@ DynamoDB Local 3.3.0 plus SDK Stubber. STEP-04B was squash-merged through PR
 `#18` as commit `9aafe6e` on 2026-07-17. The merge commit passed project CI run
 `29553563948`, CodeQL run `29553563821`, and managed Dependency Graph run
 `29553565579`; no production AWS resource or credential was used.
+
+STEP-05A is locally implemented on top of main commit `5d48409`. It uses
+`openai` 2.46.0, `httpx` 0.28.1, and Pydantic 2.13.4; stable
+`AsyncOpenAI.responses.parse()` calls have `store=False`, no tools, and no beta
+Multi-agent field or header. Official-SDK mock transport tests cover all four
+generation operations, refusal, incomplete and invalid output, rate limiting,
+authentication failure, request privacy, usage telemetry, and domain
+revalidation. The DynamoDB Local full regression passes 178 tests at 92.40%
+coverage. Real OpenAI calls, Evidence/Web search, Terra escalation, Discord
+integration, and CloudWatch emission remain out of scope. Terra escalation is
+an unresolved STEP-05C candidate in the decision record; consult the operator
+before implementing it.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
@@ -227,7 +245,7 @@ The finalized design assumes the following baseline as of 2026-07-16:
 - Python 3.14.6 using the normal GIL build;
 - uv/uv_build 0.11.29 with `pyproject.toml`, `.python-version`, and `uv.lock`;
 - `discord.py` 2.7.1 with four async client instances;
-- `openai` 2.45.0, `httpx` 0.28.1, the Responses API, Pydantic Structured
+- `openai` 2.46.0, `httpx` 0.28.1, the stable Responses API, Pydantic Structured
   Outputs, and `gpt-5.6-luna` as the deploy-time-verified default;
 - `boto3` and `boto3-stubs` 1.43.50;
 - Amazon ECS on ARM64 Fargate Spot, ECR, DynamoDB, SSM Parameter Store, and
@@ -388,6 +406,9 @@ only composition root.
   parameter, structured-output schema, or retry behavior; model availability
   and API capabilities may change.
 - Reuse one `AsyncOpenAI` per process and use the Responses API.
+- Do not use Responses API Multi-agent beta, `client.beta.responses`, the
+  `multi_agent` request field, or its beta header. Keep persona concurrency,
+  voting, checkpointing, and resume in the typed Python application layer.
 - Use `store=false`, but disclose that default abuse-monitoring logs may retain
   user content for up to 30 days. Do not send raw Discord user IDs to OpenAI.
 - Enable Web search only when the question router marks external evidence
@@ -397,6 +418,10 @@ only composition root.
   output, parsed output, and transport failure before returning domain models.
 - Confirm the configured model is available to the actual OpenAI project at
   deployment time.
+- Keep Luna-to-Terra escalation unimplemented until the operator approves a
+  deterministic trigger, phase scope, budget/deadline, persistence fields, and
+  evaluation threshold recorded in the decision document. Never use model
+  escalation to bypass a refusal or policy block.
 - Version the model identifier, persona prompts, and structured-output schema
   used by each debate session.
 - Load display names and prompts from versioned private runtime configuration;

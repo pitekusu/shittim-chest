@@ -8,6 +8,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "boto3>=1.43.50,<2",
+    "httpx>=0.28.1,<0.29",
+    "openai>=2.46.0,<3",
+    "pydantic>=2.13.4,<3",
 ]
 
 [project.urls]
