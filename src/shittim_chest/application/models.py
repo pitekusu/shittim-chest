@@ -124,6 +124,31 @@ class AcceptedRetry:
 
 
 @dataclass(frozen=True, slots=True)
+class BindDiscordContextCommand:
+    """Bind the three Discord resources created for one accepted debate."""
+
+    debate_id: DebateId
+    starter_message_id: str
+    thread_id: str
+    control_panel_message_id: str
+
+    def __post_init__(self) -> None:
+        _require_identifier(self.starter_message_id, label="starter message ID")
+        _require_identifier(self.thread_id, label="thread ID")
+        _require_identifier(self.control_panel_message_id, label="control panel message ID")
+
+
+@dataclass(frozen=True, slots=True)
+class BoundDiscordContext:
+    """The durable Discord resources associated with one debate."""
+
+    debate_id: DebateId
+    starter_message_id: str
+    thread_id: str
+    control_panel_message_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class DebateSnapshot:
     """Application aggregate transferred through the repository Protocol."""
 
@@ -136,6 +161,7 @@ class DebateSnapshot:
     attempt_created_at: datetime
     starter_message_id: str | None = None
     thread_id: str | None = None
+    control_panel_message_id: str | None = None
     lease: LeaseGrant | None = None
     evidence: EvidenceBundle | None = None
     initial_opinions: tuple[InitialOpinion, ...] = ()
@@ -161,6 +187,11 @@ class DebateSnapshot:
             _require_identifier(self.starter_message_id, label="starter message ID")
         if self.thread_id is not None:
             _require_identifier(self.thread_id, label="thread ID")
+        if self.control_panel_message_id is not None:
+            _require_identifier(
+                self.control_panel_message_id,
+                label="control panel message ID",
+            )
         if self.error_code is not None and not self.error_code.strip():
             raise ValueError("error code must be non-empty when present")
 

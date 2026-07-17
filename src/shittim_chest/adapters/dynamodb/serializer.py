@@ -6,7 +6,8 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import cast
 
-from shittim_chest.adapters.dynamodb.models import (
+from shittim_chest.application.discord import (
+    DiscordBotSlot,
     OutboxOperation,
     OutboxStatus,
     PanelOperation,
@@ -36,8 +37,8 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 4
-PREVIOUS_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 5
+PREVIOUS_SCHEMA_VERSION = 4
 MAX_ITEM_BYTES = 400 * 1024
 
 
@@ -55,6 +56,8 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
+        if migrated.get("record_type") == "outbox" and "bot_slot" not in migrated:
+            migrated["bot_slot"] = migrated.pop("bot_id", None)
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -90,6 +93,11 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
     }
     _put_optional(debate_meta, "starter_message_id", snapshot.starter_message_id)
     _put_optional(debate_meta, "thread_id", snapshot.thread_id)
+    _put_optional(
+        debate_meta,
+        "control_panel_message_id",
+        snapshot.control_panel_message_id,
+    )
     if snapshot.thread_id is not None:
         debate_meta["gsi1pk"] = f"THREAD#{snapshot.thread_id}"
         debate_meta["gsi1sk"] = f"DEBATE#{debate_id}"
@@ -290,6 +298,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         attempt_created_at=_datetime(attempt_meta, "attempt_created_at"),
         starter_message_id=_optional_text(debate_meta, "starter_message_id"),
         thread_id=_optional_text(debate_meta, "thread_id"),
+        control_panel_message_id=_optional_text(debate_meta, "control_panel_message_id"),
         lease=lease,
         evidence=evidence,
         initial_opinions=cast(tuple[InitialOpinion, ...], opinions),
@@ -313,7 +322,7 @@ def serialize_outbox(operation: OutboxOperation) -> DynamoItem:
         "debate_id": str(operation.debate_id),
         "attempt_id": attempt_id,
         "operation_id": operation.operation_id,
-        "bot_id": operation.bot_id,
+        "bot_slot": operation.bot_slot.value,
         "thread_id": operation.thread_id,
         "content": operation.content,
         "content_hash": operation.content_hash,
@@ -342,7 +351,7 @@ def deserialize_outbox(raw_item: Mapping[str, DynamoValue]) -> OutboxOperation:
         operation_id=_text(item, "operation_id"),
         debate_id=DebateId.parse(_text(item, "debate_id")),
         attempt_id=AttemptId.parse(_text(item, "attempt_id")),
-        bot_id=_text(item, "bot_id"),
+        bot_slot=DiscordBotSlot(_text(item, "bot_slot")),
         thread_id=_text(item, "thread_id"),
         content=_text(item, "content"),
         content_hash=_text(item, "content_hash"),

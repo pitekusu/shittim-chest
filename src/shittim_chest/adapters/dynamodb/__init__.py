@@ -1,11 +1,5 @@
 """DynamoDB persistence contracts and native-value serialization."""
 
-from shittim_chest.adapters.dynamodb.models import (
-    OutboxOperation,
-    OutboxStatus,
-    PanelOperation,
-    PanelOperationKind,
-)
 from shittim_chest.adapters.dynamodb.outbox import DynamoDbOutboxRepository
 from shittim_chest.adapters.dynamodb.repository import (
     DynamoDbDebateRepository,
@@ -22,6 +16,12 @@ from shittim_chest.adapters.dynamodb.serializer import (
     serialize_outbox,
     serialize_panel_operation,
     serialize_snapshot,
+)
+from shittim_chest.application.discord import (
+    OutboxOperation,
+    OutboxStatus,
+    PanelOperation,
+    PanelOperationKind,
 )
 
 __all__ = (

@@ -29,6 +29,17 @@ through PR `#21` as commit `44a35fa`. It adds fail-safe
 `question-router-v2`, hosted Responses API Web search, immutable source-backed
 Evidence, optional/required failure semantics, and the schema v3 Evidence
 migration. The Responses API Multi-agent beta is explicitly not used.
+STEP-06A is published through PR `#27` and adds SDK-independent Discord Bot
+slots and fail-closed runtime
+configuration, stable Discord error codes, deterministic message chunking,
+UUIDv7 nonces, content hashes, a versioned panel custom-ID codec, and an
+application-owned outbox Protocol. Starter message, thread, and control panel
+message IDs are separate and can be bound only while `ACCEPTED`; identical
+replay is idempotent and rebinding is rejected. DynamoDB schema v5 migrates the
+immediately previous v4 record and maps old `bot_id` to generic `bot_slot`.
+Local validation passed 221 tests with 5 opt-in skips and 92.70%
+domain/application line/branch coverage. discord.py, live Discord operations,
+four-client runtime wiring, and Discord Applications remain unimplemented.
 Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -138,6 +149,12 @@ The completed blind review produced Luna pro 4 wins, Terra standard 2 wins, and
 Keep the result as evaluation history; do not implement thresholds, extra
 token/deadline limits, or escalation UI. Discord integration and CloudWatch
 emission remain out of scope.
+STEP-06A relocates SDK-independent outbox/panel records from the DynamoDB
+adapter to the application layer so future Discord and DynamoDB adapters do not
+depend on each other. The `DiscordOutboxRepository` Protocol owns the delivery
+boundary. `bind_discord_context` persists starter, thread, and control-panel
+IDs as three distinct fields only before debate work begins. Schema v5 reads
+only the immediately previous v4 and fails closed on unknown versions.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 

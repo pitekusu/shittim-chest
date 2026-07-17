@@ -49,6 +49,15 @@ content-free aggregate recommendation. STEP-05C.1B uses preference-only blind
 review because requiring 100 independent rubric scores was not operationally
 reasonable for one maintainer.
 
+STEP-06A now provides the SDK-independent Discord contract foundation: four
+generic Bot slots, fail-closed Guild/channel/Application configuration,
+deterministic 2,000-character message chunks, UUIDv7 nonces, content hashes,
+versioned control-panel IDs, and a typed outbox boundary. Starter message,
+thread, and control-panel message IDs are persisted separately through an
+idempotent binding use case, and DynamoDB schema v5 migrates the immediately
+previous v4 representation. The discord.py SDK is intentionally deferred to
+STEP-06B/06C.
+
 Production is fixed to Luna standard for every generation phase. Terra standard
 and Luna pro remain evaluation-only policies and cannot be selected by runtime
 configuration or Discord operations. The shadow assessment remains observable
@@ -57,7 +66,7 @@ comes from three private, versioned persona prompts with distinct practical,
 verification/safety, and creative/alternative lenses while sharing the same
 evidence, safety constraints, and structured-output schema.
 
-The Discord adapter, runtime recovery wiring,
+The Discord publisher and interaction runtime, runtime recovery wiring,
 Discord Applications, containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration

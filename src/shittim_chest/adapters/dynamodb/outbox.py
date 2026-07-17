@@ -17,12 +17,12 @@ else:
     TransactWriteItemTypeDef = object
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.adapters.dynamodb.models import OutboxOperation, OutboxStatus
 from shittim_chest.adapters.dynamodb.serializer import (
     DynamoItem,
     deserialize_outbox,
     serialize_outbox,
 )
+from shittim_chest.application.discord import OutboxOperation, OutboxStatus
 from shittim_chest.application.models import DebateSnapshot
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.domain import AttemptId, DebateId

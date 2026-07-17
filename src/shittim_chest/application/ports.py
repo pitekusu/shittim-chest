@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from shittim_chest.application.discord import OutboxOperation
 from shittim_chest.application.models import (
     AcceptDebateRequest,
     DebateSnapshot,
@@ -68,6 +69,62 @@ class DiscordPublisher(Protocol):
     """Publish only an operation previously persisted by an outbox adapter."""
 
     async def publish_persisted(self, operation_id: str) -> None: ...
+
+
+class DiscordOutboxRepository(Protocol):
+    """Persist and fence Discord delivery without exposing DynamoDB to its publisher."""
+
+    async def prepare(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation: OutboxOperation,
+    ) -> OutboxOperation: ...
+
+    async def get(
+        self,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        operation_id: str,
+    ) -> OutboxOperation | None: ...
+
+    async def claim(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation_id: str,
+        claim_owner: str,
+        at: datetime,
+    ) -> OutboxOperation | None: ...
+
+    async def mark_sent(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation_id: str,
+        claim_owner: str,
+        message_id: str,
+        at: datetime,
+    ) -> OutboxOperation: ...
+
+    async def reschedule(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation_id: str,
+        claim_owner: str,
+        at: datetime,
+        next_retry_at: datetime,
+    ) -> OutboxOperation: ...
+
+    async def list_recoverable(
+        self,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        at: datetime,
+    ) -> tuple[OutboxOperation, ...]: ...
 
 
 class EvidenceService(Protocol):

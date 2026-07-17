@@ -9,6 +9,7 @@ import pytest
 
 from shittim_chest.application import (
     AcceptDebateRequest,
+    BindDiscordContextCommand,
     CancelDebateCommand,
     DebateApplication,
     DebateNotFound,
@@ -107,6 +108,74 @@ def request(*, requester_id: str = "requester") -> AcceptDebateRequest:
         channel_id="channel",
         operation_id="accept-operation",
     )
+
+
+@pytest.mark.asyncio
+async def test_bind_discord_context_is_idempotent_and_rebinding_fails(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+    command = BindDiscordContextCommand(
+        debate_id=accepted.debate_id,
+        starter_message_id="101",
+        thread_id="102",
+        control_panel_message_id="103",
+    )
+
+    first = await app.bind_discord_context(command)
+    replay = await app.bind_discord_context(command)
+
+    assert replay == first
+    assert repository.current[accepted.debate_id].control_panel_message_id == "103"
+    with pytest.raises(InvalidApplicationOperation, match="already bound"):
+        await app.bind_discord_context(replace(command, control_panel_message_id="104"))
+
+
+@pytest.mark.asyncio
+async def test_bind_discord_context_rejects_started_debate(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+    current = repository.current[accepted.debate_id]
+    repository.current[accepted.debate_id] = replace(
+        current,
+        state=current.state.transition_to(
+            DebatePhase.PREPARING_EVIDENCE,
+            at=dependencies[0].now(),
+        ),
+    )
+
+    with pytest.raises(InvalidApplicationOperation, match="before debate work"):
+        await app.bind_discord_context(
+            BindDiscordContextCommand(
+                debate_id=accepted.debate_id,
+                starter_message_id="101",
+                thread_id="102",
+                control_panel_message_id="103",
+            )
+        )
 
 
 @pytest.mark.asyncio
