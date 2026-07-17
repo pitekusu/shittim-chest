@@ -43,8 +43,9 @@ domain/application line/branch coverage. STEP-06B was squash-merged through PR
 safe allowed mentions, enforced nonce delivery, SDK-owned rate-limit handling,
 and history reconciliation.
 Each client must use `max_ratelimit_timeout=30`; Discord delivery is bounded to
-45 seconds, shorter than the shared 60-second outbox claim. STEP-06C is locally
-implemented and offline-tested with four GUILDS-only clients, a four-READY
+45 seconds, shorter than the shared 60-second outbox claim. STEP-06C was
+squash-merged through PR `#31` as commit `9799cb9`, with four GUILDS-only
+clients, a four-READY
 acceptance gate, Guild-scoped `/shittim`, immediate ephemeral defer,
 starter/Public Thread/control panel provisioning and reconciliation,
 attempt-bound cancel/retry, and owned debate tasks. Live Discord operations,
