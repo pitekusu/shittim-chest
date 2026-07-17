@@ -14,6 +14,7 @@ from shittim_chest.application.models import (
     CancelDebateCommand,
     CancelledDebate,
     DebateSnapshot,
+    LeaseGrant,
     RetryDebateCommand,
 )
 from shittim_chest.application.service import DebateApplication
@@ -29,6 +30,7 @@ __all__ = (
     "DebateNotFound",
     "DebateSnapshot",
     "InvalidApplicationOperation",
+    "LeaseGrant",
     "RequestNotAllowed",
     "RetryDebateCommand",
     "RuntimeNotReady",
