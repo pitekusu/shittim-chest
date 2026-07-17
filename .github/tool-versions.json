@@ -20,13 +20,6 @@
       "signature_bundle_sha256": "1aa906a890b58df3fbef558e6c37dd6906b9539858c37a78e9d1270381350a0f",
       "tag_prefix": "v",
       "version": "1.6.1"
-    },
-    "gitleaks": {
-      "archive_name": "gitleaks_8.30.1_linux_x64.tar.gz",
-      "archive_sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
-      "repository": "gitleaks/gitleaks",
-      "tag_prefix": "v",
-      "version": "8.30.1"
     }
   }
 }

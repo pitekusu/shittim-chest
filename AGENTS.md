@@ -12,7 +12,8 @@ manages the workflow and publishes the mechanically calculated result.
 The requirements, basic design, and detailed design are complete. The
 Python/uv project foundation, initial domain state machine, and STEP-02 GitHub
 quality/supply-chain gates are implemented. The STEP-02B Betterleaks migration
-gate is being implemented. Application use cases, adapters,
+gate is implemented, and STEP-02C retires Gitleaks after successful observation.
+Application use cases, adapters,
 containers, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -58,22 +59,23 @@ passed, and the active main Ruleset now requires five strict GitHub Actions chec
 (`quality`, `tests`, `security`, `package`, `docs-public-safety`) plus CodeQL results
 with high-or-higher security alerts blocking merge. STEP-02 provides strict
 CycloneDX 1.5 schema and `uv.lock` inventory validation, a 30-day source-SBOM
-artifact, Dependency Review, pinned Gitleaks/actionlint binaries, isolated wheel
+artifact, Dependency Review, pinned actionlint, isolated wheel
 installation, and a weekly/manual comparison with GitHub's managed SPDX 2.3
 export. GitHub's Python Dependabot graph job already supplies the complete uv
 dependency snapshot, so STEP-02 intentionally does not submit a higher-priority
 custom snapshot or grant `contents: write`.
 
-STEP-02B keeps the required `security` check name stable while running
-Betterleaks and Gitleaks over the same complete Git history. Betterleaks release
+STEP-02B established the Betterleaks migration gate while keeping the required
+`security` check name stable. Betterleaks release
 checksums are verified with a pinned Sigstore verifier, certificate identity,
-OIDC issuer, and immutable digests. Both scanners must pass generated positive
+OIDC issuer, and immutable digests. Betterleaks must pass generated positive
 and negative contract histories with redaction enabled. Do not enable
 Betterleaks provider validation, because detected candidates must not be sent to
-external APIs. A weekly read-only workflow detects newer actionlint,
-Betterleaks, and Gitleaks releases without applying them automatically. Do not
-remove Gitleaks without a later ADR supported by observed PR/main runs and
-false-positive evidence.
+external APIs. A weekly read-only workflow detects newer actionlint and
+Betterleaks releases without applying them automatically. STEP-02C retired
+Gitleaks after the parallel PR/main observation, generated contract, full-history
+scan, Sigstore verification, and latest-release workflow all passed. Reintroduce
+a second scanner only through a later ADR with a concrete coverage gap.
 
 The next application slice is STEP-03: application
 Protocols, use cases, voting/tie rules, deadlines, cancellation, and tests.
@@ -506,8 +508,8 @@ Add tests in proportion to each implemented slice. At minimum, cover:
   fencing, outbox reconciliation, and resume without duplicate Discord posts;
 - secret and full-content redaction in logs.
 
-CI verifies the uv lock, Ruff, mypy strict, pytest, pip-audit, parallel
-Betterleaks/Gitleaks full-history and generated-fixture contracts, wheel
+CI verifies the uv lock, Ruff, mypy strict, pytest, pip-audit, Betterleaks
+full-history and generated-fixture contracts, wheel
 build/install, CycloneDX source SBOM, public repository surface, Markdown
 structure, Wiki links, and workflow syntax. Import-linter becomes enforceable
 when STEP-03 introduces application boundaries; the ARM64 container gate is

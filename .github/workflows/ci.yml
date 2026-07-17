@@ -97,7 +97,7 @@ jobs:
             --requirement "${RUNNER_TEMP}/audit-requirements.txt"
       - name: Scan the public repository surface
         run: uv run --frozen python tools/check_public_surface.py
-      - name: Install verified Betterleaks and pinned Gitleaks
+      - name: Install verified Betterleaks
         run: |
           betterleaks_version=$(jq --raw-output '.tools.betterleaks.version' .github/tool-versions.json)
           betterleaks_archive_name=$(jq --raw-output '.tools.betterleaks.archive_name' .github/tool-versions.json)
@@ -133,26 +133,13 @@ jobs:
             --directory "${RUNNER_TEMP}" betterleaks
           test "$("${RUNNER_TEMP}/betterleaks" version)" = "${betterleaks_version}"
 
-          gitleaks_version=$(jq --raw-output '.tools.gitleaks.version' .github/tool-versions.json)
-          gitleaks_archive_name=$(jq --raw-output '.tools.gitleaks.archive_name' .github/tool-versions.json)
-          gitleaks_archive_sha=$(jq --raw-output '.tools.gitleaks.archive_sha256' .github/tool-versions.json)
-          gitleaks_archive="${RUNNER_TEMP}/${gitleaks_archive_name}"
-          curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
-            --output "${gitleaks_archive}" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${gitleaks_version}/${gitleaks_archive_name}"
-          printf '%s  %s\n' "${gitleaks_archive_sha}" "${gitleaks_archive}" | sha256sum --check --strict
-          tar --extract --gzip --file "${gitleaks_archive}" \
-            --directory "${RUNNER_TEMP}" gitleaks
-          test "$("${RUNNER_TEMP}/gitleaks" version)" = "${gitleaks_version}"
-      - name: Scan complete Git history with both secret scanners
+      - name: Scan complete Git history with Betterleaks
         run: |
           "${RUNNER_TEMP}/betterleaks" git --redact --no-banner --verbose .
-          "${RUNNER_TEMP}/gitleaks" git --redact --no-banner --verbose .
       - name: Exercise secret-scanner positive and negative contracts
         run: |
           uv run --frozen python tools/check_secret_scanners.py \
-            --betterleaks "${RUNNER_TEMP}/betterleaks" \
-            --gitleaks "${RUNNER_TEMP}/gitleaks"
+            --betterleaks "${RUNNER_TEMP}/betterleaks"
       - name: Review dependency changes
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
