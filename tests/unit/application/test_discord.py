@@ -107,6 +107,33 @@ def test_nonce_digest_and_panel_custom_id_have_stable_external_shapes() -> None:
             PanelCustomId.parse(malformed)
 
 
+@pytest.mark.parametrize("action", tuple(PanelAction))
+def test_panel_custom_id_binds_each_action_to_one_attempt(action: PanelAction) -> None:
+    debate_id = DebateId.new()
+    attempt_id = AttemptId.new()
+
+    custom_id = PanelCustomId.for_attempt(
+        debate_id=debate_id,
+        attempt_id=attempt_id,
+        action=action,
+    )
+
+    assert len(custom_id.operation_id) == 33
+    assert custom_id.expected_attempt_id() == attempt_id
+    assert PanelCustomId.parse(custom_id.encode()) == custom_id
+
+
+def test_panel_operation_attempt_rejects_an_action_suffix_mismatch() -> None:
+    custom_id = PanelCustomId.for_attempt(
+        debate_id=DebateId.new(),
+        attempt_id=AttemptId.new(),
+        action=PanelAction.CANCEL,
+    )
+
+    with pytest.raises(ValueError, match="bound to its action"):
+        replace(custom_id, action=PanelAction.RETRY).expected_attempt_id()
+
+
 def test_message_split_is_deterministic_bounded_and_prefers_paragraphs() -> None:
     assert split_discord_message(" short ") == ("short",)
     content = f"{'a' * 1_200}\n\n{'b' * 1_200}\nline\n{'c' * 2_100}"

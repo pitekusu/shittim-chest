@@ -66,6 +66,17 @@ additional in-process retry loop. Every client uses a 30-second maximum SDK
 rate-limit wait, and Discord operations have a 45-second timeout within the
 shared 60-second outbox claim.
 
+STEP-06C adds the offline Discord interaction runtime. Four independent clients
+use only the GUILDS Intent and new debates are accepted only while all four are
+READY. The moderator registers a Guild-scoped `/shittim` schema, defers command
+and component responses immediately, creates a nonce-protected starter message,
+Public Thread, and control panel, and reconciles an interrupted setup from
+Discord history before creating another resource. Cancel/retry buttons are
+bound to the immutable source attempt and are accepted only after Application,
+Guild, thread, panel message, debate, attempt, and actor checks. The controller
+owns and awaits its debate tasks, and one client exiting causes all four clients
+to close.
+
 Production is fixed to Luna standard for every generation phase. Terra standard
 and Luna pro remain evaluation-only policies and cannot be selected by runtime
 configuration or Discord operations. The shadow assessment remains observable
@@ -74,8 +85,9 @@ comes from three private, versioned persona prompts with distinct practical,
 verification/safety, and creative/alternative lenses while sharing the same
 evidence, safety constraints, and structured-output schema.
 
-The Discord interaction runtime, runtime recovery wiring, Discord Applications,
-containers, CDK/AWS resources,
+The Discord interaction runtime is implemented and offline-tested but is not
+yet connected to real Bot tokens or a production composition root. Runtime
+recovery wiring, Discord Applications, containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.

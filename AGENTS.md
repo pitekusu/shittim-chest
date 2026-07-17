@@ -38,14 +38,17 @@ message IDs are separate and can be bound only while `ACCEPTED`; identical
 replay is idempotent and rebinding is rejected. DynamoDB schema v5 migrates the
 immediately previous v4 record and maps old `bot_id` to generic `bot_slot`.
 Local validation passed 221 tests with 5 opt-in skips and 92.70%
-domain/application line/branch coverage. STEP-06B is implemented locally with
-discord.py 2.7.1, fenced outbox publication, safe allowed mentions, enforced
-nonce delivery, SDK-owned rate-limit handling, and history reconciliation.
+domain/application line/branch coverage. STEP-06B was squash-merged through PR
+`#30` as commit `96a1ace` with discord.py 2.7.1, fenced outbox publication,
+safe allowed mentions, enforced nonce delivery, SDK-owned rate-limit handling,
+and history reconciliation.
 Each client must use `max_ratelimit_timeout=30`; Discord delivery is bounded to
-45 seconds, shorter than the shared 60-second outbox claim. Its full locked
-suite passes 245 tests at 92.74% coverage. Live Discord
-operations, four-client interaction runtime wiring, and Discord Applications
-remain unimplemented.
+45 seconds, shorter than the shared 60-second outbox claim. STEP-06C is locally
+implemented and offline-tested with four GUILDS-only clients, a four-READY
+acceptance gate, Guild-scoped `/shittim`, immediate ephemeral defer,
+starter/Public Thread/control panel provisioning and reconciliation,
+attempt-bound cancel/retry, and owned debate tasks. Live Discord operations,
+restart recovery composition, and Discord Applications remain unimplemented.
 Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -173,6 +176,22 @@ unlocked automatically. Configure all clients with
 must remain shorter than `OUTBOX_CLAIM_SECONDS=60` so a blocked SDK wait cannot
 outlive claim ownership. The publisher contract receives the expected leased
 `DebateSnapshot` because an operation ID is scoped to its debate attempt.
+
+STEP-06C adds `DiscordInteractionController`, `DiscordPyGateway`, and
+`DiscordClientSupervisor`. Build all four clients with GUILDS-only Intent and
+never read Bot tokens in the client builder. Defer every command/component
+response before validation or persistence. Register `/shittim` only in the
+configured Guild and sync only when the deploy-provided command schema hash
+changes. Provision starter, Public Thread, and panel with mentions disabled;
+reconcile an interrupted setup by Bot author, nonce, and exact content before
+creating another resource. Bind control operations to the source AttemptId and
+verify Application, Guild, thread, panel message, debate, attempt, and actor
+before invoking a use case. The controller must own, cancel, and await all
+background debate tasks. On Python 3.14 with discord.py 2.7.1, do not use
+`Client.event()` for this listener because it reaches a deprecated asyncio API
+while tests treat warnings as errors; use the dedicated moderator client's
+explicit `on_interaction` dispatch. STEP-07 still owns process signals,
+startup `resume_recoverable`, Gateway disconnect deadlines, and outbox drain.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 

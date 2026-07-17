@@ -64,6 +64,7 @@ class CancelDebateCommand:
     actor_id: str
     operation_id: str
     can_manage_messages: bool = False
+    expected_attempt_id: AttemptId | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.actor_id, label="actor ID")
@@ -86,6 +87,7 @@ class RetryDebateCommand:
     actor_id: str
     operation_id: str
     can_manage_messages: bool = False
+    expected_attempt_id: AttemptId | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.actor_id, label="actor ID")

@@ -156,6 +156,11 @@ class DebateApplication:
         except Exception:
             await self._fail_current(debate_id, error_code="phase_failed")
 
+    async def get_debate(self, debate_id: DebateId) -> DebateSnapshot:
+        """Return the current persisted snapshot through an application read boundary."""
+
+        return await self._require_snapshot(debate_id)
+
     async def bind_discord_context(
         self,
         command: BindDiscordContextCommand,
@@ -246,6 +251,11 @@ class DebateApplication:
         snapshot = operation_result or await self._require_snapshot(command.debate_id)
         if snapshot.state.debate_id != command.debate_id:
             raise InvalidApplicationOperation("operation ID is bound to another debate")
+        if (
+            command.expected_attempt_id is not None
+            and snapshot.state.attempt_id != command.expected_attempt_id
+        ):
+            raise InvalidApplicationOperation("panel operation is bound to another attempt")
         self._authorize_actor(snapshot, command.actor_id, command.can_manage_messages)
         if snapshot.state.phase is DebatePhase.CANCELLED:
             return CancelledDebate(command.debate_id, snapshot.state.attempt_id)
@@ -278,6 +288,11 @@ class DebateApplication:
             )
             if operation_result.state.retry_of is None:
                 raise InvalidApplicationOperation("operation result is not a retry")
+            if (
+                command.expected_attempt_id is not None
+                and operation_result.state.retry_of != command.expected_attempt_id
+            ):
+                raise InvalidApplicationOperation("panel operation is bound to another attempt")
             return AcceptedRetry(
                 debate_id=command.debate_id,
                 attempt_id=operation_result.state.attempt_id,
@@ -285,6 +300,11 @@ class DebateApplication:
             )
 
         failed = await self._require_snapshot(command.debate_id)
+        if (
+            command.expected_attempt_id is not None
+            and failed.state.attempt_id != command.expected_attempt_id
+        ):
+            raise InvalidApplicationOperation("panel operation is bound to another attempt")
         self._authorize_actor(failed, command.actor_id, command.can_manage_messages)
         if failed.state.phase is not DebatePhase.FAILED:
             raise InvalidApplicationOperation("only a failed debate may be retried")
