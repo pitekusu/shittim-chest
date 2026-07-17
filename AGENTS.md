@@ -29,8 +29,8 @@ through PR `#21` as commit `44a35fa`. It adds fail-safe
 `question-router-v2`, hosted Responses API Web search, immutable source-backed
 Evidence, optional/required failure semantics, and the schema v3 Evidence
 migration. The Responses API Multi-agent beta is explicitly not used.
-STEP-06A is published through PR `#27` and adds SDK-independent Discord Bot
-slots and fail-closed runtime
+STEP-06A was squash-merged through PR `#27` as commit `47af41f` and adds
+SDK-independent Discord Bot slots and fail-closed runtime
 configuration, stable Discord error codes, deterministic message chunking,
 UUIDv7 nonces, content hashes, a versioned panel custom-ID codec, and an
 application-owned outbox Protocol. Starter message, thread, and control panel
