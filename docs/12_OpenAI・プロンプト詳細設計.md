@@ -41,7 +41,7 @@ updated: 2026-07-17
 
 Pydanticでfield、length、score範囲、candidate IDをstrictに検証し、未知fieldを拒否した後、domain invariantで自己投票、重複、未知IDを拒否する。`refusal`、`incomplete`、`output_parsed is None`は別error codeへ変換する。
 
-STEP-05Aでは現行domainとDynamoDB schemaに1対1で保存できるfieldだけをschemaに含める。旧設計の`assumptions`、`risks`、`rationale`、`tradeoffs`、`evidence_refs`を応答させて破棄することはしない。これらが必要な場合はdomain型、serializer、DynamoDB schema、Discord表示、試験を同時に変更する別sliceとする。`EvidenceDigestV1`とWeb searchはEvidence Routerを実装するSTEP-05Bで確定する。
+STEP-05Aでは現行domainとDynamoDB schemaに1対1で保存できるfieldだけをschemaに含めた。STEP-05Bで`EvidenceDigestOutputV1.summary`、検索要否、検索状態、Responses API response ID、source metadataをdomain型とDynamoDB schema v3へ同時に追加した。旧設計の`assumptions`、`risks`、`rationale`、`tradeoffs`は引き続き出力させて破棄せず、必要な場合は別sliceで保存先から設計する。
 
 ## 4. Persona prompt
 
@@ -55,7 +55,11 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 - 天気、news、価格、schedule、現職者、法令など現在性が回答の成立条件なら`required`。
 - 「今日の朝ごはん」のように現在語が付いても一般提案が可能なら`optional`。
 - `required`検索失敗はsessionを`FAILED`、`optional`失敗は注記して続行する。
-- Web searchはorchestratorが1回だけ実行する。requestで`include=["web_search_call.action.sources"]`を指定し、toolが返したsource metadataを基にimmutable Evidence bundleを作成して3人格へ同一内容で配布する。modelが本文中に生成したURLだけをsourceの正としない。
+- Web searchと討論生成は同じ`OpenAIRequestLimiter`を必須注入し、process全体の同時requestを6以下に保つ。adapterごとに独立Semaphoreを作らない。
+- Routerは追加model callを使わないversion付き決定規則`question-router-v2`とする。現在情報と高risk topicの明示語・類似語は`required`、時間・場所・推薦contextは`optional`、創作・言換え・要約・時間非依存の比較など明示的な検索不要patternだけ`none`とする。どれにも一致しない未知・類似表現はfail-safeに`optional`とする。
+- Evidence METAへ`router_rules_version`と安定した`routing_reason`を保存し、誤分類を質問本文のlog出力なしで集計・回帰test化できるようにする。
+- Web searchはorchestratorが1つのResponses API requestだけを送る。hosted toolはそのrequest内でsearch/open/findを複数回実行し得るため、`max_tool_calls=4`で上限を設ける。`tools=[{"type":"web_search"}]`、`tool_choice="required"`、`include=["web_search_call.action.sources"]`、`store=false`を指定する。
+- `action.sources`とURL citationを統合・重複排除し、URL、title、canonical source metadata、UTC取得時刻、metadata SHA-256、要約、response IDをimmutable Evidenceとして保存する。hashはsource page本文ではなく保存するcanonical metadataの完全性確認値である。model本文中のURLだけをsourceの正としない。
 - source本文はuntrusted dataとして区切り、命令、secret要求、tool実行指示を無視する。
 
 ## 6. 投票・決定
@@ -87,7 +91,7 @@ STEP-05Aでは実装しない。難易度、人格間の重大な対立、schema
 | 2026-07-16 | Structured Outputs | https://developers.openai.com/api/docs/guides/structured-outputs | `responses.parse()`とPydantic |
 | 2026-07-16 | Responses API | https://developers.openai.com/api/docs/guides/migrate-to-responses | `store=false`、typed output |
 | 2026-07-16 | OpenAI Python | https://github.com/openai/openai-python | Async client再利用、error分類 |
-| 2026-07-16 | Web search | https://developers.openai.com/api/docs/guides/tools-web-search | 共通Evidence取得 |
+| 2026-07-17 | Web search / OpenAI Python 2.46.0 | https://developers.openai.com/api/docs/guides/tools-web-search | hosted `web_search`、sources include、citation、tool call上限、共通Evidenceを実装 |
 | 2026-07-16 | Data controls | https://developers.openai.com/api/docs/guides/your-data | `store=false`、abuse monitoring最大30日 |
 | 2026-07-17 | OpenAI Python 2.46.0 | https://pypi.org/project/openai/、https://github.com/openai/openai-python | `AsyncOpenAI.responses.parse`の引数、SDK retry、Python 3.14互換を照合 |
 | 2026-07-17 | Structured Outputs | https://developers.openai.com/api/docs/guides/structured-outputs | Pydantic parse、refusal、strict schemaを実装 |
@@ -96,4 +100,4 @@ STEP-05Aでは実装しない。難易度、人格間の重大な対立、schema
 
 ## 9. Implementation status
 
-STEP-05Aで初回意見、最終案、投票、決定事項のstable Responses adapter、strict schema、private persona検証、最大6並列、SDK error変換、本文を含まないusage/failure記録をlocal実装した。公式SDKとmock HTTP transportのcontract testでrequest shape、正常系、refusal、incomplete、invalid output、429、認証失敗、domain再検証を確認した。OpenAI実API接続、Web search、Terra昇格、Discord結合、CloudWatch出力は未実施である。
+STEP-05AはPR `#20`でmerge済みである。STEP-05Bでは決定的Router、hosted Web search adapter、Evidence digest/source抽出、optional継続・required失敗、content-free usage記録、DynamoDB schema v3をlocal実装した。OpenAI実API接続、Terra昇格、Discord結合、CloudWatch出力は未実施である。

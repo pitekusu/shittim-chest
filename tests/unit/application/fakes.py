@@ -79,11 +79,14 @@ class FakeEvidence:
     bundle: EvidenceBundle = field(default_factory=EvidenceBundle)
     calls: list[str] = field(default_factory=list)
     delay: float = 0.0
+    error: Exception | None = None
 
     async def prepare_evidence(self, *, question: str) -> EvidenceBundle:
         self.calls.append(question)
         if self.delay:
             await asyncio.sleep(self.delay)
+        if self.error is not None:
+            raise self.error
         return self.bundle
 
 

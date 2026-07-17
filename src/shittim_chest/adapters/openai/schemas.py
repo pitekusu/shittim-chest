@@ -48,3 +48,9 @@ class DecisionOutputV1(StrictOutput):
     decision: str = Field(min_length=1, max_length=2_000)
     actions: tuple[ShortListItem, ...] = Field(max_length=10)
     caveats: tuple[ShortListItem, ...] = Field(max_length=10)
+
+
+class EvidenceDigestOutputV1(StrictOutput):
+    """One concise, source-backed digest shared with every participant."""
+
+    summary: str = Field(min_length=1, max_length=2_000)

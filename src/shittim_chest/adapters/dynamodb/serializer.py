@@ -21,11 +21,13 @@ from shittim_chest.domain import (
     DebateState,
     EvidenceBundle,
     EvidenceItem,
+    EvidenceSearchStatus,
     FinalDecision,
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
     RecoveryState,
+    SearchRequirement,
     Vote,
 )
 
@@ -33,8 +35,8 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 2
-PREVIOUS_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 3
+PREVIOUS_SCHEMA_VERSION = 2
 MAX_ITEM_BYTES = 400 * 1024
 
 
@@ -52,6 +54,16 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
+        if migrated.get("record_type") == "evidence_meta":
+            satisfied = migrated.get("required_search_satisfied") is True
+            migrated.setdefault("summary", "Legacy evidence bundle")
+            migrated.setdefault("search_requirement", "optional")
+            migrated.setdefault(
+                "search_status",
+                "completed" if satisfied else "optional_unavailable",
+            )
+            if satisfied:
+                migrated.setdefault("search_response_id", "legacy-v2")
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -129,8 +141,14 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
                 "record_type": "evidence_meta",
                 "attempt_id": attempt_id,
                 "required_search_satisfied": snapshot.evidence.required_search_satisfied,
+                "summary": snapshot.evidence.summary,
+                "search_requirement": snapshot.evidence.search_requirement.value,
+                "search_status": snapshot.evidence.search_status.value,
+                "router_rules_version": snapshot.evidence.router_rules_version,
+                "routing_reason": snapshot.evidence.routing_reason,
             }
         )
+        _put_optional(items[-1], "search_response_id", snapshot.evidence.search_response_id)
         for sequence, evidence in enumerate(snapshot.evidence.items):
             items.append(_serialize_evidence(common, attempt_id, sequence, evidence))
     items.extend(
@@ -179,12 +197,42 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             _many(items, "evidence", attempt_id=attempt_id),
             key=lambda item: _integer(item, "sequence"),
         )
+        legacy_empty = (
+            not evidence_items
+            and _optional_text(evidence_meta, "search_response_id") == "legacy-v2"
+        )
         evidence = EvidenceBundle(
             items=tuple(_deserialize_evidence(item) for item in evidence_items),
             required_search_satisfied=_boolean(
                 evidence_meta,
                 "required_search_satisfied",
             ),
+            summary=(
+                ""
+                if legacy_empty
+                else (
+                    _text(evidence_meta, "summary", allow_empty=True)
+                    if "summary" in evidence_meta
+                    else ""
+                )
+            ),
+            search_requirement=SearchRequirement(
+                "none"
+                if legacy_empty
+                else (_optional_text(evidence_meta, "search_requirement") or "none")
+            ),
+            search_status=EvidenceSearchStatus(
+                "not_requested"
+                if legacy_empty
+                else (_optional_text(evidence_meta, "search_status") or "not_requested")
+            ),
+            search_response_id=(
+                None if legacy_empty else _optional_text(evidence_meta, "search_response_id")
+            ),
+            router_rules_version=(
+                _optional_text(evidence_meta, "router_rules_version") or "legacy-router-v0"
+            ),
+            routing_reason=_optional_text(evidence_meta, "routing_reason") or "legacy_migration",
         )
 
     opinions = _by_participant(

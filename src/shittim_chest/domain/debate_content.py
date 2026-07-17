@@ -18,6 +18,24 @@ class ParticipantSlot(StrEnum):
     PARTICIPANT_C = "participant-c"
 
 
+@unique
+class SearchRequirement(StrEnum):
+    """Whether current external evidence is needed for one question."""
+
+    NONE = "none"
+    OPTIONAL = "optional"
+    REQUIRED = "required"
+
+
+@unique
+class EvidenceSearchStatus(StrEnum):
+    """Persisted outcome of the one evidence preparation request."""
+
+    NOT_REQUESTED = "not_requested"
+    COMPLETED = "completed"
+    OPTIONAL_UNAVAILABLE = "optional_unavailable"
+
+
 PARTICIPANTS: Final[tuple[ParticipantSlot, ...]] = tuple(ParticipantSlot)
 STABLE_TIE_BREAK_ORDER: Final[tuple[ParticipantSlot, ...]] = (
     ParticipantSlot.PARTICIPANT_B,
@@ -65,6 +83,38 @@ class EvidenceBundle:
 
     items: tuple[EvidenceItem, ...] = ()
     required_search_satisfied: bool = True
+    summary: str = ""
+    search_requirement: SearchRequirement = SearchRequirement.NONE
+    search_status: EvidenceSearchStatus = EvidenceSearchStatus.NOT_REQUESTED
+    search_response_id: str | None = None
+    router_rules_version: str = "not-routed-v0"
+    routing_reason: str = "not_routed"
+
+    def __post_init__(self) -> None:
+        if not self.router_rules_version.strip() or not self.routing_reason.strip():
+            raise ValueError("router version and routing reason must not be empty")
+        if self.search_requirement is SearchRequirement.NONE:
+            if self.search_status is not EvidenceSearchStatus.NOT_REQUESTED:
+                raise ValueError("a no-search bundle must be marked not requested")
+            if self.items or self.summary or self.search_response_id is not None:
+                raise ValueError("a no-search bundle must not contain search output")
+        elif self.search_status is EvidenceSearchStatus.COMPLETED:
+            if not self.items or not self.summary.strip() or not self.search_response_id:
+                raise ValueError(
+                    "completed search evidence must contain summary, sources, and response ID"
+                )
+            if not self.required_search_satisfied:
+                raise ValueError("completed search evidence must be satisfied")
+        elif (
+            self.search_requirement is SearchRequirement.OPTIONAL
+            and self.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
+        ):
+            if self.items or self.summary or self.search_response_id is not None:
+                raise ValueError("unavailable optional evidence must not contain search output")
+            if self.required_search_satisfied:
+                raise ValueError("unavailable optional evidence must be marked unsatisfied")
+        else:
+            raise ValueError("invalid evidence search requirement and status")
 
 
 @dataclass(frozen=True, slots=True)

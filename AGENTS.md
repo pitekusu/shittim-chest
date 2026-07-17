@@ -24,12 +24,11 @@ PR `#18` as commit `9aafe6e` with boto3 transactions, three lease slots, durable
 operation results, outbox state changes, GSI pagination, DynamoDB Local, and SDK
 stub tests. The PR checks and the merge commit's CI, CodeQL, and managed
 Dependency Graph run all passed.
-STEP-05A is implemented locally and awaiting Pull Request publication. It adds
-the stable OpenAI Responses adapter for initial opinions, final proposals,
-votes, and decisions; strict Pydantic schemas; private persona validation;
-bounded concurrency; content-free usage/failure records; and stable domain-safe
-error mapping. The full local suite passes 178 tests at 92.40% coverage. The
-Responses API Multi-agent beta is explicitly not used.
+STEP-05A was merged through PR `#20` as commit `d6ea561`. STEP-05B is locally
+implemented and awaiting Pull Request publication. It adds fail-safe
+`question-router-v2`, hosted Responses API Web search, immutable source-backed
+Evidence, optional/required failure semantics, and DynamoDB schema v3 with v2
+reader migration. The Responses API Multi-agent beta is explicitly not used.
 Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -105,16 +104,24 @@ DynamoDB Local 3.3.0 plus SDK Stubber. STEP-04B was squash-merged through PR
 `29553563948`, CodeQL run `29553563821`, and managed Dependency Graph run
 `29553565579`; no production AWS resource or credential was used.
 
-STEP-05A is locally implemented on top of main commit `5d48409`. It uses
+STEP-05A was merged through PR `#20` as commit `d6ea561` and uses
 `openai` 2.46.0, `httpx` 0.28.1, and Pydantic 2.13.4; stable
 `AsyncOpenAI.responses.parse()` calls have `store=False`, no tools, and no beta
 Multi-agent field or header. Official-SDK mock transport tests cover all four
 generation operations, refusal, incomplete and invalid output, rate limiting,
 authentication failure, request privacy, usage telemetry, and domain
-revalidation. The DynamoDB Local full regression passes 178 tests at 92.40%
-coverage. Real OpenAI calls, Evidence/Web search, Terra escalation, Discord
-integration, and CloudWatch emission remain out of scope. Terra escalation is
-an unresolved STEP-05C candidate in the decision record; consult the operator
+revalidation. STEP-05B adds `question-router-v2` without another model call.
+Unknown or unmatched expressions default to optional search; only explicit
+timeless/creative patterns use no search. Persist the router rules version and
+stable routing reason with Evidence so misclassifications can become tests.
+One hosted Web search Responses request is used only for optional/required
+routes, with `tool_choice=required`, `max_tool_calls=4`, source inclusion,
+`store=false`, and the same immutable Evidence for all participants. Optional
+failure is persisted and continues; required failure becomes
+`required_evidence_unavailable`. Evidence META is schema v3 and its reader
+migrates the immediately previous v2. Real OpenAI calls, Terra escalation,
+Discord integration, and CloudWatch emission remain out of scope. Terra
+escalation is an unresolved STEP-05C candidate in the decision record; consult the operator
 before implementing it.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.

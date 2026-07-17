@@ -5,6 +5,7 @@ from shittim_chest.application.errors import (
     DebateNotFound,
     InvalidApplicationOperation,
     RequestNotAllowed,
+    RequiredEvidenceUnavailable,
     RuntimeNotReady,
 )
 from shittim_chest.application.models import (
@@ -32,6 +33,7 @@ __all__ = (
     "InvalidApplicationOperation",
     "LeaseGrant",
     "RequestNotAllowed",
+    "RequiredEvidenceUnavailable",
     "RetryDebateCommand",
     "RuntimeNotReady",
 )
