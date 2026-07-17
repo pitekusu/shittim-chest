@@ -12,7 +12,7 @@ manages the workflow and publishes the mechanically calculated result.
 The requirements, basic design, and detailed design are complete. The
 Python/uv project foundation, initial domain state machine, and STEP-02 GitHub
 quality/supply-chain gates are implemented. The STEP-02B Betterleaks migration
-gate is implemented, and STEP-02C retires Gitleaks after successful observation.
+gate and STEP-02C Gitleaks retirement are complete.
 Application use cases, adapters,
 containers, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
