@@ -15,16 +15,24 @@ Requirements and detailed design are available in the
 [design-document mirror](https://github.com/pitekusu/shittim-chest/tree/main/docs).
 The Python 3.14.6/uv project foundation, UUIDv7 debate/attempt identifiers,
 immutable phase and Spot-recovery state machine, deterministic voting, and the
-SDK-independent application core are implemented. The application layer exposes
-typed accept/run/cancel/retry/resume use cases through Protocol boundaries and
-fake-based async tests. Pull requests are checked with read-only GitHub
+SDK-independent application core are implemented. STEP-04B also provides the
+concrete DynamoDB persistence adapter: transactional acceptance/retry/terminal
+updates, three fenced lease slots, 20-second lease renewal, strongly consistent
+operation-result idempotency, recoverable-session pagination, and a durable
+outbox. The application layer exposes typed accept/run/cancel/retry/resume use
+cases through Protocol boundaries and fake-based async tests. Pull requests are
+checked with read-only GitHub
 Actions jobs for quality, tests, security, packaging, source SBOM, and public
 documentation safety. GitHub's managed Dependency Graph is compared with the
 tested uv inventory on a weekly schedule. Betterleaks scans the complete Git
 history; release assets are digest-pinned and its checksums are verified with
-Sigstore.
-External adapters, concrete persistence, Discord Applications, AWS resources,
-containers, and production workflows have not been implemented yet.
+Sigstore. The persistence suite runs against digest-pinned DynamoDB Local and
+SDK Stubber; the STEP-04B baseline is 163 tests with 92.40% domain/application
+line and branch coverage.
+
+OpenAI and Discord adapters, runtime recovery wiring, Discord Applications,
+containers, CDK/AWS resources, and production workflows have not been
+implemented yet. No production AWS service is contacted by the current tests.
 
 The planned runtime uses Python, Discord, the OpenAI Responses API, DynamoDB,
 and one ARM64 ECS Fargate Spot task in the Tokyo Region. Fargate Spot
@@ -61,8 +69,9 @@ The weekly `Release Tool Versions` workflow compares the actionlint and
 Betterleaks pins with their latest stable GitHub releases. It
 reports drift but never updates or merges a version automatically.
 
-The lock file selects Python 3.14.6 through `.python-version`. The domain has no
-runtime dependency outside the Python standard library.
+The lock file selects Python 3.14.6 through `.python-version`. The domain remains
+standard-library-only; boto3 is isolated at the DynamoDB adapter boundary and
+synchronous SDK calls are moved off the event loop.
 
 ## Public and private boundaries
 

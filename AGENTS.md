@@ -19,10 +19,11 @@ cancellation, and fake-based async tests. STEP-04A persistence contracts were
 merged through PR `#16`: Guild/channel and
 operation identity preservation, fenced lease types, idempotent repository
 operations, vertically partitioned DynamoDB-native records, schema v1-to-v2
-up-conversion, and outbox/panel serialization. STEP-04B is implemented locally
-on `step-04b-dynamodb-adapter`: boto3 transactions, three lease slots, durable
+up-conversion, and outbox/panel serialization. STEP-04B was squash-merged through
+PR `#18` as commit `9aafe6e` with boto3 transactions, three lease slots, durable
 operation results, outbox state changes, GSI pagination, DynamoDB Local, and SDK
-stub tests pass. Commit, Pull Request, and GitHub CI evidence are still pending.
+stub tests. The PR checks and the merge commit's CI, CodeQL, and managed
+Dependency Graph run all passed.
 Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -93,8 +94,10 @@ adapter boundary, marshals validated native values explicitly, executes all SDK
 calls in worker threads, and uses a strongly readable `OPERATION#<id>/RESULT`
 item rather than a GSI as the idempotency authority. Local validation passed
 163 tests with 92.40% domain/application line/branch coverage using pinned
-DynamoDB Local 3.3.0 plus SDK Stubber. Do not describe STEP-04B as merged until
-its Pull Request and main checks have completed.
+DynamoDB Local 3.3.0 plus SDK Stubber. STEP-04B was squash-merged through PR
+`#18` as commit `9aafe6e` on 2026-07-17. The merge commit passed project CI run
+`29553563948`, CodeQL run `29553563821`, and managed Dependency Graph run
+`29553565579`; no production AWS resource or credential was used.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
