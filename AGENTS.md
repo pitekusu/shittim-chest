@@ -230,6 +230,7 @@ production remains fixed to Luna standard. Close Discord, OpenAI, and DynamoDB
 clients deterministically and idempotently. Real subprocess tests must keep
 covering SIGTERM checkpoint/cleanup and SIGKILL replacement-process recovery.
 STEP-08 owns container-boundary fault injection and production container work.
+STEP-07C was merged in PR #35 at commit `e863ae3`; PR and main CI/CodeQL passed.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
