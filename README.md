@@ -98,6 +98,17 @@ delivery conflicts fail with the stable Discord code. Cancellation stops new
 delivery immediately and leaves the outbox for the next fenced owner. Outbox
 waiting is excluded from the debate's active-processing deadline.
 
+STEP-07C adds the production composition root and the executable
+`python -m shittim_chest` entry point. Strict Pydantic configuration validates
+the generic runtime and four private persona payloads before any SDK client is
+created. The process then owns one reusable DynamoDB client, one reusable
+OpenAI client and shared limiter, and exactly four Discord clients. Startup and
+runtime failures emit stable, content-free error codes; shutdown closes all
+owned clients deterministically. `.env.example` documents names and generic
+shapes only and contains no production identifiers or credentials. Real
+subprocess tests verify graceful SIGTERM checkpoint/cleanup and SIGKILL
+replacement-process recovery.
+
 Production is fixed to Luna standard for every generation phase. Terra standard
 and Luna pro remain evaluation-only policies and cannot be selected by runtime
 configuration or Discord operations. The shadow assessment remains observable
@@ -106,10 +117,11 @@ comes from three private, versioned persona prompts with distinct practical,
 verification/safety, and creative/alternative lenses while sharing the same
 evidence, safety constraints, and structured-output schema.
 
-The Discord interaction, lifecycle, and outbox-recovery runtimes are implemented and offline-tested
-but are not yet connected to real Bot tokens or a production composition root.
-Real process/container fault injection, Discord Applications, containers, CDK/AWS resources,
-and production workflows have not been implemented yet. Responses API
+The Discord interaction, lifecycle, outbox-recovery, production-composition,
+and process-signal runtimes are implemented and offline-tested. They have not
+been connected to real Bot tokens or external services. Container-level fault
+injection, Discord Applications, containers, CDK/AWS resources, and production
+workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.

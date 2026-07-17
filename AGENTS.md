@@ -217,8 +217,19 @@ against the 300-second active-processing deadline. Retryable Discord failures
 must reuse the publisher's persisted reschedule; non-retryable failures preserve
 the stable Discord code. A `RepositoryConflict` means this worker lost fencing
 and must not terminalize the attempt. Cancellation must stop delivery and leave
-the record for a later fenced owner. STEP-07C/08 own production composition and
-real process/container fault injection.
+the record for a later fenced owner. STEP-07B was merged in PR #34 at commit
+`04bbda0`; main CI and CodeQL passed.
+
+STEP-07C adds the only production composition root in `bootstrap.py`, the
+`python -m shittim_chest` entry point, strict fail-closed runtime/persona
+configuration, content-free telemetry, and process-scoped runtime primitives.
+Validate configuration before creating any SDK client. Keep one reusable
+DynamoDB client, one reusable `AsyncOpenAI` client with one shared limiter, and
+exactly four Discord clients. Runtime configuration must not select a model;
+production remains fixed to Luna standard. Close Discord, OpenAI, and DynamoDB
+clients deterministically and idempotently. Real subprocess tests must keep
+covering SIGTERM checkpoint/cleanup and SIGKILL replacement-process recovery.
+STEP-08 owns container-boundary fault injection and production container work.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
