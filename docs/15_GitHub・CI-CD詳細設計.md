@@ -95,7 +95,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 - Betterleaksはofficial releaseの`checksums.txt`、Sigstore bundle、archiveをすべて固定SHA-256で検証し、`cosign verify-blob`でrelease workflow identityとGitHub Actions OIDC issuerを照合する。署名済みchecksum内のarchive digestとrepository pinも一致させる。Sigstore installer Actionはfull commit SHAとcosign versionを固定し、selected Actions allowlistへ限定追加する。
 - `security` check名を維持したままBetterleaks 1.6.1をfull historyへ実行する。redactionを有効化し、provider validation optionは使用しない。CIで毎回、sourceやworktreeへcredential文字列を保存せずtemporary Git objectとして生成するinvalid GitHub token形式と安全なplaceholderを別Git repositoryへcommitし、Betterleaksがpositiveを拒否しnegativeを許可することをcontract testする。
 - `tool-versions.yml`は毎週水曜13:29 JSTと手動でGitHub Releases latest APIをread-only照合し、差分時に失敗してoperatorへ更新を促す。自動更新・自動mergeは行わず、新versionはarchive digest、署名identity、full-history scan、false positiveを別PRで確認する。
-- STEP-02Bの複数PR head、main run、full-history、generated contract、Sigstore、latest-release workflowが全合格したため、STEP-02CでGitleaksを撤去する。二重scannerによる継続的な実行時間・更新負担を避け、GitHub managed Secret scanning、Push protection、Betterleaksを防御層とする。検出coverageの具体的な欠落が再現した場合だけ別ADRで第二scannerを再検討する。
+- STEP-02Bの複数PR head、main run、full-history、generated contract、Sigstore、latest-release workflowが全合格したため、STEP-02CのPR `#13`でGitleaksを撤去した。二重scannerによる継続的な実行時間・更新負担を避け、GitHub managed Secret scanning、Push protection、Betterleaksを防御層とする。検出coverageの具体的な欠落が再現した場合だけ別ADRで第二scannerを再検討する。
 - Secret scanning、Push protection、CodeQL default setup APIの`query_suite=extended`、Dependency graph、Dependabot alerts/security updatesを有効にする。
 - CodeQLは現在Pythonを対象とし、CDK実装時にJavaScript/TypeScriptを追加する。
 - uvとGitHub Actionsを週次更新する。Docker、npm/CDKはmanifest導入時に追加する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
@@ -118,7 +118,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv/GitHub Actions更新、read-only CI、managed SBOM照合、5 strict check、CodeQL ruleは運用済みである。STEP-02BでBetterleaksの段階移行gateとrelease-tool version監視を追加し、STEP-02CでGitleaksを撤去して単独運用へ移行する。既存`security` required check名は変更しない。application workflow、AWS OIDC role、AWS resourceは未実装である。
+Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv/GitHub Actions更新、read-only CI、managed SBOM照合、5 strict check、CodeQL ruleは運用済みである。STEP-02BでBetterleaksの段階移行gateとrelease-tool version監視を追加し、STEP-02CでGitleaksを撤去して単独運用へ移行済みである。既存`security` required check名は変更していない。application workflow、AWS OIDC role、AWS resourceは未実装である。
 
 ## 10. 公式資料確認記録
 
