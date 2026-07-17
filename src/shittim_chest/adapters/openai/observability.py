@@ -13,6 +13,8 @@ class OpenAIUsageRecord:
     operation: str
     response_id: str
     model: str
+    policy_id: str
+    reasoning_mode: str
     latency_ms: int
     input_tokens: int
     output_tokens: int
@@ -26,6 +28,7 @@ class OpenAIFailureRecord:
 
     operation: str
     code: str
+    policy_id: str
     latency_ms: int
 
 

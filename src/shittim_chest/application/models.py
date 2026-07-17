@@ -10,6 +10,7 @@ from shittim_chest.domain import (
     AttemptId,
     DebateId,
     DebateState,
+    EscalationAssessment,
     EvidenceBundle,
     FinalDecision,
     FinalProposal,
@@ -141,6 +142,7 @@ class DebateSnapshot:
     final_proposals: tuple[FinalProposal, ...] = ()
     votes: tuple[Vote, ...] = ()
     final_decision: FinalDecision | None = None
+    escalation_assessment: EscalationAssessment | None = None
     error_code: str | None = None
 
     def __post_init__(self) -> None:

@@ -142,7 +142,7 @@ def test_terminal_and_non_terminal_sets_are_complete_and_disjoint() -> None:
 
 @pytest.mark.parametrize("phase", tuple(EXPECTED_NON_TERMINAL_PHASES))
 def test_checkpoint_and_resume_preserve_phase_and_identity(phase: DebatePhase) -> None:
-    state = make_state(phase, schema_version=3)
+    state = make_state(phase, schema_version=4)
 
     checkpointed = state.checkpoint(at=STARTED_AT + timedelta(seconds=1))
     resumed = checkpointed.resume(at=STARTED_AT + timedelta(seconds=2))
@@ -152,7 +152,7 @@ def test_checkpoint_and_resume_preserve_phase_and_identity(phase: DebatePhase) -
     assert resumed.phase is phase
     assert resumed.recovery_state is RecoveryState.NONE
     assert resumed.debate_id == state.debate_id
-    assert resumed.schema_version == 3
+    assert resumed.schema_version == 4
     assert state.recovery_state is RecoveryState.NONE
 
 

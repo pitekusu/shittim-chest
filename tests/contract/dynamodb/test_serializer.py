@@ -30,6 +30,7 @@ from shittim_chest.domain import (
     DebateId,
     DebatePhase,
     DebateState,
+    EscalationAssessment,
     EvidenceBundle,
     EvidenceItem,
     EvidenceSearchStatus,
@@ -107,6 +108,13 @@ def snapshot() -> DebateSnapshot:
             ("パンを卵液に浸す",),
             ("アレルギーを確認する",),
         ),
+        escalation_assessment=EscalationAssessment(
+            rules_version="escalation-shadow-v1",
+            split_vote=True,
+            winning_axis_low=False,
+            winning_average_low=False,
+            assessed_at=NOW,
+        ),
     )
 
 
@@ -126,6 +134,7 @@ def test_snapshot_round_trip_preserves_current_attempt_and_vertical_items() -> N
         "final_proposal",
         "vote",
         "decision",
+        "escalation_assessment",
     }
     debate_meta = next(item for item in items if item["record_type"] == "debate_meta")
     attempt_meta = next(item for item in items if item["record_type"] == "attempt_meta")
@@ -164,9 +173,14 @@ def test_empty_evidence_bundle_is_distinct_from_missing_evidence() -> None:
 
 def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> None:
     current = serialize_snapshot(snapshot())
-    previous = tuple({**item, "schema_version": 2} for item in current)
+    previous = tuple(
+        {**item, "schema_version": 3}
+        for item in current
+        if item["record_type"] != "escalation_assessment"
+    )
     restored = deserialize_snapshot(previous)
     assert restored.state.schema_version == CURRENT_SCHEMA_VERSION
+    assert restored.escalation_assessment is None
     assert all(migrate_item(item)["schema_version"] == CURRENT_SCHEMA_VERSION for item in previous)
 
     with pytest.raises(PersistenceFormatError, match="unsupported schema"):

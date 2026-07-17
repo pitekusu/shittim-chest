@@ -25,15 +25,22 @@ from shittim_chest.domain.debate_state import (
     InvalidStateTransition,
     RecoveryState,
 )
+from shittim_chest.domain.escalation import (
+    ESCALATION_RULES_VERSION,
+    EscalationAssessment,
+    assess_escalation,
+)
 from shittim_chest.domain.identifiers import AttemptId, DebateId
 
 __all__ = (
+    "ESCALATION_RULES_VERSION",
     "PARTICIPANTS",
     "STABLE_TIE_BREAK_ORDER",
     "AttemptId",
     "DebateId",
     "DebatePhase",
     "DebateState",
+    "EscalationAssessment",
     "EvidenceBundle",
     "EvidenceItem",
     "EvidenceSearchStatus",
@@ -50,5 +57,6 @@ __all__ = (
     "SearchRequirement",
     "Vote",
     "VotingResult",
+    "assess_escalation",
     "select_winner",
 )

@@ -24,11 +24,11 @@ PR `#18` as commit `9aafe6e` with boto3 transactions, three lease slots, durable
 operation results, outbox state changes, GSI pagination, DynamoDB Local, and SDK
 stub tests. The PR checks and the merge commit's CI, CodeQL, and managed
 Dependency Graph run all passed.
-STEP-05A was merged through PR `#20` as commit `d6ea561`. STEP-05B is locally
-implemented and awaiting Pull Request publication. It adds fail-safe
+STEP-05A was merged through PR `#20` as commit `d6ea561`. STEP-05B was merged
+through PR `#21` as commit `44a35fa`. It adds fail-safe
 `question-router-v2`, hosted Responses API Web search, immutable source-backed
-Evidence, optional/required failure semantics, and DynamoDB schema v3 with v2
-reader migration. The Responses API Multi-agent beta is explicitly not used.
+Evidence, optional/required failure semantics, and the schema v3 Evidence
+migration. The Responses API Multi-agent beta is explicitly not used.
 Containers for the application, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -119,10 +119,11 @@ routes, with `tool_choice=required`, `max_tool_calls=4`, source inclusion,
 `store=false`, and the same immutable Evidence for all participants. Optional
 failure is persisted and continues; required failure becomes
 `required_evidence_unavailable`. Evidence META is schema v3 and its reader
-migrates the immediately previous v2. Real OpenAI calls, Terra escalation,
-Discord integration, and CloudWatch emission remain out of scope. Terra
-escalation is an unresolved STEP-05C candidate in the decision record; consult the operator
-before implementing it.
+migrates the immediately previous v2. STEP-05C adds local shadow-only
+deterministic escalation signals, immutable Luna/Terra/pro generation policies,
+schema v4 persistence, and an opt-in blind A/B evaluator. It must not enable
+production auto-escalation or paid evaluation without a later explicit operator
+decision. Discord integration and CloudWatch emission remain out of scope.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
@@ -425,10 +426,10 @@ only composition root.
   output, parsed output, and transport failure before returning domain models.
 - Confirm the configured model is available to the actual OpenAI project at
   deployment time.
-- Keep Luna-to-Terra escalation unimplemented until the operator approves a
-  deterministic trigger, phase scope, budget/deadline, persistence fields, and
-  evaluation threshold recorded in the decision document. Never use model
-  escalation to bypass a refusal or policy block.
+- Keep production auto-escalation disabled. STEP-05C may record only
+  `escalation-shadow-v1` signals during normal debates. Paid evaluation requires
+  the explicit local `--live` gate and must write raw output outside the
+  repository. Never use another policy to bypass a refusal or policy block.
 - Version the model identifier, persona prompts, and structured-output schema
   used by each debate session.
 - Load display names and prompts from versioned private runtime configuration;

@@ -46,6 +46,7 @@ from shittim_chest.domain import (
     ParticipantSlot,
     RecoveryState,
     Vote,
+    assess_escalation,
     select_winner,
 )
 
@@ -363,8 +364,16 @@ class DebateApplication:
                 self._generate_votes(snapshot.question, evidence, snapshot.final_proposals)
             )
         voting_result = select_winner(votes)
+        assessment = snapshot.escalation_assessment or assess_escalation(
+            voting_result,
+            assessed_at=self._clock.now(),
+        )
         await self._replace_with_phase(
-            replace(snapshot, votes=voting_result.votes),
+            replace(
+                snapshot,
+                votes=voting_result.votes,
+                escalation_assessment=assessment,
+            ),
             expected=snapshot,
             target=DebatePhase.GENERATING_DECISION,
         )

@@ -96,7 +96,7 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 - Queryは1MB paginationを考慮し、Scanを通常pathで使用しない。
 - floatを保存せず、必要な数値はintまたは`Decimal`を使用する。
 
-STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidence METAへ要約、検索要否、検索状態、Responses response ID、router rules version、routing reasonを追加しschema v3へ更新した。source itemはURL/title/canonical metadata/UTC取得時刻/metadata SHA-256を保持する。DynamoDB Localでtransaction/GSI/outboxを、serializer contractでv2→v3 migrationとEvidence round-tripを検証する。
+STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidenceを追加してschema v3へ更新した。STEP-05Cは`escalation_assessment` itemへrules version、3つのsignal、UTC評価時刻、再実行開始phase、実行有無、Policy ID、最大1回の実行回数を保存しschema v4へ更新した。readerは直前v3をassessmentなしとしてup-convertする。
 
 ## 10. Schema migration
 
