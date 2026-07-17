@@ -12,18 +12,28 @@ from shittim_chest.adapters.discord.errors import (
     DiscordThreadUnavailable,
     DiscordUnavailable,
 )
+from shittim_chest.adapters.discord.gateway import (
+    DiscordClientSupervisor,
+    DiscordPyGateway,
+    build_discord_clients,
+)
+from shittim_chest.adapters.discord.interactions import DiscordInteractionController
 from shittim_chest.adapters.discord.publisher import DiscordPyPublisher
 
 __all__ = (
     "DiscordAdapterError",
+    "DiscordClientSupervisor",
     "DiscordDeliveryConflict",
     "DiscordDeliveryRejected",
     "DiscordIdentityUnavailable",
+    "DiscordInteractionController",
     "DiscordOutboxNotFound",
     "DiscordPermissionDenied",
+    "DiscordPyGateway",
     "DiscordPyPublisher",
     "DiscordRateLimited",
     "DiscordThreadLocked",
     "DiscordThreadUnavailable",
     "DiscordUnavailable",
+    "build_discord_clients",
 )

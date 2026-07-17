@@ -279,6 +279,34 @@ class PanelCustomId:
             raise ValueError("invalid panel custom ID") from error
         return cls(debate_id=debate_id, operation_id=parts[3], action=action)
 
+    @classmethod
+    def for_attempt(
+        cls,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        action: PanelAction,
+    ) -> PanelCustomId:
+        """Build a stable panel operation ID bound to one immutable attempt."""
+
+        suffix = "c" if action is PanelAction.CANCEL else "r"
+        return cls(
+            debate_id=debate_id,
+            operation_id=f"{attempt_id.value.hex}{suffix}",
+            action=action,
+        )
+
+    def expected_attempt_id(self) -> AttemptId:
+        """Recover and validate the immutable source attempt encoded by this panel ID."""
+
+        expected_suffix = "c" if self.action is PanelAction.CANCEL else "r"
+        if len(self.operation_id) != 33 or self.operation_id[-1] != expected_suffix:
+            raise ValueError("panel operation ID is not bound to its action")
+        try:
+            return AttemptId.parse(self.operation_id[:32])
+        except ValueError as error:
+            raise ValueError("panel operation ID does not contain a UUIDv7 attempt") from error
+
 
 def nonce_from_uuid7(value: UUID) -> str:
     """Encode one RFC 9562 UUIDv7 as a 22-character unpadded base64url nonce."""

@@ -377,6 +377,33 @@ async def test_completed_debate_cannot_be_cancelled(
 
 
 @pytest.mark.asyncio
+async def test_panel_cancel_rejects_a_different_source_attempt(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    accepted = await app.accept_debate(request())
+
+    with pytest.raises(InvalidApplicationOperation, match="another attempt"):
+        await app.cancel_debate(
+            CancelDebateCommand(
+                accepted.debate_id,
+                "requester",
+                "cancel-stale-panel",
+                expected_attempt_id=dependencies[1].new_attempt_id(),
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_failed_attempt_retry_preserves_source_and_reuses_completed_artifacts(
     dependencies: tuple[
         FakeClock,
@@ -463,6 +490,42 @@ async def test_retry_requires_authorized_actor_and_failed_state(
     with pytest.raises(InvalidApplicationOperation):
         await app.retry_debate(
             RetryDebateCommand(accepted.debate_id, "requester", "retry-not-failed")
+        )
+
+
+@pytest.mark.asyncio
+async def test_panel_retry_rejects_a_different_source_attempt(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    clock = dependencies[0]
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+    source = repository.current[accepted.debate_id]
+    failed = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.FAILED, at=clock.now()),
+        error_code="test_failure",
+    )
+    await repository.replace(expected=source, updated=failed)
+
+    with pytest.raises(InvalidApplicationOperation, match="another attempt"):
+        await app.retry_debate(
+            RetryDebateCommand(
+                accepted.debate_id,
+                "requester",
+                "retry-stale-panel",
+                expected_attempt_id=dependencies[1].new_attempt_id(),
+            )
         )
 
 
