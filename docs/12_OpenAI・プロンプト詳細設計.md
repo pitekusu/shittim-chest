@@ -70,9 +70,11 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 - winner判定はPythonだけで行う。
 - 決定事項promptはwinning proposalの意味変更、新情報追加、他案への差替えを禁止する。
 
-## 6.1 LunaからTerraへの条件付き昇格
+## 6.1 条件付き品質昇格
 
-STEP-05Aでは実装しない。難易度、人格間の重大な対立、schemaは正しいが品質不足な結果を何がどの時点で判定し、どのphaseだけをTerraで再実行するかは未決定である。実現方式、予算、deadline、決定性、利用者表示、evaluation thresholdを[[02_議論事項・意思決定記録#未決議論: LunaからTerraへの条件付き昇格（STEP-05C候補）]]で決定し、別sliceの承認前にoperatorへ相談する。provider refusalやpolicy blockの回避には使用しない。
+STEP-05Cは`luna_standard`、`terra_standard`、`luna_pro`をSDK非依存Policyとして定義した。Luna proは`reasoning.mode=pro`、effort mediumであり別model slugを使用しない。投票後に`escalation-shadow-v1`で1対1対1、勝者へのいずれかの軸2以下、勝者への全軸平均3未満を独立評価して保存するが、追加requestは送らず`executed=false`とする。将来有効化する場合はEvidence/初回意見を再利用し、最終案以降を同一Policyで最大1回再実行する。refusal、policy block、schema failure、429、timeoutは昇格triggerにしない。
+
+`tools/evaluate_escalation.py`は`--live`と`OPENAI_API_KEY`の両方を要求し、repository外へblind回答とPolicy keyを分離出力する。10件の汎用fixtureを正確性、安全性、実用性、指示遵守、合議整合性の各1〜5で人間が一度評価し、token、latency、実行時入力単価による推定費用と比較する。通常の`/shittim`利用者へrubric入力を求めない。
 
 ## 7. Safety・privacy・cost
 
@@ -96,8 +98,9 @@ STEP-05Aでは実装しない。難易度、人格間の重大な対立、schema
 | 2026-07-17 | OpenAI Python 2.46.0 | https://pypi.org/project/openai/、https://github.com/openai/openai-python | `AsyncOpenAI.responses.parse`の引数、SDK retry、Python 3.14互換を照合 |
 | 2026-07-17 | Structured Outputs | https://developers.openai.com/api/docs/guides/structured-outputs | Pydantic parse、refusal、strict schemaを実装 |
 | 2026-07-17 | GPT-5.6 | https://developers.openai.com/api/docs/guides/latest-model | 高頻度処理の既定をLunaに維持 |
+| 2026-07-17 | GPT-5.6 model family / pro mode | https://developers.openai.com/api/docs/guides/latest-model | Terra standardとLuna pro mediumを比較対象とし、代表評価前の本番自動昇格を禁止 |
 | 2026-07-17 | Responses Multi-agent beta | https://developers.openai.com/api/docs/guides/responses-multi-agent | beta client/header/fieldを採用せずPython orchestrationを維持 |
 
 ## 9. Implementation status
 
-STEP-05AはPR `#20`でmerge済みである。STEP-05Bでは決定的Router、hosted Web search adapter、Evidence digest/source抽出、optional継続・required失敗、content-free usage記録、DynamoDB schema v3をlocal実装した。OpenAI実API接続、Terra昇格、Discord結合、CloudWatch出力は未実施である。
+STEP-05AはPR `#20`、STEP-05BはPR `#21`でmerge済みである。STEP-05CはPolicy request shape、shadow判定、content-free Policy telemetry、opt-in blind評価toolをlocal実装した。OpenAI実API評価、本番自動昇格、Discord結合、CloudWatch出力は未実施である。

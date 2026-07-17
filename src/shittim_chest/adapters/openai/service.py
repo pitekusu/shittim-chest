@@ -19,6 +19,7 @@ from openai import (
     RateLimitError,
 )
 from openai.types.responses.parsed_response import ParsedResponse
+from openai.types.shared_params.reasoning import Reasoning
 from pydantic import BaseModel, ValidationError
 
 from shittim_chest.adapters.openai.config import (
@@ -56,6 +57,7 @@ from shittim_chest.adapters.openai.schemas import (
     OpinionOutputV1,
     VoteOutputV1,
 )
+from shittim_chest.application.generation_policy import ReasoningMode
 from shittim_chest.domain import (
     EvidenceBundle,
     FinalDecision,
@@ -188,13 +190,16 @@ class OpenAIResponsesService:
         started = monotonic()
         try:
             async with self.limiter.slot():
+                reasoning: Reasoning = {"effort": settings.reasoning_effort.value}
+                if self.config.policy.reasoning_mode is ReasoningMode.PRO:
+                    reasoning["mode"] = "pro"
                 response = await self.client.responses.parse(
                     model=self.config.model,
                     instructions=instructions,
                     input=input_text,
                     text_format=schema,
                     max_output_tokens=settings.max_output_tokens,
-                    reasoning={"effort": settings.reasoning_effort},
+                    reasoning=reasoning,
                     store=False,
                     tools=[],
                     tool_choice="none",
@@ -244,6 +249,8 @@ class OpenAIResponsesService:
                 operation=operation,
                 response_id=response.id,
                 model=str(response.model),
+                policy_id=self.config.policy.policy_id.value,
+                reasoning_mode=self.config.policy.reasoning_mode.value,
                 latency_ms=_elapsed_ms(started),
                 input_tokens=usage.input_tokens if usage is not None else 0,
                 output_tokens=usage.output_tokens if usage is not None else 0,
@@ -266,6 +273,7 @@ class OpenAIResponsesService:
             OpenAIFailureRecord(
                 operation=operation,
                 code=error.code,
+                policy_id=self.config.policy.policy_id.value,
                 latency_ms=_elapsed_ms(started),
             )
         )

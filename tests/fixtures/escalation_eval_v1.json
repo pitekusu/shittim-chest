@@ -1,0 +1,95 @@
+{
+  "version": "escalation-eval-v1",
+  "cases": [
+    {
+      "case_id": "breakfast-options",
+      "question": "甘い朝食を手早く作るなら何がよいですか？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "短時間を重視", "proposal": "フレンチトースト"},
+        {"participant": "participant-b", "summary": "栄養との両立", "proposal": "果物入りヨーグルト"},
+        {"participant": "participant-c", "summary": "片付けを重視", "proposal": "バナナトースト"}
+      ]
+    },
+    {
+      "case_id": "conflicting-project-goals",
+      "question": "小規模サービスでコスト、可用性、保守性が対立するとき、優先順位をどう決めますか？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "費用上限から決める", "proposal": "予算制約を先に固定する"},
+        {"participant": "participant-b", "summary": "利用者影響を重視", "proposal": "SLOから必要構成を逆算する"},
+        {"participant": "participant-c", "summary": "運用負担を重視", "proposal": "マネージド機能を優先する"}
+      ]
+    },
+    {
+      "case_id": "ambiguous-request",
+      "question": "チームから『もっとモダンにして』と言われた設計を、どう具体化しますか？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "目的を質問する", "proposal": "期待する成果を確認する"},
+        {"participant": "participant-b", "summary": "現状を測定する", "proposal": "課題と指標を棚卸しする"},
+        {"participant": "participant-c", "summary": "段階的に試す", "proposal": "小さな改善案を比較する"}
+      ]
+    },
+    {
+      "case_id": "risk-tradeoff",
+      "question": "便利だが障害時の影響が大きい自動化を導入すべきか判断してください。",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "安全策を先に用意", "proposal": "停止条件とrollbackを必須にする"},
+        {"participant": "participant-b", "summary": "効果を定量化", "proposal": "限定範囲で費用対効果を測る"},
+        {"participant": "participant-c", "summary": "人間の承認を残す", "proposal": "高影響操作だけ承認制にする"}
+      ]
+    },
+    {
+      "case_id": "incomplete-information",
+      "question": "必要な情報が足りない状態で、今日中に方針だけ決めるにはどうしますか？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "仮定を明記", "proposal": "暫定方針と見直し条件を定める"},
+        {"participant": "participant-b", "summary": "重大な不明点を分離", "proposal": "不可逆な判断を保留する"},
+        {"participant": "participant-c", "summary": "追加調査を限定", "proposal": "短時間で確認できる項目だけ調べる"}
+      ]
+    },
+    {
+      "case_id": "operational-failure",
+      "question": "外部APIが断続的に失敗するサービスの利用者体験をどう設計しますか？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "状態を明示", "proposal": "進行状況と再試行可能性を表示する"},
+        {"participant": "participant-b", "summary": "永続化を優先", "proposal": "途中結果をcheckpointする"},
+        {"participant": "participant-c", "summary": "過剰retryを避ける", "proposal": "deadlineと失敗分類を設ける"}
+      ]
+    },
+    {
+      "case_id": "security-usability",
+      "question": "セキュリティ強化で操作が複雑になる場合、どこで妥協すべきですか？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "risk基準", "proposal": "高risk操作へ強い制御を集中する"},
+        {"participant": "participant-b", "summary": "安全な既定値", "proposal": "通常操作を安全に簡略化する"},
+        {"participant": "participant-c", "summary": "観測して改善", "proposal": "離脱率とincidentを測定する"}
+      ]
+    },
+    {
+      "case_id": "maintenance-choice",
+      "question": "自作機能とマネージドサービスのどちらを選ぶべきか比較してください。",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "差別化に集中", "proposal": "汎用機能はマネージドを選ぶ"},
+        {"participant": "participant-b", "summary": "lock-inも評価", "proposal": "移行可能性を含めて総費用を比較する"},
+        {"participant": "participant-c", "summary": "運用能力を見る", "proposal": "担当者とon-call負担から判断する"}
+      ]
+    },
+    {
+      "case_id": "decision-explanation",
+      "question": "反対意見が残る決定を、関係者へ納得感を保って説明する方法は？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "評価基準を示す", "proposal": "採否理由を同じ尺度で説明する"},
+        {"participant": "participant-b", "summary": "反対意見を残す", "proposal": "未解決riskと再検討条件を明記する"},
+        {"participant": "participant-c", "summary": "次の行動を示す", "proposal": "責任者と期限を具体化する"}
+      ]
+    },
+    {
+      "case_id": "quality-cost-balance",
+      "question": "生成AIの品質を上げたいが費用も抑えたい場合、どんな評価と切替方式がよいですか？",
+      "initial_opinions": [
+        {"participant": "participant-a", "summary": "代表評価を作る", "proposal": "同じ問題で候補を比較する"},
+        {"participant": "participant-b", "summary": "条件付き利用", "proposal": "低品質signal時だけ高品質設定を使う"},
+        {"participant": "participant-c", "summary": "継続監視", "proposal": "品質、latency、tokenを記録する"}
+      ]
+    }
+  ]
+}

@@ -3,44 +3,49 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
 
+from shittim_chest.application.generation_policy import (
+    LUNA_STANDARD,
+    GenerationPolicy,
+    PhaseBudget,
+)
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
-DEFAULT_MODEL: Final = "gpt-5.6-luna"
-ReasoningEffort = Literal["low", "medium"]
-
-
-@dataclass(frozen=True, slots=True)
-class PhaseSettings:
-    """One Responses API phase budget."""
-
-    reasoning_effort: ReasoningEffort
-    max_output_tokens: int
-
-    def __post_init__(self) -> None:
-        if self.max_output_tokens < 1:
-            raise ValueError("max output tokens must be positive")
+PhaseSettings = PhaseBudget
 
 
 @dataclass(frozen=True, slots=True)
 class OpenAIAdapterConfig:
     """Non-secret settings shared by one process-level OpenAI client."""
 
-    model: str = DEFAULT_MODEL
+    policy: GenerationPolicy = LUNA_STANDARD
     max_concurrency: int = 6
-    initial_opinion: PhaseSettings = field(default_factory=lambda: PhaseSettings("medium", 1_200))
-    final_proposal: PhaseSettings = field(default_factory=lambda: PhaseSettings("medium", 1_600))
-    vote: PhaseSettings = field(default_factory=lambda: PhaseSettings("low", 800))
-    decision: PhaseSettings = field(default_factory=lambda: PhaseSettings("medium", 1_200))
 
     def __post_init__(self) -> None:
-        if not self.model.strip():
-            raise ValueError("OpenAI model must not be empty")
         if not 1 <= self.max_concurrency <= 6:
             raise ValueError("OpenAI concurrency must be between 1 and 6")
+
+    @property
+    def model(self) -> str:
+        return self.policy.model
+
+    @property
+    def initial_opinion(self) -> PhaseBudget:
+        return self.policy.initial_opinion
+
+    @property
+    def final_proposal(self) -> PhaseBudget:
+        return self.policy.final_proposal
+
+    @property
+    def vote(self) -> PhaseBudget:
+        return self.policy.vote
+
+    @property
+    def decision(self) -> PhaseBudget:
+        return self.policy.decision
 
 
 @dataclass(frozen=True, slots=True)

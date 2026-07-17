@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -26,6 +26,12 @@ from shittim_chest.adapters.openai import (
     OpenAIUsageRecord,
     PersonaPrompts,
     create_openai_client,
+)
+from shittim_chest.application import (
+    LUNA_PRO,
+    LUNA_STANDARD,
+    TERRA_STANDARD,
+    GenerationPolicy,
 )
 from shittim_chest.domain import (
     PARTICIPANTS,
@@ -111,13 +117,20 @@ async def service_for(
     bodies: list[dict[str, Any]],
     *,
     max_retries: int = 0,
+    config: OpenAIAdapterConfig | None = None,
 ) -> tuple[OpenAIResponsesService, ResponseServer, RecordingObserver, httpx.AsyncClient]:
     server = ResponseServer(deque(bodies))
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(server))
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=max_retries)
     observer = RecordingObserver()
     return (
-        OpenAIResponsesService(client, personas(), OpenAIRequestLimiter(), recorder=observer),
+        OpenAIResponsesService(
+            client,
+            personas(),
+            OpenAIRequestLimiter(),
+            config=config or OpenAIAdapterConfig(),
+            recorder=observer,
+        ),
         server,
         observer,
         http_client,
@@ -214,6 +227,8 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     assert observer.usages[0].input_tokens == 100
     assert observer.usages[0].cached_input_tokens == 20
     assert observer.usages[0].reasoning_tokens == 10
+    assert observer.usages[0].policy_id == "luna_standard"
+    assert observer.usages[0].reasoning_mode == "standard"
     assert observer.failures == []
 
     for request, headers in zip(server.requests, server.headers, strict=True):
@@ -541,7 +556,39 @@ def test_config_and_persona_prompts_fail_closed() -> None:
     with pytest.raises(ValueError, match="concurrency"):
         OpenAIAdapterConfig(max_concurrency=7)
     with pytest.raises(ValueError, match="model"):
-        OpenAIAdapterConfig(model=" ")
+        OpenAIAdapterConfig(policy=replace(LUNA_STANDARD, model=" "))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "expected_model", "expected_reasoning"),
+    [
+        (TERRA_STANDARD, "gpt-5.6-terra", {"effort": "medium"}),
+        (LUNA_PRO, "gpt-5.6-luna", {"effort": "medium", "mode": "pro"}),
+    ],
+)
+async def test_comparison_policies_have_explicit_request_shapes(
+    policy: GenerationPolicy,
+    expected_model: str,
+    expected_reasoning: dict[str, str],
+) -> None:
+    assert policy in (TERRA_STANDARD, LUNA_PRO)
+    service, server, observer, http_client = await service_for(
+        [response_with({"summary": "summary", "proposal": "proposal"})],
+        config=OpenAIAdapterConfig(policy=policy),
+    )
+    try:
+        await service.generate_initial_opinion(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            question="question",
+            evidence=EvidenceBundle(),
+        )
+    finally:
+        await http_client.aclose()
+
+    assert server.requests[0]["model"] == expected_model
+    assert server.requests[0]["reasoning"] == expected_reasoning
+    assert observer.usages[0].policy_id == policy.policy_id.value
 
 
 @pytest.mark.asyncio

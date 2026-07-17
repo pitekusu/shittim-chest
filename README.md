@@ -37,15 +37,22 @@ Responses API Web search boundary. It classifies searches as none, optional,
 or required, defaults unknown wording to optional search, and stores the router
 version/reason with one immutable summary and source set for every participant;
 persists optional search failure while continuing; and fails closed when
-current evidence is required. Evidence persistence uses schema v3 with v2
-reader migration.
+current evidence is required. Evidence persistence was introduced in schema v3.
+STEP-05C adds deterministic post-vote shadow quality signals,
+SDK-independent Luna standard, Terra standard, and Luna pro policies, schema v4
+persistence, and an explicitly gated blind A/B evaluation tool. Shadow mode
+does not make an additional OpenAI request.
 
-Luna-to-Terra escalation, the Discord adapter, runtime recovery wiring,
+Production auto-escalation, the Discord adapter, runtime recovery wiring,
 Discord Applications, containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
+
+The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
+raw A/B artifacts only outside the repository, and is not run by CI. Its model
+prices must be supplied at execution time rather than being hard-coded.
 
 The planned runtime uses Python, Discord, the OpenAI Responses API, DynamoDB,
 and one ARM64 ECS Fargate Spot task in the Tokyo Region. Fargate Spot

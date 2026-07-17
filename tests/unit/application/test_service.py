@@ -132,10 +132,20 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert completed.state.phase is DebatePhase.COMPLETED
     assert completed.final_decision is not None
     assert completed.final_decision.winner is ParticipantSlot.PARTICIPANT_B
+    assert completed.escalation_assessment is not None
+    assert completed.escalation_assessment.split_vote is True
+    assert completed.escalation_assessment.executed is False
     assert evidence.calls == ["What should we eat?"]
     assert set(openai.initial_calls) == set(ParticipantSlot)
     assert set(openai.proposal_calls) == set(ParticipantSlot)
     assert len(openai.vote_calls) == 3
+    assert (
+        len(openai.initial_calls)
+        + len(openai.proposal_calls)
+        + len(openai.vote_calls)
+        + len(openai.decision_calls)
+        == 10
+    )
     assert len(orderer.calls) == 3
     assert all(voter not in candidates for voter, candidates in orderer.calls)
     assert MetricEvent.COMPLETED in {event for event, _ in metrics.events}
@@ -412,6 +422,7 @@ async def test_phase_timeout_marks_attempt_failed(
     assert failed.state.phase is DebatePhase.FAILED
     assert failed.state.failed_from_phase is DebatePhase.PREPARING_EVIDENCE
     assert failed.error_code == "phase_deadline_exceeded"
+    assert failed.escalation_assessment is None
 
 
 @pytest.mark.asyncio
@@ -434,7 +445,9 @@ async def test_session_timeout_has_distinct_stable_error_code(
 
     await app.run_debate(accepted.debate_id)
 
-    assert repository.current[accepted.debate_id].error_code == "session_deadline_exceeded"
+    failed = repository.current[accepted.debate_id]
+    assert failed.error_code == "session_deadline_exceeded"
+    assert failed.escalation_assessment is None
 
 
 @pytest.mark.asyncio
@@ -457,7 +470,9 @@ async def test_required_evidence_failure_has_distinct_stable_error_code(
 
     await app.run_debate(accepted.debate_id)
 
-    assert repository.current[accepted.debate_id].error_code == "required_evidence_unavailable"
+    failed = repository.current[accepted.debate_id]
+    assert failed.error_code == "required_evidence_unavailable"
+    assert failed.escalation_assessment is None
 
 
 @pytest.mark.asyncio

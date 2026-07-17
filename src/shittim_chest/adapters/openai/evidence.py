@@ -144,7 +144,7 @@ class OpenAIWebEvidenceService:
         except OpenAIAdapterError as error:
             self._record_failure(operation, error, started)
             raise
-        self.recorder.record_usage(_usage_record(operation, response, started))
+        self.recorder.record_usage(_usage_record(operation, response, started, self.config))
         return EvidenceBundle(
             items=items,
             summary=parsed.summary,
@@ -162,7 +162,12 @@ class OpenAIWebEvidenceService:
         started: float,
     ) -> None:
         self.recorder.record_failure(
-            OpenAIFailureRecord(operation, error.code, int((monotonic() - started) * 1000))
+            OpenAIFailureRecord(
+                operation,
+                error.code,
+                self.config.policy.policy_id.value,
+                int((monotonic() - started) * 1000),
+            )
         )
 
 
@@ -207,12 +212,15 @@ def _usage_record(
     operation: str,
     response: ParsedResponse[EvidenceDigestOutputV1],
     started: float,
+    config: OpenAIAdapterConfig,
 ) -> OpenAIUsageRecord:
     usage = response.usage
     return OpenAIUsageRecord(
         operation=operation,
         response_id=response.id,
         model=response.model,
+        policy_id=config.policy.policy_id.value,
+        reasoning_mode=config.policy.reasoning_mode.value,
         latency_ms=int((monotonic() - started) * 1000),
         input_tokens=usage.input_tokens if usage else 0,
         output_tokens=usage.output_tokens if usage else 0,

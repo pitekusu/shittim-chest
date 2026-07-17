@@ -19,6 +19,7 @@ from shittim_chest.domain import (
     DebateId,
     DebatePhase,
     DebateState,
+    EscalationAssessment,
     EvidenceBundle,
     EvidenceItem,
     EvidenceSearchStatus,
@@ -35,8 +36,8 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 3
-PREVIOUS_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 4
+PREVIOUS_SCHEMA_VERSION = 3
 MAX_ITEM_BYTES = 400 * 1024
 
 
@@ -54,16 +55,6 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
-        if migrated.get("record_type") == "evidence_meta":
-            satisfied = migrated.get("required_search_satisfied") is True
-            migrated.setdefault("summary", "Legacy evidence bundle")
-            migrated.setdefault("search_requirement", "optional")
-            migrated.setdefault(
-                "search_status",
-                "completed" if satisfied else "optional_unavailable",
-            )
-            if satisfied:
-                migrated.setdefault("search_response_id", "legacy-v2")
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -158,6 +149,8 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         _serialize_proposal(common, attempt_id, value) for value in snapshot.final_proposals
     )
     items.extend(_serialize_vote(common, attempt_id, value) for value in snapshot.votes)
+    if snapshot.escalation_assessment is not None:
+        items.append(_serialize_escalation(common, attempt_id, snapshot.escalation_assessment))
     if snapshot.final_decision is not None:
         items.append(_serialize_decision(common, attempt_id, snapshot.final_decision))
     return tuple(_validated_item(item) for item in items)
@@ -271,6 +264,22 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             _string_tuple(decision_item, "actions"),
             _string_tuple(decision_item, "caveats"),
         )
+    escalation_item = _optional_one(items, "escalation_assessment", attempt_id=attempt_id)
+    escalation_assessment = None
+    if escalation_item is not None:
+        escalation_assessment = EscalationAssessment(
+            rules_version=_text(escalation_item, "rules_version"),
+            split_vote=_boolean(escalation_item, "split_vote"),
+            winning_axis_low=_boolean(escalation_item, "winning_axis_low"),
+            winning_average_low=_boolean(escalation_item, "winning_average_low"),
+            assessed_at=_datetime(escalation_item, "assessed_at"),
+            recommended_restart_phase=DebatePhase(
+                _text(escalation_item, "recommended_restart_phase")
+            ),
+            executed=_boolean(escalation_item, "executed"),
+            executed_policy_id=_optional_text(escalation_item, "executed_policy_id"),
+            execution_count=_integer(escalation_item, "execution_count"),
+        )
     return DebateSnapshot(
         state=state,
         question=_text(debate_meta, "question"),
@@ -287,6 +296,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         final_proposals=cast(tuple[FinalProposal, ...], proposals),
         votes=votes,
         final_decision=decision,
+        escalation_assessment=escalation_assessment,
         error_code=_optional_text(attempt_meta, "error_code"),
     )
 
@@ -468,6 +478,29 @@ def _serialize_decision(
         "actions": list(value.actions),
         "caveats": list(value.caveats),
     }
+
+
+def _serialize_escalation(
+    common: DynamoItem,
+    attempt_id: str,
+    value: EscalationAssessment,
+) -> DynamoItem:
+    item: DynamoItem = {
+        **common,
+        "SK": f"ATTEMPT#{attempt_id}#ESCALATION",
+        "record_type": "escalation_assessment",
+        "attempt_id": attempt_id,
+        "rules_version": value.rules_version,
+        "split_vote": value.split_vote,
+        "winning_axis_low": value.winning_axis_low,
+        "winning_average_low": value.winning_average_low,
+        "assessed_at": _timestamp(value.assessed_at),
+        "recommended_restart_phase": value.recommended_restart_phase.value,
+        "executed": value.executed,
+        "execution_count": value.execution_count,
+    }
+    _put_optional(item, "executed_policy_id", value.executed_policy_id)
+    return item
 
 
 def _deserialize_evidence(item: DynamoItem) -> EvidenceItem:
