@@ -92,6 +92,8 @@ STEP-06Bはdiscord.py 2.7.1の公開`Thread.send()`を使用する。22文字non
 
 2回目以降のclaimでは、outbox作成時刻より後のthread履歴を古い順に最大500件調べ、同一Bot author、nonce、content、SHA-256が一致する最古messageを採用する。同一nonceで内容が異なる場合は`DISCORD_OUTBOX_CONFLICT`として送信せず停止する。discord.pyがRetry-Afterを用いた内部retryを使い切った`RateLimited`はその`retry_after`、HTTP 429はheader、408/409/5xxは30秒の既定値でoutboxを1回だけ再scheduleし、publisher自身は同じHTTP requestをloop retryしない。Discordのchannel解決、履歴照合、sendは45秒でtimeoutし、共有outbox claim 60秒より前に30秒後へ再scheduleする。DynamoDBの`mark_sent`はDiscord timeout外でfenced writeとして実行する。権限不足、thread消失、wrong Guild、locked thread、その他4xxは自動再送・自動unlockしない。
 
+STEP-07Bの`DiscordOutboxRecovery`はlease取得済みattemptの全未送信operationを強整合Queryで取得し、`chunk_sequence`とoperation IDの保存済み順序で1件ずつpublisherへ渡す。`next_retry_at`未来値と未失効claimはその永続時刻までasync待機し、pollによるbusy loopを行わない。retryable provider errorはpublisherが保存したscheduleを再読込みし、同じHTTP requestを直接retryしない。非retryable errorは安定Discord codeを保持してattemptをFAILEDへする。shutdown cancellationは再送出し、送信途中recordを次回のclaim/reconciliationへ残す。
+
 ## 8. Error code
 
 | Code | user表示 | 再試行 |
@@ -135,11 +137,13 @@ STEP-06Bはdiscord.py 2.7.1の公開`Thread.send()`を使用する。22文字non
 | 2026-07-17 | Components | https://docs.discord.com/developers/components/reference | custom ID 100文字上限とcomponent context検証を再確認 |
 | 2026-07-17 | discord.py v2.7.1 Interaction source | https://github.com/Rapptz/discord.py/blob/v2.7.1/discord/interactions.py | defer/edit original responseとtyped interaction dataをoffline contractへ反映 |
 | 2026-07-17 | discord.py Client readiness | https://discordpy.readthedocs.io/en/stable/api.html#discord.Client.wait_until_ready | `is_ready()`をprocess gateと1秒監視へ使用し、4 client全てのREADYを受付条件として維持 |
+| 2026-07-17 | Discord Message API | https://docs.discord.com/developers/resources/message | Get Channel Messagesの新しい順、100件/page、Read Message History要件とCreate Messageのnonce/enforce_nonceを再確認し、SDK履歴iteratorによるreconciliationを維持 |
 
 ## 10. STEP-06分割境界
 
 - STEP-06A（完了、PR `#27`、merge commit `47af41f`）: SDK非依存runtime/identity/error/outbox/panel契約、決定的message split、UUIDv7 nonce、SHA-256、custom ID codec、Discord context binding、schema v5。
 - STEP-06B（完了、PR `#30`、merge commit `96a1ace`）: discord.py 2.7.1 publisher、outbox claim/send/complete、`allowed_mentions`、`enforce_nonce`、SDK rate limit、長時間停止後reconciliation。
 - STEP-06C（完了、PR `#31`、merge commit `9799cb9`）: 4 client、GUILDS-only Intent、READY gate、Guild Command、先行defer、starter/Public Thread/panel、履歴reconciliation、attempt-bound Cancel/Retry、controller task ownership。CI 266 tests/92.55%合格。
-- STEP-07A（local実装済み）: process signal、fail-closed受付gate、起動時`resume_recoverable`、60秒Gateway切断checkpoint、再接続resume、90秒graceful shutdown。
-- STEP-07B/08（未実装）: outbox drain、production bootstrap、Discord/AWS runtime composition、container fault injection。
+- STEP-07A（完了、PR `#33`、merge commit `0f386f5`）: process signal、fail-closed受付gate、起動時`resume_recoverable`、60秒Gateway切断checkpoint、再接続resume、90秒graceful shutdown。
+- STEP-07B（local実装済み）: pending全件取得、永続retry/claim待機、順序drain、lease heartbeat、nonretryable error/fencing/cancellation処理。
+- STEP-07C/08（未実装）: production bootstrap、Discord/AWS runtime composition、container fault injection。

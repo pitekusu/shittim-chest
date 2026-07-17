@@ -110,14 +110,13 @@ class DynamoDbOutboxRepository:
             next_retry_at,
         )
 
-    async def list_recoverable(
+    async def list_pending(
         self,
         *,
         debate_id: DebateId,
         attempt_id: AttemptId,
-        at: datetime,
     ) -> tuple[OutboxOperation, ...]:
-        return await asyncio.to_thread(self._list_recoverable, debate_id, attempt_id, at)
+        return await asyncio.to_thread(self._list_pending, debate_id, attempt_id)
 
     def _prepare(
         self,
@@ -323,19 +322,14 @@ class DynamoDbOutboxRepository:
         )
         return self._require_operation(expected, operation_id)
 
-    def _list_recoverable(
+    def _list_pending(
         self,
         debate_id: DebateId,
         attempt_id: AttemptId,
-        at: datetime,
     ) -> tuple[OutboxOperation, ...]:
-        _require_utc(at)
         operations = self._query_attempt_outbox(debate_id, attempt_id)
         return tuple(
-            operation
-            for operation in operations
-            if operation.status is not OutboxStatus.SENT
-            and (operation.next_retry_at is None or operation.next_retry_at <= at)
+            operation for operation in operations if operation.status is not OutboxStatus.SENT
         )
 
     def _prior_chunks_sent(self, operation: OutboxOperation) -> bool:

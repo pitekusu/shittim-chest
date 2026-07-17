@@ -76,6 +76,12 @@ class DiscordPublisher(Protocol):
     ) -> OutboxOperation | None: ...
 
 
+class DiscordOutboxDrainer(Protocol):
+    """Drain persisted Discord operations before debate phase work resumes."""
+
+    async def drain(self, *, expected: DebateSnapshot) -> None: ...
+
+
 class DiscordOutboxRepository(Protocol):
     """Persist and fence Discord delivery without exposing DynamoDB to its publisher."""
 
@@ -123,12 +129,11 @@ class DiscordOutboxRepository(Protocol):
         next_retry_at: datetime,
     ) -> OutboxOperation: ...
 
-    async def list_recoverable(
+    async def list_pending(
         self,
         *,
         debate_id: DebateId,
         attempt_id: AttemptId,
-        at: datetime,
     ) -> tuple[OutboxOperation, ...]: ...
 
 

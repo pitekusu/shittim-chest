@@ -10,6 +10,7 @@ from typing import TypeVar
 from shittim_chest.application.errors import (
     DebateNotFound,
     InvalidApplicationOperation,
+    OutboxRecoveryFailed,
     RequestNotAllowed,
     RequiredEvidenceUnavailable,
     RuntimeNotReady,
@@ -31,6 +32,7 @@ from shittim_chest.application.ports import (
     Clock,
     DebateRepository,
     DiscordGateway,
+    DiscordOutboxDrainer,
     EvidenceService,
     IdGenerator,
     Metrics,
@@ -73,6 +75,7 @@ class DebateApplication:
         openai: OpenAIService,
         repository: DebateRepository,
         candidate_orderer: CandidateOrderer,
+        outbox_recovery: DiscordOutboxDrainer,
         lease_owner: str,
         session_timeout_seconds: float = 300.0,
         phase_timeout_seconds: float = 60.0,
@@ -90,6 +93,7 @@ class DebateApplication:
         self._openai = openai
         self._repository = repository
         self._candidate_orderer = candidate_orderer
+        self._outbox_recovery = outbox_recovery
         self._lease_owner = lease_owner
         self._session_timeout_seconds = session_timeout_seconds
         self._phase_timeout_seconds = phase_timeout_seconds
@@ -142,17 +146,20 @@ class DebateApplication:
 
         await self._require_snapshot(debate_id)
         try:
-            async with asyncio.timeout(self._session_timeout_seconds):
-                await self._run_with_lease_heartbeat(debate_id)
+            await self._run_with_lease_heartbeat(debate_id)
         except asyncio.CancelledError:
             await self._checkpoint_current(debate_id)
             raise
+        except RepositoryConflict:
+            return
         except _PhaseDeadlineExceeded:
             await self._fail_current(debate_id, error_code="phase_deadline_exceeded")
         except TimeoutError:
             await self._fail_current(debate_id, error_code="session_deadline_exceeded")
         except RequiredEvidenceUnavailable:
             await self._fail_current(debate_id, error_code=RequiredEvidenceUnavailable.code)
+        except OutboxRecoveryFailed as error:
+            await self._fail_current(debate_id, error_code=error.delivery_code)
         except Exception:
             await self._fail_current(debate_id, error_code="phase_failed")
 
@@ -206,7 +213,10 @@ class DebateApplication:
         )
 
     async def _run_with_lease_heartbeat(self, debate_id: DebateId) -> None:
-        phase_task = asyncio.create_task(self._run_phases(debate_id), name=f"phases:{debate_id}")
+        phase_task = asyncio.create_task(
+            self._recover_outbox_then_run_phases(debate_id),
+            name=f"phases:{debate_id}",
+        )
         heartbeat_task = asyncio.create_task(
             self._renew_lease_until_stopped(debate_id),
             name=f"lease:{debate_id}",
@@ -229,6 +239,12 @@ class DebateApplication:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(phase_task, heartbeat_task, return_exceptions=True)
+
+    async def _recover_outbox_then_run_phases(self, debate_id: DebateId) -> None:
+        snapshot = await self._require_snapshot(debate_id)
+        await self._outbox_recovery.drain(expected=snapshot)
+        async with asyncio.timeout(self._session_timeout_seconds):
+            await self._run_phases(debate_id)
 
     async def _renew_lease_until_stopped(self, debate_id: DebateId) -> None:
         while True:

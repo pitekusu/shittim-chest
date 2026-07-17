@@ -19,6 +19,7 @@ from shittim_chest.adapters.discord.gateway import (
 )
 from shittim_chest.adapters.discord.interactions import DiscordInteractionController
 from shittim_chest.adapters.discord.publisher import DiscordPyPublisher
+from shittim_chest.adapters.discord.recovery import DiscordOutboxRecovery
 
 __all__ = (
     "DiscordAdapterError",
@@ -28,6 +29,7 @@ __all__ = (
     "DiscordIdentityUnavailable",
     "DiscordInteractionController",
     "DiscordOutboxNotFound",
+    "DiscordOutboxRecovery",
     "DiscordPermissionDenied",
     "DiscordPyGateway",
     "DiscordPyPublisher",

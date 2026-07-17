@@ -185,12 +185,11 @@ class FakeOutboxRepository:
         )
         return self.operation
 
-    async def list_recoverable(
+    async def list_pending(
         self,
         *,
         debate_id: DebateId,
         attempt_id: AttemptId,
-        at: datetime,
     ) -> tuple[OutboxOperation, ...]:
         operation = await self.get(
             debate_id=debate_id,
@@ -198,8 +197,6 @@ class FakeOutboxRepository:
             operation_id=self.operation.operation_id if self.operation else "missing",
         )
         if operation is None or operation.status is OutboxStatus.SENT:
-            return ()
-        if operation.next_retry_at is not None and operation.next_retry_at > at:
             return ()
         return (operation,)
 

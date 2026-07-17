@@ -305,6 +305,10 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
         next_retry_at=NOW + timedelta(seconds=5),
     )
     assert rescheduled.status is OutboxStatus.PREPARED
+    assert await outbox_repository.list_pending(
+        debate_id=snapshot.state.debate_id,
+        attempt_id=snapshot.state.attempt_id,
+    ) == (rescheduled, second)
     assert (
         await outbox_repository.claim(
             expected=snapshot,
@@ -341,12 +345,14 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
         == sent
     )
 
-    assert (
-        await outbox_repository.claim(
-            expected=snapshot,
-            operation_id=second.operation_id,
-            claim_owner="publisher",
-            at=NOW + timedelta(seconds=7),
-        )
-        is not None
+    second_claimed = await outbox_repository.claim(
+        expected=snapshot,
+        operation_id=second.operation_id,
+        claim_owner="publisher",
+        at=NOW + timedelta(seconds=7),
     )
+    assert second_claimed is not None
+    assert await outbox_repository.list_pending(
+        debate_id=snapshot.state.debate_id,
+        attempt_id=snapshot.state.attempt_id,
+    ) == (second_claimed,)

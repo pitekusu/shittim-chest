@@ -87,6 +87,7 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 3. 成功時は`ConditionCheck(META)+Update`でmessage ID、sent_at、status=`SENT`を保存する。
 4. 送信成功・更新失敗時、または数分を超える停止後はnonce、content hash、chunk sequence、thread履歴を照合し、既存messageを採用する。
 5. 内容hashが異なる同一operation IDは`OUTBOX_CONFLICT`として停止する。chunkはsequence昇順で送信し、前chunkが`SENT`になるまで次chunkをclaimしない。
+6. recovery readerはattempt partitionをstrongly consistentかつ1 MB pagination付きでQueryし、`SENT`以外を全件返す。未来の`next_retry_at`と未失効`claim_expiry`も除外せず、adapter側owned taskが利用可能時刻まで待つ。GSI、Scan、process memoryだけをpending検出の正本にしない。
 
 ## 9. boto3 adapter
 
@@ -94,9 +95,10 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 - 複数item transactionが主要write pathであるため、STEP-04Bは1個の低level `DynamoDBClient`を再利用し、`GetItem`、paginated `Query`、`TransactWriteItems`を同じ型付き境界へ集約する。
 - typed service exceptionをadapterでdomain errorへ変換し、`ClientError`はtop-level境界だけで扱う。
 - Queryは1MB paginationを考慮し、Scanを通常pathで使用しない。
+- `list_pending`は将来retryと現在claim中を含む未送信全件を返す。送信可否はfenced `claim` transactionが最終判定し、reader結果だけでownershipを判断しない。
 - floatを保存せず、必要な数値はintまたは`Decimal`を使用する。
 
-STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidenceを追加してschema v3へ更新した。STEP-05Cは`escalation_assessment` itemへrules version、3つのsignal、UTC評価時刻、再実行開始phase、実行有無、Policy ID、最大1回の実行回数を保存しschema v4へ更新した。STEP-06Aはcontrol panel message IDをstarter message IDから分離し、outboxの実Application ID依存をgeneric Bot slotへ置換してschema v5へ更新した。readerは直前v4の欠落panel IDを`None`、旧`bot_id`を対応するgeneric slotとしてup-convertする。STEP-06Bは既存schemaを変更せず、`DiscordOutboxRepository`の`get/claim/reschedule/mark_sent`をdiscord.py publisherから利用する。Discord処理はclaimより短い45秒で打ち切るが、`mark_sent`はtimeout外のfenced transactionとして行う。送信成功後の`mark_sent`競合ではmessageを再送せず、claim expiry後の次回claimでthread履歴を照合する。
+STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidenceを追加してschema v3へ更新した。STEP-05Cは`escalation_assessment` itemへrules version、3つのsignal、UTC評価時刻、再実行開始phase、実行有無、Policy ID、最大1回の実行回数を保存しschema v4へ更新した。STEP-06Aはcontrol panel message IDをstarter message IDから分離し、outboxの実Application ID依存をgeneric Bot slotへ置換してschema v5へ更新した。readerは直前v4の欠落panel IDを`None`、旧`bot_id`を対応するgeneric slotとしてup-convertする。STEP-06Bは既存schemaを変更せず、`DiscordOutboxRepository`の`get/claim/reschedule/mark_sent`をdiscord.py publisherから利用する。Discord処理はclaimより短い45秒で打ち切るが、`mark_sent`はtimeout外のfenced transactionとして行う。送信成功後の`mark_sent`競合ではmessageを再送せず、claim expiry後の次回claimでthread履歴を照合する。STEP-07Bはschema変更なしで`list_pending`を追加し、未来retryと未失効claimを含む未送信全件をlease heartbeat配下のdrainerへ渡す。
 
 ## 10. Schema migration
 
@@ -121,3 +123,4 @@ STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。ST
 | 2026-07-17 | boto3/boto3-stubs 1.43.50 | https://pypi.org/project/boto3/、https://pypi.org/project/boto3-stubs/ | Python 3.14対応、client/型定義をlock |
 | 2026-07-17 | Query API・pagination | https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html、https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html | 1MBごとのLastEvaluatedKey処理、base tableだけstrong consistency |
 | 2026-07-17 | DynamoDB Local 3.3.0 | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.DownloadingAndRunning.html、https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocalHistory.html | 公式imageをdigest固定しCI persistence testへ使用 |
+| 2026-07-17 | Query API | https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html | base tableの`ConsistentRead=true`、1 MB `LastEvaluatedKey` pagination、filter前readを再確認しattempt PK/SK Queryを採用 |
