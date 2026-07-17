@@ -5,3 +5,9 @@
 !uv.lock
 !src/
 !src/**
+!tests/
+tests/*
+!tests/__init__.py
+!tests/fixtures/
+tests/fixtures/*
+!tests/fixtures/container_process.py

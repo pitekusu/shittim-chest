@@ -51,8 +51,9 @@ starter/Public Thread/control panel provisioning and reconciliation,
 attempt-bound cancel/retry, and owned debate tasks. Live Discord operations,
 restart recovery composition, and Discord Applications remain unimplemented.
 STEP-08A implements the local production/break-glass container foundation and
-event-loop heartbeat health check. Native ARM64 CI, container fault injection,
-image SBOM, AWS resources, and Discord Applications are not yet implemented.
+event-loop heartbeat health check. STEP-08B implements native ARM64 CI,
+container fault injection, and the image SPDX SBOM. AWS resources and Discord
+Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
 
@@ -237,11 +238,20 @@ STEP-08A adds the digest-pinned Python 3.14.6/uv multi-stage `Dockerfile`, a
 numeric UID/GID 10001 production runtime, a separately selectable break-glass
 target, and an event-loop heartbeat health command. Validate image security
 locally with a read-only root filesystem, a writable `/tmp`, all capabilities
-dropped, and no-new-privileges. Fargate task-definition settings, native ARM64
-CI, container-level fault injection, and final-image SBOM remain STEP-08B/09
-work; do not describe them as already implemented.
+dropped, and no-new-privileges.
 STEP-08A was merged in PR #37 at commit `7742f0b`; PR and main CI/CodeQL and
 the initial Docker Dependabot update run passed.
+
+STEP-08B adds the native `ubuntu-24.04-arm` `container-arm64` check. It builds
+the production and CI-only fault targets, validates image configuration and
+runtime security, injects SIGTERM at all seven non-terminal phases, and injects
+SIGKILL before/after the transaction and Discord-post boundaries. Replacement
+must leave exactly one transaction event, one content-hash-matched Discord
+message, and a completed outbox. Syft is version/digest pinned, monitored by the
+weekly release-tool workflow, and emits a 30-day SPDX JSON artifact containing
+both Debian OS and production Python packages. The fault fixture is copied only
+into the `fault-test` target; never push or deploy that target. Fargate
+task-definition settings and release attestations remain STEP-09/10 work.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
