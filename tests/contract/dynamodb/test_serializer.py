@@ -23,7 +23,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_panel_operation,
     serialize_snapshot,
 )
-from shittim_chest.application import DebateSnapshot, LeaseGrant
+from shittim_chest.application import DebateSnapshot, DiscordBotSlot, LeaseGrant
 from shittim_chest.domain import (
     PARTICIPANTS,
     AttemptId,
@@ -80,8 +80,9 @@ def snapshot() -> DebateSnapshot:
         channel_id="channel",
         created_at=NOW,
         attempt_created_at=NOW,
-        starter_message_id="starter",
-        thread_id="thread",
+        starter_message_id="101",
+        thread_id="102",
+        control_panel_message_id="103",
         lease=LeaseGrant("worker-1", 1, 42, NOW + timedelta(seconds=60)),
         evidence=EvidenceBundle(
             (
@@ -138,7 +139,8 @@ def test_snapshot_round_trip_preserves_current_attempt_and_vertical_items() -> N
     }
     debate_meta = next(item for item in items if item["record_type"] == "debate_meta")
     attempt_meta = next(item for item in items if item["record_type"] == "attempt_meta")
-    assert debate_meta["gsi1pk"] == "THREAD#thread"
+    assert debate_meta["gsi1pk"] == "THREAD#102"
+    assert debate_meta["control_panel_message_id"] == "103"
     assert attempt_meta["gsi2pk"] == "RECOVERABLE"
     assert attempt_meta["fencing_token"] == 42
 
@@ -174,7 +176,10 @@ def test_empty_evidence_bundle_is_distinct_from_missing_evidence() -> None:
 def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> None:
     current = serialize_snapshot(snapshot())
     previous = tuple(
-        {**item, "schema_version": 3}
+        {
+            **{key: value for key, value in item.items() if key != "control_panel_message_id"},
+            "schema_version": 4,
+        }
         for item in current
         if item["record_type"] != "escalation_assessment"
     )
@@ -223,8 +228,8 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
         operation_id="post-decision-0001",
         debate_id=source.state.debate_id,
         attempt_id=source.state.attempt_id,
-        bot_id="moderator",
-        thread_id="thread",
+        bot_slot=DiscordBotSlot.MODERATOR,
+        thread_id="102",
         content="message",
         content_hash="b" * 64,
         nonce="A" * 22,
@@ -242,8 +247,8 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
         channel_id="channel",
         requester_id="requester",
         created_at=NOW,
-        thread_id="thread",
-        message_id="panel-message",
+        thread_id="102",
+        message_id="103",
     )
 
     outbox_item = serialize_outbox(outbox)
@@ -259,6 +264,13 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
         deserialize_outbox(panel_item)
     with pytest.raises(PersistenceFormatError, match="not a panel"):
         deserialize_panel_operation(outbox_item)
+
+    previous_outbox = {
+        **{key: value for key, value in outbox_item.items() if key != "bot_slot"},
+        "bot_id": "moderator",
+        "schema_version": 4,
+    }
+    assert deserialize_outbox(previous_outbox) == outbox
 
 
 def test_item_larger_than_400_kb_is_rejected_before_sdk_call() -> None:
@@ -293,8 +305,8 @@ def test_outbox_validation_rejects_inconsistent_records() -> None:
         operation_id="operation",
         debate_id=source.state.debate_id,
         attempt_id=source.state.attempt_id,
-        bot_id="moderator",
-        thread_id="thread",
+        bot_slot=DiscordBotSlot.MODERATOR,
+        thread_id="102",
         content="message",
         content_hash="d" * 64,
         nonce="A" * 22,
@@ -313,7 +325,7 @@ def test_outbox_validation_rejects_inconsistent_records() -> None:
     with pytest.raises(ValueError, match="owner and expiry"):
         replace(valid, status=OutboxStatus.CLAIMED)
     with pytest.raises(ValueError, match="only a sent"):
-        replace(valid, message_id="message")
+        replace(valid, message_id="104")
     with pytest.raises(ValueError, match="2000"):
         replace(valid, content="x" * 2_001)
 
@@ -324,15 +336,15 @@ def test_sent_outbox_requires_complete_delivery_result() -> None:
         operation_id="sent",
         debate_id=source.state.debate_id,
         attempt_id=source.state.attempt_id,
-        bot_id="moderator",
-        thread_id="thread",
+        bot_slot=DiscordBotSlot.MODERATOR,
+        thread_id="102",
         content="message",
         content_hash="e" * 64,
         nonce="A" * 22,
         chunk_sequence=0,
         status=OutboxStatus.SENT,
         created_at=NOW,
-        message_id="message",
+        message_id="104",
         sent_at=NOW + timedelta(seconds=1),
     )
     assert serialize_outbox(sent)["status"] == "sent"

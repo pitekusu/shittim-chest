@@ -16,7 +16,7 @@ from shittim_chest.adapters.dynamodb import (
     OutboxStatus,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item
-from shittim_chest.application import DebateSnapshot
+from shittim_chest.application import DebateSnapshot, DiscordBotSlot
 from shittim_chest.application.ports import (
     RepositoryBusy,
     RepositoryConflict,
@@ -267,8 +267,8 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
             operation_id=f"post-{sequence}",
             debate_id=snapshot.state.debate_id,
             attempt_id=snapshot.state.attempt_id,
-            bot_id="moderator",
-            thread_id="thread",
+            bot_slot=DiscordBotSlot.MODERATOR,
+            thread_id="102",
             content=content,
             content_hash=hashlib.sha256(content.encode()).hexdigest(),
             nonce="A" * 22 if sequence == 0 else "B" * 22,
@@ -326,7 +326,7 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
         expected=snapshot,
         operation_id=first.operation_id,
         claim_owner="publisher",
-        message_id="message-0",
+        message_id="104",
         at=NOW + timedelta(seconds=6),
     )
     assert sent.status is OutboxStatus.SENT
@@ -335,7 +335,7 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
             expected=snapshot,
             operation_id=first.operation_id,
             claim_owner="publisher",
-            message_id="message-0",
+            message_id="104",
             at=NOW + timedelta(seconds=7),
         )
         == sent

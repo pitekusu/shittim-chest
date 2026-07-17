@@ -54,7 +54,7 @@ tools/
 | `BotIdentity` | private runtime config由来のapplication ID、slot、表示名、role |
 | `PersonaSpec` | slot、config version、schema version、prompt hash。prompt本文は保持しない |
 | `EvidenceBundle` | immutable。要約、`none/optional/required`、router rules version/reason、検索状態、response ID、source URL/title/canonical metadata、UTC取得時刻、metadata SHA-256を含む |
-| `OutboxOperation` | operation ID、Bot ID、22文字nonce、content hash、claim/retry/chunk状態 |
+| `OutboxOperation` | operation ID、generic Bot slot、22文字nonce、content hash、claim/retry/chunk状態 |
 
 domain modelは原則`@dataclass(frozen=True, slots=True)`とし、時刻はtimezone-aware UTC、永続化recordには`schema_version`を必須とする。
 
@@ -62,15 +62,16 @@ domain modelは原則`@dataclass(frozen=True, slots=True)`とし、時刻はtime
 
 ```python
 async def accept_debate(request: AcceptDebateRequest) -> AcceptedDebate: ...
+async def bind_discord_context(command: BindDiscordContextCommand) -> BoundDiscordContext: ...
 async def run_debate(debate_id: DebateId) -> None: ...
 async def cancel_debate(command: CancelDebateCommand) -> CancelledDebate: ...
 async def retry_debate(command: RetryDebateCommand) -> AcceptedRetry: ...
 async def resume_recoverable() -> None: ...
 ```
 
-Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに最大1つのResponses requestでimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher`は永続化済みoutbox operation以外を投稿してはならない。必須Evidence取得不能は`required_evidence_unavailable`としてFAILEDへ保存し、任意取得不能は`optional_unavailable`を保存して続行する。
+Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`DiscordOutboxRepository`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに最大1つのResponses requestでimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher`は永続化済みoutbox operation以外を投稿してはならない。必須Evidence取得不能は`required_evidence_unavailable`としてFAILEDへ保存し、任意取得不能は`optional_unavailable`を保存して続行する。
 
-STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。STEP-04Aでは`DebateSnapshot`へGuild/channel、debate/attempt作成時刻、Discord starter/thread ID、`LeaseGrant`を追加し、受付時にDiscord operation IDを失わない。cancel/retryも永続化済みoperation IDで再実行結果を返し、別request/debateへのoperation ID再利用を拒否する。
+STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。STEP-04Aでは`DebateSnapshot`へGuild/channel、debate/attempt作成時刻、Discord starter/thread ID、`LeaseGrant`を追加した。STEP-06Aではstarter message、thread、control panel messageを別fieldに分離し、`ACCEPTED`中だけ3 IDを一括bindingでき、同一値の再送は同じ結果、部分bindingまたは別値へのrebindは副作用なしで拒否する。cancel/retryも永続化済みoperation IDで再実行結果を返し、別request/debateへのoperation ID再利用を拒否する。
 
 `DebateRepository.create`はoperation IDとlease ownerを受け、quota・slotを含む原子的受付後のpersisted snapshotを返す。`replace`はexpected snapshotと任意のoperation ID、`create_retry`はexpected FAILED snapshot、operation ID、lease ownerを受ける。`claim_recoverable`はlease取得済みsnapshotだけを返し、`renew_lease`はowner/fencingを維持した新expiryを返す。競合は`RepositoryConflict`、slot枯渇は`RepositoryBusy`、日次上限は`RepositoryQuotaExceeded`へ変換する。STEP-04BでDynamoDB API呼出しとtransactionをadapterに実装済みである。
 

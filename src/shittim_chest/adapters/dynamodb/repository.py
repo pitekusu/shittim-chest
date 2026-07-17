@@ -24,7 +24,6 @@ else:
     TransactWriteItemTypeDef = object
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.adapters.dynamodb.models import PanelOperation, PanelOperationKind
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
@@ -34,6 +33,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     serialize_panel_operation,
     serialize_snapshot,
 )
+from shittim_chest.application.discord import PanelOperation, PanelOperationKind
 from shittim_chest.application.models import DebateSnapshot, LeaseGrant
 from shittim_chest.application.ports import (
     RepositoryBusy,
@@ -777,7 +777,7 @@ def _panel_operation(
         requester_id=snapshot.requester_id,
         created_at=snapshot.state.updated_at,
         thread_id=snapshot.thread_id,
-        message_id=snapshot.starter_message_id,
+        message_id=snapshot.control_panel_message_id,
     )
 
 

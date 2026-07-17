@@ -18,6 +18,8 @@ from shittim_chest.application.models import (
     AcceptDebateRequest,
     AcceptedDebate,
     AcceptedRetry,
+    BindDiscordContextCommand,
+    BoundDiscordContext,
     CancelDebateCommand,
     CancelledDebate,
     DebateSnapshot,
@@ -153,6 +155,50 @@ class DebateApplication:
             await self._fail_current(debate_id, error_code=RequiredEvidenceUnavailable.code)
         except Exception:
             await self._fail_current(debate_id, error_code="phase_failed")
+
+    async def bind_discord_context(
+        self,
+        command: BindDiscordContextCommand,
+    ) -> BoundDiscordContext:
+        """Conditionally bind starter, thread, and panel IDs without allowing rebinding."""
+
+        snapshot = await self._require_snapshot(command.debate_id)
+        requested = (
+            command.starter_message_id,
+            command.thread_id,
+            command.control_panel_message_id,
+        )
+        existing = (
+            snapshot.starter_message_id,
+            snapshot.thread_id,
+            snapshot.control_panel_message_id,
+        )
+        if existing == requested:
+            return BoundDiscordContext(command.debate_id, *requested)
+        if any(value is not None for value in existing):
+            raise InvalidApplicationOperation("Discord context is already bound")
+        if snapshot.state.phase is not DebatePhase.ACCEPTED:
+            raise InvalidApplicationOperation("Discord context must be bound before debate work")
+
+        updated = replace(
+            snapshot,
+            starter_message_id=command.starter_message_id,
+            thread_id=command.thread_id,
+            control_panel_message_id=command.control_panel_message_id,
+        )
+        persisted = await self._repository.replace(expected=snapshot, updated=updated)
+        if (
+            persisted.starter_message_id is None
+            or persisted.thread_id is None
+            or persisted.control_panel_message_id is None
+        ):
+            raise InvalidApplicationOperation("repository did not preserve Discord context")
+        return BoundDiscordContext(
+            debate_id=command.debate_id,
+            starter_message_id=persisted.starter_message_id,
+            thread_id=persisted.thread_id,
+            control_panel_message_id=persisted.control_panel_message_id,
+        )
 
     async def _run_with_lease_heartbeat(self, debate_id: DebateId) -> None:
         phase_task = asyncio.create_task(self._run_phases(debate_id), name=f"phases:{debate_id}")
