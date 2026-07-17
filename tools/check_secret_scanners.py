@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,10 @@ class Scanner:
     executable: Path
 
 
-def synthetic_secret() -> str:
+GIT_OBJECT_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
+
+
+def synthetic_marker() -> str:
     """Create an invalid but structurally realistic token without storing it in source."""
 
     suffix = hashlib.sha256(b"shittim-chest synthetic scanner contract").hexdigest()[:36]
@@ -47,13 +51,19 @@ def report_finding_count(path: Path) -> int:
     return len(value)
 
 
-def _run(command: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(  # noqa: S603 - caller supplies validated scanner path
             command,
             cwd=cwd,
             check=False,
             capture_output=True,
+            input=input_text,
             text=True,
             timeout=30,
         )
@@ -66,18 +76,28 @@ def _initialize_repository(path: Path, content: str) -> None:
     if git is None:
         raise RuntimeError("git executable is required for scanner contract tests")
     path.mkdir()
-    (path / "sample.env").write_text(content, encoding="utf-8")
     commands = (
         (git, "init", "--quiet"),
         (git, "config", "user.name", "Synthetic Scanner Contract"),
         (git, "config", "user.email", "scanner.invalid"),
-        (git, "add", "sample.env"),
-        (git, "commit", "--quiet", "-m", "Add generated scanner fixture"),
     )
     for command in commands:
         result = _run(command, cwd=path)
         if result.returncode != 0:
             raise RuntimeError("could not initialize generated scanner repository")
+
+    blob_result = _run((git, "hash-object", "-w", "--stdin"), cwd=path, input_text=content)
+    blob = blob_result.stdout.strip()
+    if blob_result.returncode != 0 or GIT_OBJECT_PATTERN.fullmatch(blob) is None:
+        raise RuntimeError("could not create generated scanner fixture blob")
+    commit_commands = (
+        (git, "update-index", "--add", "--cacheinfo", f"100644,{blob},sample.env"),
+        (git, "commit", "--quiet", "-m", "Add generated scanner fixture"),
+    )
+    for commit_command in commit_commands:
+        result = _run(commit_command, cwd=path)
+        if result.returncode != 0:
+            raise RuntimeError("could not commit generated scanner fixture")
 
 
 def _scan(scanner: Scanner, repository: Path, report: Path) -> tuple[int, int]:
@@ -109,7 +129,7 @@ def verify_scanners(scanners: Sequence[Scanner]) -> None:
         root = Path(temporary)
         positive = root / "positive"
         negative = root / "negative"
-        _initialize_repository(positive, f"SYNTHETIC_TOKEN={synthetic_secret()}\n")
+        _initialize_repository(positive, f"SYNTHETIC_TOKEN={synthetic_marker()}\n")
         _initialize_repository(negative, "OPENAI_API_KEY=replace-me\n")
 
         failures: list[str] = []

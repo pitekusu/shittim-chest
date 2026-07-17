@@ -5,15 +5,15 @@ from pathlib import Path
 
 import pytest
 from tools.check_public_surface import DENY_PATTERNS
-from tools.check_secret_scanners import report_finding_count, synthetic_secret
+from tools.check_secret_scanners import report_finding_count, synthetic_marker
 
 
-def test_synthetic_secret_is_generated_but_detectable() -> None:
-    secret = synthetic_secret()
+def test_synthetic_marker_is_generated_but_detectable() -> None:
+    marker = synthetic_marker()
 
-    assert secret.startswith("ghp_")
-    assert len(secret) == 40
-    assert DENY_PATTERNS["GitHub token"].fullmatch(secret.encode())
+    assert marker.startswith("ghp_")
+    assert len(marker) == 40
+    assert DENY_PATTERNS["GitHub token"].fullmatch(marker.encode())
 
 
 def test_report_finding_count_accepts_array(tmp_path: Path) -> None:
