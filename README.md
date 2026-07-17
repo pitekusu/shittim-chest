@@ -1,6 +1,7 @@
 # The Shittim Chest
 
 [![CI](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml)
+[![Release Tool Versions](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml)
 
 The Shittim Chest is a Discord multi-agent debate Bot under incremental
 development. A moderator
@@ -17,7 +18,10 @@ immutable phase and Spot-recovery state machine, retry attempt boundary, and
 domain tests are implemented. Pull requests are checked with read-only GitHub
 Actions jobs for quality, tests, security, packaging, source SBOM, and public
 documentation safety. GitHub's managed Dependency Graph is compared with the
-tested uv inventory on a weekly schedule.
+tested uv inventory on a weekly schedule. Betterleaks and Gitleaks currently
+scan the complete Git history in parallel while the migration is observed;
+release assets are digest-pinned and Betterleaks checksums are verified with
+Sigstore.
 Application use cases, external adapters, Discord Applications, AWS resources,
 containers, and production workflows have not been implemented yet.
 
@@ -38,6 +42,8 @@ uv run --frozen mypy
 uv run --frozen pytest
 uv run --frozen python tools/check_public_surface.py
 uv run --frozen python -m tools.check_docs
+uv run --frozen python tools/check_tool_versions.py validate \
+  .github/tool-versions.json
 uv export --quiet --frozen --all-groups --format cyclonedx1.5 \
   --output-file /tmp/shittim-chest-source-sbom.cdx.json
 uv run --frozen python tools/check_sbom.py validate \
@@ -48,6 +54,10 @@ uv run --frozen pip-audit --strict --require-hashes \
   --requirement /tmp/shittim-chest-audit-requirements.txt
 uv build --no-sources
 ```
+
+The weekly `Release Tool Versions` workflow compares the actionlint,
+Betterleaks, and Gitleaks pins with their latest stable GitHub releases. It
+reports drift but never updates or merges a version automatically.
 
 The lock file selects Python 3.14.6 through `.python-version`. The domain has no
 runtime dependency outside the Python standard library.
