@@ -34,7 +34,7 @@ STEP-06Aは`moderator`、`participant-a`、`participant-b`、`participant-c`を`
 - Gateway Intentは`GUILDS`だけを有効にする。
 - Message Contentを含むPrivileged Intentsを無効にする。
 - 4 client全てがREADYのときだけ新規討論を受け付ける。
-- 1 client切断時は新規受付を閉じる。進行中sessionはcheckpointし、再接続deadline内に戻らなければ`FAILED`へ遷移する。
+- 1 client切断時は新規受付を即時閉じる。60秒以内に4 READYへ戻れば進行を継続し、60秒連続で戻らなければ進行中sessionを同一phaseの`CHECKPOINTED`へ退避する。通信断だけでは`FAILED`へ遷移せず、4 READY復帰後にfenced leaseを再取得して自動resumeする。
 
 ## 4. Command schema
 
@@ -134,10 +134,12 @@ STEP-06Bはdiscord.py 2.7.1の公開`Thread.send()`を使用する。22文字non
 | 2026-07-17 | Application Commands | https://docs.discord.com/developers/interactions/application-commands | Guild command、STRING 1〜1000文字、deploy時明示syncを実装 |
 | 2026-07-17 | Components | https://docs.discord.com/developers/components/reference | custom ID 100文字上限とcomponent context検証を再確認 |
 | 2026-07-17 | discord.py v2.7.1 Interaction source | https://github.com/Rapptz/discord.py/blob/v2.7.1/discord/interactions.py | defer/edit original responseとtyped interaction dataをoffline contractへ反映 |
+| 2026-07-17 | discord.py Client readiness | https://discordpy.readthedocs.io/en/stable/api.html#discord.Client.wait_until_ready | `is_ready()`をprocess gateと1秒監視へ使用し、4 client全てのREADYを受付条件として維持 |
 
 ## 10. STEP-06分割境界
 
 - STEP-06A（完了、PR `#27`、merge commit `47af41f`）: SDK非依存runtime/identity/error/outbox/panel契約、決定的message split、UUIDv7 nonce、SHA-256、custom ID codec、Discord context binding、schema v5。
 - STEP-06B（完了、PR `#30`、merge commit `96a1ace`）: discord.py 2.7.1 publisher、outbox claim/send/complete、`allowed_mentions`、`enforce_nonce`、SDK rate limit、長時間停止後reconciliation。
 - STEP-06C（完了、PR `#31`、merge commit `9799cb9`）: 4 client、GUILDS-only Intent、READY gate、Guild Command、先行defer、starter/Public Thread/panel、履歴reconciliation、attempt-bound Cancel/Retry、controller task ownership。CI 266 tests/92.55%合格。
-- STEP-07（未実装）: process signal、起動時`resume_recoverable`、Gateway切断deadline、outbox drain、Discord/AWS runtime composition。
+- STEP-07A（local実装済み）: process signal、fail-closed受付gate、起動時`resume_recoverable`、60秒Gateway切断checkpoint、再接続resume、90秒graceful shutdown。
+- STEP-07B/08（未実装）: outbox drain、production bootstrap、Discord/AWS runtime composition、container fault injection。

@@ -77,6 +77,18 @@ Guild, thread, panel message, debate, attempt, and actor checks. The controller
 owns and awaits its debate tasks, and one client exiting causes all four clients
 to close.
 
+STEP-07A adds the process runtime lifecycle. A separate fail-closed admission
+gate stays closed through startup until all four Discord identities are READY,
+the Guild Command schema is synchronized when needed, and recoverable debates
+are started as an owned task. SIGINT and SIGTERM immediately close admission
+and interaction dispatch; owned debate/recovery tasks are cancelled and awaited
+so the existing application checkpoint contract runs. One Bot disconnect closes
+admission immediately, checkpoints after a 60-second continuous outage, and
+automatically resumes after all four identities return READY without marking a
+connectivity failure as a failed debate. Graceful cleanup has a 90-second
+application deadline, leaving 30 seconds below the planned Fargate
+`stopTimeout=120` for client, logging, and container-runtime shutdown.
+
 Production is fixed to Luna standard for every generation phase. Terra standard
 and Luna pro remain evaluation-only policies and cannot be selected by runtime
 configuration or Discord operations. The shadow assessment remains observable
@@ -85,9 +97,10 @@ comes from three private, versioned persona prompts with distinct practical,
 verification/safety, and creative/alternative lenses while sharing the same
 evidence, safety constraints, and structured-output schema.
 
-The Discord interaction runtime is implemented and offline-tested but is not
-yet connected to real Bot tokens or a production composition root. Runtime
-recovery wiring, Discord Applications, containers, CDK/AWS resources,
+The Discord interaction and lifecycle runtimes are implemented and offline-tested
+but are not yet connected to real Bot tokens or a production composition root.
+Outbox drain, real process/container fault injection, Discord Applications,
+containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.

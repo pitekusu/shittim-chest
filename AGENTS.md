@@ -191,8 +191,22 @@ before invoking a use case. The controller must own, cancel, and await all
 background debate tasks. On Python 3.14 with discord.py 2.7.1, do not use
 `Client.event()` for this listener because it reaches a deprecated asyncio API
 while tests treat warnings as errors; use the dedicated moderator client's
-explicit `on_interaction` dispatch. STEP-07 still owns process signals,
-startup `resume_recoverable`, Gateway disconnect deadlines, and outbox drain.
+explicit `on_interaction` dispatch.
+
+STEP-07A adds `RuntimeAdmissionGateway`, `RuntimeLifecycle`, and
+`UnixSignalHandlers`. Construct `DebateApplication` with the process admission
+gateway, not the physical `DiscordPyGateway`, so startup and shutdown remain
+fail closed. Keep admission closed until all four clients are READY, command
+schema sync has succeeded, and startup `resume_recoverable` is owned. A single
+Bot disconnect closes admission immediately; after 60 continuous seconds,
+cancel and await interaction/recovery tasks so the existing application
+cancellation contract checkpoints them. Do not convert connectivity loss to
+FAILED. Resume recoverable work and reopen admission only after all four clients
+return READY. SIGINT/SIGTERM must synchronously close admission and interaction
+dispatch, then perform bounded asynchronous cleanup. The application deadline
+is 90 seconds, leaving 30 seconds below ECS `stopTimeout=120` for client, log,
+and container-runtime exit. STEP-07B still owns outbox drain; STEP-07C/08 own
+production composition and real process/container fault injection.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
@@ -546,9 +560,11 @@ only composition root.
   platform version 1.4.0 or later, and container `stopTimeout=120` seconds.
 - If the deployment-time combined Tokyo Spot rate for ARM64 is higher than
   x86_64, or ARM64 compatibility checks fail, use x86_64; otherwise keep ARM64.
-- On SIGTERM, stop accepting work, checkpoint completed operations and the
-  current phase, flush state, and exit within the stop timeout. A replacement
-  task must acquire a fenced DynamoDB lease and resume only unfinished work.
+- On SIGINT/SIGTERM, synchronously stop acceptance and interaction dispatch,
+  cancel and await owned work so the current phase is checkpointed, and finish
+  application cleanup within 90 seconds. Keep container `stopTimeout=120` and
+  reserve its last 30 seconds for Discord/log/runtime exit. A replacement task
+  must acquire a fenced DynamoDB lease and resume only unfinished work.
 - Do not add automatic on-demand Fargate fallback. The Bot may remain offline
   until Spot capacity becomes available again.
 - Deploy stop-before-start so only one task normally holds the four Bot tokens
