@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from shittim_chest.application.models import AcceptDebateRequest, DebateSnapshot, MetricEvent
+from shittim_chest.application.models import (
+    AcceptDebateRequest,
+    DebateSnapshot,
+    LeaseGrant,
+    MetricEvent,
+)
 from shittim_chest.domain import (
     AttemptId,
     DebateId,
@@ -116,7 +121,15 @@ class OpenAIService(Protocol):
 class DebateRepository(Protocol):
     """Persist application aggregates with conditional-write semantics."""
 
-    async def create(self, snapshot: DebateSnapshot) -> None: ...
+    async def get_operation_result(self, operation_id: str) -> DebateSnapshot | None: ...
+
+    async def create(
+        self,
+        snapshot: DebateSnapshot,
+        *,
+        operation_id: str,
+        lease_owner: str,
+    ) -> DebateSnapshot: ...
 
     async def get(self, debate_id: DebateId) -> DebateSnapshot | None: ...
 
@@ -125,13 +138,28 @@ class DebateRepository(Protocol):
         *,
         expected: DebateSnapshot,
         updated: DebateSnapshot,
-    ) -> None: ...
+        operation_id: str | None = None,
+    ) -> DebateSnapshot: ...
 
     async def create_retry(
         self,
         *,
         expected_failed: DebateSnapshot,
         retry: DebateSnapshot,
-    ) -> None: ...
+        operation_id: str,
+        lease_owner: str,
+    ) -> DebateSnapshot: ...
 
-    async def list_recoverable(self) -> tuple[DebateId, ...]: ...
+    async def claim_recoverable(
+        self,
+        *,
+        lease_owner: str,
+        at: datetime,
+    ) -> tuple[DebateSnapshot, ...]: ...
+
+    async def renew_lease(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+    ) -> LeaseGrant: ...

@@ -12,7 +12,7 @@ updated: 2026-07-16
 ## 1. Table設定
 
 - 単一table、on-demand、PK/SKはstring、PITR 35日、deletion protection有効、`RETAIN`とする。
-- 全itemに`schema_version`、`created_at`、`updated_at`をUTCで保存する。
+- 全itemに`schema_version`、`created_at`、`updated_at`をUTCで保存する。STEP-04Aのcurrent record schemaは`2`とし、readerはschema `1`を構造検証後に`2`へup-convertする。未知versionはfail closedとする。
 - debate本文とDiscord threadは自動期限なしで保存し、TTLを設定しない。「永久保存」は自動削除しない意味であり、過去状態への復旧保証はPITRの35日までとする。AWS Backupは採用しない。
 - TTLは期限切れ補助recordだけに使用し、lease解放やsecurity処理へ依存しない。
 
@@ -94,6 +94,8 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 - Queryは1MB paginationを考慮し、Scanを通常pathで使用しない。
 - floatを保存せず、必要な数値はintまたは`Decimal`を使用する。
 
+STEP-04Aはboto3を依存へ追加せず、resource interfaceへ渡せるstring/int/bool/null/list/mapだけのnative-value itemを生成・検証・復元する。snapshot、outbox、panel operationの読書きを同じschema境界でfail closedにする。低level AttributeValue変換、API error mapping、thread隔離はSTEP-04Bで実装する。
+
 ## 10. Schema migration
 
 - readerは現行versionと直前versionを読めるようにし、旧recordを現行domain modelへup-convertする。
@@ -110,3 +112,7 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 | 2026-07-16 | GSI | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html | discoveryと排他の分離 |
 | 2026-07-16 | PITR | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Point-in-time-recovery.html | 35日restore |
 | 2026-07-16 | boto3 DynamoDB | https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/dynamodb.html | resource/client、pagination |
+| 2026-07-17 | DynamoDB data types・400KB | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html | native value型、UTF-8、item事前上限検査 |
+| 2026-07-17 | Item size calculation | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/CapacityUnitCalculations.html | 属性名と値を含む400KB境界をcontract test化 |
+| 2026-07-17 | TransactWriteItems API | https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html | 同一item複数action禁止、10分tokenだけへ冪等性を依存しない |
+| 2026-07-17 | DynamoDB Local差異 | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.UsageNotes.html | Localで再現しないtransaction conflictはSTEP-04BのSDK stub testへ分離 |

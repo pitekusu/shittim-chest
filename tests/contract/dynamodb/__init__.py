@@ -1,0 +1,1 @@
+"""DynamoDB persistence contract tests."""

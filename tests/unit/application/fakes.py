@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
-from shittim_chest.application.models import AcceptDebateRequest, DebateSnapshot, MetricEvent
+from shittim_chest.application.models import (
+    AcceptDebateRequest,
+    DebateSnapshot,
+    LeaseGrant,
+    MetricEvent,
+)
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.domain import (
     AttemptId,
@@ -179,12 +184,38 @@ class FakeRepository:
         self.current: dict[DebateId, DebateSnapshot] = {}
         self.history: dict[DebateId, list[DebateSnapshot]] = defaultdict(list)
         self.recoverable: tuple[DebateId, ...] = ()
+        self.operations: dict[str, DebateSnapshot] = {}
+        self.next_fencing_token = 1
 
-    async def create(self, snapshot: DebateSnapshot) -> None:
+    async def get_operation_result(self, operation_id: str) -> DebateSnapshot | None:
+        return self.operations.get(operation_id)
+
+    def _grant(self, snapshot: DebateSnapshot, lease_owner: str) -> DebateSnapshot:
+        lease = LeaseGrant(
+            owner_id=lease_owner,
+            slot=0,
+            fencing_token=self.next_fencing_token,
+            expires_at=snapshot.state.updated_at + timedelta(seconds=60),
+        )
+        self.next_fencing_token += 1
+        return replace(snapshot, lease=lease)
+
+    async def create(
+        self,
+        snapshot: DebateSnapshot,
+        *,
+        operation_id: str,
+        lease_owner: str,
+    ) -> DebateSnapshot:
+        if operation_id in self.operations:
+            return self.operations[operation_id]
         if snapshot.state.debate_id in self.current:
             raise RepositoryConflict
-        self.current[snapshot.state.debate_id] = snapshot
-        self.history[snapshot.state.debate_id].append(snapshot)
+        persisted = self._grant(snapshot, lease_owner)
+        self.current[snapshot.state.debate_id] = persisted
+        self.history[snapshot.state.debate_id].append(persisted)
+        self.operations[operation_id] = persisted
+        return persisted
 
     async def get(self, debate_id: DebateId) -> DebateSnapshot | None:
         return self.current.get(debate_id)
@@ -194,24 +225,61 @@ class FakeRepository:
         *,
         expected: DebateSnapshot,
         updated: DebateSnapshot,
-    ) -> None:
+        operation_id: str | None = None,
+    ) -> DebateSnapshot:
+        if operation_id is not None and operation_id in self.operations:
+            return self.operations[operation_id]
         debate_id = expected.state.debate_id
         if self.current.get(debate_id) != expected:
             raise RepositoryConflict
-        self.current[debate_id] = updated
-        self.history[debate_id].append(updated)
+        persisted = replace(updated, lease=None) if updated.state.phase.is_terminal else updated
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        if operation_id is not None:
+            self.operations[operation_id] = persisted
+        return persisted
 
     async def create_retry(
         self,
         *,
         expected_failed: DebateSnapshot,
         retry: DebateSnapshot,
-    ) -> None:
+        operation_id: str,
+        lease_owner: str,
+    ) -> DebateSnapshot:
+        if operation_id in self.operations:
+            return self.operations[operation_id]
         debate_id = expected_failed.state.debate_id
         if self.current.get(debate_id) != expected_failed:
             raise RepositoryConflict
-        self.current[debate_id] = retry
-        self.history[debate_id].append(retry)
+        persisted = self._grant(retry, lease_owner)
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        self.operations[operation_id] = persisted
+        return persisted
 
-    async def list_recoverable(self) -> tuple[DebateId, ...]:
-        return self.recoverable
+    async def claim_recoverable(
+        self,
+        *,
+        lease_owner: str,
+        at: datetime,
+    ) -> tuple[DebateSnapshot, ...]:
+        del at
+        snapshots = tuple(self.current[debate_id] for debate_id in self.recoverable)
+        claimed = tuple(self._grant(snapshot, lease_owner) for snapshot in snapshots)
+        for snapshot in claimed:
+            self.current[snapshot.state.debate_id] = snapshot
+        return claimed
+
+    async def renew_lease(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+    ) -> LeaseGrant:
+        current = self.current.get(expected.state.debate_id)
+        if current != expected or expected.lease is None:
+            raise RepositoryConflict
+        renewed = replace(expected.lease, expires_at=at + timedelta(seconds=60))
+        self.current[expected.state.debate_id] = replace(expected, lease=renewed)
+        return renewed

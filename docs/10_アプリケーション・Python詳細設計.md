@@ -70,7 +70,9 @@ async def resume_recoverable() -> None: ...
 
 Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに1回だけimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher`は永続化済みoutbox operation以外を投稿してはならない。
 
-STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。`DebateRepository.replace`と`create_retry`はexpected snapshotを条件とし、競合時に`RepositoryConflict`を返す。DynamoDB transaction、lease、outboxの具体実装はSTEP-04へ分離する。
+STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。STEP-04Aでは`DebateSnapshot`へGuild/channel、debate/attempt作成時刻、Discord starter/thread ID、`LeaseGrant`を追加し、受付時にDiscord operation IDを失わない。cancel/retryも永続化済みoperation IDで再実行結果を返し、別request/debateへのoperation ID再利用を拒否する。
+
+`DebateRepository.create`はoperation IDとlease ownerを受け、quota・slotを含む原子的受付後のpersisted snapshotを返す。`replace`はexpected snapshotと任意のoperation ID、`create_retry`はexpected FAILED snapshot、operation ID、lease ownerを受ける。`claim_recoverable`はlease取得済みsnapshotだけを返し、`renew_lease`はowner/fencingを維持した新expiryを返す。競合は`RepositoryConflict`へ変換する。DynamoDB API呼出しとtransaction実装はSTEP-04Bへ分離する。
 
 ## 5. 状態遷移
 
@@ -140,3 +142,4 @@ bootstrapへ渡す非秘密設定はenvironment、model ID、table名、log leve
 | 2026-07-17 | pytest-asyncio 1.4.0 | https://pypi.org/project/pytest-asyncio/ | strict modeでasync use caseを試験 |
 | 2026-07-17 | import-linter 2.13 | https://pypi.org/project/import-linter/ | `application -> domain`の一方向contractをCI必須化 |
 | 2026-07-16 | boto3 1.43.49 | https://boto3.amazonaws.com/v1/documentation/api/latest/index.html | client再利用、typed exception、thread隔離 |
+| 2026-07-17 | DynamoDB data type・item制限 | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html | SDK非依存native-value契約、UTF-8、400KB事前拒否 |

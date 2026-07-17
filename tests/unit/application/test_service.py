@@ -90,6 +90,7 @@ def make_application(
         openai=openai,
         repository=repository,
         candidate_orderer=orderer,
+        lease_owner="worker-1",
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
     )
@@ -101,6 +102,7 @@ def request(*, requester_id: str = "requester") -> AcceptDebateRequest:
         requester_id=requester_id,
         guild_id="guild",
         channel_id="channel",
+        operation_id="accept-operation",
     )
 
 
@@ -167,10 +169,37 @@ async def test_accept_fails_closed_when_runtime_or_channel_is_not_ready(
     assert repository.current == {}
 
 
+@pytest.mark.asyncio
+async def test_accept_operation_is_idempotent_and_bound_to_request(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    discord = dependencies[3]
+    repository = dependencies[6]
+
+    first = await app.accept_debate(request())
+    discord.ready = False
+    repeated = await app.accept_debate(request())
+
+    assert repeated == first
+    assert len(repository.current) == 1
+    with pytest.raises(InvalidApplicationOperation, match="another request"):
+        await app.accept_debate(replace(request(), question="A different question"))
+
+
 @pytest.mark.parametrize("question", ["", " ", "x" * 1001])
 def test_accept_request_rejects_invalid_question(question: str) -> None:
     with pytest.raises(ValueError, match="question"):
-        AcceptDebateRequest(question, "requester", "guild", "channel")
+        AcceptDebateRequest(question, "requester", "guild", "channel", "operation")
 
 
 @pytest.mark.parametrize("field", ["requester", "guild", "channel"])
@@ -178,7 +207,13 @@ def test_accept_request_rejects_empty_identifiers(field: str) -> None:
     values = {"requester": "requester", "guild": "guild", "channel": "channel"}
     values[field] = " "
     with pytest.raises(ValueError, match="must not be empty"):
-        AcceptDebateRequest("question", values["requester"], values["guild"], values["channel"])
+        AcceptDebateRequest(
+            "question",
+            values["requester"],
+            values["guild"],
+            values["channel"],
+            "operation",
+        )
 
 
 @pytest.mark.asyncio
@@ -199,9 +234,13 @@ async def test_cancel_is_authorized_idempotent_and_terminal(
     accepted = await app.accept_debate(request())
 
     with pytest.raises(RequestNotAllowed):
-        await app.cancel_debate(CancelDebateCommand(accepted.debate_id, "other"))
-    cancelled = await app.cancel_debate(CancelDebateCommand(accepted.debate_id, "requester"))
-    repeated = await app.cancel_debate(CancelDebateCommand(accepted.debate_id, "moderator", True))
+        await app.cancel_debate(CancelDebateCommand(accepted.debate_id, "other", "cancel-other"))
+    cancelled = await app.cancel_debate(
+        CancelDebateCommand(accepted.debate_id, "requester", "cancel-operation")
+    )
+    repeated = await app.cancel_debate(
+        CancelDebateCommand(accepted.debate_id, "moderator", "cancel-operation", True)
+    )
     await app.run_debate(accepted.debate_id)
 
     assert cancelled == repeated
@@ -226,7 +265,9 @@ async def test_completed_debate_cannot_be_cancelled(
     await app.run_debate(accepted.debate_id)
 
     with pytest.raises(InvalidApplicationOperation):
-        await app.cancel_debate(CancelDebateCommand(accepted.debate_id, "requester"))
+        await app.cancel_debate(
+            CancelDebateCommand(accepted.debate_id, "requester", "cancel-completed")
+        )
 
 
 @pytest.mark.asyncio
@@ -250,7 +291,9 @@ async def test_failed_attempt_retry_preserves_source_and_reuses_completed_artifa
     failed = replace(source, state=failed_state, error_code="test_failure")
     await repository.replace(expected=source, updated=failed)
 
-    retried = await app.retry_debate(RetryDebateCommand(accepted.debate_id, "moderator", True))
+    retried = await app.retry_debate(
+        RetryDebateCommand(accepted.debate_id, "moderator", "retry-operation", True)
+    )
 
     current = repository.current[accepted.debate_id]
     assert current.state.phase is DebatePhase.ACCEPTED
@@ -258,6 +301,39 @@ async def test_failed_attempt_retry_preserves_source_and_reuses_completed_artifa
     assert current.state.attempt_id == retried.attempt_id
     assert failed.state.phase is DebatePhase.FAILED
     assert current.error_code is None
+
+
+@pytest.mark.asyncio
+async def test_retry_operation_is_idempotent(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    clock = dependencies[0]
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+    source = repository.current[accepted.debate_id]
+    failed = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.FAILED, at=clock.now()),
+        error_code="test_failure",
+    )
+    await repository.replace(expected=source, updated=failed)
+    command = RetryDebateCommand(accepted.debate_id, "requester", "retry-idempotent")
+
+    first = await app.retry_debate(command)
+    repeated = await app.retry_debate(command)
+
+    assert repeated == first
+    assert repository.current[accepted.debate_id].state.attempt_id == first.attempt_id
 
 
 @pytest.mark.asyncio
@@ -277,9 +353,11 @@ async def test_retry_requires_authorized_actor_and_failed_state(
     accepted = await app.accept_debate(request())
 
     with pytest.raises(RequestNotAllowed):
-        await app.retry_debate(RetryDebateCommand(accepted.debate_id, "other"))
+        await app.retry_debate(RetryDebateCommand(accepted.debate_id, "other", "retry-other"))
     with pytest.raises(InvalidApplicationOperation):
-        await app.retry_debate(RetryDebateCommand(accepted.debate_id, "requester"))
+        await app.retry_debate(
+            RetryDebateCommand(accepted.debate_id, "requester", "retry-not-failed")
+        )
 
 
 @pytest.mark.asyncio
@@ -452,6 +530,10 @@ async def test_recovery_reuses_every_completed_phase_artifact(
         state=state,
         question="cached question",
         requester_id="requester",
+        guild_id="guild",
+        channel_id="channel",
+        created_at=state.updated_at,
+        attempt_created_at=state.updated_at,
         evidence=evidence,
         initial_opinions=opinions,
         final_proposals=proposals,
@@ -463,7 +545,7 @@ async def test_recovery_reuses_every_completed_phase_artifact(
             (),
         ),
     )
-    await repository.create(snapshot)
+    await repository.create(snapshot, operation_id="cached-create", lease_owner="worker-1")
 
     await app.run_debate(debate_id)
 

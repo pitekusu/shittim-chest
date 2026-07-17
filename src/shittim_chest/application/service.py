@@ -69,11 +69,14 @@ class DebateApplication:
         openai: OpenAIService,
         repository: DebateRepository,
         candidate_orderer: CandidateOrderer,
+        lease_owner: str,
         session_timeout_seconds: float = 300.0,
         phase_timeout_seconds: float = 60.0,
     ) -> None:
         if session_timeout_seconds <= 0 or phase_timeout_seconds <= 0:
             raise ValueError("timeouts must be positive")
+        if not lease_owner.strip():
+            raise ValueError("lease owner must not be empty")
         self._clock = clock
         self._ids = ids
         self._metrics = metrics
@@ -82,11 +85,23 @@ class DebateApplication:
         self._openai = openai
         self._repository = repository
         self._candidate_orderer = candidate_orderer
+        self._lease_owner = lease_owner
         self._session_timeout_seconds = session_timeout_seconds
         self._phase_timeout_seconds = phase_timeout_seconds
 
     async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate:
         """Validate readiness and atomically persist a new accepted debate."""
+
+        existing = await self._repository.get_operation_result(request.operation_id)
+        if existing is not None:
+            if (
+                existing.requester_id != request.requester_id
+                or existing.guild_id != request.guild_id
+                or existing.channel_id != request.channel_id
+                or existing.question != request.question
+            ):
+                raise InvalidApplicationOperation("operation ID is bound to another request")
+            return AcceptedDebate(existing.state.debate_id, existing.state.attempt_id)
 
         if not await self._discord.all_identities_ready():
             raise RuntimeNotReady("all four Discord identities must be ready")
@@ -95,14 +110,26 @@ class DebateApplication:
 
         debate_id = self._ids.new_debate_id()
         attempt_id = self._ids.new_attempt_id()
+        now = self._clock.now()
         snapshot = DebateSnapshot(
-            state=DebateState.accepted(debate_id, attempt_id, at=self._clock.now()),
+            state=DebateState.accepted(debate_id, attempt_id, at=now),
             question=request.question,
             requester_id=request.requester_id,
+            guild_id=request.guild_id,
+            channel_id=request.channel_id,
+            created_at=now,
+            attempt_created_at=now,
         )
-        await self._repository.create(snapshot)
-        self._metrics.increment(MetricEvent.ACCEPTED, debate_id=debate_id)
-        return AcceptedDebate(debate_id=debate_id, attempt_id=attempt_id)
+        persisted = await self._repository.create(
+            snapshot,
+            operation_id=request.operation_id,
+            lease_owner=self._lease_owner,
+        )
+        self._metrics.increment(MetricEvent.ACCEPTED, debate_id=persisted.state.debate_id)
+        return AcceptedDebate(
+            debate_id=persisted.state.debate_id,
+            attempt_id=persisted.state.attempt_id,
+        )
 
     async def run_debate(self, debate_id: DebateId) -> None:
         """Run or continue one debate until it reaches a terminal state."""
@@ -124,7 +151,10 @@ class DebateApplication:
     async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate:
         """Conditionally move an active debate to the cancelled terminal state."""
 
-        snapshot = await self._require_snapshot(command.debate_id)
+        operation_result = await self._repository.get_operation_result(command.operation_id)
+        snapshot = operation_result or await self._require_snapshot(command.debate_id)
+        if snapshot.state.debate_id != command.debate_id:
+            raise InvalidApplicationOperation("operation ID is bound to another debate")
         self._authorize_actor(snapshot, command.actor_id, command.can_manage_messages)
         if snapshot.state.phase is DebatePhase.CANCELLED:
             return CancelledDebate(command.debate_id, snapshot.state.attempt_id)
@@ -135,12 +165,33 @@ class DebateApplication:
             snapshot,
             state=snapshot.state.transition_to(DebatePhase.CANCELLED, at=self._clock.now()),
         )
-        await self._repository.replace(expected=snapshot, updated=updated)
+        persisted = await self._repository.replace(
+            expected=snapshot,
+            updated=updated,
+            operation_id=command.operation_id,
+        )
         self._metrics.increment(MetricEvent.CANCELLED, debate_id=command.debate_id)
-        return CancelledDebate(command.debate_id, updated.state.attempt_id)
+        return CancelledDebate(command.debate_id, persisted.state.attempt_id)
 
     async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry:
         """Create a new immutable attempt from a failed attempt."""
+
+        operation_result = await self._repository.get_operation_result(command.operation_id)
+        if operation_result is not None:
+            if operation_result.state.debate_id != command.debate_id:
+                raise InvalidApplicationOperation("operation ID is bound to another debate")
+            self._authorize_actor(
+                operation_result,
+                command.actor_id,
+                command.can_manage_messages,
+            )
+            if operation_result.state.retry_of is None:
+                raise InvalidApplicationOperation("operation result is not a retry")
+            return AcceptedRetry(
+                debate_id=command.debate_id,
+                attempt_id=operation_result.state.attempt_id,
+                retry_of=operation_result.state.retry_of,
+            )
 
         failed = await self._require_snapshot(command.debate_id)
         self._authorize_actor(failed, command.actor_id, command.can_manage_messages)
@@ -149,21 +200,39 @@ class DebateApplication:
 
         attempt_id = self._ids.new_attempt_id()
         retry_state = failed.state.new_retry_attempt(attempt_id, at=self._clock.now())
-        retry = replace(failed, state=retry_state, error_code=None, final_decision=None)
-        await self._repository.create_retry(expected_failed=failed, retry=retry)
+        retry = replace(
+            failed,
+            state=retry_state,
+            attempt_created_at=retry_state.updated_at,
+            lease=None,
+            error_code=None,
+            final_decision=None,
+        )
+        persisted = await self._repository.create_retry(
+            expected_failed=failed,
+            retry=retry,
+            operation_id=command.operation_id,
+            lease_owner=self._lease_owner,
+        )
         self._metrics.increment(MetricEvent.RETRIED, debate_id=command.debate_id)
+        if persisted.state.retry_of is None:
+            raise InvalidApplicationOperation("persisted retry is missing its source attempt")
         return AcceptedRetry(
             debate_id=command.debate_id,
-            attempt_id=attempt_id,
-            retry_of=failed.state.attempt_id,
+            attempt_id=persisted.state.attempt_id,
+            retry_of=persisted.state.retry_of,
         )
 
     async def resume_recoverable(self) -> None:
         """Resume every repository-selected recoverable debate with owned tasks."""
 
-        debate_ids = await self._repository.list_recoverable()
+        snapshots = await self._repository.claim_recoverable(
+            lease_owner=self._lease_owner,
+            at=self._clock.now(),
+        )
         async with asyncio.TaskGroup() as task_group:
-            for debate_id in debate_ids:
+            for snapshot in snapshots:
+                debate_id = snapshot.state.debate_id
                 task_group.create_task(self.run_debate(debate_id), name=f"resume:{debate_id}")
 
     async def _run_phases(self, debate_id: DebateId) -> None:
@@ -411,7 +480,7 @@ class DebateApplication:
         metric_event: MetricEvent = MetricEvent.PHASE_COMPLETED,
     ) -> DebateSnapshot:
         try:
-            await self._repository.replace(expected=expected, updated=updated)
+            persisted = await self._repository.replace(expected=expected, updated=updated)
         except RepositoryConflict:
             current = await self._require_snapshot(expected.state.debate_id)
             if current.state.phase.is_terminal:
@@ -421,7 +490,7 @@ class DebateApplication:
             metric_event,
             debate_id=updated.state.debate_id,
         )
-        return updated
+        return persisted
 
     async def _checkpoint_current(self, debate_id: DebateId) -> None:
         current = await self._require_snapshot(debate_id)
