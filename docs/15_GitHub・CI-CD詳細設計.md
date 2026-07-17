@@ -33,7 +33,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 
 1. uv lock check、Ruff format/check、mypy strict。import-linterはapplication境界を導入するSTEP-03で追加する。
 2. pytest unit/contract、domain/application coverage 90%以上。
-3. pip-audit、Betterleaks/Gitleaks並行scan、public surface scan、Dependency Review、`uv export --frozen --all-groups --format cyclonedx1.5`で生成したCycloneDX SBOMのstrict schema、project、`uv.lock`完全一致検証。
+3. pip-audit、Betterleaks full-history scan、生成fixture contract、public surface scan、Dependency Review、`uv export --frozen --all-groups --format cyclonedx1.5`で生成したCycloneDX SBOMのstrict schema、project、`uv.lock`完全一致検証。
 4. wheel buildとinstall smoke test。
 5. Markdown/frontmatter/fence/Wiki link/heading、license scope、public file、GitHub workflow syntaxを検証する。非公開Obsidian正本とのbyte一致はlocal pre-PRでのみ検証する。
 6. TypeScript typecheck/test、CDK assertion、`cdk synth --strict`、cdk-nagはSTEP-09で追加する。
@@ -91,11 +91,11 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 ## 6. Actions・supply chain settings
 
 - repository既定`GITHUB_TOKEN`はread-only、Pull Request approval権限なしとする。
-- GitHub-owned Actionと明示allowlistしたActionだけを許可し、全Actionをfull commit SHAへpinする。Dependabotに同一行のversion commentを使ってSHA更新させ、version tagだけのpinは禁止する。Gitleaks、Betterleaks、actionlintは`.github/tool-versions.json`へversion、release archive名、SHA-256を固定し、実行時latestを本番gateへ直接取り込まない。
+- GitHub-owned Actionと明示allowlistしたActionだけを許可し、全Actionをfull commit SHAへpinする。Dependabotに同一行のversion commentを使ってSHA更新させ、version tagだけのpinは禁止する。Betterleaksとactionlintは`.github/tool-versions.json`へversion、release archive名、SHA-256を固定し、実行時latestを本番gateへ直接取り込まない。
 - Betterleaksはofficial releaseの`checksums.txt`、Sigstore bundle、archiveをすべて固定SHA-256で検証し、`cosign verify-blob`でrelease workflow identityとGitHub Actions OIDC issuerを照合する。署名済みchecksum内のarchive digestとrepository pinも一致させる。Sigstore installer Actionはfull commit SHAとcosign versionを固定し、selected Actions allowlistへ限定追加する。
-- STEP-02Bでは`security` check名を維持したままBetterleaks 1.6.1とGitleaks 8.30.1をfull historyへ直列実行する。両scannerともredactionを有効化し、Betterleaksのprovider validation optionは使用しない。CIで毎回、sourceへcredential文字列を保存せず生成するinvalid GitHub token形式と安全なplaceholderを別Git repositoryへcommitし、両scannerがpositiveを拒否しnegativeを許可することをcontract testする。
-- `tool-versions.yml`は毎週水曜13:29 JSTと手動でGitHub Releases latest APIをread-only照合し、差分時に失敗してoperatorへ更新を促す。自動更新・自動mergeは行わず、新versionはarchive digest、署名identity、並行scan、false positiveを別PRで確認する。
-- Gitleaks撤去は、最低限の観測期間、複数PR/main run、full-history結果、generated contract、既知fixture、false positive運用、upstream security policyを確認した別ADRで判断する。STEP-02Bだけでは撤去しない。
+- `security` check名を維持したままBetterleaks 1.6.1をfull historyへ実行する。redactionを有効化し、provider validation optionは使用しない。CIで毎回、sourceやworktreeへcredential文字列を保存せずtemporary Git objectとして生成するinvalid GitHub token形式と安全なplaceholderを別Git repositoryへcommitし、Betterleaksがpositiveを拒否しnegativeを許可することをcontract testする。
+- `tool-versions.yml`は毎週水曜13:29 JSTと手動でGitHub Releases latest APIをread-only照合し、差分時に失敗してoperatorへ更新を促す。自動更新・自動mergeは行わず、新versionはarchive digest、署名identity、full-history scan、false positiveを別PRで確認する。
+- STEP-02Bの複数PR head、main run、full-history、generated contract、Sigstore、latest-release workflowが全合格したため、STEP-02CでGitleaksを撤去する。二重scannerによる継続的な実行時間・更新負担を避け、GitHub managed Secret scanning、Push protection、Betterleaksを防御層とする。検出coverageの具体的な欠落が再現した場合だけ別ADRで第二scannerを再検討する。
 - Secret scanning、Push protection、CodeQL default setup APIの`query_suite=extended`、Dependency graph、Dependabot alerts/security updatesを有効にする。
 - CodeQLは現在Pythonを対象とし、CDK実装時にJavaScript/TypeScriptを追加する。
 - uvとGitHub Actionsを週次更新する。Docker、npm/CDKはmanifest導入時に追加する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
@@ -118,7 +118,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv/GitHub Actions更新、read-only CI、managed SBOM照合、5 strict check、CodeQL ruleは運用済みである。STEP-02BでBetterleaksの段階移行gateとrelease-tool version監視を追加中であり、既存`security` required check名は変更しない。application workflow、AWS OIDC role、AWS resourceは未実装である。
+Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv/GitHub Actions更新、read-only CI、managed SBOM照合、5 strict check、CodeQL ruleは運用済みである。STEP-02BでBetterleaksの段階移行gateとrelease-tool version監視を追加し、STEP-02CでGitleaksを撤去して単独運用へ移行する。既存`security` required check名は変更しない。application workflow、AWS OIDC role、AWS resourceは未実装である。
 
 ## 10. 公式資料確認記録
 

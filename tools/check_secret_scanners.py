@@ -161,23 +161,17 @@ def verify_scanners(scanners: Sequence[Scanner]) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--betterleaks", required=True, type=Path)
-    parser.add_argument("--gitleaks", required=True, type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        verify_scanners(
-            (
-                Scanner("betterleaks", args.betterleaks),
-                Scanner("gitleaks", args.gitleaks),
-            )
-        )
+        verify_scanners((Scanner("betterleaks", args.betterleaks),))
     except RuntimeError as error:
         print(error, file=sys.stderr)
         return 1
-    print("secret scanner contract passed: 2 scanners, positive and negative histories")
+    print("secret scanner contract passed: Betterleaks positive and negative histories")
     return 0
 
 

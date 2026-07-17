@@ -18,9 +18,8 @@ immutable phase and Spot-recovery state machine, retry attempt boundary, and
 domain tests are implemented. Pull requests are checked with read-only GitHub
 Actions jobs for quality, tests, security, packaging, source SBOM, and public
 documentation safety. GitHub's managed Dependency Graph is compared with the
-tested uv inventory on a weekly schedule. Betterleaks and Gitleaks currently
-scan the complete Git history in parallel while the migration is observed;
-release assets are digest-pinned and Betterleaks checksums are verified with
+tested uv inventory on a weekly schedule. Betterleaks scans the complete Git
+history; release assets are digest-pinned and its checksums are verified with
 Sigstore.
 Application use cases, external adapters, Discord Applications, AWS resources,
 containers, and production workflows have not been implemented yet.
@@ -55,8 +54,8 @@ uv run --frozen pip-audit --strict --require-hashes \
 uv build --no-sources
 ```
 
-The weekly `Release Tool Versions` workflow compares the actionlint,
-Betterleaks, and Gitleaks pins with their latest stable GitHub releases. It
+The weekly `Release Tool Versions` workflow compares the actionlint and
+Betterleaks pins with their latest stable GitHub releases. It
 reports drift but never updates or merges a version automatically.
 
 The lock file selects Python 3.14.6 through `.python-version`. The domain has no
