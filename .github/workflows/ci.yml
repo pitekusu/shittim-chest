@@ -218,6 +218,59 @@ jobs:
           "${environment}/bin/python" -I -c \
             'import importlib.metadata, os, pathlib, shittim_chest, sys; package = pathlib.Path(shittim_chest.__file__).resolve().parent; assert importlib.metadata.version("shittim-chest") == os.environ["EXPECTED_VERSION"]; assert package.is_relative_to(pathlib.Path(sys.prefix).resolve()); assert (package / "py.typed").is_file()'
 
+  container-arm64:
+    name: container-arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Confirm the native ARM64 runner
+        run: |
+          test "$(uname -m)" = "aarch64"
+          test "$(docker info --format '{{.Architecture}}')" = "aarch64"
+      - name: Build production and CI-only fault images
+        run: |
+          docker build --target production \
+            --tag shittim-chest:step-08b-arm64 .
+          docker build --target fault-test \
+            --tag shittim-chest:step-08b-fault-arm64 .
+      - name: Validate image security and inject termination faults
+        run: |
+          python tools/run_container_gate.py \
+            --production-image shittim-chest:step-08b-arm64 \
+            --fault-image shittim-chest:step-08b-fault-arm64 \
+            --expected-architecture arm64
+      - name: Install pinned Syft
+        run: |
+          syft_version=$(jq --raw-output '.tools.syft.version' .github/tool-versions.json)
+          syft_archive_name=$(jq --raw-output '.tools.syft.archive_name' .github/tool-versions.json)
+          syft_archive_sha=$(jq --raw-output '.tools.syft.archive_sha256' .github/tool-versions.json)
+          archive="${RUNNER_TEMP}/${syft_archive_name}"
+          curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/anchore/syft/releases/download/v${syft_version}/${syft_archive_name}"
+          printf '%s  %s\n' "${syft_archive_sha}" "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" syft
+          test "$("${RUNNER_TEMP}/syft" version -o json | jq --raw-output .version)" = \
+            "${syft_version}"
+      - name: Generate and validate the final image SPDX SBOM
+        run: |
+          "${RUNNER_TEMP}/syft" docker:shittim-chest:step-08b-arm64 \
+            --output "spdx-json=${RUNNER_TEMP}/image-sbom-arm64.spdx.json"
+          python tools/check_image_sbom.py \
+            "${RUNNER_TEMP}/image-sbom-arm64.spdx.json"
+      - name: Retain the final image SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-sbom-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/image-sbom-arm64.spdx.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
   docs-public-safety:
     name: docs-public-safety
     runs-on: ubuntu-latest

@@ -121,12 +121,17 @@ The Discord interaction, lifecycle, outbox-recovery, production-composition,
 and process-signal runtimes are implemented and offline-tested. STEP-08A adds a
 digest-pinned multi-stage production container, a separately selectable
 break-glass target, numeric non-root execution, and a content-free event-loop
-heartbeat health check. The local amd64 security boundary has been validated
-with a read-only root filesystem, a writable temporary mount, all Linux
-capabilities dropped, and no-new-privileges. They have not been connected to
-real Bot tokens or external services. Native ARM64 CI, container fault
-injection, final-image SBOM, Discord Applications, CDK/AWS resources, and
-production workflows remain for later slices. Responses API
+heartbeat health check. STEP-08B adds a native `ubuntu-24.04-arm` required
+check that builds and runs the ARM64 image with a read-only root filesystem,
+a writable temporary mount, all Linux capabilities dropped, and
+no-new-privileges. The same check injects SIGTERM at every non-terminal debate
+phase, injects SIGKILL immediately before and after the transaction and
+Discord-post boundaries, and validates replacement recovery without duplicate
+commits or displayed messages. A pinned Syft release generates and validates a
+30-day SPDX artifact covering Debian and production Python packages. They have
+not been connected to real Bot tokens or external services. Discord
+Applications, CDK/AWS resources, release attestations, and production workflows
+remain for later slices. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.

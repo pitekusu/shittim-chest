@@ -37,7 +37,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 4. wheel buildとinstall smoke test。
 5. Markdown/frontmatter/fence/Wiki link/heading、license scope、public file、GitHub workflow syntaxを検証する。非公開Obsidian正本とのbyte一致はlocal pre-PRでのみ検証する。
 6. TypeScript typecheck/test、CDK assertion、`cdk synth --strict`、cdk-nagはSTEP-09で追加する。
-7. ARM64 container buildとhealth command testはSTEP-08で追加する。paid/network integrationは実行しない。
+7. `container-arm64`は公開repositoryのnative `ubuntu-24.04-arm`でproduction/fault-test targetをbuildする。image config、read-only/non-root/capability、health、SIGTERM/SIGKILL recoveryを検査し、Syft v1.48.0でOS/runtime dependencyを含むSPDX JSONを生成して30日保持する。secret、OIDC、registry push、paid/network integrationは使用しない。
 
 fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-hosted runnerを渡さない。fork codeを扱う`pull_request_target`は禁止する。外部contributorのworkflowは毎回maintainer承認を要求する。
 
@@ -48,6 +48,7 @@ fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-
 - GitHub managed graphが完全な間はcustom Dependency Submissionを行わない。user submissionはDependabot graph jobより優先され、重複、上書き、`contents: write`権限を増やすためである。managed inventoryに欠落・停滞が再現した場合だけADRでfallbackを再検討する。
 - `dependency-graph.yml`をDependabot更新時刻と毎時開始時のActions混雑を避けた毎週火曜12:17 JSTと手動でmain上だけ実行し、GitHub SBOM export endpointのSPDX 2.3 PyPI package集合と、checkoutしたmainのCycloneDX/`uv.lock`集合をread-onlyで照合する。GitHub SPDX export自体にはcommit SHAがないため、比較前後にmain SHAが`GITHUB_SHA`から動いていないことを確認する。移動時は検証済みを示すgreenにせず明示失敗し、最新mainで再実行する。managed graph反映遅延は30秒間隔・最大10回のbounded pollingで吸収し、stable mainで収束しなければ失敗する。同じrefの重複runは非cancel型concurrencyで直列化し、pendingが複数なら最新確認を優先する。
 - GitHub SBOM exportはrepository dependency inventoryの出力であり、container OS packageを網羅するrelease image SBOMの代替にはしない。
+- STEP-08Bのimage SBOMはPR/test imageの検証artifactであり、release provenance/SBOM attestationではない。STEP-10ではECRへ一度だけpushしたdigestから再生成し、GitHub artifact attestationでdigestとrepository identityを結ぶ。
 
 ## 4. Production release
 

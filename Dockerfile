@@ -47,6 +47,18 @@ ENTRYPOINT ["python", "-m", "shittim_chest"]
 
 FROM runtime-base AS production
 
+FROM production AS fault-test
+
+USER root
+
+COPY --chown=${APP_UID}:${APP_GID} tests/__init__.py /fault-tests/tests/__init__.py
+COPY --chown=${APP_UID}:${APP_GID} tests/fixtures/container_process.py \
+    /fault-tests/tests/fixtures/container_process.py
+
+ENV PYTHONPATH=/fault-tests
+
+USER ${APP_UID}:${APP_GID}
+
 FROM runtime-base AS break-glass
 
 USER root
