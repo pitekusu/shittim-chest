@@ -171,8 +171,16 @@ write operation in this repository, rather than first attempting the GitHub App
 and falling back after a predictable 403. This repository-specific rule
 overrides connector-first plugin guidance for write actions only.
 
-- Run `gh auth status` before a write workflow and stop if the active account is
-  not `pitekusu` or authentication is invalid. Never print or persist its token.
+- Treat GitHub authentication verification as a mandatory preflight for every
+  write workflow. Run both `gh auth status` and
+  `gh api user --jq '.login'` on the host, outside the restricted sandbox, and
+  require both commands to succeed with the active account `pitekusu`. Never
+  print or persist the token.
+- Do not diagnose an expired GitHub credential from a sandboxed `gh` failure.
+  Restricted network, DNS, keyring, or API access can make a valid login appear
+  invalid. Retry the two-command preflight on the host and distinguish transport
+  errors from authentication errors. Request reauthentication only when the
+  host-side check reports an invalid credential, `401`, or `Bad credentials`.
 - Use local `git` for branch creation, explicit staging, commit, and push. Use
   `gh` for Pull Request creation/update, ready state, comments, labels, checks,
   review metadata, and merge actions.
