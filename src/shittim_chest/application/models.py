@@ -210,3 +210,5 @@ class MetricEvent(StrEnum):
     CHECKPOINTED = "debate_checkpointed"
     RESUMED = "debate_resumed"
     RETRIED = "debate_retried"
+    OUTBOX_RECOVERED = "discord_outbox_recovered"
+    OUTBOX_RETRY_SCHEDULED = "discord_outbox_retry_scheduled"

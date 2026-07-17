@@ -110,6 +110,20 @@ class FakeCandidateOrderer:
         return tuple(reversed(candidates))
 
 
+@dataclass(slots=True)
+class FakeOutboxRecovery:
+    calls: list[DebateSnapshot] = field(default_factory=list)
+    error: Exception | None = None
+    delay: float = 0.0
+
+    async def drain(self, *, expected: DebateSnapshot) -> None:
+        self.calls.append(expected)
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.error is not None:
+            raise self.error
+
+
 class FakeOpenAI:
     def __init__(self) -> None:
         self.initial_calls: list[ParticipantSlot] = []

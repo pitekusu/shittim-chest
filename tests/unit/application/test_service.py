@@ -14,12 +14,14 @@ from shittim_chest.application import (
     DebateApplication,
     DebateNotFound,
     InvalidApplicationOperation,
+    OutboxRecoveryFailed,
     RequestNotAllowed,
     RequiredEvidenceUnavailable,
     RetryDebateCommand,
     RuntimeNotReady,
 )
 from shittim_chest.application.models import DebateSnapshot, MetricEvent
+from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.domain import (
     PARTICIPANTS,
     DebatePhase,
@@ -40,6 +42,7 @@ from tests.unit.application.fakes import (
     FakeIds,
     FakeMetrics,
     FakeOpenAI,
+    FakeOutboxRecovery,
     FakeRepository,
 )
 
@@ -82,6 +85,7 @@ def make_application(
     session_timeout: float = 300.0,
     phase_timeout: float = 60.0,
     lease_renewal: float = 20.0,
+    outbox_recovery: FakeOutboxRecovery | None = None,
 ) -> DebateApplication:
     clock, ids, metrics, discord, evidence, openai, repository, orderer = dependencies
     return DebateApplication(
@@ -93,6 +97,7 @@ def make_application(
         openai=openai,
         repository=repository,
         candidate_orderer=orderer,
+        outbox_recovery=outbox_recovery or FakeOutboxRecovery(),
         lease_owner="worker-1",
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
@@ -679,7 +684,8 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
         FakeCandidateOrderer,
     ],
 ) -> None:
-    app = make_application(dependencies)
+    outbox_recovery = FakeOutboxRecovery()
+    app = make_application(dependencies, outbox_recovery=outbox_recovery)
     clock = dependencies[0]
     repository = dependencies[6]
     accepted = await app.accept_debate(request())
@@ -691,7 +697,91 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
     await app.resume_recoverable()
 
     assert repository.current[accepted.debate_id].state.phase is DebatePhase.COMPLETED
+    assert len(outbox_recovery.calls) == 1
+    assert outbox_recovery.calls[0].state.recovery_state is RecoveryState.CHECKPOINTED
     assert MetricEvent.RESUMED in {event for event, _ in dependencies[2].events}
+
+
+@pytest.mark.asyncio
+async def test_nonretryable_outbox_recovery_failure_preserves_delivery_error_code(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    outbox_recovery = FakeOutboxRecovery(error=OutboxRecoveryFailed("DISCORD_OUTBOX_CONFLICT"))
+    app = make_application(dependencies, outbox_recovery=outbox_recovery)
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = repository.current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "DISCORD_OUTBOX_CONFLICT"
+    assert len(outbox_recovery.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_outbox_recovery_wait_is_outside_session_deadline_and_renews_lease(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    outbox_recovery = FakeOutboxRecovery(delay=0.03)
+    app = make_application(
+        dependencies,
+        outbox_recovery=outbox_recovery,
+        session_timeout=0.01,
+        lease_renewal=0.005,
+    )
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+
+    await app.run_debate(accepted.debate_id)
+
+    assert repository.current[accepted.debate_id].state.phase is DebatePhase.COMPLETED
+    assert repository.renew_calls
+
+
+@pytest.mark.asyncio
+async def test_outbox_fencing_conflict_does_not_terminalize_the_attempt(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(
+        dependencies,
+        outbox_recovery=FakeOutboxRecovery(error=RepositoryConflict("lost fencing")),
+    )
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+
+    await app.run_debate(accepted.debate_id)
+
+    current = repository.current[accepted.debate_id]
+    assert current.state.phase is DebatePhase.ACCEPTED
+    assert current.error_code is None
 
 
 @pytest.mark.asyncio

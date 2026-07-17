@@ -193,7 +193,8 @@ background debate tasks. On Python 3.14 with discord.py 2.7.1, do not use
 while tests treat warnings as errors; use the dedicated moderator client's
 explicit `on_interaction` dispatch.
 
-STEP-07A adds `RuntimeAdmissionGateway`, `RuntimeLifecycle`, and
+STEP-07A was squash-merged through PR `#33` as commit `0f386f5` and adds
+`RuntimeAdmissionGateway`, `RuntimeLifecycle`, and
 `UnixSignalHandlers`. Construct `DebateApplication` with the process admission
 gateway, not the physical `DiscordPyGateway`, so startup and shutdown remain
 fail closed. Keep admission closed until all four clients are READY, command
@@ -205,8 +206,19 @@ FAILED. Resume recoverable work and reopen admission only after all four clients
 return READY. SIGINT/SIGTERM must synchronously close admission and interaction
 dispatch, then perform bounded asynchronous cleanup. The application deadline
 is 90 seconds, leaving 30 seconds below ECS `stopTimeout=120` for client, log,
-and container-runtime exit. STEP-07B still owns outbox drain; STEP-07C/08 own
-production composition and real process/container fault injection.
+and container-runtime exit.
+
+STEP-07B adds `DiscordOutboxRecovery` and requires `DebateApplication` to drain
+pending outbox operations before phase work resumes. Use a strongly consistent,
+paginated base-table Query to list every unsent operation, including future
+retry and unexpired-claim records. Wait for persisted availability without busy
+looping while the 20-second lease heartbeat continues. Do not count outbox wait
+against the 300-second active-processing deadline. Retryable Discord failures
+must reuse the publisher's persisted reschedule; non-retryable failures preserve
+the stable Discord code. A `RepositoryConflict` means this worker lost fencing
+and must not terminalize the attempt. Cancellation must stop delivery and leave
+the record for a later fenced owner. STEP-07C/08 own production composition and
+real process/container fault injection.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 

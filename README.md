@@ -89,6 +89,15 @@ connectivity failure as a failed debate. Graceful cleanup has a 90-second
 application deadline, leaving 30 seconds below the planned Fargate
 `stopTimeout=120` for client, logging, and container-runtime shutdown.
 
+STEP-07B connects persisted outbox recovery to every leased debate before phase
+work resumes. Pending chunks are read with a strongly consistent, paginated
+DynamoDB Query and drained in persisted order. Future retry times and live claim
+expiries are awaited without busy looping while the lease heartbeat continues.
+Retryable Discord failures use the publisher's persisted reschedule; permanent
+delivery conflicts fail with the stable Discord code. Cancellation stops new
+delivery immediately and leaves the outbox for the next fenced owner. Outbox
+waiting is excluded from the debate's active-processing deadline.
+
 Production is fixed to Luna standard for every generation phase. Terra standard
 and Luna pro remain evaluation-only policies and cannot be selected by runtime
 configuration or Discord operations. The shadow assessment remains observable
@@ -97,10 +106,9 @@ comes from three private, versioned persona prompts with distinct practical,
 verification/safety, and creative/alternative lenses while sharing the same
 evidence, safety constraints, and structured-output schema.
 
-The Discord interaction and lifecycle runtimes are implemented and offline-tested
+The Discord interaction, lifecycle, and outbox-recovery runtimes are implemented and offline-tested
 but are not yet connected to real Bot tokens or a production composition root.
-Outbox drain, real process/container fault injection, Discord Applications,
-containers, CDK/AWS resources,
+Real process/container fault injection, Discord Applications, containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
