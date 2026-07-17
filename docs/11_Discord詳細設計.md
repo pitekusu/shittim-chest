@@ -145,5 +145,6 @@ STEP-07Bの`DiscordOutboxRecovery`はlease取得済みattemptの全未送信oper
 - STEP-06B（完了、PR `#30`、merge commit `96a1ace`）: discord.py 2.7.1 publisher、outbox claim/send/complete、`allowed_mentions`、`enforce_nonce`、SDK rate limit、長時間停止後reconciliation。
 - STEP-06C（完了、PR `#31`、merge commit `9799cb9`）: 4 client、GUILDS-only Intent、READY gate、Guild Command、先行defer、starter/Public Thread/panel、履歴reconciliation、attempt-bound Cancel/Retry、controller task ownership。CI 266 tests/92.55%合格。
 - STEP-07A（完了、PR `#33`、merge commit `0f386f5`）: process signal、fail-closed受付gate、起動時`resume_recoverable`、60秒Gateway切断checkpoint、再接続resume、90秒graceful shutdown。
-- STEP-07B（local実装済み）: pending全件取得、永続retry/claim待機、順序drain、lease heartbeat、nonretryable error/fencing/cancellation処理。
-- STEP-07C/08（未実装）: production bootstrap、Discord/AWS runtime composition、container fault injection。
+- STEP-07B（完了、PR `#34`、merge commit `04bbda0`）: pending全件取得、永続retry/claim待機、順序drain、lease heartbeat、nonretryable error/fencing/cancellation処理。
+- STEP-07C（local実装済み）: strictなprivate runtime/persona設定からexactly 4 clientを生成し、共通gateway、READY gate、interaction controller、lifecycleへ注入するproduction composition。実process SIGTERM/SIGKILLをoffline検証済み。
+- STEP-08以降（未実装）: 実Discord Application/tokenでのsmoke、production AWS runtime、container fault injection。
