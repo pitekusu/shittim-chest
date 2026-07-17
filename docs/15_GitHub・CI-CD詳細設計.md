@@ -33,7 +33,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 
 1. uv lock check、Ruff format/check、mypy strict。import-linterはapplication境界を導入するSTEP-03で追加する。
 2. pytest unit/contract、domain/application coverage 90%以上。
-3. pip-audit、Gitleaks、public surface scan、Dependency Review、`uv export --frozen --all-groups --format cyclonedx1.5`で生成したCycloneDX SBOMのstrict schema、project、`uv.lock`完全一致検証。
+3. pip-audit、Betterleaks/Gitleaks並行scan、public surface scan、Dependency Review、`uv export --frozen --all-groups --format cyclonedx1.5`で生成したCycloneDX SBOMのstrict schema、project、`uv.lock`完全一致検証。
 4. wheel buildとinstall smoke test。
 5. Markdown/frontmatter/fence/Wiki link/heading、license scope、public file、GitHub workflow syntaxを検証する。非公開Obsidian正本とのbyte一致はlocal pre-PRでのみ検証する。
 6. TypeScript typecheck/test、CDK assertion、`cdk synth --strict`、cdk-nagはSTEP-09で追加する。
@@ -91,7 +91,11 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 ## 6. Actions・supply chain settings
 
 - repository既定`GITHUB_TOKEN`はread-only、Pull Request approval権限なしとする。
-- GitHub-owned Actionと明示allowlistしたActionだけを許可し、全Actionをfull commit SHAへpinする。Dependabotに同一行のversion commentを使ってSHA更新させ、version tagだけのpinは禁止する。Gitleaks 8.30.1とactionlint 1.7.12は公式release archiveとSHA-256を固定し、Action allowlistや実行時latestへ依存しない。
+- GitHub-owned Actionと明示allowlistしたActionだけを許可し、全Actionをfull commit SHAへpinする。Dependabotに同一行のversion commentを使ってSHA更新させ、version tagだけのpinは禁止する。Gitleaks、Betterleaks、actionlintは`.github/tool-versions.json`へversion、release archive名、SHA-256を固定し、実行時latestを本番gateへ直接取り込まない。
+- Betterleaksはofficial releaseの`checksums.txt`、Sigstore bundle、archiveをすべて固定SHA-256で検証し、`cosign verify-blob`でrelease workflow identityとGitHub Actions OIDC issuerを照合する。署名済みchecksum内のarchive digestとrepository pinも一致させる。Sigstore installer Actionはfull commit SHAとcosign versionを固定し、selected Actions allowlistへ限定追加する。
+- STEP-02Bでは`security` check名を維持したままBetterleaks 1.6.1とGitleaks 8.30.1をfull historyへ直列実行する。両scannerともredactionを有効化し、Betterleaksのprovider validation optionは使用しない。CIで毎回、sourceへcredential文字列を保存せず生成するinvalid GitHub token形式と安全なplaceholderを別Git repositoryへcommitし、両scannerがpositiveを拒否しnegativeを許可することをcontract testする。
+- `tool-versions.yml`は毎週水曜13:29 JSTと手動でGitHub Releases latest APIをread-only照合し、差分時に失敗してoperatorへ更新を促す。自動更新・自動mergeは行わず、新versionはarchive digest、署名identity、並行scan、false positiveを別PRで確認する。
+- Gitleaks撤去は、最低限の観測期間、複数PR/main run、full-history結果、generated contract、既知fixture、false positive運用、upstream security policyを確認した別ADRで判断する。STEP-02Bだけでは撤去しない。
 - Secret scanning、Push protection、CodeQL default setup APIの`query_suite=extended`、Dependency graph、Dependabot alerts/security updatesを有効にする。
 - CodeQLは現在Pythonを対象とし、CDK実装時にJavaScript/TypeScriptを追加する。
 - uvとGitHub Actionsを週次更新する。Docker、npm/CDKはmanifest導入時に追加する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
@@ -114,7 +118,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv更新は運用済みで、STEP-02にGitHub Actions更新を追加した。read-only CIとmanaged SBOM照合workflowは実装中であり、PR/main run合格後に5 checkとCodeQL ruleをRulesetへ設定する。application workflow、AWS OIDC role、AWS resourceは未実装である。
+Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv/GitHub Actions更新、read-only CI、managed SBOM照合、5 strict check、CodeQL ruleは運用済みである。STEP-02BでBetterleaksの段階移行gateとrelease-tool version監視を追加中であり、既存`security` required check名は変更しない。application workflow、AWS OIDC role、AWS resourceは未実装である。
 
 ## 10. 公式資料確認記録
 
@@ -136,6 +140,11 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-17 | Dependabot uv updater 0.11.8 | https://github.com/dependabot/dependabot-core/blob/main/uv/Dockerfile | 公式updaterの実uv versionをproject互換範囲と照合 |
 | 2026-07-17 | uv required version・versioning | https://docs.astral.sh/uv/reference/settings/#required-version、https://docs.astral.sh/uv/reference/policies/versioning/ | PEP 440範囲と同一minor patch互換を採用 |
 | 2026-07-17 | Python Dependabot graph job | https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph-data | full transitive managed snapshotをcustom submissionより優先 |
+| 2026-07-17 | Betterleaks 1.6.1 | https://github.com/betterleaks/betterleaks | Git/full-history scan、redaction、Gitleaks config互換、validation opt-in、release assetを確認 |
+| 2026-07-17 | Betterleaks scanning | https://github.com/betterleaks/betterleaks/blob/main/docs/scanning.md | `git`、JSON report、redaction、validation無効の実行契約へ反映 |
+| 2026-07-17 | Betterleaks security policy | https://github.com/betterleaks/betterleaks/blob/main/.github/SECURITY.md | latest releaseのみsupportされるため週次version検知を追加 |
+| 2026-07-17 | Gitleaks maintenance policy | https://github.com/gitleaks/gitleaks | feature complete/security patchのみとBetterleaks移行案を確認し並行期間を採用 |
+| 2026-07-17 | cosign blob verification 3.0.6 | https://docs.sigstore.dev/cosign/verifying/verify/ | release checksumのcertificate identity・OIDC issuer・bundle検証 |
 | 2026-07-17 | Dependency Review API 2026-03-10 | https://docs.github.com/en/rest/dependency-graph/dependency-review | `uv.lock`全packageと更新差分をlive APIで確認 |
 | 2026-07-17 | uv CycloneDX 1.5 preview | https://docs.astral.sh/uv/concepts/projects/export/ | strict schemaとlock inventory gateを追加 |
 | 2026-07-17 | setup-uv v8.3.2 | https://github.com/astral-sh/setup-uv/releases/tag/v8.3.2 | uv 0.11.29、Python 3.14.6をfull SHA固定Actionで導入 |

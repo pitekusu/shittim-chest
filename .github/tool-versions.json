@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "tools": {
+    "actionlint": {
+      "archive_name": "actionlint_1.7.12_linux_amd64.tar.gz",
+      "archive_sha256": "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+      "repository": "rhysd/actionlint",
+      "tag_prefix": "v",
+      "version": "1.7.12"
+    },
+    "betterleaks": {
+      "archive_name": "betterleaks_1.6.1_linux_x64.tar.gz",
+      "archive_sha256": "fbefc700a0bd4522cc952dd2a8f259cdb80526d7e60114aca19bb2d6fdc80f81",
+      "certificate_identity": "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/v1.6.1",
+      "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
+      "checksums_name": "checksums.txt",
+      "checksums_sha256": "eccb3a1c4ee7eee8f2a2a4d81d22f91ee199e222a47bc4c0398f94c50ec01264",
+      "repository": "betterleaks/betterleaks",
+      "signature_bundle_name": "checksums.txt.sigstore.json",
+      "signature_bundle_sha256": "1aa906a890b58df3fbef558e6c37dd6906b9539858c37a78e9d1270381350a0f",
+      "tag_prefix": "v",
+      "version": "1.6.1"
+    },
+    "gitleaks": {
+      "archive_name": "gitleaks_8.30.1_linux_x64.tar.gz",
+      "archive_sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+      "repository": "gitleaks/gitleaks",
+      "tag_prefix": "v",
+      "version": "8.30.1"
+    }
+  }
+}

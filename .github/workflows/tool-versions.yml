@@ -1,0 +1,30 @@
+name: Release Tool Versions
+
+on:
+  schedule:
+    - cron: "29 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tool-versions
+  cancel-in-progress: false
+
+jobs:
+  check-release-tools:
+    name: check-release-tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Validate pins and compare latest stable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/check_tool_versions.py validate .github/tool-versions.json
+          python tools/check_tool_versions.py latest .github/tool-versions.json

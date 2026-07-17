@@ -11,7 +11,8 @@ manages the workflow and publishes the mechanically calculated result.
 
 The requirements, basic design, and detailed design are complete. The
 Python/uv project foundation, initial domain state machine, and STEP-02 GitHub
-quality/supply-chain gates are implemented. Application use cases, adapters,
+quality/supply-chain gates are implemented. The STEP-02B Betterleaks migration
+gate is being implemented. Application use cases, adapters,
 containers, AWS resources, and Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
@@ -62,6 +63,17 @@ installation, and a weekly/manual comparison with GitHub's managed SPDX 2.3
 export. GitHub's Python Dependabot graph job already supplies the complete uv
 dependency snapshot, so STEP-02 intentionally does not submit a higher-priority
 custom snapshot or grant `contents: write`.
+
+STEP-02B keeps the required `security` check name stable while running
+Betterleaks and Gitleaks over the same complete Git history. Betterleaks release
+checksums are verified with a pinned Sigstore verifier, certificate identity,
+OIDC issuer, and immutable digests. Both scanners must pass generated positive
+and negative contract histories with redaction enabled. Do not enable
+Betterleaks provider validation, because detected candidates must not be sent to
+external APIs. A weekly read-only workflow detects newer actionlint,
+Betterleaks, and Gitleaks releases without applying them automatically. Do not
+remove Gitleaks without a later ADR supported by observed PR/main runs and
+false-positive evidence.
 
 The next application slice is STEP-03: application
 Protocols, use cases, voting/tie rules, deadlines, cancellation, and tests.
@@ -234,6 +246,8 @@ uv run --frozen mypy
 uv run --frozen pytest
 uv run --frozen python tools/check_public_surface.py
 uv run --frozen python -m tools.check_docs
+uv run --frozen python tools/check_tool_versions.py validate \
+  .github/tool-versions.json
 uv export --quiet --frozen --all-groups --format cyclonedx1.5 \
   --output-file /tmp/shittim-chest-source-sbom.cdx.json
 uv run --frozen python tools/check_sbom.py validate \
@@ -492,7 +506,8 @@ Add tests in proportion to each implemented slice. At minimum, cover:
   fencing, outbox reconciliation, and resume without duplicate Discord posts;
 - secret and full-content redaction in logs.
 
-CI verifies the uv lock, Ruff, mypy strict, pytest, pip-audit, Gitleaks, wheel
+CI verifies the uv lock, Ruff, mypy strict, pytest, pip-audit, parallel
+Betterleaks/Gitleaks full-history and generated-fixture contracts, wheel
 build/install, CycloneDX source SBOM, public repository surface, Markdown
 structure, Wiki links, and workflow syntax. Import-linter becomes enforceable
 when STEP-03 introduces application boundaries; the ARM64 container gate is
