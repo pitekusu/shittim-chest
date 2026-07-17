@@ -263,6 +263,56 @@ async def test_command_schema_is_guild_scoped_bounded_and_synced_only_when_chang
 
 
 @pytest.mark.asyncio
+async def test_shutdown_rejects_new_command_before_acceptance_or_task_creation() -> None:
+    current = snapshot()
+    application = FakeApplication(current)
+    channel, _, _, _ = text_channel(events=application.events)
+    current_interaction = interaction(channel=channel)
+    controller = DiscordInteractionController(
+        clients=clients(),
+        config=config(),
+        application=application,
+    )
+
+    controller.begin_shutdown()
+    await controller._command_callback(current_interaction, current.question)
+
+    assert application.accept_requests == []
+    response = cast(Any, current_interaction).edit_original_response
+    response.assert_awaited_once()
+    assert "runtime_not_ready" in response.await_args.kwargs["content"]
+    await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_surfaces_owned_debate_cleanup_failure() -> None:
+    current = snapshot()
+    controller = DiscordInteractionController(
+        clients=clients(),
+        config=config(),
+        application=FakeApplication(current),
+    )
+    started = asyncio.Event()
+
+    async def fail_during_checkpoint() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("checkpoint write failed") from None
+
+    task = asyncio.create_task(fail_during_checkpoint())
+    controller._tasks[current.state.debate_id] = task
+    await started.wait()
+
+    with pytest.raises(RuntimeError, match="failed during checkpoint"):
+        await controller.checkpoint_active()
+
+    assert task.done()
+    await controller.close()
+
+
+@pytest.mark.asyncio
 async def test_command_defers_first_then_creates_and_binds_public_context() -> None:
     current = snapshot()
     application = FakeApplication(current)

@@ -29,7 +29,7 @@ from shittim_chest.application import (
     RetryDebateCommand,
     nonce_from_uuid7,
 )
-from shittim_chest.application.errors import ApplicationError
+from shittim_chest.application.errors import ApplicationError, RuntimeNotReady
 from shittim_chest.application.ports import (
     RepositoryBusy,
     RepositoryConflict,
@@ -84,6 +84,7 @@ class DiscordInteractionController:
         self._guild = discord.Object(id=int(config.guild_id))
         self._tree = app_commands.CommandTree(self._moderator)
         self._tasks: dict[DebateId, asyncio.Task[None]] = {}
+        self._shutting_down = False
         self._register_command()
         self._register_component_listener()
 
@@ -113,15 +114,29 @@ class DiscordInteractionController:
         await self._tree.sync(guild=self._guild)
         return True
 
-    async def close(self) -> None:
-        """Cancel and await every debate task owned by this controller."""
+    def begin_shutdown(self) -> None:
+        """Reject new interaction work before asynchronous shutdown begins."""
+
+        self._shutting_down = True
+        self._moderator.clear_interaction_handler()
+
+    async def checkpoint_active(self) -> None:
+        """Cancel active debates and await their application checkpoints."""
 
         tasks = tuple(self._tasks.values())
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
-        self._moderator.clear_interaction_handler()
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                raise RuntimeError("a debate task failed during checkpoint") from result
+
+    async def close(self) -> None:
+        """Stop interaction dispatch and checkpoint every owned debate task."""
+
+        self.begin_shutdown()
+        await self.checkpoint_active()
 
     def _register_command(self) -> None:
         command: app_commands.Command[app_commands.Group, ..., None] = app_commands.Command(
@@ -143,11 +158,13 @@ class DiscordInteractionController:
         await interaction.response.defer(ephemeral=True, thinking=True)
         accepted: AcceptedDebate | None = None
         try:
+            self._ensure_running()
             request, channel = self._accept_request(interaction, question)
             accepted = await self._application.accept_debate(request)
             snapshot = await self._application.get_debate(accepted.debate_id)
             if _has_bound_context(snapshot):
                 await self._finish_accept(interaction, snapshot)
+                self._ensure_running()
                 self._start_debate(snapshot.state.debate_id)
                 return
             bound = await self._provision_context(
@@ -157,6 +174,7 @@ class DiscordInteractionController:
                 snapshot=snapshot,
             )
             await self._finish_accept(interaction, bound)
+            self._ensure_running()
             self._start_debate(bound.state.debate_id)
         except asyncio.CancelledError:
             raise
@@ -171,6 +189,7 @@ class DiscordInteractionController:
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
+            self._ensure_running()
             panel_id = PanelCustomId.parse(custom_id)
             expected_attempt = panel_id.expected_attempt_id()
             snapshot, message = await self._panel_context(interaction, panel_id)
@@ -395,6 +414,7 @@ class DiscordInteractionController:
         if current.state.attempt_id != result.attempt_id:
             raise ValueError("retry operation is no longer the current attempt")
         await _edit_panel(message, current)
+        self._ensure_running()
         self._start_debate(result.debate_id)
         await self._edit_response(interaction, "討論を再試行します。")
 
@@ -469,6 +489,10 @@ class DiscordInteractionController:
             self._tasks.pop(debate_id, None)
         if not task.cancelled():
             task.exception()
+
+    def _ensure_running(self) -> None:
+        if self._shutting_down:
+            raise RuntimeNotReady("the Discord runtime is shutting down")
 
     async def _respond_with_error(
         self,

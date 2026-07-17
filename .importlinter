@@ -5,6 +5,7 @@ root_package = shittim_chest
 name = Adapters may depend on application and domain in order
 type = layers
 layers =
+    shittim_chest.runtime
     shittim_chest.adapters
     shittim_chest.application
     shittim_chest.domain

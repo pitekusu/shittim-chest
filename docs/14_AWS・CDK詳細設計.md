@@ -49,6 +49,8 @@ L2 constructを優先し、L1/escape hatchはADRで理由を残す。construct I
 
 Spot singleton停止とcapacity不足中の全面停止を仕様として許容する。EventBridgeで`Your Spot Task was interrupted.`を記録・通知する。
 
+application側のgraceful shutdown deadlineは90秒とし、`stopTimeout=120`の残り30秒をDiscord client close、log driver、container runtimeの終了余裕にする。AWSはSpot interruption時にSIGTERMを送り、configured `stopTimeout`後にSIGKILLするため、container実装時は値の省略を禁止する。
+
 ## 5. Container definition
 
 - 平常taskはinit process有効、application userはnon-root、read-only root filesystem、privileged無効、Linux capability全削除、ECS Exec無効とする。
@@ -114,3 +116,5 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-16 | Task definition | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | CPU/memory、stop timeout、awslogs |
 | 2026-07-16 | CDK | https://docs.aws.amazon.com/cdk/v2/guide/home.html | stack、synth/diff、logical ID |
 | 2026-07-16 | VPC pricing | https://aws.amazon.com/vpc/pricing/ | Public IPv4費用 |
+| 2026-07-17 | Fargate Spot termination | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | SIGTERM後にconfigured stopTimeoutでSIGKILL、singletonはcapacity復帰まで停止する前提を再確認 |
+| 2026-07-17 | ECS ContainerDefinition | https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ContainerDefinition.html | Fargate `stopTimeout=120`を明示し、application内部deadlineを90秒へ設定 |
