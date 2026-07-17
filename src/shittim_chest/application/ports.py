@@ -68,7 +68,12 @@ class DiscordGateway(Protocol):
 class DiscordPublisher(Protocol):
     """Publish only an operation previously persisted by an outbox adapter."""
 
-    async def publish_persisted(self, operation_id: str) -> None: ...
+    async def publish_persisted(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation_id: str,
+    ) -> OutboxOperation | None: ...
 
 
 class DiscordOutboxRepository(Protocol):

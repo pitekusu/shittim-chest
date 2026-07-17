@@ -55,8 +55,16 @@ deterministic 2,000-character message chunks, UUIDv7 nonces, content hashes,
 versioned control-panel IDs, and a typed outbox boundary. Starter message,
 thread, and control-panel message IDs are persisted separately through an
 idempotent binding use case, and DynamoDB schema v5 migrates the immediately
-previous v4 representation. The discord.py SDK is intentionally deferred to
-STEP-06B/06C.
+previous v4 representation. STEP-06B adds the discord.py 2.7.1 publisher: it
+claims only persisted outbox chunks, sends with all mentions disabled and a
+nonce that discord.py maps to `enforce_nonce=true`, then conditionally stores
+the returned message ID. A reclaimed operation scans the dedicated thread for
+the same Bot author, nonce, and content hash before sending, so a Discord
+success followed by a DynamoDB completion failure does not immediately create
+a duplicate. SDK-exhausted 429/408/409/5xx failures are rescheduled without an
+additional in-process retry loop. Every client uses a 30-second maximum SDK
+rate-limit wait, and Discord operations have a 45-second timeout within the
+shared 60-second outbox claim.
 
 Production is fixed to Luna standard for every generation phase. Terra standard
 and Luna pro remain evaluation-only policies and cannot be selected by runtime
@@ -66,8 +74,8 @@ comes from three private, versioned persona prompts with distinct practical,
 verification/safety, and creative/alternative lenses while sharing the same
 evidence, safety constraints, and structured-output schema.
 
-The Discord publisher and interaction runtime, runtime recovery wiring,
-Discord Applications, containers, CDK/AWS resources,
+The Discord interaction runtime, runtime recovery wiring, Discord Applications,
+containers, CDK/AWS resources,
 and production workflows have not been implemented yet. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.

@@ -2,6 +2,7 @@
 
 from shittim_chest.application.discord import (
     DISCORD_BOT_SLOTS,
+    OUTBOX_CLAIM_SECONDS,
     DiscordBotSlot,
     DiscordErrorCode,
     DiscordIdentityConfig,
@@ -54,6 +55,7 @@ __all__ = (
     "DISCORD_BOT_SLOTS",
     "LUNA_PRO",
     "LUNA_STANDARD",
+    "OUTBOX_CLAIM_SECONDS",
     "PRODUCTION_POLICY",
     "TERRA_STANDARD",
     "AcceptDebateRequest",
