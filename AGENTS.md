@@ -15,8 +15,8 @@ quality/supply-chain gates are implemented. The STEP-02B Betterleaks migration
 gate and STEP-02C Gitleaks retirement are complete. STEP-03 application core was
 merged through PR `#15` with voting rules, Protocols,
 accept/run/cancel/retry/resume use cases, deadlines, checkpoint-aware
-cancellation, and fake-based async tests. STEP-04A persistence contracts are
-implemented on branch `step-04a-persistence-contracts`: Guild/channel and
+cancellation, and fake-based async tests. STEP-04A persistence contracts were
+merged through PR `#16`: Guild/channel and
 operation identity preservation, fenced lease types, idempotent repository
 operations, vertically partitioned DynamoDB-native records, schema v1-to-v2
 up-conversion, and outbox/panel serialization. boto3 calls, DynamoDB Local
@@ -84,9 +84,10 @@ scan, Sigstore verification, and latest-release workflow all passed. Reintroduce
 a second scanner only through a later ADR with a concrete coverage gap.
 
 STEP-03 was squash-merged through PR `#15` as commit `34ccc54` on 2026-07-17.
-The current slice is STEP-04A persistence contracts. It intentionally remains
-SDK-independent: native-value serialization and repository semantics may not
-import boto3 or connect to AWS. STEP-04B adds the boto3 adapter, conditional
+STEP-04A was squash-merged through PR `#16` as commit `54948d7` on 2026-07-17.
+It intentionally remains SDK-independent: native-value serialization and
+repository semantics may not import boto3 or connect to AWS. The next slice is
+STEP-04B, which adds the boto3 adapter, conditional
 transactions, three lease slots, outbox state changes, and DynamoDB Local tests.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
