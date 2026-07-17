@@ -240,6 +240,8 @@ locally with a read-only root filesystem, a writable `/tmp`, all capabilities
 dropped, and no-new-privileges. Fargate task-definition settings, native ARM64
 CI, container-level fault injection, and final-image SBOM remain STEP-08B/09
 work; do not describe them as already implemented.
+STEP-08A was merged in PR #37 at commit `7742f0b`; PR and main CI/CodeQL and
+the initial Docker Dependabot update run passed.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
