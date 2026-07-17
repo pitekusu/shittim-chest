@@ -121,13 +121,23 @@ failure is persisted and continues; required failure becomes
 `required_evidence_unavailable`. Evidence META is schema v3 and its reader
 migrates the immediately previous v2. STEP-05C was merged through PR `#22` as
 commit `a6f43cb` and adds shadow-only deterministic escalation signals, immutable Luna/Terra/pro generation policies,
-schema v4 persistence, and an opt-in blind A/B evaluator. It must not enable
-production auto-escalation or paid evaluation without a later explicit operator
-decision. STEP-05C.1A was merged through PR `#24` as commit `1360411` and adds
+schema v4 persistence, and an opt-in blind A/B evaluator. Production is fixed
+to `PRODUCTION_POLICY=luna_standard`; Terra standard and Luna pro are
+evaluation-only and must not be selectable from runtime configuration or
+Discord operations. STEP-05C.1A was merged through PR `#24` as commit `1360411` and adds
 separate scorer/key output trees, safe per-run failure capture, strict
 human-score validation, and content-free policy aggregation.
-It still does not authorize or execute paid evaluation. Discord integration and
-CloudWatch emission remain out of scope.
+STEP-05C.1B paid blind answer generation was explicitly approved and completed
+on 2026-07-17 with 10 cases and 20 successful answers. Human review uses one
+A/B/tie preference per case; do not require the impractical 100-value rubric
+for this operator evaluation. `tools/review_escalation.py` must preserve blind
+model identity, save after every choice, and support resume. Policy aggregation
+uses preference wins first and cost then p95 latency only for a preference tie.
+The completed blind review produced Luna pro 4 wins, Terra standard 2 wins, and
+4 ties. The operator chose Luna standard only for production and no escalation.
+Keep the result as evaluation history; do not implement thresholds, extra
+token/deadline limits, or escalation UI. Discord integration and CloudWatch
+emission remain out of scope.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
@@ -430,14 +440,20 @@ only composition root.
   output, parsed output, and transport failure before returning domain models.
 - Confirm the configured model is available to the actual OpenAI project at
   deployment time.
-- Keep production auto-escalation disabled. STEP-05C may record only
-  `escalation-shadow-v1` signals during normal debates. Paid evaluation requires
+- Use `PRODUCTION_POLICY=luna_standard` for every production generation phase.
+  Do not expose Terra standard or Luna pro through bootstrap configuration,
+  runtime parameters, or Discord controls. STEP-05C may record only
+  `escalation-shadow-v1` with `executed=false`. Paid evaluation requires
   the explicit local `--live` gate and must write raw output outside the
   repository. Never use another policy to bypass a refusal or policy block.
 - Version the model identifier, persona prompts, and structured-output schema
   used by each debate session.
 - Load display names and prompts from versioned private runtime configuration;
   public source contains only schemas and generic examples.
+- Create persona variety through distinct decision lenses, priorities,
+  disagreement methods, proposal styles, and tone. Keep the same Evidence,
+  safety constraints, and structured-output schema for all personas, and never
+  claim independent verification merely because several prompts use one model.
 - Validate all structured output at the application boundary. A syntactically
   valid model response is not automatically a valid domain action.
 - Separate safety refusals and schema failures from retryable transport or

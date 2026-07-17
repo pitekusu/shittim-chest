@@ -197,6 +197,96 @@ def test_operational_failure_requires_rerun() -> None:
     }
 
 
+def test_preference_only_selects_more_frequently_preferred_policy() -> None:
+    blind, key = _pair()
+    cases = blind["cases"]
+    assert isinstance(cases, list)
+    case = cases[0]
+    assert isinstance(case, dict)
+    for label in ("A", "B"):
+        result = case[label]
+        assert isinstance(result, dict)
+        rubric = result["rubric"]
+        assert isinstance(rubric, dict)
+        for axis in rubric:
+            rubric[axis] = None
+
+    summary = aggregate(
+        blind,
+        key,
+        quality_tie_margin=0.05,
+        max_p95_ms=1_000,
+        max_total_usd=1.0,
+        preference_only=True,
+    )
+
+    assert summary["scoring_mode"] == "preference_only"
+    assert summary["recommendation"] == {
+        "status": "candidate",
+        "policy": "terra_standard",
+        "reason": "more blind preference wins",
+    }
+    policies = summary["policies"]
+    assert isinstance(policies, dict)
+    terra = policies["terra_standard"]
+    assert isinstance(terra, dict)
+    assert terra["quality_mean"] is None
+
+
+def test_preference_only_tie_uses_cost_then_latency() -> None:
+    blind, key = _pair()
+    cases = blind["cases"]
+    assert isinstance(cases, list)
+    case = cases[0]
+    assert isinstance(case, dict)
+    case["preference"] = "tie"
+    for label in ("A", "B"):
+        result = case[label]
+        assert isinstance(result, dict)
+        rubric = result["rubric"]
+        assert isinstance(rubric, dict)
+        for axis in rubric:
+            rubric[axis] = None
+    key_cases = key["cases"]
+    assert isinstance(key_cases, list)
+    key_case = key_cases[0]
+    assert isinstance(key_case, dict)
+    metrics = key_case["metrics"]
+    assert isinstance(metrics, dict)
+    metrics_b = metrics["B"]
+    assert isinstance(metrics_b, dict)
+    metrics_b["estimated_usd"] = 0.005
+
+    summary = aggregate(
+        blind,
+        key,
+        quality_tie_margin=0.05,
+        max_p95_ms=1_000,
+        max_total_usd=1.0,
+        preference_only=True,
+    )
+
+    assert summary["recommendation"] == {
+        "status": "candidate",
+        "policy": "luna_pro",
+        "reason": "preference tie; lower cost or latency",
+    }
+
+
+def test_preference_only_rejects_mixed_rubric_scores() -> None:
+    blind, key = _pair()
+
+    with pytest.raises(ValueError, match="preference-only rubric must remain unscored"):
+        aggregate(
+            blind,
+            key,
+            quality_tie_margin=0.05,
+            max_p95_ms=1_000,
+            max_total_usd=1.0,
+            preference_only=True,
+        )
+
+
 def test_unscored_success_and_mismatched_key_fail_closed() -> None:
     blind, key = _pair()
     cases = blind["cases"]
