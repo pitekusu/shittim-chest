@@ -130,8 +130,14 @@ Discord-post boundaries, and validates replacement recovery without duplicate
 commits or displayed messages. A pinned Syft release generates and validates a
 30-day SPDX artifact covering Debian and production Python packages. They have
 not been connected to real Bot tokens or external services. Discord
-Applications, CDK/AWS resources, release attestations, and production workflows
-remain for later slices. Responses API
+Applications, deployed AWS resources, release attestations, and production workflows
+remain for later slices. STEP-09A adds the local CDK TypeScript foundation and a
+strictly tested `ShittimChest-Prod-Stateful` stack for the retained DynamoDB table
+and the default-encrypted, fully immutable ECR repository. It also defines an
+AWS Signer profile and ECR Managed Signing rule. Future releases deploy only an
+approved image digest and attach the signature, SPDX SBOM, build provenance, and
+vulnerability assessment to that digest as OCI reference artifacts. STEP-09A
+does not bootstrap or deploy the AWS account. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.

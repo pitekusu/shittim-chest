@@ -36,7 +36,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 3. pip-audit、Betterleaks full-history scan、生成fixture contract、public surface scan、Dependency Review、`uv export --frozen --all-groups --format cyclonedx1.5`で生成したCycloneDX SBOMのstrict schema、project、`uv.lock`完全一致検証。
 4. wheel buildとinstall smoke test。
 5. Markdown/frontmatter/fence/Wiki link/heading、license scope、public file、GitHub workflow syntaxを検証する。非公開Obsidian正本とのbyte一致はlocal pre-PRでのみ検証する。
-6. TypeScript typecheck/test、CDK assertion、`cdk synth --strict`、cdk-nagはSTEP-09で追加する。
+6. STEP-09Aで`cdk` jobを追加し、Node.js 22.22.2と`package-lock.json`を使った`npm ci`、npm audit、TypeScript strict typecheck、Vitest CDK assertion、cdk-nag 3 Validation Plugin、`cdk synth --strict`をcredentialなしで実行する。Runtime/Operations assertionはSTEP-09B/09Cで同じjobへ追加する。
 7. `container-arm64`は公開repositoryのnative `ubuntu-24.04-arm`でproduction/fault-test targetをbuildする。full SHA固定した`docker/setup-buildx-action`と`docker/build-push-action`を使い、両targetを`load: true`で同じnative Docker daemonへ読み込む。production buildだけが`container-arm64-production` scopeへ`mode=max`のGHA cacheをexportし、fault buildは同じjob内のBuildx builder cacheを再利用する。builderは`pyproject.toml`と`uv.lock`だけをcopyして`uv sync --frozen --no-dev --no-install-project --no-editable`を実行した後、application sourceをcopyしてprojectをinstallする。`/root/.cache/uv`は`sharing=locked`のBuildKit cache mountとし、runtime imageへcopyしない。既定Python image以外の取得を`UV_PYTHON_DOWNLOADS=0`で禁止する。image config、read-only/non-root/capability、health、SIGTERM/SIGKILL recoveryを検査し、Syft v1.48.0でOS/runtime dependencyを含むSPDX JSONを生成して30日保持する。secret、OIDC、registry push、paid/network integrationは使用しない。
 
 Docker build cacheは性能最適化であり、依存関係の正本ではない。`uv.lock`、`--frozen`、digest固定base imageを再現性境界とし、cache missまたはcache evictionでも同一gateを通るimageを再構築できなければならない。`UV_NO_CACHE=1`は使用せず、uv cacheはbuild mountの寿命へ限定する。
@@ -53,6 +53,7 @@ fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-
 - `dependency-graph.yml`をDependabot更新時刻と毎時開始時のActions混雑を避けた毎週火曜12:17 JSTと手動でmain上だけ実行し、GitHub SBOM export endpointのSPDX 2.3 PyPI package集合と、checkoutしたmainのCycloneDX/`uv.lock`集合をread-onlyで照合する。GitHub SPDX export自体にはcommit SHAがないため、比較前後にmain SHAが`GITHUB_SHA`から動いていないことを確認する。移動時は検証済みを示すgreenにせず明示失敗し、最新mainで再実行する。managed graph反映遅延は30秒間隔・最大10回のbounded pollingで吸収し、stable mainで収束しなければ失敗する。同じrefの重複runは非cancel型concurrencyで直列化し、pendingが複数なら最新確認を優先する。
 - GitHub SBOM exportはrepository dependency inventoryの出力であり、container OS packageを網羅するrelease image SBOMの代替にはしない。
 - STEP-08Bのimage SBOMはPR/test imageの検証artifactであり、release provenance/SBOM attestationではない。STEP-10ではECRへ一度だけpushしたdigestから再生成し、GitHub artifact attestationでdigestとrepository identityを結ぶ。
+- STEP-09Aでnpm ecosystemをDependabot週次更新へ追加する。`package-lock.json`はGitHub Dependency Graph/SBOMのmanaged parserへ委ね、custom Dependency Submissionを追加しない。公開SPDX export上のnpm inventoryはmerge後に確認し、欠落が再現した場合だけ既存のmanaged-first方針に従ってfallbackを検討する。
 
 ## 4. Production release
 
@@ -61,19 +62,23 @@ Private Free向けの二つのrelease workflowは使用せず、`release.yml`へ
 ### Plan job
 
 - `workflow_dispatch`かつmain上のcommit SHAだけを受け付ける。ref、immutable repository ID、対象commitのCI成功をfail closedで検証する。
-- release imageを1回だけbuild・試験・ECR pushし、commit SHA tagとdigestを確定する。deploy jobでは再buildしない。
-- commit SHA、image digest、SBOM hash、scan result、CDK template hash、CloudFormation change set ARN、version付きSSM parameter名をrelease manifestへ保存する。
+- release imageを1回だけbuild・試験・ECR pushし、一意なcommit SHA tagとmanifest digestを確定する。ECRは除外なしの完全immutableであり、deploy jobではtag再解決も再buildもしない。
+- commit SHA、image digest、4種のOCI referrer artifact digest、SBOM hash、scan result、Signer profile ARN、CDK template hash、CloudFormation change set ARN、version付きSSM parameter名をrelease manifestへ保存する。
 - push済みの最終image digestからOS packageとPython runtime dependencyを含むSPDX JSON SBOMを生成する。
-- imageにはbuild provenanceとSBOMを別々のattestationとして、full SHAへpinした`actions/attest`で生成する。deprecatedな`actions/attest-sbom`は新規利用しない。
+- ECR Managed Signingのstatusをimage digest指定でbounded pollingし、期待profileが`COMPLETE`にならなければ停止する。AWS公式NotationとSigner pluginを固定・検証して導入し、strict trust policyと期待profile ARNでdigest URIを暗号学的にverifyする。
+- imageにはbuild provenanceとSBOMを別々のattestationとして、full SHAへpinした`actions/attest`で生成し、`push-to-registry`でECR OCI referrerへ保存する。deprecatedな`actions/attest-sbom`は新規利用しない。
+- ECR scan完了後にfindingをseverity別に正規化したcontent-free vulnerability assessmentをOCI referrerへattachする。critical/high findingは期限・owner付きrisk acceptanceがない限り停止する。
+- ECR `list-image-referrers`でAWS Signer signature、SPDX SBOM、build provenance、vulnerability assessmentが全て同じimage digestへ`ACTIVE`で紐付くことを確認する。
 - release manifestにもprovenance attestationを生成する。頻繁なtest buildやsource file単体にはattestationを生成しない。
-- 初回は`CDK bootstrap → Stateful/ECR change set実行 → image push → Runtime → Operations`、通常releaseは既存ECRへのpush後に全stackのchange setをprepareする。
+- 初回は`CDK bootstrap → Stateful/ECR/Signer change set実行 → image push/verify → Runtime → Operations`、通常releaseは既存ECRへのpush・署名・referrer検証後に全stackのchange setをprepareする。
 
 ### Deploy job
 
 - `production` Environmentを参照し、reviewer `pitekusu`の承認後だけ開始する。単独運用のためself-reviewは許可するが、独立した四眼承認ではないことを明記する。
 - Environmentのdeployment branchは`main`だけ、administrator bypassは禁止、wait timerは0とする。
-- plan jobと同一runのmanifestを取得し、GitHub artifact attestationのsubject digest、repository identity、commit、image digest、SBOM hash、change set ARNを再検証する。
-- ECRへattestationをregistry referrerとしてpushできることをintegration testする。利用中の組合せで未対応ならGitHub artifact attestationへ保持したままdeployを停止し、格納先やverificationをADRで再設計する。
+- plan jobと同一runのmanifestを取得し、GitHub artifact attestationのsubject digest、repository identity、workflow、commit、image digest、SBOM hash、scan result、Signer profile、OCI referrer artifact digest、change set ARNを再検証する。
+- `notation verify`、GitHub attestation verify、ECR signing status、`list-image-referrers`をEnvironment承認後にも再実行する。4種のreferrer不足、revoked/invalid signature、subject違い、artifact digest違いはfail closedとする。
+- task definition template内の全application image URIが`repository@sha256:<digest>`でmanifestと一致し、tag形式が0件であることを確認する。
 - change setを再生成せず実行し、READY/Discord/OpenAI/AWS connectivity smoke test後にresultとdigestをdeployment summaryへ記録する。
 - production専用`concurrency`は`cancel-in-progress=false`、job timeoutを設定する。
 
@@ -109,7 +114,8 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 
 ## 7. Image・artifact・rollback
 
-- ECR tagは`git-<full-sha>`、task definitionはdigestを参照する。
+- ECR tagは除外なしの完全immutableとし、`git-<full-sha>`等は追跡用に限定する。task definition、deploy、rollbackは常にdigest URIを参照する。
+- ECRの同一image digestへAWS Signer signature、SPDX SBOM、build provenance、vulnerability assessmentをOCI reference artifactとして保存する。subjectと4 artifact digestをrelease manifestへ固定する。
 - coverage/test resultは30日、production release manifest、SBOM、attestation、image digest、template/change set summaryは90日保存する。
 - secret、OpenAI output、Discord message本文、private runtime configurationをartifactへ含めない。
 - rollbackは直前の正常image digestとtask definition revisionを指定し、DynamoDB schema compatibilityを確認してから行う。
@@ -117,6 +123,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 ## 8. Deployment failure
 
 - build/scan/synth/diff/attestation検証失敗: deployしない。
+- Managed Signing失敗・timeout、Notation検証失敗、署名revocation、OCI referrer不足・不一致: deployしない。task起動前hookで検出した場合はservice deploymentをrollbackする。
 - Runtime taskがREADYにならない: circuit breaker rollback後、直前digestへ戻す。
 - Stateful replacementが表示: deployを停止し、ADR、PITR、backup境界を確認する。
 - Environment、ruleset、Secret scanningを設定できない: Actionsを無効化し、解消までimplementation/deployを開始しない。
@@ -154,3 +161,7 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-17 | uv CycloneDX 1.5 preview | https://docs.astral.sh/uv/concepts/projects/export/ | strict schemaとlock inventory gateを追加 |
 | 2026-07-17 | setup-uv v8.3.2 | https://github.com/astral-sh/setup-uv/releases/tag/v8.3.2 | uv 0.11.29、Python 3.14.6をfull SHA固定Actionで導入 |
 | 2026-07-17 | Scheduled workflow | https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule | 毎時開始を避け火曜12:17 JST、default branch、遅延/dropを監視 |
+| 2026-07-19 | ECR Managed Signing / status | https://docs.aws.amazon.com/AmazonECR/latest/userguide/managed-signing.html、https://docs.aws.amazon.com/cli/latest/reference/ecr/describe-image-signing-status.html | digest指定の自動署名待機と期待profile検証 |
+| 2026-07-19 | ECR OCI v1.1 Referrers | https://docs.aws.amazon.com/AmazonECR/latest/userguide/images.html、https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ListImageReferrers.html | 4種のreference artifactをrelease/deploy両jobで照合 |
+| 2026-07-19 | AWS Signer Notation verification | https://docs.aws.amazon.com/signer/latest/developerguide/image-verification.html | strict trust policy、digest URI、revocation確認 |
+| 2026-07-19 | GitHub registry attestations | https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations | image digestのprovenance/SBOMをECRへpushしてidentity検証 |

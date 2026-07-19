@@ -52,8 +52,9 @@ attempt-bound cancel/retry, and owned debate tasks. Live Discord operations,
 restart recovery composition, and Discord Applications remain unimplemented.
 STEP-08A implements the local production/break-glass container foundation and
 event-loop heartbeat health check. STEP-08B implements native ARM64 CI,
-container fault injection, and the image SPDX SBOM. AWS resources and Discord
-Applications are not yet implemented.
+container fault injection, and the image SPDX SBOM. STEP-09A implements the
+local CDK TypeScript foundation and the retained Stateful stack, but no AWS
+resource has been deployed. Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
 
@@ -258,6 +259,18 @@ passed. The first PR run exposed a Python 3.12 host/Python 3.14 domain import;
 keep the host-side gate standard-library-only and preserve the unit assertion
 that its phase list matches the domain state machine.
 
+STEP-09A uses Node.js 22.22.2, exact npm dependency pins, recommended CDK
+feature flags, cdk-nag 3 validation plugins, TypeScript strict mode, and Vitest
+assertions. `ShittimChest-Prod-Stateful` contains one on-demand DynamoDB table
+with `PK`/`SK`, `gsi1`/`gsi2`, 35-day PITR, deletion protection, AWS-managed
+encryption, and `RETAIN`; one retained ECR repository with default encryption,
+scan-on-push, exclusion-free `IMMUTABLE` tags, and 14-day untagged/candidate
+cleanup; and a retained `Notation-OCI-SHA384-ECDSA` AWS Signer profile plus an
+ECR Managed Signing rule scoped to `shittim-chest`. Do not bootstrap or deploy
+this stack as part of local/PR validation. STEP-09B owns digest-only Runtime
+task definitions, STEP-09C owns Operations and pre-scale image admission, and
+STEP-10 owns real signing/referrer verification.
+
 The production builder must keep locked dependency installation in a layer
 before application source is copied. Use `uv sync --frozen --no-dev
 --no-install-project --no-editable` for that layer, then copy `README.md`,
@@ -369,8 +382,10 @@ content, or raw model output.
 - Run one ARM64 ECS Fargate Spot task. Spot-only downtime is acceptable; the
   application must checkpoint and resume after interruption rather than mark
   the session failed.
-- Use AWS CDK with TypeScript and GitHub Actions OIDC. Alert at monthly AWS and
-  OpenAI spend of USD 50; tag AWS resources with `Project=shittim-chest`.
+- Use AWS CDK with TypeScript and GitHub Actions OIDC. Use monthly Budgets of
+  USD 50 for project-tagged AWS spend, USD 30 for the whole AWS account, and
+  USD 50 for OpenAI; set the Cost Anomaly Detection notification threshold to
+  USD 30. Tag AWS resources with `Project=shittim-chest`.
 - Limit the MVP to the Guild ID and non-empty normal-text-channel allowlist in
   versioned runtime configuration. Run four Guild-install-only Discord
   Applications in one Python process and accept new work only while all four
@@ -663,18 +678,34 @@ only composition root.
   deletion.
 - Treat deployment overlap carefully: two tasks using the same Discord Bot
   tokens must not both accept the same work.
+- Keep ECR tag mutability at exclusion-free `IMMUTABLE`; never introduce
+  `latest`, mutable exclusions, or tag-based task definitions. Tags are
+  traceability labels only. ECS deploy and rollback must use
+  `repository@sha256:<digest>` and must not resolve a tag after approval.
+- ECR uses its default server-side encryption. Managed Signing must use the
+  retained `shittim_chest_ecr` `Notation-OCI-SHA384-ECDSA` profile. For every
+  release digest, require an AWS Signer signature, SPDX SBOM, build provenance,
+  and vulnerability assessment as ECR OCI reference artifacts.
+- Release verification is fail closed: poll signing status by digest, run
+  Notation strict verification against the expected profile including
+  revocation, verify GitHub attestation identity, and use ECR
+  `ListImageReferrers` to match all artifact digests before executing a change
+  set. Signing status alone is not cryptographic verification.
 - Restrict plan and drift OIDC roles with `StringEquals` to the immutable main
   subject and the deploy role to the immutable `production` environment
   subject, always with `aud=sts.amazonaws.com`. One manual release workflow
   builds and tests once, attests a manifest, waits for environment approval,
   and executes only that manifest and change set with non-cancelling
   production concurrency.
-- Configure monthly AWS budgets of USD 50 for project-tagged spend and USD 50
-  for the account, plus an OpenAI project budget of USD 50. Activate the
-  `Project` cost-allocation tag and enable Cost Anomaly Detection. Use Container
-  Insights and a composite alarm so Spot downtime is warning-only while a
-  running task with fewer than four READY Bots is critical. Apply CloudWatch
-  Logs data protection and validate IAM policies with Access Analyzer.
+- Configure a monthly USD 50 Budget for project-tagged spend, a USD 30 Budget
+  for the whole account, and a USD 50 OpenAI project budget. Activate the
+  `Project` cost-allocation tag and set the Cost Anomaly Detection notification
+  threshold to USD 30. Do not enable Container Insights for the singleton MVP.
+  Monitor free ECS service CPU/memory metrics; notify on EventBridge task-stop
+  and Spot-interruption events; and implement low-cardinality, content-free
+  `BotReady`, heartbeat-age, outbox-backlog, and failure-count metrics with
+  their alarms. Apply CloudWatch Logs data protection and validate IAM policies
+  with Access Analyzer.
 
 ## Current Official Documentation Policy
 

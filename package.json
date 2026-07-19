@@ -1,0 +1,30 @@
+{
+  "name": "shittim-chest-infrastructure",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test:infra": "vitest run infra/test",
+    "audit:infra": "npm audit --audit-level=low",
+    "cdk": "cdk",
+    "cdk:list": "cdk list",
+    "synth": "cdk synth --strict",
+    "check:infra": "npm run build && npm run test:infra && npm run synth"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.261.0",
+    "constructs": "10.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "aws-cdk": "2.1132.0",
+    "cdk-nag": "3.0.1",
+    "tsx": "4.23.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

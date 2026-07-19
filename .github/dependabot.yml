@@ -59,3 +59,38 @@ updates:
       prefix: "deps"
       include: "scope"
     open-pull-requests-limit: 5
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    assignees:
+      - "pitekusu"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      cdk-minor-and-patch:
+        applies-to: "version-updates"
+        patterns:
+          - "aws-cdk"
+          - "aws-cdk-lib"
+          - "constructs"
+          - "cdk-nag"
+        update-types:
+          - "minor"
+          - "patch"
+      typescript-minor-and-patch:
+        applies-to: "version-updates"
+        patterns:
+          - "@types/node"
+          - "tsx"
+          - "typescript"
+          - "vitest"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
