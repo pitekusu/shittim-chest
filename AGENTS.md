@@ -266,6 +266,13 @@ before application source is copied. Use `uv sync --frozen --no-dev
 `UV_NO_CACHE=1` for the build. Keep `UV_PYTHON_DOWNLOADS=0` because the pinned
 Python base image is the only permitted interpreter source. A cache miss must
 change build time only, never the resulting dependency versions or gate result.
+In GitHub Actions, set up one Buildx builder and use full-SHA-pinned official
+`docker/build-push-action` steps with `load: true` so the later runtime and Syft
+checks inspect the exact images that were built. Export only the production
+`mode=max` cache to the `container-arm64-production` GHA scope, with cache
+export failure ignored because it is an optimization. Do not push either the
+production test image or the CI-only fault image from Pull Request CI. Keep
+the workflow at `contents: read` with no secret or OIDC access.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 

@@ -233,12 +233,24 @@ jobs:
         run: |
           test "$(uname -m)" = "aarch64"
           test "$(docker info --format '{{.Architecture}}')" = "aarch64"
-      - name: Build production and CI-only fault images
-        run: |
-          docker build --target production \
-            --tag shittim-chest:step-08b-arm64 .
-          docker build --target fault-test \
-            --tag shittim-chest:step-08b-fault-arm64 .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build and load the production image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: production
+          tags: shittim-chest:step-08b-arm64
+          load: true
+          cache-from: type=gha,scope=container-arm64-production
+          cache-to: type=gha,scope=container-arm64-production,mode=max,ignore-error=true
+      - name: Build and load the CI-only fault image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: fault-test
+          tags: shittim-chest:step-08b-fault-arm64
+          load: true
       - name: Validate image security and inject termination faults
         run: |
           python tools/run_container_gate.py \

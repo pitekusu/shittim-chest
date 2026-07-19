@@ -156,6 +156,13 @@ Repeat the build without changing `pyproject.toml` or `uv.lock` to verify that
 the dependency sync layer is reused. The local cache is a performance
 optimization only; frozen lock validation remains the correctness boundary.
 
+The native ARM64 CI job uses Docker Buildx and `docker/build-push-action` to
+build and load both local test images. The production build exports a
+ref-scoped GitHub Actions cache under `container-arm64-production`; the fault
+build reuses the same in-job Buildx builder. Neither image is pushed. Cache
+export failure is non-blocking, while image build, container gates, and SBOM
+validation remain mandatory.
+
 The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
 the scorer artifact and unblinding key to separate repository-external directory
 trees, and is not run by CI. Its model prices must be supplied at execution
