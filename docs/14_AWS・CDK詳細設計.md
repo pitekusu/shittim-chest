@@ -158,8 +158,8 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 - Public IPv4は0.005 USD/時を基準に約3.65 USD/月を見込み、deploy時に再計算する。
 - ECR連携でのAWS Signer利用自体に追加Signer料金はない。ただしsignature、SBOM、provenance、vulnerability assessmentは各reference artifactとしてECR image quotaと保存容量を消費するため、repository容量とartifact数を月次確認する。
 - Fargate既定20 GiB ephemeral storageは追加料金なしとし、追加容量は設定しない。Container Insightsは無効とする。単一taskのMVPではECS標準CPU・メモリ、EventBridge通知、少数のapplication metricを使い、task/container単位のContainer Insights固定費を負担しない。
-- `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 50 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。Cost Anomaly Detectionの通知thresholdは30 USDとする。
-- Budgetはactual 80%/100%とforecasted 100%を通知し、自動停止actionは設けない。Cost Anomaly Detectionのservice monitorを有効化する。
+- `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 20 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。Cost Anomaly Detectionは月額予算ではなく異常の総影響額を評価するため、notification thresholdは10 USDとする。
+- Budgetはactual 80%/100%とforecasted 100%を通知し、自動停止actionは設けない。Cost Anomaly Detectionは既存のservice monitorを再利用し、同一accountのAWS managed service monitorを重複作成しない。STEP-09Cでは新しいCDK管理Budget/CAD通知を作成して通知先の到達を確認した後、既存の手動10 USD BudgetとCAD subscriptionを撤去する。`Project` tagがBillingで`Active`になるまではtag budgetをdeployしない。
 - DynamoDB PITRは35日、stack削除でもtableをretainする。業務dataにTTLを設定しないが35日より古い状態の復旧は保証せず、AWS Backupは作成しない。
 - DynamoDB on-demand maximum throughputは負荷試験前に推測値を設定しない。初回本番計測後に必要性と値をADRで決定し、設定する場合はthrottle alarmと同時に導入する。
 

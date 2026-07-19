@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml)
 [![Release Tool Versions](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml)
+[![Dependency Graph](https://img.shields.io/badge/GitHub-Dependency%20Graph-181717?logo=github)](https://github.com/pitekusu/shittim-chest/network/dependencies)
 
 The Shittim Chest is a Discord multi-agent debate Bot under incremental
 development. A moderator
