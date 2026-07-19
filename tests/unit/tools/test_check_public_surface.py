@@ -6,6 +6,15 @@ import pytest
 from tools.check_public_surface import DENY_PATTERNS, candidate_files
 
 
+def test_aws_account_pattern_detects_real_id_but_allows_documented_dummy() -> None:
+    pattern = DENY_PATTERNS["AWS account ID"]
+    account_id = b"123456" + b"789012"
+
+    assert pattern.search(b'account = "' + account_id + b'"')
+    assert pattern.search(b'account = "000000000000"') is None
+    assert pattern.search(b"sha256:abc123456789012def") is None
+
+
 def test_snowflake_pattern_detects_delimited_id_but_not_registry_hash() -> None:
     pattern = DENY_PATTERNS["Discord snowflake"]
     digits = b"1" * 17

@@ -53,8 +53,11 @@ restart recovery composition, and Discord Applications remain unimplemented.
 STEP-08A implements the local production/break-glass container foundation and
 event-loop heartbeat health check. STEP-08B implements native ARM64 CI,
 container fault injection, and the image SPDX SBOM. STEP-09A implements the
-local CDK TypeScript foundation and the retained Stateful stack, but no AWS
-resource has been deployed. Discord Applications are not yet implemented.
+local CDK TypeScript foundation and retained Stateful stack. STEP-09B implements
+the Runtime stack, including the public-only VPC, least-privilege IAM, ARM64
+Fargate Spot singleton, digest-only normal/break-glass task definitions,
+versioned SSM references, and protected log groups. No AWS resource has been
+deployed. Discord Applications are not yet implemented.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
 
@@ -267,9 +270,19 @@ encryption, and `RETAIN`; one retained ECR repository with default encryption,
 scan-on-push, exclusion-free `IMMUTABLE` tags, and 14-day untagged/candidate
 cleanup; and a retained `Notation-OCI-SHA384-ECDSA` AWS Signer profile plus an
 ECR Managed Signing rule scoped to `shittim-chest`. Do not bootstrap or deploy
-this stack as part of local/PR validation. STEP-09B owns digest-only Runtime
-task definitions, STEP-09C owns Operations and pre-scale image admission, and
-STEP-10 owns real signing/referrer verification.
+this stack as part of local/PR validation. STEP-09B adds
+`ShittimChest-Prod-Runtime`: `10.42.0.0/24` split into two public `/26` subnets,
+no NAT/ALB/VPC endpoint, no ingress, TCP 443 egress, Public IPv4, and a
+FARGATE_SPOT-only ARM64 singleton. Preserve minimum healthy 0%, maximum 100%,
+disabled AZ rebalancing, `stopTimeout=120`, and disabled Container Insights.
+The normal task must remain read-only-root, non-root, capability-free, and
+without ECS Exec/SSM/`ssmmessages` task permissions. Private values are injected
+only by the execution role using exact SSM parameter ARNs and
+`ssm:GetParameters`. The break-glass task definition and role remain detached
+from the service until an approved later workflow switches revisions. Do not
+bootstrap or deploy this stack as part of local/PR validation. STEP-09C owns
+Operations and pre-scale image admission, and STEP-10 owns real
+signing/referrer verification.
 
 The production builder must keep locked dependency installation in a layer
 before application source is copied. Use `uv sync --frozen --no-dev
