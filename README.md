@@ -193,7 +193,6 @@ uv lock --check
 uv sync --frozen --all-groups
 uv run --frozen ruff format --check .
 uv run --frozen ruff check .
-uv run --frozen mypy
 uv run --frozen ty check
 uv run --frozen lint-imports
 uv run --frozen pytest

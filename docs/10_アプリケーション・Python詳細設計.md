@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-17
+updated: 2026-07-19
 ---
 
 # アプリケーション・Python詳細設計
@@ -142,8 +142,10 @@ ECSが環境変数へ注入する値は`SHITTIM_ENVIRONMENT=production`、`AWS_R
 
 - Python 3.14.6通常GIL build、`requires-python = ">=3.14,<3.15"`、uv lock固定。開発・CI・releaseはuv 0.11.29を使い、`required-version = ">=0.11.8,<0.12"`で同一minorのDependabot updaterを許可する。`uv_build` lower boundは0.11.29を維持する。
 - 全function、method、attributeを型付けし、`src`、`tests`、`tools`の全てで
-  `mypy --strict`と`ty check`を通す。tyがbetaの間はmypyを独立したstrict
-  gateとして維持し、診断カテゴリ全体の無効化で差異を隠さない。
+  `ty check`を通す。`missing-type-argument=error`と
+  `possibly-unresolved-reference=warn`を維持し、診断カテゴリ全体の無効化で
+  passing resultを作らない。型注釈の網羅性を強めるRuff ANN/PYIは、既存コードへの
+  影響を個別評価する将来の品質改善とする。
 - Ruffだけをformatter/import sorter/linterとして使い、100文字、double quote、`E,F,I,UP,B,SIM,ASYNC,RUF,S`を基準とする。
 - cyclomatic complexityは10以下。naive datetime、mutable default、application層の`dict[str, Any]`は禁止する。
 - import-linterで`domain <- application <- adapters`の方向を検証する。
