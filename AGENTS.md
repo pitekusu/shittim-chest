@@ -452,6 +452,7 @@ uv run --frozen mypy
 uv run --frozen ty check
 uv run --frozen lint-imports
 uv run --frozen pytest
+uv run --frozen python tools/run_dynamodb_local.py
 uv run --frozen python tools/check_public_surface.py
 uv run --frozen python -m tools.check_docs
 uv run --frozen python tools/check_tool_versions.py validate \
@@ -748,6 +749,16 @@ Vault on a self-hosted runner.
 Keep domain/application coverage at 90% or higher. Use DynamoDB Local for
 transactions, conditional writes, GSIs, migrations, and outbox tests, with
 separate contract tests for behavior it cannot emulate.
+
+Use `tools/run_dynamodb_local.py` for the local full persistence suite. It
+chooses Podman before Docker, maps DynamoDB Local to a random loopback-only
+port, injects `DYNAMODB_ENDPOINT_URL` only into the child test process, waits
+for a signed `ListTables` request, and stops only its PID-derived temporary
+container. It uses the same digest-pinned DynamoDB Local 3.3.0 image as CI and
+does not need valid AWS credentials. A Codex restricted sandbox can reject
+rootless Podman before it contacts the service because `/run/user/1000/libpod`
+is read-only; execute the helper on the host in that case rather than changing
+the image, endpoint, or test skips.
 
 Use fakes for Discord, OpenAI, the clock, IDs, Evidence, and repositories in
 unit tests. Network-backed integration tests must be opt-in and must not incur

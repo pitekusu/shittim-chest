@@ -197,6 +197,7 @@ uv run --frozen mypy
 uv run --frozen ty check
 uv run --frozen lint-imports
 uv run --frozen pytest
+uv run --frozen python tools/run_dynamodb_local.py
 uv run --frozen python tools/check_public_surface.py
 uv run --frozen python -m tools.check_docs
 uv run --frozen python tools/check_tool_versions.py validate \
@@ -211,6 +212,16 @@ uv run --frozen pip-audit --strict --require-hashes \
   --requirement /tmp/shittim-chest-audit-requirements.txt
 uv build --no-sources
 ```
+
+`tools/run_dynamodb_local.py` is the local equivalent of the CI persistence
+service: it selects Podman first (or Docker), starts the digest-pinned DynamoDB
+Local image on an automatically assigned loopback port, waits for a signed
+`ListTables` request, runs the locked full pytest suite, and removes only its
+own uniquely named container. It avoids a fixed port-8000 conflict and never
+contacts AWS. Use `--container-cli docker` to override the runtime or append a
+command after `--` for a focused run. If Codex's restricted sandbox cannot
+access the rootless Podman runtime directory, run this command in the host
+terminal; the repository runner itself requires no AWS credential.
 
 The weekly `Release Tool Versions` workflow compares the actionlint and
 Betterleaks pins with their latest stable GitHub releases. It
