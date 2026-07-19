@@ -259,7 +259,7 @@ passed. The first PR run exposed a Python 3.12 host/Python 3.14 domain import;
 keep the host-side gate standard-library-only and preserve the unit assertion
 that its phase list matches the domain state machine.
 
-STEP-09A uses Node.js 22.22.2, exact npm dependency pins, recommended CDK
+STEP-09A uses Node.js 24.18.0 Active LTS, exact npm dependency pins, recommended CDK
 feature flags, cdk-nag 3 validation plugins, TypeScript strict mode, and Vitest
 assertions. `ShittimChest-Prod-Stateful` contains one on-demand DynamoDB table
 with `PK`/`SK`, `gsi1`/`gsi2`, 35-day PITR, deletion protection, AWS-managed
