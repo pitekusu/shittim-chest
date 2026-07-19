@@ -161,7 +161,8 @@ build and load both local test images. The production build exports a
 ref-scoped GitHub Actions cache under `container-arm64-production`; the fault
 build reuses the same in-job Buildx builder. Neither image is pushed. Cache
 export failure is non-blocking, while image build, container gates, and SBOM
-validation remain mandatory.
+validation remain mandatory. Buildx summaries and compact diagnostic build
+records are retained for 30 days with the image SBOM.
 
 The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
 the scorer artifact and unblinding key to separate repository-external directory

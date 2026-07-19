@@ -272,7 +272,9 @@ checks inspect the exact images that were built. Export only the production
 `mode=max` cache to the `container-arm64-production` GHA scope, with cache
 export failure ignored because it is an optimization. Do not push either the
 production test image or the CI-only fault image from Pull Request CI. Keep
-the workflow at `contents: read` with no secret or OIDC access.
+the workflow at `contents: read` with no secret or OIDC access. Retain the
+Buildx summaries and diagnostic build records for 30 days, matching the test
+image SBOM retention period.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 

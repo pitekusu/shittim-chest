@@ -41,7 +41,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 
 Docker build cacheは性能最適化であり、依存関係の正本ではない。`uv.lock`、`--frozen`、digest固定base imageを再現性境界とし、cache missまたはcache evictionでも同一gateを通るimageを再構築できなければならない。`UV_NO_CACHE=1`は使用せず、uv cacheはbuild mountの寿命へ限定する。
 
-GHA cacheはGitHubのref access restrictionに従う。forkを含むPull Requestへsecret、OIDC、write permissionを追加せず、cache exportは`ignore-error=true`としてcache service障害やevictionをCI correctness failureへ変えない。build、`load`、container gate、SBOMは引き続きfail closedとする。scopeはjob名に依存しない固定値にし、別architectureや将来のrelease buildと共有しない。
+GHA cacheはGitHubのref access restrictionに従う。forkを含むPull Requestへsecret、OIDC、write permissionを追加せず、cache exportは`ignore-error=true`としてcache service障害やevictionをCI correctness failureへ変えない。build、`load`、container gate、SBOMは引き続きfail closedとする。scopeはjob名に依存しない固定値にし、別architectureや将来のrelease buildと共有しない。Buildx summaryと診断用`.dockerbuild` recordはSBOMと同じ30日保持とし、imageやcredentialの代替artifactとして扱わない。
 
 fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-hosted runnerを渡さない。fork codeを扱う`pull_request_target`は禁止する。外部contributorのworkflowは毎回maintainer承認を要求する。
 
