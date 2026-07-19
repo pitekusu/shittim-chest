@@ -396,9 +396,12 @@ content, or raw model output.
   application must checkpoint and resume after interruption rather than mark
   the session failed.
 - Use AWS CDK with TypeScript and GitHub Actions OIDC. Use monthly Budgets of
-  USD 50 for project-tagged AWS spend, USD 30 for the whole AWS account, and
-  USD 50 for OpenAI; set the Cost Anomaly Detection notification threshold to
-  USD 30. Tag AWS resources with `Project=shittim-chest`.
+  USD 20 for project-tagged AWS spend, USD 30 for the whole AWS account, and
+  USD 50 for OpenAI; set the Cost Anomaly Detection total-impact notification
+  threshold to USD 10. Activate the `Project` cost-allocation tag before the
+  tag budget deploy. Create and verify new CDK-managed notifications before
+  removing legacy manual USD 10 Budget/CAD notifications; reuse the existing
+  AWS managed service monitor. Tag AWS resources with `Project=shittim-chest`.
 - Limit the MVP to the Guild ID and non-empty normal-text-channel allowlist in
   versioned runtime configuration. Run four Guild-install-only Discord
   Applications in one Python process and accept new work only while all four
@@ -710,10 +713,13 @@ only composition root.
   builds and tests once, attests a manifest, waits for environment approval,
   and executes only that manifest and change set with non-cancelling
   production concurrency.
-- Configure a monthly USD 50 Budget for project-tagged spend, a USD 30 Budget
+- Configure a monthly USD 20 Budget for project-tagged spend, a USD 30 Budget
   for the whole account, and a USD 50 OpenAI project budget. Activate the
-  `Project` cost-allocation tag and set the Cost Anomaly Detection notification
-  threshold to USD 30. Do not enable Container Insights for the singleton MVP.
+  `Project` cost-allocation tag and set the Cost Anomaly Detection total-impact
+  notification threshold to USD 10. Do not enable Container Insights for the
+  singleton MVP. Create and verify new CDK-managed notifications before
+  removing the legacy manual USD 10 Budget/CAD notifications; reuse the
+  existing AWS managed service monitor.
   Monitor free ECS service CPU/memory metrics; notify on EventBridge task-stop
   and Spot-interruption events; and implement low-cardinality, content-free
   `BotReady`, heartbeat-age, outbox-backlog, and failure-count metrics with
