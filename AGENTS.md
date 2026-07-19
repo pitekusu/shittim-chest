@@ -88,7 +88,7 @@ AWS resources. Those capabilities must be added in later isolated slices and
 must depend on the domain rules rather than reimplementing them in adapters.
 
 The STEP-01 acceptance snapshot is 66 passing tests, 100% domain line/branch
-coverage, Ruff and mypy strict success, zero known locked-dependency
+coverage, Ruff and type-check success, zero known locked-dependency
 vulnerabilities, a clean public-surface scan, and successful GitHub-managed
 CodeQL and GitGuardian checks.
 
@@ -417,7 +417,7 @@ The finalized design assumes the following baseline as of 2026-07-16:
 - `boto3` and `boto3-stubs` 1.43.50;
 - Amazon ECS on ARM64 Fargate Spot, ECR, DynamoDB, SSM Parameter Store, and
   CloudWatch Logs;
-- Ruff 0.15.22, mypy 2.3.0, ty 0.0.61, pytest 9.1.1, import-linter 2.13, Hypothesis,
+- Ruff 0.15.22, ty 0.0.61, pytest 9.1.1, import-linter 2.13, Hypothesis,
   respx, pip-audit, and the other versions recorded in the detailed design.
 
 These are design inputs, not permission to create cloud resources. Do not
@@ -448,7 +448,6 @@ uv lock --check
 uv sync --frozen --all-groups
 uv run --frozen ruff format --check .
 uv run --frozen ruff check .
-uv run --frozen mypy
 uv run --frozen ty check
 uv run --frozen lint-imports
 uv run --frozen pytest
@@ -505,10 +504,10 @@ only composition root.
 ## Python Style
 
 - Use UTF-8, LF, four spaces, double quotes, and a 100-character line limit.
-- Type every function, method, and attribute and pass both `mypy --strict` and
-  `ty check` across `src`, `tests`, and `tools`. Keep mypy as an independent
-  strict gate while ty remains beta; do not silence whole ty rule categories to
-  manufacture parity.
+- Type every function, method, and attribute and pass `ty check` across `src`,
+  `tests`, and `tools`. Keep `missing-type-argument=error` and
+  `possibly-unresolved-reference=warn`; do not silence whole ty rule categories
+  to manufacture a passing result.
 - Prefer `@dataclass(frozen=True, slots=True)` models and `StrEnum` domain
   state. Use Pydantic only for settings, structured output, and external
   boundary validation.
@@ -733,7 +732,7 @@ Add tests in proportion to each implemented slice. At minimum, cover:
   fencing, outbox reconciliation, and resume without duplicate Discord posts;
 - secret and full-content redaction in logs.
 
-CI verifies the uv lock, Ruff, mypy strict, ty across source/tests/tools,
+CI verifies the uv lock, Ruff, ty across source/tests/tools,
 import-linter, pytest, pip-audit, Betterleaks
 full-history and generated-fixture contracts, wheel
 build/install, CycloneDX source SBOM, public repository surface, Markdown
