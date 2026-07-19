@@ -36,7 +36,9 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 RUN groupadd --gid "${APP_GID}" shittim \
     && useradd --uid "${APP_UID}" --gid "${APP_GID}" --no-create-home \
         --home-dir /nonexistent --shell /usr/sbin/nologin shittim \
-    && install --directory --owner "${APP_UID}" --group "${APP_GID}" --mode 0755 /app
+    && install --directory --owner "${APP_UID}" --group "${APP_GID}" --mode 0755 /app \
+    && install --directory --owner "${APP_UID}" --group "${APP_GID}" \
+        --mode 0700 /tmp/shittim-chest
 
 WORKDIR /app
 

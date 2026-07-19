@@ -23,6 +23,7 @@ DENY_PATTERNS = {
     ),
     "private key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "absolute home path": re.compile(rb"(?m)(?:/var)?/home/[A-Za-z0-9._-]+/"),
+    "AWS account ID": re.compile(rb"(?<![A-Za-z0-9])(?!0{12}(?![0-9]))[0-9]{12}(?![A-Za-z0-9])"),
     "Discord snowflake": re.compile(rb"(?<![A-Za-z0-9])[0-9]{17,20}(?![A-Za-z0-9])"),
     "email address": re.compile(
         rb"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"

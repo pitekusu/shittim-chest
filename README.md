@@ -137,7 +137,14 @@ and the default-encrypted, fully immutable ECR repository. It also defines an
 AWS Signer profile and ECR Managed Signing rule. Future releases deploy only an
 approved image digest and attach the signature, SPDX SBOM, build provenance, and
 vulnerability assessment to that digest as OCI reference artifacts. STEP-09A
-does not bootstrap or deploy the AWS account. Responses API
+does not bootstrap or deploy the AWS account. STEP-09B adds the strictly tested
+`ShittimChest-Prod-Runtime` stack: a public-only VPC without NAT or a load balancer,
+HTTPS-only task egress, an ARM64 Fargate Spot singleton, digest-only image parameters,
+versioned private SSM references, least-privilege execution/task roles, and isolated
+normal and break-glass task definitions. The normal service keeps ECS Exec and
+Container Insights disabled, uses a read-only root filesystem, and writes only to
+the task-local `/tmp/shittim-chest` mount. This stack is also synth-only and has not
+been deployed. Responses API
 Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
