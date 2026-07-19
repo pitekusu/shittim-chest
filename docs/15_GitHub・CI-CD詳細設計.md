@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-17
+updated: 2026-07-19
 ---
 
 # GitHub・CI-CD詳細設計
@@ -31,7 +31,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 
 `ci.yml`はPull Requestとmain pushで実行し、job既定権限を`contents: read`だけにする。PR単位の`concurrency`で古いcommitのCIだけをcancelし、jobごとに固定check名と`timeout-minutes`を定義する。
 
-1. uv lock check、Ruff format/check、mypy strict、tyによる`src`・`tests`・`tools`全体検査、import-linter。STEP-03で`application -> domain`の一方向contractを`quality` jobへ追加済みとする。tyは同じ`quality` job内で必須実行し、beta期間中はmypyを置換しない。
+1. uv lock check、Ruff format/check、tyによる`src`・`tests`・`tools`全体検査、import-linter。STEP-03で`application -> domain`の一方向contractを`quality` jobへ追加済みとする。tyは同じ`quality` job内の唯一のtype-check gateとし、`missing-type-argument=error`と`possibly-unresolved-reference=warn`を維持する。
 2. pytest unit/contract、domain/application coverage 90%以上。
 3. pip-audit、Betterleaks full-history scan、生成fixture contract、public surface scan、Dependency Review、`uv export --frozen --all-groups --format cyclonedx1.5`で生成したCycloneDX SBOMのstrict schema、project、`uv.lock`完全一致検証。
 4. wheel buildとinstall smoke test。
