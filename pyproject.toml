@@ -32,6 +32,7 @@ dev = [
     "pytest-asyncio>=1.4.0,<2",
     "pytest-cov>=7.1.0,<8",
     "ruff>=0.15.22,<0.16",
+    "ty>=0.0.61,<0.1",
 ]
 
 [build-system]
@@ -58,6 +59,13 @@ strict = true
 warn_unreachable = true
 show_error_codes = true
 files = ["src", "tests", "tools"]
+
+[tool.ty.src]
+include = ["src", "tests", "tools"]
+
+[tool.ty.rules]
+missing-type-argument = "error"
+possibly-unresolved-reference = "warn"
 
 [tool.pytest]
 minversion = "9.1"

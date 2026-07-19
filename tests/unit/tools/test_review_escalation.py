@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from pathlib import Path
+from typing import cast
 
 from tools.review_escalation import (
     normalize_preference,
@@ -76,8 +77,10 @@ def test_review_saves_after_each_choice_and_can_resume() -> None:
     assert len(saved) == 2
     cases = document["cases"]
     assert isinstance(cases, list)
+    cases = cast(list[object], cases)
     first = cases[0]
     assert isinstance(first, dict)
+    first = cast(dict[str, object], first)
     assert first["preference"] == "A"
     assert any("Enter A, B, tie, or q." in message for message in messages)
 
@@ -91,6 +94,7 @@ def test_review_saves_after_each_choice_and_can_resume() -> None:
     assert completed is True
     second = cases[1]
     assert isinstance(second, dict)
+    second = cast(dict[str, object], second)
     assert second["preference"] == "tie"
 
 
@@ -101,6 +105,7 @@ def test_secure_writer_uses_owner_only_permissions(tmp_path: Path) -> None:
 
     assert output.stat().st_mode & 0o777 == 0o600
     loaded = json.loads(output.read_text(encoding="utf-8"))
+    loaded = cast(dict[str, object], loaded)
     assert loaded["evaluation_id"] == "evaluation-1"
 
 

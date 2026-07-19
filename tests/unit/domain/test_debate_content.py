@@ -98,7 +98,7 @@ def test_vote_scores_are_inclusive_integers_from_one_to_five(score: object) -> N
         Vote(
             voter=ParticipantSlot.PARTICIPANT_A,
             candidate=ParticipantSlot.PARTICIPANT_B,
-            accuracy_score=score,  # type: ignore[arg-type]
+            accuracy_score=cast(int, score),
             usefulness_score=3,
             safety_score=3,
             reason="reason",

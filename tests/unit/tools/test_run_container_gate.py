@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import cast
 
 import pytest
 from tools.run_container_gate import (
@@ -59,10 +60,13 @@ def test_invalid_image_configuration_is_rejected(
     document = deepcopy(_inspect())
     image = document[0]
     assert isinstance(image, dict)
+    image = cast(dict[str, object], image)
     config = image["Config"]
     assert isinstance(config, dict)
+    config = cast(dict[str, object], config)
     health = config["Healthcheck"]
     assert isinstance(health, dict)
+    health = cast(dict[str, object], health)
     if field == "Architecture":
         image[field] = value
     elif field in {"User", "StopSignal"}:

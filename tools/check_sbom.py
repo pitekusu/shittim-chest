@@ -11,6 +11,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from cyclonedx.schema import SchemaVersion
 from cyclonedx.validation.json import JsonStrictValidator
@@ -35,13 +36,13 @@ class CycloneDxInventory:
 def _object(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise SbomError(f"{label} must be a JSON object with string keys")
-    return value
+    return cast(dict[str, object], value)
 
 
 def _array(value: object, label: str) -> list[object]:
     if not isinstance(value, list):
         raise SbomError(f"{label} must be a JSON array")
-    return value
+    return cast(list[object], value)
 
 
 def _text(value: object, label: str) -> str:

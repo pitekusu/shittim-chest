@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from typing import cast
 
 import pytest
 from tools.check_sbom import (
@@ -116,6 +117,7 @@ def test_lock_inventory_difference_is_rejected() -> None:
     lock, project = _project_documents()
     packages = lock["package"]
     assert isinstance(packages, list)
+    packages = cast(list[object], packages)
     packages.append(
         {
             "name": "missing",
@@ -158,8 +160,10 @@ def test_unknown_dependency_child_is_rejected() -> None:
     document = _cyclonedx_document()
     dependencies = document["dependencies"]
     assert isinstance(dependencies, list)
+    dependencies = cast(list[object], dependencies)
     root_dependency = dependencies[0]
     assert isinstance(root_dependency, dict)
+    root_dependency = cast(dict[str, object], root_dependency)
     root_dependency["dependsOn"] = [_versioned("missing", "1.0.0")]
 
     with pytest.raises(SbomError, match="unknown dependency child ref"):
@@ -206,6 +210,7 @@ def test_wrong_spdx_version_is_rejected() -> None:
     document = deepcopy(_github_spdx(_versioned("pkg:pypi/pytest", "9.1.1")))
     sbom = document["sbom"]
     assert isinstance(sbom, dict)
+    sbom = cast(dict[str, object], sbom)
     sbom["spdxVersion"] = "SPDX-2.2"
 
     with pytest.raises(SbomError, match=r"SPDX-2\.3"):

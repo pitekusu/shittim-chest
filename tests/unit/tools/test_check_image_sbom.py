@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import cast
 
 import pytest
 from tools.check_image_sbom import ImageSbomError, validate_spdx_document
@@ -59,6 +60,7 @@ def test_invalid_image_inventory_is_rejected(mutation: str, message: str) -> Non
     document = deepcopy(_document())
     packages = document["packages"]
     assert isinstance(packages, list)
+    packages = cast(list[object], packages)
     if mutation == "version":
         document["spdxVersion"] = "SPDX-2.2"
     elif mutation == "creator":

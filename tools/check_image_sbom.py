@@ -9,14 +9,14 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 MAXIMUM_SBOM_BYTES: Final = 20 * 1024 * 1024
 PYPI_PURL_PREFIX: Final = "pkg:pypi/"
 DEBIAN_PURL_PREFIX: Final = "pkg:deb/debian/"
 PROJECT_VERSION: Final = "0.1.0"
 FORBIDDEN_DEVELOPMENT_PACKAGES: Final = frozenset(
-    {"hypothesis", "import-linter", "mypy", "pip-audit", "pytest", "ruff"}
+    {"hypothesis", "import-linter", "mypy", "pip-audit", "pytest", "ruff", "ty"}
 )
 
 
@@ -27,13 +27,13 @@ class ImageSbomError(RuntimeError):
 def _object(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ImageSbomError(f"{label} must be an object")
-    return value
+    return cast(dict[str, object], value)
 
 
 def _array(value: object, label: str) -> list[object]:
     if not isinstance(value, list):
         raise ImageSbomError(f"{label} must be an array")
-    return value
+    return cast(list[object], value)
 
 
 def _text(value: object, label: str) -> str:

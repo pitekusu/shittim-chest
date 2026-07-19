@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import cast
 
 import pytest
 from tools.score_escalation import aggregate
@@ -83,16 +84,22 @@ def test_summary_contains_no_question_or_raw_answer_and_breaks_tie_by_cost() -> 
     assert "estimated_usd" not in str(blind)
     cases = blind["cases"]
     assert isinstance(cases, list)
+    cases = cast(list[object], cases)
     case = cases[0]
     assert isinstance(case, dict)
+    case = cast(dict[str, object], case)
     key_cases = key["cases"]
     assert isinstance(key_cases, list)
+    key_cases = cast(list[object], key_cases)
     key_case = key_cases[0]
     assert isinstance(key_case, dict)
+    key_case = cast(dict[str, object], key_case)
     key_metrics = key_case["metrics"]
     assert isinstance(key_metrics, dict)
+    key_metrics = cast(dict[str, object], key_metrics)
     metrics_b = key_metrics["B"]
     assert isinstance(metrics_b, dict)
+    metrics_b = cast(dict[str, object], metrics_b)
     metrics_b["estimated_usd"] = 0.005
 
     summary = _aggregate(blind, key)
@@ -101,6 +108,7 @@ def test_summary_contains_no_question_or_raw_answer_and_breaks_tie_by_cost() -> 
     assert "not copied" not in str(summary)
     recommendation = summary["recommendation"]
     assert isinstance(recommendation, dict)
+    recommendation = cast(dict[str, object], recommendation)
     assert recommendation["policy"] == "luna_pro"
 
 
@@ -108,10 +116,13 @@ def test_higher_quality_candidate_requires_no_worse_major_failure_rate() -> None
     blind, key = _pair()
     cases = blind["cases"]
     assert isinstance(cases, list)
+    cases = cast(list[object], cases)
     case = cases[0]
     assert isinstance(case, dict)
+    case = cast(dict[str, object], case)
     result_b = case["B"]
     assert isinstance(result_b, dict)
+    result_b = cast(dict[str, object], result_b)
     result_b.clear()
     result_b.update(
         {
@@ -128,10 +139,13 @@ def test_higher_quality_candidate_requires_no_worse_major_failure_rate() -> None
     )
     key_cases = key["cases"]
     assert isinstance(key_cases, list)
+    key_cases = cast(list[object], key_cases)
     key_case = key_cases[0]
     assert isinstance(key_case, dict)
+    key_case = cast(dict[str, object], key_case)
     key_metrics = key_case["metrics"]
     assert isinstance(key_metrics, dict)
+    key_metrics = cast(dict[str, object], key_metrics)
     key_metrics["B"] = {
         "elapsed_ms": 50,
         "input_tokens": 1,
@@ -156,10 +170,13 @@ def test_operational_failure_requires_rerun() -> None:
     blind, key = _pair()
     cases = blind["cases"]
     assert isinstance(cases, list)
+    cases = cast(list[object], cases)
     case = cases[0]
     assert isinstance(case, dict)
+    case = cast(dict[str, object], case)
     result_a = case["A"]
     assert isinstance(result_a, dict)
+    result_a = cast(dict[str, object], result_a)
     result_a.clear()
     result_a.update(
         {
@@ -176,10 +193,13 @@ def test_operational_failure_requires_rerun() -> None:
     )
     key_cases = key["cases"]
     assert isinstance(key_cases, list)
+    key_cases = cast(list[object], key_cases)
     key_case = key_cases[0]
     assert isinstance(key_case, dict)
+    key_case = cast(dict[str, object], key_case)
     key_metrics = key_case["metrics"]
     assert isinstance(key_metrics, dict)
+    key_metrics = cast(dict[str, object], key_metrics)
     key_metrics["A"] = {
         "elapsed_ms": 500,
         "input_tokens": 0,
@@ -201,13 +221,17 @@ def test_preference_only_selects_more_frequently_preferred_policy() -> None:
     blind, key = _pair()
     cases = blind["cases"]
     assert isinstance(cases, list)
+    cases = cast(list[object], cases)
     case = cases[0]
     assert isinstance(case, dict)
+    case = cast(dict[str, object], case)
     for label in ("A", "B"):
         result = case[label]
         assert isinstance(result, dict)
+        result = cast(dict[str, object], result)
         rubric = result["rubric"]
         assert isinstance(rubric, dict)
+        rubric = cast(dict[str, object], rubric)
         for axis in rubric:
             rubric[axis] = None
 
@@ -228,8 +252,10 @@ def test_preference_only_selects_more_frequently_preferred_policy() -> None:
     }
     policies = summary["policies"]
     assert isinstance(policies, dict)
+    policies = cast(dict[str, object], policies)
     terra = policies["terra_standard"]
     assert isinstance(terra, dict)
+    terra = cast(dict[str, object], terra)
     assert terra["quality_mean"] is None
 
 
@@ -237,24 +263,32 @@ def test_preference_only_tie_uses_cost_then_latency() -> None:
     blind, key = _pair()
     cases = blind["cases"]
     assert isinstance(cases, list)
+    cases = cast(list[object], cases)
     case = cases[0]
     assert isinstance(case, dict)
+    case = cast(dict[str, object], case)
     case["preference"] = "tie"
     for label in ("A", "B"):
         result = case[label]
         assert isinstance(result, dict)
+        result = cast(dict[str, object], result)
         rubric = result["rubric"]
         assert isinstance(rubric, dict)
+        rubric = cast(dict[str, object], rubric)
         for axis in rubric:
             rubric[axis] = None
     key_cases = key["cases"]
     assert isinstance(key_cases, list)
+    key_cases = cast(list[object], key_cases)
     key_case = key_cases[0]
     assert isinstance(key_case, dict)
+    key_case = cast(dict[str, object], key_case)
     metrics = key_case["metrics"]
     assert isinstance(metrics, dict)
+    metrics = cast(dict[str, object], metrics)
     metrics_b = metrics["B"]
     assert isinstance(metrics_b, dict)
+    metrics_b = cast(dict[str, object], metrics_b)
     metrics_b["estimated_usd"] = 0.005
 
     summary = aggregate(
@@ -291,12 +325,16 @@ def test_unscored_success_and_mismatched_key_fail_closed() -> None:
     blind, key = _pair()
     cases = blind["cases"]
     assert isinstance(cases, list)
+    cases = cast(list[object], cases)
     case = cases[0]
     assert isinstance(case, dict)
+    case = cast(dict[str, object], case)
     result_a = case["A"]
     assert isinstance(result_a, dict)
+    result_a = cast(dict[str, object], result_a)
     rubric = result_a["rubric"]
     assert isinstance(rubric, dict)
+    rubric = cast(dict[str, object], rubric)
     rubric["accuracy"] = None
     with pytest.raises(ValueError, match="integers 1-5"):
         _aggregate(blind, key)

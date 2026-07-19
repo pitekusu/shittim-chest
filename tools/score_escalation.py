@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import fmean
+from typing import cast
 
 from tools.evaluate_escalation import REPOSITORY_ROOT, RUBRIC_AXES, validate_output_directory
 
@@ -66,7 +67,7 @@ def load_json(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
-    return value
+    return cast(dict[str, object], value)
 
 
 def aggregate(
@@ -104,13 +105,15 @@ def aggregate(
             result = case.get(label)
             if not isinstance(result, dict):
                 raise ValueError(f"{case_id} result {label} must be an object")
+            typed_result = cast(dict[str, object], result)
             metrics = metrics_by_label.get(label)
             if not isinstance(metrics, dict):
                 raise ValueError(f"{case_id} policy key is missing metrics for {label}")
+            typed_metrics = cast(dict[str, object], metrics)
             records[policy].append(
                 _validated_result(
-                    result,
-                    metrics=metrics,
+                    typed_result,
+                    metrics=typed_metrics,
                     case_id=case_id,
                     label=label,
                     preference_only=preference_only,
@@ -162,7 +165,7 @@ def _cases(value: Mapping[str, object]) -> list[dict[str, object]]:
         raise ValueError("evaluation must contain cases")
     if not all(isinstance(case, dict) for case in cases):
         raise ValueError("every evaluation case must be an object")
-    return cases
+    return cast(list[dict[str, object]], cases)
 
 
 def _key_by_case(key: Mapping[str, object]) -> dict[str, dict[str, dict[str, object]]]:
@@ -172,10 +175,12 @@ def _key_by_case(key: Mapping[str, object]) -> dict[str, dict[str, dict[str, obj
         mapping = case.get("mapping")
         if not isinstance(mapping, dict) or set(mapping) != {"A", "B"}:
             raise ValueError(f"{case_id} policy mapping must contain A and B")
+        typed_mapping = cast(dict[str, object], mapping)
         metrics = case.get("metrics")
         if not isinstance(metrics, dict) or set(metrics) != {"A", "B"}:
             raise ValueError(f"{case_id} policy metrics must contain A and B")
-        result[case_id] = {"mapping": mapping, "metrics": metrics}
+        typed_metrics = cast(dict[str, object], metrics)
+        result[case_id] = {"mapping": typed_mapping, "metrics": typed_metrics}
     return result
 
 
@@ -191,8 +196,9 @@ def _validated_result(
     rubric = result.get("rubric")
     if not isinstance(rubric, dict):
         raise ValueError(f"{case_id} result {label} requires a rubric")
-    values = list(rubric.values())
-    if set(rubric) != set(RUBRIC_AXES):
+    typed_rubric = cast(dict[str, object], rubric)
+    values = list(typed_rubric.values())
+    if set(typed_rubric) != set(RUBRIC_AXES):
         raise ValueError(f"{case_id} result {label} has an invalid rubric")
     if status == "succeeded":
         if preference_only:
@@ -215,7 +221,7 @@ def _validated_result(
     if status == "failed":
         if not isinstance(failure, dict) or failure.get("category") not in {"major", "operational"}:
             raise ValueError(f"{case_id} failed result {label} requires a failure category")
-        category = failure["category"]
+        category = cast(dict[str, object], failure)["category"]
     return ScoredResult(
         status=str(status),
         scores=tuple(value for value in values if isinstance(value, int)),
