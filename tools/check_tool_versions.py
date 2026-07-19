@@ -14,7 +14,7 @@ import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 MAX_CONFIG_BYTES: Final = 128 * 1024
 MAX_RESPONSE_BYTES: Final = 1024 * 1024
@@ -79,7 +79,7 @@ def _read_json_object(path: Path) -> dict[str, object]:
         raise ValueError(f"invalid tool version JSON: {error}") from error
     if not isinstance(value, dict):
         raise ValueError("tool version config root must be an object")
-    return value
+    return cast(dict[str, object], value)
 
 
 def _require_string(data: Mapping[str, object], field: str, tool_name: str) -> str:
@@ -106,6 +106,7 @@ def load_tool_pins(path: Path) -> tuple[ToolPin, ...]:
         raw = tools[name]
         if not isinstance(name, str) or not isinstance(raw, dict):
             raise ValueError("tool entries must map string names to objects")
+        raw = cast(dict[str, object], raw)
         expected_fields = BETTERLEAKS_FIELDS if name == "betterleaks" else COMMON_FIELDS
         if set(raw) != expected_fields:
             missing = sorted(expected_fields - set(raw))

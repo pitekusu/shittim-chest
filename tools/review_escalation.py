@@ -11,6 +11,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from tools.evaluate_escalation import REPOSITORY_ROOT, validate_output_directory
@@ -40,7 +41,7 @@ def load_document(path: Path) -> dict[str, object]:
         or not all(isinstance(case, dict) for case in cases)
     ):
         raise ValueError("blind results must contain evaluation cases")
-    return value
+    return cast(dict[str, object], value)
 
 
 def validate_resume(source: Mapping[str, object], resumed: Mapping[str, object]) -> None:
@@ -63,7 +64,7 @@ def render_case(case: Mapping[str, object], *, index: int, total: int) -> str:
         result = case.get(label)
         if not isinstance(result, dict):
             raise ValueError(f"{case_id} result {label} must be an object")
-        sections.extend(_render_result(label, result, case_id=case_id))
+        sections.extend(_render_result(label, cast(dict[str, object], result), case_id=case_id))
     return "\n".join(sections)
 
 
@@ -77,9 +78,12 @@ def review_preferences(
     cases = document.get("cases")
     if not isinstance(cases, list):
         raise ValueError("blind results must contain evaluation cases")
-    for index, case in enumerate(cases, start=1):
+    typed_cases = cast(list[object], cases)
+    for index, raw_case in enumerate(typed_cases, start=1):
+        case = raw_case
         if not isinstance(case, dict):
             raise ValueError("every evaluation case must be an object")
+        case = cast(dict[str, object], case)
         if case.get("preference") in {"A", "B", "tie"}:
             continue
         emit(render_case(case, index=index, total=len(cases)))
@@ -128,7 +132,8 @@ def _render_result(label: str, result: Mapping[str, object], *, case_id: str) ->
         items = result.get(field)
         if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
             raise ValueError(f"{case_id} result {label} has invalid {field}")
-        lines.append(f"{heading}: " + (" / ".join(items) if items else "(none)"))
+        typed_items = cast(list[str], items)
+        lines.append(f"{heading}: " + (" / ".join(typed_items) if typed_items else "(none)"))
     return lines
 
 

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from tools.check_tool_versions import ToolPin, find_outdated_pins, load_tool_pins
@@ -58,8 +59,10 @@ def test_load_tool_pins_rejects_identity_for_another_tag(tmp_path: Path) -> None
     config = _valid_config()
     tools = config["tools"]
     assert isinstance(tools, dict)
+    tools = cast(dict[str, object], tools)
     betterleaks = tools["betterleaks"]
     assert isinstance(betterleaks, dict)
+    betterleaks = cast(dict[str, object], betterleaks)
     betterleaks["certificate_identity"] = str(betterleaks["certificate_identity"]).replace(
         "v1.6.1", "v1.6.0"
     )

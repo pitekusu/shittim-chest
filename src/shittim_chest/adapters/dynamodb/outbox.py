@@ -149,9 +149,9 @@ class DynamoDbOutboxRepository:
             self._transact(actions, operation.operation_id)
         except RepositoryConflict:
             existing = self._get(operation.debate_id, operation.attempt_id, operation.operation_id)
-            if existing == operation:
-                return existing
-            raise
+            if existing is None or existing != operation:
+                raise
+            return existing
         return operation
 
     def _claim(

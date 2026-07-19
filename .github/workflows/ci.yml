@@ -44,8 +44,10 @@ jobs:
           uv run --frozen ruff check .
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
-      - name: Check strict typing
-        run: uv run --frozen mypy
+      - name: Check types with mypy and ty
+        run: |
+          uv run --frozen mypy
+          uv run --frozen ty check
       - name: Check architecture boundaries
         run: uv run --frozen lint-imports
 
