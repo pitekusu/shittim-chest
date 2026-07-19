@@ -136,6 +136,14 @@ Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
 
+The builder installs locked third-party dependencies before copying application
+source by using `uv sync --no-install-project`. A second sync installs only the
+project, so source-only changes preserve the dependency layer. uv downloads use
+a BuildKit cache mount and are never copied into the runtime image;
+`UV_PYTHON_DOWNLOADS=0` also prevents an unexpected Python download because the
+builder image already provides the pinned interpreter. `UV_NO_CACHE=1` is not
+used during image builds.
+
 Build the two local image targets with Docker-format metadata so the health
 configuration is retained:
 
@@ -143,6 +151,10 @@ configuration is retained:
 podman build --format docker --target production -t shittim-chest:production .
 podman build --format docker --target break-glass -t shittim-chest:break-glass .
 ```
+
+Repeat the build without changing `pyproject.toml` or `uv.lock` to verify that
+the dependency sync layer is reused. The local cache is a performance
+optimization only; frozen lock validation remains the correctness boundary.
 
 The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
 the scorer artifact and unblinding key to separate repository-external directory

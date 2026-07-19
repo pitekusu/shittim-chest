@@ -257,6 +257,15 @@ CodeQL, image SPDX validation, and the `container-arm64` Ruleset requirement
 passed. The first PR run exposed a Python 3.12 host/Python 3.14 domain import;
 keep the host-side gate standard-library-only and preserve the unit assertion
 that its phase list matches the domain state machine.
+
+The production builder must keep locked dependency installation in a layer
+before application source is copied. Use `uv sync --frozen --no-dev
+--no-install-project --no-editable` for that layer, then copy `README.md`,
+`LICENSE`, and `src/` and run the final frozen non-editable sync. Mount
+`/root/.cache/uv` as a BuildKit cache with `sharing=locked`; do not set
+`UV_NO_CACHE=1` for the build. Keep `UV_PYTHON_DOWNLOADS=0` because the pinned
+Python base image is the only permitted interpreter source. A cache miss must
+change build time only, never the resulting dependency versions or gate result.
 Update this section and `20_実装・試験・検証記録.md` after each later slice so
 the boundary does not become stale.
 
