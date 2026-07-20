@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "test:infra": "vitest run infra/test",
-    "audit:infra": "npm audit --audit-level=low",
+    "audit:infra": "npm audit --audit-level=low --json | node infra/check-audit.mjs",
     "cdk": "cdk",
     "cdk:list": "cdk list",
     "synth": "cdk synth --strict",

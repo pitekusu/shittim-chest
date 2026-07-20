@@ -1,0 +1,9 @@
+[
+  {
+    "id": "GHSA-3jxr-9vmj-r5cp",
+    "package": "brace-expansion",
+    "severity": "high",
+    "reason": "aws-cdk-lib 2.261.0 bundles brace-expansion 5.0.6 via minimatch, and npm overrides cannot replace bundled dependencies. The DoS requires attacker-controlled glob patterns, but aws-cdk-lib only processes our own CDK code at synth time. Remove once aws-cdk-lib ships brace-expansion >= 5.0.7.",
+    "expires": "2026-08-20"
+  }
+]
