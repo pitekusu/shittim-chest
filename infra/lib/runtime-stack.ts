@@ -379,15 +379,12 @@ export class RuntimeStack extends Stack {
         operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
       },
       taskRole: options.taskRole,
-      volumes: [{ name: "runtime-tmp" }],
     });
-    const linuxParameters = new ecs.LinuxParameters(
-      this,
-      `${options.taskId}LinuxParameters`,
-      { initProcessEnabled: true },
-    );
+    const linuxParameters = new ecs.LinuxParameters(this, `${options.taskId}LinuxParameters`, {
+      initProcessEnabled: true,
+    });
     linuxParameters.dropCapabilities(ecs.Capability.ALL);
-    const container = definition.addContainer("ApplicationContainer", {
+    definition.addContainer("ApplicationContainer", {
       containerName: options.containerName,
       environment: {
         AWS_REGION: "ap-northeast-1",
@@ -415,11 +412,17 @@ export class RuntimeStack extends Stack {
       versionConsistency: ecs.VersionConsistency.ENABLED,
       workingDirectory: "/app",
     });
-    container.addMountPoints({
-      containerPath: "/tmp/shittim-chest",
-      readOnly: false,
-      sourceVolume: "runtime-tmp",
-    });
+    // CDK LinuxParameters cannot express parameterized tmpfs mount options
+    // (uid=/gid=/mode=), so declare the 1 MiB heartbeat tmpfs through the L1
+    // task definition. Fargate supports tmpfs since the 2026-01 announcement.
+    const cfnTaskDefinition = definition.node.defaultChild as ecs.CfnTaskDefinition;
+    cfnTaskDefinition.addPropertyOverride("ContainerDefinitions.0.LinuxParameters.Tmpfs", [
+      {
+        ContainerPath: "/tmp/shittim-chest",
+        MountOptions: ["nosuid", "nodev", "noexec", "uid=10001", "gid=10001", "mode=0700"],
+        Size: 1,
+      },
+    ]);
     options.imageRepository.grantPull(options.executionRole);
     return definition;
   }

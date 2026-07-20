@@ -72,13 +72,13 @@ application側のgraceful shutdown deadlineは90秒とし、`stopTimeout=120`の
 - app health checkはprocess/event-loop heartbeatだけを確認し、Discord/OpenAI障害をrestart理由にしない。
 - `awslogs` modeは`blocking`を明示し、secret・質問・回答全文をstdoutへ出さない。
 - applicationとbreak-glass Execは専用log groupに分け、各90日保持、`RETAIN`、AWS-managed encryption、CloudWatch Logs data protectionによるcredential・個人識別情報のmaskを適用する。
-- 一時書込みはheartbeat用の`/tmp/shittim-chest` bind mountだけに許可する。Fargate既定20 GiB ephemeral storage内に収め、追加`ephemeralStorage`は設定しない。平常imageはECS Execだけのためにshell utilityを追加しない。
+- 一時書込みはheartbeat用の`/tmp/shittim-chest` tmpfs mount（1 MiB、`nosuid,nodev,noexec,uid=10001,gid=10001,mode=0700`）だけに許可する。Fargate既定20 GiB ephemeral storageは引き続き追加容量なしとする。平常imageはECS Execだけのためにshell utilityを追加しない。
 
-imageは`/tmp/shittim-chest`をUID/GID `10001:10001`、mode `0700`で事前作成し、Fargate bind mount後もnon-root applicationがheartbeatを書込める構成にする。
+imageは`/tmp/shittim-chest`をUID/GID `10001:10001`、mode `0700`で事前作成し、tmpfsの`uid`/`gid`/`mode` mount optionと一致させてnon-root applicationがheartbeatを書込める構成にする。
 
 STEP-08AではPython `3.14.6-slim-trixie`とuv `0.11.29`のmulti-architecture image index digestを固定したmulti-stage `Dockerfile`を実装する。production imageはnumeric UID/GID `10001`、exec形式entrypoint、`SIGTERM` stop signalを使用し、uv、build cache、raw source、testを含めない。event loop ownerが5秒ごとにPID付きheartbeatを`/tmp/shittim-chest/heartbeat`へatomic更新し、health commandは20秒以内の更新、PID形式、process生存だけを本文出力なしで検査する。
 
-Fargate task definitionは`tmpfs`をsupportしないため、productionでは既定20 GiB ephemeral storage内のtask bind mountを`/tmp/shittim-chest`へ定義する。mountごとの容量上限や追加課金はなく、容量を増やす`ephemeralStorage`は設定しない。local container試験では同等のtmpfsを使う。`initProcessEnabled=true`もtask definition側のSTEP-09で設定し、STEP-08A imageだけで設定済みとは扱わない。
+2026-01-06の公式発表でFargateがtmpfs mountをsupportしたため、production task definitionは`linuxParameters.tmpfs`で1 MiBの`/tmp/shittim-chest`を宣言し、以前のtask bind mountは廃止する。memory上に置かれtask停止で残存しないため、ephemeral storageを消費しない。CDKの`LinuxParameters`は`uid=`/`gid=`/`mode=`のparameter付きmount optionを表現できないため、L1 `CfnTaskDefinition`のproperty overrideで宣言する。2026-07-20時点で開発者ガイド`fargate-tasks-services.html`は`tmpfs`非対応と記載したままだが、What's New発表とAPI reference `LinuxParameters`/`Tmpfs`（Fargate非対応の注記なし）を優先し、deploy時にtask起動で実動作を確認する。local container試験では同等のtmpfsを使う。`initProcessEnabled=true`もtask definition側のSTEP-09で設定し、STEP-08A imageだけで設定済みとは扱わない。
 
 ### 5.1 Break-glass task definition
 
@@ -179,7 +179,8 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-17 | Fargate Spot termination | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | SIGTERM後にconfigured stopTimeoutでSIGKILL、singletonはcapacity復帰まで停止する前提を再確認 |
 | 2026-07-17 | ECS ContainerDefinition | https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ContainerDefinition.html | Fargate `stopTimeout=120`を明示し、application内部deadlineを90秒へ設定 |
 | 2026-07-17 | ECS task definition parameters | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | ARM64、512 CPU/1024 MiB、health、read-only root、`stopTimeout=120`のtask境界を再確認 |
-| 2026-07-17 | Fargate task differences | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html | Fargateで`tmpfs`非対応のためtask bind volumeへ分離 |
+| 2026-07-17 | Fargate task differences | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html | Fargateで`tmpfs`非対応のためtask bind volumeへ分離（2026-07-20に次行で訂正） |
+| 2026-07-20 | ECS tmpfs on Fargate | https://aws.amazon.com/jp/about-aws/whats-new/2026/01/amazon-ecs-tmpfs-mounts-aws-fargate-managed-instances/、https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_LinuxParameters.html | 2026-01-06発表でFargate tmpfs support開始。bind mountを1 MiB tmpfsへ置換。開発者ガイド`fargate-tasks-services.html`の`tmpfs`非対応記載は同日時点で未更新 |
 | 2026-07-17 | Python official image 3.14.6 | https://hub.docker.com/_/python | slim-trixieのamd64/arm64 multi-arch index digestを固定 |
 | 2026-07-17 | Docker build best practices | https://docs.docker.com/build/building/best-practices/ | multi-stage、最小runtime、digest固定、`.dockerignore` |
 | 2026-07-17 | uv Docker integration 0.11.29 | https://docs.astral.sh/uv/guides/integration/docker/ | uv image digest固定、`uv sync --frozen --no-dev --no-editable`、cache非同梱 |

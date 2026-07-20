@@ -121,19 +121,22 @@ describe("RuntimeStack", () => {
         NetworkMode: "awsvpc",
         RequiresCompatibilities: ["FARGATE"],
         RuntimePlatform: { CpuArchitecture: "ARM64", OperatingSystemFamily: "LINUX" },
-        Volumes: [{ Name: "runtime-tmp" }],
       });
+      expect(properties.Volumes ?? []).toEqual([]);
       const container = (properties.ContainerDefinitions as Array<Record<string, unknown>>)[0]!;
       expect(JSON.stringify(container.Image)).toContain("@");
       expect(container).toMatchObject({
-        LinuxParameters: { Capabilities: { Drop: ["ALL"] }, InitProcessEnabled: true },
-        MountPoints: [
-          {
-            ContainerPath: "/tmp/shittim-chest",
-            ReadOnly: false,
-            SourceVolume: "runtime-tmp",
-          },
-        ],
+        LinuxParameters: {
+          Capabilities: { Drop: ["ALL"] },
+          InitProcessEnabled: true,
+          Tmpfs: [
+            {
+              ContainerPath: "/tmp/shittim-chest",
+              MountOptions: ["nosuid", "nodev", "noexec", "uid=10001", "gid=10001", "mode=0700"],
+              Size: 1,
+            },
+          ],
+        },
         Privileged: false,
         StopTimeout: 120,
         User: "10001:10001",
