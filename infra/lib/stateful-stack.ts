@@ -1,5 +1,4 @@
 import {
-  Duration,
   RemovalPolicy,
   Stack,
   StackProps,
@@ -54,16 +53,16 @@ export class StatefulStack extends Stack {
       imageTagMutability: ecr.TagMutability.IMMUTABLE,
       lifecycleRules: [
         {
-          description: "Expire untagged images after 14 days",
-          maxImageAge: Duration.days(14),
+          description: "Keep only the newest 5 untagged images",
+          maxImageCount: 5,
           rulePriority: 1,
           tagStatus: ecr.TagStatus.UNTAGGED,
         },
         {
-          description: "Expire candidate images after 14 days",
-          maxImageAge: Duration.days(14),
+          description: "Keep only the newest 5 tagged images",
+          maxImageCount: 5,
           rulePriority: 2,
-          tagPatternList: ["candidate-*"],
+          tagPatternList: ["*"],
           tagStatus: ecr.TagStatus.TAGGED,
         },
       ],
@@ -78,7 +77,7 @@ export class StatefulStack extends Stack {
         scanType: "ENHANCED",
         rules: [
           {
-            scanFrequency: "SCAN_ON_PUSH",
+            scanFrequency: "CONTINUOUS_SCAN",
             repositoryFilters: [
               {
                 filter: "shittim-chest",

@@ -76,7 +76,7 @@ describe("StatefulStack", () => {
     });
   });
 
-  test("creates a retained immutable repository with bounded candidates", () => {
+  test("creates a retained immutable repository that keeps only the newest 5 images", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::ECR::Repository", 1);
@@ -94,17 +94,17 @@ describe("StatefulStack", () => {
                 Match.objectLike({
                   action: { type: "expire" },
                   selection: Match.objectLike({
-                    countNumber: 14,
-                    countType: "sinceImagePushed",
+                    countNumber: 5,
+                    countType: "imageCountMoreThan",
                     tagStatus: "untagged",
                   }),
                 }),
                 Match.objectLike({
                   action: { type: "expire" },
                   selection: Match.objectLike({
-                    countNumber: 14,
-                    countType: "sinceImagePushed",
-                    tagPatternList: ["candidate-*"],
+                    countNumber: 5,
+                    countType: "imageCountMoreThan",
+                    tagPatternList: ["*"],
                     tagStatus: "tagged",
                   }),
                 }),
@@ -125,7 +125,7 @@ describe("StatefulStack", () => {
       ScanType: "ENHANCED",
       Rules: [
         {
-          ScanFrequency: "SCAN_ON_PUSH",
+          ScanFrequency: "CONTINUOUS_SCAN",
           RepositoryFilters: [
             {
               Filter: "shittim-chest",
