@@ -1,5 +1,4 @@
 import {
-  Duration,
   RemovalPolicy,
   Stack,
   StackProps,
@@ -12,6 +11,7 @@ import { Construct } from "constructs";
 export class StatefulStack extends Stack {
   public readonly debateTable: dynamodb.Table;
   public readonly imageRepository: ecr.Repository;
+  public readonly scanningConfiguration: ecr.CfnRegistryScanningConfiguration;
   public readonly signingConfiguration: ecr.CfnSigningConfiguration;
   public readonly signingProfile: signer.CfnSigningProfile;
 
@@ -47,26 +47,48 @@ export class StatefulStack extends Stack {
 
     this.imageRepository = new ecr.Repository(this, "ApplicationRepository", {
       repositoryName: "shittim-chest",
-      imageScanOnPush: true,
+      // Basic scan-on-push stays off: the registry-level enhanced scanning
+      // configuration below covers this repository instead.
+      imageScanOnPush: false,
       imageTagMutability: ecr.TagMutability.IMMUTABLE,
       lifecycleRules: [
         {
-          description: "Expire untagged images after 14 days",
-          maxImageAge: Duration.days(14),
+          description: "Keep only the newest 5 untagged images",
+          maxImageCount: 5,
           rulePriority: 1,
           tagStatus: ecr.TagStatus.UNTAGGED,
         },
         {
-          description: "Expire candidate images after 14 days",
-          maxImageAge: Duration.days(14),
+          description: "Keep only the newest 5 tagged images",
+          maxImageCount: 5,
           rulePriority: 2,
-          tagPatternList: ["candidate-*"],
+          tagPatternList: ["*"],
           tagStatus: ecr.TagStatus.TAGGED,
         },
       ],
       removalPolicy: RemovalPolicy.RETAIN,
       emptyOnDelete: false,
     });
+
+    this.scanningConfiguration = new ecr.CfnRegistryScanningConfiguration(
+      this,
+      "EnhancedScanningConfiguration",
+      {
+        scanType: "ENHANCED",
+        rules: [
+          {
+            scanFrequency: "CONTINUOUS_SCAN",
+            repositoryFilters: [
+              {
+                filter: "shittim-chest",
+                filterType: "WILDCARD_MATCH",
+              },
+            ],
+          },
+        ],
+      },
+    );
+    this.scanningConfiguration.node.addDependency(this.imageRepository);
 
     this.signingProfile = new signer.CfnSigningProfile(this, "ImageSigningProfile", {
       platformId: "Notation-OCI-SHA384-ECDSA",

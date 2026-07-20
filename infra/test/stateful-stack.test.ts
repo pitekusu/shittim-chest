@@ -76,7 +76,7 @@ describe("StatefulStack", () => {
     });
   });
 
-  test("creates a retained immutable scanned repository with bounded candidates", () => {
+  test("creates a retained immutable repository that keeps only the newest 5 images", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::ECR::Repository", 1);
@@ -85,7 +85,7 @@ describe("StatefulStack", () => {
       UpdateReplacePolicy: "Retain",
       Properties: {
         EncryptionConfiguration: Match.absent(),
-        ImageScanningConfiguration: { ScanOnPush: true },
+        ImageScanningConfiguration: { ScanOnPush: false },
         ImageTagMutability: "IMMUTABLE",
         LifecyclePolicy: {
           LifecyclePolicyText: Match.serializedJson(
@@ -94,17 +94,17 @@ describe("StatefulStack", () => {
                 Match.objectLike({
                   action: { type: "expire" },
                   selection: Match.objectLike({
-                    countNumber: 14,
-                    countType: "sinceImagePushed",
+                    countNumber: 5,
+                    countType: "imageCountMoreThan",
                     tagStatus: "untagged",
                   }),
                 }),
                 Match.objectLike({
                   action: { type: "expire" },
                   selection: Match.objectLike({
-                    countNumber: 14,
-                    countType: "sinceImagePushed",
-                    tagPatternList: ["candidate-*"],
+                    countNumber: 5,
+                    countType: "imageCountMoreThan",
+                    tagPatternList: ["*"],
                     tagStatus: "tagged",
                   }),
                 }),
@@ -114,6 +114,26 @@ describe("StatefulStack", () => {
         },
         RepositoryName: "shittim-chest",
       },
+    });
+  });
+
+  test("enables registry enhanced scanning only for the application repository", () => {
+    const { template } = synthesize();
+
+    template.resourceCountIs("AWS::ECR::RegistryScanningConfiguration", 1);
+    template.hasResourceProperties("AWS::ECR::RegistryScanningConfiguration", {
+      ScanType: "ENHANCED",
+      Rules: [
+        {
+          ScanFrequency: "CONTINUOUS_SCAN",
+          RepositoryFilters: [
+            {
+              Filter: "shittim-chest",
+              FilterType: "WILDCARD_MATCH",
+            },
+          ],
+        },
+      ],
     });
   });
 
