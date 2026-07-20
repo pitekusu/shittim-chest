@@ -76,7 +76,7 @@ describe("StatefulStack", () => {
     });
   });
 
-  test("creates a retained immutable scanned repository with bounded candidates", () => {
+  test("creates a retained immutable repository with bounded candidates", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::ECR::Repository", 1);
@@ -85,7 +85,7 @@ describe("StatefulStack", () => {
       UpdateReplacePolicy: "Retain",
       Properties: {
         EncryptionConfiguration: Match.absent(),
-        ImageScanningConfiguration: { ScanOnPush: true },
+        ImageScanningConfiguration: { ScanOnPush: false },
         ImageTagMutability: "IMMUTABLE",
         LifecyclePolicy: {
           LifecyclePolicyText: Match.serializedJson(
@@ -114,6 +114,26 @@ describe("StatefulStack", () => {
         },
         RepositoryName: "shittim-chest",
       },
+    });
+  });
+
+  test("enables registry enhanced scanning only for the application repository", () => {
+    const { template } = synthesize();
+
+    template.resourceCountIs("AWS::ECR::RegistryScanningConfiguration", 1);
+    template.hasResourceProperties("AWS::ECR::RegistryScanningConfiguration", {
+      ScanType: "ENHANCED",
+      Rules: [
+        {
+          ScanFrequency: "SCAN_ON_PUSH",
+          RepositoryFilters: [
+            {
+              Filter: "shittim-chest",
+              FilterType: "WILDCARD_MATCH",
+            },
+          ],
+        },
+      ],
     });
   });
 
