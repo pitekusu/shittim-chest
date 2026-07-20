@@ -4,305 +4,90 @@
 
 This repository contains the Discord multi-agent debate Bot project
 `shittim_chest` (シッテムの箱; official English name: The Shittim Chest).
-The planned system runs four Discord Bot
-accounts: one orchestration Bot and three AI persona Bots. The persona Bots
-produce initial opinions, revised proposals, and votes; the orchestration Bot
-manages the workflow and publishes the mechanically calculated result.
+The system runs four Discord Bot accounts: one orchestration Bot and three AI
+persona Bots. The persona Bots produce initial opinions, revised proposals,
+and votes; the orchestration Bot manages the workflow and publishes the
+mechanically calculated result.
 
-The requirements, basic design, and detailed design are complete. The
-Python/uv project foundation, initial domain state machine, and STEP-02 GitHub
-quality/supply-chain gates are implemented. The STEP-02B Betterleaks migration
-gate and STEP-02C Gitleaks retirement are complete. STEP-03 application core was
-merged through PR `#15` with voting rules, Protocols,
-accept/run/cancel/retry/resume use cases, deadlines, checkpoint-aware
-cancellation, and fake-based async tests. STEP-04A persistence contracts were
-merged through PR `#16`: Guild/channel and
-operation identity preservation, fenced lease types, idempotent repository
-operations, vertically partitioned DynamoDB-native records, schema v1-to-v2
-up-conversion, and outbox/panel serialization. STEP-04B was squash-merged through
-PR `#18` as commit `9aafe6e` with boto3 transactions, three lease slots, durable
-operation results, outbox state changes, GSI pagination, DynamoDB Local, and SDK
-stub tests. The PR checks and the merge commit's CI, CodeQL, and managed
-Dependency Graph run all passed.
-STEP-05A was merged through PR `#20` as commit `d6ea561`. STEP-05B was merged
-through PR `#21` as commit `44a35fa`. It adds fail-safe
-`question-router-v2`, hosted Responses API Web search, immutable source-backed
-Evidence, optional/required failure semantics, and the schema v3 Evidence
-migration. The Responses API Multi-agent beta is explicitly not used.
-STEP-06A was squash-merged through PR `#27` as commit `47af41f` and adds
-SDK-independent Discord Bot slots and fail-closed runtime
-configuration, stable Discord error codes, deterministic message chunking,
-UUIDv7 nonces, content hashes, a versioned panel custom-ID codec, and an
-application-owned outbox Protocol. Starter message, thread, and control panel
-message IDs are separate and can be bound only while `ACCEPTED`; identical
-replay is idempotent and rebinding is rejected. DynamoDB schema v5 migrates the
-immediately previous v4 record and maps old `bot_id` to generic `bot_slot`.
-Local validation passed 221 tests with 5 opt-in skips and 92.70%
-domain/application line/branch coverage. STEP-06B was squash-merged through PR
-`#30` as commit `96a1ace` with discord.py 2.7.1, fenced outbox publication,
-safe allowed mentions, enforced nonce delivery, SDK-owned rate-limit handling,
-and history reconciliation.
-Each client must use `max_ratelimit_timeout=30`; Discord delivery is bounded to
-45 seconds, shorter than the shared 60-second outbox claim. STEP-06C was
-squash-merged through PR `#31` as commit `9799cb9`, with four GUILDS-only
-clients, a four-READY
-acceptance gate, Guild-scoped `/shittim`, immediate ephemeral defer,
-starter/Public Thread/control panel provisioning and reconciliation,
-attempt-bound cancel/retry, and owned debate tasks. Live Discord operations,
-restart recovery composition, and Discord Applications remain unimplemented.
-STEP-08A implements the local production/break-glass container foundation and
-event-loop heartbeat health check. STEP-08B implements native ARM64 CI,
-container fault injection, and the image SPDX SBOM. STEP-09A implements the
-local CDK TypeScript foundation and retained Stateful stack. STEP-09B implements
-the Runtime stack, including the public-only VPC, least-privilege IAM, ARM64
-Fargate Spot singleton, digest-only normal/break-glass task definitions,
-versioned SSM references, and protected log groups. No AWS resource has been
-deployed. Discord Applications are not yet implemented.
+Requirements, basic design, and detailed design are complete. Implementation
+proceeds in isolated slices, each squash-merged through a Pull Request;
+per-slice validation evidence lives in `docs/20_実装・試験・検証記録.md`.
 Approved decisions are recorded in the project index and decision record; do
 not silently promote historical options to requirements.
 
-## Current Implementation Boundary
+## Implementation Progress
 
-STEP-01, the Python domain foundation, was squash-merged through PR `#1` as
-commit `7fa642e` on 2026-07-17. Treat this as a rules-and-state foundation, not
-as a runnable Discord Bot or a production-ready service.
+All slices through STEP-09B are merged to `main`:
 
-The implemented domain foundation is responsible for:
+| Slice | PR | Merge commit | Scope |
+|---|---|---|---|
+| STEP-01 | #1 | `7fa642e` | Python 3.14.6/uv foundation, UUIDv7 debate/attempt IDs, 21-edge phase state machine, checkpoint/retry rules |
+| STEP-02/02B/02C | #10/#12/#13 | `e2fdaad` | GitHub CI quality/supply-chain gates, CycloneDX source SBOM, Sigstore-verified Betterleaks, Gitleaks retired |
+| STEP-03 | #15 | `34ccc54` | Application core: voting rules, Protocols, accept/run/cancel/retry/resume use cases, deadlines |
+| STEP-04A | #16 | `54948d7` | SDK-independent persistence contracts, schema v1-to-v2 up-conversion, outbox/panel serialization |
+| STEP-04B | #18 | `9aafe6e` | boto3 DynamoDB adapter: transactions, three fenced lease slots, idempotent operation results, outbox |
+| STEP-05A | #20 | `d6ea561` | OpenAI adapter: stable Responses API, Pydantic structured outputs, `store=false` |
+| STEP-05B | #21 | `44a35fa` | Fail-safe `question-router-v2`, hosted Web search, immutable Evidence, schema v3 |
+| STEP-05C/.1 | #22/#24/#26 | `a6f43cb` | Shadow escalation signals, Luna/Terra/pro policies, schema v4, blind A/B evaluator |
+| STEP-06A | #27 | `47af41f` | SDK-independent Discord contracts: four Bot slots, message chunking, nonces, panel codec, outbox Protocol, schema v5 |
+| STEP-06B | #30 | `96a1ace` | discord.py 2.7.1 publisher: fenced outbox publication, nonce/content-hash reconciliation |
+| STEP-06C | #31 | `9799cb9` | Interaction runtime: four GUILDS-only clients, Guild-scoped `/shittim`, thread/panel provisioning |
+| STEP-07A | #33 | `0f386f5` | Runtime lifecycle: fail-closed admission gate, signal handling, 90-second cleanup deadline |
+| STEP-07B | #34 | `04bbda0` | Outbox recovery drained before phase work resumes |
+| STEP-07C | #35 | `e863ae3` | Production composition root (`bootstrap.py`), `python -m shittim_chest`, fail-closed config |
+| STEP-08A | #37 | `7742f0b` | Digest-pinned multi-stage Dockerfile, non-root production/break-glass targets, heartbeat health check |
+| STEP-08B | #39 | `2cca51a` | Native ARM64 CI gate, SIGTERM/SIGKILL fault injection, Syft SPDX image SBOM |
+| STEP-09A | #47 | `e2e9e3f` | CDK TypeScript foundation, retained Stateful stack (DynamoDB, ECR, Signer profile/Managed Signing) |
+| STEP-09B | #53 | `3c5ccc9` | Runtime stack: public-only VPC, least-privilege IAM, ARM64 Fargate Spot singleton, digest-only task definitions |
 
-- reproducible Python 3.14.6 and uv project metadata, dependency locking,
-  source/wheel packaging, and typed-package markers;
-- UUIDv7 `DebateId` values for one logical debate and UUIDv7 `AttemptId` values
-  for each immutable execution or retry attempt;
-- the only valid debate phase order, with exactly 21 allowed normal,
-  cancellation, and failure edges;
-- rejection of phase skipping, reverse/self transitions, terminal-state
-  transitions, invalid UTC timestamps, and invalid schema versions;
-- Spot interruption checkpoints represented separately as
-  `recovery_state=checkpointed`, with resume at the same phase;
-- immutable failure history: a retry creates a new attempt in the same debate,
-  links it with `retry_of`, and starts from the recorded `failed_from_phase`;
-- stable domain errors for invalid phase, recovery, and retry operations; and
-- deterministic unit/property tests that do not require Discord, OpenAI, AWS,
-  or network access.
+Not yet implemented:
 
-The domain foundation does not yet orchestrate a full debate, calculate votes,
-post Discord messages, call OpenAI, persist DynamoDB records, acquire leases,
-publish an outbox, handle real process signals, build a container, or provision
-AWS resources. Those capabilities must be added in later isolated slices and
-must depend on the domain rules rather than reimplementing them in adapters.
+- STEP-09C: operations and monitoring (Budgets, Cost Anomaly Detection,
+  metrics/alarms) and pre-scale image admission.
+- STEP-10: real signing/referrer verification and release workflows.
+- Discord Applications are not created; there are no live Discord or paid
+  OpenAI calls.
+- No AWS resource has been bootstrapped or deployed; both CDK stacks are
+  synth-only.
 
-The STEP-01 acceptance snapshot is 66 passing tests, 100% domain line/branch
-coverage, Ruff and type-check success, zero known locked-dependency
-vulnerabilities, a clean public-surface scan, and successful GitHub-managed
-CodeQL and GitGuardian checks.
+### Standing constraints from merged slices
 
-STEP-02 was squash-merged through PR `#10` as commit `e2fdaad` on 2026-07-17.
-Its Pull Request and first `main` run passed, the managed CycloneDX/SPDX comparison
-passed, and the active main Ruleset now requires five strict GitHub Actions checks
-(`quality`, `tests`, `security`, `package`, `docs-public-safety`) plus CodeQL results
-with high-or-higher security alerts blocking merge. STEP-02 provides strict
-CycloneDX 1.5 schema and `uv.lock` inventory validation, a 30-day source-SBOM
-artifact, Dependency Review, pinned actionlint, isolated wheel
-installation, and a weekly/manual comparison with GitHub's managed SPDX 2.3
-export. GitHub's Python Dependabot graph job already supplies the complete uv
-dependency snapshot, so STEP-02 intentionally does not submit a higher-priority
-custom snapshot or grant `contents: write`.
+- Configure every Discord client with `max_ratelimit_timeout=30`; the adapter's
+  45-second Discord-operation timeout must remain shorter than
+  `OUTBOX_CLAIM_SECONDS=60` so a blocked SDK wait cannot outlive claim
+  ownership.
+- On Python 3.14 with discord.py 2.7.1, do not use `Client.event()` for the
+  interaction listener because it reaches a deprecated asyncio API while tests
+  treat warnings as errors; use the dedicated moderator client's explicit
+  `on_interaction` dispatch.
+- Each DynamoDB schema reader migrates only the immediately previous version
+  and fails closed on unknown versions.
+- Drain pending outbox operations before phase work resumes; do not count
+  outbox waiting against the 300-second active-processing deadline. A
+  `RepositoryConflict` means this worker lost fencing and must not terminalize
+  the attempt.
+- Never enable Betterleaks provider validation, because detected candidates
+  must not be sent to external APIs. Reintroduce a second secret scanner only
+  through a later ADR with a concrete coverage gap. The weekly release-tool
+  workflow detects newer actionlint, Betterleaks, and Syft releases without
+  applying them automatically.
+- Do not submit a custom GitHub dependency snapshot or grant `contents: write`;
+  GitHub's Python Dependabot graph job already supplies the complete uv
+  dependency inventory.
+- The main Ruleset requires the strict checks `quality`, `tests`, `security`,
+  `package`, `docs-public-safety`, and `container-arm64`, plus CodeQL results
+  with high-or-higher security alerts blocking merge.
+- Production remains fixed to Luna standard. The completed blind A/B evaluation
+  (Luna pro 4 wins, Terra standard 2 wins, 4 ties; operator chose Luna standard
+  with no escalation) is evaluation history only; do not implement thresholds,
+  extra token/deadline limits, or escalation UI.
+- The container fault fixture is copied only into the CI-only `fault-test`
+  target; never push or deploy that target. Keep the host-side container gate
+  standard-library-only (the host may run Python 3.12) and preserve the unit
+  assertion that its phase list matches the domain state machine.
 
-STEP-02B established the Betterleaks migration gate while keeping the required
-`security` check name stable. Betterleaks release
-checksums are verified with a pinned Sigstore verifier, certificate identity,
-OIDC issuer, and immutable digests. Betterleaks must pass generated positive
-and negative contract histories with redaction enabled. Do not enable
-Betterleaks provider validation, because detected candidates must not be sent to
-external APIs. A weekly read-only workflow detects newer actionlint and
-Betterleaks releases without applying them automatically. STEP-02C retired
-Gitleaks after the parallel PR/main observation, generated contract, full-history
-scan, Sigstore verification, and latest-release workflow all passed. Reintroduce
-a second scanner only through a later ADR with a concrete coverage gap.
-
-STEP-03 was squash-merged through PR `#15` as commit `34ccc54` on 2026-07-17.
-STEP-04A was squash-merged through PR `#16` as commit `54948d7` on 2026-07-17.
-Its serializer remains SDK-independent. STEP-04B adds boto3 1.43.50 at the
-adapter boundary, marshals validated native values explicitly, executes all SDK
-calls in worker threads, and uses a strongly readable `OPERATION#<id>/RESULT`
-item rather than a GSI as the idempotency authority. Local validation passed
-163 tests with 92.40% domain/application line/branch coverage using pinned
-DynamoDB Local 3.3.0 plus SDK Stubber. STEP-04B was squash-merged through PR
-`#18` as commit `9aafe6e` on 2026-07-17. The merge commit passed project CI run
-`29553563948`, CodeQL run `29553563821`, and managed Dependency Graph run
-`29553565579`; no production AWS resource or credential was used.
-
-STEP-05A was merged through PR `#20` as commit `d6ea561` and uses
-`openai` 2.46.0, `httpx` 0.28.1, and Pydantic 2.13.4; stable
-`AsyncOpenAI.responses.parse()` calls have `store=False`, no tools, and no beta
-Multi-agent field or header. Official-SDK mock transport tests cover all four
-generation operations, refusal, incomplete and invalid output, rate limiting,
-authentication failure, request privacy, usage telemetry, and domain
-revalidation. STEP-05B adds `question-router-v2` without another model call.
-Unknown or unmatched expressions default to optional search; only explicit
-timeless/creative patterns use no search. Persist the router rules version and
-stable routing reason with Evidence so misclassifications can become tests.
-One hosted Web search Responses request is used only for optional/required
-routes, with `tool_choice=required`, `max_tool_calls=4`, source inclusion,
-`store=false`, and the same immutable Evidence for all participants. Optional
-failure is persisted and continues; required failure becomes
-`required_evidence_unavailable`. Evidence META is schema v3 and its reader
-migrates the immediately previous v2. STEP-05C was merged through PR `#22` as
-commit `a6f43cb` and adds shadow-only deterministic escalation signals, immutable Luna/Terra/pro generation policies,
-schema v4 persistence, and an opt-in blind A/B evaluator. Production is fixed
-to `PRODUCTION_POLICY=luna_standard`; Terra standard and Luna pro are
-evaluation-only and must not be selectable from runtime configuration or
-Discord operations. STEP-05C.1A was merged through PR `#24` as commit `1360411` and adds
-separate scorer/key output trees, safe per-run failure capture, strict
-human-score validation, and content-free policy aggregation.
-STEP-05C.1B paid blind answer generation was explicitly approved and completed
-on 2026-07-17 with 10 cases and 20 successful answers. Human review uses one
-A/B/tie preference per case; do not require the impractical 100-value rubric
-for this operator evaluation. `tools/review_escalation.py` must preserve blind
-model identity, save after every choice, and support resume. Policy aggregation
-uses preference wins first and cost then p95 latency only for a preference tie.
-The completed blind review produced Luna pro 4 wins, Terra standard 2 wins, and
-4 ties. The operator chose Luna standard only for production and no escalation.
-Keep the result as evaluation history; do not implement thresholds, extra
-token/deadline limits, or escalation UI. Discord integration and CloudWatch
-emission remain out of scope.
-STEP-06A relocates SDK-independent outbox/panel records from the DynamoDB
-adapter to the application layer so future Discord and DynamoDB adapters do not
-depend on each other. The `DiscordOutboxRepository` Protocol owns the delivery
-boundary. `bind_discord_context` persists starter, thread, and control-panel
-IDs as three distinct fields only before debate work begins. Schema v5 reads
-only the immediately previous v4 and fails closed on unknown versions.
-STEP-06B adds `DiscordPyPublisher`. It requires exactly four distinct clients,
-publishes only a persisted and fenced operation, uses
-`discord.AllowedMentions.none()` and a nonce, and relies on discord.py 2.7.1 to
-emit `enforce_nonce=true` and honor `Retry-After`. It does not implement a
-second request retry loop. Reclaimed deliveries scan at most 500 messages after
-the outbox creation time and adopt the oldest exact Bot-author/nonce/content
-match. A same-nonce content mismatch fails closed. Locked threads are never
-unlocked automatically. Configure all clients with
-`max_ratelimit_timeout=30`; the adapter's 45-second Discord-operation timeout
-must remain shorter than `OUTBOX_CLAIM_SECONDS=60` so a blocked SDK wait cannot
-outlive claim ownership. The publisher contract receives the expected leased
-`DebateSnapshot` because an operation ID is scoped to its debate attempt.
-
-STEP-06C adds `DiscordInteractionController`, `DiscordPyGateway`, and
-`DiscordClientSupervisor`. Build all four clients with GUILDS-only Intent and
-never read Bot tokens in the client builder. Defer every command/component
-response before validation or persistence. Register `/shittim` only in the
-configured Guild and sync only when the deploy-provided command schema hash
-changes. Provision starter, Public Thread, and panel with mentions disabled;
-reconcile an interrupted setup by Bot author, nonce, and exact content before
-creating another resource. Bind control operations to the source AttemptId and
-verify Application, Guild, thread, panel message, debate, attempt, and actor
-before invoking a use case. The controller must own, cancel, and await all
-background debate tasks. On Python 3.14 with discord.py 2.7.1, do not use
-`Client.event()` for this listener because it reaches a deprecated asyncio API
-while tests treat warnings as errors; use the dedicated moderator client's
-explicit `on_interaction` dispatch.
-
-STEP-07A was squash-merged through PR `#33` as commit `0f386f5` and adds
-`RuntimeAdmissionGateway`, `RuntimeLifecycle`, and
-`UnixSignalHandlers`. Construct `DebateApplication` with the process admission
-gateway, not the physical `DiscordPyGateway`, so startup and shutdown remain
-fail closed. Keep admission closed until all four clients are READY, command
-schema sync has succeeded, and startup `resume_recoverable` is owned. A single
-Bot disconnect closes admission immediately; after 60 continuous seconds,
-cancel and await interaction/recovery tasks so the existing application
-cancellation contract checkpoints them. Do not convert connectivity loss to
-FAILED. Resume recoverable work and reopen admission only after all four clients
-return READY. SIGINT/SIGTERM must synchronously close admission and interaction
-dispatch, then perform bounded asynchronous cleanup. The application deadline
-is 90 seconds, leaving 30 seconds below ECS `stopTimeout=120` for client, log,
-and container-runtime exit.
-
-STEP-07B adds `DiscordOutboxRecovery` and requires `DebateApplication` to drain
-pending outbox operations before phase work resumes. Use a strongly consistent,
-paginated base-table Query to list every unsent operation, including future
-retry and unexpired-claim records. Wait for persisted availability without busy
-looping while the 20-second lease heartbeat continues. Do not count outbox wait
-against the 300-second active-processing deadline. Retryable Discord failures
-must reuse the publisher's persisted reschedule; non-retryable failures preserve
-the stable Discord code. A `RepositoryConflict` means this worker lost fencing
-and must not terminalize the attempt. Cancellation must stop delivery and leave
-the record for a later fenced owner. STEP-07B was merged in PR #34 at commit
-`04bbda0`; main CI and CodeQL passed.
-
-STEP-07C adds the only production composition root in `bootstrap.py`, the
-`python -m shittim_chest` entry point, strict fail-closed runtime/persona
-configuration, content-free telemetry, and process-scoped runtime primitives.
-Validate configuration before creating any SDK client. Keep one reusable
-DynamoDB client, one reusable `AsyncOpenAI` client with one shared limiter, and
-exactly four Discord clients. Runtime configuration must not select a model;
-production remains fixed to Luna standard. Close Discord, OpenAI, and DynamoDB
-clients deterministically and idempotently. Real subprocess tests must keep
-covering SIGTERM checkpoint/cleanup and SIGKILL replacement-process recovery.
-STEP-07C was merged in PR #35 at commit `e863ae3`; PR and main CI/CodeQL passed.
-
-STEP-08A adds the digest-pinned Python 3.14.6/uv multi-stage `Dockerfile`, a
-numeric UID/GID 10001 production runtime, a separately selectable break-glass
-target, and an event-loop heartbeat health command. Validate image security
-locally with a read-only root filesystem, a writable `/tmp`, all capabilities
-dropped, and no-new-privileges.
-STEP-08A was merged in PR #37 at commit `7742f0b`; PR and main CI/CodeQL and
-the initial Docker Dependabot update run passed.
-
-STEP-08B adds the native `ubuntu-24.04-arm` `container-arm64` check. It builds
-the production and CI-only fault targets, validates image configuration and
-runtime security, injects SIGTERM at all seven non-terminal phases, and injects
-SIGKILL before/after the transaction and Discord-post boundaries. Replacement
-must leave exactly one transaction event, one content-hash-matched Discord
-message, and a completed outbox. Syft is version/digest pinned, monitored by the
-weekly release-tool workflow, and emits a 30-day SPDX JSON artifact containing
-both Debian OS and production Python packages. The fault fixture is copied only
-into the `fault-test` target; never push or deploy that target. Fargate
-task-definition settings and release attestations remain STEP-09/10 work.
-STEP-08B was merged in PR #39 at commit `2cca51a`; PR/main native ARM64 CI,
-CodeQL, image SPDX validation, and the `container-arm64` Ruleset requirement
-passed. The first PR run exposed a Python 3.12 host/Python 3.14 domain import;
-keep the host-side gate standard-library-only and preserve the unit assertion
-that its phase list matches the domain state machine.
-
-STEP-09A uses Node.js 24.18.0 Active LTS, exact npm dependency pins, recommended CDK
-feature flags, cdk-nag 3 validation plugins, TypeScript strict mode, and Vitest
-assertions. `ShittimChest-Prod-Stateful` contains one on-demand DynamoDB table
-with `PK`/`SK`, `gsi1`/`gsi2`, 35-day PITR, deletion protection, AWS-managed
-encryption, and `RETAIN`; one retained ECR repository with default encryption,
-scan-on-push, exclusion-free `IMMUTABLE` tags, and 14-day untagged/candidate
-cleanup; and a retained `Notation-OCI-SHA384-ECDSA` AWS Signer profile plus an
-ECR Managed Signing rule scoped to `shittim-chest`. Do not bootstrap or deploy
-this stack as part of local/PR validation. STEP-09B adds
-`ShittimChest-Prod-Runtime`: `10.42.0.0/24` split into two public `/26` subnets,
-no NAT/ALB/VPC endpoint, no ingress, TCP 443 egress, Public IPv4, and a
-FARGATE_SPOT-only ARM64 singleton. Preserve minimum healthy 0%, maximum 100%,
-disabled AZ rebalancing, `stopTimeout=120`, and disabled Container Insights.
-The normal task must remain read-only-root, non-root, capability-free, and
-without ECS Exec/SSM/`ssmmessages` task permissions. Private values are injected
-only by the execution role using exact SSM parameter ARNs and
-`ssm:GetParameters`. The break-glass task definition and role remain detached
-from the service until an approved later workflow switches revisions. Do not
-bootstrap or deploy this stack as part of local/PR validation. STEP-09C owns
-Operations and pre-scale image admission, and STEP-10 owns real
-signing/referrer verification.
-
-The production builder must keep locked dependency installation in a layer
-before application source is copied. Use `uv sync --frozen --no-dev
---no-install-project --no-editable` for that layer, then copy `README.md`,
-`LICENSE`, and `src/` and run the final frozen non-editable sync. Mount
-`/root/.cache/uv` as a BuildKit cache with `sharing=locked`; do not set
-`UV_NO_CACHE=1` for the build. Keep `UV_PYTHON_DOWNLOADS=0` because the pinned
-Python base image is the only permitted interpreter source. A cache miss must
-change build time only, never the resulting dependency versions or gate result.
-In GitHub Actions, set up one Buildx builder and use full-SHA-pinned official
-`docker/build-push-action` steps with `load: true` so the later runtime and Syft
-checks inspect the exact images that were built. Export only the production
-`mode=max` cache to the `container-arm64-production` GHA scope, with cache
-export failure ignored because it is an optimization. Do not push either the
-production test image or the CI-only fault image from Pull Request CI. Keep
-the workflow at `contents: read` with no secret or OIDC access. Retain the
-Buildx summaries and diagnostic build records for 30 days, matching the test
-image SBOM retention period.
-Update this section and `20_実装・試験・検証記録.md` after each later slice so
-the boundary does not become stale.
+Update the progress table and `20_実装・試験・検証記録.md` after each later
+slice so the boundary does not become stale.
 
 ## GitHub Tooling Policy
 
@@ -498,9 +283,9 @@ uv run --frozen pip-audit --strict --require-hashes \
 uv build --no-sources
 ```
 
-The current domain slice must retain 90% or greater line/branch coverage and
-must exercise every phase pair, checkpoint/recovery boundary, retry attempt
-boundary, UUIDv7 boundary, UTC timestamp rule, and immutable-state invariant.
+Domain tests must exercise every phase pair, checkpoint/recovery boundary,
+retry attempt boundary, UUIDv7 boundary, UTC timestamp rule, and
+immutable-state invariant.
 
 ## Expected Project Structure
 
@@ -643,12 +428,39 @@ only composition root.
 - Do not duplicate retry behavior already provided by OpenAI SDK, boto3, or
   discord.py in the application layer.
 
+## Container Build Rules
+
+- The production builder must keep locked dependency installation in a layer
+  before application source is copied. Use `uv sync --frozen --no-dev
+  --no-install-project --no-editable` for that layer, then copy `README.md`,
+  `LICENSE`, and `src/` and run the final frozen non-editable sync.
+- Mount `/root/.cache/uv` as a BuildKit cache with `sharing=locked`; do not set
+  `UV_NO_CACHE=1` for the build. Keep `UV_PYTHON_DOWNLOADS=0` because the pinned
+  Python base image is the only permitted interpreter source. A cache miss must
+  change build time only, never the resulting dependency versions or gate
+  result.
+- In GitHub Actions, set up one Buildx builder and use full-SHA-pinned official
+  `docker/build-push-action` steps with `load: true` so the later runtime and
+  Syft checks inspect the exact images that were built. Export only the
+  production `mode=max` cache to the `container-arm64-production` GHA scope,
+  with cache export failure ignored because it is an optimization. Do not push
+  either the production test image or the CI-only fault image from Pull Request
+  CI. Keep the workflow at `contents: read` with no secret or OIDC access.
+  Retain the Buildx summaries and diagnostic build records for 30 days,
+  matching the test image SBOM retention period.
+
 ## AWS Defaults
 
 - Use `ap-northeast-1` unless an existing resource explicitly requires another
   Region.
 - Use IAM Identity Center SSO for interactive work. Do not create new long-lived
   access keys for normal development.
+- The CDK project uses Node.js 24.18.0 Active LTS, exact npm dependency pins,
+  recommended CDK feature flags, cdk-nag 3 validation plugins, TypeScript
+  strict mode, and Vitest assertions. Keep both CDK stacks synth-only in
+  local/PR validation; do not bootstrap or deploy them. The break-glass task
+  definition and role remain detached from the service until an approved later
+  workflow switches revisions.
 - Fargate task definitions must use `awsvpc` networking and a valid CPU/memory
   combination.
 - Use an IPv4 VPC and public subnets with `AssignPublicIp=ENABLED`. Route
