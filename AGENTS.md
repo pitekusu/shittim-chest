@@ -77,10 +77,12 @@ Not yet implemented:
 - The main Ruleset requires the strict checks `quality`, `tests`, `security`,
   `package`, `docs-public-safety`, `container-arm64`, and `grype`, plus CodeQL
   results with high-or-higher security alerts blocking merge. The `grype` job
-  scans the CycloneDX source SBOM and the arm64 SPDX image SBOM, fails on
-  high-or-above findings, reports medium/low only as `::warning::` annotations
-  and a job summary, caches its vulnerability database for one day, and stores
-  full JSON results as artifacts.
+  scans the CycloneDX source SBOM and the arm64 SPDX image SBOM and uploads
+  SARIF to code scanning (`security-events: write`); new high-or-above Grype
+  alerts block merge through the ruleset code scanning rule, while existing
+  unfixed base-image alerts are triaged and dismissed with reasons in the
+  Security tab. The job caches its vulnerability database for one day and
+  stores full JSON results as artifacts.
 - Production remains fixed to Luna standard. The completed blind A/B evaluation
   (Luna pro 4 wins, Terra standard 2 wins, 4 ties; operator chose Luna standard
   with no escalation) is evaluation history only; do not implement thresholds,
@@ -603,7 +605,7 @@ import-linter, pytest, pip-audit, Betterleaks
 full-history and generated-fixture contracts, wheel
 build/install, CycloneDX source SBOM, public repository surface, Markdown
 structure, Wiki links, workflow syntax, and a Grype scan of the source and
-arm64 image SBOMs with a high-or-above severity gate. STEP-03 makes
+arm64 image SBOMs uploaded as SARIF to code scanning. STEP-03 makes
 import-linter
 enforceable in the existing `quality` check; the native ARM64 container gate is
 added in STEP-08B.

@@ -311,17 +311,14 @@ jobs:
     needs:
       - security
       - container-arm64
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          version: ${{ env.UV_VERSION }}
-          python-version: ${{ env.PYTHON_VERSION }}
-          enable-cache: true
       - name: Download the source SBOM
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -365,14 +362,17 @@ jobs:
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
           GRYPE_DB_AUTO_UPDATE: "false"
         run: |
+          mkdir -p "${RUNNER_TEMP}/grype-sarif"
           "${RUNNER_TEMP}/grype" \
             "sbom:${RUNNER_TEMP}/grype-input/source/source-sbom.cdx.json" \
             --name "source-sbom" \
-            --output "json=${RUNNER_TEMP}/grype-source.cdx.report.json"
+            --output "json=${RUNNER_TEMP}/grype-source.cdx.report.json" \
+            --output "sarif=${RUNNER_TEMP}/grype-sarif/grype-source.sarif"
           "${RUNNER_TEMP}/grype" \
             "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
             --name "image-sbom-arm64" \
-            --output "json=${RUNNER_TEMP}/grype-image-arm64.spdx.report.json"
+            --output "json=${RUNNER_TEMP}/grype-image-arm64.spdx.report.json" \
+            --output "sarif=${RUNNER_TEMP}/grype-sarif/grype-image-arm64.sarif"
       - name: Retain the complete Grype scan results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -383,14 +383,12 @@ jobs:
             ${{ runner.temp }}/grype-image-arm64.spdx.report.json
           if-no-files-found: error
           retention-days: 30
-      - name: Summarize findings and enforce the severity gate
+      - name: Upload the Grype SARIF results to code scanning
         if: always()
-        run: |
-          uv run --frozen python tools/report_grype.py \
-            --target "source SBOM (CycloneDX)" \
-            "${RUNNER_TEMP}/grype-source.cdx.report.json" \
-            --target "image SBOM (arm64, SPDX)" \
-            "${RUNNER_TEMP}/grype-image-arm64.spdx.report.json"
+        uses: github/codeql-action/upload-sarif@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
+        with:
+          sarif_file: ${{ runner.temp }}/grype-sarif
+          category: grype-sbom
 
   docs-public-safety:
     name: docs-public-safety
