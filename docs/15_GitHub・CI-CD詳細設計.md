@@ -24,7 +24,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 - Pull Requestを必須とし、単独管理のためrequired approvalは0とする。
 - conversation resolutionとlinear historyを必須とし、force pushとbranch削除を禁止する。
 - bypass actorは設けない。merge methodはsquashだけを許可し、merge後にhead branchを自動削除する。
-- CI実装前は存在しないcheckをrequiredにしない。STEP-02のmain run成功後、`quality`、`tests`、`security`、`package`、`docs-public-safety`をGitHub Actions App由来に限定してrequired status checksへ追加し、strict checkを有効にする。`cdk`と`container-arm64`は各実装stepのmain成功後に追加する。CodeQLはstatus名ではなくcode scanning result ruleでHigh以上を保護する。
+- CI実装前は存在しないcheckをrequiredにしない。STEP-02のmain run成功後、`quality`、`tests`、`security`、`package`、`docs-public-safety`をGitHub Actions App由来に限定してrequired status checksへ追加し、strict checkを有効にする。`cdk`、`container-arm64`、`grype`は各実装stepのmain成功後に追加する。CodeQLはstatus名ではなくcode scanning result ruleでHigh以上を保護する。
 - emergency時もrulesetをbypassせず、修正PRとProduction Environment承認を使用する。
 
 ## 3. Pull Request CI
@@ -38,6 +38,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 5. Markdown/frontmatter/fence/Wiki link/heading、license scope、public file、GitHub workflow syntaxを検証する。非公開Obsidian正本とのbyte一致はlocal pre-PRでのみ検証する。
 6. STEP-09Aで`cdk` jobを追加し、最新Active LTSのNode.js 24.18.0と`package-lock.json`を使った`npm ci`、npm audit、TypeScript strict typecheck、Vitest CDK assertion、cdk-nag 3 Validation Plugin、`cdk synth --strict`をcredentialなしで実行する。Runtime/Operations assertionはSTEP-09B/09Cで同じjobへ追加する。
 7. `container-arm64`は公開repositoryのnative `ubuntu-24.04-arm`でproduction/fault-test targetをbuildする。full SHA固定した`docker/setup-buildx-action`と`docker/build-push-action`を使い、両targetを`load: true`で同じnative Docker daemonへ読み込む。production buildだけが`container-arm64-production` scopeへ`mode=max`のGHA cacheをexportし、fault buildは同じjob内のBuildx builder cacheを再利用する。builderは`pyproject.toml`と`uv.lock`だけをcopyして`uv sync --frozen --no-dev --no-install-project --no-editable`を実行した後、application sourceをcopyしてprojectをinstallする。`/root/.cache/uv`は`sharing=locked`のBuildKit cache mountとし、runtime imageへcopyしない。既定Python image以外の取得を`UV_PYTHON_DOWNLOADS=0`で禁止する。image config、read-only/non-root/capability、health、SIGTERM/SIGKILL recoveryを検査し、Syft v1.48.0でOS/runtime dependencyを含むSPDX JSONを生成して30日保持する。secret、OIDC、registry push、paid/network integrationは使用しない。
+8. `grype`は`security`と`container-arm64`の成功後に走り、両jobがartifactとして保持したCycloneDX source SBOMとSPDX arm64 image SBOMをdownloadしてscanする。Grypeは`.github/tool-versions.json`でversionとarchive SHA-256を固定し、amd64 tarballをchecksum検証してinstallする。vulnerability DBはUTC日付keyのactions/cacheで1日cacheし、exact miss時だけ`grype db update`で更新し、scanは`GRYPE_DB_AUTO_UPDATE=false`でcacheを優先する。high以上が1件でもあればjobを失敗させ、medium/lowはCI成功のまま`::warning::` annotationとし、severity別件数とgate結果をJob SummaryのMarkdown表で目立つように通知する。全件のJSON scan結果は30日artifactへ保存する。gate判定・annotation・summary生成はstdlibのみの`tools/report_grype.py`が担い、report JSONの構造不正や欠損はfail closedとする。
 
 Docker build cacheは性能最適化であり、依存関係の正本ではない。`uv.lock`、`--frozen`、digest固定base imageを再現性境界とし、cache missまたはcache evictionでも同一gateを通るimageを再構築できなければならない。`UV_NO_CACHE=1`は使用せず、uv cacheはbuild mountの寿命へ限定する。
 
@@ -165,3 +166,5 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-19 | ECR OCI v1.1 Referrers | https://docs.aws.amazon.com/AmazonECR/latest/userguide/images.html、https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ListImageReferrers.html | 4種のreference artifactをrelease/deploy両jobで照合 |
 | 2026-07-19 | AWS Signer Notation verification | https://docs.aws.amazon.com/signer/latest/developerguide/image-verification.html | strict trust policy、digest URI、revocation確認 |
 | 2026-07-19 | GitHub registry attestations | https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations | image digestのprovenance/SBOMをECRへpushしてidentity検証 |
+| 2026-07-20 | Grype CLI / configuration 0.116.0 | https://oss.anchore.com/docs/reference/grype/cli/、https://oss.anchore.com/docs/reference/grype/configuration/ | `sbom:`入力、`json=<path>`出力、`GRYPE_DB_AUTO_UPDATE`/`GRYPE_DB_CACHE_DIR`、DB max age 120h（1日cacheと整合） |
+| 2026-07-20 | GitHub Actions job summary / workflow commands | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands | `GITHUB_STEP_SUMMARY`、`::warning::`/`::error::` annotation（種別ごとの表示上限を考慮） |

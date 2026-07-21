@@ -174,6 +174,7 @@ jobs:
       - name: Retain the source SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
+          name: source-sbom-${{ github.sha }}
           path: ${{ runner.temp }}/source-sbom.cdx.json
           archive: false
           if-no-files-found: error
@@ -304,6 +305,95 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 30
+
+  grype:
+    name: grype
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs:
+      - security
+      - container-arm64
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Download the source SBOM
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: source-sbom-${{ github.sha }}
+          path: ${{ runner.temp }}/grype-input/source
+      - name: Download the arm64 image SBOM
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: image-sbom-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/grype-input/image
+      - name: Install pinned Grype
+        run: |
+          grype_version=$(jq --raw-output '.tools.grype.version' .github/tool-versions.json)
+          grype_archive_name=$(jq --raw-output '.tools.grype.archive_name' .github/tool-versions.json)
+          grype_archive_sha=$(jq --raw-output '.tools.grype.archive_sha256' .github/tool-versions.json)
+          archive="${RUNNER_TEMP}/${grype_archive_name}"
+          curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/anchore/grype/releases/download/v${grype_version}/${grype_archive_name}"
+          printf '%s  %s\n' "${grype_archive_sha}" "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" grype
+          test "$("${RUNNER_TEMP}/grype" version -o json | jq --raw-output .version)" = \
+            "${grype_version}"
+      - name: Stamp the daily database cache key
+        id: database-date
+        run: echo "date=$(date --utc +%Y-%m-%d)" >> "${GITHUB_OUTPUT}"
+      - name: Cache the Grype vulnerability database for one day
+        id: grype-database-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/grype/db
+          key: grype-db-${{ runner.os }}-${{ steps.database-date.outputs.date }}
+          restore-keys: |
+            grype-db-${{ runner.os }}-
+      - name: Update the Grype vulnerability database
+        if: steps.grype-database-cache.outputs.cache-hit != 'true'
+        run: |
+          "${RUNNER_TEMP}/grype" db update
+      - name: Scan both SBOMs with Grype
+        env:
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+          GRYPE_DB_AUTO_UPDATE: "false"
+        run: |
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/source/source-sbom.cdx.json" \
+            --name "source-sbom" \
+            --output "json=${RUNNER_TEMP}/grype-source.cdx.report.json"
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
+            --name "image-sbom-arm64" \
+            --output "json=${RUNNER_TEMP}/grype-image-arm64.spdx.report.json"
+      - name: Retain the complete Grype scan results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: grype-scan-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/grype-source.cdx.report.json
+            ${{ runner.temp }}/grype-image-arm64.spdx.report.json
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+      - name: Summarize findings and enforce the severity gate
+        if: always()
+        run: |
+          uv run --frozen python tools/report_grype.py \
+            --target "source SBOM (CycloneDX)" \
+            "${RUNNER_TEMP}/grype-source.cdx.report.json" \
+            --target "image SBOM (arm64, SPDX)" \
+            "${RUNNER_TEMP}/grype-image-arm64.spdx.report.json"
 
   docs-public-safety:
     name: docs-public-safety
