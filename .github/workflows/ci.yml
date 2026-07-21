@@ -383,12 +383,18 @@ jobs:
             ${{ runner.temp }}/grype-image-arm64.spdx.report.json
           if-no-files-found: error
           retention-days: 30
-      - name: Upload the Grype SARIF results to code scanning
+      - name: Upload the source SBOM SARIF to code scanning
         if: always()
         uses: github/codeql-action/upload-sarif@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
         with:
-          sarif_file: ${{ runner.temp }}/grype-sarif
-          category: grype-sbom
+          sarif_file: ${{ runner.temp }}/grype-sarif/grype-source.sarif
+          category: grype-source-sbom
+      - name: Upload the image SBOM SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
+        with:
+          sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
+          category: grype-image-sbom
 
   docs-public-safety:
     name: docs-public-safety
