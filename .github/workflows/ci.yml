@@ -174,7 +174,6 @@ jobs:
       - name: Retain the source SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: source-sbom-${{ github.sha }}
           path: ${{ runner.temp }}/source-sbom.cdx.json
           archive: false
           if-no-files-found: error
@@ -327,12 +326,12 @@ jobs:
       - name: Download the source SBOM
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: source-sbom-${{ github.sha }}
+          name: source-sbom.cdx.json
           path: ${{ runner.temp }}/grype-input/source
       - name: Download the arm64 image SBOM
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: image-sbom-arm64-${{ github.sha }}
+          name: image-sbom-arm64.spdx.json
           path: ${{ runner.temp }}/grype-input/image
       - name: Install pinned Grype
         run: |
@@ -383,7 +382,6 @@ jobs:
           path: |
             ${{ runner.temp }}/grype-source.cdx.report.json
             ${{ runner.temp }}/grype-image-arm64.spdx.report.json
-          archive: false
           if-no-files-found: error
           retention-days: 30
       - name: Summarize findings and enforce the severity gate
