@@ -69,14 +69,20 @@ Not yet implemented:
 - Never enable Betterleaks provider validation, because detected candidates
   must not be sent to external APIs. Reintroduce a second secret scanner only
   through a later ADR with a concrete coverage gap. The weekly release-tool
-  workflow detects newer actionlint, Betterleaks, and Syft releases without
-  applying them automatically.
+  workflow detects newer actionlint, Betterleaks, Syft, and Grype releases
+  without applying them automatically.
 - Do not submit a custom GitHub dependency snapshot or grant `contents: write`;
   GitHub's Python Dependabot graph job already supplies the complete uv
   dependency inventory.
 - The main Ruleset requires the strict checks `quality`, `tests`, `security`,
-  `package`, `docs-public-safety`, and `container-arm64`, plus CodeQL results
-  with high-or-higher security alerts blocking merge.
+  `package`, `docs-public-safety`, `container-arm64`, and `grype`, plus CodeQL
+  results with high-or-higher security alerts blocking merge. The `grype` job
+  scans the CycloneDX source SBOM and the arm64 SPDX image SBOM and uploads
+  SARIF to code scanning (`security-events: write`); new high-or-above Grype
+  alerts block merge through the ruleset code scanning rule, while existing
+  unfixed base-image alerts are triaged and dismissed with reasons in the
+  Security tab. The job caches its vulnerability database for one day and
+  stores full JSON results as artifacts.
 - Production remains fixed to Luna standard. The completed blind A/B evaluation
   (Luna pro 4 wins, Terra standard 2 wins, 4 ties; operator chose Luna standard
   with no escalation) is evaluation history only; do not implement thresholds,
@@ -598,7 +604,9 @@ CI verifies the uv lock, Ruff, ty across source/tests/tools,
 import-linter, pytest, pip-audit, Betterleaks
 full-history and generated-fixture contracts, wheel
 build/install, CycloneDX source SBOM, public repository surface, Markdown
-structure, Wiki links, and workflow syntax. STEP-03 makes import-linter
+structure, Wiki links, workflow syntax, and a Grype scan of the source and
+arm64 image SBOMs uploaded as SARIF to code scanning. STEP-03 makes
+import-linter
 enforceable in the existing `quality` check; the native ARM64 container gate is
 added in STEP-08B.
 

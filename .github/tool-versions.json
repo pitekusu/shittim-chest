@@ -27,6 +27,13 @@
       "repository": "anchore/syft",
       "tag_prefix": "v",
       "version": "1.48.0"
+    },
+    "grype": {
+      "archive_name": "grype_0.116.0_linux_amd64.tar.gz",
+      "archive_sha256": "40aff724297312f91ea390d003bed8d8651c74cc7f5b26732db80b3a408d2fc5",
+      "repository": "anchore/grype",
+      "tag_prefix": "v",
+      "version": "0.116.0"
     }
   }
 }
