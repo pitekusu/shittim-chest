@@ -588,7 +588,10 @@ jobs:
           tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" actionlint
           installed_version=$("${RUNNER_TEMP}/actionlint" -version | head -n 1)
           test "${installed_version}" = "${actionlint_version}"
-          "${RUNNER_TEMP}/actionlint" -color
+          # actionlint 1.7.12 predates GitHub's documented vulnerability-alerts scope.
+          # check_notification_workflows.py permits exactly one read-only use.
+          "${RUNNER_TEMP}/actionlint" -color \
+            -ignore 'unknown permission scope "vulnerability-alerts"'
       - name: Check changed lines for whitespace errors
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

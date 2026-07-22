@@ -67,6 +67,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     secret_references = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
     if secret_references != {"DISCORD_WEBHOOK_URL"}:
         raise WorkflowPolicyError("target workflow may use only DISCORD_WEBHOOK_URL")
+    _validate_vulnerability_alerts_permission(directory)
     return 1
 
 
@@ -88,6 +89,19 @@ def _contains_untrusted_run_expression(text: str) -> bool:
             if "${{ github.event." in nested:
                 return True
     return False
+
+
+def _validate_vulnerability_alerts_permission(directory: Path) -> None:
+    uses: list[tuple[str, str]] = []
+    for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "vulnerability-alerts:" in line and not line.lstrip().startswith("#"):
+                uses.append((path.name, line.strip()))
+    expected = [("discord-security-digest.yml", "vulnerability-alerts: read")]
+    if uses != expected:
+        raise WorkflowPolicyError(
+            "vulnerability-alerts is restricted to one read-only Security Digest permission"
+        )
 
 
 def main() -> int:

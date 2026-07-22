@@ -63,9 +63,13 @@ Discord Embedはtitle 256、description 4,096、field 25件、field name 256、f
 
 1. STEP-02D-A: 共通package、workflow completion通知、bounded retry、unit test。local・PR CI合格。
 2. STEP-02D-B: PR lifecycle、Dependabot分岐、merge由来push抑制、限定`pull_request_target` policy test。local実装済み。
-3. STEP-02D-C: 日次security digest、scan停止検知、Discord/GitHub設定、manual smoke test。
+3. STEP-02D-C: 日次security digest、scan停止検知はlocal実装済み。Discord/GitHub実設定とmanual smoke testはoperator activation待ち。
 
 STEP-02D-Aでは通知をdisabledのままmergeし、実Webhook通信、Discord ID、GitHub Secret/Variable変更を行わない。
+
+Security DigestはDependabot Alerts、Code scanning Alerts、Dependabot PR、check runs、Code scanning analyses、CodeQL workflowをLink headerが尽きるまで取得する。全取得後だけ件数を表示し、途中失敗では件数を破棄してSecurity threadへ監視失敗を通知し、workflowも失敗させる。Dependency GraphとRelease Tool Versionsは8日以内の成功、CodeQLはlatest main runの成功と8日鮮度、CodeQLとGrypeは現在main SHAのanalysisを要求する。
+
+GitHub公式の`vulnerability-alerts: read`をDependabot Alerts専用に使用する。actionlint 1.7.12の未追随診断は限定除外し、専用policy testが当該workflow 1件のread以外を拒否する。
 
 ## 5. 障害対応
 
@@ -82,6 +86,7 @@ STEP-02D-Aでは通知をdisabledのままmergeし、実Webhook通信、Discord 
 |---|---|---|---|
 | 2026-07-23 | GitHub Actions events | https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows | `workflow_run`と限定`pull_request_target`のdefault-branch trust boundary |
 | 2026-07-23 | GitHub workflow permissions | https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax | `actions`、`security-events`、`vulnerability-alerts`等の最小権限 |
+| 2026-07-23 | Dependabot Alerts REST | https://docs.github.com/en/rest/dependabot/alerts?apiVersion=2026-03-10 | repository alertの全page取得、Dependabot Alerts read permission |
 | 2026-07-23 | Dependabot on Actions | https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-on-actions | Dependabot起点eventのSecret制約 |
 | 2026-07-23 | Discord Webhook | https://docs.discord.com/developers/resources/webhook | `thread_id`、`wait=true`、通常Webhook送信 |
 | 2026-07-23 | Discord Message | https://docs.discord.com/developers/resources/message | Embed上限、allowed mentions |

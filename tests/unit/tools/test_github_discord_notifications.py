@@ -16,7 +16,7 @@ from tools.github_discord_notifications.formatting import (
     message_payload,
     sanitize_text,
 )
-from tools.github_discord_notifications.github_api import GitHubApiError, _next_link
+from tools.github_discord_notifications.github_api import GitHubApiError, GitHubClient, _next_link
 from tools.github_discord_notifications.models import CurlResult, JsonObject, JsonValue
 from tools.github_discord_notifications.webhook import (
     MAX_ATTEMPTS,
@@ -164,6 +164,34 @@ def test_workflow_name_and_path_must_both_match() -> None:
     assert resolve_workflow_target(workflow_run(name="Unknown")) is None
 
 
+def test_notification_workflow_success_is_suppressed_but_failure_is_reported() -> None:
+    success = event_payload(
+        name="Discord Security Digest",
+        path=".github/workflows/discord-security-digest.yml",
+    )
+    assert (
+        run_notification(
+            event=success,
+            environment={},
+            github=FakeGitHub(),
+            discord=FakeDiscord(),
+        )
+        == ()
+    )
+    discord = FakeDiscord()
+    run_notification(
+        event=event_payload(
+            name="Discord Repository Events",
+            path=".github/workflows/discord-repository-events.yml",
+            conclusion="failure",
+        ),
+        environment=environment(),
+        github=FakeGitHub(jobs=[{"name": "notify", "conclusion": "failure"}]),
+        discord=discord,
+    )
+    assert [thread for thread, _ in discord.messages] == ["203"]
+
+
 def test_successful_workflow_sends_no_alert_mention() -> None:
     discord = FakeDiscord()
     results = run_notification(
@@ -282,6 +310,41 @@ def test_next_link_accepts_only_the_next_relation() -> None:
     )
     assert _next_link(header) == "https://api.github.com/items?page=3"
     assert _next_link(None) is None
+
+
+def test_keyed_pagination_reads_every_link_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = GitHubClient(token="token-placeholder", repository="example/project")  # noqa: S106
+    pages: list[tuple[JsonValue, str | None]] = [
+        (
+            {"check_runs": [{"id": 1}]},
+            "https://api.github.com/repos/example/project/check-runs?page=2",
+        ),
+        ({"check_runs": [{"id": 2}]}, None),
+    ]
+    queries: list[dict[str, str] | None] = []
+
+    def get(path: str, *, query: dict[str, str] | None) -> tuple[JsonValue, str | None]:
+        queries.append(query)
+        return pages.pop(0)
+
+    monkeypatch.setattr(client, "_get", get)
+    assert [item["id"] for item in client.paginate_keyed_array("check-runs", key="check_runs")] == [
+        1,
+        2,
+    ]
+    assert queries[0] == {"per_page": "100"}
+    assert queries[1] == {"page": "2"}
+
+
+def test_keyed_pagination_rejects_a_missing_array(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = GitHubClient(token="token-placeholder", repository="example/project")  # noqa: S106
+
+    def get(path: str, *, query: dict[str, str] | None) -> tuple[JsonValue, str | None]:
+        return {"check_runs": None}, None
+
+    monkeypatch.setattr(client, "_get", get)
+    with pytest.raises(GitHubApiError, match="lacked array field"):
+        tuple(client.paginate_keyed_array("check-runs", key="check_runs"))
 
 
 @pytest.mark.parametrize("status", [429, 500, 503, 599])

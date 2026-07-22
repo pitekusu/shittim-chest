@@ -6,6 +6,8 @@ on:
       - CI
       - Dependency Graph
       - Release Tool Versions
+      - Discord Repository Events
+      - Discord Security Digest
     types:
       - completed
 

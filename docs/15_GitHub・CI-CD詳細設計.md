@@ -52,6 +52,8 @@ fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-
 
 GitHub Actionsの運用通知は[[21_GitHub・Discord通知運用設計]]を正とする。`workflow_run`はrepository管理の`CI`、`Dependency Graph`、`Release Tool Versions`だけをworkflow名とpathの両方で識別し、GitHub管理の同名workflowを除外する。通知workflowは独立し、元workflowのstatus checkを上書きしない。`DISCORD_NOTIFICATIONS_ENABLED` が`true`になるまでは全送信をskipする。
 
+Security Digestの`GITHUB_TOKEN` は`vulnerability-alerts: read`をDependabot Alerts、`security-events: read`をCode scanningに使用する。actionlint 1.7.12はGitHubの新しい`vulnerability-alerts`を未認識のため、この既知診断だけを除外する。代わりに専用policy checkerが`discord-security-digest.yml`の`read` 1件以外を拒否し、`read-all`への権限拡大で回避しない。
+
 ### Dependency graph・source SBOM
 
 - GitHubのstatic parser一覧に`uv.lock`はないが、Python repositoryではDependabot graph jobがfull transitive snapshotを生成する。2026-07-17のlive SPDX 2.3 exportとDependency Review APIで、`uv.lock`の全42 external packageとRuff更新差分が認識されることを確認した。

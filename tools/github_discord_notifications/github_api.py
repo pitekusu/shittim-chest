@@ -75,6 +75,34 @@ class GitHubClient:
             current_path = parsed.path
             current_query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
 
+    def paginate_keyed_array(
+        self,
+        path: str,
+        *,
+        key: str,
+        query: dict[str, str] | None = None,
+    ) -> Iterator[JsonObject]:
+        """Yield objects from a paginated array nested under one response key."""
+
+        current_path = path
+        current_query = {**(query or {}), "per_page": "100"}
+        while True:
+            value, next_url = self._get(current_path, query=current_query)
+            nested = value.get(key) if isinstance(value, dict) else None
+            if not isinstance(nested, list):
+                raise GitHubApiError(f"GitHub pagination response lacked array field {key}")
+            for item in nested:
+                if not isinstance(item, dict):
+                    raise GitHubApiError("GitHub pagination item was not an object")
+                yield item
+            if next_url is None:
+                return
+            parsed = urllib.parse.urlsplit(next_url)
+            if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+                raise GitHubApiError("GitHub pagination returned an unexpected host")
+            current_path = parsed.path
+            current_query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+
     def _get(
         self,
         path: str,
