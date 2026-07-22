@@ -321,7 +321,7 @@ jobs:
           load: true
       - name: Validate image security and inject termination faults
         run: |
-          python tools/run_container_gate.py \
+          python -m tools.run_container_gate \
             --production-image shittim-chest:step-08b-arm64 \
             --fault-image shittim-chest:step-08b-fault-arm64 \
             --expected-architecture arm64
