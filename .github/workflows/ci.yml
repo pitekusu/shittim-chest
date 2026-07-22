@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
@@ -92,7 +92,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out the complete tested history
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -186,7 +186,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
@@ -226,7 +226,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install Node.js
@@ -247,7 +247,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out the tested commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Confirm the native ARM64 runner
@@ -394,7 +394,7 @@ jobs:
       security-events: write
     steps:
       - name: Check out the tested commit
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Download the source SBOM
@@ -514,13 +514,13 @@ jobs:
           retention-days: 30
       - name: Upload the source SBOM SARIF to code scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-source.sarif
           category: grype-source-sbom
       - name: Upload the image SBOM SARIF to code scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
           category: grype-image-sbom
@@ -558,7 +558,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the complete tested history
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
