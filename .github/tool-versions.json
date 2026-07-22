@@ -22,11 +22,11 @@
       "version": "1.6.1"
     },
     "syft": {
-      "archive_name": "syft_1.48.0_linux_arm64.tar.gz",
-      "archive_sha256": "6865a3d97c4e28b4b38571c17a2bf512da4494ef1d37613c3122fce0d67e63b0",
+      "archive_name": "syft_1.49.0_linux_arm64.tar.gz",
+      "archive_sha256": "c7c32de183c32368de197edba75e8dba7632915f7761bacd55149a9ca7fe0fa4",
       "repository": "anchore/syft",
       "tag_prefix": "v",
-      "version": "1.48.0"
+      "version": "1.49.0"
     },
     "grype": {
       "archive_name": "grype_0.116.0_linux_amd64.tar.gz",
