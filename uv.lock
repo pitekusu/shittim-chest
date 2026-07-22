@@ -189,15 +189,15 @@ wheels = [
 
 [[package]]
 name = "boto3-stubs"
-version = "1.43.51"
+version = "1.43.53"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore-stubs" },
     { name = "types-s3transfer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2e/cb/052936e4efb898ba165333864bfa0c1f99b4431b48562f8b07863d53a64e/boto3_stubs-1.43.51.tar.gz", hash = "sha256:56177d149f918ef2caf38176b61e286400448152c70f08a50616c596e8a851db", size = 103200, upload-time = "2026-07-17T20:29:43.733Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/40/5f28d471d6f59b0649bea6a5885185a5e388dfafc0e8117ee97b34eef509/boto3_stubs-1.43.53.tar.gz", hash = "sha256:28229c6a08adbc2edc6138d0b08f22d199ad46c655e448aafc6593f857d1031f", size = 103236, upload-time = "2026-07-21T19:52:37.138Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/8e/f2266a4a4a480883500e4d31badc621524125a1124b8d7595a3b4d83227a/boto3_stubs-1.43.51-py3-none-any.whl", hash = "sha256:dc01e52a142c023f59cad0a68cc5f149c5c64b2d9ca6af1b0cbb7e08f405de18", size = 70961, upload-time = "2026-07-17T20:29:40.693Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/0e/2e88a58746e16d186aef25763e8838b2a6f1c91229e31a85be49b84df536/boto3_stubs-1.43.53-py3-none-any.whl", hash = "sha256:7a2c6ccd457bc1651d3fc0f45d8d8e14d209f36867879cbd70a01ba6b336feca", size = 70962, upload-time = "2026-07-21T19:52:33.371Z" },
 ]
 
 [package.optional-dependencies]
@@ -1311,7 +1311,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", extras = ["dynamodb"], specifier = ">=1.43.51,<2" },
+    { name = "boto3-stubs", extras = ["dynamodb"], specifier = ">=1.43.53,<2" },
     { name = "cyclonedx-python-lib", extras = ["json-validation"], specifier = ">=11.11.0,<12" },
     { name = "hypothesis", specifier = ">=6.157.0,<7" },
     { name = "import-linter", specifier = ">=2.13,<3" },

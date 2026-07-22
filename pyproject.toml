@@ -22,7 +22,7 @@ Repository = "https://github.com/pitekusu/shittim-chest"
 
 [dependency-groups]
 dev = [
-    "boto3-stubs[dynamodb]>=1.43.51,<2",
+    "boto3-stubs[dynamodb]>=1.43.53,<2",
     "cyclonedx-python-lib[json-validation]>=11.11.0,<12",
     "hypothesis>=6.157.0,<7",
     "import-linter>=2.13,<3",
