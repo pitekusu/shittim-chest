@@ -373,6 +373,18 @@ jobs:
             --name "image-sbom-arm64" \
             --output "json=${RUNNER_TEMP}/grype-image-arm64.spdx.report.json" \
             --output "sarif=${RUNNER_TEMP}/grype-sarif/grype-image-arm64.sarif"
+      - name: Point the SARIF locations at repository files
+        run: |
+          rewrite_locations() {
+            local input="$1" file="$2"
+            jq --arg file "${file}" '
+              (.runs[].results[].locations[]?.physicalLocation? | objects) |= (
+                .artifactLocation.uri = $file | .region = {startLine: 1}
+              )' "${input}" > "${input}.fixed"
+            mv "${input}.fixed" "${input}"
+          }
+          rewrite_locations "${RUNNER_TEMP}/grype-sarif/grype-source.sarif" "uv.lock"
+          rewrite_locations "${RUNNER_TEMP}/grype-sarif/grype-image-arm64.sarif" "Dockerfile"
       - name: Retain the complete Grype scan results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
