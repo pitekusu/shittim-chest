@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pitekusu/shittim-chest/security/container-risk-acceptance.schema.json",
+  "title": "The Shittim Chest container vulnerability risk acceptances",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "maximum_validity_days", "acceptances"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "maximum_validity_days": { "const": 90 },
+    "acceptances": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "vulnerability_id",
+          "package",
+          "image_digest",
+          "status",
+          "justification",
+          "impact",
+          "exploitability",
+          "evidence",
+          "approved_on",
+          "expires_on",
+          "reevaluation_conditions",
+          "owner"
+        ],
+        "properties": {
+          "vulnerability_id": {
+            "type": "string",
+            "pattern": "^(CVE-[0-9]{4}-[0-9]{4,}|GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4})$"
+          },
+          "package": { "type": "string", "minLength": 1 },
+          "image_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "status": { "enum": ["affected", "under_investigation"] },
+          "justification": { "type": "string", "minLength": 10 },
+          "impact": { "type": "string", "minLength": 10 },
+          "exploitability": { "type": "string", "minLength": 10 },
+          "evidence": { "type": "string", "minLength": 10 },
+          "approved_on": { "type": "string", "format": "date" },
+          "expires_on": { "type": "string", "format": "date" },
+          "reevaluation_conditions": { "type": "string", "minLength": 10 },
+          "owner": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

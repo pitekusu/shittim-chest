@@ -15,9 +15,15 @@ import {
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
+import containerPolicy from "../../container-policy.json";
+
 const IMAGE_DIGEST_PATTERN = "^sha256:[0-9a-f]{64}$";
 const CONFIG_VERSION_PATTERN = "^v[0-9]{4}$";
 const PARAMETER_ROOT = "/shittim-chest/production";
+const RUNTIME_UID = containerPolicy.runtime_identity.uid;
+const RUNTIME_GID = containerPolicy.runtime_identity.gid;
+const RUNTIME_USER = `${RUNTIME_UID}:${RUNTIME_GID}`;
+const HEARTBEAT_TMPFS = containerPolicy.heartbeat_tmpfs;
 
 export interface RuntimeStackProps extends StackProps {
   readonly debateTable: dynamodb.ITable;
@@ -408,7 +414,7 @@ export class RuntimeStack extends Stack {
       readonlyRootFilesystem: options.readonlyRootFilesystem,
       secrets: options.parameters.secrets,
       stopTimeout: Duration.seconds(120),
-      user: "10001:10001",
+      user: RUNTIME_USER,
       versionConsistency: ecs.VersionConsistency.ENABLED,
       workingDirectory: "/app",
     });
@@ -418,9 +424,14 @@ export class RuntimeStack extends Stack {
     const cfnTaskDefinition = definition.node.defaultChild as ecs.CfnTaskDefinition;
     cfnTaskDefinition.addPropertyOverride("ContainerDefinitions.0.LinuxParameters.Tmpfs", [
       {
-        ContainerPath: "/tmp/shittim-chest",
-        MountOptions: ["nosuid", "nodev", "noexec", "uid=10001", "gid=10001", "mode=0700"],
-        Size: 1,
+        ContainerPath: HEARTBEAT_TMPFS.path,
+        MountOptions: [
+          ...HEARTBEAT_TMPFS.mount_options,
+          `uid=${RUNTIME_UID}`,
+          `gid=${RUNTIME_GID}`,
+          `mode=${HEARTBEAT_TMPFS.mode}`,
+        ],
+        Size: HEARTBEAT_TMPFS.size_mib,
       },
     ]);
     options.imageRepository.grantPull(options.executionRole);

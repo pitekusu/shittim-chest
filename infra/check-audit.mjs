@@ -20,6 +20,21 @@ process.stdin.on("end", () => {
     console.error("npm audit output was not valid JSON; refusing to pass");
     process.exit(1);
   }
+  if (
+    report === null ||
+    typeof report !== "object" ||
+    "error" in report ||
+    typeof report.auditReportVersion !== "number" ||
+    report.metadata === null ||
+    typeof report.metadata !== "object" ||
+    report.metadata.vulnerabilities === null ||
+    typeof report.metadata.vulnerabilities !== "object" ||
+    report.vulnerabilities === null ||
+    typeof report.vulnerabilities !== "object"
+  ) {
+    console.error("npm audit report was incomplete or reported an error; refusing to pass");
+    process.exit(1);
+  }
   const today = new Date().toISOString().slice(0, 10);
   const failures = [];
   for (const [name, vulnerability] of Object.entries(report.vulnerabilities ?? {})) {

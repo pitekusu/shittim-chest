@@ -43,6 +43,7 @@ jobs:
         run: |
           uv run --frozen ruff format --check .
           uv run --frozen ruff check .
+          uv run --frozen python tools/check_container_policy.py
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
       - name: Check types with ty
@@ -253,9 +254,50 @@ jobs:
         run: |
           test "$(uname -m)" = "aarch64"
           test "$(docker info --format '{{.Architecture}}')" = "aarch64"
+      - name: Require read-only DHI credentials
+        env:
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+        run: |
+          test -n "${DHI_USERNAME}" || {
+            echo "DHI_USERNAME is unavailable; fork PRs must be reproduced on a trusted branch." >&2
+            exit 1
+          }
+          test -n "${DHI_TOKEN}" || {
+            echo "DHI_TOKEN is unavailable; fork PRs must be reproduced on a trusted branch." >&2
+            exit 1
+          }
+      - name: Log in to the DHI image registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+      - name: Authenticate Docker Scout
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Verify the pinned DHI ARM64 manifests
+        run: |
+          verify_manifest() {
+            policy_key=$1
+            reference=$(jq --raw-output ".dhi.${policy_key}.reference" container-policy.json)
+            expected=$(jq --raw-output ".dhi.${policy_key}.arm64_manifest_digest" container-policy.json)
+            actual=$(docker buildx imagetools inspect --raw "${reference}" | jq --raw-output '
+              .manifests[]
+              | select(.platform.os == "linux" and .platform.architecture == "arm64")
+              | .digest
+            ')
+            test "${actual}" = "${expected}"
+          }
+          verify_manifest builder
+          verify_manifest runtime
       - name: Build and load the production image
+        id: build-production
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -264,6 +306,15 @@ jobs:
           load: true
           cache-from: type=gha,scope=container-arm64-production
           cache-to: type=gha,scope=container-arm64-production,mode=max,ignore-error=true
+      - name: Record the tested image digest and size
+        env:
+          IMAGE_DIGEST: ${{ steps.build-production.outputs.digest }}
+        run: |
+          test "$(printf '%s' "${IMAGE_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \
+            "${IMAGE_DIGEST}"
+          printf '%s\n' "${IMAGE_DIGEST}" > "${RUNNER_TEMP}/image-manifest-digest.txt"
+          docker image inspect shittim-chest:step-08b-arm64 --format '{{.Size}}' \
+            > "${RUNNER_TEMP}/image-size-bytes.txt"
       - name: Build and load the CI-only fault image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -290,6 +341,32 @@ jobs:
           tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" syft
           test "$("${RUNNER_TEMP}/syft" version -o json | jq --raw-output .version)" = \
             "${syft_version}"
+      - name: Install pinned Docker Scout
+        run: |
+          scout_version=$(jq --raw-output '.tools["docker-scout"].version' .github/tool-versions.json)
+          scout_archive_name=$(jq --raw-output '.tools["docker-scout"].archive_name' .github/tool-versions.json)
+          scout_archive_sha=$(jq --raw-output '.tools["docker-scout"].archive_sha256' .github/tool-versions.json)
+          archive="${RUNNER_TEMP}/${scout_archive_name}"
+          curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/docker/scout-cli/releases/download/v${scout_version}/${scout_archive_name}"
+          printf '%s  %s\n' "${scout_archive_sha}" "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" docker-scout
+          installed_version=$("${RUNNER_TEMP}/docker-scout" version | \
+            sed -n 's/^version: v\([^ ]*\).*/\1/p')
+          test "${installed_version}" = "${scout_version}"
+      - name: Fetch and verify the DHI VEX attestation
+        run: |
+          runtime_reference=$(jq --raw-output '.dhi.runtime.reference' container-policy.json)
+          "${RUNNER_TEMP}/docker-scout" vex get \
+            --verify \
+            --skip-tlog \
+            --platform linux/arm64 \
+            --output "${RUNNER_TEMP}/dhi-python-runtime.openvex.json" \
+            "registry://${runtime_reference}"
+          test -s "${RUNNER_TEMP}/dhi-python-runtime.openvex.json"
+          jq --exit-status '.statements | type == "array" and length > 0' \
+            "${RUNNER_TEMP}/dhi-python-runtime.openvex.json"
       - name: Generate and validate the final image SPDX SBOM
         run: |
           "${RUNNER_TEMP}/syft" docker:shittim-chest:step-08b-arm64 \
@@ -300,7 +377,11 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-sbom-arm64-${{ github.sha }}
-          path: ${{ runner.temp }}/image-sbom-arm64.spdx.json
+          path: |
+            ${{ runner.temp }}/image-sbom-arm64.spdx.json
+            ${{ runner.temp }}/image-manifest-digest.txt
+            ${{ runner.temp }}/image-size-bytes.txt
+            ${{ runner.temp }}/dhi-python-runtime.openvex.json
           if-no-files-found: error
           retention-days: 30
 
@@ -357,7 +438,30 @@ jobs:
         if: steps.grype-database-cache.outputs.cache-hit != 'true'
         run: |
           "${RUNNER_TEMP}/grype" db update
-      - name: Scan both SBOMs with Grype
+      - name: Generate complete unfiltered Grype JSON reports
+        env:
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+          GRYPE_DB_AUTO_UPDATE: "false"
+        run: |
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/source/source-sbom.cdx.json" \
+            --name "source-sbom" \
+            --output "json=${RUNNER_TEMP}/grype-source.full.json"
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
+            --name "image-sbom-arm64" \
+            --output "json=${RUNNER_TEMP}/grype-image-arm64.full.json"
+      - name: Apply verified DHI VEX for residual-risk classification
+        env:
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+          GRYPE_DB_AUTO_UPDATE: "false"
+        run: |
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
+            --name "image-sbom-arm64-vex" \
+            --vex "${RUNNER_TEMP}/grype-input/image/dhi-python-runtime.openvex.json" \
+            --output "json=${RUNNER_TEMP}/grype-image-arm64.vex.json"
+      - name: Generate actionable-only SARIF
         env:
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
           GRYPE_DB_AUTO_UPDATE: "false"
@@ -366,13 +470,25 @@ jobs:
           "${RUNNER_TEMP}/grype" \
             "sbom:${RUNNER_TEMP}/grype-input/source/source-sbom.cdx.json" \
             --name "source-sbom" \
-            --output "json=${RUNNER_TEMP}/grype-source.cdx.report.json" \
+            --only-fixed \
+            --output "json=${RUNNER_TEMP}/grype-source.actionable.json" \
             --output "sarif=${RUNNER_TEMP}/grype-sarif/grype-source.sarif"
           "${RUNNER_TEMP}/grype" \
             "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
             --name "image-sbom-arm64" \
-            --output "json=${RUNNER_TEMP}/grype-image-arm64.spdx.report.json" \
+            --only-fixed \
+            --output "json=${RUNNER_TEMP}/grype-image-arm64.actionable.json" \
             --output "sarif=${RUNNER_TEMP}/grype-sarif/grype-image-arm64.sarif"
+      - name: Validate full and actionable report separation
+        run: |
+          python tools/report_grype.py \
+            --source-full "${RUNNER_TEMP}/grype-source.full.json" \
+            --source-actionable "${RUNNER_TEMP}/grype-source.actionable.json" \
+            --image-full "${RUNNER_TEMP}/grype-image-arm64.full.json" \
+            --image-actionable "${RUNNER_TEMP}/grype-image-arm64.actionable.json" \
+            --image-sbom "${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
+            --image-size-file "${RUNNER_TEMP}/grype-input/image/image-size-bytes.txt" \
+            --output "${RUNNER_TEMP}/grype-summary.json"
       - name: Point the SARIF locations at repository files
         run: |
           rewrite_locations() {
@@ -391,8 +507,12 @@ jobs:
         with:
           name: grype-scan-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/grype-source.cdx.report.json
-            ${{ runner.temp }}/grype-image-arm64.spdx.report.json
+            ${{ runner.temp }}/grype-source.full.json
+            ${{ runner.temp }}/grype-source.actionable.json
+            ${{ runner.temp }}/grype-image-arm64.full.json
+            ${{ runner.temp }}/grype-image-arm64.actionable.json
+            ${{ runner.temp }}/grype-image-arm64.vex.json
+            ${{ runner.temp }}/grype-summary.json
           if-no-files-found: error
           retention-days: 30
       - name: Upload the source SBOM SARIF to code scanning
@@ -407,6 +527,33 @@ jobs:
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
           category: grype-image-sbom
+      - name: Enforce fixable severity and residual-risk gates
+        if: always()
+        env:
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+          GRYPE_DB_AUTO_UPDATE: "false"
+        run: |
+          status=0
+          python tools/check_container_risk_acceptance.py \
+            --policy security/container-risk-acceptance.json \
+            --raw-report "${RUNNER_TEMP}/grype-image-arm64.full.json" \
+            --vex-report "${RUNNER_TEMP}/grype-image-arm64.vex.json" \
+            --image-digest-file \
+              "${RUNNER_TEMP}/grype-input/image/image-manifest-digest.txt" || status=$?
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/source/source-sbom.cdx.json" \
+            --name "source-sbom-actionable" \
+            --only-fixed \
+            --fail-on high || status=$?
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
+            --name "image-sbom-arm64-actionable" \
+            --only-fixed \
+            --fail-on high || status=$?
+          if [ "${status}" -ne 0 ]; then
+            echo "Fixable High/Critical or untracked residual container risk blocks merge." >&2
+            exit "${status}"
+          fi
 
   docs-public-safety:
     name: docs-public-safety

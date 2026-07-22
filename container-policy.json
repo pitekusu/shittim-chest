@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "dhi": {
+    "builder": {
+      "reference": "dhi.io/python:3.14.6-debian13-dev@sha256:1df3badfd28c3fd54fb8371d55a4a050c4051b8a808f8367f7241442a334928b",
+      "arm64_manifest_digest": "sha256:e868dd92037f1659a469e60c43f31d5e0982dc8c9fcb7855d3d3be769a896b1a"
+    },
+    "runtime": {
+      "reference": "dhi.io/python:3.14.6-debian13@sha256:c43e37b1d2c740bf924149f7ce015a79636a084a3fd755ac8c5ffc2f4a850b3e",
+      "arm64_manifest_digest": "sha256:983c8722646422f58a8fbc3567b13841597a68021a134b7ae572adb4c54a882d"
+    }
+  },
+  "runtime_identity": {
+    "username": "nonroot",
+    "groupname": "nonroot",
+    "uid": 65532,
+    "gid": 65532,
+    "home": "/home/nonroot"
+  },
+  "heartbeat_tmpfs": {
+    "path": "/tmp/shittim-chest",
+    "size_mib": 1,
+    "mode": "0700",
+    "mount_options": [
+      "nosuid",
+      "nodev",
+      "noexec"
+    ]
+  }
+}
