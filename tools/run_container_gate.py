@@ -15,8 +15,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from tools.check_container_policy import load_container_policy
+
 IMAGE_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
-EXPECTED_USER: Final = "10001:10001"
+CONTAINER_POLICY: Final = load_container_policy()
+EXPECTED_IDENTITY: Final = CONTAINER_POLICY.identity
+EXPECTED_USER: Final = EXPECTED_IDENTITY.user_spec
+HEARTBEAT_TMPFS: Final = CONTAINER_POLICY.heartbeat_tmpfs
 MAXIMUM_STOP_SECONDS: Final = 120.0
 NON_TERMINAL_PHASES: Final = (
     "accepted",
@@ -78,11 +83,23 @@ def validate_image_configuration(document: object, expected_architecture: str) -
     if image.get("Architecture") != expected_architecture:
         raise ContainerGateError("image architecture does not match the native runner")
     if config.get("User") != EXPECTED_USER:
-        raise ContainerGateError("image must use numeric UID/GID 10001")
+        raise ContainerGateError("image must use the numeric DHI runtime UID/GID")
     if config.get("Entrypoint") != ["python", "-m", "shittim_chest"]:
         raise ContainerGateError("image entrypoint is not the production module")
     if config.get("StopSignal") != "SIGTERM":
         raise ContainerGateError("image stop signal must be SIGTERM")
+    labels = config.get("Labels")
+    if not isinstance(labels, dict):
+        raise ContainerGateError("image must retain DHI labels")
+    expected_labels = {
+        "com.docker.dhi.distro": "debian-13",
+        "com.docker.dhi.name": "dhi/python",
+        "com.docker.dhi.package-manager": "",
+        "com.docker.dhi.shell": "",
+        "com.docker.dhi.variant": "runtime",
+    }
+    if any(labels.get(key) != value for key, value in expected_labels.items()):
+        raise ContainerGateError("image does not inherit the expected DHI runtime")
     # Docker Engine nests this under Config; Podman exposes the same Docker metadata
     # at the image object's top level.
     health = config.get("Healthcheck", image.get("Healthcheck"))
@@ -102,25 +119,52 @@ def validate_image_configuration(document: object, expected_architecture: str) -
 
 
 def _validate_runtime_security(image: str) -> None:
-    script = """
+    script = f"""
 import asyncio
+import getpass
 import os
 import pathlib
+import pwd
 import shutil
+import sys
+import shittim_chest
 from shittim_chest.runtime.health import EventLoopHeartbeat, heartbeat_is_healthy
 
 async def verify():
-    assert os.getuid() == 10001 and os.getgid() == 10001
+    assert os.getuid() == {EXPECTED_IDENTITY.uid}
+    assert os.getgid() == {EXPECTED_IDENTITY.gid}
+    account = pwd.getpwuid(os.getuid())
+    assert account.pw_name == {EXPECTED_IDENTITY.username!r}
+    assert account.pw_dir == {EXPECTED_IDENTITY.home!r}
+    assert pathlib.Path.home() == pathlib.Path({EXPECTED_IDENTITY.home!r})
+    assert os.path.expanduser("~") == {EXPECTED_IDENTITY.home!r}
+    assert getpass.getuser() == {EXPECTED_IDENTITY.username!r}
+    assert os.environ.get("HOME") in (None, {EXPECTED_IDENTITY.home!r})
+    assert pathlib.Path(sys.executable).is_relative_to(pathlib.Path("/app/.venv"))
+    assert os.access(sys.executable, os.R_OK | os.X_OK)
     assert shutil.which("uv") is None
+    assert shutil.which("sh") is None
+    assert shutil.which("bash") is None
+    assert shutil.which("apt") is None
+    assert shutil.which("apt-get") is None
+    assert shutil.which("dpkg") is None
     assert not pathlib.Path("/app/src").exists()
     assert not pathlib.Path("/app/tests").exists()
-    pathlib.Path("/tmp/native-arm64-probe").write_text("ok", encoding="ascii")
+    probe = pathlib.Path({HEARTBEAT_TMPFS.path!r}) / "native-arm64-probe"
+    probe.write_text("ok", encoding="ascii")
+    probe.unlink()
     try:
         pathlib.Path("/app/read-only-probe").write_text("blocked", encoding="ascii")
     except OSError:
         pass
     else:
         raise AssertionError("root filesystem accepted a write")
+    try:
+        (pathlib.Path.home() / "read-only-probe").write_text("blocked", encoding="ascii")
+    except OSError:
+        pass
+    else:
+        raise AssertionError("HOME accepted a write")
     async with EventLoopHeartbeat(interval_seconds=0.01):
         await asyncio.sleep(0.03)
         assert heartbeat_is_healthy(max_age_seconds=1)
@@ -132,7 +176,11 @@ asyncio.run(verify())
         "--rm",
         "--read-only",
         "--tmpfs",
-        "/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777",  # noqa: S108
+        (
+            f"{HEARTBEAT_TMPFS.path}:rw,{','.join(HEARTBEAT_TMPFS.mount_options)},"
+            f"size={HEARTBEAT_TMPFS.size_mib}m,uid={EXPECTED_IDENTITY.uid},"
+            f"gid={EXPECTED_IDENTITY.gid},mode={HEARTBEAT_TMPFS.mode}"
+        ),
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--entrypoint",
@@ -141,6 +189,12 @@ asyncio.run(verify())
         "-c",
         script,
     )
+    for executable in ("/bin/sh", "/bin/bash"):
+        result = _docker(
+            "run", "--rm", "--entrypoint", executable, image, "-c", "exit 0", check=False
+        )
+        if result.returncode == 0:
+            raise ContainerGateError(f"production image unexpectedly executes {executable}")
 
 
 def _container_name(suffix: str) -> str:
@@ -157,7 +211,11 @@ def _start_fault_container(image: str, state: Path, scenario: str) -> str:
         name,
         "--read-only",
         "--tmpfs",
-        "/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777",  # noqa: S108
+        (
+            f"{HEARTBEAT_TMPFS.path}:rw,{','.join(HEARTBEAT_TMPFS.mount_options)},"
+            f"size={HEARTBEAT_TMPFS.size_mib}m,uid={EXPECTED_IDENTITY.uid},"
+            f"gid={EXPECTED_IDENTITY.gid},mode={HEARTBEAT_TMPFS.mode}"
+        ),
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--volume",

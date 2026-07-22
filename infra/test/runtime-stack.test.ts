@@ -132,14 +132,21 @@ describe("RuntimeStack", () => {
           Tmpfs: [
             {
               ContainerPath: "/tmp/shittim-chest",
-              MountOptions: ["nosuid", "nodev", "noexec", "uid=10001", "gid=10001", "mode=0700"],
+              MountOptions: [
+                "nosuid",
+                "nodev",
+                "noexec",
+                "uid=65532",
+                "gid=65532",
+                "mode=0700",
+              ],
               Size: 1,
             },
           ],
         },
         Privileged: false,
         StopTimeout: 120,
-        User: "10001:10001",
+        User: "65532:65532",
         VersionConsistency: "enabled",
         WorkingDirectory: "/app",
       });

@@ -150,6 +150,13 @@ Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
 
+The current container policy adopts the free DHI Community Python 3.14.6
+Debian 13 images. The shell-less production runtime uses DHI's `nonroot`
+identity (`65532:65532`); the independently built break-glass target uses the
+matching `-dev` image. Exact index and ARM64 manifest digests, the runtime
+identity, and the dedicated 1 MiB heartbeat tmpfs are recorded in
+`container-policy.json` and shared with Docker, native tests, and CDK.
+
 The builder installs locked third-party dependencies before copying application
 source by using `uv sync --no-install-project`. A second sync installs only the
 project, so source-only changes preserve the dependency layer. uv downloads use
@@ -177,6 +184,16 @@ build reuses the same in-job Buildx builder. Neither image is pushed. Cache
 export failure is non-blocking, while image build, container gates, and SBOM
 validation remain mandatory. Buildx summaries and compact diagnostic build
 records are retained for 30 days with the image SBOM.
+
+DHI pulls require a read-only Docker account token. Maintainers configure
+`DHI_USERNAME` and `DHI_TOKEN` separately as GitHub Actions secrets and
+Dependabot secrets; values never belong in the repository. Docker image updates
+run daily. CI retains complete Grype JSON for audit and trends, publishes
+actionable `--only-fixed` SARIF, blocks fixable High/Critical findings, verifies
+Docker's signed DHI OpenVEX, and requires any remaining unfixable High/Critical
+risk to have a digest-bound acceptance that expires within 90 days. Vendor VEX
+does not remove the unfiltered report, and Security-tab bulk dismissal is not a
+risk-acceptance mechanism.
 
 The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
 the scorer artifact and unblinding key to separate repository-external directory

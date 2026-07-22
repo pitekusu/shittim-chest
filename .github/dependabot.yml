@@ -1,5 +1,12 @@
 version: 2
 
+registries:
+  dhi:
+    type: "docker-registry"
+    url: "https://dhi.io"
+    username: "${{secrets.DHI_USERNAME}}"
+    password: "${{secrets.DHI_TOKEN}}"
+
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -49,10 +56,11 @@ updates:
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    registries:
+      - "dhi"
     assignees:
       - "pitekusu"
     commit-message:

@@ -20,9 +20,16 @@ def _inspect() -> list[object]:
         {
             "Architecture": "arm64",
             "Config": {
-                "User": "10001:10001",
+                "User": "65532:65532",
                 "Entrypoint": ["python", "-m", "shittim_chest"],
                 "StopSignal": "SIGTERM",
+                "Labels": {
+                    "com.docker.dhi.distro": "debian-13",
+                    "com.docker.dhi.name": "dhi/python",
+                    "com.docker.dhi.package-manager": "",
+                    "com.docker.dhi.shell": "",
+                    "com.docker.dhi.variant": "runtime",
+                },
                 "Healthcheck": {
                     "Test": ["CMD", "python", "-m", "shittim_chest.runtime.health"],
                     "Interval": 10_000_000_000,
@@ -47,8 +54,9 @@ def test_fault_gate_covers_every_non_terminal_domain_phase() -> None:
     ("field", "value", "message"),
     [
         ("Architecture", "amd64", "architecture"),
-        ("User", "root", "numeric UID"),
+        ("User", "root", "numeric DHI"),
         ("StopSignal", "SIGKILL", "SIGTERM"),
+        ("com.docker.dhi.variant", "dev", "DHI runtime"),
         ("Interval", 1, "Interval"),
     ],
 )
@@ -71,6 +79,11 @@ def test_invalid_image_configuration_is_rejected(
         image[field] = value
     elif field in {"User", "StopSignal"}:
         config[field] = value
+    elif field.startswith("com.docker.dhi"):
+        labels = config["Labels"]
+        assert isinstance(labels, dict)
+        labels = cast(dict[str, object], labels)
+        labels[field] = value
     else:
         health[field] = value
 

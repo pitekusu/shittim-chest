@@ -2,7 +2,7 @@
 
 FROM ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc AS uv
 
-FROM docker.io/library/python:3.14.6-slim-trixie@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS builder
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:1df3badfd28c3fd54fb8371d55a4a050c4051b8a808f8367f7241442a334928b AS builder
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
@@ -24,27 +24,17 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-editable
 
-FROM docker.io/library/python:3.14.6-slim-trixie@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS runtime-base
-
-ARG APP_GID=10001
-ARG APP_UID=10001
+FROM dhi.io/python:3.14.6-debian13@sha256:c43e37b1d2c740bf924149f7ce015a79636a084a3fd755ac8c5ffc2f4a850b3e AS runtime-base
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN groupadd --gid "${APP_GID}" shittim \
-    && useradd --uid "${APP_UID}" --gid "${APP_GID}" --no-create-home \
-        --home-dir /nonexistent --shell /usr/sbin/nologin shittim \
-    && install --directory --owner "${APP_UID}" --group "${APP_GID}" --mode 0755 /app \
-    && install --directory --owner "${APP_UID}" --group "${APP_GID}" \
-        --mode 0700 /tmp/shittim-chest
-
 WORKDIR /app
 
-COPY --from=builder --chown=${APP_UID}:${APP_GID} /app/.venv /app/.venv
+COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
 
-USER ${APP_UID}:${APP_GID}
+USER 65532:65532
 
 STOPSIGNAL SIGTERM
 
@@ -57,19 +47,21 @@ FROM runtime-base AS production
 
 FROM production AS fault-test
 
-USER root
-
-COPY --chown=${APP_UID}:${APP_GID} tests/__init__.py /fault-tests/tests/__init__.py
-COPY --chown=${APP_UID}:${APP_GID} tests/fixtures/container_process.py \
+COPY --chown=65532:65532 tests/__init__.py /fault-tests/tests/__init__.py
+COPY --chown=65532:65532 tests/fixtures/container_process.py \
     /fault-tests/tests/fixtures/container_process.py
 
 ENV PYTHONPATH=/fault-tests
 
-USER ${APP_UID}:${APP_GID}
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:1df3badfd28c3fd54fb8371d55a4a050c4051b8a808f8367f7241442a334928b AS break-glass
 
-FROM runtime-base AS break-glass
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-USER root
+WORKDIR /app
+
+COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bsdutils procps \
@@ -79,4 +71,11 @@ RUN apt-get update \
     && command -v ps \
     && command -v script
 
-USER ${APP_UID}:${APP_GID}
+USER 65532:65532
+
+STOPSIGNAL SIGTERM
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+    CMD ["python", "-m", "shittim_chest.runtime.health"]
+
+ENTRYPOINT ["python", "-m", "shittim_chest"]

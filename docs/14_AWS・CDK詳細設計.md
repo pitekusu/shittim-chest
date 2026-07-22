@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-19
+updated: 2026-07-22
 ---
 
 # AWS・CDK詳細設計
@@ -72,11 +72,13 @@ application側のgraceful shutdown deadlineは90秒とし、`stopTimeout=120`の
 - app health checkはprocess/event-loop heartbeatだけを確認し、Discord/OpenAI障害をrestart理由にしない。
 - `awslogs` modeは`blocking`を明示し、secret・質問・回答全文をstdoutへ出さない。
 - applicationとbreak-glass Execは専用log groupに分け、各90日保持、`RETAIN`、AWS-managed encryption、CloudWatch Logs data protectionによるcredential・個人識別情報のmaskを適用する。
-- 一時書込みはheartbeat用の`/tmp/shittim-chest` tmpfs mount（1 MiB、`nosuid,nodev,noexec,uid=10001,gid=10001,mode=0700`）だけに許可する。Fargate既定20 GiB ephemeral storageは引き続き追加容量なしとする。平常imageはECS Execだけのためにshell utilityを追加しない。
+- 一時書込みはheartbeat用の`/tmp/shittim-chest` tmpfs mount（1 MiB、`nosuid,nodev,noexec,uid=65532,gid=65532,mode=0700`）だけに許可する。Fargate既定20 GiB ephemeral storageは引き続き追加容量なしとする。平常imageはECS Execだけのためにshell utilityを追加しない。
 
-imageは`/tmp/shittim-chest`をUID/GID `10001:10001`、mode `0700`で事前作成し、tmpfsの`uid`/`gid`/`mode` mount optionと一致させてnon-root applicationがheartbeatを書込める構成にする。
+runtime identityはDHI runtimeに定義済みの`nonroot` (`65532:65532`、home `/home/nonroot`)を使用する。Dockerfile、native container gate、CDK task definition、tmpfs mount optionはrepository rootの`container-policy.json`を共通契約とし、どれか一つだけのUID/GID変更をCIで拒否する。`/tmp/shittim-chest`はFargate起動時に同一UID/GIDとmode `0700`でmountし、non-root applicationがheartbeatを書込む。
 
-STEP-08AではPython `3.14.6-slim-trixie`とuv `0.11.29`のmulti-architecture image index digestを固定したmulti-stage `Dockerfile`を実装する。production imageはnumeric UID/GID `10001`、exec形式entrypoint、`SIGTERM` stop signalを使用し、uv、build cache、raw source、testを含めない。event loop ownerが5秒ごとにPID付きheartbeatを`/tmp/shittim-chest/heartbeat`へatomic更新し、health commandは20秒以内の更新、PID形式、process生存だけを本文出力なしで検査する。
+production containerはDHI Communityの`dhi.io/python:3.14.6-debian13`、builderは対応する`-dev`を採用し、tagとOCI image index digestの両方を固定する。2026-07-22にindexがARM64 manifestを含むこと、runtimeの`User=65532`、`nonroot` passwd/group/home、runtime variant、shell/package manager非搭載をregistry manifestとfilesystemで実測した。productionはexec形式entrypoint、`SIGTERM`を使用し、uv、build cache、raw source、testを含めない。DHIから継承したlabelとruntime variantもnative gateで検査する。event loop ownerが5秒ごとにPID付きheartbeatを`/tmp/shittim-chest/heartbeat`へatomic更新し、health commandは20秒以内の更新、PID形式、process生存だけを本文出力なしで検査する。
+
+DHI CommunityはApache-2.0の無償catalogを使い、Select/Enterpriseの購入とSLAは前提にしない。ただし`dhi.io`のpullにはDocker IDとread-only PAT/OATでの認証が必要である。CIとDependabotは同名の`DHI_USERNAME`/`DHI_TOKEN`をActions secretsとDependabot secretsにそれぞれ登録し、値をartifactやlogに出力しない。DHI CommunityにはHigh/Critical修正SLAがないため、daily Dependabot、署名済みVEX、期限付きの個別risk acceptanceで補う。
 
 2026-01-06の公式発表でFargateがtmpfs mountをsupportしたため、production task definitionは`linuxParameters.tmpfs`で1 MiBの`/tmp/shittim-chest`を宣言し、以前のtask bind mountは廃止する。memory上に置かれtask停止で残存しないため、ephemeral storageを消費しない。CDKの`LinuxParameters`は`uid=`/`gid=`/`mode=`のparameter付きmount optionを表現できないため、L1 `CfnTaskDefinition`のproperty overrideで宣言する。2026-07-20時点で開発者ガイド`fargate-tasks-services.html`は`tmpfs`非対応と記載したままだが、What's New発表とAPI reference `LinuxParameters`/`Tmpfs`（Fargate非対応の注記なし）を優先し、deploy時にtask起動で実動作を確認する。local container試験では同等のtmpfsを使う。`initProcessEnabled=true`もtask definition側のSTEP-09で設定し、STEP-08A imageだけで設定済みとは扱わない。
 
@@ -84,7 +86,7 @@ STEP-08AではPython `3.14.6-slim-trixie`とuv `0.11.29`のmulti-architecture im
 
 通常のlog/metric調査で不足し承認されたincidentだけ、stop-before-startでbreak-glass revisionへ切り替える。break-glass版はroot filesystemを書込み可能にし、ECS Exec、`/bin/sh`、`script`、`cat`、4つの`ssmmessages` action、専用CloudWatch Logs書込権限を有効にする。sessionはroot実行であることを前提に、`logging=OVERRIDE`、専用90日log group、開始理由・操作者・開始終了時刻を記録する。調査終了後は平常revisionへ戻し、Exec agentがないtaskへ置換されたことを確認する。
 
-STEP-08Aの`break-glass` image targetはproduction runtimeへ`/bin/sh`、`cat`、`script`、`ps`だけを追加し、application実行時は引き続きUID/GID `10001`とする。root filesystem書込み可否、Exec agent、IAM、log group、承認workflowはimageではなくSTEP-09/10のbreak-glass task revisionで制御する。
+`break-glass` targetはproduction distroless runtimeにpackage managerを追加せず、同一digest固定のDHI `-dev`から独立構築する。`/bin/sh`、`cat`、`script`、`ps`と同一application venvを含めるが、実行userは引き続き`65532:65532`とする。production imageとは別digestで試験・署名・承認し、平常serviceへ混入させない。root filesystem書込み可否、Exec agent、IAM、log group、承認workflowはSTEP-09/10のbreak-glass task revisionで制御する。
 
 ## 6. ECR
 
@@ -181,7 +183,8 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-17 | ECS task definition parameters | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | ARM64、512 CPU/1024 MiB、health、read-only root、`stopTimeout=120`のtask境界を再確認 |
 | 2026-07-17 | Fargate task differences | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html | Fargateで`tmpfs`非対応のためtask bind volumeへ分離（2026-07-20に次行で訂正） |
 | 2026-07-20 | ECS tmpfs on Fargate | https://aws.amazon.com/jp/about-aws/whats-new/2026/01/amazon-ecs-tmpfs-mounts-aws-fargate-managed-instances/、https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_LinuxParameters.html | 2026-01-06発表でFargate tmpfs support開始。bind mountを1 MiB tmpfsへ置換。開発者ガイド`fargate-tasks-services.html`の`tmpfs`非対応記載は同日時点で未更新 |
-| 2026-07-17 | Python official image 3.14.6 | https://hub.docker.com/_/python | slim-trixieのamd64/arm64 multi-arch index digestを固定 |
+| 2026-07-22 | DHI Community Python 3.14.6 | https://docs.docker.com/dhi/how-to/use/、https://docs.docker.com/dhi/features/ | Apache-2.0 Community、`dhi.io`認証、`-dev`とdistroless runtime、SLA非保証を採用条件に反映 |
+| 2026-07-22 | DHI Python registry manifest | https://dhi.io/catalog/python | 3.14.6 Debian 13 index digest、ARM64 manifest、runtime `User=65532`、`nonroot` home、shell/package manager非搭載を実測 |
 | 2026-07-17 | Docker build best practices | https://docs.docker.com/build/building/best-practices/ | multi-stage、最小runtime、digest固定、`.dockerignore` |
 | 2026-07-17 | uv Docker integration 0.11.29 | https://docs.astral.sh/uv/guides/integration/docker/ | uv image digest固定、`uv sync --frozen --no-dev --no-editable`、cache非同梱 |
 | 2026-07-19 | AWS CDK prerequisites / Node support、Node.js releases | https://docs.aws.amazon.com/cdk/v2/guide/prerequisites.html、https://docs.aws.amazon.com/cdk/v2/guide/node-versions.html、https://nodejs.org/en/about/previous-releases | Node.js 24.18.0 Active LTS、TypeScript strict、local CLI固定。Node 26 Currentは採用しない |

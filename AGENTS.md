@@ -79,10 +79,23 @@ Not yet implemented:
   results with high-or-higher security alerts blocking merge. The `grype` job
   scans the CycloneDX source SBOM and the arm64 SPDX image SBOM and uploads
   SARIF to code scanning (`security-events: write`); new high-or-above Grype
-  alerts block merge through the ruleset code scanning rule, while existing
-  unfixed base-image alerts are triaged and dismissed with reasons in the
-  Security tab. The job caches its vulnerability database for one day and
-  stores full JSON results as artifacts.
+  alerts block merge through the ruleset code scanning rule. The job caches its
+  vulnerability database for one day and stores unfiltered full JSON results
+  as artifacts. Do not bulk-dismiss base-image findings. Actionable SARIF uses
+  `--only-fixed`; fixable High/Critical findings fail the job. Unfixable
+  High/Critical findings require verified DHI `not_affected` VEX or a
+  digest-bound, evidence-backed local acceptance expiring within 90 days.
+- Production uses the digest-pinned DHI Community Python 3.14.6 Debian 13
+  runtime and DHI-defined `nonroot` identity `65532:65532`. Keep Dockerfile,
+  native container checks, ECS `user`, and the `/tmp/shittim-chest` tmpfs in
+  sync through `container-policy.json`. Do not add a shell or package manager
+  to production; build the separate break-glass target from the matching DHI
+  `-dev` image.
+- DHI requires authentication even for Community images. `DHI_USERNAME` and
+  read-only `DHI_TOKEN` must exist separately in Actions secrets and Dependabot
+  secrets; never log, commit, or place them in Obsidian. Docker Dependabot runs
+  daily. Fork PRs cannot receive these secrets and must be reproduced on a
+  trusted maintainer branch before merge.
 - Production remains fixed to Luna standard. The completed blind A/B evaluation
   (Luna pro 4 wins, Terra standard 2 wins, 4 ties; operator chose Luna standard
   with no escalation) is evaluation history only; do not implement thresholds,

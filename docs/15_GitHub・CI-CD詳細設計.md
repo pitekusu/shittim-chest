@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-19
+updated: 2026-07-22
 ---
 
 # GitHub・CI-CD詳細設計
@@ -38,7 +38,9 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 5. Markdown/frontmatter/fence/Wiki link/heading、license scope、public file、GitHub workflow syntaxを検証する。非公開Obsidian正本とのbyte一致はlocal pre-PRでのみ検証する。
 6. STEP-09Aで`cdk` jobを追加し、最新Active LTSのNode.js 24.18.0と`package-lock.json`を使った`npm ci`、npm audit、TypeScript strict typecheck、Vitest CDK assertion、cdk-nag 3 Validation Plugin、`cdk synth --strict`をcredentialなしで実行する。Runtime/Operations assertionはSTEP-09B/09Cで同じjobへ追加する。
 7. `container-arm64`は公開repositoryのnative `ubuntu-24.04-arm`でproduction/fault-test targetをbuildする。full SHA固定した`docker/setup-buildx-action`と`docker/build-push-action`を使い、両targetを`load: true`で同じnative Docker daemonへ読み込む。production buildだけが`container-arm64-production` scopeへ`mode=max`のGHA cacheをexportし、fault buildは同じjob内のBuildx builder cacheを再利用する。builderは`pyproject.toml`と`uv.lock`だけをcopyして`uv sync --frozen --no-dev --no-install-project --no-editable`を実行した後、application sourceをcopyしてprojectをinstallする。`/root/.cache/uv`は`sharing=locked`のBuildKit cache mountとし、runtime imageへcopyしない。既定Python image以外の取得を`UV_PYTHON_DOWNLOADS=0`で禁止する。image config、read-only/non-root/capability、health、SIGTERM/SIGKILL recoveryを検査し、`.github/tool-versions.json`でSHA-256固定したSyft（現行pin v1.49.0）でOS/runtime dependencyを含むSPDX JSONを生成して30日保持する。secret、OIDC、registry push、paid/network integrationは使用しない。
-8. `grype`は`security`と`container-arm64`の成功後に走り、両jobがartifactとして保持したCycloneDX source SBOMとSPDX arm64 image SBOMをdownloadしてscanする。Grypeは`.github/tool-versions.json`でversionとarchive SHA-256を固定し、amd64 tarballをchecksum検証してinstallする。vulnerability DBはUTC日付keyのactions/cacheで1日cacheし、exact miss時だけ`grype db update`で更新し、scanは`GRYPE_DB_AUTO_UPDATE=false`でcacheを優先する。scan結果は`-o sarif=`でSARIF形式を生成する。SBOM scanのSARIF locationはSBOM metadata由来のディレクトリURIとなりcode scanningでpreview不可となるため、upload前にjqで`artifactLocation.uri`を実在file（source SBOMは`uv.lock`、image SBOMは`Dockerfile`、いずれも`startLine: 1`）へ書き換える。package名・version等の固有情報はSARIF messageに既に含まれる。書き換え後、full SHA固定の`github/codeql-action/upload-sarif`でGitHub code scanningへuploadする（job権限`security-events: write`）。location変更により既存alertはfixed扱いでcloseし、同一内容が新locationでopenし直す。alertはSecurity tabで確認・triageし、high以上の新規alertはmain Rulesetのcode scanning ruleでmergeをblockする。CI job自体はscan・uploadの失敗時だけ失敗とし、全件のJSON scan結果は30日artifactへ保持する。fork PRでは`security-events: write`が降格されるためuploadできず、外部contributorのPRはその旨を記録した上でmaintainerが結果を確認する。
+8. `grype`は`security`と`container-arm64`の成功後に走り、CycloneDX source SBOMとSPDX ARM64 image SBOMを全件・actionableの2系統でscanする。全件JSONは深刻度やfix有無で除外せず30日artifact保存し、trendとrisk reviewに使う。actionable JSON/SARIFは`--only-fixed`で修正版があるfindingに限定し、`--fail-on high`によりfixable High/Criticalをjobでfail closedにする。SARIF locationはupload前に実在file（sourceは`uv.lock`、imageは`Dockerfile`）へ付け替える。この分離により未修正findingを消さず、今すぐ対処可能なfindingだけをmerge gateにする。
+9. DHI runtimeのOpenVEXをpin済みDocker Scoutで取得し、Docker公開鍵でcosign signatureを検証する。DHI attestationはpublic Rekor logに必ずしも登録されないため公式手順の`--skip-tlog`を使うが、`--verify`と公開鍵signature検証は省略しない。Grype `--vex`適用結果でDockerが`not_affected`と判定したpackage/CVEだけをvendor suppressionとして扱う。それ以外の未修正High/Criticalはdigest、owner、根拠、影響、exploitability、再評価条件、90日以内の期限を持つ個別entryがなければmergeを拒否する。新image digestで旧acceptanceは自動的に無効とする。一括dismiss、無期限例外、根拠なき`not_affected`は禁止する。
+10. `container-arm64`はDHI・Docker Scout認証、build、native runtime、SPDX、VEX取得のいずれもfail closedとする。Actions secretsはread-only Docker PATの`DHI_USERNAME`/`DHI_TOKEN`を登録する。fork PRにはsecretが渡らないためDHI imageをpullできず、maintainerが同じcommitをtrusted branchで再現して全required checksを通すまでmergeしない。
 
 Docker build cacheは性能最適化であり、依存関係の正本ではない。`uv.lock`、`--frozen`、digest固定base imageを再現性境界とし、cache missまたはcache evictionでも同一gateを通るimageを再構築できなければならない。`UV_NO_CACHE=1`は使用せず、uv cacheはbuild mountの寿命へ限定する。
 
@@ -109,7 +111,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 - STEP-02Bの複数PR head、main run、full-history、generated contract、Sigstore、latest-release workflowが全合格したため、STEP-02CのPR `#13`でGitleaksを撤去した。二重scannerによる継続的な実行時間・更新負担を避け、GitHub managed Secret scanning、Push protection、Betterleaksを防御層とする。検出coverageの具体的な欠落が再現した場合だけ別ADRで第二scannerを再検討する。
 - Secret scanning、Push protection、CodeQL default setup APIの`query_suite=extended`、Dependency graph、Dependabot alerts/security updatesを有効にする。
 - CodeQLは現在Pythonを対象とし、CDK実装時にJavaScript/TypeScriptを追加する。
-- uvとGitHub Actionsを週次更新する。Docker、npm/CDKはmanifest導入時に追加する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
+- uv、GitHub Actions、npm/CDKは週次更新する。Docker ecosystemはDHIの修正を最短で取り込むため毎日09:00 JSTに確認し、Dependabot secretsの`DHI_USERNAME`/`DHI_TOKEN`で`dhi.io`を認証する。minor/patchとsecurity updateは安全な単位でgroup化し、major、OpenAI model、Python minor変更は個別PRとして自動mergeしない。
 - Dependabot uv updaterがprojectの`required-version`を満たさない場合はversion update全体が`tool_version_not_supported`で停止する。開発・CIはuv 0.11.29へpinしたまま、projectの互換範囲はDependabot公式imageの0.11.8を含む`>=0.11.8,<0.12`とする。updater更新後に下限を上げる場合は公式Dockerfileとlock/update試験を再確認する。
 - Dependency GraphのGitHub管理SBOM、PRのCycloneDX source SBOM、release imageのSPDX SBOMを用途別に併用する。互いを代替扱いせず、生成元、commit、image digestをrelease manifestへ記録する。
 
@@ -168,3 +170,6 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-19 | GitHub registry attestations | https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations | image digestのprovenance/SBOMをECRへpushしてidentity検証 |
 | 2026-07-20 | Grype CLI / configuration 0.116.0 | https://oss.anchore.com/docs/reference/grype/cli/、https://oss.anchore.com/docs/reference/grype/configuration/ | `sbom:`入力、`json=<path>`出力、`GRYPE_DB_AUTO_UPDATE`/`GRYPE_DB_CACHE_DIR`、DB max age 120h（1日cacheと整合） |
 | 2026-07-20 | GitHub Actions code scanning SARIF upload | https://docs.github.com/en/code-security/code-scanning/integrating-with-code-scanning/sarif-support-for-code-scanning | `security-events: write`、`upload-sarif`によるSecurity tab連携 |
+| 2026-07-22 | DHI scan・OpenVEX | https://docs.docker.com/dhi/how-to/scan/、https://docs.docker.com/dhi/core-concepts/vex/ | Scout署名検証済みVEXをGrype `--vex`へ適用し、`not_affected`だけをvendor suppressionに使用 |
+| 2026-07-22 | DHI attestation verification | https://docs.docker.com/dhi/how-to/verify/ | `--verify --skip-tlog`でRekor非登録を許容しつつDocker公開鍵signature検証を維持 |
+| 2026-07-22 | Dependabot private registries | https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/remove-access-to-public-registries | `dhi.io`のDocker registry認証とDependabot secretsを構成 |
