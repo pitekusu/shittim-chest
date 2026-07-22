@@ -100,6 +100,7 @@ def load_tool_pins(path: Path) -> tuple[ToolPin, ...]:
     tools = root["tools"]
     if not isinstance(tools, dict) or not tools:
         raise ValueError("tools must be a non-empty object")
+    tools = cast(dict[str, object], tools)
 
     pins: list[ToolPin] = []
     for name in sorted(tools):
