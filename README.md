@@ -150,6 +150,14 @@ Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
 
+STEP-02D adds an independent GitHub Actions to private Discord Forum
+notification path. The first slice observes only the repository-managed `CI`,
+`Dependency Graph`, and `Release Tool Versions` workflows, validates both the
+workflow name and path, and sends bounded, sanitized embeds with finite retry.
+Notifications remain disabled until the later repository-event and security
+digest slices, private Forum threads, Actions secret, and repository variables
+are configured. Notification failure never changes the source workflow result.
+
 The current container policy adopts the free DHI Community Python 3.14.6
 Debian 13 images. The shell-less production runtime uses DHI's `nonroot`
 identity (`65532:65532`); the independently built break-glass target uses the

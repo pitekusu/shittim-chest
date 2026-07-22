@@ -1,0 +1,41 @@
+name: Discord Workflow Notifications
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Dependency Graph
+      - Release Tool Versions
+    types:
+      - completed
+
+permissions: {}
+
+concurrency:
+  group: discord-workflow-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    name: notify
+    if: vars.DISCORD_NOTIFICATIONS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out the trusted default-branch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Notify the Discord operations forum
+        env:
+          DISCORD_ALERT_ROLE_ID: ${{ vars.DISCORD_ALERT_ROLE_ID }}
+          DISCORD_THREAD_CI: ${{ vars.DISCORD_THREAD_CI }}
+          DISCORD_THREAD_DEPENDABOT: ${{ vars.DISCORD_THREAD_DEPENDABOT }}
+          DISCORD_THREAD_SECURITY: ${{ vars.DISCORD_THREAD_SECURITY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m tools.github_discord_notifications workflow-run
