@@ -61,8 +61,8 @@ Discord Embedはtitle 256、description 4,096、field 25件、field name 256、f
 
 ## 4. STEP-02D段階実装
 
-1. STEP-02D-A: 共通package、workflow completion通知、bounded retry、unit test。
-2. STEP-02D-B: PR lifecycle、Dependabot分岐、merge由来push抑制、限定`pull_request_target` policy test。
+1. STEP-02D-A: 共通package、workflow completion通知、bounded retry、unit test。local・PR CI合格。
+2. STEP-02D-B: PR lifecycle、Dependabot分岐、merge由来push抑制、限定`pull_request_target` policy test。local実装済み。
 3. STEP-02D-C: 日次security digest、scan停止検知、Discord/GitHub設定、manual smoke test。
 
 STEP-02D-Aでは通知をdisabledのままmergeし、実Webhook通信、Discord ID、GitHub Secret/Variable変更を行わない。

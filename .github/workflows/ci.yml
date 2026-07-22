@@ -574,6 +574,7 @@ jobs:
         run: |
           uv run --frozen python tools/check_public_surface.py
           uv run --frozen python -m tools.check_docs
+          uv run --frozen python -m tools.check_notification_workflows
       - name: Validate GitHub Actions workflows
         run: |
           actionlint_version=$(jq --raw-output '.tools.actionlint.version' .github/tool-versions.json)

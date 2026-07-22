@@ -13,6 +13,7 @@ from typing import cast
 
 from tools.github_discord_notifications.github_api import GitHubApiError, GitHubClient
 from tools.github_discord_notifications.models import JsonObject
+from tools.github_discord_notifications.repository_events import notify_pull_request, notify_push
 from tools.github_discord_notifications.webhook import DiscordWebhookError, DiscordWebhookSender
 from tools.github_discord_notifications.workflow_run import run_notification
 
@@ -21,6 +22,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("workflow-run", help="notify a completed trusted workflow run")
+    subcommands.add_parser("pull-request", help="notify a pull-request lifecycle event")
+    subcommands.add_parser("push", help="notify a direct or unclassified main push")
     return parser.parse_args(argv)
 
 
@@ -29,6 +32,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "workflow-run":
             results = _workflow_run(os.environ)
+        elif args.command == "pull-request":
+            results = _pull_request(os.environ)
+        elif args.command == "push":
+            results = _push(os.environ)
         else:  # pragma: no cover - argparse rejects unknown commands.
             raise ValueError("unsupported command")
     except (DiscordWebhookError, GitHubApiError, OSError, ValueError) as error:
@@ -39,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _append_summary(
             os.environ,
             success=True,
-            lines=("対象外のworkflow name/pathだったため送信しませんでした。",),
+            lines=("対象外または重複抑制条件に一致したため送信しませんでした。",),
         )
         return 0
     _append_summary(
@@ -59,6 +66,29 @@ def _workflow_run(environment: Mapping[str, str]):
         repository=_required(environment, "GITHUB_REPOSITORY"),
     )
     return run_notification(
+        event=event,
+        environment=environment,
+        github=github,
+        discord=DiscordWebhookSender(),
+    )
+
+
+def _pull_request(environment: Mapping[str, str]):
+    event = _read_event(_required(environment, "GITHUB_EVENT_PATH"))
+    return notify_pull_request(
+        event=event,
+        environment=environment,
+        discord=DiscordWebhookSender(),
+    )
+
+
+def _push(environment: Mapping[str, str]):
+    event = _read_event(_required(environment, "GITHUB_EVENT_PATH"))
+    github = GitHubClient(
+        token=_required(environment, "GITHUB_TOKEN"),
+        repository=_required(environment, "GITHUB_REPOSITORY"),
+    )
+    return notify_push(
         event=event,
         environment=environment,
         github=github,

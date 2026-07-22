@@ -154,8 +154,12 @@ STEP-02D adds an independent GitHub Actions to private Discord Forum
 notification path. The first slice observes only the repository-managed `CI`,
 `Dependency Graph`, and `Release Tool Versions` workflows, validates both the
 workflow name and path, and sends bounded, sanitized embeds with finite retry.
-Notifications remain disabled until the later repository-event and security
-digest slices, private Forum threads, Actions secret, and repository variables
+The repository-event slice adds metadata-only PR lifecycle notifications,
+suppresses merge-derived main pushes, and flags direct or API-unclassified
+pushes. Its narrowly allowed `pull_request_target` never checks out PR code,
+uses artifacts or caches, or requests write access; a dedicated negative policy
+gate protects that boundary. Notifications remain disabled until the security
+digest slice, private Forum threads, Actions secret, and repository variables
 are configured. Notification failure never changes the source workflow result.
 
 The current container policy adopts the free DHI Community Python 3.14.6
