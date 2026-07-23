@@ -40,14 +40,11 @@ All slices through STEP-09B are merged to `main`:
 | STEP-09A | #47 | `e2e9e3f` | CDK TypeScript foundation, retained Stateful stack (DynamoDB, ECR, Signer profile/Managed Signing) |
 | STEP-09B | #53 | `3c5ccc9` | Runtime stack: public-only VPC, least-privilege IAM, ARM64 Fargate Spot singleton, digest-only task definitions |
 
-Not yet implemented:
+STEP-02D is implemented and active. The four Forum threads, webhook/thread
+settings, and smoke tests were completed on 2026-07-23. The friend-only server
+exposes the Forum to `@everyone`; no notification role is configured.
 
-- STEP-02D notification code is implemented as an ordered A/B/C PR stack, but
-  live Discord Forum threads, webhook/thread values, GitHub notification
-  settings, activation, and smoke tests remain operator work. Keep
-  `DISCORD_NOTIFICATIONS_ENABLED` false or unset until all three slices are on
-  `main` and the four fixed Forum threads exist. The friend-only server exposes
-  the Forum to `@everyone`; no notification role is configured.
+Not yet implemented:
 - STEP-09C: operations and monitoring (Budgets, Cost Anomaly Detection,
   metrics/alarms) and pre-scale image admission.
 - STEP-10: real signing/referrer verification and release workflows.
@@ -672,10 +669,9 @@ does not yet exist or could not run.
 - GitHub-to-Discord operational notifications are an at-least-once convenience,
   not an authoritative status store. Keep `DISCORD_WEBHOOK_URL` in Actions
   Secrets only, keep actual thread IDs in repository variables only, do
-  not duplicate the webhook into Dependabot Secrets, and leave
-  `DISCORD_NOTIFICATIONS_ENABLED` false until the four Forum threads
-  and smoke-test procedure in `docs/21_GitHub・Discord通知運用設計.md`
-  are ready.
+  not duplicate the webhook into Dependabot Secrets. The production setting is
+  `DISCORD_NOTIFICATIONS_ENABLED=true`; disable it only as the documented first
+  containment action for a notification incident.
 - Do not configure `DISCORD_ALERT_ROLE_ID`. A missing or blank value must keep
   `allowed_mentions.parse=[]` for failures, High/Critical alerts, and monitor
   failures as well as normal notifications.
