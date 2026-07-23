@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -29,6 +31,12 @@ from tools.github_discord_notifications.workflow_run import (
     run_notification,
     workflow_embed,
 )
+
+
+def test_notification_package_parses_with_github_runner_python_baseline() -> None:
+    package = Path("tools/github_discord_notifications")
+    for source in sorted(package.glob("*.py")):
+        ast.parse(source.read_text(encoding="utf-8"), filename=str(source), feature_version=(3, 12))
 
 
 def workflow_run(
