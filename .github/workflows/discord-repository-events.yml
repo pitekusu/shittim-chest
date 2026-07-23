@@ -1,0 +1,63 @@
+name: Discord Repository Events
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - closed
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  group: discord-repository-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  pull-request:
+    name: pull-request
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      vars.DISCORD_NOTIFICATIONS_ENABLED == 'true' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted default-branch notification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Notify pull-request lifecycle
+        env:
+          DISCORD_THREAD_PR: ${{ vars.DISCORD_THREAD_PR }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python3 -m tools.github_discord_notifications pull-request
+
+  push:
+    name: push
+    if: github.event_name == 'push' && vars.DISCORD_NOTIFICATIONS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted main notification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Notify direct or unclassified main push
+        env:
+          DISCORD_THREAD_PR: ${{ vars.DISCORD_THREAD_PR }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m tools.github_discord_notifications push
