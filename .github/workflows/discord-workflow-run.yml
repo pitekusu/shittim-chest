@@ -34,7 +34,6 @@ jobs:
           persist-credentials: false
       - name: Notify the Discord operations forum
         env:
-          DISCORD_ALERT_ROLE_ID: ${{ vars.DISCORD_ALERT_ROLE_ID }}
           DISCORD_THREAD_CI: ${{ vars.DISCORD_THREAD_CI }}
           DISCORD_THREAD_DEPENDABOT: ${{ vars.DISCORD_THREAD_DEPENDABOT }}
           DISCORD_THREAD_SECURITY: ${{ vars.DISCORD_THREAD_SECURITY }}
