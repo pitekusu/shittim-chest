@@ -68,9 +68,9 @@ GitHub APIのISO 8601時刻は判定・Discord Embed `timestamp`ではUTC instan
 
 1. STEP-02D-A: 共通package、workflow completion通知、bounded retry、unit test。PR `#71`の全check合格。
 2. STEP-02D-B: PR lifecycle、Dependabot分岐、merge由来push抑制、限定`pull_request_target` policy test。PR `#72`の全check合格。
-3. STEP-02D-C: 日次security digest、scan停止検知をPR `#73`で実装し全check合格。Discord/GitHub実設定とmanual smoke testはoperator activation待ち。
+3. STEP-02D-C: 日次security digest、scan停止検知をPR `#73`で実装し全check合格。Discord/GitHub実設定、manual Security Digest、CI completion、PR lifecycleのsmoke testを2026-07-23に完了し、有効化済み。
 
-STEP-02D-Aでは通知をdisabledのままmergeし、実Webhook通信、Discord ID、GitHub Secret/Variable変更を行わない。
+各実装PRは通知をdisabledのままmergeした。全sliceのmerge、実設定、互換性・表示修正、manual smoke test合格後に`DISCORD_NOTIFICATIONS_ENABLED=true`へ変更した。
 
 Security DigestはDependabot Alerts、Code scanning Alerts、Dependabot PR、check runs、Code scanning analyses、CodeQL workflowをLink headerが尽きるまで取得する。全取得後だけ件数を表示し、途中失敗では件数を破棄してSecurity threadへ監視失敗を通知し、workflowも失敗させる。Dependency GraphとRelease Tool Versionsは8日以内の成功、CodeQLはlatest main runの成功と8日鮮度、CodeQLとGrypeは現在main SHAのanalysisを要求する。
 
