@@ -229,6 +229,20 @@ def test_failure_lists_at_most_eight_failed_jobs_and_mentions_role() -> None:
     assert github.requests == ["actions/runs/321/attempts/2/jobs"]
 
 
+def test_failure_without_configured_role_disables_all_mentions() -> None:
+    configured = environment()
+    configured.pop("DISCORD_ALERT_ROLE_ID")
+    discord = FakeDiscord()
+    run_notification(
+        event=event_payload(conclusion="failure"),
+        environment=configured,
+        github=FakeGitHub(jobs=[{"name": "failed", "conclusion": "failure"}]),
+        discord=discord,
+    )
+    assert discord.messages[0][1]["allowed_mentions"] == {"parse": []}
+    assert "content" not in discord.messages[0][1]
+
+
 @pytest.mark.parametrize("conclusion", ["cancelled", "timed_out", "action_required"])
 def test_non_success_conclusions_query_jobs(conclusion: str) -> None:
     github = FakeGitHub(jobs=[{"name": "job", "conclusion": conclusion}])

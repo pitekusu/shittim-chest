@@ -110,7 +110,7 @@ def run_notification(
 
     webhook_url = _required(environment, "DISCORD_WEBHOOK_URL")
     thread_id = _required(environment, target.thread_environment)
-    role_id = _required(environment, "DISCORD_ALERT_ROLE_ID")
+    role_id = environment.get("DISCORD_ALERT_ROLE_ID", "").strip() or None
     presentation = conclusion_presentation(conclusion)
     failed_jobs = _failed_job_names(github, run) if conclusion != "success" else ()
     embed = workflow_embed(run, failed_jobs=failed_jobs)

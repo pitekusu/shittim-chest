@@ -43,10 +43,11 @@ All slices through STEP-09B are merged to `main`:
 Not yet implemented:
 
 - STEP-02D notification code is implemented as an ordered A/B/C PR stack, but
-  live Discord Forum threads, webhook/role/thread values, GitHub notification
+  live Discord Forum threads, webhook/thread values, GitHub notification
   settings, activation, and smoke tests remain operator work. Keep
   `DISCORD_NOTIFICATIONS_ENABLED` false or unset until all three slices are on
-  `main` and the four fixed private Forum threads exist.
+  `main` and the four fixed Forum threads exist. The friend-only server exposes
+  the Forum to `@everyone`; no notification role is configured.
 - STEP-09C: operations and monitoring (Budgets, Cost Anomaly Detection,
   metrics/alarms) and pre-scale image admission.
 - STEP-10: real signing/referrer verification and release workflows.
@@ -670,11 +671,14 @@ does not yet exist or could not run.
   dedicated negative policy tests as a merge gate.
 - GitHub-to-Discord operational notifications are an at-least-once convenience,
   not an authoritative status store. Keep `DISCORD_WEBHOOK_URL` in Actions
-  Secrets only, keep actual thread/role IDs in repository variables only, do
+  Secrets only, keep actual thread IDs in repository variables only, do
   not duplicate the webhook into Dependabot Secrets, and leave
-  `DISCORD_NOTIFICATIONS_ENABLED` false until the four private Forum threads
+  `DISCORD_NOTIFICATIONS_ENABLED` false until the four Forum threads
   and smoke-test procedure in `docs/21_GitHub・Discord通知運用設計.md`
   are ready.
+- Do not configure `DISCORD_ALERT_ROLE_ID`. A missing or blank value must keep
+  `allowed_mentions.parse=[]` for failures, High/Critical alerts, and monitor
+  failures as well as normal notifications.
 - GitHub currently documents `vulnerability-alerts: read` as the dedicated
   `GITHUB_TOKEN` permission for Dependabot Alerts. Pinned actionlint 1.7.12
   predates that scope, so CI ignores only its exact unknown-scope diagnostic;

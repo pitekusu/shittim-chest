@@ -173,6 +173,20 @@ def test_complete_digest_sends_one_embed_to_each_thread_after_all_reads() -> Non
     assert github.requests[-1].startswith("actions/workflows/99/runs")
 
 
+def test_high_alerts_without_configured_role_disable_all_mentions() -> None:
+    configured = environment()
+    configured.pop("DISCORD_ALERT_ROLE_ID")
+    discord = FakeDiscord()
+    run_security_digest(
+        environment=configured,
+        github=FakeGitHub(),
+        discord=discord,
+        now=NOW,
+    )
+    assert all(payload["allowed_mentions"] == {"parse": []} for _, payload in discord.messages)
+    assert all("content" not in payload for _, payload in discord.messages)
+
+
 def test_zero_alerts_and_no_open_prs_are_explicit_and_do_not_mention() -> None:
     github = FakeGitHub(alerts=[], code_alerts=[], pulls=[])
     discord = FakeDiscord()

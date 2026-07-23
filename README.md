@@ -150,7 +150,7 @@ Multi-agent beta is intentionally not used; Python application orchestration
 remains the authority for persona concurrency, voting, checkpoints, and resume.
 No production AWS or OpenAI service is contacted by the current tests.
 
-STEP-02D adds an independent GitHub Actions to private Discord Forum
+STEP-02D adds an independent GitHub Actions to a server-visible Discord Forum
 notification path. The first slice observes only the repository-managed `CI`,
 `Dependency Graph`, and `Release Tool Versions` workflows, validates both the
 workflow name and path, and sends bounded, sanitized embeds with finite retry.
@@ -159,7 +159,7 @@ suppresses merge-derived main pushes, and flags direct or API-unclassified
 pushes. Its narrowly allowed `pull_request_target` never checks out PR code,
 uses artifacts or caches, or requests write access; a dedicated negative policy
 gate protects that boundary. Notifications remain disabled until the security
-digest slice, private Forum threads, Actions secret, and repository variables
+digest slice, four Forum threads, Actions secret, and repository variables
 are configured. The daily digest implementation reads all Dependabot alert,
 code-scanning alert, Dependabot PR, and check-run pages before rendering any
 count. It also detects stale repository workflows, failed or stale CodeQL, and
@@ -167,6 +167,9 @@ missing CodeQL/Grype analysis for current `main`; incomplete API reads produce
 only a count-free monitor-failure alert. Notification failure never changes the
 source workflow result. Live Discord configuration and smoke testing remain an
 operator activation step.
+The friend-only Discord server intentionally exposes the Forum to `@everyone`
+and does not use an alert role. Every webhook payload therefore disables all
+mentions, including failure and High/Critical notifications.
 
 The current container policy adopts the free DHI Community Python 3.14.6
 Debian 13 images. The shell-less production runtime uses DHI's `nonroot`

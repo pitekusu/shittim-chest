@@ -77,7 +77,7 @@ def run_security_digest(
     webhook_url = _required(environment, "DISCORD_WEBHOOK_URL")
     dependabot_thread = _required(environment, "DISCORD_THREAD_DEPENDABOT")
     security_thread = _required(environment, "DISCORD_THREAD_SECURITY")
-    role_id = _required(environment, "DISCORD_ALERT_ROLE_ID")
+    role_id = environment.get("DISCORD_ALERT_ROLE_ID", "").strip() or None
     timestamp = now or datetime.now(UTC)
     try:
         data = collect_digest(github=github, now=timestamp)
