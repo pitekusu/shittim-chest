@@ -281,3 +281,22 @@ def test_top_five_alerts_are_severity_sorted_and_bounded() -> None:
     top = next(field.value for field in rendered.fields if field.name == "上位alert")
     assert len(top.splitlines()) == 5
     assert top.startswith("critical")
+
+
+def test_dependabot_alert_lines_remain_readable_after_discord_normalization() -> None:
+    alert = dependabot_alert()
+    dependency = cast(JsonObject, alert["dependency"])
+    package = cast(JsonObject, dependency["package"])
+    package["name"] = "brace-expansion"
+    alert["vulnerable_manifest_path"] = None
+    vulnerability = cast(JsonObject, alert["security_vulnerability"])
+    patched = cast(JsonObject, vulnerability["first_patched_version"])
+    patched["identifier"] = "5.0.7"
+    discord = FakeDiscord()
+    run_security_digest(
+        environment=environment(),
+        github=FakeGitHub(alerts=[alert]),
+        discord=discord,
+        now=NOW,
+    )
+    assert fields(discord.messages[0][1])["上位alert"] == ("high | brace-expansion | — | 5.0.7")

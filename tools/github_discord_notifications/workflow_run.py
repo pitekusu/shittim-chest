@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Protocol
 
 from tools.github_discord_notifications.formatting import (
@@ -166,7 +166,7 @@ def workflow_embed(run: JsonObject, *, failed_jobs: tuple[str, ...]) -> DiscordE
         DiscordField("Commit", string_value(run.get("head_sha"))[:7], True),
         DiscordField("実行者", string_value(actor.get("login")), True),
         DiscordField("実行", f"#{run_number} / attempt {run_attempt}", True),
-        DiscordField("開始日時", started, True),
+        DiscordField("開始日時", _jst_timestamp(started), True),
         DiscordField("実行時間", duration, True),
     ]
     if failed_jobs:
@@ -201,6 +201,17 @@ def dependabot_merge_embed(pull: JsonObject, run: JsonObject) -> DiscordEmbed:
         ),
         timestamp=merged_at,
     )
+
+
+def _jst_timestamp(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    jst = timezone(timedelta(hours=9), name="JST")
+    return parsed.astimezone(jst).strftime("%Y-%m-%d %H:%M:%S JST")
 
 
 def _failed_job_names(github: GitHubReader, run: JsonObject) -> tuple[str, ...]:
