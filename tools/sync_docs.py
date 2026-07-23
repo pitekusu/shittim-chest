@@ -28,6 +28,7 @@ EXPECTED_FILES = (
     "18_試験・品質保証設計.md",
     "19_実装計画・トレーサビリティ.md",
     "20_実装・試験・検証記録.md",
+    "21_GitHub・Discord通知運用設計.md",
 )
 ALLOWED_DESTINATION_EXTRAS = {"LICENSE.md", "README.md"}
 SECRET_PATTERNS = {

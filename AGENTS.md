@@ -145,7 +145,7 @@ overrides connector-first plugin guidance for write actions only.
 
 ## Authoritative Documents
 
-The 14 public-safe project notes in the operator's Obsidian Vault are the source
+The 15 public-safe project notes in the operator's Obsidian Vault are the source
 of truth. Set `SHITTIM_DOCS_SOURCE` to that directory; never commit its local
 absolute path. Repository `docs/` is the public, read-only mirror.
 
@@ -657,8 +657,19 @@ does not yet exist or could not run.
   requires zero independent approvals but requires configured checks, blocks
   force-push/delete, and has no bypass actor.
 - Public pull-request jobs are untrusted: use read-only `GITHUB_TOKEN`, no
-  secrets or OIDC, no self-hosted runner, and never execute fork code through
-  `pull_request_target`.
+  secrets or OIDC, and no self-hosted runner. Never execute fork code through
+  `pull_request_target`. The only permitted target workflow is
+  `.github/workflows/discord-repository-events.yml`: it may read PR metadata
+  with default-branch notification code, but must not checkout the PR head,
+  download artifacts, use caches, or request write permission. Keep the
+  dedicated negative policy tests as a merge gate.
+- GitHub-to-Discord operational notifications are an at-least-once convenience,
+  not an authoritative status store. Keep `DISCORD_WEBHOOK_URL` in Actions
+  Secrets only, keep actual thread/role IDs in repository variables only, do
+  not duplicate the webhook into Dependabot Secrets, and leave
+  `DISCORD_NOTIFICATIONS_ENABLED` false until the four private Forum threads
+  and smoke-test procedure in `docs/21_GitHub・Discord通知運用設計.md`
+  are ready.
 - Use concise imperative commit messages.
 - Keep generated caches, virtual environments, coverage data, `.env`, runtime
   state, and credentials out of Git.
