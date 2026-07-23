@@ -18,6 +18,8 @@ def _workflow_directory(tmp_path: Path) -> Path:
     directory.mkdir()
     source = WORKFLOW_DIRECTORY / ALLOWED_TARGET_WORKFLOW
     (directory / ALLOWED_TARGET_WORKFLOW).write_bytes(source.read_bytes())
+    digest = WORKFLOW_DIRECTORY / "discord-security-digest.yml"
+    (directory / digest.name).write_bytes(digest.read_bytes())
     return directory
 
 
@@ -106,4 +108,25 @@ def test_multiline_run_cannot_expand_pull_request_metadata(tmp_path: Path) -> No
         "run: |\n          echo ${{ github.event.pull_request.title }}",
     )
     with pytest.raises(WorkflowPolicyError, match="untrusted event"):
+        validate_notification_workflows(directory)
+
+
+def test_vulnerability_alerts_permission_cannot_be_widened(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    digest = directory / "discord-security-digest.yml"
+    digest.write_text(
+        digest.read_text(encoding="utf-8").replace(
+            "vulnerability-alerts: read", "vulnerability-alerts: write"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkflowPolicyError, match="one read-only"):
+        validate_notification_workflows(directory)
+
+
+def test_vulnerability_alerts_permission_cannot_be_duplicated(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    extra = directory / "extra.yml"
+    extra.write_text("permissions:\n  vulnerability-alerts: read\n", encoding="utf-8")
+    with pytest.raises(WorkflowPolicyError, match="one read-only"):
         validate_notification_workflows(directory)

@@ -160,7 +160,13 @@ pushes. Its narrowly allowed `pull_request_target` never checks out PR code,
 uses artifacts or caches, or requests write access; a dedicated negative policy
 gate protects that boundary. Notifications remain disabled until the security
 digest slice, private Forum threads, Actions secret, and repository variables
-are configured. Notification failure never changes the source workflow result.
+are configured. The daily digest implementation reads all Dependabot alert,
+code-scanning alert, Dependabot PR, and check-run pages before rendering any
+count. It also detects stale repository workflows, failed or stale CodeQL, and
+missing CodeQL/Grype analysis for current `main`; incomplete API reads produce
+only a count-free monitor-failure alert. Notification failure never changes the
+source workflow result. Live Discord configuration and smoke testing remain an
+operator activation step.
 
 The current container policy adopts the free DHI Community Python 3.14.6
 Debian 13 images. The shell-less production runtime uses DHI's `nonroot`

@@ -14,6 +14,7 @@ from typing import cast
 from tools.github_discord_notifications.github_api import GitHubApiError, GitHubClient
 from tools.github_discord_notifications.models import JsonObject
 from tools.github_discord_notifications.repository_events import notify_pull_request, notify_push
+from tools.github_discord_notifications.security_digest import run_security_digest
 from tools.github_discord_notifications.webhook import DiscordWebhookError, DiscordWebhookSender
 from tools.github_discord_notifications.workflow_run import run_notification
 
@@ -24,6 +25,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     subcommands.add_parser("workflow-run", help="notify a completed trusted workflow run")
     subcommands.add_parser("pull-request", help="notify a pull-request lifecycle event")
     subcommands.add_parser("push", help="notify a direct or unclassified main push")
+    subcommands.add_parser("security-digest", help="send the daily dependency/security digest")
     return parser.parse_args(argv)
 
 
@@ -36,6 +38,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             results = _pull_request(os.environ)
         elif args.command == "push":
             results = _push(os.environ)
+        elif args.command == "security-digest":
+            results = _security_digest(os.environ)
         else:  # pragma: no cover - argparse rejects unknown commands.
             raise ValueError("unsupported command")
     except (DiscordWebhookError, GitHubApiError, OSError, ValueError) as error:
@@ -90,6 +94,18 @@ def _push(environment: Mapping[str, str]):
     )
     return notify_push(
         event=event,
+        environment=environment,
+        github=github,
+        discord=DiscordWebhookSender(),
+    )
+
+
+def _security_digest(environment: Mapping[str, str]):
+    github = GitHubClient(
+        token=_required(environment, "GITHUB_TOKEN"),
+        repository=_required(environment, "GITHUB_REPOSITORY"),
+    )
+    return run_security_digest(
         environment=environment,
         github=github,
         discord=DiscordWebhookSender(),

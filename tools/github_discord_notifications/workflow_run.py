@@ -27,6 +27,7 @@ class WorkflowTarget:
     path: str
     thread_environment: str
     logical_thread: str
+    notify_success: bool = True
 
 
 WORKFLOW_TARGETS = {
@@ -40,6 +41,18 @@ WORKFLOW_TARGETS = {
         ".github/workflows/tool-versions.yml",
         "DISCORD_THREAD_SECURITY",
         "セキュリティ",
+    ),
+    "Discord Repository Events": WorkflowTarget(
+        ".github/workflows/discord-repository-events.yml",
+        "DISCORD_THREAD_SECURITY",
+        "セキュリティ",
+        notify_success=False,
+    ),
+    "Discord Security Digest": WorkflowTarget(
+        ".github/workflows/discord-security-digest.yml",
+        "DISCORD_THREAD_SECURITY",
+        "セキュリティ",
+        notify_success=False,
     ),
 }
 
@@ -91,10 +104,13 @@ def run_notification(
     if target is None:
         return ()
 
+    conclusion = string_value(run.get("conclusion"), default="unknown")
+    if conclusion == "success" and not target.notify_success:
+        return ()
+
     webhook_url = _required(environment, "DISCORD_WEBHOOK_URL")
     thread_id = _required(environment, target.thread_environment)
     role_id = _required(environment, "DISCORD_ALERT_ROLE_ID")
-    conclusion = string_value(run.get("conclusion"), default="unknown")
     presentation = conclusion_presentation(conclusion)
     failed_jobs = _failed_job_names(github, run) if conclusion != "success" else ()
     embed = workflow_embed(run, failed_jobs=failed_jobs)

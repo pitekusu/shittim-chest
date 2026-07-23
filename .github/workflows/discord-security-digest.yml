@@ -1,0 +1,40 @@
+name: Discord Security Digest
+
+on:
+  schedule:
+    - cron: "37 0 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: discord-security-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    name: digest
+    if: vars.DISCORD_NOTIFICATIONS_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+      security-events: read
+      vulnerability-alerts: read
+    steps:
+      - name: Check out trusted main notification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Send complete daily security digests
+        env:
+          DISCORD_ALERT_ROLE_ID: ${{ vars.DISCORD_ALERT_ROLE_ID }}
+          DISCORD_THREAD_DEPENDABOT: ${{ vars.DISCORD_THREAD_DEPENDABOT }}
+          DISCORD_THREAD_SECURITY: ${{ vars.DISCORD_THREAD_SECURITY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m tools.github_discord_notifications security-digest
