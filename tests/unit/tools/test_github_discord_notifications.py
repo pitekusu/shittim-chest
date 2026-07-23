@@ -166,6 +166,17 @@ def test_sanitize_text_preserves_no_raw_discord_markdown() -> None:
     assert sanitize_text("[label](url) @here") == r"\[label\]\(url\) @here"
 
 
+def test_sanitize_text_preserves_newlines_and_readable_dependency_versions() -> None:
+    value = "first\nsecond\r\nhigh | brace-expansion | — | 5.0.7"
+    assert sanitize_text(value) == "first\nsecond\nhigh | brace-expansion | — | 5.0.7"
+
+
+def test_workflow_start_time_is_rendered_in_japan_standard_time() -> None:
+    embed = workflow_embed(workflow_run(), failed_jobs=())
+    started = next(field.value for field in embed.fields if field.name == "開始日時")
+    assert started == "2026-07-23 09:00:00 JST"
+
+
 def test_workflow_name_and_path_must_both_match() -> None:
     assert resolve_workflow_target(workflow_run()) is not None
     assert resolve_workflow_target(workflow_run(path="dynamic/dependabot/update-graph")) is None

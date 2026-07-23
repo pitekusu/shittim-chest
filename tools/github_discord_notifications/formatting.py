@@ -31,16 +31,20 @@ FOOTER_LIMIT = 2048
 FIELD_COUNT_LIMIT = 25
 EMBED_TOTAL_LIMIT = 6000
 
-_MARKDOWN = re.compile(r"([\\`*_{}\[\]()<>#+\-.!|~])")
+_MARKDOWN = re.compile(r"([\\`*_\[\]()<>~])")
 _CONTROL_REPLACEMENT = "�"
 
 
 def sanitize_text(value: object) -> str:
     """Remove display-control spoofing and escape Discord Markdown."""
 
-    text = str(value) if value is not None else "—"
+    text = (str(value) if value is not None else "—").replace("\r\n", "\n").replace("\r", "\n")
     cleaned = "".join(
-        _CONTROL_REPLACEMENT if unicodedata.category(character) in {"Cc", "Cf"} else character
+        character
+        if character == "\n"
+        else _CONTROL_REPLACEMENT
+        if unicodedata.category(character) in {"Cc", "Cf"}
+        else character
         for character in text
     )
     return _MARKDOWN.sub(r"\\\1", cleaned).strip() or "—"

@@ -684,6 +684,11 @@ does not yet exist or could not run.
   `tools/github_discord_notifications/` parse-compatible with Python 3.12 and
   retain the AST compatibility regression test even though project CI targets
   Python 3.14.
+- Preserve LF line breaks while sanitizing Discord text; replace other display
+  controls, escape only Markdown constructs that can alter formatting or links,
+  and keep dependency names, pipes, hyphens, and dotted versions readable.
+  Render human-facing workflow times as `YYYY-MM-DD HH:MM:SS JST`; keep Discord
+  embed timestamps as valid ISO 8601 instants.
 - GitHub currently documents `vulnerability-alerts: read` as the dedicated
   `GITHUB_TOKEN` permission for Dependabot Alerts. Pinned actionlint 1.7.12
   predates that scope, so CI ignores only its exact unknown-scope diagnostic;

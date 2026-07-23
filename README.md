@@ -170,6 +170,8 @@ operator activation step.
 The friend-only Discord server intentionally exposes the Forum to `@everyone`
 and does not use an alert role. Every webhook payload therefore disables all
 mentions, including failure and High/Critical notifications.
+Notification fields preserve safe line breaks and readable dependency/version
+text, and human-facing workflow start times are rendered in Japan Standard Time.
 
 The current container policy adopts the free DHI Community Python 3.14.6
 Debian 13 images. The shell-less production runtime uses DHI's `nonroot`
