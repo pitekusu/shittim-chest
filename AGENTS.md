@@ -679,6 +679,11 @@ does not yet exist or could not run.
 - Do not configure `DISCORD_ALERT_ROLE_ID`. A missing or blank value must keep
   `allowed_mentions.parse=[]` for failures, High/Critical alerts, and monitor
   failures as well as normal notifications.
+- Notification workflows deliberately use the GitHub-hosted runner's system
+  `python3` without installing project dependencies. Keep
+  `tools/github_discord_notifications/` parse-compatible with Python 3.12 and
+  retain the AST compatibility regression test even though project CI targets
+  Python 3.14.
 - GitHub currently documents `vulnerability-alerts: read` as the dedicated
   `GITHUB_TOKEN` permission for Dependabot Alerts. Pinned actionlint 1.7.12
   predates that scope, so CI ignores only its exact unknown-scope diagnostic;

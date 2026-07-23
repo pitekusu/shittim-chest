@@ -17,6 +17,7 @@ from tools.github_discord_notifications.models import CurlResult, JsonObject
 
 MAX_ATTEMPTS = 4
 TRANSIENT_CURL_CODES = frozenset({5, 6, 7, 18, 28, 35, 52, 55, 56})
+_STATUS_CODE_ERRORS = (UnicodeDecodeError, ValueError)
 
 
 class DiscordWebhookError(RuntimeError):
@@ -132,7 +133,7 @@ def _thread_url(webhook_url: str, thread_id: str) -> str:
 def _status_code(raw: bytes) -> int | None:
     try:
         value = int(raw.decode("ascii"))
-    except UnicodeDecodeError, ValueError:
+    except _STATUS_CODE_ERRORS:
         return None
     return value if 100 <= value <= 599 else None
 
