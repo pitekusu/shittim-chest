@@ -282,9 +282,10 @@ jobs:
         run: |
           # Dockerfile is the sole exact digest pin; require the index to publish
           # a linux/arm64 manifest under that pin without storing a second digest.
+          # This job does not install the project uv env; the policy tool is stdlib-only.
           verify_manifest() {
             stage=$1
-            reference=$(uv run --frozen python tools/check_container_policy.py \
+            reference=$(python3 tools/check_container_policy.py \
               --print-reference "${stage}")
             actual=$(docker buildx imagetools inspect --raw "${reference}" | jq --raw-output '
               .manifests[]
@@ -356,7 +357,7 @@ jobs:
           test "${installed_version}" = "${scout_version}"
       - name: Fetch and verify the DHI VEX attestation
         run: |
-          runtime_reference=$(uv run --frozen python tools/check_container_policy.py \
+          runtime_reference=$(python3 tools/check_container_policy.py \
             --print-reference runtime)
           "${RUNNER_TEMP}/docker-scout" vex get \
             --verify \
