@@ -21,6 +21,7 @@ from shittim_chest.application.discord_http import (
     DiscordHttpOperation,
     DiscordHttpPing,
 )
+from shittim_chest.application.ingress import IngressOutcome
 from shittim_chest.application.scale_to_zero import IngressKind
 
 DISCORD_SIGNATURE_REPLAY_TOLERANCE = timedelta(minutes=5)
@@ -307,6 +308,57 @@ def error_response(error: DiscordHttpBoundaryError) -> ApiGatewayV2Response:
     return _json_response(error.status_code, {"error": public_code})
 
 
+def ingress_response(outcome: IngressOutcome) -> ApiGatewayV2Response:
+    """Map a durable application result to one token-free ephemeral callback."""
+
+    content = {
+        IngressOutcome.STARTING: (
+            "\u23f3 シッテムの箱を起動しています。\nチャンネルへ起動状況を表示します。"
+        ),
+        IngressOutcome.ACCEPTED: (
+            "\u2705 議論依頼を受け付けました。\nチャンネルへ進行状況を表示します。"
+        ),
+        IngressOutcome.RETRY_STARTING: (
+            "\u23f3 再試行を受け付け、シッテムの箱を起動しています。"
+            "\nチャンネルへ操作状況を表示します。"
+        ),
+        IngressOutcome.RETRY_ACCEPTED: (
+            "\u2705 再試行を受け付けました。\nチャンネルへ操作状況を表示します。"
+        ),
+        IngressOutcome.CANCEL_STARTING: (
+            "\u23f3 取り消しを受け付け、シッテムの箱を起動しています。"
+            "\nチャンネルへ操作状況を表示します。"
+        ),
+        IngressOutcome.CANCEL_ACCEPTED: (
+            "\u2705 取り消しを受け付けました。\nチャンネルへ操作状況を表示します。"
+        ),
+        IngressOutcome.COMPLETED: "この依頼はすでに処理を完了しています。",
+        IngressOutcome.REJECTED: "この依頼は受け付けられませんでした。",
+        IngressOutcome.TERMINAL_FAILED: "この依頼は処理期限内に開始できませんでした。",
+        IngressOutcome.QUEUE_FULL: (
+            "\u274c 現在20件の依頼が待機しています。\nしばらくしてから再実行してください。"
+        ),
+        IngressOutcome.NOT_ALLOWED: "この場所または操作では利用できません。",
+    }[outcome]
+    return _json_response(
+        200,
+        {
+            "data": {
+                "allowed_mentions": {"parse": []},
+                "content": content,
+                "flags": 64,
+            },
+            "type": 4,
+        },
+    )
+
+
+def ingress_unavailable_response() -> ApiGatewayV2Response:
+    """Fail without claiming Discord acceptance when durable persistence is unknown."""
+
+    return _json_response(503, {"error": "ingress_unavailable"})
+
+
 def _parse_command(
     data: Mapping[str, object],
     *,
@@ -528,6 +580,8 @@ __all__ = (
     "DiscordSignedHttpRequest",
     "error_response",
     "extract_api_gateway_v2_request",
+    "ingress_response",
+    "ingress_unavailable_response",
     "parse_verified_interaction",
     "pong_response",
 )

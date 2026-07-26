@@ -16,7 +16,6 @@ from mypy_boto3_dynamodb.type_defs import (
 from shittim_chest.adapters.dynamodb import (
     DynamoDbIngressRepository,
     DynamoDbRuntimeStateRepository,
-    PersistenceFormatError,
     ingress_request_sort_key,
     serialize_runtime_state,
 )
@@ -32,6 +31,7 @@ def new_request(index: int, *, created_at: datetime | None = None) -> IngressReq
     return IngressRequest.new_debate(
         interaction_id=interaction_id,
         operation_id=f"operation-{index:04d}",
+        application_id="application-id",
         question=f"question-{index}",
         requester_id="requester-id",
         requester_username="requester",
@@ -229,7 +229,7 @@ async def test_missing_or_malformed_runtime_state_fails_closed(
         TableName=dynamodb_table,
         Item=marshal_item(malformed),
     )
-    with pytest.raises(PersistenceFormatError, match="invalid runtime state"):
+    with pytest.raises(RepositoryConflict, match="runtime state record is invalid"):
         await runtime.get()
 
 
@@ -397,6 +397,7 @@ async def test_terminal_deadline_fixed_width_boundary_is_atomic(
     at_boundary = IngressRequest.new_debate(
         interaction_id="interaction-boundary",
         operation_id="operation-boundary",
+        application_id="application-id",
         question="boundary question",
         requester_id="requester-id",
         requester_username="requester",

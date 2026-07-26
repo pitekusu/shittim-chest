@@ -9,6 +9,7 @@ from enum import StrEnum, unique
 from shittim_chest.domain import (
     AttemptId,
     DebateId,
+    DebatePhase,
     DebateState,
     EscalationAssessment,
     EvidenceBundle,
@@ -159,6 +160,35 @@ class BoundDiscordContext:
     starter_message_id: str
     thread_id: str
     control_panel_message_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DebateAuthorizationSnapshot:
+    """Minimal persisted context needed to authorize one HTTP component."""
+
+    debate_id: DebateId
+    attempt_id: AttemptId
+    phase: DebatePhase
+    requester_id: str
+    guild_id: str
+    channel_id: str
+    thread_id: str | None
+    control_panel_message_id: str | None
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("requester ID", self.requester_id),
+            ("Guild ID", self.guild_id),
+            ("channel ID", self.channel_id),
+        ):
+            _require_identifier(value, label=f"authorization {label}")
+        if self.thread_id is not None:
+            _require_identifier(self.thread_id, label="authorization thread ID")
+        if self.control_panel_message_id is not None:
+            _require_identifier(
+                self.control_panel_message_id,
+                label="authorization control panel message ID",
+            )
 
 
 @dataclass(frozen=True, slots=True)

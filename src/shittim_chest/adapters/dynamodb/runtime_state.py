@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_dynamodb.type_defs import TransactWriteItemTypeDef
@@ -19,6 +21,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
     DynamoValue,
+    PersistenceFormatError,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
     deserialize_runtime_state,
@@ -26,7 +29,10 @@ from shittim_chest.adapters.dynamodb.serializer import (
     serialize_runtime_state,
     serialize_runtime_wake_result,
 )
-from shittim_chest.application.ports import RepositoryConflict
+from shittim_chest.adapters.dynamodb.transaction_errors import (
+    is_condition_only_cancellation,
+)
+from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
 from shittim_chest.application.scale_to_zero import (
     INGRESS_QUEUE_LIMIT,
     IngressOperationResult,
@@ -72,7 +78,12 @@ class DynamoDbRuntimeStateRepository:
         self._table_name = table_name
 
     async def get(self) -> RuntimeState | None:
-        return await asyncio.to_thread(self._get)
+        try:
+            return await asyncio.to_thread(self._get)
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
+        except PersistenceFormatError:
+            raise RepositoryConflict("runtime state record is invalid") from None
 
     async def request_wake(
         self,
@@ -80,7 +91,12 @@ class DynamoDbRuntimeStateRepository:
         interaction_id: str,
         at: datetime,
     ) -> RuntimeState:
-        return await asyncio.to_thread(self._request_wake, interaction_id, at)
+        try:
+            return await asyncio.to_thread(self._request_wake, interaction_id, at)
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
+        except PersistenceFormatError:
+            raise RepositoryConflict("runtime state record is invalid") from None
 
     async def replace(
         self,
@@ -88,7 +104,12 @@ class DynamoDbRuntimeStateRepository:
         expected: RuntimeState,
         updated: RuntimeState,
     ) -> RuntimeState:
-        return await asyncio.to_thread(self._replace, expected, updated)
+        try:
+            return await asyncio.to_thread(self._replace, expected, updated)
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
+        except PersistenceFormatError:
+            raise RepositoryConflict("runtime state record is invalid") from None
 
     def _get(self) -> RuntimeState | None:
         item = self._get_item(_runtime_key())
@@ -152,11 +173,11 @@ class DynamoDbRuntimeStateRepository:
                 ExpressionAttributeValues=marshal_item(values),
                 ReturnConsumedCapacity="NONE",
             )
-        except self._client.exceptions.ConditionalCheckFailedException as error:
+        except self._client.exceptions.ConditionalCheckFailedException:
             current = self._get()
             if current == updated:
                 return updated
-            raise RepositoryConflict("runtime state changed before replacement") from error
+            raise RepositoryConflict("runtime state changed before replacement") from None
         return updated
 
     def _transact_wake(
@@ -285,9 +306,11 @@ class DynamoDbRuntimeStateRepository:
                 ReturnConsumedCapacity="NONE",
             )
         except self._client.exceptions.TransactionCanceledException as error:
-            raise RepositoryConflict("runtime wake transaction condition failed") from error
-        except self._client.exceptions.IdempotentParameterMismatchException as error:
-            raise RepositoryConflict("runtime wake transaction token input changed") from error
+            if is_condition_only_cancellation(error):
+                raise RepositoryConflict("runtime wake transaction condition failed") from None
+            raise RepositoryUnavailable from None
+        except self._client.exceptions.IdempotentParameterMismatchException:
+            raise RepositoryConflict("runtime wake transaction token input changed") from None
 
     def _load_ingress_operation(self, interaction_id: str) -> IngressOperationResult:
         item = self._get_item(_operation_key(interaction_id))

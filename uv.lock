@@ -204,6 +204,12 @@ wheels = [
 dynamodb = [
     { name = "mypy-boto3-dynamodb" },
 ]
+lambda = [
+    { name = "mypy-boto3-lambda" },
+]
+ssm = [
+    { name = "mypy-boto3-ssm" },
+]
 
 [[package]]
 name = "botocore"
@@ -869,6 +875,24 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-lambda"
+version = "1.43.48"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/93/aba6c64a33426150f69c0dda676815294a3fd4af8d5d249d721ad9c2c24b/mypy_boto3_lambda-1.43.48.tar.gz", hash = "sha256:f783d46cf0d001eba713b02ce98a3956ff90f4a02dfe986c0dd7bac32034cb07", size = 52630, upload-time = "2026-07-14T20:32:34.727Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/41/e01c5b0f8a9c2ef9b549140e9ba6642b837311f11b62d80fcc8e983a6268/mypy_boto3_lambda-1.43.48-py3-none-any.whl", hash = "sha256:6461afa3125717f3cc7e358313c7c8d1ece2d07f73e5be3ab1d0524732015492", size = 61118, upload-time = "2026-07-14T20:32:32.697Z" },
+]
+
+[[package]]
+name = "mypy-boto3-ssm"
+version = "1.43.53"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/a5/f43b2c755cf3ad6c61821f54802d13acf3831deb378d90e68f5ced332063/mypy_boto3_ssm-1.43.53.tar.gz", hash = "sha256:f20a2f1035a0d58b61647c6f5c883e058152acdccd8a97e7d1916476dc8e7c7b", size = 97766, upload-time = "2026-07-21T19:52:31.108Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/97/b2cf5f41d412891e8122e5e6a1986c7ebcdff3c9d5ac90058e045c65a816/mypy_boto3_ssm-1.43.53-py3-none-any.whl", hash = "sha256:d90a5a46e2e5db78ae5354d6cf925be81567704d4d051337feef79b8cfd6d3de", size = 99501, upload-time = "2026-07-21T19:52:28.759Z" },
+]
+
+[[package]]
 name = "openai"
 version = "2.46.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1368,7 +1392,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "boto3-stubs", extra = ["dynamodb"] },
+    { name = "boto3-stubs", extra = ["dynamodb", "lambda", "ssm"] },
     { name = "cyclonedx-python-lib", extra = ["json-validation"] },
     { name = "hypothesis" },
     { name = "import-linter" },
@@ -1392,7 +1416,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", extras = ["dynamodb"], specifier = ">=1.43.53,<2" },
+    { name = "boto3-stubs", extras = ["dynamodb", "lambda", "ssm"], specifier = ">=1.43.53,<2" },
     { name = "cyclonedx-python-lib", extras = ["json-validation"], specifier = ">=11.11.0,<12" },
     { name = "hypothesis", specifier = ">=6.159.0,<7" },
     { name = "import-linter", specifier = ">=2.13,<3" },

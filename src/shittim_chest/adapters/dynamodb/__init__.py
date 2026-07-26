@@ -1,5 +1,8 @@
 """DynamoDB persistence contracts and native-value serialization."""
 
+from shittim_chest.adapters.dynamodb.debate_lookup import (
+    DynamoDbDebateAuthorizationLookup,
+)
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.adapters.dynamodb.outbox import DynamoDbOutboxRepository
 from shittim_chest.adapters.dynamodb.repository import (
@@ -13,6 +16,8 @@ from shittim_chest.adapters.dynamodb.serializer import (
     PersistenceFormatError,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
+    deserialize_ingress_semantic_binding,
+    deserialize_ingress_status_publication,
     deserialize_outbox,
     deserialize_panel_operation,
     deserialize_runtime_state,
@@ -22,6 +27,8 @@ from shittim_chest.adapters.dynamodb.serializer import (
     migrate_item,
     serialize_ingress_operation_result,
     serialize_ingress_request,
+    serialize_ingress_semantic_binding,
+    serialize_ingress_status_publication,
     serialize_outbox,
     serialize_panel_operation,
     serialize_runtime_state,
@@ -37,6 +44,7 @@ from shittim_chest.application.discord import (
 
 __all__ = (
     "CURRENT_SCHEMA_VERSION",
+    "DynamoDbDebateAuthorizationLookup",
     "DynamoDbDebateRepository",
     "DynamoDbIngressRepository",
     "DynamoDbOutboxRepository",
@@ -50,6 +58,8 @@ __all__ = (
     "create_dynamodb_client",
     "deserialize_ingress_operation_result",
     "deserialize_ingress_request",
+    "deserialize_ingress_semantic_binding",
+    "deserialize_ingress_status_publication",
     "deserialize_outbox",
     "deserialize_panel_operation",
     "deserialize_runtime_state",
@@ -59,6 +69,8 @@ __all__ = (
     "migrate_item",
     "serialize_ingress_operation_result",
     "serialize_ingress_request",
+    "serialize_ingress_semantic_binding",
+    "serialize_ingress_status_publication",
     "serialize_outbox",
     "serialize_panel_operation",
     "serialize_runtime_state",

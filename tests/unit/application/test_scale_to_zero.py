@@ -22,6 +22,7 @@ def request() -> IngressRequest:
     return IngressRequest.new_debate(
         interaction_id="interaction-id",
         operation_id="operation-id",
+        application_id="application-id",
         question="Which sweet breakfast should I choose?",
         requester_id="requester-id",
         requester_username="requester",
@@ -40,7 +41,7 @@ def test_new_request_has_per_request_deadlines_and_counts_toward_queue() -> None
     assert value.status.counts_toward_queue_limit
     assert value.startup_deadline_at == NOW + timedelta(minutes=3)
     assert value.terminal_deadline_at == NOW + timedelta(minutes=15)
-    assert value.status_message_state is StatusMessageState.PENDING
+    assert value.status_message_state is StatusMessageState.STARTING
 
 
 def test_request_rejects_non_utc_and_incorrect_deadlines() -> None:

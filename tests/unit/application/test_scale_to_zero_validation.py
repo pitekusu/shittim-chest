@@ -12,6 +12,12 @@ from shittim_chest.application import (
     RuntimeState,
     RuntimeStatus,
 )
+from shittim_chest.application.scale_to_zero import (
+    IngressKind,
+    IngressStatusPublication,
+    StatusMessageState,
+    StatusPublicationState,
+)
 from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 7, 26, 3, 0, tzinfo=UTC)
@@ -21,6 +27,7 @@ def request() -> IngressRequest:
     return IngressRequest.new_debate(
         interaction_id="interaction-id",
         operation_id="operation-id",
+        application_id="application-id",
         question="Choose a sweet breakfast",
         requester_id="requester-id",
         requester_username="requester",
@@ -98,6 +105,78 @@ def test_request_rejects_invalid_shape_variants() -> None:
         replace(source, ttl=-1)
     with pytest.raises(ValueError, match="unsupported ingress"):
         replace(source, schema_version=2)
+    with pytest.raises(ValueError, match="manage-messages"):
+        replace(source, requester_can_manage_messages=True)
+    with pytest.raises(ValueError, match="component context"):
+        replace(source, parent_channel_id="parent-channel-id")
+    with pytest.raises(ValueError, match="component context"):
+        replace(source, source_message_id="message-id")
+
+
+def test_control_request_requires_complete_immutable_context_and_hides_repr() -> None:
+    debate_id = DebateId.new()
+    attempt_id = AttemptId.new()
+    source = IngressRequest.control_operation(
+        interaction_id="private-interaction-id",
+        operation_id="semantic-operation",
+        kind=IngressKind.RETRY,
+        application_id="application-id",
+        requester_id="private-requester-id",
+        requester_username="requester",
+        requester_display_name="Requester",
+        requester_can_manage_messages=True,
+        guild_id="guild-id",
+        channel_id="thread-id",
+        parent_channel_id="channel-id",
+        source_message_id="message-id",
+        source_thread_id="thread-id",
+        target_debate_id=debate_id,
+        expected_attempt_id=attempt_id,
+        custom_id="component-id",
+        created_at=NOW,
+    )
+
+    assert "private-interaction-id" not in repr(source)
+    assert "private-requester-id" not in repr(source)
+    with pytest.raises(ValueError, match="parent channel"):
+        replace(source, parent_channel_id=None)
+    with pytest.raises(ValueError, match="target debate"):
+        replace(source, target_debate_id=None)
+    with pytest.raises(ValueError, match="command input"):
+        replace(source, command_name="shittim")
+    with pytest.raises(ValueError, match="must be retry or cancel"):
+        IngressRequest.control_operation(
+            interaction_id="interaction-id",
+            operation_id="operation-id",
+            kind=IngressKind.NEW_DEBATE,
+            application_id="application-id",
+            requester_id="requester-id",
+            requester_username="requester",
+            requester_display_name="Requester",
+            requester_can_manage_messages=False,
+            guild_id="guild-id",
+            channel_id="thread-id",
+            parent_channel_id="channel-id",
+            source_message_id="message-id",
+            source_thread_id="thread-id",
+            target_debate_id=debate_id,
+            expected_attempt_id=attempt_id,
+            custom_id="component-id",
+            created_at=NOW,
+        )
+
+
+def test_prepared_status_publication_is_due_and_validates_nonce() -> None:
+    publication = IngressStatusPublication.prepared(request())
+
+    assert publication.state is StatusPublicationState.PREPARED
+    assert publication.desired_state is StatusMessageState.STARTING
+    assert publication.delivered_state is None
+    assert publication.next_attempt_at == NOW
+    assert len(publication.nonce) == 22
+    assert "interaction-id" not in repr(publication)
+    with pytest.raises(ValueError, match="22 base64url"):
+        replace(publication, nonce="not-valid")
 
 
 def test_request_accepts_claimed_accepted_and_terminal_shapes() -> None:

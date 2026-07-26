@@ -1,6 +1,7 @@
 """SDK contracts for strongly consistent runtime reads and wake transactions."""
 
-from datetime import UTC, datetime
+import traceback
+from datetime import UTC, datetime, timedelta
 
 import boto3
 import pytest
@@ -25,6 +26,7 @@ from shittim_chest.application import (
     RuntimeState,
     RuntimeWakeResult,
 )
+from shittim_chest.application.ports import RepositoryUnavailable
 
 NOW = datetime(2026, 7, 26, 5, 30, tzinfo=UTC)
 
@@ -41,6 +43,7 @@ def request() -> IngressRequest:
     return IngressRequest.new_debate(
         interaction_id="interaction-alpha",
         operation_id="operation-alpha",
+        application_id="application-id",
         question="question",
         requester_id="requester-id",
         requester_username="requester",
@@ -81,6 +84,38 @@ async def test_runtime_get_is_strongly_consistent() -> None:
         )
 
         assert await repository.get() == state
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_runtime_replace_sdk_failure_is_content_free() -> None:
+    sdk = client()
+    repository = DynamoDbRuntimeStateRepository(client=sdk, table_name="test-table")
+    expected = RuntimeState.stopped(at=NOW).request_wake(at=NOW)
+    updated = expected.mark_started(
+        at=NOW + timedelta(seconds=1),
+        runtime_instance_id="runtime-alpha",
+    )
+
+    with Stubber(sdk) as stubber:
+        stubber.add_client_error(
+            "put_item",
+            service_error_code="InternalServerError",
+            service_message="sensitive provider detail",
+            http_status_code=500,
+            expected_params={
+                "TableName": "test-table",
+                "Item": marshal_item(serialize_runtime_state(updated)),
+                "ConditionExpression": ANY,
+                "ExpressionAttributeNames": ANY,
+                "ExpressionAttributeValues": ANY,
+                "ReturnConsumedCapacity": "NONE",
+            },
+        )
+
+        with pytest.raises(RepositoryUnavailable, match=r"^repository_unavailable$") as caught:
+            await repository.replace(expected=expected, updated=updated)
+        assert "sensitive provider detail" not in "".join(traceback.format_exception(caught.value))
         stubber.assert_no_pending_responses()
 
 

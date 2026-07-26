@@ -1,0 +1,64 @@
+"""Process-reusable boto3 client factories for the three-second ingress path."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import boto3
+from botocore.config import Config
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_lambda.client import LambdaClient
+    from mypy_boto3_ssm.client import SSMClient
+
+DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS = 3.0
+INGRESS_CONNECT_TIMEOUT_SECONDS = 0.1
+INGRESS_READ_TIMEOUT_SECONDS = 0.3
+# Cold SSM, semantic probe, authorization, enqueue, race classification,
+# and canonical replay bundle are the longest serial pre-response path.
+INGRESS_MAX_SERIAL_SDK_ROUNDS = 6
+INGRESS_RESPONSE_MARGIN_SECONDS = 0.4
+INGRESS_TOTAL_MAX_ATTEMPTS = 1
+
+
+def ingress_sdk_config() -> Config:
+    """Return a single-attempt SDK policy bounded below the Discord deadline."""
+
+    return Config(
+        connect_timeout=INGRESS_CONNECT_TIMEOUT_SECONDS,
+        read_timeout=INGRESS_READ_TIMEOUT_SECONDS,
+        max_pool_connections=4,
+        retries={"mode": "standard", "total_max_attempts": INGRESS_TOTAL_MAX_ATTEMPTS},
+        tcp_keepalive=True,
+        user_agent_extra="shittim-chest-ingress",
+    )
+
+
+def create_ingress_dynamodb_client(
+    *,
+    region_name: str,
+) -> DynamoDBClient:
+    """Create one DynamoDB client shared by ingress repositories in one process."""
+
+    _require_region(region_name)
+    return boto3.client("dynamodb", region_name=region_name, config=ingress_sdk_config())
+
+
+def create_lambda_client(*, region_name: str) -> LambdaClient:
+    """Create one Lambda client to reuse for an ingress Lambda execution environment."""
+
+    _require_region(region_name)
+    return boto3.client("lambda", region_name=region_name, config=ingress_sdk_config())
+
+
+def create_ssm_client(*, region_name: str) -> SSMClient:
+    """Create one SSM client to reuse for an ingress Lambda execution environment."""
+
+    _require_region(region_name)
+    return boto3.client("ssm", region_name=region_name, config=ingress_sdk_config())
+
+
+def _require_region(region_name: str) -> None:
+    if not region_name or region_name != region_name.strip():
+        raise ValueError("AWS Region must not be empty or padded")

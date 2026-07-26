@@ -8,6 +8,7 @@ from typing import Protocol
 from shittim_chest.application.discord import OutboxOperation
 from shittim_chest.application.models import (
     AcceptDebateRequest,
+    DebateAuthorizationSnapshot,
     DebateSnapshot,
     LeaseGrant,
     MetricEvent,
@@ -18,6 +19,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressOperationResult,
     IngressRequest,
     IngressStatus,
+    IngressStatusPublication,
     RuntimeActivity,
     RuntimeState,
     StatusMessageState,
@@ -39,6 +41,10 @@ class RepositoryConflict(Exception):
     """Raised when a conditional repository operation loses its expected state."""
 
 
+class RepositoryIdentityConflict(RepositoryConflict):
+    """Raised when a replay reuses an operation with different immutable identity."""
+
+
 class RepositoryBusy(Exception):
     """Raised when all three global execution slots are leased."""
 
@@ -49,6 +55,34 @@ class RepositoryQuotaExceeded(Exception):
 
 class RepositoryQueueFull(Exception):
     """Raised when the bounded ingress FIFO already contains twenty requests."""
+
+
+class RepositoryUnavailable(RuntimeError):
+    """Raised when a repository SDK call fails before a durable result is known."""
+
+    def __init__(self) -> None:
+        super().__init__("repository_unavailable")
+
+
+class StatusTriggerUnavailable(RuntimeError):
+    """Raised when the durable status publisher cannot be kicked asynchronously."""
+
+    def __init__(self) -> None:
+        super().__init__("status_trigger_unavailable")
+
+
+class ReconciliationTriggerUnavailable(RuntimeError):
+    """Raised when the runtime reconciler cannot be kicked asynchronously."""
+
+    def __init__(self) -> None:
+        super().__init__("reconciliation_trigger_unavailable")
+
+
+class ParameterReadUnavailable(RuntimeError):
+    """Raised when one explicitly configured Parameter Store value cannot be read."""
+
+    def __init__(self) -> None:
+        super().__init__("parameter_read_unavailable")
 
 
 class Clock(Protocol):
@@ -75,6 +109,8 @@ class IngressRepository(Protocol):
     """Persist a bounded FIFO and its strongly consistent operation results."""
 
     async def enqueue(self, request: IngressRequest) -> EnqueuedIngress: ...
+
+    async def get_replay(self, request: IngressRequest) -> EnqueuedIngress | None: ...
 
     async def get_operation_result(
         self,
@@ -142,6 +178,13 @@ class IngressRepository(Protocol):
 
     async def active_count(self) -> int: ...
 
+    async def get_status_publication(
+        self,
+        interaction_id: str,
+    ) -> IngressStatusPublication | None: ...
+
+    async def pending_status_count(self) -> int: ...
+
 
 class RuntimeStateRepository(Protocol):
     """Store one strongly consistent, generation-fenced runtime aggregate."""
@@ -169,6 +212,34 @@ class EcsRuntimeControl(Protocol):
     async def describe(self) -> EcsRuntimeSnapshot: ...
 
     async def set_desired_count(self, desired_count: int) -> EcsRuntimeSnapshot: ...
+
+
+class StatusPublicationTrigger(Protocol):
+    """Kick the idempotent public-status publisher with a content-free identifier."""
+
+    async def request_publication(self, interaction_id: str) -> None: ...
+
+
+class RuntimeReconciliationTrigger(Protocol):
+    """Kick lost-wake recovery after the request transaction commits."""
+
+    async def request_reconciliation(self, interaction_id: str) -> None: ...
+
+
+class ParameterReader(Protocol):
+    """Read only an explicitly configured Parameter Store path."""
+
+    async def get_parameter(self, name: str, *, with_decryption: bool = True) -> str: ...
+
+
+class DebateLookup(Protocol):
+    """Read the current aggregate required to authorize a persisted component."""
+
+    async def get(
+        self,
+        debate_id: DebateId,
+        expected_attempt_id: AttemptId,
+    ) -> DebateAuthorizationSnapshot | None: ...
 
 
 class DiscordStatusPublisher(Protocol):

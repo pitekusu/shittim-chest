@@ -16,6 +16,7 @@ from shittim_chest.adapters.dynamodb import (
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.application import (
+    IngressKind,
     IngressRequest,
     IngressStatus,
     StatusMessageState,
@@ -23,10 +24,14 @@ from shittim_chest.application import (
 from shittim_chest.application.ports import (
     RepositoryConflict,
     RepositoryQueueFull,
+    RepositoryUnavailable,
 )
+from shittim_chest.application.scale_to_zero import StatusPublicationState
 from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 7, 26, 4, 0, tzinfo=UTC)
+TARGET_DEBATE_ID = DebateId.new()
+EXPECTED_ATTEMPT_ID = AttemptId.new()
 
 
 def new_request(index: int, *, created_at: datetime | None = None) -> IngressRequest:
@@ -35,6 +40,7 @@ def new_request(index: int, *, created_at: datetime | None = None) -> IngressReq
     return IngressRequest.new_debate(
         interaction_id=interaction_id,
         operation_id=interaction_id,
+        application_id="application-id",
         question=f"question-{index}",
         requester_id="requester-id",
         requester_username="requester",
@@ -43,6 +49,33 @@ def new_request(index: int, *, created_at: datetime | None = None) -> IngressReq
         channel_id="channel-id",
         command_name="shittim",
         created_at=at,
+    )
+
+
+def control_request(
+    index: int,
+    *,
+    operation_id: str = "retry-operation",
+    requester_id: str = "requester-id",
+) -> IngressRequest:
+    return IngressRequest.control_operation(
+        interaction_id=f"component-interaction-{index:04d}",
+        operation_id=operation_id,
+        kind=IngressKind.RETRY,
+        application_id="application-id",
+        requester_id=requester_id,
+        requester_username="requester",
+        requester_display_name="Requester",
+        requester_can_manage_messages=False,
+        guild_id="guild-id",
+        channel_id="thread-id",
+        parent_channel_id="channel-id",
+        source_message_id="panel-message-id",
+        source_thread_id="thread-id",
+        target_debate_id=TARGET_DEBATE_ID,
+        expected_attempt_id=EXPECTED_ATTEMPT_ID,
+        custom_id=f"shittim:retry:{TARGET_DEBATE_ID}:{EXPECTED_ATTEMPT_ID}",
+        created_at=NOW + timedelta(microseconds=index),
     )
 
 
@@ -57,13 +90,15 @@ async def test_enqueue_replay_fifo_claim_retry_accept_and_counter(
 
     assert (await repository.enqueue(later)).created
     first = await repository.enqueue(earlier)
-    replay = await repository.enqueue(
-        replace(
-            earlier,
-            operation_id="different-operation-id",
-            question="different retry payload",
+    with pytest.raises(RepositoryConflict, match="immutable identity"):
+        await repository.enqueue(
+            replace(
+                earlier,
+                operation_id="different-operation-id",
+                question="different retry payload",
+            )
         )
-    )
+    replay = await repository.enqueue(earlier)
 
     assert first.created
     assert not replay.created
@@ -203,18 +238,86 @@ async def test_concurrent_duplicate_creates_one_request_and_increments_once(
     dynamodb_table: str,
 ) -> None:
     repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
-    request = new_request(1)
+    first_request = control_request(1)
+    second_request = control_request(2)
 
     first, second = await asyncio.gather(
-        repository.enqueue(request),
-        repository.enqueue(replace(request, operation_id="another-operation")),
+        repository.enqueue(first_request),
+        repository.enqueue(second_request),
     )
 
     assert sorted((first.created, second.created)) == [False, True]
     assert first.request == second.request
-    assert first.request.operation_id in {request.operation_id, "another-operation"}
+    assert first.request.interaction_id in {
+        first_request.interaction_id,
+        second_request.interaction_id,
+    }
     assert first.operation == second.operation
     assert await repository.active_count() == 1
+    assert await repository.pending_status_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_replay_precedes_full_queue_check_and_rejects_changed_identity(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    canonical = control_request(1)
+    await repository.enqueue(canonical)
+    for index in range(2, 21):
+        await repository.enqueue(new_request(index))
+
+    replay = await repository.enqueue(control_request(21))
+    direct_replay = await repository.get_replay(control_request(23))
+
+    assert not replay.created
+    assert replay.request == canonical
+    assert direct_replay is not None
+    assert direct_replay.request == canonical
+    assert await repository.active_count() == 20
+    assert await repository.pending_status_count() == 20
+    with pytest.raises(RepositoryConflict, match="immutable identity"):
+        await repository.enqueue(control_request(22, requester_id="another-requester"))
+    with pytest.raises(RepositoryQueueFull):
+        await repository.enqueue(new_request(21))
+
+
+@pytest.mark.asyncio
+async def test_enqueue_prepares_independent_status_publication_without_token(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+
+    result = await repository.enqueue(request)
+    publication = await repository.get_status_publication(result.request.interaction_id)
+
+    assert publication is not None
+    assert publication.state is StatusPublicationState.PREPARED
+    assert publication.desired_state is StatusMessageState.STARTING
+    assert publication.delivered_state is None
+    assert publication.status_channel_id == request.status_channel_id
+    assert publication.request_sort_key == ingress_request_sort_key(request)
+    assert len(publication.nonce) == 22
+    assert publication.next_attempt_at == request.created_at
+    assert await repository.pending_status_count() == 1
+    raw = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": f"INGRESS_OPERATION#{request.interaction_id}",
+                "SK": "STATUS_PUBLICATION",
+            }
+        ),
+        ConsistentRead=True,
+    )
+    persisted = unmarshal_item(raw["Item"])
+    assert "token" not in persisted
+    assert persisted["gsi1pk"] == "INGRESS#STATUS_DUE"
+    assert persisted["desired_state"] == StatusMessageState.STARTING.value
+    assert "delivered_state" not in persisted
 
 
 @pytest.mark.asyncio
@@ -258,6 +361,37 @@ async def test_malformed_counter_fails_closed_without_overwriting_it(
         ConsistentRead=True,
     )
     assert unmarshal_item(response["Item"]) == negative_counter
+
+
+@pytest.mark.asyncio
+async def test_malformed_status_counter_rolls_back_the_entire_enqueue(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    counter = {
+        "PK": "CONTROL#INGRESS",
+        "SK": "STATUS_PENDING_COUNTER",
+        "record_type": "unexpected_record",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": 1,
+        "count": 0,
+    }
+    dynamodb_client.put_item(TableName=dynamodb_table, Item=marshal_item(counter))
+    request = new_request(1)
+
+    with pytest.raises(RepositoryUnavailable):
+        await repository.enqueue(request)
+
+    assert await repository.active_count() == 0
+    assert await repository.get_operation_result(request.interaction_id) is None
+    assert await repository.get_status_publication(request.interaction_id) is None
+    response = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": "CONTROL#INGRESS", "SK": "STATUS_PENDING_COUNTER"}),
+        ConsistentRead=True,
+    )
+    assert unmarshal_item(response["Item"]) == counter
 
 
 @pytest.mark.asyncio
@@ -513,6 +647,44 @@ async def test_transition_conditions_bind_immutable_request_and_operation_identi
     assert unmarshal_item(raw_request["Item"])["status"] == IngressStatus.PENDING.value
     assert unmarshal_item(raw_operation["Item"])["request_sort_key"] == "REQUEST#corrupt"
     assert await repository.active_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_fails_closed_when_status_publication_is_missing_or_rebound(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    missing = new_request(1)
+    rebound = control_request(2)
+    await repository.enqueue(missing)
+    await repository.enqueue(rebound)
+
+    dynamodb_client.delete_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": f"INGRESS_OPERATION#{missing.interaction_id}",
+                "SK": "STATUS_PUBLICATION",
+            }
+        ),
+    )
+    with pytest.raises(RepositoryConflict, match="no status publication"):
+        await repository.enqueue(missing)
+
+    dynamodb_client.update_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": f"INGRESS_OPERATION#{rebound.interaction_id}",
+                "SK": "STATUS_PUBLICATION",
+            }
+        ),
+        UpdateExpression="SET status_channel_id=:other",
+        ExpressionAttributeValues=marshal_item({":other": "other-channel"}),
+    )
+    with pytest.raises(RepositoryConflict, match="another request"):
+        await repository.enqueue(control_request(3))
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
@@ -85,7 +88,28 @@ class StatusMessageState(StrEnum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
+    TERMINAL_FAILED = "terminal_failed"
+
+
+@unique
+class StatusPublicationState(StrEnum):
+    """Delivery lifecycle for one durable public status publication."""
+
+    PREPARED = "prepared"
+    CLAIMED = "claimed"
+    RETRYING = "retrying"
+    DELIVERED = "delivered"
     FAILED = "failed"
+
+    @property
+    def counts_as_pending(self) -> bool:
+        """Return whether this publication prevents an idle runtime."""
+
+        return self in {
+            StatusPublicationState.PREPARED,
+            StatusPublicationState.CLAIMED,
+            StatusPublicationState.RETRYING,
+        }
 
 
 @unique
@@ -121,16 +145,18 @@ _ALLOWED_RUNTIME_TRANSITIONS: dict[RuntimeStatus, frozenset[RuntimeStatus]] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class IngressRequest:
     """One durable Discord interaction without its short-lived interaction token."""
 
     interaction_id: str
     operation_id: str
     kind: IngressKind
+    application_id: str
     requester_id: str
     requester_username: str
     requester_display_name: str
+    requester_can_manage_messages: bool
     guild_id: str
     channel_id: str
     status_channel_id: str
@@ -143,8 +169,11 @@ class IngressRequest:
     command_name: str | None = None
     custom_id: str | None = None
     question: str | None = None
+    parent_channel_id: str | None = None
     source_message_id: str | None = None
     source_thread_id: str | None = None
+    target_debate_id: DebateId | None = None
+    expected_attempt_id: AttemptId | None = None
     status_message_id: str | None = None
     status_message_updated_at: datetime | None = None
     next_attempt_at: datetime | None = None
@@ -163,6 +192,7 @@ class IngressRequest:
         for label, value in (
             ("interaction ID", self.interaction_id),
             ("operation ID", self.operation_id),
+            ("application ID", self.application_id),
             ("requester ID", self.requester_id),
             ("requester username", self.requester_username),
             ("requester display name", self.requester_display_name),
@@ -171,6 +201,8 @@ class IngressRequest:
             ("status channel ID", self.status_channel_id),
         ):
             _require_text(value, label=label)
+        if not isinstance(self.requester_can_manage_messages, bool):
+            raise ValueError("requester manage-messages permission must be a boolean")
         for label, value in (
             ("creation timestamp", self.created_at),
             ("update timestamp", self.updated_at),
@@ -200,8 +232,36 @@ class IngressRequest:
             raise ValueError("only a new debate may contain a question")
         if self.kind is IngressKind.NEW_DEBATE and self.command_name is None:
             raise ValueError("new debate requires a command name")
-        if self.kind is not IngressKind.NEW_DEBATE and self.custom_id is None:
-            raise ValueError("control operation requires a custom ID")
+        if self.kind is IngressKind.NEW_DEBATE:
+            if self.custom_id is not None:
+                raise ValueError("new debate cannot contain a component custom ID")
+            if self.requester_can_manage_messages:
+                raise ValueError("new debate cannot persist manage-messages permission")
+            if any(
+                value is not None
+                for value in (
+                    self.parent_channel_id,
+                    self.source_message_id,
+                    self.source_thread_id,
+                    self.target_debate_id,
+                    self.expected_attempt_id,
+                )
+            ):
+                raise ValueError("new debate cannot contain component context")
+        else:
+            if self.command_name is not None or self.question is not None:
+                raise ValueError("control operation cannot contain command input")
+            for label, value in (
+                ("component custom ID", self.custom_id),
+                ("parent channel ID", self.parent_channel_id),
+                ("source message ID", self.source_message_id),
+                ("source thread ID", self.source_thread_id),
+            ):
+                if value is None:
+                    raise ValueError(f"control operation requires a {label}")
+                _require_text(value, label=label)
+            if self.target_debate_id is None or self.expected_attempt_id is None:
+                raise ValueError("control operation requires target debate and attempt IDs")
         if (self.claim_owner is None) is not (self.claim_expires_at is None):
             raise ValueError("claim owner and expiry must be set together")
         if self.status is IngressStatus.CLAIMED and self.claim_owner is None:
@@ -229,6 +289,7 @@ class IngressRequest:
         *,
         interaction_id: str,
         operation_id: str,
+        application_id: str,
         question: str,
         requester_id: str,
         requester_username: str,
@@ -244,14 +305,16 @@ class IngressRequest:
             interaction_id=interaction_id,
             operation_id=operation_id,
             kind=IngressKind.NEW_DEBATE,
+            application_id=application_id,
             requester_id=requester_id,
             requester_username=requester_username,
             requester_display_name=requester_display_name,
+            requester_can_manage_messages=False,
             guild_id=guild_id,
             channel_id=channel_id,
             status_channel_id=channel_id,
             status=IngressStatus.PENDING,
-            status_message_state=StatusMessageState.PENDING,
+            status_message_state=StatusMessageState.STARTING,
             created_at=created_at,
             updated_at=created_at,
             startup_deadline_at=created_at + STARTUP_TIMEOUT,
@@ -260,8 +323,60 @@ class IngressRequest:
             question=question,
         )
 
+    @classmethod
+    def control_operation(
+        cls,
+        *,
+        interaction_id: str,
+        operation_id: str,
+        kind: IngressKind,
+        application_id: str,
+        requester_id: str,
+        requester_username: str,
+        requester_display_name: str,
+        requester_can_manage_messages: bool,
+        guild_id: str,
+        channel_id: str,
+        parent_channel_id: str,
+        source_message_id: str,
+        source_thread_id: str,
+        target_debate_id: DebateId,
+        expected_attempt_id: AttemptId,
+        custom_id: str,
+        created_at: datetime,
+    ) -> IngressRequest:
+        """Construct a pending retry or cancellation bound to immutable context."""
 
-@dataclass(frozen=True, slots=True)
+        if kind is IngressKind.NEW_DEBATE:
+            raise ValueError("control operation kind must be retry or cancel")
+        return cls(
+            interaction_id=interaction_id,
+            operation_id=operation_id,
+            kind=kind,
+            application_id=application_id,
+            requester_id=requester_id,
+            requester_username=requester_username,
+            requester_display_name=requester_display_name,
+            requester_can_manage_messages=requester_can_manage_messages,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            parent_channel_id=parent_channel_id,
+            status_channel_id=channel_id,
+            status=IngressStatus.PENDING,
+            status_message_state=StatusMessageState.STARTING,
+            created_at=created_at,
+            updated_at=created_at,
+            startup_deadline_at=created_at + STARTUP_TIMEOUT,
+            terminal_deadline_at=created_at + TERMINAL_TIMEOUT,
+            custom_id=custom_id,
+            source_message_id=source_message_id,
+            source_thread_id=source_thread_id,
+            target_debate_id=target_debate_id,
+            expected_attempt_id=expected_attempt_id,
+        )
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class IngressOperationResult:
     """Strongly consistent replay result for one Discord interaction."""
 
@@ -293,7 +408,145 @@ class IngressOperationResult:
             raise ValueError("unsupported ingress operation schema version")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
+class IngressSemanticOperationBinding:
+    """Bind a component's semantic operation to its first Interaction ID."""
+
+    operation_id: str
+    canonical_interaction_id: str
+    request_sort_key: str
+    created_at: datetime
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("operation ID", self.operation_id),
+            ("canonical interaction ID", self.canonical_interaction_id),
+            ("request sort key", self.request_sort_key),
+        ):
+            _require_text(value, label=label)
+        _require_utc(self.created_at, label="semantic binding creation timestamp")
+        if self.schema_version != 1:
+            raise ValueError("unsupported ingress semantic binding schema version")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class IngressStatusPublication:
+    """Durable desired and delivered state for one public status message."""
+
+    canonical_interaction_id: str
+    request_sort_key: str
+    status_channel_id: str
+    desired_state: StatusMessageState
+    state: StatusPublicationState
+    nonce: str
+    created_at: datetime
+    updated_at: datetime
+    delivered_state: StatusMessageState | None = None
+    status_message_id: str | None = None
+    status_message_updated_at: datetime | None = None
+    content_hash: str | None = None
+    history_cursor_message_id: str | None = None
+    next_attempt_at: datetime | None = None
+    claim_owner: str | None = None
+    claim_expires_at: datetime | None = None
+    delivery_attempt: int = 0
+    incarnation: int = 0
+    error_code: str | None = None
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("canonical interaction ID", self.canonical_interaction_id),
+            ("request sort key", self.request_sort_key),
+            ("status channel ID", self.status_channel_id),
+        ):
+            _require_text(value, label=label)
+        if re.fullmatch(r"[A-Za-z0-9_-]{22}", self.nonce) is None:
+            raise ValueError("status publication nonce must be 22 base64url characters")
+        for label, value in (
+            ("creation timestamp", self.created_at),
+            ("update timestamp", self.updated_at),
+        ):
+            _require_utc(value, label=f"status publication {label}")
+        for label, value in (
+            ("status message timestamp", self.status_message_updated_at),
+            ("next attempt timestamp", self.next_attempt_at),
+            ("claim expiry", self.claim_expires_at),
+        ):
+            _require_optional_utc(value, label=f"status publication {label}")
+        if self.updated_at < self.created_at:
+            raise ValueError("status publication update cannot precede creation")
+        if (self.claim_owner is None) is not (self.claim_expires_at is None):
+            raise ValueError("status publication claim owner and expiry must be set together")
+        if self.state is StatusPublicationState.CLAIMED and self.claim_owner is None:
+            raise ValueError("claimed status publication requires a claim")
+        if self.state is not StatusPublicationState.CLAIMED and self.claim_owner is not None:
+            raise ValueError("only a claimed status publication may retain a claim")
+        if (
+            self.state
+            in {
+                StatusPublicationState.PREPARED,
+                StatusPublicationState.RETRYING,
+            }
+            and self.next_attempt_at is None
+        ):
+            raise ValueError("due status publication requires a next attempt timestamp")
+        if self.state is StatusPublicationState.CLAIMED and self.next_attempt_at is not None:
+            raise ValueError("claimed status publication cannot retain a next attempt timestamp")
+        if not self.state.counts_as_pending and self.next_attempt_at is not None:
+            raise ValueError("settled status publication cannot retain a next attempt timestamp")
+        if self.state is StatusPublicationState.DELIVERED:
+            if self.delivered_state is not self.desired_state:
+                raise ValueError("delivered status publication must match desired state")
+            if self.status_message_id is None or self.status_message_updated_at is None:
+                raise ValueError("delivered status publication requires message metadata")
+        if (
+            self.content_hash is not None
+            and re.fullmatch(r"[0-9a-f]{64}", self.content_hash) is None
+        ):
+            raise ValueError("status publication content hash must be lowercase SHA-256")
+        for label, value in (
+            ("delivery attempt", self.delivery_attempt),
+            ("incarnation", self.incarnation),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"status publication {label} must be non-negative")
+        if self.schema_version != 1:
+            raise ValueError("unsupported ingress status publication schema version")
+
+    @classmethod
+    def prepared(cls, request: IngressRequest) -> IngressStatusPublication:
+        """Prepare the initial STARTING publication without a Discord token."""
+
+        if request.status_message_state is not StatusMessageState.STARTING:
+            raise ValueError("new ingress status publication must start in STARTING")
+        return cls(
+            canonical_interaction_id=request.interaction_id,
+            request_sort_key=(
+                "REQUEST#"
+                f"{request.created_at.isoformat(timespec='microseconds').replace('+00:00', 'Z')}#"
+                f"{request.interaction_id}"
+            ),
+            status_channel_id=request.status_channel_id,
+            desired_state=StatusMessageState.STARTING,
+            state=StatusPublicationState.PREPARED,
+            nonce=status_publication_nonce(request.interaction_id),
+            created_at=request.created_at,
+            updated_at=request.created_at,
+            next_attempt_at=request.created_at,
+        )
+
+
+def status_publication_nonce(canonical_interaction_id: str) -> str:
+    """Return a deterministic Discord-safe 128-bit nonce for one publication."""
+
+    _require_text(canonical_interaction_id, label="canonical interaction ID")
+    digest = hashlib.sha256(f"status:{canonical_interaction_id}".encode()).digest()[:16]
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class EnqueuedIngress:
     """Return one persisted request and whether this call created it."""
 

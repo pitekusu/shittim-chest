@@ -18,11 +18,14 @@ from shittim_chest.application.scale_to_zero import (
     IngressKind,
     IngressOperationResult,
     IngressRequest,
+    IngressSemanticOperationBinding,
     IngressStatus,
+    IngressStatusPublication,
     RuntimeState,
     RuntimeStatus,
     RuntimeWakeResult,
     StatusMessageState,
+    StatusPublicationState,
 )
 from shittim_chest.domain import (
     PARTICIPANTS,
@@ -107,6 +110,7 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         "guild_id": snapshot.guild_id,
         "channel_id": snapshot.channel_id,
         "current_attempt_id": attempt_id,
+        "current_phase": snapshot.state.phase.value,
     }
     _put_optional(debate_meta, "starter_message_id", snapshot.starter_message_id)
     _put_optional(debate_meta, "thread_id", snapshot.thread_id)
@@ -451,9 +455,11 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         "interaction_id": request.interaction_id,
         "operation_id": request.operation_id,
         "interaction_kind": request.kind.value,
+        "application_id": request.application_id,
         "requester_id": request.requester_id,
         "requester_username": request.requester_username,
         "requester_display_name": request.requester_display_name,
+        "requester_can_manage_messages": request.requester_can_manage_messages,
         "guild_id": request.guild_id,
         "channel_id": request.channel_id,
         "status_channel_id": request.status_channel_id,
@@ -469,8 +475,11 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         ("command_name", request.command_name),
         ("custom_id", request.custom_id),
         ("question", request.question),
+        ("parent_channel_id", request.parent_channel_id),
         ("source_message_id", request.source_message_id),
         ("source_thread_id", request.source_thread_id),
+        ("target_debate_id", _identifier(request.target_debate_id)),
+        ("expected_attempt_id", _identifier(request.expected_attempt_id)),
         ("status_message_id", request.status_message_id),
         ("status_message_updated_at", _optional_timestamp(request.status_message_updated_at)),
         ("next_attempt_at", _optional_timestamp(request.next_attempt_at)),
@@ -499,9 +508,11 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             interaction_id=_text(item, "interaction_id"),
             operation_id=_text(item, "operation_id"),
             kind=IngressKind(_text(item, "interaction_kind")),
+            application_id=_text(item, "application_id"),
             requester_id=_text(item, "requester_id"),
             requester_username=_text(item, "requester_username"),
             requester_display_name=_text(item, "requester_display_name"),
+            requester_can_manage_messages=_boolean(item, "requester_can_manage_messages"),
             guild_id=_text(item, "guild_id"),
             channel_id=_text(item, "channel_id"),
             status_channel_id=_text(item, "status_channel_id"),
@@ -514,8 +525,11 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             command_name=_optional_text(item, "command_name"),
             custom_id=_optional_text(item, "custom_id"),
             question=_optional_text(item, "question"),
+            parent_channel_id=_optional_text(item, "parent_channel_id"),
             source_message_id=_optional_text(item, "source_message_id"),
             source_thread_id=_optional_text(item, "source_thread_id"),
+            target_debate_id=_optional_debate(item, "target_debate_id"),
+            expected_attempt_id=_optional_attempt(item, "expected_attempt_id"),
             status_message_id=_optional_text(item, "status_message_id"),
             status_message_updated_at=_optional_datetime(item, "status_message_updated_at"),
             next_attempt_at=_optional_datetime(item, "next_attempt_at"),
@@ -598,6 +612,157 @@ def deserialize_ingress_operation_result(
     if _text(item, "SK") != "RESULT":
         raise PersistenceFormatError("ingress operation has an invalid sort key")
     return operation
+
+
+def serialize_ingress_semantic_binding(
+    binding: IngressSemanticOperationBinding,
+) -> DynamoItem:
+    """Serialize the first Interaction ID bound to a component operation."""
+
+    return _validated_item(
+        {
+            "PK": f"INGRESS_SEMANTIC_OPERATION#{binding.operation_id}",
+            "SK": "BINDING",
+            "record_type": "ingress_semantic_operation_binding",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": binding.schema_version,
+            "operation_id": binding.operation_id,
+            "canonical_interaction_id": binding.canonical_interaction_id,
+            "request_sort_key": binding.request_sort_key,
+            "created_at": _timestamp(binding.created_at),
+        }
+    )
+
+
+def deserialize_ingress_semantic_binding(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressSemanticOperationBinding:
+    """Validate one semantic component-operation binding."""
+
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="ingress_semantic_operation_binding",
+    )
+    try:
+        binding = IngressSemanticOperationBinding(
+            operation_id=_text(item, "operation_id"),
+            canonical_interaction_id=_text(item, "canonical_interaction_id"),
+            request_sort_key=_text(item, "request_sort_key"),
+            created_at=_datetime(item, "created_at"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress semantic binding") from error
+    if _text(item, "PK") != f"INGRESS_SEMANTIC_OPERATION#{binding.operation_id}":
+        raise PersistenceFormatError("ingress semantic binding has an invalid partition key")
+    if _text(item, "SK") != "BINDING":
+        raise PersistenceFormatError("ingress semantic binding has an invalid sort key")
+    return binding
+
+
+def serialize_ingress_status_publication(
+    publication: IngressStatusPublication,
+) -> DynamoItem:
+    """Serialize a durable desired/delivered public-status operation."""
+
+    item: DynamoItem = {
+        "PK": f"INGRESS_OPERATION#{publication.canonical_interaction_id}",
+        "SK": "STATUS_PUBLICATION",
+        "record_type": "ingress_status_publication",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": publication.schema_version,
+        "canonical_interaction_id": publication.canonical_interaction_id,
+        "request_sort_key": publication.request_sort_key,
+        "status_channel_id": publication.status_channel_id,
+        "desired_state": publication.desired_state.value,
+        "publication_state": publication.state.value,
+        "nonce": publication.nonce,
+        "created_at": _timestamp(publication.created_at),
+        "updated_at": _timestamp(publication.updated_at),
+        "delivery_attempt": publication.delivery_attempt,
+        "incarnation": publication.incarnation,
+    }
+    for field, value in (
+        (
+            "delivered_state",
+            publication.delivered_state.value if publication.delivered_state is not None else None,
+        ),
+        ("status_message_id", publication.status_message_id),
+        (
+            "status_message_updated_at",
+            _optional_timestamp(publication.status_message_updated_at),
+        ),
+        ("content_hash", publication.content_hash),
+        ("history_cursor_message_id", publication.history_cursor_message_id),
+        ("next_attempt_at", _optional_timestamp(publication.next_attempt_at)),
+        ("claim_owner", publication.claim_owner),
+        ("claim_expiry", _optional_timestamp(publication.claim_expires_at)),
+        ("error_code", publication.error_code),
+    ):
+        _put_optional(item, field, value)
+    due_at = _status_publication_due_at(publication)
+    if due_at is not None:
+        item["gsi1pk"] = "INGRESS#STATUS_DUE"
+        item["gsi1sk"] = f"{_timestamp(due_at)}#{publication.canonical_interaction_id}"
+    return _validated_item(item)
+
+
+def deserialize_ingress_status_publication(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressStatusPublication:
+    """Validate one durable public-status operation and its sparse due index."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="ingress_status_publication")
+    delivered = _optional_text(item, "delivered_state")
+    try:
+        publication = IngressStatusPublication(
+            canonical_interaction_id=_text(item, "canonical_interaction_id"),
+            request_sort_key=_text(item, "request_sort_key"),
+            status_channel_id=_text(item, "status_channel_id"),
+            desired_state=StatusMessageState(_text(item, "desired_state")),
+            delivered_state=(StatusMessageState(delivered) if delivered is not None else None),
+            state=StatusPublicationState(_text(item, "publication_state")),
+            nonce=_text(item, "nonce"),
+            created_at=_datetime(item, "created_at"),
+            updated_at=_datetime(item, "updated_at"),
+            status_message_id=_optional_text(item, "status_message_id"),
+            status_message_updated_at=_optional_datetime(item, "status_message_updated_at"),
+            content_hash=_optional_text(item, "content_hash"),
+            history_cursor_message_id=_optional_text(item, "history_cursor_message_id"),
+            next_attempt_at=_optional_datetime(item, "next_attempt_at"),
+            claim_owner=_optional_text(item, "claim_owner"),
+            claim_expires_at=_optional_datetime(item, "claim_expiry"),
+            delivery_attempt=_integer(item, "delivery_attempt"),
+            incarnation=_integer(item, "incarnation"),
+            error_code=_optional_text(item, "error_code"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress status publication") from error
+    if _text(item, "PK") != f"INGRESS_OPERATION#{publication.canonical_interaction_id}":
+        raise PersistenceFormatError("ingress status publication has an invalid partition key")
+    if _text(item, "SK") != "STATUS_PUBLICATION":
+        raise PersistenceFormatError("ingress status publication has an invalid sort key")
+    due_at = _status_publication_due_at(publication)
+    is_indexed = "gsi1pk" in item or "gsi1sk" in item
+    if due_at is None:
+        if is_indexed:
+            raise PersistenceFormatError("settled status publication must not be due-indexed")
+    else:
+        if _text(item, "gsi1pk") != "INGRESS#STATUS_DUE":
+            raise PersistenceFormatError("status publication has an invalid due index key")
+        expected_sort_key = f"{_timestamp(due_at)}#{publication.canonical_interaction_id}"
+        if _text(item, "gsi1sk") != expected_sort_key:
+            raise PersistenceFormatError("status publication has an invalid due index sort key")
+    return publication
+
+
+def _status_publication_due_at(publication: IngressStatusPublication) -> datetime | None:
+    if not publication.state.counts_as_pending:
+        return None
+    if publication.state is StatusPublicationState.CLAIMED:
+        return publication.claim_expires_at
+    return publication.next_attempt_at
 
 
 def serialize_runtime_state(state: RuntimeState) -> DynamoItem:
