@@ -203,7 +203,11 @@ def test_runtime_transitions_set_typed_state_fields() -> None:
         error_code="DISCORD_NOT_READY",
     )
     restarted = degraded.transition(RuntimeStatus.STARTING, at=NOW + timedelta(seconds=5))
-    ready_again = restarted.transition(RuntimeStatus.READY, at=NOW + timedelta(seconds=6))
+    ready_again = restarted.transition(
+        RuntimeStatus.READY,
+        at=NOW + timedelta(seconds=6),
+        runtime_instance_id="runtime-2",
+    )
     idle = ready_again.begin_idle(at=NOW + timedelta(seconds=7))
     stopping = idle.transition(RuntimeStatus.STOPPING, at=NOW + timedelta(minutes=31))
     stopped = stopping.transition(RuntimeStatus.STOPPED, at=NOW + timedelta(minutes=32))
@@ -236,7 +240,11 @@ def test_runtime_stop_fence_checks_every_dimension() -> None:
     ready = (
         RuntimeState.stopped(at=NOW)
         .request_wake(at=NOW + timedelta(seconds=1))
-        .transition(RuntimeStatus.READY, at=NOW + timedelta(seconds=2))
+        .transition(
+            RuntimeStatus.READY,
+            at=NOW + timedelta(seconds=2),
+            runtime_instance_id="runtime-1",
+        )
     )
     idle = ready.begin_idle(at=NOW + timedelta(minutes=1))
     eligible = NOW + timedelta(minutes=31)

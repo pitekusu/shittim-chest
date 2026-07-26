@@ -559,7 +559,7 @@ async def test_startup_timeout_is_nonterminal_and_fifteen_minutes_is_terminal(
         == with_message
     )
     desired_at = NOW + timedelta(minutes=3, seconds=4)
-    desired_timestamp = desired_at.isoformat().replace("+00:00", "Z")
+    desired_timestamp = desired_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
     for key in (
         {"PK": "CONTROL#INGRESS", "SK": ingress_request_sort_key(request)},
         {"PK": f"INGRESS_OPERATION#{request.interaction_id}", "SK": "RESULT"},

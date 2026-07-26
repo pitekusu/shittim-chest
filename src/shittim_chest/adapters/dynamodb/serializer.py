@@ -19,6 +19,9 @@ from shittim_chest.application.scale_to_zero import (
     IngressOperationResult,
     IngressRequest,
     IngressStatus,
+    RuntimeState,
+    RuntimeStatus,
+    RuntimeWakeResult,
     StatusMessageState,
 )
 from shittim_chest.domain import (
@@ -597,6 +600,112 @@ def deserialize_ingress_operation_result(
     return operation
 
 
+def serialize_runtime_state(state: RuntimeState) -> DynamoItem:
+    """Serialize the singleton generation-fenced runtime control record."""
+
+    item: DynamoItem = {
+        "PK": "CONTROL#RUNTIME",
+        "SK": "STATE",
+        "record_type": "runtime_state",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": state.schema_version,
+        "state": state.status.value,
+        "generation": state.generation,
+        "desired_count": state.desired_count,
+        "version": state.version,
+        "updated_at": _timestamp(state.updated_at),
+    }
+    for field, value in (
+        ("runtime_instance_id", state.runtime_instance_id),
+        ("wake_started_at", _optional_timestamp(state.wake_started_at)),
+        ("last_request_at", _optional_timestamp(state.last_request_at)),
+        ("started_at", _optional_timestamp(state.started_at)),
+        ("ready_at", _optional_timestamp(state.ready_at)),
+        ("busy_since", _optional_timestamp(state.busy_since)),
+        ("idle_since", _optional_timestamp(state.idle_since)),
+        ("stop_eligible_at", _optional_timestamp(state.stop_eligible_at)),
+        ("stopping_at", _optional_timestamp(state.stopping_at)),
+        ("stopped_at", _optional_timestamp(state.stopped_at)),
+        ("last_error_code", state.last_error_code),
+        ("last_reconciled_at", _optional_timestamp(state.last_reconciled_at)),
+    ):
+        _put_optional(item, field, value)
+    return _validated_item(item)
+
+
+def deserialize_runtime_state(raw_item: Mapping[str, DynamoValue]) -> RuntimeState:
+    """Validate and rebuild the singleton runtime control record."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="runtime_state")
+    try:
+        state = RuntimeState(
+            status=RuntimeStatus(_text(item, "state")),
+            generation=_integer(item, "generation"),
+            desired_count=_integer(item, "desired_count"),
+            version=_integer(item, "version"),
+            updated_at=_datetime(item, "updated_at"),
+            runtime_instance_id=_optional_text(item, "runtime_instance_id"),
+            wake_started_at=_optional_datetime(item, "wake_started_at"),
+            last_request_at=_optional_datetime(item, "last_request_at"),
+            started_at=_optional_datetime(item, "started_at"),
+            ready_at=_optional_datetime(item, "ready_at"),
+            busy_since=_optional_datetime(item, "busy_since"),
+            idle_since=_optional_datetime(item, "idle_since"),
+            stop_eligible_at=_optional_datetime(item, "stop_eligible_at"),
+            stopping_at=_optional_datetime(item, "stopping_at"),
+            stopped_at=_optional_datetime(item, "stopped_at"),
+            last_error_code=_optional_text(item, "last_error_code"),
+            last_reconciled_at=_optional_datetime(item, "last_reconciled_at"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid runtime state") from error
+    if _text(item, "PK") != "CONTROL#RUNTIME" or _text(item, "SK") != "STATE":
+        raise PersistenceFormatError("runtime state has an invalid key")
+    return state
+
+
+def serialize_runtime_wake_result(result: RuntimeWakeResult) -> DynamoItem:
+    """Serialize one immutable interaction-to-generation binding."""
+
+    return _validated_item(
+        {
+            "PK": f"INGRESS_OPERATION#{result.interaction_id}",
+            "SK": "RUNTIME_WAKE",
+            "record_type": "runtime_wake_result",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": result.schema_version,
+            "interaction_id": result.interaction_id,
+            "generation": result.generation,
+            "runtime_version": result.runtime_version,
+            "recorded_at": _timestamp(result.recorded_at),
+        }
+    )
+
+
+def deserialize_runtime_wake_result(
+    raw_item: Mapping[str, DynamoValue],
+) -> RuntimeWakeResult:
+    """Validate one immutable interaction-to-generation binding."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="runtime_wake_result")
+    try:
+        result = RuntimeWakeResult(
+            interaction_id=_text(item, "interaction_id"),
+            generation=_integer(item, "generation"),
+            runtime_version=_integer(item, "runtime_version"),
+            recorded_at=_datetime(item, "recorded_at"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid runtime wake result") from error
+    if _text(item, "PK") != f"INGRESS_OPERATION#{result.interaction_id}":
+        raise PersistenceFormatError("runtime wake result has an invalid partition key")
+    if _text(item, "SK") != "RUNTIME_WAKE":
+        raise PersistenceFormatError("runtime wake result has an invalid sort key")
+    return result
+
+
 def _serialize_evidence(
     common: DynamoItem,
     attempt_id: str,
@@ -822,7 +931,7 @@ def _identifier(value: AttemptId | DebateId | None) -> str | None:
 def _timestamp(value: datetime) -> str:
     if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value):
         raise PersistenceFormatError("timestamp must be timezone-aware UTC")
-    return value.isoformat().replace("+00:00", "Z")
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _optional_timestamp(value: datetime | None) -> str | None:

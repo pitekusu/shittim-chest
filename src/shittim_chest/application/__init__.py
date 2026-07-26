@@ -65,6 +65,7 @@ from shittim_chest.application.scale_to_zero import (
     RuntimeActivity,
     RuntimeState,
     RuntimeStatus,
+    RuntimeWakeResult,
     StatusMessageState,
 )
 from shittim_chest.application.service import DebateApplication
@@ -123,6 +124,7 @@ __all__ = (
     "RuntimeNotReady",
     "RuntimeState",
     "RuntimeStatus",
+    "RuntimeWakeResult",
     "StatusMessageState",
     "content_sha256",
     "nonce_from_uuid7",

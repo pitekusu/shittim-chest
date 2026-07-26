@@ -816,7 +816,7 @@ def _client_token(value: str, slot: int | None = None) -> str:
 
 def _timestamp(value: datetime) -> str:
     _require_utc(value)
-    return value.isoformat().replace("+00:00", "Z")
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _optional_timestamp(item: Mapping[str, DynamoValue], field: str) -> datetime | None:

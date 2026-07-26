@@ -368,6 +368,29 @@ class EcsRuntimeSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeWakeResult:
+    """Immutable record binding one interaction to its assigned generation."""
+
+    interaction_id: str
+    generation: int
+    runtime_version: int
+    recorded_at: datetime
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        _require_text(self.interaction_id, label="interaction ID")
+        for label, value in (
+            ("runtime generation", self.generation),
+            ("runtime version", self.runtime_version),
+        ):
+            if isinstance(value, bool) or value < 1:
+                raise ValueError(f"{label} must be a positive integer")
+        _require_utc(self.recorded_at, label="wake result timestamp")
+        if self.schema_version != 1:
+            raise ValueError("unsupported runtime wake result schema version")
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeState:
     """Versioned aggregate control state, not a replacement for debate ownership."""
 
@@ -397,6 +420,10 @@ class RuntimeState:
             raise ValueError("runtime desired count must be zero or one")
         if isinstance(self.version, bool) or self.version < 0:
             raise ValueError("runtime version must be a non-negative integer")
+        if self.runtime_instance_id is not None:
+            _require_text(self.runtime_instance_id, label="runtime instance ID")
+        if self.last_error_code is not None:
+            _require_text(self.last_error_code, label="runtime error code")
         _require_utc(self.updated_at, label="runtime update timestamp")
         for label, value in (
             ("wake start", self.wake_started_at),
@@ -421,6 +448,37 @@ class RuntimeState:
             raise ValueError("only IDLE state may retain idle timestamps")
         if self.status is RuntimeStatus.STOPPING and self.stopping_at is None:
             raise ValueError("STOPPING state requires a stopping timestamp")
+        if self.status is RuntimeStatus.STOPPED:
+            if self.desired_count != 0 or self.stopped_at is None:
+                raise ValueError("STOPPED state requires desired zero and a stopped timestamp")
+            if self.runtime_instance_id is not None:
+                raise ValueError("STOPPED state cannot retain a runtime instance")
+        if (
+            self.status
+            in {
+                RuntimeStatus.STARTING,
+                RuntimeStatus.READY,
+                RuntimeStatus.BUSY,
+                RuntimeStatus.IDLE,
+            }
+            and self.desired_count != 1
+        ):
+            raise ValueError("active runtime state requires desired count one")
+        if self.status is RuntimeStatus.STARTING and self.wake_started_at is None:
+            raise ValueError("STARTING state requires a wake timestamp")
+        if self.status in {RuntimeStatus.READY, RuntimeStatus.BUSY, RuntimeStatus.IDLE}:
+            if self.runtime_instance_id is None:
+                raise ValueError("ready runtime state requires a runtime instance")
+            if self.started_at is None:
+                raise ValueError("ready runtime state requires a start timestamp")
+            if self.ready_at is None:
+                raise ValueError("ready runtime state requires a ready timestamp")
+        if self.status is RuntimeStatus.BUSY and self.busy_since is None:
+            raise ValueError("BUSY state requires a busy timestamp")
+        if self.status is RuntimeStatus.STOPPING and self.desired_count != 0:
+            raise ValueError("STOPPING state requires desired count zero")
+        if self.status is RuntimeStatus.DEGRADED and self.last_error_code is None:
+            raise ValueError("DEGRADED state requires an error code")
         if self.schema_version != 1:
             raise ValueError("unsupported runtime state schema version")
 
@@ -455,6 +513,8 @@ class RuntimeState:
             wake_started_at = at
         elif self.status is RuntimeStatus.STARTING and wake_started_at is None:
             wake_started_at = at
+        restarting = next_status is RuntimeStatus.STARTING
+        requires_fresh_instance = restarting and self.status is not RuntimeStatus.STARTING
         return replace(
             self,
             status=next_status,
@@ -469,6 +529,29 @@ class RuntimeState:
             stopping_at=None,
             stopped_at=None,
             last_error_code=None,
+            ready_at=None if restarting else self.ready_at,
+            busy_since=None if restarting else self.busy_since,
+            runtime_instance_id=None if requires_fresh_instance else self.runtime_instance_id,
+            started_at=None if requires_fresh_instance else self.started_at,
+        )
+
+    def mark_started(self, *, at: datetime, runtime_instance_id: str) -> RuntimeState:
+        """Bind the STARTING generation to one physical runtime instance."""
+
+        _require_utc(at, label="runtime start timestamp")
+        _require_text(runtime_instance_id, label="runtime instance ID")
+        if self.status is not RuntimeStatus.STARTING:
+            raise ValueError("only STARTING runtime may bind an instance")
+        if at < self.updated_at:
+            raise ValueError("runtime start timestamp cannot precede runtime update")
+        if self.runtime_instance_id not in {None, runtime_instance_id}:
+            raise ValueError("runtime generation is already bound to another instance")
+        return replace(
+            self,
+            runtime_instance_id=runtime_instance_id,
+            started_at=self.started_at or at,
+            version=self.version + 1,
+            updated_at=at,
         )
 
     def transition(
@@ -488,6 +571,16 @@ class RuntimeState:
             raise ValueError(f"invalid runtime transition: {self.status} -> {next_status}")
         if runtime_instance_id is not None:
             _require_text(runtime_instance_id, label="runtime instance ID")
+        if (
+            runtime_instance_id is not None
+            and self.runtime_instance_id is not None
+            and runtime_instance_id != self.runtime_instance_id
+        ):
+            raise ValueError("runtime transition belongs to another instance")
+        if next_status is RuntimeStatus.DEGRADED:
+            if error_code is None:
+                raise ValueError("DEGRADED transition requires an error code")
+            _require_text(error_code, label="runtime error code")
         values: dict[str, object] = {
             "status": next_status,
             "version": self.version + 1,
@@ -498,14 +591,25 @@ class RuntimeState:
             "last_error_code": error_code,
         }
         if next_status is RuntimeStatus.READY:
+            if values["runtime_instance_id"] is None:
+                raise ValueError("READY transition requires a runtime instance")
+            values["started_at"] = self.started_at or at
             values["ready_at"] = at
         elif next_status is RuntimeStatus.BUSY:
+            if values["runtime_instance_id"] is None:
+                raise ValueError("BUSY transition requires a runtime instance")
+            values["started_at"] = self.started_at or at
+            values["ready_at"] = self.ready_at or at
             values["busy_since"] = at
         elif next_status is RuntimeStatus.STARTING:
             values["desired_count"] = 1
             values["wake_started_at"] = at
             values["stopping_at"] = None
             values["stopped_at"] = None
+            values["runtime_instance_id"] = None
+            values["started_at"] = None
+            values["ready_at"] = None
+            values["busy_since"] = None
         elif next_status is RuntimeStatus.STOPPING:
             values["desired_count"] = 0
             values["stopping_at"] = at
@@ -536,6 +640,38 @@ class RuntimeState:
             busy_since=None,
             last_error_code=None,
         )
+
+    def record_reconciled(self, *, at: datetime) -> RuntimeState:
+        """Record a successful reconciliation without changing generation or state."""
+
+        _require_utc(at, label="reconciliation timestamp")
+        if at < self.updated_at:
+            raise ValueError("reconciliation timestamp cannot precede runtime update")
+        return replace(
+            self,
+            version=self.version + 1,
+            updated_at=at,
+            last_reconciled_at=at,
+        )
+
+    def validate_replacement(self, updated: RuntimeState) -> None:
+        """Validate one non-wake successor before a conditional persistence write."""
+
+        if updated == self:
+            return
+        if updated.schema_version != self.schema_version:
+            raise ValueError("runtime replacement cannot change schema version")
+        if updated.generation != self.generation:
+            raise ValueError("only request_wake may change runtime generation")
+        if updated.version != self.version + 1:
+            raise ValueError("runtime replacement must increment version exactly once")
+        if updated.updated_at < self.updated_at:
+            raise ValueError("runtime replacement timestamp cannot move backwards")
+        if (
+            updated.status is not self.status
+            and updated.status not in _ALLOWED_RUNTIME_TRANSITIONS[self.status]
+        ):
+            raise ValueError(f"invalid runtime transition: {self.status} -> {updated.status}")
 
     def may_stop(
         self,

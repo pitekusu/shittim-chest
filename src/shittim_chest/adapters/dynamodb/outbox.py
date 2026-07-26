@@ -482,7 +482,7 @@ def _client_token(value: str) -> str:
 
 def _timestamp(value: datetime) -> str:
     _require_utc(value)
-    return value.isoformat().replace("+00:00", "Z")
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _require_utc(value: datetime) -> None:

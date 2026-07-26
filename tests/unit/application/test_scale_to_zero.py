@@ -128,7 +128,11 @@ def test_runtime_wake_from_idle_clears_stop_window() -> None:
     idle = (
         RuntimeState.stopped(at=NOW)
         .request_wake(at=NOW + timedelta(seconds=1))
-        .transition(RuntimeStatus.READY, at=NOW + timedelta(seconds=2))
+        .transition(
+            RuntimeStatus.READY,
+            at=NOW + timedelta(seconds=2),
+            runtime_instance_id="runtime-1",
+        )
         .begin_idle(at=NOW + timedelta(minutes=1))
     )
 

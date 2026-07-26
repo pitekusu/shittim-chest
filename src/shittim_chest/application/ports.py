@@ -146,12 +146,12 @@ class IngressRepository(Protocol):
 class RuntimeStateRepository(Protocol):
     """Store one strongly consistent, generation-fenced runtime aggregate."""
 
-    async def get(self) -> RuntimeState: ...
+    async def get(self) -> RuntimeState | None: ...
 
     async def request_wake(
         self,
         *,
-        operation_id: str,
+        interaction_id: str,
         at: datetime,
     ) -> RuntimeState: ...
 
