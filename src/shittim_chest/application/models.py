@@ -191,6 +191,16 @@ class DebateAuthorizationSnapshot:
             )
 
 
+@unique
+class PanelRefreshState(StrEnum):
+    """Durable delivery state derived from one panel refresh version."""
+
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    ABANDONED = "abandoned"
+
+
 @dataclass(frozen=True, slots=True)
 class DebateSnapshot:
     """Application aggregate transferred through the repository Protocol."""
@@ -204,10 +214,19 @@ class DebateSnapshot:
     channel_id: str
     created_at: datetime
     attempt_created_at: datetime
+    origin_ingress_interaction_id: str | None = None
     starter_message_id: str | None = None
     thread_id: str | None = None
     control_panel_message_id: str | None = None
     lease: LeaseGrant | None = None
+    panel_refresh_required_at: datetime | None = None
+    panel_refreshed_at: datetime | None = None
+    panel_refresh_claim_owner: str | None = None
+    panel_refresh_claim_expires_at: datetime | None = None
+    panel_refresh_next_attempt_at: datetime | None = None
+    panel_refresh_delivery_attempt: int = 0
+    panel_refresh_failed_at: datetime | None = None
+    panel_refresh_error_code: str | None = None
     evidence: EvidenceBundle | None = None
     initial_opinions: tuple[InitialOpinion, ...] = ()
     final_proposals: tuple[FinalProposal, ...] = ()
@@ -233,6 +252,11 @@ class DebateSnapshot:
             raise ValueError("attempt creation timestamp cannot precede debate creation")
         if self.state.updated_at < self.attempt_created_at:
             raise ValueError("state timestamp cannot precede attempt creation")
+        if self.origin_ingress_interaction_id is not None:
+            _require_identifier(
+                self.origin_ingress_interaction_id,
+                label="origin ingress interaction ID",
+            )
         if self.starter_message_id is not None:
             _require_identifier(self.starter_message_id, label="starter message ID")
         if self.thread_id is not None:
@@ -242,8 +266,77 @@ class DebateSnapshot:
                 self.control_panel_message_id,
                 label="control panel message ID",
             )
+        for label, timestamp in (
+            ("panel refresh requirement", self.panel_refresh_required_at),
+            ("panel refresh completion", self.panel_refreshed_at),
+            ("panel refresh claim expiry", self.panel_refresh_claim_expires_at),
+            ("panel refresh next attempt", self.panel_refresh_next_attempt_at),
+            ("panel refresh failure", self.panel_refresh_failed_at),
+        ):
+            if timestamp is not None:
+                _require_utc(timestamp, label=label)
+        if (self.panel_refresh_claim_owner is None) is not (
+            self.panel_refresh_claim_expires_at is None
+        ):
+            raise ValueError("panel refresh claim owner and expiry must be set together")
+        if self.panel_refresh_claim_owner is not None:
+            _require_identifier(
+                self.panel_refresh_claim_owner,
+                label="panel refresh claim owner",
+            )
+        if isinstance(self.panel_refresh_delivery_attempt, bool) or not isinstance(
+            self.panel_refresh_delivery_attempt,
+            int,
+        ):
+            raise TypeError("panel refresh delivery attempt must be an integer")
+        if self.panel_refresh_delivery_attempt < 0:
+            raise ValueError("panel refresh delivery attempt must be non-negative")
+        if self.panel_refreshed_at is not None and self.panel_refresh_required_at is None:
+            raise ValueError("panel refresh completion requires a requirement timestamp")
+        if (self.panel_refresh_failed_at is None) is not (self.panel_refresh_error_code is None):
+            raise ValueError("panel refresh failure timestamp and error code must be set together")
+        if self.panel_refresh_error_code is not None:
+            if not self.panel_refresh_error_code.strip():
+                raise ValueError("panel refresh error code must be non-empty")
+            if len(self.panel_refresh_error_code) > 100:
+                raise ValueError("panel refresh error code must be at most 100 characters")
+        if self.panel_refresh_failed_at is not None:
+            required_at = self.panel_refresh_required_at
+            if required_at is None:
+                raise ValueError("panel refresh failure requires a requirement timestamp")
+            if self.panel_refresh_failed_at < required_at:
+                raise ValueError("panel refresh failure cannot precede its requirement")
+            if self.panel_refreshed_at is not None and self.panel_refreshed_at >= required_at:
+                raise ValueError("delivered panel refresh cannot also be abandoned")
+        if self.panel_refresh_state is PanelRefreshState.PENDING:
+            if self.thread_id is None or self.control_panel_message_id is None:
+                raise ValueError("pending panel refresh requires a complete panel binding")
+        elif (
+            self.panel_refresh_claim_owner is not None
+            or self.panel_refresh_next_attempt_at is not None
+        ):
+            raise ValueError("settled panel refresh cannot retain retry or claim state")
         if self.error_code is not None and not self.error_code.strip():
             raise ValueError("error code must be non-empty when present")
+
+    @property
+    def panel_refresh_pending(self) -> bool:
+        """Return whether Discord has not acknowledged the latest desired panel state."""
+
+        return self.panel_refresh_state is PanelRefreshState.PENDING
+
+    @property
+    def panel_refresh_state(self) -> PanelRefreshState:
+        """Derive the durable outcome without persisting a redundant status field."""
+
+        if self.panel_refresh_failed_at is not None:
+            return PanelRefreshState.ABANDONED
+        required_at = self.panel_refresh_required_at
+        if required_at is None:
+            return PanelRefreshState.NOT_REQUIRED
+        if self.panel_refreshed_at is not None and self.panel_refreshed_at >= required_at:
+            return PanelRefreshState.DELIVERED
+        return PanelRefreshState.PENDING
 
 
 @unique
@@ -260,3 +353,4 @@ class MetricEvent(StrEnum):
     RETRIED = "debate_retried"
     OUTBOX_RECOVERED = "discord_outbox_recovered"
     OUTBOX_RETRY_SCHEDULED = "discord_outbox_retry_scheduled"
+    PANEL_REFRESH_FAILED = "discord_panel_refresh_failed"

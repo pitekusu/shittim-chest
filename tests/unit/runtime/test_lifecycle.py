@@ -32,8 +32,19 @@ class FakeDiscordGateway:
         return self.allowed
 
 
+class RecordingAdmissionGateway(RuntimeAdmissionGateway):
+    def __init__(self, delegate: FakeDiscordGateway, events: list[str]) -> None:
+        super().__init__(delegate)
+        self._events = events
+
+    def close(self) -> None:
+        self._events.append("admission_closed")
+        super().close()
+
+
 @dataclass(slots=True)
 class FakeSupervisor:
+    events: list[str]
     started: asyncio.Event = field(default_factory=asyncio.Event)
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     tokens: Mapping[DiscordBotSlot, str] | None = None
@@ -41,65 +52,193 @@ class FakeSupervisor:
 
     async def run(self, tokens: Mapping[DiscordBotSlot, str]) -> None:
         self.tokens = tokens
+        self.events.append("supervisor_started")
         self.started.set()
         try:
             if self.failure is not None:
                 raise self.failure
             await asyncio.Event().wait()
         finally:
+            self.events.append("supervisor_stopped")
             self.stopped.set()
 
 
 @dataclass(slots=True)
 class FakeInteractions:
+    events: list[str]
     schema_hash: str = "current-schema"
     begin_shutdown_calls: int = 0
-    checkpoint_calls: int = 0
     close_calls: int = 0
     sync_inputs: list[str | None] = field(default_factory=list)
-    block_checkpoint: bool = False
-    checkpoint_failure: Exception | None = None
+    close_failure: Exception | None = None
 
     @property
     def command_schema_hash(self) -> str:
         return self.schema_hash
 
     async def sync_command_if_changed(self, *, previous_schema_hash: str | None) -> bool:
+        self.events.append("command_schema_synced")
         self.sync_inputs.append(previous_schema_hash)
         return previous_schema_hash != self.schema_hash
 
     def begin_shutdown(self) -> None:
+        self.events.append("interactions_shutdown")
         self.begin_shutdown_calls += 1
 
+    async def close(self) -> None:
+        self.events.append("interactions_closed")
+        self.close_calls += 1
+        if self.close_failure is not None:
+            raise self.close_failure
+
+
+@dataclass(slots=True)
+class FakeIngressRuntime:
+    events: list[str]
+    active_tasks: int = 0
+    recover_calls: int = 0
+    begin_shutdown_calls: int = 0
+    checkpoint_calls: int = 0
+    close_calls: int = 0
+    recover_failure: Exception | None = None
+    cancellation_failure: Exception | None = None
+    checkpoint_failure: Exception | None = None
+    block_checkpoint: bool = False
+    recover_release: asyncio.Event | None = None
+    recover_results: list[int] = field(default_factory=list)
+    debate_release: asyncio.Event | None = None
+    debate_task: asyncio.Task[bool] | None = None
+
+    @property
+    def active_task_count(self) -> int:
+        return self.active_tasks
+
+    def begin_shutdown(self) -> None:
+        self.events.append("ingress_runtime_shutdown")
+        self.begin_shutdown_calls += 1
+
+    async def recover_once(self) -> int:
+        self.events.append("recovery_started")
+        self.recover_calls += 1
+        if self.recover_failure is not None:
+            raise self.recover_failure
+        try:
+            if self.recover_release is not None:
+                await self.recover_release.wait()
+        except asyncio.CancelledError:
+            if self.cancellation_failure is not None:
+                raise self.cancellation_failure from None
+            raise
+        started = self.recover_results.pop(0) if self.recover_results else 0
+        if started > 0:
+            self.active_tasks += started
+        if self.debate_release is not None and (
+            self.debate_task is None or self.debate_task.done()
+        ):
+            self.debate_task = asyncio.create_task(
+                self.debate_release.wait(),
+                name="fake:long-running-debate",
+            )
+            self.active_tasks = 1
+            started += 1
+        self.events.append("recovery_registered")
+        return started
+
     async def checkpoint_active(self) -> None:
+        self.events.append("ingress_checkpointed")
         self.checkpoint_calls += 1
         if self.checkpoint_failure is not None:
             raise self.checkpoint_failure
         if self.block_checkpoint:
             await asyncio.Event().wait()
+        if self.debate_task is not None and not self.debate_task.done():
+            self.debate_task.cancel()
+            await asyncio.gather(self.debate_task, return_exceptions=True)
+        self.debate_task = None
+        self.active_tasks = 0
 
     async def close(self) -> None:
+        self.events.append("ingress_runtime_closed")
         self.close_calls += 1
 
 
 @dataclass(slots=True)
-class FakeApplication:
-    resume_calls: int = 0
-    block_recovery: bool = False
-    failure: Exception | None = None
-    cancellation_failure: Exception | None = None
+class FakeDrainGate:
+    events: list[str]
+    supervisor_started: bool = False
+    command_schema_checked: bool = False
+    recovery_complete: bool = False
+    shutting_down: bool = False
 
-    async def resume_recoverable(self) -> None:
-        self.resume_calls += 1
-        if self.failure is not None:
-            raise self.failure
-        if self.block_recovery:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                if self.cancellation_failure is not None:
-                    raise self.cancellation_failure from None
-                raise
+    def mark_supervisor_started(self) -> None:
+        self.events.append("gate_supervisor_started")
+        self.supervisor_started = True
+
+    def mark_command_schema_checked(self) -> None:
+        self.events.append("gate_schema_checked")
+        self.command_schema_checked = True
+
+    def begin_recovery(self) -> None:
+        self.events.append("gate_recovery_closed")
+        self.recovery_complete = False
+
+    def mark_recovery_complete(self) -> None:
+        self.events.append("gate_recovery_complete")
+        self.recovery_complete = True
+
+    def begin_shutdown(self) -> None:
+        self.events.append("gate_shutdown")
+        self.recovery_complete = False
+        self.shutting_down = True
+
+
+@dataclass(slots=True)
+class FakeDrainer:
+    events: list[str]
+    run_calls: int = 0
+    stop_calls: int = 0
+    failure: Exception | None = None
+
+    async def run(self, stop: asyncio.Event) -> None:
+        self.events.append("drainer_started")
+        self.run_calls += 1
+        try:
+            if self.failure is not None:
+                raise self.failure
+            await stop.wait()
+        finally:
+            self.events.append("drainer_stopped")
+            self.stop_calls += 1
+
+
+@dataclass(slots=True)
+class FakeRuntimeInstance:
+    events: list[str]
+    started_calls: int = 0
+    ready_inputs: list[bool] = field(default_factory=list)
+    woken_results: list[bool] = field(default_factory=list)
+    woken_checks: int = 0
+    started_failure: Exception | None = None
+    ready_failure: Exception | None = None
+
+    async def mark_started(self) -> None:
+        self.events.append("runtime_started")
+        self.started_calls += 1
+        if self.started_failure is not None:
+            raise self.started_failure
+
+    async def mark_ready(self, *, active: bool) -> None:
+        self.events.append(f"runtime_ready:{active}")
+        self.ready_inputs.append(active)
+        if self.ready_failure is not None:
+            raise self.ready_failure
+
+    async def claim_woken_start(self) -> bool:
+        self.woken_checks += 1
+        claimed = self.woken_results.pop(0) if self.woken_results else False
+        if claimed:
+            self.events.append("runtime_wake_claimed")
+        return claimed
 
 
 @dataclass(slots=True)
@@ -134,6 +273,20 @@ class FakeEventLoop:
         return self.callbacks.pop(current_signal, None) is not None
 
 
+@dataclass(frozen=True, slots=True)
+class LifecycleFakes:
+    runtime: RuntimeLifecycle
+    admission: RecordingAdmissionGateway
+    supervisor: FakeSupervisor
+    interactions: FakeInteractions
+    ingress_runtime: FakeIngressRuntime
+    gate: FakeDrainGate
+    drainer: FakeDrainer
+    runtime_instance: FakeRuntimeInstance
+    signals: FakeSignalHandlers
+    events: list[str]
+
+
 def tokens() -> dict[DiscordBotSlot, str]:
     return {slot: f"token-{slot.value}" for slot in DiscordBotSlot}
 
@@ -161,28 +314,37 @@ def lifecycle(
     gateway: FakeDiscordGateway,
     supervisor: FakeSupervisor | None = None,
     interactions: FakeInteractions | None = None,
-    application: FakeApplication | None = None,
+    ingress_runtime: FakeIngressRuntime | None = None,
+    gate: FakeDrainGate | None = None,
+    drainer: FakeDrainer | None = None,
+    runtime_instance: FakeRuntimeInstance | None = None,
     signal_handlers: FakeSignalHandlers | None = None,
     disconnect_grace_seconds: float = 0.02,
     shutdown_timeout_seconds: float = 0.2,
-) -> tuple[
-    RuntimeLifecycle,
-    RuntimeAdmissionGateway,
-    FakeSupervisor,
-    FakeInteractions,
-    FakeApplication,
-    FakeSignalHandlers,
-]:
-    current_supervisor = supervisor or FakeSupervisor()
-    current_interactions = interactions or FakeInteractions()
-    current_application = application or FakeApplication()
+) -> LifecycleFakes:
+    events: list[str] = []
+    current_supervisor = supervisor or FakeSupervisor(events)
+    current_interactions = interactions or FakeInteractions(events)
+    current_ingress_runtime = ingress_runtime or FakeIngressRuntime(events)
+    current_gate = gate or FakeDrainGate(events)
+    current_drainer = drainer or FakeDrainer(events)
+    current_runtime_instance = runtime_instance or FakeRuntimeInstance(events)
     current_signals = signal_handlers or FakeSignalHandlers()
-    admission = RuntimeAdmissionGateway(gateway)
+    current_supervisor.events = events
+    current_interactions.events = events
+    current_ingress_runtime.events = events
+    current_gate.events = events
+    current_drainer.events = events
+    current_runtime_instance.events = events
+    admission = RecordingAdmissionGateway(gateway, events)
     runtime = RuntimeLifecycle(
         admission=admission,
         supervisor=current_supervisor,
         interactions=current_interactions,
-        application=current_application,
+        ingress_runtime=current_ingress_runtime,
+        drain_gate=current_gate,
+        drainer=current_drainer,
+        runtime_instance=current_runtime_instance,
         tokens=tokens(),
         previous_command_schema_hash="previous-schema",
         signal_handlers=current_signals,
@@ -190,14 +352,23 @@ def lifecycle(
         disconnect_grace_seconds=disconnect_grace_seconds,
         shutdown_timeout_seconds=shutdown_timeout_seconds,
     )
-    return (
-        runtime,
-        admission,
-        current_supervisor,
-        current_interactions,
-        current_application,
-        current_signals,
+    return LifecycleFakes(
+        runtime=runtime,
+        admission=admission,
+        supervisor=current_supervisor,
+        interactions=current_interactions,
+        ingress_runtime=current_ingress_runtime,
+        gate=current_gate,
+        drainer=current_drainer,
+        runtime_instance=current_runtime_instance,
+        signals=current_signals,
+        events=events,
     )
+
+
+def assert_order(events: list[str], *ordered: str) -> None:
+    positions = [events.index(event) for event in ordered]
+    assert positions == sorted(positions), events
 
 
 @pytest.mark.asyncio
@@ -248,160 +419,356 @@ async def test_unix_signal_handlers_own_sigint_and_sigterm(
 
 
 @pytest.mark.asyncio
-async def test_startup_syncs_once_resumes_recoverable_and_shutdown_is_owned() -> None:
-    values = lifecycle(gateway=FakeDiscordGateway(ready=True))
-    runtime, admission, supervisor, interactions, application, signals = values
+async def test_startup_orders_recovery_before_runtime_ready_admission_and_drain() -> None:
+    debate_release = asyncio.Event()
+    ingress_runtime = FakeIngressRuntime([], debate_release=debate_release)
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        ingress_runtime=ingress_runtime,
+    )
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await values.supervisor.started.wait()
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
 
-    runtime_task = asyncio.create_task(runtime.run())
-    await supervisor.started.wait()
-    await wait_until(lambda: admission.is_accepting and application.resume_calls == 1)
+    assert values.interactions.sync_inputs == ["previous-schema"]
+    assert values.supervisor.tokens == tokens()
+    assert values.runtime_instance.ready_inputs == [True]
+    assert values.ingress_runtime.debate_task is not None
+    assert not values.ingress_runtime.debate_task.done()
+    assert_order(
+        values.events,
+        "runtime_started",
+        "supervisor_started",
+        "gate_supervisor_started",
+        "command_schema_synced",
+        "gate_schema_checked",
+        "recovery_started",
+        "recovery_registered",
+        "gate_recovery_complete",
+        "runtime_ready:True",
+        "drainer_started",
+    )
 
-    assert interactions.sync_inputs == ["previous-schema"]
-    assert supervisor.tokens == tokens()
-    assert signals.install_calls == 1
-
-    assert signals.callback is not None
-    signals.callback()
-    runtime.request_shutdown()
+    values.runtime.request_shutdown()
     await runtime_task
-
-    assert runtime.shutdown_requested
-    assert not admission.is_accepting
-    assert interactions.begin_shutdown_calls == 1
-    assert interactions.checkpoint_calls == 1
-    assert interactions.close_calls == 1
-    assert signals.uninstall_calls == 1
-    assert supervisor.stopped.is_set()
 
 
 @pytest.mark.asyncio
-async def test_disconnect_closes_admission_then_checkpoints_and_resumes_after_reconnect() -> None:
+async def test_recovery_registration_barrier_is_fail_closed() -> None:
+    release = asyncio.Event()
+    ingress_runtime = FakeIngressRuntime([], recover_release=release)
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        ingress_runtime=ingress_runtime,
+    )
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: ingress_runtime.recover_calls == 1)
+
+    assert not values.admission.is_accepting
+    assert values.drainer.run_calls == 0
+    assert values.runtime_instance.ready_inputs == []
+    assert not values.gate.recovery_complete
+
+    release.set()
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
+    assert values.signals.callback is not None
+    values.signals.callback()
+    values.runtime.request_shutdown()
+    await runtime_task
+
+
+@pytest.mark.asyncio
+async def test_ready_poll_reclaims_a_debate_after_an_old_lease_expires() -> None:
+    ingress_runtime = FakeIngressRuntime([], recover_results=[0, 1])
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        ingress_runtime=ingress_runtime,
+    )
+    runtime_task = asyncio.create_task(values.runtime.run())
+
+    await wait_until(
+        lambda: (
+            values.admission.is_accepting
+            and values.drainer.run_calls == 1
+            and values.runtime_instance.ready_inputs == [False, True]
+        )
+    )
+
+    assert values.ingress_runtime.recover_calls >= 2
+    assert values.gate.recovery_complete
+    assert values.drainer.run_calls == 1
+    first_drain = values.events.index("drainer_started")
+    busy_transition = values.events.index("runtime_ready:True")
+    assert first_drain < busy_transition
+
+    values.runtime.request_shutdown()
+    await runtime_task
+
+
+@pytest.mark.asyncio
+async def test_idle_wake_rebinds_then_recovers_before_reopening_drain() -> None:
+    runtime_instance = FakeRuntimeInstance([], woken_results=[True])
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        runtime_instance=runtime_instance,
+    )
+    runtime_task = asyncio.create_task(values.runtime.run())
+
+    await wait_until(
+        lambda: (
+            values.admission.is_accepting
+            and values.drainer.run_calls == 2
+            and values.runtime_instance.ready_inputs == [False, False]
+        )
+    )
+
+    wake_start = values.events.index("runtime_wake_claimed")
+    wake_events = values.events[wake_start:]
+    assert_order(
+        wake_events,
+        "runtime_wake_claimed",
+        "admission_closed",
+        "gate_recovery_closed",
+        "drainer_stopped",
+        "recovery_started",
+        "recovery_registered",
+        "gate_recovery_complete",
+        "runtime_ready:False",
+        "drainer_started",
+    )
+    assert values.runtime_instance.woken_checks >= 1
+
+    values.runtime.request_shutdown()
+    await runtime_task
+
+
+@pytest.mark.asyncio
+async def test_disconnect_stops_claims_then_checkpoints_and_recovers_before_reopen() -> None:
     physical = FakeDiscordGateway(ready=True)
-    application = FakeApplication(block_recovery=True)
-    values = lifecycle(gateway=physical, application=application)
-    runtime, admission, _, interactions, _, _ = values
-    runtime_task = asyncio.create_task(runtime.run())
-    await wait_until(lambda: admission.is_accepting and application.resume_calls == 1)
+    values = lifecycle(gateway=physical)
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
 
     physical.ready = False
-    await wait_until(lambda: not admission.is_accepting)
-    assert interactions.checkpoint_calls == 0
-    await wait_until(lambda: interactions.checkpoint_calls == 1)
+    await wait_until(lambda: not values.admission.is_accepting and values.drainer.stop_calls == 1)
+    disconnect_gate = len(values.events) - 1 - values.events[::-1].index("gate_recovery_closed")
+    disconnect_admission = len(values.events) - 1 - values.events[::-1].index("admission_closed")
+    stopped = len(values.events) - 1 - values.events[::-1].index("drainer_stopped")
+    assert disconnect_admission < disconnect_gate < stopped
+    assert values.ingress_runtime.checkpoint_calls == 0
+    await wait_until(lambda: values.ingress_runtime.checkpoint_calls == 1)
 
+    recover_calls_before_reconnect = values.ingress_runtime.recover_calls
+    recovery_start = len(values.events)
     physical.ready = True
-    await wait_until(lambda: admission.is_accepting and application.resume_calls == 2)
-    assert interactions.sync_inputs == ["previous-schema"]
+    await wait_until(
+        lambda: (
+            values.admission.is_accepting
+            and values.ingress_runtime.recover_calls > recover_calls_before_reconnect
+            and values.drainer.run_calls == 2
+        )
+    )
+    reconnect_events = values.events[recovery_start:]
+    assert_order(
+        reconnect_events,
+        "recovery_started",
+        "recovery_registered",
+        "gate_recovery_complete",
+        "runtime_ready:False",
+        "drainer_started",
+    )
+    assert values.interactions.sync_inputs == ["previous-schema"]
 
-    runtime.request_shutdown()
+    values.runtime.request_shutdown()
     await runtime_task
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_gates_before_drain_checkpoint_and_components() -> None:
+    values = lifecycle(gateway=FakeDiscordGateway(ready=True))
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
+
+    start = len(values.events)
+    values.runtime.request_shutdown()
+    assert not values.admission.is_accepting
+    assert values.gate.shutting_down
+    assert values.ingress_runtime.begin_shutdown_calls == 1
+    await runtime_task
+
+    shutdown_events = values.events[start:]
+    assert_order(
+        shutdown_events,
+        "gate_shutdown",
+        "admission_closed",
+        "ingress_runtime_shutdown",
+        "drainer_stopped",
+        "ingress_checkpointed",
+        "ingress_runtime_closed",
+        "interactions_closed",
+        "supervisor_stopped",
+    )
+    assert values.ingress_runtime.checkpoint_calls == 1
+    assert values.ingress_runtime.close_calls == 1
+    assert values.interactions.close_calls == 1
+    assert values.signals.uninstall_calls == 1
 
 
 @pytest.mark.asyncio
 async def test_unexpected_supervisor_failure_is_propagated_after_cleanup() -> None:
-    supervisor = FakeSupervisor(failure=RuntimeError("gateway failed"))
+    supervisor = FakeSupervisor([], failure=RuntimeError("gateway failed"))
     values = lifecycle(gateway=FakeDiscordGateway(), supervisor=supervisor)
-    runtime, admission, _, interactions, _, signals = values
-
     with pytest.raises(RuntimeError, match="gateway failed"):
-        await runtime.run()
+        await values.runtime.run()
 
-    assert not admission.is_accepting
-    assert interactions.begin_shutdown_calls == 1
-    assert interactions.close_calls == 1
-    assert signals.uninstall_calls == 1
+    assert not values.admission.is_accepting
+    assert values.interactions.begin_shutdown_calls == 1
+    assert values.ingress_runtime.close_calls == 1
+    assert values.interactions.close_calls == 1
+    assert values.signals.uninstall_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_start_failure_never_starts_clients_or_admission() -> None:
+    runtime_instance = FakeRuntimeInstance([], started_failure=RuntimeError("start failed"))
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        runtime_instance=runtime_instance,
+    )
+
+    with pytest.raises(RuntimeError, match="start failed"):
+        await values.runtime.run()
+
+    assert not values.supervisor.started.is_set()
+    assert not values.admission.is_accepting
+    assert values.drainer.run_calls == 0
+    assert values.ingress_runtime.begin_shutdown_calls == 1
+    assert values.signals.uninstall_calls == 1
 
 
 @pytest.mark.asyncio
 async def test_recovery_failure_closes_admission_and_stops_the_runtime() -> None:
-    application = FakeApplication(failure=RuntimeError("recovery failed"))
-    values = lifecycle(gateway=FakeDiscordGateway(ready=True), application=application)
-    runtime, admission, supervisor, interactions, _, signals = values
-
+    ingress_runtime = FakeIngressRuntime([], recover_failure=RuntimeError("recovery failed"))
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        ingress_runtime=ingress_runtime,
+    )
     with pytest.raises(RuntimeError, match="recovery failed"):
-        await runtime.run()
+        await values.runtime.run()
 
-    assert application.resume_calls == 1
-    assert not admission.is_accepting
-    assert supervisor.stopped.is_set()
-    assert interactions.close_calls == 1
-    assert signals.uninstall_calls == 1
+    assert ingress_runtime.recover_calls == 1
+    assert not values.admission.is_accepting
+    assert values.drainer.run_calls == 0
+    assert values.supervisor.stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_runtime_ready_failure_never_opens_admission_or_starts_drain() -> None:
+    runtime_instance = FakeRuntimeInstance([], ready_failure=RuntimeError("ready failed"))
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        runtime_instance=runtime_instance,
+    )
+    with pytest.raises(RuntimeError, match="ready failed"):
+        await values.runtime.run()
+
+    assert not values.admission.is_accepting
+    assert values.drainer.run_calls == 0
+    assert values.gate.recovery_complete is False
+
+
+@pytest.mark.asyncio
+async def test_unexpected_drainer_failure_stops_the_runtime() -> None:
+    drainer = FakeDrainer([], failure=RuntimeError("drain failed"))
+    values = lifecycle(gateway=FakeDiscordGateway(ready=True), drainer=drainer)
+    with pytest.raises(RuntimeError, match="drain failed"):
+        await values.runtime.run()
+
+    assert not values.admission.is_accepting
+    assert values.ingress_runtime.checkpoint_calls == 1
+    assert values.supervisor.stopped.is_set()
 
 
 @pytest.mark.asyncio
 async def test_shutdown_timeout_fails_explicitly_before_fargate_deadline() -> None:
-    interactions = FakeInteractions(block_checkpoint=True)
+    ingress_runtime = FakeIngressRuntime([], block_checkpoint=True)
     values = lifecycle(
         gateway=FakeDiscordGateway(ready=True),
-        interactions=interactions,
+        ingress_runtime=ingress_runtime,
         shutdown_timeout_seconds=0.01,
     )
-    runtime, admission, supervisor, _, application, signals = values
-    runtime_task = asyncio.create_task(runtime.run())
-    await wait_until(lambda: admission.is_accepting and application.resume_calls == 1)
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
 
-    runtime.request_shutdown()
+    values.runtime.request_shutdown()
     with pytest.raises(RuntimeShutdownTimeout, match=r"0\.01 seconds"):
         await runtime_task
-    await supervisor.stopped.wait()
+    await values.supervisor.stopped.wait()
 
-    assert not admission.is_accepting
-    assert signals.uninstall_calls == 1
+    assert not values.admission.is_accepting
+    assert values.signals.uninstall_calls == 1
 
 
 @pytest.mark.asyncio
 async def test_checkpoint_failure_is_reported_after_clients_are_stopped() -> None:
-    interactions = FakeInteractions(checkpoint_failure=RuntimeError("checkpoint failed"))
+    ingress_runtime = FakeIngressRuntime(
+        [],
+        checkpoint_failure=RuntimeError("checkpoint failed"),
+    )
     values = lifecycle(
         gateway=FakeDiscordGateway(ready=True),
-        interactions=interactions,
+        ingress_runtime=ingress_runtime,
     )
-    runtime, admission, supervisor, _, application, signals = values
-    runtime_task = asyncio.create_task(runtime.run())
-    await wait_until(lambda: admission.is_accepting and application.resume_calls == 1)
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
 
-    runtime.request_shutdown()
+    values.runtime.request_shutdown()
     with pytest.raises(ExceptionGroup, match="runtime shutdown failed"):
         await runtime_task
 
-    assert supervisor.stopped.is_set()
-    assert not admission.is_accepting
-    assert interactions.close_calls == 1
-    assert signals.uninstall_calls == 1
+    assert values.supervisor.stopped.is_set()
+    assert values.ingress_runtime.close_calls == 1
+    assert values.interactions.close_calls == 1
+    assert values.signals.uninstall_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_recovery_checkpoint_failure_is_not_swallowed() -> None:
-    application = FakeApplication(
-        block_recovery=True,
+async def test_recovery_cancellation_failure_is_not_swallowed() -> None:
+    release = asyncio.Event()
+    ingress_runtime = FakeIngressRuntime(
+        [],
+        recover_release=release,
         cancellation_failure=RuntimeError("recovery checkpoint failed"),
     )
     values = lifecycle(
         gateway=FakeDiscordGateway(ready=True),
-        application=application,
+        ingress_runtime=ingress_runtime,
     )
-    runtime, admission, supervisor, interactions, _, signals = values
-    runtime_task = asyncio.create_task(runtime.run())
-    await wait_until(lambda: admission.is_accepting and application.resume_calls == 1)
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: ingress_runtime.recover_calls == 1)
 
-    runtime.request_shutdown()
+    values.runtime.request_shutdown()
     with pytest.raises(ExceptionGroup, match="runtime shutdown failed"):
         await runtime_task
 
-    assert supervisor.stopped.is_set()
-    assert interactions.close_calls == 1
-    assert signals.uninstall_calls == 1
+    assert values.supervisor.stopped.is_set()
+    assert values.interactions.close_calls == 1
+    assert values.signals.uninstall_calls == 1
 
 
 def test_runtime_rejects_non_positive_timeouts() -> None:
-    physical = FakeDiscordGateway()
-    admission = RuntimeAdmissionGateway(physical)
+    events: list[str] = []
+    admission = RecordingAdmissionGateway(FakeDiscordGateway(), events)
 
     with pytest.raises(ValueError, match="positive"):
         RuntimeLifecycle(
             admission=admission,
-            supervisor=FakeSupervisor(),
-            interactions=FakeInteractions(),
-            application=FakeApplication(),
+            supervisor=FakeSupervisor(events),
+            interactions=FakeInteractions(events),
+            ingress_runtime=FakeIngressRuntime(events),
+            drain_gate=FakeDrainGate(events),
+            drainer=FakeDrainer(events),
+            runtime_instance=FakeRuntimeInstance(events),
             tokens=tokens(),
             previous_command_schema_hash=None,
             signal_handlers=FakeSignalHandlers(),

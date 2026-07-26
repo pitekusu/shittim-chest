@@ -38,10 +38,13 @@ from shittim_chest.application.ports import (
     IdGenerator,
     Metrics,
     OpenAIService,
+    RepositoryClaimLost,
     RepositoryConflict,
 )
+from shittim_chest.application.scale_to_zero import IngressClaimFence, IngressKind
 from shittim_chest.domain import (
     PARTICIPANTS,
+    AttemptId,
     DebateId,
     DebatePhase,
     DebateState,
@@ -100,10 +103,21 @@ class DebateApplication:
         self._phase_timeout_seconds = phase_timeout_seconds
         self._lease_renewal_seconds = lease_renewal_seconds
 
-    async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate:
+    async def accept_debate(
+        self,
+        request: AcceptDebateRequest,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedDebate:
         """Validate readiness and atomically persist a new accepted debate."""
 
-        existing = await self._repository.get_operation_result(request.operation_id)
+        replay_claim = (
+            None if ingress_claim is None else _claim_for_write(ingress_claim, at=self._clock.now())
+        )
+        existing = await self._repository.get_operation_result(
+            request.operation_id,
+            ingress_claim=replay_claim,
+        )
         if existing is not None:
             if (
                 existing.requester_id != request.requester_id
@@ -114,6 +128,7 @@ class DebateApplication:
                 or existing.question != request.question
             ):
                 raise InvalidApplicationOperation("operation ID is bound to another request")
+            existing = await self._reclaim_ingress_replay(existing, ingress_claim=ingress_claim)
             return AcceptedDebate(existing.state.debate_id, existing.state.attempt_id)
 
         if not await self._discord.all_identities_ready():
@@ -134,11 +149,15 @@ class DebateApplication:
             channel_id=request.channel_id,
             created_at=now,
             attempt_created_at=now,
+            origin_ingress_interaction_id=(
+                None if ingress_claim is None else ingress_claim.interaction_id
+            ),
         )
         persisted = await self._repository.create(
             snapshot,
             operation_id=request.operation_id,
             lease_owner=self._lease_owner,
+            ingress_claim=_claim_for_write(ingress_claim, at=now),
         )
         self._metrics.increment(MetricEvent.ACCEPTED, debate_id=persisted.state.debate_id)
         return AcceptedDebate(
@@ -271,10 +290,21 @@ class DebateApplication:
                     return
                 raise
 
-    async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate:
+    async def cancel_debate(
+        self,
+        command: CancelDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> CancelledDebate:
         """Conditionally move an active debate to the cancelled terminal state."""
 
-        operation_result = await self._repository.get_operation_result(command.operation_id)
+        replay_claim = (
+            None if ingress_claim is None else _claim_for_write(ingress_claim, at=self._clock.now())
+        )
+        operation_result = await self._repository.get_operation_result(
+            command.operation_id,
+            ingress_claim=replay_claim,
+        )
         snapshot = operation_result or await self._require_snapshot(command.debate_id)
         if snapshot.state.debate_id != command.debate_id:
             raise InvalidApplicationOperation("operation ID is bound to another debate")
@@ -299,14 +329,26 @@ class DebateApplication:
             expected=snapshot,
             updated=updated,
             operation_id=command.operation_id,
+            ingress_claim=_claim_for_write(ingress_claim, at=now),
         )
         self._metrics.increment(MetricEvent.CANCELLED, debate_id=command.debate_id)
         return CancelledDebate(command.debate_id, persisted.state.attempt_id)
 
-    async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry:
+    async def retry_debate(
+        self,
+        command: RetryDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedRetry:
         """Create a new immutable attempt from a failed attempt."""
 
-        operation_result = await self._repository.get_operation_result(command.operation_id)
+        replay_claim = (
+            None if ingress_claim is None else _claim_for_write(ingress_claim, at=self._clock.now())
+        )
+        operation_result = await self._repository.get_operation_result(
+            command.operation_id,
+            ingress_claim=replay_claim,
+        )
         if operation_result is not None:
             if operation_result.state.debate_id != command.debate_id:
                 raise InvalidApplicationOperation("operation ID is bound to another debate")
@@ -315,17 +357,19 @@ class DebateApplication:
                 command.actor_id,
                 command.can_manage_messages,
             )
-            if operation_result.state.retry_of is None:
+            retry_of = operation_result.state.retry_of
+            if retry_of is None:
                 raise InvalidApplicationOperation("operation result is not a retry")
-            if (
-                command.expected_attempt_id is not None
-                and operation_result.state.retry_of != command.expected_attempt_id
-            ):
+            if command.expected_attempt_id is not None and retry_of != command.expected_attempt_id:
                 raise InvalidApplicationOperation("panel operation is bound to another attempt")
+            operation_result = await self._reclaim_ingress_replay(
+                operation_result,
+                ingress_claim=ingress_claim,
+            )
             return AcceptedRetry(
                 debate_id=command.debate_id,
                 attempt_id=operation_result.state.attempt_id,
-                retry_of=operation_result.state.retry_of,
+                retry_of=retry_of,
             )
 
         failed = await self._require_snapshot(command.debate_id)
@@ -339,11 +383,15 @@ class DebateApplication:
             raise InvalidApplicationOperation("only a failed debate may be retried")
 
         attempt_id = self._ids.new_attempt_id()
-        retry_state = failed.state.new_retry_attempt(attempt_id, at=self._clock.now())
+        now = self._clock.now()
+        retry_state = failed.state.new_retry_attempt(attempt_id, at=now)
         retry = replace(
             failed,
             state=retry_state,
             attempt_created_at=retry_state.updated_at,
+            origin_ingress_interaction_id=(
+                None if ingress_claim is None else ingress_claim.interaction_id
+            ),
             lease=None,
             error_code=None,
             final_decision=None,
@@ -353,6 +401,7 @@ class DebateApplication:
             retry=retry,
             operation_id=command.operation_id,
             lease_owner=self._lease_owner,
+            ingress_claim=_claim_for_write(ingress_claim, at=now),
         )
         self._metrics.increment(MetricEvent.RETRIED, debate_id=command.debate_id)
         if persisted.state.retry_of is None:
@@ -366,14 +415,84 @@ class DebateApplication:
     async def resume_recoverable(self) -> None:
         """Resume every repository-selected recoverable debate with owned tasks."""
 
-        snapshots = await self._repository.claim_recoverable(
-            lease_owner=self._lease_owner,
-            at=self._clock.now(),
-        )
+        snapshots = await self.claim_recoverable()
         async with asyncio.TaskGroup() as task_group:
             for snapshot in snapshots:
                 debate_id = snapshot.state.debate_id
                 task_group.create_task(self.run_debate(debate_id), name=f"resume:{debate_id}")
+
+    async def claim_recoverable(self) -> tuple[DebateSnapshot, ...]:
+        """Claim recoverable debates without choosing a process task owner.
+
+        Runtime composition uses this method to register every returned debate
+        in its single shared task registry. The legacy ``resume_recoverable``
+        wrapper remains available to non-production fixtures.
+        """
+
+        return await self._repository.claim_recoverable(
+            lease_owner=self._lease_owner,
+            at=self._clock.now(),
+        )
+
+    async def fail_pre_activation(
+        self,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        kind: IngressKind,
+        ingress_claim: IngressClaimFence,
+        error_code: str,
+    ) -> str:
+        """Fail one admitted NEW/RETRY attempt before ingress acceptance.
+
+        This compensation releases the execution slot but intentionally keeps
+        the daily admission quota consumed.  The latter is an abuse-control
+        counter for admitted attempts, not a success counter.
+        """
+
+        error_code = _validated_ingress_error_code(error_code)
+        snapshot = await self._require_snapshot(debate_id)
+        if (
+            snapshot.state.attempt_id != attempt_id
+            or snapshot.origin_ingress_interaction_id != ingress_claim.interaction_id
+            or ingress_claim.kind is not kind
+        ):
+            raise RepositoryClaimLost("pre-activation failure is bound to another attempt")
+        if snapshot.state.phase.is_terminal:
+            if snapshot.state.phase is DebatePhase.FAILED and snapshot.error_code is not None:
+                return snapshot.error_code
+            raise RepositoryConflict("pre-activation attempt reached another terminal state")
+        context = (
+            snapshot.starter_message_id,
+            snapshot.thread_id,
+            snapshot.control_panel_message_id,
+        )
+        if kind is IngressKind.NEW_DEBATE:
+            if snapshot.state.retry_of is not None or any(value is not None for value in context):
+                raise RepositoryConflict("new debate context is no longer safe to compensate")
+        elif kind is IngressKind.RETRY:
+            if snapshot.state.retry_of is None or not all(value is not None for value in context):
+                raise RepositoryConflict("retry context is no longer safe to compensate")
+        else:
+            raise InvalidApplicationOperation("cancel ingress cannot be compensated as a start")
+        lease = snapshot.lease
+        if lease is None or lease.owner_id != self._lease_owner:
+            raise RepositoryConflict("pre-activation lease belongs to another runtime")
+        now = self._clock.now()
+        updated = replace(
+            snapshot,
+            state=snapshot.state.transition_to(DebatePhase.FAILED, at=now),
+            error_code=error_code,
+        )
+        persisted = await self._repository.fail_pre_activation(
+            expected=snapshot,
+            updated=updated,
+            ingress_claim=_require_claim_for_write(ingress_claim, at=now),
+        )
+        if persisted.error_code is None:
+            raise RepositoryConflict("pre-activation failure lost its error code")
+        self._metrics.increment(MetricEvent.FAILED, debate_id=debate_id)
+        return persisted.error_code
 
     async def _run_phases(self, debate_id: DebateId) -> None:
         while True:
@@ -681,6 +800,25 @@ class DebateApplication:
             raise DebateNotFound(f"debate not found: {debate_id}")
         return snapshot
 
+    async def _reclaim_ingress_replay(
+        self,
+        snapshot: DebateSnapshot,
+        *,
+        ingress_claim: IngressClaimFence | None,
+    ) -> DebateSnapshot:
+        if ingress_claim is None or snapshot.state.phase.is_terminal:
+            return snapshot
+        at = self._clock.now()
+        current_claim = _claim_for_write(ingress_claim, at=at)
+        if current_claim is None:
+            raise RepositoryClaimLost("ingress replay lost its durable claim")
+        return await self._repository.reclaim_for_ingress(
+            expected=snapshot,
+            lease_owner=self._lease_owner,
+            at=at,
+            ingress_claim=current_claim,
+        )
+
     def _require_owned_active_lease(self, snapshot: DebateSnapshot, *, at: datetime) -> None:
         """Prevent a stale process from reusing a replacement runtime's lease."""
 
@@ -704,6 +842,37 @@ class DebateApplication:
     ) -> None:
         if actor_id != snapshot.requester_id and not can_manage_messages:
             raise RequestNotAllowed("only the requester or a moderator may perform this operation")
+
+
+def _claim_for_write(
+    ingress_claim: IngressClaimFence | None,
+    *,
+    at: datetime,
+) -> IngressClaimFence | None:
+    if ingress_claim is None:
+        return None
+    try:
+        return ingress_claim.for_write_at(at)
+    except ValueError as error:
+        raise RepositoryClaimLost("ingress claim expired before the durable write") from error
+
+
+def _require_claim_for_write(
+    ingress_claim: IngressClaimFence,
+    *,
+    at: datetime,
+) -> IngressClaimFence:
+    current = _claim_for_write(ingress_claim, at=at)
+    if current is None:  # pragma: no cover - non-optional input narrows this defensively
+        raise RepositoryClaimLost("ingress claim is required for the durable write")
+    return current
+
+
+def _validated_ingress_error_code(error_code: str) -> str:
+    value = error_code.strip()
+    if not value or len(value) > 100:
+        raise ValueError("ingress error code must contain at most 100 characters")
+    return value
 
 
 def _validate_participant_outputs(

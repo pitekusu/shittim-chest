@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -14,6 +14,8 @@ from shittim_chest.application import (
     CancelDebateCommand,
     DebateApplication,
     DebateNotFound,
+    IngressClaimFence,
+    IngressKind,
     InvalidApplicationOperation,
     OutboxRecoveryFailed,
     RequestNotAllowed,
@@ -116,6 +118,124 @@ def request(*, requester_id: str = "requester") -> AcceptDebateRequest:
         guild_id="guild",
         channel_id="channel",
         operation_id="accept-operation",
+    )
+
+
+def ingress_claim(
+    *,
+    operation_id: str,
+    at: datetime,
+    kind: IngressKind = IngressKind.NEW_DEBATE,
+    claim_owner: str = "new-worker",
+) -> IngressClaimFence:
+    return IngressClaimFence(
+        interaction_id=f"interaction-{operation_id}",
+        operation_id=operation_id,
+        kind=kind,
+        created_at=at - timedelta(seconds=1),
+        claim_owner=claim_owner,
+        claim_expires_at=at + timedelta(minutes=2),
+        delivery_attempt=2,
+        write_at=at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingress_accept_replay_reclaims_expired_lease_without_changing_ids(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    repository = dependencies[6]
+    original_app = make_application(dependencies, lease_owner="old-worker")
+    accepted = await original_app.accept_debate(
+        request(),
+        ingress_claim=ingress_claim(
+            operation_id="accept-operation",
+            at=dependencies[0].current,
+            claim_owner="old-worker",
+        ),
+    )
+    original = repository.current[accepted.debate_id]
+    assert original.lease is not None
+    replay_at = dependencies[0].current
+    stale = replace(
+        original,
+        lease=replace(
+            original.lease,
+            owner_id="old-worker",
+            expires_at=replay_at - timedelta(microseconds=1),
+        ),
+    )
+    repository.current[accepted.debate_id] = stale
+    repository.operations["accept-operation"] = stale
+    replay_app = make_application(dependencies, lease_owner="new-worker")
+
+    replayed = await replay_app.accept_debate(
+        request(),
+        ingress_claim=ingress_claim(operation_id="accept-operation", at=replay_at),
+    )
+
+    assert replayed == accepted
+    reclaimed = repository.current[accepted.debate_id]
+    assert reclaimed.state.debate_id == accepted.debate_id
+    assert reclaimed.state.attempt_id == accepted.attempt_id
+    assert reclaimed.lease is not None
+    assert reclaimed.lease.owner_id == "new-worker"
+
+
+@pytest.mark.asyncio
+async def test_pre_activation_failure_keeps_quota_semantics_but_releases_attempt_lease(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies, lease_owner="new-worker")
+    repository = dependencies[6]
+    claim = ingress_claim(
+        operation_id="accept-operation",
+        at=dependencies[0].current,
+    )
+    accepted = await app.accept_debate(request(), ingress_claim=claim)
+
+    error_code = await app.fail_pre_activation(
+        debate_id=accepted.debate_id,
+        attempt_id=accepted.attempt_id,
+        kind=IngressKind.NEW_DEBATE,
+        ingress_claim=claim,
+        error_code="discord_context_invalid",
+    )
+
+    failed = repository.current[accepted.debate_id]
+    assert error_code == "discord_context_invalid"
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.state.failed_from_phase is DebatePhase.ACCEPTED
+    assert failed.error_code == error_code
+    assert failed.lease is None
+    assert failed.origin_ingress_interaction_id == claim.interaction_id
+    assert (
+        await app.fail_pre_activation(
+            debate_id=accepted.debate_id,
+            attempt_id=accepted.attempt_id,
+            kind=IngressKind.NEW_DEBATE,
+            ingress_claim=claim,
+            error_code="different_replay_code",
+        )
+        == "discord_context_invalid"
     )
 
 
@@ -829,6 +949,32 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
     assert len(outbox_recovery.calls) == 1
     assert outbox_recovery.calls[0].state.recovery_state is RecoveryState.CHECKPOINTED
     assert MetricEvent.RESUMED in {event for event, _ in dependencies[2].events}
+
+
+@pytest.mark.asyncio
+async def test_claim_recoverable_does_not_start_phase_work(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+    original = repository.current[accepted.debate_id]
+    repository.recoverable = (accepted.debate_id,)
+
+    claimed = await app.claim_recoverable()
+
+    assert claimed == (repository.current[accepted.debate_id],)
+    assert claimed[0].state.phase is DebatePhase.ACCEPTED
+    assert repository.current[accepted.debate_id].state == original.state
 
 
 @pytest.mark.asyncio

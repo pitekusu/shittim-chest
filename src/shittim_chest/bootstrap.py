@@ -22,9 +22,12 @@ from shittim_chest.adapters.discord import (
     DiscordPyPublisher,
     build_discord_clients,
 )
+from shittim_chest.adapters.discord.ingress_runtime import DiscordIngressRuntime
 from shittim_chest.adapters.dynamodb import (
     DynamoDbDebateRepository,
+    DynamoDbIngressRepository,
     DynamoDbOutboxRepository,
+    DynamoDbRuntimeStateRepository,
     create_dynamodb_client,
 )
 from shittim_chest.adapters.openai import (
@@ -35,7 +38,9 @@ from shittim_chest.adapters.openai import (
     PersonaPrompts,
     create_openai_client,
 )
-from shittim_chest.application import DebateApplication
+from shittim_chest.application import DebateApplication, IngressCommandAdapter
+from shittim_chest.application.ingress_drain import IngressDrainer, RuntimeIngressDrainGate
+from shittim_chest.application.runtime_instance import RuntimeInstanceState
 from shittim_chest.config import BootstrapConfig, load_bootstrap_config
 from shittim_chest.runtime import (
     ContentFreeTelemetry,
@@ -98,6 +103,14 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         client=dynamodb_client,
         table_name=config.table_name,
     )
+    ingress_repository = DynamoDbIngressRepository(
+        client=dynamodb_client,
+        table_name=config.table_name,
+    )
+    runtime_state_repository = DynamoDbRuntimeStateRepository(
+        client=dynamodb_client,
+        table_name=config.table_name,
+    )
     outbox = DynamoDbOutboxRepository(
         client=dynamodb_client,
         table_name=config.table_name,
@@ -155,11 +168,38 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         config=config.runtime,
         application=application,
     )
+    ingress_runtime = DiscordIngressRuntime(
+        clients=clients,
+        application=application,
+        panel_refresh=repository,
+        clock=clock,
+        metrics=telemetry,
+        claim_owner=owner_id,
+    )
+    drain_gate = RuntimeIngressDrainGate(admission)
+    runtime_instance = RuntimeInstanceState(
+        clock=clock,
+        repository=runtime_state_repository,
+        runtime_instance_id=owner_id,
+    )
+    drainer = IngressDrainer(
+        clock=clock,
+        ingress=ingress_repository,
+        runtime_state=runtime_state_repository,
+        commands=IngressCommandAdapter(application),
+        context=ingress_runtime,
+        gate=drain_gate,
+        runtime_instance_id=owner_id,
+        runtime_session=runtime_instance,
+    )
     lifecycle = RuntimeLifecycle(
         admission=admission,
         supervisor=supervisor,
         interactions=interactions,
-        application=application,
+        ingress_runtime=ingress_runtime,
+        drain_gate=drain_gate,
+        drainer=drainer,
+        runtime_instance=runtime_instance,
         tokens=config.discord_tokens,
         previous_command_schema_hash=config.previous_command_schema_hash,
     )

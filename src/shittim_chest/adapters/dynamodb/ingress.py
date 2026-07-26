@@ -28,12 +28,15 @@ from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
     DynamoValue,
+    IngressActivePointer,
     PersistenceFormatError,
+    deserialize_ingress_active_pointer,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
     deserialize_ingress_semantic_binding,
     deserialize_ingress_status_publication,
     ingress_request_sort_key,
+    serialize_ingress_active_pointer,
     serialize_ingress_operation_result,
     serialize_ingress_request,
     serialize_ingress_semantic_binding,
@@ -71,10 +74,9 @@ from shittim_chest.application.status_publication import (
 )
 from shittim_chest.domain import AttemptId, DebateId
 
-INGRESS_INDEX = "gsi2"
-INGRESS_ACTIVE_INDEX_KEY = "INGRESS#ACTIVE"
 INGRESS_RECORD_SCHEMA_VERSION = 1
 INGRESS_STATUS_PUBLICATION_RECORD_SCHEMA_VERSION = 3
+INGRESS_ACTIVE_POINTER_PARTITION = "CONTROL#INGRESS#ACTIVE"
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -168,6 +170,24 @@ class DynamoDbIngressRepository:
         return await self._run(
             self._mark_terminal,
             request,
+            at,
+            status,
+            error_code,
+        )
+
+    async def mark_claim_terminal(
+        self,
+        *,
+        request: IngressRequest,
+        claim_owner: str,
+        at: datetime,
+        status: IngressStatus,
+        error_code: str,
+    ) -> IngressRequest:
+        return await self._run(
+            self._mark_claim_terminal,
+            request,
+            claim_owner,
             at,
             status,
             error_code,
@@ -312,6 +332,7 @@ class DynamoDbIngressRepository:
             self._increment_counter_action(request.created_at),
             self._increment_status_counter_action(request.created_at),
             self._put_new(serialize_ingress_request(request)),
+            self._put_new(serialize_ingress_active_pointer(request)),
             self._put_new(serialize_ingress_operation_result(operation)),
             self._put_new(serialize_ingress_status_publication(publication)),
         ]
@@ -325,6 +346,7 @@ class DynamoDbIngressRepository:
                 token=_client_token(
                     f"{self._table_name}:ingress:{request.interaction_id}:{request.operation_id}"
                 ),
+                aggregate_write_floor=len(actions) - 1,
             )
         except RepositoryConflict:
             replay, active_count = self._resolve_enqueue_conflict(request)
@@ -1168,7 +1190,12 @@ class DynamoDbIngressRepository:
 
     def _list_ready(self, at: datetime) -> tuple[IngressRequest, ...]:
         _require_utc(at)
-        return tuple(request for request in self._query_active() if _is_ready(request, at))
+        ready: list[IngressRequest] = []
+        for request in self._query_active():
+            if not _is_ready(request, at):
+                break
+            ready.append(request)
+        return tuple(ready)
 
     def _claim(
         self,
@@ -1222,8 +1249,6 @@ class DynamoDbIngressRepository:
     ) -> IngressRequest:
         _require_utc(at)
         _require_utc(next_attempt_at)
-        if request.status is not IngressStatus.CLAIMED or request.claim_owner != claim_owner:
-            raise RepositoryConflict("only the current ingress claimant may reschedule")
         if next_attempt_at <= at:
             current = self._load_current(request)
             if (
@@ -1236,8 +1261,22 @@ class DynamoDbIngressRepository:
             raise ValueError("next ingress attempt must be in the future")
         if not error_code.strip():
             raise ValueError("reschedule error code must not be empty")
+        current = self._load_current(request)
+        if (
+            current is not None
+            and current.status is IngressStatus.RETRYING
+            and current.next_attempt_at == next_attempt_at
+            and current.error_code == error_code
+        ):
+            return current
+        current = self._require_exact_claim(
+            request=request,
+            current=current,
+            claim_owner=claim_owner,
+            at=at,
+        )
         updated = replace(
-            request,
+            current,
             status=IngressStatus.RETRYING,
             updated_at=at,
             next_attempt_at=next_attempt_at,
@@ -1245,18 +1284,19 @@ class DynamoDbIngressRepository:
             claim_expires_at=None,
             error_code=error_code,
         )
-        condition = (
-            self._request_condition(request) + " AND claim_owner=:owner AND claim_expiry > :at"
+        condition, values, operation_condition, operation_values = self._claim_conditions(
+            request=current,
+            claim_owner=claim_owner,
+            at=at,
         )
-        values = self._expected_values(request)
-        values[":owner"] = claim_owner
-        values[":at"] = _timestamp(at)
         try:
             self._replace_request_and_operation(
-                previous=request,
+                previous=current,
                 updated=updated,
                 condition=condition,
                 values=values,
+                operation_condition=operation_condition,
+                operation_values=operation_values,
                 token_suffix=f"retry:{claim_owner}:{at}",
             )
         except RepositoryConflict:
@@ -1280,10 +1320,22 @@ class DynamoDbIngressRepository:
         attempt_id: AttemptId,
     ) -> IngressRequest:
         _require_utc(at)
-        if request.status is not IngressStatus.CLAIMED or request.claim_owner != claim_owner:
-            raise RepositoryConflict("only the current ingress claimant may accept")
+        current = self._load_current(request)
+        if (
+            current is not None
+            and current.status is IngressStatus.ACCEPTED
+            and current.accepted_debate_id == debate_id
+            and current.accepted_attempt_id == attempt_id
+        ):
+            return current
+        current = self._require_exact_claim(
+            request=request,
+            current=current,
+            claim_owner=claim_owner,
+            at=at,
+        )
         updated = replace(
-            request,
+            current,
             status=IngressStatus.ACCEPTED,
             status_message_state=StatusMessageState.ACCEPTED,
             updated_at=at,
@@ -1295,11 +1347,12 @@ class DynamoDbIngressRepository:
             accepted_debate_id=debate_id,
             accepted_attempt_id=attempt_id,
         )
-        condition = self._request_condition(request)
-        condition += " AND claim_owner=:owner AND claim_expiry > :at AND terminal_deadline_at > :at"
-        values = self._expected_values(request)
-        values[":owner"] = claim_owner
-        values[":at"] = _timestamp(at)
+        condition, values, operation_condition, operation_values = self._claim_conditions(
+            request=current,
+            claim_owner=claim_owner,
+            at=at,
+        )
+        condition += " AND terminal_deadline_at > :at"
         try:
             status_actions = self._rearm_status_actions(
                 request=updated,
@@ -1307,11 +1360,13 @@ class DynamoDbIngressRepository:
                 at=at,
             )
             self._replace_request_and_operation(
-                previous=request,
+                previous=current,
                 updated=updated,
                 condition=condition,
                 values=values,
-                extra_actions=(self._decrement_counter_action(at), *status_actions),
+                operation_condition=operation_condition,
+                operation_values=operation_values,
+                extra_actions=(*self._leave_active_queue_actions(current, at), *status_actions),
                 token_suffix=f"accepted:{debate_id}:{attempt_id}",
             )
         except RepositoryConflict:
@@ -1378,6 +1433,131 @@ class DynamoDbIngressRepository:
             raise
         return updated
 
+    def _mark_claim_terminal(
+        self,
+        request: IngressRequest,
+        claim_owner: str,
+        at: datetime,
+        status: IngressStatus,
+        error_code: str,
+    ) -> IngressRequest:
+        _require_utc(at)
+        if status not in {IngressStatus.REJECTED, IngressStatus.FAILED}:
+            raise ValueError("claimed terminal status must be rejected or failed")
+        if not claim_owner.strip():
+            raise ValueError("claim owner must not be empty")
+        if not error_code.strip():
+            raise ValueError("claimed terminal settlement requires an error code")
+        current = self._load_current(request)
+        if current is not None and current.status.is_terminal:
+            if current.status is status and current.error_code == error_code:
+                return current
+            raise RepositoryConflict("ingress request already reached another terminal state")
+        if current is None:
+            raise RepositoryConflict("claimed ingress request no longer exists")
+        _assert_exact_identity(request, current)
+        if (
+            current.status is not IngressStatus.CLAIMED
+            or current.claim_owner != claim_owner
+            or current.claim_expires_at is None
+            or current.claim_expires_at <= at
+            or current.delivery_attempt != request.delivery_attempt
+            or current.claim_expires_at != request.claim_expires_at
+        ):
+            raise RepositoryConflict("only the exact live ingress claimant may settle")
+        state = (
+            StatusMessageState.REJECTED
+            if status is IngressStatus.REJECTED
+            else StatusMessageState.TERMINAL_FAILED
+        )
+        updated = replace(
+            current,
+            status=status,
+            status_message_state=state,
+            updated_at=at,
+            next_attempt_at=None,
+            claim_owner=None,
+            claim_expires_at=None,
+            error_code=error_code,
+            completed_at=at,
+        )
+        request_values: DynamoItem = {
+            ":claimed_status": IngressStatus.CLAIMED.value,
+            ":schema": CURRENT_SCHEMA_VERSION,
+            ":record_schema": current.schema_version,
+            ":request_type": "ingress_request",
+            ":interaction_id": current.interaction_id,
+            ":operation_id": current.operation_id,
+            ":interaction_kind": current.kind.value,
+            ":created_at": _timestamp(current.created_at),
+            ":owner": claim_owner,
+            ":claim_expiry": _timestamp(current.claim_expires_at),
+            ":at": _timestamp(at),
+            ":delivery_attempt": current.delivery_attempt,
+            ":message_state": current.status_message_state.value,
+            ":status_channel": current.status_channel_id,
+        }
+        request_condition = (
+            "#status=:claimed_status AND schema_version=:schema "
+            "AND record_schema_version=:record_schema AND record_type=:request_type "
+            "AND interaction_id=:interaction_id AND operation_id=:operation_id "
+            "AND interaction_kind=:interaction_kind AND created_at=:created_at "
+            "AND claim_owner=:owner AND claim_expiry=:claim_expiry "
+            "AND claim_expiry > :at AND delivery_attempt=:delivery_attempt "
+            "AND status_message_state=:message_state "
+            "AND status_channel_id=:status_channel"
+        )
+        if current.status_message_id is None:
+            request_condition += (
+                " AND attribute_not_exists(status_message_id) "
+                "AND attribute_not_exists(status_message_updated_at)"
+            )
+        else:
+            if current.status_message_updated_at is None:
+                raise RepositoryConflict("status message ID has no update timestamp")
+            request_condition += (
+                " AND status_message_id=:message_id AND status_message_updated_at=:message_updated"
+            )
+            request_values[":message_id"] = current.status_message_id
+            request_values[":message_updated"] = _timestamp(current.status_message_updated_at)
+        operation_values: DynamoItem = {
+            ":claimed_status": IngressStatus.CLAIMED.value,
+            ":schema": CURRENT_SCHEMA_VERSION,
+            ":record_schema": current.schema_version,
+            ":operation_type": "ingress_operation_result",
+            ":interaction_id": current.interaction_id,
+            ":operation_id": current.operation_id,
+            ":request_sort_key": ingress_request_sort_key(current),
+            ":created_at": _timestamp(current.created_at),
+        }
+        operation_condition = (
+            "#status=:claimed_status AND schema_version=:schema "
+            "AND record_schema_version=:record_schema AND record_type=:operation_type "
+            "AND interaction_id=:interaction_id AND operation_id=:operation_id "
+            "AND request_sort_key=:request_sort_key AND created_at=:created_at"
+        )
+        try:
+            status_actions = self._rearm_status_actions(request=updated, state=state, at=at)
+            self._replace_request_and_operation(
+                previous=current,
+                updated=updated,
+                condition=request_condition,
+                values=request_values,
+                operation_condition=operation_condition,
+                operation_values=operation_values,
+                extra_actions=(*self._leave_active_queue_actions(current, at), *status_actions),
+                token_suffix=(
+                    f"claim-terminal:{claim_owner}:{current.claim_expires_at}:"
+                    f"{current.delivery_attempt}:{status.value}:{error_code}:{at}"
+                ),
+            )
+        except RepositoryConflict:
+            latest = self._load_current(request)
+            if latest is not None and latest.status is status and latest.error_code == error_code:
+                return latest
+            raise
+        return updated
+
     def _mark_terminal(
         self,
         request: IngressRequest,
@@ -1426,7 +1606,7 @@ class DynamoDbIngressRepository:
             completed_at=at,
         )
         queue_actions = (
-            (self._decrement_counter_action(at),)
+            self._leave_active_queue_actions(request, at)
             if request.status.counts_toward_queue_limit
             else ()
         )
@@ -1532,25 +1712,64 @@ class DynamoDbIngressRepository:
 
     def _query_active(self) -> tuple[IngressRequest, ...]:
         requests: list[IngressRequest] = []
+        for pointer in self._query_active_pointers():
+            item = self._get_item(_request_key(pointer.request_sort_key))
+            if item is None:
+                raise RepositoryConflict("ingress active pointer targets a missing request")
+            request = deserialize_ingress_request(item)
+            if (
+                request.interaction_id != pointer.interaction_id
+                or request.created_at != pointer.created_at
+                or ingress_request_sort_key(request) != pointer.request_sort_key
+            ):
+                raise RepositoryConflict("ingress active pointer targets another request")
+            if request.status.counts_toward_queue_limit:
+                requests.append(request)
+                continue
+
+            # A terminal/accepted transaction may commit between the pointer Query and
+            # this strongly consistent request Get. Only a verified pointer deletion
+            # makes that race safe to skip; a residual pointer is durable corruption.
+            current_pointer_item = self._get_item(_active_pointer_key(pointer.request_sort_key))
+            if current_pointer_item is None:
+                continue
+            current_pointer = deserialize_ingress_active_pointer(current_pointer_item)
+            if current_pointer != pointer:
+                raise RepositoryConflict("ingress active pointer changed immutable identity")
+            raise RepositoryConflict("inactive ingress request retains an active pointer")
+        return tuple(requests)
+
+    def _query_active_pointers(self) -> tuple[IngressActivePointer, ...]:
+        pointers: list[IngressActivePointer] = []
         exclusive_start_key: dict[str, AttributeValueTypeDef] | None = None
+        query_limit = INGRESS_QUEUE_LIMIT + 1
         while True:
+            remaining = query_limit - len(pointers)
+            if remaining <= 0:
+                raise RepositoryConflict("ingress active pointer count exceeds twenty")
             parameters: QueryInputTypeDef = {
                 "TableName": self._table_name,
-                "IndexName": INGRESS_INDEX,
-                "KeyConditionExpression": "gsi2pk=:active",
-                "ExpressionAttributeValues": marshal_item({":active": INGRESS_ACTIVE_INDEX_KEY}),
+                "KeyConditionExpression": "PK=:pk",
+                "ExpressionAttributeValues": marshal_item(
+                    {":pk": INGRESS_ACTIVE_POINTER_PARTITION}
+                ),
                 "ScanIndexForward": True,
+                "ConsistentRead": True,
+                "Limit": remaining,
             }
             if exclusive_start_key is not None:
                 parameters["ExclusiveStartKey"] = exclusive_start_key
             response = self._client.query(**parameters)
-            requests.extend(
-                deserialize_ingress_request(unmarshal_item(item))
-                for item in response.get("Items", [])
-            )
+            for item in response.get("Items", []):
+                pointer = deserialize_ingress_active_pointer(unmarshal_item(item))
+                if pointers and pointer.request_sort_key <= pointers[-1].request_sort_key:
+                    raise RepositoryConflict("ingress active pointers are not strictly ordered")
+                pointers.append(pointer)
+                if len(pointers) > INGRESS_QUEUE_LIMIT:
+                    raise RepositoryConflict("ingress active pointer count exceeds twenty")
             exclusive_start_key = response.get("LastEvaluatedKey")
             if not exclusive_start_key:
-                return tuple(requests)
+                return tuple(pointers)
 
     def _rearm_status_actions(
         self,
@@ -1710,6 +1929,94 @@ class DynamoDbIngressRepository:
     def _status_request_expected_values(self, request: IngressRequest) -> DynamoItem:
         return self._expected_values(request)
 
+    def _require_exact_claim(
+        self,
+        *,
+        request: IngressRequest,
+        current: IngressRequest | None,
+        claim_owner: str,
+        at: datetime,
+    ) -> IngressRequest:
+        if current is None:
+            raise RepositoryConflict("claimed ingress request no longer exists")
+        _assert_exact_identity(request, current)
+        if (
+            current.status is not IngressStatus.CLAIMED
+            or current.claim_owner != claim_owner
+            or current.claim_expires_at is None
+            or current.claim_expires_at <= at
+            or current.delivery_attempt != request.delivery_attempt
+            or current.claim_expires_at != request.claim_expires_at
+        ):
+            raise RepositoryConflict("only the exact live ingress claimant may mutate")
+        return current
+
+    def _claim_conditions(
+        self,
+        *,
+        request: IngressRequest,
+        claim_owner: str,
+        at: datetime,
+    ) -> tuple[str, DynamoItem, str, DynamoItem]:
+        if request.claim_expires_at is None:
+            raise RepositoryConflict("claimed ingress request has no expiry")
+        request_values: DynamoItem = {
+            ":claimed_status": IngressStatus.CLAIMED.value,
+            ":schema": CURRENT_SCHEMA_VERSION,
+            ":record_schema": request.schema_version,
+            ":request_type": "ingress_request",
+            ":interaction_id": request.interaction_id,
+            ":operation_id": request.operation_id,
+            ":interaction_kind": request.kind.value,
+            ":created_at": _timestamp(request.created_at),
+            ":owner": claim_owner,
+            ":claim_expiry": _timestamp(request.claim_expires_at),
+            ":at": _timestamp(at),
+            ":delivery_attempt": request.delivery_attempt,
+            ":message_state": request.status_message_state.value,
+            ":status_channel": request.status_channel_id,
+        }
+        request_condition = (
+            "#status=:claimed_status AND schema_version=:schema "
+            "AND record_schema_version=:record_schema AND record_type=:request_type "
+            "AND interaction_id=:interaction_id AND operation_id=:operation_id "
+            "AND interaction_kind=:interaction_kind AND created_at=:created_at "
+            "AND claim_owner=:owner AND claim_expiry=:claim_expiry "
+            "AND claim_expiry > :at AND delivery_attempt=:delivery_attempt "
+            "AND status_message_state=:message_state "
+            "AND status_channel_id=:status_channel"
+        )
+        if request.status_message_id is None:
+            request_condition += (
+                " AND attribute_not_exists(status_message_id) "
+                "AND attribute_not_exists(status_message_updated_at)"
+            )
+        else:
+            if request.status_message_updated_at is None:
+                raise RepositoryConflict("status message ID has no update timestamp")
+            request_condition += (
+                " AND status_message_id=:message_id AND status_message_updated_at=:message_updated"
+            )
+            request_values[":message_id"] = request.status_message_id
+            request_values[":message_updated"] = _timestamp(request.status_message_updated_at)
+        operation_values: DynamoItem = {
+            ":claimed_status": IngressStatus.CLAIMED.value,
+            ":schema": CURRENT_SCHEMA_VERSION,
+            ":record_schema": request.schema_version,
+            ":operation_type": "ingress_operation_result",
+            ":interaction_id": request.interaction_id,
+            ":operation_id": request.operation_id,
+            ":request_sort_key": ingress_request_sort_key(request),
+            ":created_at": _timestamp(request.created_at),
+        }
+        operation_condition = (
+            "#status=:claimed_status AND schema_version=:schema "
+            "AND record_schema_version=:record_schema AND record_type=:operation_type "
+            "AND interaction_id=:interaction_id AND operation_id=:operation_id "
+            "AND request_sort_key=:request_sort_key AND created_at=:created_at"
+        )
+        return request_condition, request_values, operation_condition, operation_values
+
     def _replace_request_and_operation(
         self,
         *,
@@ -1719,6 +2026,8 @@ class DynamoDbIngressRepository:
         values: Mapping[str, DynamoValue],
         token_suffix: str,
         extra_actions: Iterable[TransactWriteItemTypeDef] = (),
+        operation_condition: str | None = None,
+        operation_values: Mapping[str, DynamoValue] | None = None,
     ) -> None:
         operation = _operation_for_request(updated)
         request_action = cast(
@@ -1739,7 +2048,8 @@ class DynamoDbIngressRepository:
                 "Put": {
                     "TableName": self._table_name,
                     "Item": marshal_item(serialize_ingress_operation_result(operation)),
-                    "ConditionExpression": (
+                    "ConditionExpression": operation_condition
+                    or (
                         "#status=:expected_status AND updated_at=:expected_updated "
                         "AND schema_version=:schema AND record_schema_version=:record_schema "
                         "AND record_type=:operation_type "
@@ -1748,7 +2058,7 @@ class DynamoDbIngressRepository:
                     ),
                     "ExpressionAttributeNames": {"#status": "status"},
                     "ExpressionAttributeValues": marshal_item(
-                        self._operation_expected_values(previous)
+                        operation_values or self._operation_expected_values(previous)
                     ),
                 }
             },
@@ -1912,6 +2222,54 @@ class DynamoDbIngressRepository:
             },
         )
 
+    def _leave_active_queue_actions(
+        self,
+        request: IngressRequest,
+        at: datetime,
+    ) -> tuple[TransactWriteItemTypeDef, TransactWriteItemTypeDef]:
+        if not request.status.counts_toward_queue_limit:
+            raise RepositoryConflict("only queued ingress may leave the active pointer set")
+        return (
+            self._decrement_counter_action(at),
+            self._delete_active_pointer_action(request),
+        )
+
+    def _delete_active_pointer_action(
+        self,
+        request: IngressRequest,
+    ) -> TransactWriteItemTypeDef:
+        pointer = serialize_ingress_active_pointer(request)
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Delete": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(
+                        {
+                            "PK": INGRESS_ACTIVE_POINTER_PARTITION,
+                            "SK": ingress_request_sort_key(request),
+                        }
+                    ),
+                    "ConditionExpression": (
+                        "record_type=:type AND schema_version=:schema "
+                        "AND record_schema_version=:record_schema "
+                        "AND interaction_id=:interaction_id "
+                        "AND request_sort_key=:request_sort_key AND created_at=:created_at"
+                    ),
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":type": pointer["record_type"],
+                            ":schema": pointer["schema_version"],
+                            ":record_schema": pointer["record_schema_version"],
+                            ":interaction_id": pointer["interaction_id"],
+                            ":request_sort_key": pointer["request_sort_key"],
+                            ":created_at": pointer["created_at"],
+                        }
+                    ),
+                }
+            },
+        )
+
     def _decrement_counter_action(self, at: datetime) -> TransactWriteItemTypeDef:
         return cast(
             TransactWriteItemTypeDef,
@@ -1952,10 +2310,19 @@ class DynamoDbIngressRepository:
             },
         )
 
-    def _transact(self, actions: Iterable[TransactWriteItemTypeDef], *, token: str) -> bool:
+    def _transact(
+        self,
+        actions: Iterable[TransactWriteItemTypeDef],
+        *,
+        token: str,
+        aggregate_write_floor: int | None = None,
+    ) -> bool:
         action_list = list(actions)
         if not 1 <= len(action_list) <= 100:
             raise ValueError("DynamoDB transaction must contain between 1 and 100 actions")
+        write_floor = len(action_list) if aggregate_write_floor is None else aggregate_write_floor
+        if not 1 <= write_floor <= len(action_list):
+            raise ValueError("aggregate write floor must cover one to all transaction actions")
         try:
             response = self._client.transact_write_items(
                 TransactItems=action_list,
@@ -1975,11 +2342,12 @@ class DynamoDbIngressRepository:
             return True
         if read_units > 0:
             return False
-        # DynamoDB Local reports only aggregate units. These bounded auxiliary
-        # items consume at least one unit per write action; an idempotent replay
-        # reports the cheaper reads described by the TransactWriteItems API.
+        # DynamoDB Local reports only aggregate units and currently omits the
+        # immutable active-pointer write from enqueue's aggregate total. The
+        # caller supplies that known local floor; an idempotent replay reports
+        # only the cheaper reads described by the TransactWriteItems API.
         total_units = sum(capacity.get("CapacityUnits", 0) for capacity in capacities)
-        return not capacities or total_units >= len(action_list)
+        return not capacities or total_units >= write_floor
 
     def _load_current(self, request: IngressRequest) -> IngressRequest | None:
         return self._load_request(ingress_request_sort_key(request))
@@ -2144,6 +2512,10 @@ def _validate_history_checkpoint_progress(
 
 def _request_key(request_sort_key: str) -> DynamoItem:
     return {"PK": "CONTROL#INGRESS", "SK": request_sort_key}
+
+
+def _active_pointer_key(request_sort_key: str) -> DynamoItem:
+    return {"PK": INGRESS_ACTIVE_POINTER_PARTITION, "SK": request_sort_key}
 
 
 def _counter_key() -> DynamoItem:

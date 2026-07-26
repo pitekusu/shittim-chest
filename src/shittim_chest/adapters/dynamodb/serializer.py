@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
@@ -54,6 +55,7 @@ type DynamoItem = dict[str, DynamoValue]
 CURRENT_SCHEMA_VERSION = 6
 PREVIOUS_SCHEMA_VERSION = 5
 MAX_ITEM_BYTES = 400 * 1024
+INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
 
 class PersistenceFormatError(ValueError):
@@ -62,6 +64,16 @@ class PersistenceFormatError(ValueError):
 
 class ItemTooLarge(PersistenceFormatError):
     """Raised before an item can cross DynamoDB's 400 KB limit."""
+
+
+@dataclass(frozen=True, slots=True)
+class IngressActivePointer:
+    """PII-free immutable pointer to one request that still occupies the FIFO."""
+
+    interaction_id: str
+    request_sort_key: str
+    created_at: datetime
+    schema_version: int = INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION
 
 
 def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
@@ -136,10 +148,52 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
     _put_optional(attempt_meta, "retry_of", _identifier(snapshot.state.retry_of))
     _put_optional(
         attempt_meta,
+        "origin_ingress_interaction_id",
+        snapshot.origin_ingress_interaction_id,
+    )
+    _put_optional(
+        attempt_meta,
         "failed_from_phase",
         snapshot.state.failed_from_phase.value if snapshot.state.failed_from_phase else None,
     )
     _put_optional(attempt_meta, "error_code", snapshot.error_code)
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_required_at",
+        _optional_timestamp(snapshot.panel_refresh_required_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refreshed_at",
+        _optional_timestamp(snapshot.panel_refreshed_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_claim_owner",
+        snapshot.panel_refresh_claim_owner,
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_claim_expiry",
+        _optional_timestamp(snapshot.panel_refresh_claim_expires_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_next_attempt_at",
+        _optional_timestamp(snapshot.panel_refresh_next_attempt_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_failed_at",
+        _optional_timestamp(snapshot.panel_refresh_failed_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_error_code",
+        snapshot.panel_refresh_error_code,
+    )
+    if snapshot.panel_refresh_delivery_attempt:
+        attempt_meta["panel_refresh_delivery_attempt"] = snapshot.panel_refresh_delivery_attempt
     if snapshot.lease is not None:
         attempt_meta.update(
             {
@@ -149,7 +203,24 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
                 "fencing_token": snapshot.lease.fencing_token,
             }
         )
-    if not snapshot.state.phase.is_terminal:
+    if snapshot.panel_refresh_pending:
+        due_at = (
+            snapshot.panel_refresh_claim_expires_at
+            or snapshot.panel_refresh_next_attempt_at
+            or snapshot.panel_refresh_required_at
+        )
+        if due_at is None:  # pragma: no cover - model invariant narrows this
+            raise AssertionError("pending panel refresh has no due timestamp")
+        attempt_meta["gsi2pk"] = "PANEL_REFRESH"
+        attempt_meta["gsi2sk"] = f"{_timestamp(due_at)}#{debate_id}#{attempt_id}"
+    elif not snapshot.state.phase.is_terminal and all(
+        value is not None
+        for value in (
+            snapshot.starter_message_id,
+            snapshot.thread_id,
+            snapshot.control_panel_message_id,
+        )
+    ):
         attempt_meta["gsi2pk"] = "RECOVERABLE"
         attempt_meta["gsi2sk"] = f"{_timestamp(snapshot.state.updated_at)}#{debate_id}#{attempt_id}"
 
@@ -320,10 +391,44 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         channel_id=_text(debate_meta, "channel_id"),
         created_at=_datetime(debate_meta, "created_at"),
         attempt_created_at=_datetime(attempt_meta, "attempt_created_at"),
+        origin_ingress_interaction_id=_optional_text(
+            attempt_meta,
+            "origin_ingress_interaction_id",
+        ),
         starter_message_id=_optional_text(debate_meta, "starter_message_id"),
         thread_id=_optional_text(debate_meta, "thread_id"),
         control_panel_message_id=_optional_text(debate_meta, "control_panel_message_id"),
         lease=lease,
+        panel_refresh_required_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_required_at",
+        ),
+        panel_refreshed_at=_optional_datetime(attempt_meta, "panel_refreshed_at"),
+        panel_refresh_claim_owner=_optional_text(
+            attempt_meta,
+            "panel_refresh_claim_owner",
+        ),
+        panel_refresh_claim_expires_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_claim_expiry",
+        ),
+        panel_refresh_next_attempt_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_next_attempt_at",
+        ),
+        panel_refresh_failed_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_failed_at",
+        ),
+        panel_refresh_error_code=_optional_text(
+            attempt_meta,
+            "panel_refresh_error_code",
+        ),
+        panel_refresh_delivery_attempt=(
+            _integer(attempt_meta, "panel_refresh_delivery_attempt")
+            if "panel_refresh_delivery_attempt" in attempt_meta
+            else 0
+        ),
         evidence=evidence,
         initial_opinions=cast(tuple[InitialOpinion, ...], opinions),
         final_proposals=cast(tuple[FinalProposal, ...], proposals),
@@ -440,8 +545,68 @@ def deserialize_panel_operation(raw_item: Mapping[str, DynamoValue]) -> PanelOpe
 def ingress_request_sort_key(request: IngressRequest) -> str:
     """Return the stable, UTC-sortable FIFO key for one ingress request."""
 
-    timestamp = request.created_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
-    return f"REQUEST#{timestamp}#{request.interaction_id}"
+    return ingress_request_sort_key_from_identity(
+        created_at=request.created_at,
+        interaction_id=request.interaction_id,
+    )
+
+
+def ingress_request_sort_key_from_identity(*, created_at: datetime, interaction_id: str) -> str:
+    """Build the stable request key from its PII-free immutable identity."""
+
+    if created_at.tzinfo is None or created_at.utcoffset() != UTC.utcoffset(created_at):
+        raise ValueError("ingress creation timestamp must be timezone-aware UTC")
+    if not interaction_id.strip():
+        raise ValueError("interaction ID must not be empty")
+    timestamp = created_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return f"REQUEST#{timestamp}#{interaction_id}"
+
+
+def serialize_ingress_active_pointer(request: IngressRequest) -> DynamoItem:
+    """Serialize the immutable bounded-workset pointer for one queued request."""
+
+    request_sort_key = ingress_request_sort_key(request)
+    return _validated_item(
+        {
+            "PK": "CONTROL#INGRESS#ACTIVE",
+            "SK": request_sort_key,
+            "record_type": "ingress_active_pointer",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION,
+            "interaction_id": request.interaction_id,
+            "request_sort_key": request_sort_key,
+            "created_at": _timestamp(request.created_at),
+        }
+    )
+
+
+def deserialize_ingress_active_pointer(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressActivePointer:
+    """Validate an active pointer without loading request payload or PII."""
+
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="ingress_active_pointer",
+        expected_record_schema_version=INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION,
+    )
+    pointer = IngressActivePointer(
+        interaction_id=_text(item, "interaction_id"),
+        request_sort_key=_text(item, "request_sort_key"),
+        created_at=_datetime(item, "created_at"),
+        schema_version=_integer(item, "record_schema_version"),
+    )
+    expected_sort_key = ingress_request_sort_key_from_identity(
+        created_at=pointer.created_at,
+        interaction_id=pointer.interaction_id,
+    )
+    if _text(item, "PK") != "CONTROL#INGRESS#ACTIVE":
+        raise PersistenceFormatError("ingress active pointer has an invalid partition key")
+    if _text(item, "SK") != expected_sort_key:
+        raise PersistenceFormatError("ingress active pointer has an invalid sort key")
+    if pointer.request_sort_key != expected_sort_key:
+        raise PersistenceFormatError("ingress active pointer targets another request")
+    return pointer
 
 
 def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
@@ -494,9 +659,6 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         ("ttl", request.ttl),
     ):
         _put_optional(item, field, value)
-    if request.status.counts_toward_queue_limit:
-        item["gsi2pk"] = "INGRESS#ACTIVE"
-        item["gsi2sk"] = ingress_request_sort_key(request)
     return _validated_item(item)
 
 
@@ -551,14 +713,8 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
         raise PersistenceFormatError("ingress request has an invalid partition key")
     if _text(item, "SK") != ingress_request_sort_key(request):
         raise PersistenceFormatError("ingress request has an invalid sort key")
-    is_indexed = "gsi2pk" in item or "gsi2sk" in item
-    if request.status.counts_toward_queue_limit:
-        if _text(item, "gsi2pk") != "INGRESS#ACTIVE":
-            raise PersistenceFormatError("active ingress request has an invalid index key")
-        if _text(item, "gsi2sk") != ingress_request_sort_key(request):
-            raise PersistenceFormatError("active ingress request has an invalid index sort key")
-    elif is_indexed:
-        raise PersistenceFormatError("inactive ingress request must not be indexed as active")
+    if "gsi2pk" in item or "gsi2sk" in item:
+        raise PersistenceFormatError("ingress request must not use the recoverable debate index")
     return request
 
 

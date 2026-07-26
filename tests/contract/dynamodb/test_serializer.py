@@ -24,7 +24,12 @@ from shittim_chest.adapters.dynamodb import (
     serialize_snapshot,
 )
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
-from shittim_chest.application import DebateSnapshot, DiscordBotSlot, LeaseGrant
+from shittim_chest.application import (
+    DebateSnapshot,
+    DiscordBotSlot,
+    LeaseGrant,
+    PanelRefreshState,
+)
 from shittim_chest.domain import (
     PARTICIPANTS,
     AttemptId,
@@ -171,6 +176,53 @@ def test_terminal_snapshot_removes_recoverable_index() -> None:
 
     assert "gsi2pk" not in attempt_meta
     assert deserialize_snapshot(items).state.phase is DebatePhase.COMPLETED
+
+
+def test_pending_terminal_panel_refresh_uses_distinct_due_index_and_round_trips() -> None:
+    source = snapshot()
+    completed_at = NOW + timedelta(seconds=7)
+    pending = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.COMPLETED, at=completed_at),
+        lease=None,
+        panel_refresh_required_at=completed_at,
+        panel_refresh_claim_owner="panel-worker",
+        panel_refresh_claim_expires_at=completed_at + timedelta(seconds=60),
+        panel_refresh_delivery_attempt=1,
+    )
+
+    items = serialize_snapshot(pending)
+    attempt_meta = next(item for item in items if item["record_type"] == "attempt_meta")
+
+    assert attempt_meta["gsi2pk"] == "PANEL_REFRESH"
+    assert str(attempt_meta["gsi2sk"]).startswith("2026-07-17T01:03:10")
+    assert deserialize_snapshot(items) == pending
+
+
+def test_abandoned_panel_refresh_round_trips_without_a_due_index() -> None:
+    source = snapshot()
+    completed_at = NOW + timedelta(seconds=7)
+    failed_at = completed_at + timedelta(seconds=30)
+    abandoned = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.COMPLETED, at=completed_at),
+        lease=None,
+        panel_refresh_required_at=completed_at,
+        panel_refresh_delivery_attempt=3,
+        panel_refresh_failed_at=failed_at,
+        panel_refresh_error_code="discord_permission_denied",
+    )
+
+    items = serialize_snapshot(abandoned)
+    attempt_meta = next(item for item in items if item["record_type"] == "attempt_meta")
+    restored = deserialize_snapshot(items)
+
+    assert attempt_meta["panel_refresh_failed_at"] == failed_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    assert attempt_meta["panel_refresh_error_code"] == "discord_permission_denied"
+    assert "gsi2pk" not in attempt_meta
+    assert "gsi2sk" not in attempt_meta
+    assert restored == abandoned
+    assert restored.panel_refresh_state is PanelRefreshState.ABANDONED
 
 
 def test_empty_evidence_bundle_is_distinct_from_missing_evidence() -> None:

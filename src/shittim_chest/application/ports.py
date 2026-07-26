@@ -23,6 +23,8 @@ from shittim_chest.application.models import (
 from shittim_chest.application.scale_to_zero import (
     EcsRuntimeSnapshot,
     EnqueuedIngress,
+    IngressClaimFence,
+    IngressKind,
     IngressOperationResult,
     IngressRequest,
     IngressStatus,
@@ -52,6 +54,10 @@ class RepositoryConflict(Exception):
 
 class RepositoryIdentityConflict(RepositoryConflict):
     """Raised when a replay reuses an operation with different immutable identity."""
+
+
+class RepositoryClaimLost(RepositoryConflict):
+    """Raised when an atomic write no longer owns its exact ingress claim."""
 
 
 class RepositoryBusy(Exception):
@@ -117,11 +123,38 @@ class Metrics(Protocol):
 class DebateCommandUseCases(Protocol):
     """SDK-independent command boundary shared by ingress implementations."""
 
-    async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate: ...
+    async def accept_debate(
+        self,
+        request: AcceptDebateRequest,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedDebate: ...
 
-    async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate: ...
+    async def cancel_debate(
+        self,
+        command: CancelDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> CancelledDebate: ...
 
-    async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry: ...
+    async def retry_debate(
+        self,
+        command: RetryDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedRetry: ...
+
+    async def get_debate(self, debate_id: DebateId) -> DebateSnapshot: ...
+
+    async def fail_pre_activation(
+        self,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        kind: IngressKind,
+        ingress_claim: IngressClaimFence,
+        error_code: str,
+    ) -> str: ...
 
 
 class DebateInteractionUseCases(DebateCommandUseCases, Protocol):
@@ -193,6 +226,16 @@ class IngressRepository(Protocol):
         at: datetime,
         status: IngressStatus,
         error_code: str | None,
+    ) -> IngressRequest: ...
+
+    async def mark_claim_terminal(
+        self,
+        *,
+        request: IngressRequest,
+        claim_owner: str,
+        at: datetime,
+        status: IngressStatus,
+        error_code: str,
     ) -> IngressRequest: ...
 
     async def request_status_publication(
@@ -362,6 +405,56 @@ class DiscordOutboxDrainer(Protocol):
     async def drain(self, *, expected: DebateSnapshot) -> None: ...
 
 
+class PanelRefreshRepository(Protocol):
+    """Fence durable control-panel convergence independently of debate execution."""
+
+    async def claim_panel_refresh(
+        self,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        claim_owner: str,
+        at: datetime,
+    ) -> DebateSnapshot | None: ...
+
+    async def claim_next_due_panel_refresh(
+        self,
+        *,
+        claim_owner: str,
+        at: datetime,
+    ) -> DebateSnapshot | None: ...
+
+    async def complete_panel_refresh(
+        self,
+        *,
+        expected: DebateSnapshot,
+        claim_owner: str,
+        at: datetime,
+    ) -> DebateSnapshot: ...
+
+    async def reschedule_panel_refresh(
+        self,
+        *,
+        expected: DebateSnapshot,
+        claim_owner: str,
+        at: datetime,
+        next_attempt_at: datetime,
+    ) -> DebateSnapshot: ...
+
+    async def abandon_panel_refresh(
+        self,
+        *,
+        expected: DebateSnapshot,
+        claim_owner: str,
+        at: datetime,
+        error_code: str,
+    ) -> DebateSnapshot: ...
+
+    async def pending_panel_refresh_count(self) -> int: ...
+
+    async def abandoned_panel_refresh_count(self) -> int: ...
+
+
 class DiscordOutboxRepository(Protocol):
     """Persist and fence Discord delivery without exposing DynamoDB to its publisher."""
 
@@ -476,7 +569,12 @@ class OpenAIService(Protocol):
 class DebateRepository(Protocol):
     """Persist application aggregates with conditional-write semantics."""
 
-    async def get_operation_result(self, operation_id: str) -> DebateSnapshot | None: ...
+    async def get_operation_result(
+        self,
+        operation_id: str,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot | None: ...
 
     async def create(
         self,
@@ -484,6 +582,7 @@ class DebateRepository(Protocol):
         *,
         operation_id: str,
         lease_owner: str,
+        ingress_claim: IngressClaimFence | None = None,
     ) -> DebateSnapshot: ...
 
     async def get(self, debate_id: DebateId) -> DebateSnapshot | None: ...
@@ -494,6 +593,7 @@ class DebateRepository(Protocol):
         expected: DebateSnapshot,
         updated: DebateSnapshot,
         operation_id: str | None = None,
+        ingress_claim: IngressClaimFence | None = None,
     ) -> DebateSnapshot: ...
 
     async def create_retry(
@@ -503,6 +603,24 @@ class DebateRepository(Protocol):
         retry: DebateSnapshot,
         operation_id: str,
         lease_owner: str,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot: ...
+
+    async def reclaim_for_ingress(
+        self,
+        *,
+        expected: DebateSnapshot,
+        lease_owner: str,
+        at: datetime,
+        ingress_claim: IngressClaimFence,
+    ) -> DebateSnapshot: ...
+
+    async def fail_pre_activation(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+        ingress_claim: IngressClaimFence,
     ) -> DebateSnapshot: ...
 
     async def claim_recoverable(

@@ -154,5 +154,6 @@ def test_ecs_snapshot_rejects_non_singleton_counts(value: int) -> None:
 def test_runtime_activity_requires_every_counter_to_be_zero() -> None:
     assert RuntimeActivity().is_complete
     assert not RuntimeActivity(claimed_ingress=1).is_complete
+    assert not RuntimeActivity(pending_panel_refreshes=1).is_complete
     with pytest.raises(ValueError, match="non-negative integers"):
         RuntimeActivity(active_leases=-1)

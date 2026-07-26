@@ -16,8 +16,10 @@ from shittim_chest.adapters.dynamodb import (
     serialize_ingress_request,
 )
 from shittim_chest.adapters.dynamodb.serializer import (
+    deserialize_ingress_active_pointer,
     deserialize_ingress_semantic_binding,
     deserialize_ingress_status_publication,
+    serialize_ingress_active_pointer,
     serialize_ingress_semantic_binding,
     serialize_ingress_status_publication,
 )
@@ -63,8 +65,8 @@ def test_ingress_request_round_trip_has_fifo_and_independent_schema_keys() -> No
 
     assert item["PK"] == "CONTROL#INGRESS"
     assert item["SK"] == "REQUEST#2026-07-26T04:05:06.000789Z#interaction-0001"
-    assert item["gsi2pk"] == "INGRESS#ACTIVE"
-    assert item["gsi2sk"] == item["SK"]
+    assert "gsi2pk" not in item
+    assert "gsi2sk" not in item
     assert item["schema_version"] == CURRENT_SCHEMA_VERSION
     assert item["record_schema_version"] == 1
     assert item["application_id"] == "application-id"
@@ -72,6 +74,31 @@ def test_ingress_request_round_trip_has_fifo_and_independent_schema_keys() -> No
     assert item["status_message_state"] == StatusMessageState.STARTING.value
     assert "token" not in item
     assert deserialize_ingress_request(item) == source
+
+
+def test_active_pointer_round_trip_is_fifo_ordered_and_contains_no_pii() -> None:
+    source = request()
+
+    item = serialize_ingress_active_pointer(source)
+
+    assert item == {
+        "PK": "CONTROL#INGRESS#ACTIVE",
+        "SK": "REQUEST#2026-07-26T04:05:06.000789Z#interaction-0001",
+        "record_type": "ingress_active_pointer",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": 1,
+        "interaction_id": "interaction-0001",
+        "request_sort_key": "REQUEST#2026-07-26T04:05:06.000789Z#interaction-0001",
+        "created_at": "2026-07-26T04:05:06.000789Z",
+    }
+    assert "question" not in item
+    assert "requester_id" not in item
+    assert "guild_id" not in item
+    assert "ttl" not in item
+    assert deserialize_ingress_active_pointer(item).request_sort_key == item["SK"]
+
+    with pytest.raises(PersistenceFormatError, match="targets another request"):
+        deserialize_ingress_active_pointer({**item, "request_sort_key": "REQUEST#other"})
 
 
 def test_control_request_round_trip_preserves_immutable_authorization_context() -> None:
@@ -107,7 +134,7 @@ def test_control_request_round_trip_preserves_immutable_authorization_context() 
     assert deserialize_ingress_request(item) == source
 
 
-def test_inactive_ingress_request_is_removed_from_active_index() -> None:
+def test_inactive_ingress_request_does_not_use_the_recoverable_debate_index() -> None:
     source = request()
     failed = replace(
         source,
@@ -246,7 +273,7 @@ def test_prepared_status_publication_round_trip_separates_desired_and_delivered(
         ("schema_version", CURRENT_SCHEMA_VERSION - 1, "shared table schema"),
         ("record_schema_version", 2, "auxiliary record schema"),
         ("PK", "CONTROL#OTHER", "partition key"),
-        ("gsi2pk", "OTHER", "index key"),
+        ("gsi2pk", "OTHER", "recoverable debate index"),
     ],
 )
 def test_ingress_schema_and_keys_fail_closed(

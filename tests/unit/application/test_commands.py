@@ -14,6 +14,8 @@ from shittim_chest.application import (
     AppliedIngressCommand,
     CancelDebateCommand,
     CancelledDebate,
+    DebateSnapshot,
+    IngressClaimFence,
     IngressCommandAdapter,
     IngressKind,
     IngressRequest,
@@ -23,7 +25,7 @@ from shittim_chest.application import (
 )
 from shittim_chest.application.errors import InvalidApplicationOperation
 from shittim_chest.application.ports import RepositoryConflict
-from shittim_chest.domain import AttemptId, DebateId
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState, RecoveryState
 
 NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 
@@ -35,20 +37,84 @@ class FakeUseCases:
     commands: list[AcceptDebateRequest | CancelDebateCommand | RetryDebateCommand] = field(
         default_factory=list
     )
+    claims: list[IngressClaimFence | None] = field(default_factory=list)
+    terminal_error_code: str | None = None
+    aborts: list[tuple[IngressKind, str]] = field(default_factory=list)
 
-    async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate:
+    async def accept_debate(
+        self,
+        request: AcceptDebateRequest,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedDebate:
         self.commands.append(request)
+        self.claims.append(ingress_claim)
         return AcceptedDebate(self.debate_id, self.attempt_id)
 
-    async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate:
+    async def cancel_debate(
+        self,
+        command: CancelDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> CancelledDebate:
         self.commands.append(command)
+        self.claims.append(ingress_claim)
         return CancelledDebate(self.debate_id, self.attempt_id)
 
-    async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry:
+    async def retry_debate(
+        self,
+        command: RetryDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedRetry:
         self.commands.append(command)
+        self.claims.append(ingress_claim)
         if command.expected_attempt_id is None:
             raise AssertionError("test retry command must preserve its source attempt")
         return AcceptedRetry(self.debate_id, self.attempt_id, command.expected_attempt_id)
+
+    async def get_debate(self, debate_id: DebateId) -> DebateSnapshot:
+        assert debate_id == self.debate_id
+        command = self.commands[-1]
+        retry_of = command.expected_attempt_id if isinstance(command, RetryDebateCommand) else None
+        phase = DebatePhase.FAILED if self.terminal_error_code is not None else DebatePhase.ACCEPTED
+        state = DebateState(
+            debate_id=self.debate_id,
+            attempt_id=self.attempt_id,
+            phase=phase,
+            recovery_state=RecoveryState.NONE,
+            updated_at=NOW,
+            failed_from_phase=(DebatePhase.ACCEPTED if phase is DebatePhase.FAILED else None),
+            retry_of=retry_of,
+        )
+        return DebateSnapshot(
+            state=state,
+            question="question",
+            requester_id="requester-id",
+            requester_username="username",
+            requester_display_name="display name",
+            guild_id="guild-id",
+            channel_id="channel-id",
+            created_at=NOW,
+            attempt_created_at=NOW,
+            error_code=self.terminal_error_code,
+        )
+
+    async def fail_pre_activation(
+        self,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        kind: IngressKind,
+        ingress_claim: IngressClaimFence,
+        error_code: str,
+    ) -> str:
+        assert debate_id == self.debate_id
+        assert attempt_id == self.attempt_id
+        assert ingress_claim.kind is kind
+        self.aborts.append((kind, error_code))
+        self.terminal_error_code = error_code
+        return error_code
 
 
 def new_request() -> IngressRequest:
@@ -152,7 +218,68 @@ async def test_adapter_applies_each_claimed_request_through_existing_typed_use_c
 
     assert result == AppliedIngressCommand(kind, use_cases.debate_id, use_cases.attempt_id)
     assert len(use_cases.commands) == 1
+    assert use_cases.claims == [
+        IngressClaimFence.from_claimed_request(
+            request,
+            claim_owner="runtime-instance",
+            write_at=NOW,
+        )
+    ]
     assert not use_cases.commands[0].__class__.__module__.startswith("discord")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", [IngressKind.NEW_DEBATE, IngressKind.RETRY])
+async def test_adapter_surfaces_persisted_pre_activation_failure_without_hiding_ids(
+    kind: IngressKind,
+) -> None:
+    use_cases = FakeUseCases(terminal_error_code="discord_context_invalid")
+    request = claimed(new_request() if kind is IngressKind.NEW_DEBATE else control_request(kind))
+
+    result = await IngressCommandAdapter(use_cases).apply(
+        request,
+        claim_owner="runtime-instance",
+        at=NOW,
+    )
+
+    assert result == AppliedIngressCommand(
+        kind,
+        use_cases.debate_id,
+        use_cases.attempt_id,
+        "discord_context_invalid",
+    )
+
+
+@pytest.mark.asyncio
+async def test_adapter_compensates_only_matching_startable_ingress_with_exact_claim() -> None:
+    use_cases = FakeUseCases()
+    adapter = IngressCommandAdapter(use_cases)
+    request = claimed(new_request())
+    applied = AppliedIngressCommand(
+        IngressKind.NEW_DEBATE,
+        use_cases.debate_id,
+        use_cases.attempt_id,
+    )
+
+    error_code = await adapter.abort_pre_activation(
+        request,
+        applied,
+        claim_owner="runtime-instance",
+        at=NOW,
+        error_code="discord_context_invalid",
+    )
+
+    assert error_code == "discord_context_invalid"
+    assert use_cases.aborts == [(IngressKind.NEW_DEBATE, "discord_context_invalid")]
+
+    with pytest.raises(InvalidApplicationOperation, match="matching startable"):
+        await adapter.abort_pre_activation(
+            request,
+            AppliedIngressCommand(IngressKind.CANCEL, use_cases.debate_id, use_cases.attempt_id),
+            claim_owner="runtime-instance",
+            at=NOW,
+            error_code="must_not_run",
+        )
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,9 @@
-"""SDK-level ingress contracts, including complete GSI pagination."""
+"""SDK-level ingress contracts, including the bounded strong FIFO workset."""
 
 from __future__ import annotations
 
 import traceback
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import boto3
@@ -21,14 +22,17 @@ from shittim_chest.adapters.dynamodb import (
     serialize_ingress_status_publication,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item
+from shittim_chest.adapters.dynamodb.serializer import serialize_ingress_active_pointer
 from shittim_chest.application import (
     IngressKind,
     IngressOperationResult,
     IngressRequest,
     IngressSemanticOperationBinding,
+    IngressStatus,
     IngressStatusPublication,
+    StatusMessageState,
 )
-from shittim_chest.application.ports import RepositoryUnavailable
+from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
 from shittim_chest.application.status_publication import render_public_status
 from shittim_chest.domain import AttemptId, DebateId
 
@@ -85,52 +89,162 @@ def component_request(interaction_id: str) -> IngressRequest:
 
 
 @pytest.mark.asyncio
-async def test_active_gsi_query_consumes_every_page_in_fifo_order() -> None:
+async def test_active_pointer_query_is_strong_bounded_and_fifo_ordered() -> None:
     sdk = client()
     repository = DynamoDbIngressRepository(client=sdk, table_name="test-table")
     first = request(1)
     second = request(2)
     last_key = marshal_item(
         {
-            "PK": "CONTROL#INGRESS",
+            "PK": "CONTROL#INGRESS#ACTIVE",
             "SK": ingress_request_sort_key(first),
-            "gsi2pk": "INGRESS#ACTIVE",
-            "gsi2sk": ingress_request_sort_key(first),
         }
     )
     common = {
         "TableName": "test-table",
-        "IndexName": "gsi2",
-        "KeyConditionExpression": "gsi2pk=:active",
-        "ExpressionAttributeValues": marshal_item({":active": "INGRESS#ACTIVE"}),
+        "KeyConditionExpression": "PK=:pk",
+        "ExpressionAttributeValues": marshal_item({":pk": "CONTROL#INGRESS#ACTIVE"}),
         "ScanIndexForward": True,
+        "ConsistentRead": True,
     }
 
     with Stubber(sdk) as stubber:
         stubber.add_response(
             "query",
             {
-                "Items": [marshal_item(serialize_ingress_request(first))],
+                "Items": [marshal_item(serialize_ingress_active_pointer(first))],
                 "Count": 1,
                 "ScannedCount": 1,
                 "LastEvaluatedKey": last_key,
             },
-            common,
+            {**common, "Limit": 21},
         )
         stubber.add_response(
             "query",
             {
-                "Items": [marshal_item(serialize_ingress_request(second))],
+                "Items": [marshal_item(serialize_ingress_active_pointer(second))],
                 "Count": 1,
                 "ScannedCount": 1,
             },
-            {**common, "ExclusiveStartKey": last_key},
+            {**common, "Limit": 20, "ExclusiveStartKey": last_key},
+        )
+        stubber.add_response(
+            "get_item",
+            {"Item": marshal_item(serialize_ingress_request(first))},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(
+                    {"PK": "CONTROL#INGRESS", "SK": ingress_request_sort_key(first)}
+                ),
+                "ConsistentRead": True,
+            },
+        )
+        stubber.add_response(
+            "get_item",
+            {"Item": marshal_item(serialize_ingress_request(second))},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(
+                    {"PK": "CONTROL#INGRESS", "SK": ingress_request_sort_key(second)}
+                ),
+                "ConsistentRead": True,
+            },
         )
 
         assert await repository.list_ready(at=NOW + timedelta(seconds=1)) == (
             first,
             second,
         )
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_active_pointer_query_rejects_a_twenty_first_entry() -> None:
+    sdk = client()
+    repository = DynamoDbIngressRepository(client=sdk, table_name="test-table")
+    requests = [request(index) for index in range(1, 22)]
+    expected = {
+        "TableName": "test-table",
+        "KeyConditionExpression": "PK=:pk",
+        "ExpressionAttributeValues": marshal_item({":pk": "CONTROL#INGRESS#ACTIVE"}),
+        "ScanIndexForward": True,
+        "ConsistentRead": True,
+        "Limit": 21,
+    }
+
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "query",
+            {
+                "Items": [
+                    marshal_item(serialize_ingress_active_pointer(source)) for source in requests
+                ],
+                "Count": 21,
+                "ScannedCount": 21,
+            },
+            expected,
+        )
+
+        with pytest.raises(RepositoryConflict, match="exceeds twenty"):
+            await repository.list_ready(at=NOW + timedelta(seconds=1))
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_active_pointer_query_skips_only_a_verified_concurrent_deletion() -> None:
+    sdk = client()
+    repository = DynamoDbIngressRepository(client=sdk, table_name="test-table")
+    source = request(1)
+    pointer = serialize_ingress_active_pointer(source)
+    accepted = replace(
+        source,
+        status=IngressStatus.ACCEPTED,
+        status_message_state=StatusMessageState.ACCEPTED,
+        updated_at=NOW + timedelta(seconds=1),
+        accepted_debate_id=DEBATE_ID,
+        accepted_attempt_id=ATTEMPT_ID,
+    )
+
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "query",
+            {"Items": [marshal_item(pointer)], "Count": 1, "ScannedCount": 1},
+            {
+                "TableName": "test-table",
+                "KeyConditionExpression": "PK=:pk",
+                "ExpressionAttributeValues": marshal_item({":pk": "CONTROL#INGRESS#ACTIVE"}),
+                "ScanIndexForward": True,
+                "ConsistentRead": True,
+                "Limit": 21,
+            },
+        )
+        stubber.add_response(
+            "get_item",
+            {"Item": marshal_item(serialize_ingress_request(accepted))},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(
+                    {"PK": "CONTROL#INGRESS", "SK": ingress_request_sort_key(source)}
+                ),
+                "ConsistentRead": True,
+            },
+        )
+        stubber.add_response(
+            "get_item",
+            {},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(
+                    {
+                        "PK": "CONTROL#INGRESS#ACTIVE",
+                        "SK": ingress_request_sort_key(source),
+                    }
+                ),
+                "ConsistentRead": True,
+            },
+        )
+
+        assert await repository.list_ready(at=NOW + timedelta(seconds=2)) == ()
         stubber.assert_no_pending_responses()
 
 

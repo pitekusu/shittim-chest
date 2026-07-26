@@ -68,6 +68,7 @@ from shittim_chest.application.models import (
     CancelledDebate,
     DebateSnapshot,
     LeaseGrant,
+    PanelRefreshState,
     RetryDebateCommand,
 )
 from shittim_chest.application.scale_to_zero import (
@@ -78,6 +79,7 @@ from shittim_chest.application.scale_to_zero import (
     TERMINAL_TIMEOUT,
     EcsRuntimeSnapshot,
     EnqueuedIngress,
+    IngressClaimFence,
     IngressKind,
     IngressOperationResult,
     IngressRequest,
@@ -153,6 +155,7 @@ __all__ = (
     "GenerationPolicy",
     "GenerationPolicyId",
     "IngressAcceptance",
+    "IngressClaimFence",
     "IngressCommandAdapter",
     "IngressDebateCommand",
     "IngressKind",
@@ -171,6 +174,7 @@ __all__ = (
     "PanelCustomId",
     "PanelOperation",
     "PanelOperationKind",
+    "PanelRefreshState",
     "PhaseBudget",
     "PublicStatusPublisher",
     "ReasoningEffort",

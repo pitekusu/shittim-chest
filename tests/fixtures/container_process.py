@@ -51,20 +51,45 @@ class _Interactions:
     def begin_shutdown(self) -> None:
         return
 
+    async def close(self) -> None:
+        return
+
+
+class _IngressRuntime:
+    def __init__(self, state: Path, scenario: str) -> None:
+        self._state = state
+        self._scenario = scenario
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def active_task_count(self) -> int:
+        return int(self._task is not None and not self._task.done())
+
+    def begin_shutdown(self) -> None:
+        return
+
+    async def recover_once(self) -> int:
+        if self._task is not None and not self._task.done():
+            return 0
+        self._task = asyncio.create_task(self._run_scenario(), name="fixture:fault-scenario")
+        await asyncio.sleep(0)
+        if self._task.done():
+            self._task.result()
+            return 0
+        return 1
+
     async def checkpoint_active(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+        self._task = None
         current = _read(self._state / "phase", "unknown")
         _write(self._state / "recovery", f"checkpointed:{current}")
 
     async def close(self) -> None:
         return
 
-
-class _Recoverable:
-    def __init__(self, state: Path, scenario: str) -> None:
-        self._state = state
-        self._scenario = scenario
-
-    async def resume_recoverable(self) -> None:
+    async def _run_scenario(self) -> None:
         if self._scenario.startswith("phase:"):
             phase = self._scenario.removeprefix("phase:")
             if phase not in PHASES:
@@ -83,6 +108,39 @@ class _Recoverable:
         _prepare_forced_boundary(self._state, self._scenario)
         _write(self._state / "ready", self._scenario)
         await asyncio.Event().wait()
+
+
+class _DrainGate:
+    def mark_supervisor_started(self) -> None:
+        return
+
+    def mark_command_schema_checked(self) -> None:
+        return
+
+    def begin_recovery(self) -> None:
+        return
+
+    def mark_recovery_complete(self) -> None:
+        return
+
+    def begin_shutdown(self) -> None:
+        return
+
+
+class _Drainer:
+    async def run(self, stop: asyncio.Event) -> None:
+        await stop.wait()
+
+
+class _RuntimeInstance:
+    async def mark_started(self) -> None:
+        return
+
+    async def claim_woken_start(self) -> bool:
+        return False
+
+    async def mark_ready(self, *, active: bool) -> None:
+        del active
 
 
 def _prepare_forced_boundary(state: Path, scenario: str) -> None:
@@ -140,11 +198,15 @@ def _append(path: Path, value: str) -> None:
 
 
 async def _run(state: Path, scenario: str) -> None:
+    ingress_runtime = _IngressRuntime(state, scenario)
     lifecycle = RuntimeLifecycle(
         admission=RuntimeAdmissionGateway(_Gateway()),
         supervisor=_Supervisor(),
         interactions=_Interactions(state),
-        application=_Recoverable(state, scenario),
+        ingress_runtime=ingress_runtime,
+        drain_gate=_DrainGate(),
+        drainer=_Drainer(),
+        runtime_instance=_RuntimeInstance(),
         tokens={slot: f"placeholder-{slot.value}" for slot in DiscordBotSlot},
         previous_command_schema_hash=None,
         readiness_poll_seconds=0.01,

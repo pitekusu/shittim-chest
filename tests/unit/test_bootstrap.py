@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any, cast
 
 import pytest
 
@@ -17,11 +18,23 @@ async def test_production_composition_builds_and_closes_without_external_request
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "local-placeholder")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "local-placeholder")
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setattr(bootstrap, "lease_owner_id", lambda: "runtime-owner")
     config = load_bootstrap_config(_environment())
 
     runtime = build_production_runtime(config)
 
     assert isinstance(runtime, ProductionRuntime)
+    lifecycle = cast(Any, runtime.lifecycle)
+    runtime_instance = lifecycle._runtime_instance
+    drainer = lifecycle._drainer
+    ingress_runtime = lifecycle._ingress_runtime
+    assert runtime_instance.runtime_instance_id == "runtime-owner"
+    assert drainer._runtime_instance_id == "runtime-owner"
+    assert drainer._runtime_session is runtime_instance
+    assert drainer._runtime_state is runtime_instance._repository
+    assert drainer._context is ingress_runtime
+    assert ingress_runtime._application is drainer._commands._application
+    assert lifecycle._interactions._application is ingress_runtime._application
     await runtime.aclose()
     await runtime.aclose()
 

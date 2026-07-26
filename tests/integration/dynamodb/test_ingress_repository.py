@@ -19,6 +19,7 @@ from shittim_chest.adapters.dynamodb import (
     CURRENT_SCHEMA_VERSION,
     DynamoDbIngressRepository,
     ingress_request_sort_key,
+    serialize_ingress_request,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.application import (
@@ -115,6 +116,19 @@ async def test_enqueue_replay_fifo_claim_retry_accept_and_counter(
     assert replay.request == earlier
     assert await repository.active_count() == 2
     assert await repository.list_ready(at=NOW + timedelta(seconds=1)) == (earlier, later)
+    pointers = dynamodb_client.query(
+        TableName=dynamodb_table,
+        KeyConditionExpression="PK=:pk",
+        ExpressionAttributeValues=marshal_item({":pk": "CONTROL#INGRESS#ACTIVE"}),
+        ConsistentRead=True,
+        ScanIndexForward=True,
+    )
+    pointer_items = [unmarshal_item(item) for item in pointers["Items"]]
+    assert [item["SK"] for item in pointer_items] == [
+        ingress_request_sort_key(earlier),
+        ingress_request_sort_key(later),
+    ]
+    assert all("question" not in item and "requester_id" not in item for item in pointer_items)
 
     claimed = await repository.claim(
         request=earlier,
@@ -142,7 +156,7 @@ async def test_enqueue_replay_fifo_claim_retry_accept_and_counter(
     )
     assert retried.status is IngressStatus.RETRYING
     assert retried.claim_owner is None
-    assert retried not in await repository.list_ready(at=NOW + timedelta(seconds=4))
+    assert await repository.list_ready(at=NOW + timedelta(seconds=4)) == ()
     assert (await repository.list_ready(at=NOW + timedelta(seconds=5)))[0] == retried
 
     reclaimed = await repository.claim(
@@ -166,6 +180,16 @@ async def test_enqueue_replay_fifo_claim_retry_accept_and_counter(
     assert accepted.accepted_debate_id == debate_id
     assert accepted.accepted_attempt_id == attempt_id
     assert await repository.active_count() == 1
+    assert "Item" not in dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": "CONTROL#INGRESS#ACTIVE",
+                "SK": ingress_request_sort_key(earlier),
+            }
+        ),
+        ConsistentRead=True,
+    )
     accepted_publication = await repository.get_status_publication(accepted.interaction_id)
     assert accepted_publication is not None
     assert accepted_publication.desired_state is StatusMessageState.ACCEPTED
@@ -184,6 +208,9 @@ async def test_enqueue_replay_fifo_claim_retry_accept_and_counter(
     assert operation is not None
     assert operation.status is IngressStatus.ACCEPTED
     assert operation.accepted_debate_id == debate_id
+    durable_replay = await repository.get_replay(earlier)
+    assert durable_replay is not None
+    assert durable_replay.request == accepted
 
 
 @pytest.mark.asyncio
@@ -209,6 +236,16 @@ async def test_queue_limit_is_atomic_and_terminal_transition_releases_capacity(
     )
     assert rejected.status is IngressStatus.REJECTED
     assert await repository.active_count() == 19
+    assert "Item" not in dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": "CONTROL#INGRESS#ACTIVE",
+                "SK": ingress_request_sort_key(requests[0]),
+            }
+        ),
+        ConsistentRead=True,
+    )
     assert (
         await repository.mark_terminal(
             request=requests[0],
@@ -225,6 +262,183 @@ async def test_queue_limit_is_atomic_and_terminal_transition_releases_capacity(
     replay = await repository.enqueue(requests[1])
     assert not replay.created
     assert await repository.active_count() == 20
+
+
+@pytest.mark.asyncio
+async def test_active_pointer_corruption_fails_closed(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+    await repository.enqueue(request)
+    accepted = replace(
+        request,
+        status=IngressStatus.ACCEPTED,
+        status_message_state=StatusMessageState.ACCEPTED,
+        updated_at=NOW + timedelta(seconds=1),
+        accepted_debate_id=DebateId.new(),
+        accepted_attempt_id=AttemptId.new(),
+    )
+    dynamodb_client.put_item(
+        TableName=dynamodb_table,
+        Item=marshal_item(serialize_ingress_request(accepted)),
+    )
+
+    with pytest.raises(RepositoryConflict, match="retains an active pointer"):
+        await repository.list_ready(at=NOW + timedelta(seconds=2))
+
+    dynamodb_client.delete_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": "CONTROL#INGRESS",
+                "SK": ingress_request_sort_key(request),
+            }
+        ),
+    )
+    with pytest.raises(RepositoryConflict, match="missing request"):
+        await repository.list_ready(at=NOW + timedelta(seconds=2))
+
+
+@pytest.mark.asyncio
+async def test_claim_terminal_tolerates_status_metadata_updates_but_fences_generation(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1, created_at=NOW)
+    await repository.enqueue(request)
+    claimed = await repository.claim(
+        request=request,
+        claim_owner="runtime",
+        at=NOW + timedelta(seconds=1),
+    )
+    assert claimed is not None
+    request_key = {
+        "PK": "CONTROL#INGRESS",
+        "SK": ingress_request_sort_key(claimed),
+    }
+    metadata_at = NOW + timedelta(seconds=2)
+    metadata_timestamp = metadata_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    dynamodb_client.update_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(request_key),
+        UpdateExpression=(
+            "SET updated_at=:at, status_message_id=:message, status_message_updated_at=:at"
+        ),
+        ExpressionAttributeValues=marshal_item({":at": metadata_timestamp, ":message": "500"}),
+    )
+    dynamodb_client.update_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": f"INGRESS_OPERATION#{claimed.interaction_id}", "SK": "RESULT"}),
+        UpdateExpression="SET updated_at=:at",
+        ExpressionAttributeValues=marshal_item({":at": metadata_timestamp}),
+    )
+
+    rejected = await repository.mark_claim_terminal(
+        request=claimed,
+        claim_owner="runtime",
+        at=NOW + timedelta(seconds=3),
+        status=IngressStatus.REJECTED,
+        error_code="request_not_allowed",
+    )
+
+    assert rejected.status is IngressStatus.REJECTED
+    assert rejected.status_message_id == "500"
+    assert rejected.status_message_updated_at == metadata_at
+    assert await repository.active_count() == 0
+    assert "Item" not in dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": "CONTROL#INGRESS#ACTIVE",
+                "SK": ingress_request_sort_key(request),
+            }
+        ),
+        ConsistentRead=True,
+    )
+
+    second = new_request(2, created_at=NOW + timedelta(seconds=4))
+    await repository.enqueue(second)
+    first_claim = await repository.claim(
+        request=second,
+        claim_owner="old-runtime",
+        at=NOW + timedelta(seconds=5),
+    )
+    assert first_claim is not None and first_claim.claim_expires_at is not None
+    replacement_claim = await repository.claim(
+        request=first_claim,
+        claim_owner="new-runtime",
+        at=first_claim.claim_expires_at,
+    )
+    assert replacement_claim is not None
+    with pytest.raises(RepositoryConflict, match="exact live ingress claimant"):
+        await repository.mark_claim_terminal(
+            request=first_claim,
+            claim_owner="old-runtime",
+            at=first_claim.claim_expires_at,
+            status=IngressStatus.FAILED,
+            error_code="application_failure",
+        )
+    assert await repository.active_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_claim_settlements_use_generation_not_status_publication_revision(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    retry_request = new_request(1, created_at=NOW)
+    await repository.enqueue(retry_request)
+    retry_claim = await repository.claim(
+        request=retry_request,
+        claim_owner="runtime",
+        at=NOW + timedelta(seconds=1),
+    )
+    assert retry_claim is not None
+    await repository.request_status_publication(
+        request=retry_claim,
+        state=StatusMessageState.READY,
+        at=NOW + timedelta(seconds=2),
+    )
+
+    rescheduled = await repository.reschedule(
+        request=retry_claim,
+        claim_owner="runtime",
+        at=NOW + timedelta(seconds=3),
+        next_attempt_at=NOW + timedelta(seconds=10),
+        error_code="slot_busy",
+    )
+
+    assert rescheduled.status is IngressStatus.RETRYING
+    assert rescheduled.status_message_state is StatusMessageState.READY
+
+    accept_request = new_request(2, created_at=NOW + timedelta(seconds=4))
+    await repository.enqueue(accept_request)
+    accept_claim = await repository.claim(
+        request=accept_request,
+        claim_owner="runtime",
+        at=NOW + timedelta(seconds=5),
+    )
+    assert accept_claim is not None
+    await repository.request_status_publication(
+        request=accept_claim,
+        state=StatusMessageState.READY,
+        at=NOW + timedelta(seconds=6),
+    )
+
+    accepted = await repository.mark_accepted(
+        request=accept_claim,
+        claim_owner="runtime",
+        at=NOW + timedelta(seconds=7),
+        debate_id=DebateId.new(),
+        attempt_id=AttemptId.new(),
+    )
+
+    assert accepted.status is IngressStatus.ACCEPTED
+    assert accepted.status_message_state is StatusMessageState.ACCEPTED
 
 
 @pytest.mark.asyncio

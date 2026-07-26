@@ -389,6 +389,78 @@ class IngressRequest:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class IngressClaimFence:
+    """PII-free identity of one exact durable ingress claim generation."""
+
+    interaction_id: str
+    operation_id: str
+    kind: IngressKind
+    created_at: datetime
+    claim_owner: str
+    claim_expires_at: datetime
+    delivery_attempt: int
+    write_at: datetime
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, IngressKind):
+            raise ValueError("ingress claim kind must be an IngressKind")
+        for label, value in (
+            ("interaction ID", self.interaction_id),
+            ("operation ID", self.operation_id),
+            ("claim owner", self.claim_owner),
+        ):
+            _require_text(value, label=label)
+        for label, value in (
+            ("creation timestamp", self.created_at),
+            ("claim expiry", self.claim_expires_at),
+            ("write timestamp", self.write_at),
+        ):
+            _require_utc(value, label=label)
+        if self.claim_expires_at <= self.created_at:
+            raise ValueError("claim expiry must follow creation")
+        if self.claim_expires_at <= self.write_at:
+            raise ValueError("ingress claim must remain live at write time")
+        if isinstance(self.delivery_attempt, bool) or self.delivery_attempt <= 0:
+            raise ValueError("delivery attempt must be a positive integer")
+        if self.schema_version != 1:
+            raise ValueError("unsupported ingress claim schema version")
+
+    @classmethod
+    def from_claimed_request(
+        cls,
+        request: IngressRequest,
+        *,
+        claim_owner: str,
+        write_at: datetime,
+    ) -> IngressClaimFence:
+        """Capture an already-validated request without copying user content."""
+
+        if (
+            request.status is not IngressStatus.CLAIMED
+            or request.claim_owner != claim_owner
+            or request.claim_expires_at is None
+        ):
+            raise ValueError("request is not owned by the supplied ingress claimant")
+        return cls(
+            interaction_id=request.interaction_id,
+            operation_id=request.operation_id,
+            kind=request.kind,
+            created_at=request.created_at,
+            claim_owner=claim_owner,
+            claim_expires_at=request.claim_expires_at,
+            delivery_attempt=request.delivery_attempt,
+            write_at=write_at,
+            schema_version=request.schema_version,
+        )
+
+    def for_write_at(self, write_at: datetime) -> IngressClaimFence:
+        """Revalidate the same claim generation at a later mutation timestamp."""
+
+        return replace(self, write_at=write_at)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class IngressOperationResult:
     """Strongly consistent replay result for one Discord interaction."""
 
@@ -690,6 +762,7 @@ class RuntimeActivity:
     pending_outbox: int = 0
     claimed_outbox: int = 0
     pending_status_updates: int = 0
+    pending_panel_refreshes: int = 0
     checkpoint_tasks: int = 0
 
     def __post_init__(self) -> None:
@@ -703,6 +776,7 @@ class RuntimeActivity:
             self.pending_outbox,
             self.claimed_outbox,
             self.pending_status_updates,
+            self.pending_panel_refreshes,
             self.checkpoint_tasks,
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -723,6 +797,7 @@ class RuntimeActivity:
                 self.pending_outbox,
                 self.claimed_outbox,
                 self.pending_status_updates,
+                self.pending_panel_refreshes,
                 self.checkpoint_tasks,
             )
         )

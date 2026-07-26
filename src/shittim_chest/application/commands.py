@@ -12,8 +12,13 @@ from shittim_chest.application.models import (
     RetryDebateCommand,
 )
 from shittim_chest.application.ports import DebateCommandUseCases, RepositoryConflict
-from shittim_chest.application.scale_to_zero import IngressKind, IngressRequest, IngressStatus
-from shittim_chest.domain import AttemptId, DebateId
+from shittim_chest.application.scale_to_zero import (
+    IngressClaimFence,
+    IngressKind,
+    IngressRequest,
+    IngressStatus,
+)
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
 IngressDebateCommand = AcceptDebateRequest | CancelDebateCommand | RetryDebateCommand
 
@@ -25,6 +30,15 @@ class AppliedIngressCommand:
     kind: IngressKind
     debate_id: DebateId
     attempt_id: AttemptId
+    terminal_error_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.terminal_error_code is None:
+            return
+        if self.kind not in {IngressKind.NEW_DEBATE, IngressKind.RETRY}:
+            raise ValueError("only startable ingress may replay a pre-activation failure")
+        if not self.terminal_error_code.strip() or len(self.terminal_error_code) > 100:
+            raise ValueError("terminal ingress error code must contain at most 100 characters")
 
 
 class IngressCommandAdapter:
@@ -44,17 +58,64 @@ class IngressCommandAdapter:
     ) -> AppliedIngressCommand:
         """Apply exactly one claimed request without settling its ingress record."""
 
-        _require_current_claim(request, claim_owner=claim_owner, at=at)
+        ingress_claim = _current_claim_fence(request, claim_owner=claim_owner, at=at)
 
         command = command_from_ingress(request)
         if isinstance(command, AcceptDebateRequest):
-            result = await self._application.accept_debate(command)
-            return AppliedIngressCommand(request.kind, result.debate_id, result.attempt_id)
+            result = await self._application.accept_debate(command, ingress_claim=ingress_claim)
+            return await self._applied(request.kind, result.debate_id, result.attempt_id)
         if isinstance(command, RetryDebateCommand):
-            result = await self._application.retry_debate(command)
-            return AppliedIngressCommand(request.kind, result.debate_id, result.attempt_id)
-        result = await self._application.cancel_debate(command)
+            result = await self._application.retry_debate(command, ingress_claim=ingress_claim)
+            return await self._applied(request.kind, result.debate_id, result.attempt_id)
+        result = await self._application.cancel_debate(command, ingress_claim=ingress_claim)
         return AppliedIngressCommand(request.kind, result.debate_id, result.attempt_id)
+
+    async def abort_pre_activation(
+        self,
+        request: IngressRequest,
+        applied: AppliedIngressCommand,
+        *,
+        claim_owner: str,
+        at: datetime,
+        error_code: str,
+    ) -> str:
+        """Fail one startable attempt before its ingress is durably accepted."""
+
+        if applied.kind is not request.kind or request.kind not in {
+            IngressKind.NEW_DEBATE,
+            IngressKind.RETRY,
+        }:
+            raise InvalidApplicationOperation("only matching startable ingress may be aborted")
+        ingress_claim = _current_claim_fence(request, claim_owner=claim_owner, at=at)
+        return await self._application.fail_pre_activation(
+            debate_id=applied.debate_id,
+            attempt_id=applied.attempt_id,
+            kind=applied.kind,
+            ingress_claim=ingress_claim,
+            error_code=error_code,
+        )
+
+    async def _applied(
+        self,
+        kind: IngressKind,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+    ) -> AppliedIngressCommand:
+        snapshot = await self._application.get_debate(debate_id)
+        if snapshot.state.debate_id != debate_id or snapshot.state.attempt_id != attempt_id:
+            raise InvalidApplicationOperation("command result no longer names the current attempt")
+        terminal_error_code = None
+        if snapshot.state.phase.is_terminal:
+            if (
+                kind not in {IngressKind.NEW_DEBATE, IngressKind.RETRY}
+                or snapshot.state.phase is not DebatePhase.FAILED
+                or snapshot.error_code is None
+            ):
+                raise InvalidApplicationOperation(
+                    "command replay reached an unexpected terminal state"
+                )
+            terminal_error_code = snapshot.error_code
+        return AppliedIngressCommand(kind, debate_id, attempt_id, terminal_error_code)
 
 
 def command_from_ingress(request: IngressRequest) -> IngressDebateCommand:
@@ -108,12 +169,12 @@ def _validate_control_source(request: IngressRequest) -> None:
         raise InvalidApplicationOperation("control ingress source context is inconsistent")
 
 
-def _require_current_claim(
+def _current_claim_fence(
     request: IngressRequest,
     *,
     claim_owner: str,
     at: datetime,
-) -> None:
+) -> IngressClaimFence:
     """Reject a foreign or expired claim before an existing use case is invoked."""
 
     if not claim_owner.strip():
@@ -127,6 +188,11 @@ def _require_current_claim(
         or request.claim_expires_at <= at
     ):
         raise RepositoryConflict("ingress claim is no longer owned by this runtime")
+    return IngressClaimFence.from_claimed_request(
+        request,
+        claim_owner=claim_owner,
+        write_at=at,
+    )
 
 
 __all__ = (
