@@ -142,6 +142,8 @@ def request() -> AcceptDebateRequest:
     return AcceptDebateRequest(
         question="question",
         requester_id="101",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id="102",
         channel_id="103",
         operation_id="104",

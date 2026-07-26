@@ -214,6 +214,8 @@ def snapshot() -> DebateSnapshot:
         state=DebateState.accepted(debate_id, attempt_id, at=NOW),
         question="question",
         requester_id="105",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id=GUILD_ID,
         channel_id=CHANNEL_ID,
         created_at=NOW,

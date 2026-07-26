@@ -106,6 +106,8 @@ class DebateApplication:
         if existing is not None:
             if (
                 existing.requester_id != request.requester_id
+                or existing.requester_username != request.requester_username
+                or existing.requester_display_name != request.requester_display_name
                 or existing.guild_id != request.guild_id
                 or existing.channel_id != request.channel_id
                 or existing.question != request.question
@@ -125,6 +127,8 @@ class DebateApplication:
             state=DebateState.accepted(debate_id, attempt_id, at=now),
             question=request.question,
             requester_id=request.requester_id,
+            requester_username=request.requester_username,
+            requester_display_name=request.requester_display_name,
             guild_id=request.guild_id,
             channel_id=request.channel_id,
             created_at=now,

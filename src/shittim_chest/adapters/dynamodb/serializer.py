@@ -37,8 +37,8 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 5
-PREVIOUS_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 6
+PREVIOUS_SCHEMA_VERSION = 5
 MAX_ITEM_BYTES = 400 * 1024
 
 
@@ -56,8 +56,13 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
-        if migrated.get("record_type") == "outbox" and "bot_slot" not in migrated:
-            migrated["bot_slot"] = migrated.pop("bot_id", None)
+        # v5 debate_meta has no Discord name snapshots. Use the immutable
+        # requester_id as a deterministic non-empty legacy fallback — not a
+        # recovered Discord username or Guild display name.
+        if migrated.get("record_type") == "debate_meta":
+            requester_id = _text(migrated, "requester_id")
+            migrated.setdefault("requester_username", requester_id)
+            migrated.setdefault("requester_display_name", requester_id)
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -87,6 +92,8 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         "record_type": "debate_meta",
         "question": snapshot.question,
         "requester_id": snapshot.requester_id,
+        "requester_username": snapshot.requester_username,
+        "requester_display_name": snapshot.requester_display_name,
         "guild_id": snapshot.guild_id,
         "channel_id": snapshot.channel_id,
         "current_attempt_id": attempt_id,
@@ -292,6 +299,8 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         state=state,
         question=_text(debate_meta, "question"),
         requester_id=_text(debate_meta, "requester_id"),
+        requester_username=_text(debate_meta, "requester_username"),
+        requester_display_name=_text(debate_meta, "requester_display_name"),
         guild_id=_text(debate_meta, "guild_id"),
         channel_id=_text(debate_meta, "channel_id"),
         created_at=_datetime(debate_meta, "created_at"),

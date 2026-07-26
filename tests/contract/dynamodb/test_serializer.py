@@ -23,6 +23,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_panel_operation,
     serialize_snapshot,
 )
+from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from shittim_chest.application import DebateSnapshot, DiscordBotSlot, LeaseGrant
 from shittim_chest.domain import (
     PARTICIPANTS,
@@ -43,6 +44,17 @@ from shittim_chest.domain import (
 )
 
 NOW = datetime(2026, 7, 17, 1, 2, 3, tzinfo=UTC)
+
+
+def _as_previous_schema(item: DynamoItem) -> DynamoItem:
+    """Build a v5 item from a current snapshot item for migration tests."""
+
+    migrated: DynamoItem = {key: value for key, value in item.items()}
+    if migrated.get("record_type") == "debate_meta":
+        migrated.pop("requester_username", None)
+        migrated.pop("requester_display_name", None)
+    migrated["schema_version"] = 5
+    return migrated
 
 
 def snapshot() -> DebateSnapshot:
@@ -76,6 +88,8 @@ def snapshot() -> DebateSnapshot:
         state=state,
         question="甘い朝食は何がいい?",
         requester_id="requester",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id="guild",
         channel_id="channel",
         created_at=NOW,
@@ -175,21 +189,49 @@ def test_empty_evidence_bundle_is_distinct_from_missing_evidence() -> None:
 
 def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> None:
     current = serialize_snapshot(snapshot())
-    previous = tuple(
-        {
-            **{key: value for key, value in item.items() if key != "control_panel_message_id"},
-            "schema_version": 4,
-        }
-        for item in current
-        if item["record_type"] != "escalation_assessment"
-    )
+    previous = tuple(_as_previous_schema(item) for item in current)
     restored = deserialize_snapshot(previous)
     assert restored.state.schema_version == CURRENT_SCHEMA_VERSION
-    assert restored.escalation_assessment is None
+    assert restored.requester_username == restored.requester_id
+    assert restored.requester_display_name == restored.requester_id
     assert all(migrate_item(item)["schema_version"] == CURRENT_SCHEMA_VERSION for item in previous)
 
+    re_serialized = serialize_snapshot(restored)
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in re_serialized)
+    debate_meta = next(item for item in re_serialized if item["record_type"] == "debate_meta")
+    assert debate_meta["requester_username"] == restored.requester_id
+    assert debate_meta["requester_display_name"] == restored.requester_id
+
+    with pytest.raises(PersistenceFormatError, match="unsupported schema"):
+        migrate_item({**current[0], "schema_version": 4})
     with pytest.raises(PersistenceFormatError, match="unsupported schema"):
         migrate_item({**current[0], "schema_version": 99})
+
+
+def test_v6_debate_meta_requires_requester_name_snapshots() -> None:
+    items = list(serialize_snapshot(snapshot()))
+    debate_meta = next(item for item in items if item["record_type"] == "debate_meta")
+    for field in ("requester_username", "requester_display_name"):
+        missing = tuple(
+            {key: value for key, value in item.items() if key != field}
+            if item["record_type"] == "debate_meta"
+            else item
+            for item in items
+        )
+        with pytest.raises(PersistenceFormatError, match=field):
+            deserialize_snapshot(missing)
+
+        empty = tuple(
+            {**item, field: ""} if item["record_type"] == "debate_meta" else item for item in items
+        )
+        with pytest.raises(
+            (PersistenceFormatError, ValueError),
+            match=r"non-empty|must not be empty",
+        ):
+            deserialize_snapshot(empty)
+
+    assert debate_meta["requester_username"] == "pitekusu"
+    assert debate_meta["requester_display_name"] == "ぬし"
 
 
 def test_malformed_item_collections_fail_closed() -> None:
@@ -265,12 +307,17 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
     with pytest.raises(PersistenceFormatError, match="not a panel"):
         deserialize_panel_operation(outbox_item)
 
-    previous_outbox = {
-        **{key: value for key, value in outbox_item.items() if key != "bot_slot"},
-        "bot_id": "moderator",
-        "schema_version": 4,
-    }
+    previous_outbox = {**outbox_item, "schema_version": 5}
+    assert previous_outbox["bot_slot"] == DiscordBotSlot.MODERATOR.value
     assert deserialize_outbox(previous_outbox) == outbox
+    with pytest.raises(PersistenceFormatError, match="unsupported schema"):
+        deserialize_outbox(
+            {
+                **{key: value for key, value in outbox_item.items() if key != "bot_slot"},
+                "bot_id": "moderator",
+                "schema_version": 4,
+            }
+        )
 
 
 def test_item_larger_than_400_kb_is_rejected_before_sdk_call() -> None:

@@ -70,6 +70,8 @@ def snapshot(*, phase: DebatePhase = DebatePhase.ACCEPTED) -> DebateSnapshot:
         state=state,
         question="今日の朝ごはんは何がいい? 甘いものが食べたい",
         requester_id=str(REQUESTER_ID),
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id=GUILD_ID,
         channel_id=CHANNEL_ID,
         created_at=NOW,
@@ -208,6 +210,8 @@ def interaction(
     interaction_type: discord.InteractionType = discord.InteractionType.application_command,
     custom_id: str | None = None,
     message: discord.Message | None = None,
+    username: str = "pitekusu",
+    display_name: str = "ぬし",
 ) -> discord.Interaction[discord.Client]:
     interaction_mock = MagicMock(spec=discord.Interaction)
     interaction_mock.id = INTERACTION_ID
@@ -216,7 +220,11 @@ def interaction(
     interaction_mock.guild_id = int(GUILD_ID)
     interaction_mock.channel_id = int(CHANNEL_ID if message is None else THREAD_ID)
     interaction_mock.channel = channel
-    interaction_mock.user = SimpleNamespace(id=REQUESTER_ID)
+    interaction_mock.user = SimpleNamespace(
+        id=REQUESTER_ID,
+        name=username,
+        display_name=display_name,
+    )
     interaction_mock.permissions = discord.Permissions(manage_messages=False)
     interaction_mock.created_at = NOW
     interaction_mock.message = message
@@ -331,7 +339,12 @@ async def test_command_defers_first_then_creates_and_binds_public_context() -> N
     await asyncio.wait_for(application.run_started.wait(), timeout=1)
 
     assert application.events[0] == "defer"
-    assert application.accept_requests[0].operation_id == str(INTERACTION_ID)
+    accept_request = application.accept_requests[0]
+    assert accept_request.operation_id == str(INTERACTION_ID)
+    assert accept_request.requester_id == str(REQUESTER_ID)
+    assert accept_request.requester_username == "pitekusu"
+    assert accept_request.requester_display_name == "ぬし"
+    assert accept_request.requester_username != accept_request.requester_display_name
     cast(Any, channel).send.assert_awaited_once()
     starter_kwargs = cast(Any, channel).send.await_args.kwargs
     assert starter_kwargs["nonce"] == str(INTERACTION_ID)
@@ -346,6 +359,32 @@ async def test_command_defers_first_then_creates_and_binds_public_context() -> N
     assert application.current.control_panel_message_id == str(PANEL_ID)
     cast(Any, current_interaction).edit_original_response.assert_awaited_once()
     assert not cast(Any, panel).edit.await_count
+    await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_accept_request_uses_member_display_name_when_guild_nick_is_set() -> None:
+    current = snapshot()
+    application = FakeApplication(current)
+    channel, _, _, _ = text_channel(events=application.events)
+    current_interaction = interaction(
+        channel=channel,
+        username="pitekusu",
+        display_name="サーバ内ニックネーム",
+    )
+    controller = DiscordInteractionController(
+        clients=clients(),
+        config=config(),
+        application=application,
+    )
+
+    await controller._command_callback(current_interaction, current.question)
+    await asyncio.wait_for(application.run_started.wait(), timeout=1)
+
+    accept_request = application.accept_requests[0]
+    assert accept_request.requester_username == "pitekusu"
+    assert accept_request.requester_display_name == "サーバ内ニックネーム"
+    assert accept_request.requester_username != str(accept_request)
     await controller.close()
 
 

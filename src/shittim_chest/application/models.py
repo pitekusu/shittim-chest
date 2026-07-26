@@ -24,6 +24,13 @@ def _require_identifier(value: str, *, label: str) -> None:
         raise ValueError(f"{label} must not be empty")
 
 
+def _require_display_text(value: str, *, label: str) -> None:
+    """Reject empty or whitespace-only display strings without mutating them."""
+
+    if not value.strip():
+        raise ValueError(f"{label} must not be empty")
+
+
 def _require_utc(value: datetime, *, label: str) -> None:
     if value.tzinfo is None or value.utcoffset() != timedelta(0):
         raise ValueError(f"{label} must be timezone-aware UTC")
@@ -35,6 +42,8 @@ class AcceptDebateRequest:
 
     question: str
     requester_id: str
+    requester_username: str
+    requester_display_name: str
     guild_id: str
     channel_id: str
     operation_id: str
@@ -43,6 +52,8 @@ class AcceptDebateRequest:
         if not 1 <= len(self.question) <= 1000 or not self.question.strip():
             raise ValueError("question must contain between 1 and 1000 characters")
         _require_identifier(self.requester_id, label="requester ID")
+        _require_display_text(self.requester_username, label="requester username")
+        _require_display_text(self.requester_display_name, label="requester display name")
         _require_identifier(self.guild_id, label="guild ID")
         _require_identifier(self.channel_id, label="channel ID")
         _require_identifier(self.operation_id, label="operation ID")
@@ -157,6 +168,8 @@ class DebateSnapshot:
     state: DebateState
     question: str
     requester_id: str
+    requester_username: str
+    requester_display_name: str
     guild_id: str
     channel_id: str
     created_at: datetime
@@ -177,6 +190,11 @@ class DebateSnapshot:
         if not 1 <= len(self.question) <= 1000 or not self.question.strip():
             raise ValueError("snapshot question must contain between 1 and 1000 characters")
         _require_identifier(self.requester_id, label="snapshot requester ID")
+        _require_display_text(self.requester_username, label="snapshot requester username")
+        _require_display_text(
+            self.requester_display_name,
+            label="snapshot requester display name",
+        )
         _require_identifier(self.guild_id, label="snapshot Guild ID")
         _require_identifier(self.channel_id, label="snapshot channel ID")
         _require_utc(self.created_at, label="snapshot creation timestamp")

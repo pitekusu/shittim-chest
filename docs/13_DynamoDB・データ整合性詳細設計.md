@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-17
+updated: 2026-07-26
 ---
 
 # DynamoDB・データ整合性詳細設計
@@ -12,7 +12,7 @@ updated: 2026-07-17
 ## 1. Table設定
 
 - 単一table、on-demand、PK/SKはstring、PITR 35日、deletion protection有効、`RETAIN`とする。
-- 全itemに`schema_version`、`created_at`、`updated_at`をUTCで保存する。STEP-06Aのcurrent record schemaは`5`とし、readerは直前schema `4`を構造検証後に`5`へup-convertする。未知versionはfail closedとする。
+- 全itemに`schema_version`、`created_at`、`updated_at`をUTCで保存する。STEP-06Dのcurrent record schemaは`6`とし、readerは直前schema `5`を構造検証後に`6`へup-convertする。未知versionはfail closedとする。
 - debate本文とDiscord threadは自動期限なしで保存し、TTLを設定しない。「永久保存」は自動削除しない意味であり、過去状態への復旧保証はPITRの35日までとする。AWS Backupは採用しない。
 - TTLは期限切れ補助recordだけに使用し、lease解放やsecurity処理へ依存しない。
 
@@ -44,7 +44,7 @@ Debate META itemへ`gsi1pk=THREAD#<thread-id>`、`gsi1sk=DEBATE#<uuid7>`を設�
 
 ## 4. META必須属性
 
-Debate METAは`debate_id`、Guild/channel、starter message ID、thread ID、control panel message ID、user ID、question、`current_attempt_id`、schema versionを保存する。Attempt METAは`attempt_id`、`retry_of`、phase、`failed_from_phase`、recovery state、winner、model/prompt/schema version、active elapsed、lease owner、lease expiry、fencing token、error codeを保存する。400KB制限へ近づけないようartifactを別itemへ分離する。
+Debate METAは`debate_id`、Guild/channel、starter message ID、thread ID、control panel message ID、`requester_id`（Discord user ID）、受付時点の`requester_username`と`requester_display_name`、question、`current_attempt_id`、schema versionを保存する。username/display nameは将来の認証済みWebアーカイブ表示・検索用の不変snapshotであり、認可・PK/SK/GSI/lease/fencingには使わない。Attempt METAやartifactへは重複保存しない。Attempt METAは`attempt_id`、`retry_of`、phase、`failed_from_phase`、recovery state、winner、model/prompt/schema version、active elapsed、lease owner、lease expiry、fencing token、error codeを保存する。400KB制限へ近づけないようartifactを別itemへ分離する。
 
 ## 5. 受付transaction
 
@@ -98,11 +98,12 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 - `list_pending`は将来retryと現在claim中を含む未送信全件を返す。送信可否はfenced `claim` transactionが最終判定し、reader結果だけでownershipを判断しない。
 - floatを保存せず、必要な数値はintまたは`Decimal`を使用する。
 
-STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidenceを追加してschema v3へ更新した。STEP-05Cは`escalation_assessment` itemへrules version、3つのsignal、UTC評価時刻、再実行開始phase、実行有無、Policy ID、最大1回の実行回数を保存しschema v4へ更新した。STEP-06Aはcontrol panel message IDをstarter message IDから分離し、outboxの実Application ID依存をgeneric Bot slotへ置換してschema v5へ更新した。readerは直前v4の欠落panel IDを`None`、旧`bot_id`を対応するgeneric slotとしてup-convertする。STEP-06Bは既存schemaを変更せず、`DiscordOutboxRepository`の`get/claim/reschedule/mark_sent`をdiscord.py publisherから利用する。Discord処理はclaimより短い45秒で打ち切るが、`mark_sent`はtimeout外のfenced transactionとして行う。送信成功後の`mark_sent`競合ではmessageを再送せず、claim expiry後の次回claimでthread履歴を照合する。STEP-07Bはschema変更なしで`list_pending`を追加し、未来retryと未失効claimを含む未送信全件をlease heartbeat配下のdrainerへ渡す。
+STEP-04Aはboto3非依存のnative-value itemとschema検証を提供する。STEP-04Bはboto3 adapter、transaction、lease/fencing、outboxを実装した。STEP-05BはEvidenceを追加してschema v3へ更新した。STEP-05Cは`escalation_assessment` itemへrules version、3つのsignal、UTC評価時刻、再実行開始phase、実行有無、Policy ID、最大1回の実行回数を保存しschema v4へ更新した。STEP-06Aはcontrol panel message IDをstarter message IDから分離し、outboxの実Application ID依存をgeneric Bot slotへ置換してschema v5へ更新した。readerは直前v4の欠落panel IDを`None`、旧`bot_id`を対応するgeneric slotとしてup-convertした。STEP-06DはDebate METAへ受付時点の`requester_username`と`requester_display_name`を追加してschema v6へ更新した。v5 debate_metaは実Discord名を復元せず、決定的legacy fallbackとして両フィールドへ`requester_id`を入れる。v4以前の直接読込はfail closedとする。STEP-06Bはschema変更なしで、`DiscordOutboxRepository`の`get/claim/reschedule/mark_sent`をdiscord.py publisherから利用する。Discord処理はclaimより短い45秒で打ち切るが、`mark_sent`はtimeout外のfenced transactionとして行う。送信成功後の`mark_sent`競合ではmessageを再送せず、claim expiry後の次回claimでthread履歴を照合する。STEP-07Bはschema変更なしで`list_pending`を追加し、未来retryと未失効claimを含む未送信全件をlease heartbeat配下のdrainerへ渡す。
 
 ## 10. Schema migration
 
-- readerは現行versionと直前versionを読めるようにし、旧recordを現行domain modelへup-convertする。
+- readerは現行versionと直前versionを読めるようにし、旧recordを現行domain modelへup-convertする。現行は`6`、直前は`5`である。
+- v5→v6では`debate_meta`へ`requester_username`と`requester_display_name`を追加する。欠落時は実名復元ではなく`requester_id`を非空fallbackとして設定する。他record typeは内容を変えず`schema_version`だけを`6`へ上げる。
 - writeは常に現行version。state-changing use case、特に新attempt retryの前に、必要なlazy migrationをexpected旧version条件付きで完了する。migration不能、競合、未対応versionはfail closedとし、旧`schema_version`を継承したnew itemを作らない。
 - destructive migrationはbackup/PITR確認、dry-run、item count、rollback手順をADRへ記録する。
 

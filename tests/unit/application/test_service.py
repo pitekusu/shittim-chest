@@ -109,6 +109,8 @@ def request(*, requester_id: str = "requester") -> AcceptDebateRequest:
     return AcceptDebateRequest(
         question="What should we eat?",
         requester_id=requester_id,
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id="guild",
         channel_id="channel",
         operation_id="accept-operation",
@@ -303,14 +305,29 @@ async def test_accept_operation_is_idempotent_and_bound_to_request(
 
     assert repeated == first
     assert len(repository.current) == 1
+    accepted = repository.current[first.debate_id]
+    assert accepted.requester_username == "pitekusu"
+    assert accepted.requester_display_name == "ぬし"
     with pytest.raises(InvalidApplicationOperation, match="another request"):
         await app.accept_debate(replace(request(), question="A different question"))
+    with pytest.raises(InvalidApplicationOperation, match="another request"):
+        await app.accept_debate(replace(request(), requester_username="other-user"))
+    with pytest.raises(InvalidApplicationOperation, match="another request"):
+        await app.accept_debate(replace(request(), requester_display_name="別名"))
 
 
 @pytest.mark.parametrize("question", ["", " ", "x" * 1001])
 def test_accept_request_rejects_invalid_question(question: str) -> None:
     with pytest.raises(ValueError, match="question"):
-        AcceptDebateRequest(question, "requester", "guild", "channel", "operation")
+        AcceptDebateRequest(
+            question,
+            "requester",
+            "pitekusu",
+            "ぬし",
+            "guild",
+            "channel",
+            "operation",
+        )
 
 
 @pytest.mark.parametrize("field", ["requester", "guild", "channel"])
@@ -321,10 +338,47 @@ def test_accept_request_rejects_empty_identifiers(field: str) -> None:
         AcceptDebateRequest(
             "question",
             values["requester"],
+            "pitekusu",
+            "ぬし",
             values["guild"],
             values["channel"],
             "operation",
         )
+
+
+@pytest.mark.parametrize(
+    ("username", "display_name"),
+    [("", "ぬし"), (" ", "ぬし"), ("pitekusu", ""), ("pitekusu", " ")],
+)
+def test_accept_request_rejects_empty_requester_names(
+    username: str,
+    display_name: str,
+) -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        AcceptDebateRequest(
+            "question",
+            "requester-id",
+            username,
+            display_name,
+            "guild",
+            "channel",
+            "operation",
+        )
+
+
+def test_accept_request_preserves_unicode_names_without_normalization() -> None:
+    request = AcceptDebateRequest(
+        question="question",
+        requester_id="requester-id",
+        requester_username=" Pitekusu\u3000",
+        requester_display_name=" ぬし ",
+        guild_id="guild",
+        channel_id="channel",
+        operation_id="operation",
+    )
+    assert request.requester_username == " Pitekusu\u3000"
+    assert request.requester_display_name == " ぬし "
+    assert request.requester_id == "requester-id"
 
 
 @pytest.mark.asyncio
@@ -439,6 +493,8 @@ async def test_failed_attempt_retry_preserves_source_and_reuses_completed_artifa
     assert current.state.attempt_id == retried.attempt_id
     assert failed.state.phase is DebatePhase.FAILED
     assert current.error_code is None
+    assert current.requester_username == failed.requester_username == "pitekusu"
+    assert current.requester_display_name == failed.requester_display_name == "ぬし"
 
 
 @pytest.mark.asyncio
@@ -817,6 +873,8 @@ async def test_recovery_reuses_every_completed_phase_artifact(
         state=state,
         question="cached question",
         requester_id="requester",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id="guild",
         channel_id="channel",
         created_at=state.updated_at,
