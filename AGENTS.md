@@ -32,7 +32,7 @@ All slices through STEP-09B are merged to `main`:
 | STEP-06A | #27 | `47af41f` | SDK-independent Discord contracts: four Bot slots, message chunking, nonces, panel codec, outbox Protocol, schema v5 |
 | STEP-06B | #30 | `96a1ace` | discord.py 2.7.1 publisher: fenced outbox publication, nonce/content-hash reconciliation |
 | STEP-06C | #31 | `9799cb9` | Interaction runtime: four GUILDS-only clients, Guild-scoped `/shittim`, thread/panel provisioning |
-| STEP-06D | (open) | (pending) | Accept-time Discord username/display-name snapshots on Debate META; schema v6; auth still requester_id only |
+| STEP-06D | #81 | `8fd90b5` | Accept-time Discord username/display-name snapshots on Debate META; schema v6; auth still requester_id only |
 | STEP-07A | #33 | `0f386f5` | Runtime lifecycle: fail-closed admission gate, signal handling, 90-second cleanup deadline |
 | STEP-07B | #34 | `04bbda0` | Outbox recovery drained before phase work resumes |
 | STEP-07C | #35 | `e863ae3` | Production composition root (`bootstrap.py`), `python -m shittim_chest`, fail-closed config |
