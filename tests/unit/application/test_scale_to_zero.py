@@ -20,14 +20,14 @@ NOW = datetime(2026, 7, 26, 1, 2, 3, tzinfo=UTC)
 
 def request() -> IngressRequest:
     return IngressRequest.new_debate(
-        interaction_id="100000000000000001",
-        operation_id="100000000000000001",
+        interaction_id="interaction-id",
+        operation_id="operation-id",
         question="Which sweet breakfast should I choose?",
-        requester_id="100000000000000002",
+        requester_id="requester-id",
         requester_username="requester",
         requester_display_name="Requester",
-        guild_id="100000000000000003",
-        channel_id="100000000000000004",
+        guild_id="guild-id",
+        channel_id="channel-id",
         command_name="shittim",
         created_at=NOW,
     )
