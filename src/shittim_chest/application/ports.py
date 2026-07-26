@@ -22,7 +22,9 @@ from shittim_chest.application.scale_to_zero import (
     IngressStatusPublication,
     RuntimeActivity,
     RuntimeState,
+    StatusHistoryCheckpoint,
     StatusMessageState,
+    StatusPublicationWork,
 )
 from shittim_chest.domain import (
     AttemptId,
@@ -163,12 +165,11 @@ class IngressRepository(Protocol):
         error_code: str | None,
     ) -> IngressRequest: ...
 
-    async def update_status_message(
+    async def request_status_publication(
         self,
         *,
         request: IngressRequest,
         state: StatusMessageState,
-        message_id: str,
         at: datetime,
     ) -> IngressRequest: ...
 
@@ -184,6 +185,64 @@ class IngressRepository(Protocol):
     ) -> IngressStatusPublication | None: ...
 
     async def pending_status_count(self) -> int: ...
+
+
+class StatusPublicationRepository(Protocol):
+    """Fence and settle one desired public status without exposing DynamoDB."""
+
+    async def claim_status_publication(
+        self,
+        *,
+        interaction_id: str,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork | None: ...
+
+    async def reschedule_status_publication(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+        next_attempt_at: datetime,
+        error_code: str,
+        history_checkpoint: StatusHistoryCheckpoint | None = None,
+        message_may_exist: bool = False,
+    ) -> IngressStatusPublication: ...
+
+    async def mark_status_delivered(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        message_id: str,
+        at: datetime,
+    ) -> IngressStatusPublication: ...
+
+    async def mark_status_failed(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+        error_code: str,
+        message_may_exist: bool = False,
+    ) -> IngressStatusPublication: ...
+
+    async def replace_missing_status_message(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork: ...
+
+    async def list_due_status_publications(
+        self,
+        *,
+        at: datetime,
+        limit: int,
+    ) -> tuple[IngressStatusPublication, ...]: ...
 
 
 class RuntimeStateRepository(Protocol):
@@ -240,12 +299,6 @@ class DebateLookup(Protocol):
         debate_id: DebateId,
         expected_attempt_id: AttemptId,
     ) -> DebateAuthorizationSnapshot | None: ...
-
-
-class DiscordStatusPublisher(Protocol):
-    """Create or update one persisted public startup-status message."""
-
-    async def publish(self, *, request: IngressRequest) -> IngressRequest: ...
 
 
 class RuntimeActivityInspector(Protocol):

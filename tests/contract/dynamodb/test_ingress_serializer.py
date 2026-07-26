@@ -30,9 +30,11 @@ from shittim_chest.application import (
 from shittim_chest.application.scale_to_zero import (
     IngressSemanticOperationBinding,
     IngressStatusPublication,
+    StatusHistoryCheckpoint,
     StatusMessageState,
     StatusPublicationState,
 )
+from shittim_chest.application.status_publication import render_public_status
 from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 7, 26, 4, 5, 6, 789, tzinfo=UTC)
@@ -160,13 +162,18 @@ def test_semantic_binding_round_trip_is_fail_closed() -> None:
 
 
 def test_prepared_status_publication_round_trip_separates_desired_and_delivered() -> None:
-    source = IngressStatusPublication.prepared(request())
+    source_request = request()
+    source = IngressStatusPublication.prepared(
+        source_request,
+        content=render_public_status(source_request, StatusMessageState.STARTING),
+    )
     item = serialize_ingress_status_publication(source)
 
     assert item["PK"] == "INGRESS_OPERATION#interaction-0001"
     assert item["SK"] == "STATUS_PUBLICATION"
     assert item["publication_state"] == StatusPublicationState.PREPARED.value
     assert item["desired_state"] == StatusMessageState.STARTING.value
+    assert item["record_schema_version"] == 3
     assert "delivered_state" not in item
     assert item["gsi1pk"] == "INGRESS#STATUS_DUE"
     assert len(str(item["nonce"])) == 22
@@ -174,6 +181,47 @@ def test_prepared_status_publication_round_trip_separates_desired_and_delivered(
 
     with pytest.raises(PersistenceFormatError, match="due index sort key"):
         deserialize_ingress_status_publication({**item, "gsi1sk": "wrong"})
+    with pytest.raises(PersistenceFormatError, match="auxiliary record schema"):
+        deserialize_ingress_status_publication({**item, "record_schema_version": 2})
+
+    numeric_request = replace(
+        source_request,
+        interaction_id="300",
+        operation_id="300",
+    )
+    numeric = IngressStatusPublication.prepared(
+        numeric_request,
+        content=render_public_status(numeric_request, StatusMessageState.STARTING),
+    )
+    scanning = replace(
+        numeric,
+        history_checkpoint=StatusHistoryCheckpoint(
+            history_cursor_message_id="500",
+            history_verified_head_message_id="700",
+            history_gap_cursor_message_id="800",
+            history_gap_upper_message_id="900",
+        ),
+        history_reconciliation_required=True,
+    )
+    scanning_item = serialize_ingress_status_publication(scanning)
+    assert scanning_item["history_cursor_message_id"] == "500"
+    assert scanning_item["history_verified_head_message_id"] == "700"
+    assert scanning_item["history_gap_cursor_message_id"] == "800"
+    assert scanning_item["history_gap_upper_message_id"] == "900"
+    assert deserialize_ingress_status_publication(scanning_item) == scanning
+    with pytest.raises(ValueError, match="follow the interaction"):
+        replace(
+            numeric,
+            history_checkpoint=StatusHistoryCheckpoint(
+                history_cursor_message_id="200",
+                history_verified_head_message_id="700",
+            ),
+            history_reconciliation_required=True,
+        )
+    missing_head = dict(scanning_item)
+    del missing_head["history_verified_head_message_id"]
+    with pytest.raises(PersistenceFormatError, match="verified head"):
+        deserialize_ingress_status_publication(missing_head)
 
     delivered = replace(
         source,

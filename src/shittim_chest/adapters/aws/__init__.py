@@ -4,7 +4,10 @@ from shittim_chest.adapters.aws.clients import (
     create_ingress_dynamodb_client,
     create_lambda_client,
     create_ssm_client,
+    create_status_dynamodb_client,
+    create_status_ssm_client,
     ingress_sdk_config,
+    status_sdk_config,
 )
 from shittim_chest.adapters.aws.ssm import SsmParameterReader
 from shittim_chest.adapters.aws.status_trigger import (
@@ -19,5 +22,8 @@ __all__ = (
     "create_ingress_dynamodb_client",
     "create_lambda_client",
     "create_ssm_client",
+    "create_status_dynamodb_client",
+    "create_status_ssm_client",
     "ingress_sdk_config",
+    "status_sdk_config",
 )

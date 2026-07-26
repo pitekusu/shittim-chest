@@ -13,6 +13,7 @@ from shittim_chest.domain import AttemptId, DebateId
 
 INGRESS_QUEUE_LIMIT = 20
 INGRESS_CLAIM_SECONDS = 120
+STATUS_PUBLICATION_CLAIM_SECONDS = 180
 STARTUP_TIMEOUT = timedelta(minutes=3)
 TERMINAL_TIMEOUT = timedelta(minutes=15)
 IDLE_TIMEOUT = timedelta(minutes=30)
@@ -31,6 +32,15 @@ def _require_utc(value: datetime, *, label: str) -> None:
 def _require_optional_utc(value: datetime | None, *, label: str) -> None:
     if value is not None:
         _require_utc(value, label=label)
+
+
+def _require_canonical_snowflake(value: str, *, label: str) -> None:
+    if (
+        re.fullmatch(r"[0-9]{1,20}", value) is None
+        or not 0 < int(value) < 2**64
+        or str(int(value)) != value
+    ):
+        raise ValueError(f"{label} must be a canonical Discord snowflake")
 
 
 @unique
@@ -217,6 +227,8 @@ class IngressRequest:
             ("completion timestamp", self.completed_at),
         ):
             _require_optional_utc(value, label=label)
+        if (self.status_message_id is None) is not (self.status_message_updated_at is None):
+            raise ValueError("status message ID and timestamp must be set together")
         if self.updated_at < self.created_at:
             raise ValueError("request update cannot precede creation")
         if self.startup_deadline_at != self.created_at + STARTUP_TIMEOUT:
@@ -431,6 +443,46 @@ class IngressSemanticOperationBinding:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class StatusHistoryCheckpoint:
+    """Durable progress for baseline history and late-arrival gap scans."""
+
+    history_verified_head_message_id: str
+    history_cursor_message_id: str | None = None
+    history_gap_cursor_message_id: str | None = None
+    history_gap_upper_message_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_canonical_snowflake(
+            self.history_verified_head_message_id,
+            label="history verified-head message ID",
+        )
+        for label, value in (
+            ("history cursor message ID", self.history_cursor_message_id),
+            ("history gap cursor message ID", self.history_gap_cursor_message_id),
+            ("history gap upper message ID", self.history_gap_upper_message_id),
+        ):
+            if value is not None:
+                _require_canonical_snowflake(value, label=label)
+        if (self.history_gap_cursor_message_id is None) is not (
+            self.history_gap_upper_message_id is None
+        ):
+            raise ValueError("history gap cursor and upper message IDs must be set together")
+        verified_head = int(self.history_verified_head_message_id)
+        if (
+            self.history_cursor_message_id is not None
+            and int(self.history_cursor_message_id) > verified_head
+        ):
+            raise ValueError("history cursor cannot follow the verified head")
+        if self.history_gap_cursor_message_id is not None:
+            gap_cursor = int(self.history_gap_cursor_message_id)
+            gap_upper = int(self.history_gap_upper_message_id or "0")
+            if gap_cursor <= verified_head:
+                raise ValueError("history gap cursor must follow the verified head")
+            if gap_cursor > gap_upper:
+                raise ValueError("history gap cursor cannot follow the gap upper bound")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class IngressStatusPublication:
     """Durable desired and delivered state for one public status message."""
 
@@ -440,20 +492,22 @@ class IngressStatusPublication:
     desired_state: StatusMessageState
     state: StatusPublicationState
     nonce: str
+    content: str
+    content_hash: str
     created_at: datetime
     updated_at: datetime
     delivered_state: StatusMessageState | None = None
     status_message_id: str | None = None
     status_message_updated_at: datetime | None = None
-    content_hash: str | None = None
-    history_cursor_message_id: str | None = None
+    history_checkpoint: StatusHistoryCheckpoint | None = None
+    history_reconciliation_required: bool = False
     next_attempt_at: datetime | None = None
     claim_owner: str | None = None
     claim_expires_at: datetime | None = None
     delivery_attempt: int = 0
     incarnation: int = 0
     error_code: str | None = None
-    schema_version: int = 1
+    schema_version: int = 3
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -464,6 +518,12 @@ class IngressStatusPublication:
             _require_text(value, label=label)
         if re.fullmatch(r"[A-Za-z0-9_-]{22}", self.nonce) is None:
             raise ValueError("status publication nonce must be 22 base64url characters")
+        _require_text(self.content, label="status publication content")
+        if len(self.content) > 2_000:
+            raise ValueError("status publication content must be at most 2000 characters")
+        expected_content_hash = hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+        if self.content_hash != expected_content_hash:
+            raise ValueError("status publication content hash does not match its content")
         for label, value in (
             ("creation timestamp", self.created_at),
             ("update timestamp", self.updated_at),
@@ -475,6 +535,26 @@ class IngressStatusPublication:
             ("claim expiry", self.claim_expires_at),
         ):
             _require_optional_utc(value, label=f"status publication {label}")
+        if (self.status_message_id is None) is not (self.status_message_updated_at is None):
+            raise ValueError("status publication message ID and timestamp must be set together")
+        if not isinstance(self.history_reconciliation_required, bool):
+            raise ValueError("status publication history reconciliation flag must be a boolean")
+        if self.status_message_id is not None and self.history_reconciliation_required:
+            raise ValueError("known status message cannot require history reconciliation")
+        if self.history_checkpoint is not None:
+            if not self.history_reconciliation_required or self.status_message_id is not None:
+                raise ValueError("history checkpoint requires an unresolved status message scan")
+            _require_canonical_snowflake(
+                self.canonical_interaction_id,
+                label="history checkpoint interaction ID",
+            )
+            interaction_id = int(self.canonical_interaction_id)
+            verified_head = int(self.history_checkpoint.history_verified_head_message_id)
+            if verified_head <= interaction_id:
+                raise ValueError("history verified head must follow the interaction")
+            history_cursor = self.history_checkpoint.history_cursor_message_id
+            if history_cursor is not None and int(history_cursor) <= interaction_id:
+                raise ValueError("history cursor must follow the interaction")
         if self.updated_at < self.created_at:
             raise ValueError("status publication update cannot precede creation")
         if (self.claim_owner is None) is not (self.claim_expires_at is None):
@@ -501,22 +581,27 @@ class IngressStatusPublication:
                 raise ValueError("delivered status publication must match desired state")
             if self.status_message_id is None or self.status_message_updated_at is None:
                 raise ValueError("delivered status publication requires message metadata")
-        if (
-            self.content_hash is not None
-            and re.fullmatch(r"[0-9a-f]{64}", self.content_hash) is None
-        ):
-            raise ValueError("status publication content hash must be lowercase SHA-256")
         for label, value in (
             ("delivery attempt", self.delivery_attempt),
             ("incarnation", self.incarnation),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"status publication {label} must be non-negative")
-        if self.schema_version != 1:
+        if self.nonce != status_publication_nonce(
+            self.canonical_interaction_id,
+            incarnation=self.incarnation,
+        ):
+            raise ValueError("status publication nonce does not match its incarnation")
+        if self.schema_version != 3:
             raise ValueError("unsupported ingress status publication schema version")
 
     @classmethod
-    def prepared(cls, request: IngressRequest) -> IngressStatusPublication:
+    def prepared(
+        cls,
+        request: IngressRequest,
+        *,
+        content: str,
+    ) -> IngressStatusPublication:
         """Prepare the initial STARTING publication without a Discord token."""
 
         if request.status_message_state is not StatusMessageState.STARTING:
@@ -531,18 +616,55 @@ class IngressStatusPublication:
             status_channel_id=request.status_channel_id,
             desired_state=StatusMessageState.STARTING,
             state=StatusPublicationState.PREPARED,
-            nonce=status_publication_nonce(request.interaction_id),
+            nonce=status_publication_nonce(request.interaction_id, incarnation=0),
+            content=content,
+            content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
             created_at=request.created_at,
             updated_at=request.created_at,
             next_attempt_at=request.created_at,
         )
 
 
-def status_publication_nonce(canonical_interaction_id: str) -> str:
+@dataclass(frozen=True, slots=True, repr=False)
+class StatusPublicationWork:
+    """Strongly read request and publication claimed as one delivery unit."""
+
+    request: IngressRequest
+    publication: IngressStatusPublication
+
+    def __post_init__(self) -> None:
+        if self.request.interaction_id != self.publication.canonical_interaction_id:
+            raise ValueError("status publication belongs to another request")
+        expected_sort_key = (
+            "REQUEST#"
+            f"{self.request.created_at.isoformat(timespec='microseconds').replace('+00:00', 'Z')}#"
+            f"{self.request.interaction_id}"
+        )
+        if self.publication.request_sort_key != expected_sort_key:
+            raise ValueError("status publication request sort key is inconsistent")
+        if self.request.status_channel_id != self.publication.status_channel_id:
+            raise ValueError("status publication channel is inconsistent")
+        if self.request.status_message_state is not self.publication.desired_state:
+            raise ValueError("status publication desired state is inconsistent")
+        if self.request.status_message_id != self.publication.status_message_id:
+            raise ValueError("status publication message ID is inconsistent")
+        if self.request.status_message_updated_at != self.publication.status_message_updated_at:
+            raise ValueError("status publication message timestamp is inconsistent")
+
+
+def status_publication_nonce(
+    canonical_interaction_id: str,
+    *,
+    incarnation: int = 0,
+) -> str:
     """Return a deterministic Discord-safe 128-bit nonce for one publication."""
 
     _require_text(canonical_interaction_id, label="canonical interaction ID")
-    digest = hashlib.sha256(f"status:{canonical_interaction_id}".encode()).digest()[:16]
+    if isinstance(incarnation, bool) or not isinstance(incarnation, int) or incarnation < 0:
+        raise ValueError("status publication incarnation must be a non-negative integer")
+    digest = hashlib.sha256(f"status:{canonical_interaction_id}:{incarnation}".encode()).digest()[
+        :16
+    ]
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
 
 

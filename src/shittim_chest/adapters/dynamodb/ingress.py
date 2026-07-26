@@ -51,6 +51,7 @@ from shittim_chest.application.ports import (
 from shittim_chest.application.scale_to_zero import (
     INGRESS_CLAIM_SECONDS,
     INGRESS_QUEUE_LIMIT,
+    STATUS_PUBLICATION_CLAIM_SECONDS,
     EnqueuedIngress,
     IngressKind,
     IngressOperationResult,
@@ -58,13 +59,22 @@ from shittim_chest.application.scale_to_zero import (
     IngressSemanticOperationBinding,
     IngressStatus,
     IngressStatusPublication,
+    StatusHistoryCheckpoint,
     StatusMessageState,
+    StatusPublicationState,
+    StatusPublicationWork,
+    status_publication_nonce,
+)
+from shittim_chest.application.status_publication import (
+    render_public_status,
+    status_content_hash,
 )
 from shittim_chest.domain import AttemptId, DebateId
 
 INGRESS_INDEX = "gsi2"
 INGRESS_ACTIVE_INDEX_KEY = "INGRESS#ACTIVE"
 INGRESS_RECORD_SCHEMA_VERSION = 1
+INGRESS_STATUS_PUBLICATION_RECORD_SCHEMA_VERSION = 3
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -163,22 +173,6 @@ class DynamoDbIngressRepository:
             error_code,
         )
 
-    async def update_status_message(
-        self,
-        *,
-        request: IngressRequest,
-        state: StatusMessageState,
-        message_id: str,
-        at: datetime,
-    ) -> IngressRequest:
-        return await self._run(
-            self._update_status_message,
-            request,
-            state,
-            message_id,
-            at,
-        )
-
     async def list_startup_deadlines(self, *, at: datetime) -> tuple[IngressRequest, ...]:
         return await self._run(self._list_startup_deadlines, at)
 
@@ -197,6 +191,107 @@ class DynamoDbIngressRepository:
     async def pending_status_count(self) -> int:
         return await self._run(self._pending_status_count)
 
+    async def claim_status_publication(
+        self,
+        *,
+        interaction_id: str,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork | None:
+        return await self._run(
+            self._claim_status_publication,
+            interaction_id,
+            claim_owner,
+            at,
+        )
+
+    async def reschedule_status_publication(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+        next_attempt_at: datetime,
+        error_code: str,
+        history_checkpoint: StatusHistoryCheckpoint | None = None,
+        message_may_exist: bool = False,
+    ) -> IngressStatusPublication:
+        return await self._run(
+            self._reschedule_status_publication,
+            work,
+            claim_owner,
+            at,
+            next_attempt_at,
+            error_code,
+            history_checkpoint,
+            message_may_exist,
+        )
+
+    async def mark_status_delivered(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        message_id: str,
+        at: datetime,
+    ) -> IngressStatusPublication:
+        return await self._run(
+            self._mark_status_delivered,
+            work,
+            claim_owner,
+            message_id,
+            at,
+        )
+
+    async def mark_status_failed(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+        error_code: str,
+        message_may_exist: bool = False,
+    ) -> IngressStatusPublication:
+        return await self._run(
+            self._mark_status_failed,
+            work,
+            claim_owner,
+            at,
+            error_code,
+            message_may_exist,
+        )
+
+    async def replace_missing_status_message(
+        self,
+        *,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork:
+        return await self._run(
+            self._replace_missing_status_message,
+            work,
+            claim_owner,
+            at,
+        )
+
+    async def list_due_status_publications(
+        self,
+        *,
+        at: datetime,
+        limit: int,
+    ) -> tuple[IngressStatusPublication, ...]:
+        return await self._run(self._list_due_status_publications, at, limit)
+
+    async def request_status_publication(
+        self,
+        *,
+        request: IngressRequest,
+        state: StatusMessageState,
+        at: datetime,
+    ) -> IngressRequest:
+        return await self._run(self._request_status_publication, request, state, at)
+
     async def _run(self, function: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
         try:
             return await asyncio.to_thread(function, *args, **kwargs)
@@ -209,7 +304,10 @@ class DynamoDbIngressRepository:
         if request.status is not IngressStatus.PENDING:
             raise ValueError("new ingress request must be pending")
         operation = _operation_for_request(request)
-        publication = IngressStatusPublication.prepared(request)
+        publication = IngressStatusPublication.prepared(
+            request,
+            content=render_public_status(request, StatusMessageState.STARTING),
+        )
         actions = [
             self._increment_counter_action(request.created_at),
             self._increment_status_counter_action(request.created_at),
@@ -351,6 +449,10 @@ class DynamoDbIngressRepository:
             or publication.status_channel_id != persisted.status_channel_id
         ):
             raise RepositoryConflict("ingress status publication points to another request")
+        try:
+            StatusPublicationWork(request=persisted, publication=publication)
+        except ValueError:
+            raise RepositoryConflict("ingress status publication bundle is inconsistent") from None
 
     def _get_operation_result(self, interaction_id: str) -> IngressOperationResult | None:
         if not interaction_id.strip():
@@ -375,6 +477,694 @@ class DynamoDbIngressRepository:
             raise ValueError("canonical interaction ID must not be empty")
         item = self._get_item(_status_publication_key(interaction_id))
         return None if item is None else deserialize_ingress_status_publication(item)
+
+    def _status_work(self, interaction_id: str) -> StatusPublicationWork | None:
+        publication = self._get_status_publication(interaction_id)
+        if publication is None:
+            return None
+        request_item, current_publication_item = self._transact_get_items(
+            (
+                _request_key(publication.request_sort_key),
+                _status_publication_key(interaction_id),
+            )
+        )
+        if request_item is None or current_publication_item is None:
+            raise RepositoryConflict("status publication bundle is incomplete")
+        request = deserialize_ingress_request(request_item)
+        current = deserialize_ingress_status_publication(current_publication_item)
+        try:
+            return StatusPublicationWork(request=request, publication=current)
+        except ValueError:
+            raise RepositoryConflict("status publication bundle is inconsistent") from None
+
+    def _latest_owned_status_work(
+        self,
+        *,
+        stale_work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork | None:
+        latest = self._status_work(stale_work.publication.canonical_interaction_id)
+        if latest is None:
+            return None
+        publication = latest.publication
+        if (
+            publication.state is not StatusPublicationState.CLAIMED
+            or publication.claim_owner != claim_owner
+            or publication.claim_expires_at is None
+            or publication.claim_expires_at <= at
+            or publication.nonce != stale_work.publication.nonce
+            or publication.incarnation != stale_work.publication.incarnation
+            or publication.delivery_attempt != stale_work.publication.delivery_attempt
+            or publication.status_channel_id != stale_work.publication.status_channel_id
+        ):
+            return None
+        return latest
+
+    def _claim_status_publication(
+        self,
+        interaction_id: str,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork | None:
+        _require_utc(at)
+        if not interaction_id.strip() or not claim_owner.strip():
+            raise ValueError("status publication identity and claim owner must not be empty")
+        work = self._status_work(interaction_id)
+        if work is None or not _status_publication_is_due(work.publication, at):
+            return None
+        publication = work.publication
+        claimed = replace(
+            publication,
+            state=StatusPublicationState.CLAIMED,
+            updated_at=at,
+            next_attempt_at=None,
+            claim_owner=claim_owner,
+            claim_expires_at=at + timedelta(seconds=STATUS_PUBLICATION_CLAIM_SECONDS),
+            delivery_attempt=publication.delivery_attempt + 1,
+            history_reconciliation_required=(
+                publication.history_reconciliation_required
+                or (
+                    publication.state is StatusPublicationState.CLAIMED
+                    and publication.status_message_id is None
+                )
+            ),
+            error_code=None,
+        )
+        actions = (
+            self._put_status_publication_action(
+                previous=publication,
+                updated=claimed,
+                extra_condition=_status_due_condition(publication),
+                extra_values={":claim_at": _timestamp(at)},
+            ),
+            self._check_status_request_action(work.request),
+        )
+        try:
+            self._transact(
+                actions,
+                token=_client_token(
+                    f"{self._table_name}:status:claim:{interaction_id}:{claim_owner}:{at}"
+                ),
+            )
+        except RepositoryConflict:
+            return None
+        return StatusPublicationWork(request=work.request, publication=claimed)
+
+    def _reschedule_status_publication(
+        self,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+        next_attempt_at: datetime,
+        error_code: str,
+        history_checkpoint: StatusHistoryCheckpoint | None = None,
+        message_may_exist: bool = False,
+    ) -> IngressStatusPublication:
+        _require_utc(at)
+        _require_utc(next_attempt_at)
+        if next_attempt_at <= at:
+            raise ValueError("status publication retry must be scheduled in the future")
+        _require_status_claim(work.publication, claim_owner)
+        if not error_code.strip():
+            raise ValueError("status publication retry error code must not be empty")
+        if not isinstance(message_may_exist, bool):
+            raise ValueError("status publication message ambiguity flag must be a boolean")
+        history_progressed = (
+            history_checkpoint is not None
+            and history_checkpoint != work.publication.history_checkpoint
+        )
+        if history_checkpoint is not None:
+            _validate_history_checkpoint_progress(
+                work.publication.history_checkpoint,
+                history_checkpoint,
+            )
+        unbound_message_may_exist = message_may_exist and work.publication.status_message_id is None
+        updated = replace(
+            work.publication,
+            state=StatusPublicationState.RETRYING,
+            updated_at=at,
+            next_attempt_at=next_attempt_at,
+            claim_owner=None,
+            claim_expires_at=None,
+            delivery_attempt=(0 if history_progressed else work.publication.delivery_attempt),
+            history_checkpoint=(
+                history_checkpoint
+                if history_checkpoint is not None
+                else work.publication.history_checkpoint
+            ),
+            history_reconciliation_required=(
+                True
+                if history_checkpoint is not None or unbound_message_may_exist
+                else work.publication.history_reconciliation_required
+            ),
+            error_code=error_code,
+        )
+        try:
+            self._transact(
+                (
+                    self._put_status_publication_action(
+                        previous=work.publication,
+                        updated=updated,
+                        extra_condition="claim_owner=:owner AND claim_expiry > :claim_at",
+                        extra_values={":owner": claim_owner, ":claim_at": _timestamp(at)},
+                    ),
+                    self._check_status_request_action(work.request),
+                ),
+                token=_client_token(
+                    f"{self._table_name}:status:retry:"
+                    f"{work.publication.canonical_interaction_id}:{claim_owner}:{at}:"
+                    f"{next_attempt_at}:{error_code}:"
+                    f"{_history_checkpoint_token(updated.history_checkpoint)}:"
+                    f"{message_may_exist}"
+                ),
+            )
+        except RepositoryConflict:
+            current = self._get_status_publication(work.publication.canonical_interaction_id)
+            if (
+                current is not None
+                and current.state is StatusPublicationState.RETRYING
+                and current.next_attempt_at == next_attempt_at
+                and current.error_code == error_code
+                and current.history_checkpoint == updated.history_checkpoint
+                and current.history_reconciliation_required
+                == updated.history_reconciliation_required
+                and current.delivery_attempt == updated.delivery_attempt
+                and current.content_hash == updated.content_hash
+                and current.nonce == updated.nonce
+            ):
+                return current
+            released = self._release_latest_status_claim(
+                stale_work=work,
+                claim_owner=claim_owner,
+                at=at,
+                next_attempt_at=next_attempt_at,
+                retry_error_code=error_code,
+                history_checkpoint=history_checkpoint,
+                message_may_exist=message_may_exist,
+            )
+            if released is not None:
+                return released
+            raise
+        return updated
+
+    def _release_latest_status_claim(
+        self,
+        *,
+        stale_work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+        next_attempt_at: datetime | None = None,
+        retry_error_code: str | None = None,
+        permanent_error_code: str | None = None,
+        history_checkpoint: StatusHistoryCheckpoint | None = None,
+        message_may_exist: bool = False,
+    ) -> IngressStatusPublication | None:
+        if (next_attempt_at is None) is not (retry_error_code is None):
+            raise ValueError("stale status retry time and error code must be set together")
+        if (next_attempt_at is None) is (permanent_error_code is None):
+            raise ValueError("exactly one stale status settlement mode must be selected")
+        if next_attempt_at is not None:
+            _require_utc(next_attempt_at)
+        if not isinstance(message_may_exist, bool):
+            raise ValueError("stale status message ambiguity flag must be a boolean")
+        latest = self._latest_owned_status_work(
+            stale_work=stale_work,
+            claim_owner=claim_owner,
+            at=at,
+        )
+        if latest is None:
+            return None
+        publication = latest.publication
+        same_revision = (
+            publication.desired_state is stale_work.publication.desired_state
+            and publication.content_hash == stale_work.publication.content_hash
+        )
+        updated_at = max(at, publication.updated_at)
+        retry_at = max(next_attempt_at, updated_at) if next_attempt_at is not None else None
+        permanently_failed = permanent_error_code is not None and same_revision
+        history_progressed = (
+            history_checkpoint is not None and history_checkpoint != publication.history_checkpoint
+        )
+        if history_checkpoint is not None:
+            _validate_history_checkpoint_progress(
+                publication.history_checkpoint,
+                history_checkpoint,
+            )
+        released = replace(
+            publication,
+            state=(
+                StatusPublicationState.RETRYING
+                if next_attempt_at is not None
+                else (
+                    StatusPublicationState.FAILED
+                    if permanently_failed
+                    else StatusPublicationState.PREPARED
+                )
+            ),
+            updated_at=updated_at,
+            next_attempt_at=(
+                retry_at
+                if next_attempt_at is not None
+                else (None if permanently_failed else updated_at)
+            ),
+            claim_owner=None,
+            claim_expires_at=None,
+            delivery_attempt=(
+                0 if history_progressed or not same_revision else publication.delivery_attempt
+            ),
+            history_checkpoint=(
+                history_checkpoint
+                if history_checkpoint is not None
+                else publication.history_checkpoint
+            ),
+            history_reconciliation_required=(
+                publication.status_message_id is None
+                and (
+                    publication.history_reconciliation_required
+                    or history_checkpoint is not None
+                    or message_may_exist
+                )
+            ),
+            error_code=(
+                retry_error_code
+                if next_attempt_at is not None
+                else (permanent_error_code if permanently_failed else None)
+            ),
+        )
+        actions = [
+            self._put_status_publication_action(
+                previous=publication,
+                updated=released,
+                extra_condition="claim_owner=:owner AND claim_expiry > :claim_at",
+                extra_values={":owner": claim_owner, ":claim_at": _timestamp(at)},
+            ),
+            self._check_status_request_action(latest.request),
+        ]
+        if permanently_failed:
+            actions.append(self._decrement_status_counter_action(at))
+        self._transact(
+            actions,
+            token=_client_token(
+                f"{self._table_name}:status:release-stale:"
+                f"{publication.canonical_interaction_id}:{claim_owner}:"
+                f"{publication.content_hash}:{retry_at}:"
+                f"{retry_error_code}:{permanent_error_code}:"
+                f"{_history_checkpoint_token(released.history_checkpoint)}:"
+                f"{message_may_exist}:{publication.delivery_attempt}:{publication.nonce}:"
+                f"{updated_at}"
+            ),
+        )
+        return released
+
+    def _mark_status_delivered(
+        self,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        message_id: str,
+        at: datetime,
+    ) -> IngressStatusPublication:
+        _require_utc(at)
+        _require_status_claim(work.publication, claim_owner)
+        if not message_id.strip():
+            raise ValueError("status message ID must not be empty")
+        if (
+            work.publication.status_message_id is not None
+            and work.publication.status_message_id != message_id
+        ):
+            raise RepositoryConflict("status delivery cannot rebind a known message")
+        delivered = replace(
+            work.publication,
+            state=StatusPublicationState.DELIVERED,
+            delivered_state=work.publication.desired_state,
+            status_message_id=message_id,
+            status_message_updated_at=at,
+            updated_at=at,
+            next_attempt_at=None,
+            claim_owner=None,
+            claim_expires_at=None,
+            history_checkpoint=None,
+            history_reconciliation_required=False,
+            error_code=None,
+        )
+        request = replace(
+            work.request,
+            status_message_id=message_id,
+            status_message_updated_at=at,
+        )
+        try:
+            self._transact(
+                (
+                    self._put_status_publication_action(
+                        previous=work.publication,
+                        updated=delivered,
+                        extra_condition="claim_owner=:owner AND claim_expiry > :claim_at",
+                        extra_values={":owner": claim_owner, ":claim_at": _timestamp(at)},
+                    ),
+                    self._put_status_request_metadata_action(
+                        previous=work.request,
+                        updated=request,
+                    ),
+                    self._decrement_status_counter_action(at),
+                ),
+                token=_client_token(
+                    f"{self._table_name}:status:delivered:"
+                    f"{work.publication.canonical_interaction_id}:{claim_owner}:"
+                    f"{work.publication.desired_state.value}:{message_id}:"
+                    f"{work.publication.delivery_attempt}:{work.publication.nonce}:"
+                    f"{work.publication.content_hash}:{at}"
+                ),
+            )
+        except RepositoryConflict:
+            current = self._get_status_publication(work.publication.canonical_interaction_id)
+            if (
+                current is not None
+                and current.state is StatusPublicationState.DELIVERED
+                and current.desired_state is work.publication.desired_state
+                and current.status_message_id == message_id
+                and current.content_hash == work.publication.content_hash
+            ):
+                return current
+            converged = self._settle_latest_status_delivery(
+                stale_work=work,
+                claim_owner=claim_owner,
+                message_id=message_id,
+                at=at,
+            )
+            if converged is not None:
+                return converged
+            raise
+        return delivered
+
+    def _settle_latest_status_delivery(
+        self,
+        *,
+        stale_work: StatusPublicationWork,
+        claim_owner: str,
+        message_id: str,
+        at: datetime,
+    ) -> IngressStatusPublication | None:
+        latest = self._latest_owned_status_work(
+            stale_work=stale_work,
+            claim_owner=claim_owner,
+            at=at,
+        )
+        if latest is None:
+            return None
+        publication = latest.publication
+        if (
+            publication.status_message_id is not None
+            and publication.status_message_id != message_id
+        ):
+            raise RepositoryConflict("stale status delivery cannot rebind a known message")
+        same_revision_content = (
+            publication.desired_state is stale_work.publication.desired_state
+            and publication.content_hash == stale_work.publication.content_hash
+        )
+        updated_at = max(at, publication.updated_at)
+        updated = replace(
+            publication,
+            state=(
+                StatusPublicationState.DELIVERED
+                if same_revision_content
+                else StatusPublicationState.PREPARED
+            ),
+            delivered_state=stale_work.publication.desired_state,
+            status_message_id=message_id,
+            status_message_updated_at=at,
+            updated_at=updated_at,
+            next_attempt_at=None if same_revision_content else updated_at,
+            claim_owner=None,
+            claim_expires_at=None,
+            history_checkpoint=None,
+            delivery_attempt=0 if not same_revision_content else publication.delivery_attempt,
+            history_reconciliation_required=False,
+            error_code=None,
+        )
+        request = replace(
+            latest.request,
+            status_message_id=message_id,
+            status_message_updated_at=at,
+        )
+        actions = [
+            self._put_status_publication_action(
+                previous=publication,
+                updated=updated,
+                extra_condition="claim_owner=:owner AND claim_expiry > :claim_at",
+                extra_values={":owner": claim_owner, ":claim_at": _timestamp(at)},
+            ),
+            self._put_status_request_metadata_action(
+                previous=latest.request,
+                updated=request,
+            ),
+        ]
+        if same_revision_content:
+            actions.append(self._decrement_status_counter_action(at))
+        self._transact(
+            actions,
+            token=_client_token(
+                f"{self._table_name}:status:stale-delivery:"
+                f"{publication.canonical_interaction_id}:{claim_owner}:"
+                f"{publication.content_hash}:{message_id}:"
+                f"{publication.delivery_attempt}:{publication.nonce}:{updated_at}"
+            ),
+        )
+        return updated
+
+    def _mark_status_failed(
+        self,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+        error_code: str,
+        message_may_exist: bool = False,
+    ) -> IngressStatusPublication:
+        _require_utc(at)
+        _require_status_claim(work.publication, claim_owner)
+        if not error_code.strip():
+            raise ValueError("status publication failure code must not be empty")
+        if not isinstance(message_may_exist, bool):
+            raise ValueError("status publication message ambiguity flag must be a boolean")
+        unbound_message_may_exist = message_may_exist and work.publication.status_message_id is None
+        failed = replace(
+            work.publication,
+            state=StatusPublicationState.FAILED,
+            updated_at=at,
+            next_attempt_at=None,
+            claim_owner=None,
+            claim_expires_at=None,
+            history_reconciliation_required=(
+                work.publication.history_reconciliation_required or unbound_message_may_exist
+            ),
+            error_code=error_code,
+        )
+        try:
+            self._transact(
+                (
+                    self._put_status_publication_action(
+                        previous=work.publication,
+                        updated=failed,
+                        extra_condition="claim_owner=:owner AND claim_expiry > :claim_at",
+                        extra_values={":owner": claim_owner, ":claim_at": _timestamp(at)},
+                    ),
+                    self._check_status_request_action(work.request),
+                    self._decrement_status_counter_action(at),
+                ),
+                token=_client_token(
+                    f"{self._table_name}:status:failed:"
+                    f"{work.publication.canonical_interaction_id}:{claim_owner}:"
+                    f"{work.publication.desired_state.value}:{error_code}:"
+                    f"{work.publication.delivery_attempt}:{work.publication.nonce}:"
+                    f"{work.publication.content_hash}:{at}:{message_may_exist}"
+                ),
+            )
+        except RepositoryConflict:
+            current = self._get_status_publication(work.publication.canonical_interaction_id)
+            if (
+                current is not None
+                and current.state is StatusPublicationState.FAILED
+                and current.desired_state is work.publication.desired_state
+                and current.error_code == error_code
+                and current.history_reconciliation_required
+                == failed.history_reconciliation_required
+            ):
+                return current
+            released = self._release_latest_status_claim(
+                stale_work=work,
+                claim_owner=claim_owner,
+                at=at,
+                permanent_error_code=error_code,
+                message_may_exist=message_may_exist,
+            )
+            if released is not None:
+                return released
+            raise
+        return failed
+
+    def _replace_missing_status_message(
+        self,
+        work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork:
+        _require_utc(at)
+        _require_status_claim(work.publication, claim_owner)
+        if work.publication.status_message_id is None:
+            raise RepositoryConflict("only a known status message can be replaced")
+        incarnation = work.publication.incarnation + 1
+        replacement = replace(
+            work.publication,
+            state=StatusPublicationState.RETRYING,
+            nonce=status_publication_nonce(
+                work.publication.canonical_interaction_id,
+                incarnation=incarnation,
+            ),
+            status_message_id=None,
+            status_message_updated_at=None,
+            history_checkpoint=None,
+            history_reconciliation_required=False,
+            updated_at=at,
+            next_attempt_at=at,
+            claim_owner=None,
+            claim_expires_at=None,
+            delivery_attempt=0,
+            incarnation=incarnation,
+            error_code="status_message_missing",
+        )
+        request = replace(
+            work.request,
+            status_message_id=None,
+            status_message_updated_at=None,
+        )
+        try:
+            self._transact(
+                (
+                    self._put_status_publication_action(
+                        previous=work.publication,
+                        updated=replacement,
+                        extra_condition="claim_owner=:owner AND claim_expiry > :claim_at",
+                        extra_values={":owner": claim_owner, ":claim_at": _timestamp(at)},
+                    ),
+                    self._put_status_request_metadata_action(
+                        previous=work.request,
+                        updated=request,
+                    ),
+                ),
+                token=_client_token(
+                    f"{self._table_name}:status:missing:"
+                    f"{work.publication.canonical_interaction_id}:{claim_owner}:{incarnation}"
+                ),
+            )
+        except RepositoryConflict:
+            latest = self._replace_latest_missing_status_message(
+                stale_work=work,
+                claim_owner=claim_owner,
+                at=at,
+            )
+            if latest is not None:
+                return latest
+            raise
+        return StatusPublicationWork(request=request, publication=replacement)
+
+    def _replace_latest_missing_status_message(
+        self,
+        *,
+        stale_work: StatusPublicationWork,
+        claim_owner: str,
+        at: datetime,
+    ) -> StatusPublicationWork | None:
+        latest = self._latest_owned_status_work(
+            stale_work=stale_work,
+            claim_owner=claim_owner,
+            at=at,
+        )
+        if (
+            latest is None
+            or latest.publication.status_message_id != stale_work.publication.status_message_id
+        ):
+            return None
+        publication = latest.publication
+        incarnation = publication.incarnation + 1
+        updated_at = max(at, publication.updated_at)
+        replacement = replace(
+            publication,
+            state=StatusPublicationState.RETRYING,
+            nonce=status_publication_nonce(
+                publication.canonical_interaction_id,
+                incarnation=incarnation,
+            ),
+            status_message_id=None,
+            status_message_updated_at=None,
+            history_checkpoint=None,
+            history_reconciliation_required=False,
+            updated_at=updated_at,
+            next_attempt_at=updated_at,
+            claim_owner=None,
+            claim_expires_at=None,
+            delivery_attempt=0,
+            incarnation=incarnation,
+            error_code="status_message_missing",
+        )
+        request = replace(
+            latest.request,
+            status_message_id=None,
+            status_message_updated_at=None,
+        )
+        self._transact(
+            (
+                self._put_status_publication_action(
+                    previous=publication,
+                    updated=replacement,
+                    extra_condition="claim_owner=:owner AND claim_expiry > :claim_at",
+                    extra_values={":owner": claim_owner, ":claim_at": _timestamp(at)},
+                ),
+                self._put_status_request_metadata_action(
+                    previous=latest.request,
+                    updated=request,
+                ),
+            ),
+            token=_client_token(
+                f"{self._table_name}:status:missing-latest:"
+                f"{publication.canonical_interaction_id}:{claim_owner}:{incarnation}"
+            ),
+        )
+        return StatusPublicationWork(request=request, publication=replacement)
+
+    def _list_due_status_publications(
+        self,
+        at: datetime,
+        limit: int,
+    ) -> tuple[IngressStatusPublication, ...]:
+        _require_utc(at)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("status publication query limit must be between 1 and 100")
+        publications: list[IngressStatusPublication] = []
+        exclusive_start_key: dict[str, AttributeValueTypeDef] | None = None
+        while len(publications) < limit:
+            parameters: QueryInputTypeDef = {
+                "TableName": self._table_name,
+                "IndexName": "gsi1",
+                "KeyConditionExpression": "gsi1pk=:due AND gsi1sk <= :at",
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":due": "INGRESS#STATUS_DUE",
+                        ":at": f"{_timestamp(at)}#\uffff",
+                    }
+                ),
+                "ScanIndexForward": True,
+                "Limit": limit - len(publications),
+            }
+            if exclusive_start_key is not None:
+                parameters["ExclusiveStartKey"] = exclusive_start_key
+            response = self._client.query(**parameters)
+            publications.extend(
+                deserialize_ingress_status_publication(unmarshal_item(item))
+                for item in response.get("Items", [])
+            )
+            exclusive_start_key = response.get("LastEvaluatedKey")
+            if not exclusive_start_key:
+                break
+        return tuple(publications[:limit])
 
     def _list_ready(self, at: datetime) -> tuple[IngressRequest, ...]:
         _require_utc(at)
@@ -511,12 +1301,17 @@ class DynamoDbIngressRepository:
         values[":owner"] = claim_owner
         values[":at"] = _timestamp(at)
         try:
+            status_actions = self._rearm_status_actions(
+                request=updated,
+                state=StatusMessageState.ACCEPTED,
+                at=at,
+            )
             self._replace_request_and_operation(
                 previous=request,
                 updated=updated,
                 condition=condition,
                 values=values,
-                extra_actions=(self._decrement_counter_action(at),),
+                extra_actions=(self._decrement_counter_action(at), *status_actions),
                 token_suffix=f"accepted:{debate_id}:{attempt_id}",
             )
         except RepositoryConflict:
@@ -538,7 +1333,14 @@ class DynamoDbIngressRepository:
     ) -> IngressRequest:
         _require_utc(at)
         if request.status_message_state is StatusMessageState.STARTUP_TIMEOUT:
-            return request
+            current = self._status_work(request.interaction_id)
+            if (
+                current is None
+                or current.publication.request_sort_key != ingress_request_sort_key(request)
+                or current.request.status_message_state is not StatusMessageState.STARTUP_TIMEOUT
+            ):
+                raise RepositoryConflict("startup-timeout replay is stale")
+            return current.request
         if not request.status.counts_toward_queue_limit:
             raise RepositoryConflict("startup timeout applies only to queued ingress")
         if at < request.startup_deadline_at or at >= request.terminal_deadline_at:
@@ -553,11 +1355,17 @@ class DynamoDbIngressRepository:
         values = self._expected_values(request)
         values[":at"] = _timestamp(at)
         try:
+            status_actions = self._rearm_status_actions(
+                request=updated,
+                state=StatusMessageState.STARTUP_TIMEOUT,
+                at=at,
+            )
             self._replace_request_and_operation(
                 previous=request,
                 updated=updated,
                 condition=condition,
                 values=values,
+                extra_actions=status_actions,
                 token_suffix=f"startup-timeout:{at}",
             )
         except RepositoryConflict:
@@ -584,6 +1392,16 @@ class DynamoDbIngressRepository:
             IngressStatus.FAILED,
         }:
             raise ValueError("terminal ingress status must be completed, rejected, or failed")
+        if request.status.is_terminal:
+            current = self._status_work(request.interaction_id)
+            if (
+                current is not None
+                and current.publication.request_sort_key == ingress_request_sort_key(request)
+                and current.request.status is status
+                and current.request.error_code == error_code
+            ):
+                return current.request
+            raise RepositoryConflict("ingress request already reached another terminal state")
         if status is IngressStatus.COMPLETED:
             if request.status is not IngressStatus.ACCEPTED:
                 raise RepositoryConflict("only an accepted ingress request may complete")
@@ -591,10 +1409,6 @@ class DynamoDbIngressRepository:
                 raise ValueError("completed ingress request cannot have an error code")
         elif error_code is None or not error_code.strip():
             raise ValueError("rejected and failed ingress requests require an error code")
-        if request.status.is_terminal:
-            if request.status is status and request.error_code == error_code:
-                return request
-            raise RepositoryConflict("ingress request already reached another terminal state")
         state_by_status = {
             IngressStatus.COMPLETED: StatusMessageState.COMPLETED,
             IngressStatus.REJECTED: StatusMessageState.REJECTED,
@@ -611,18 +1425,23 @@ class DynamoDbIngressRepository:
             error_code=error_code,
             completed_at=at,
         )
-        extra = (
+        queue_actions = (
             (self._decrement_counter_action(at),)
             if request.status.counts_toward_queue_limit
             else ()
         )
         try:
+            status_actions = self._rearm_status_actions(
+                request=updated,
+                state=state_by_status[status],
+                at=at,
+            )
             self._replace_request_and_operation(
                 previous=request,
                 updated=updated,
                 condition=self._request_condition(request),
                 values=self._expected_values(request),
-                extra_actions=extra,
+                extra_actions=(*queue_actions, *status_actions),
                 token_suffix=f"terminal:{status.value}:{at}",
             )
         except RepositoryConflict:
@@ -636,30 +1455,25 @@ class DynamoDbIngressRepository:
             raise
         return updated
 
-    def _update_status_message(
+    def _request_status_publication(
         self,
         request: IngressRequest,
         state: StatusMessageState,
-        message_id: str,
         at: datetime,
     ) -> IngressRequest:
         _require_utc(at)
-        if not message_id.strip():
-            raise ValueError("status message ID must not be empty")
-        if at < request.updated_at:
-            raise ValueError("status message timestamp cannot precede request update")
-        if (
-            request.status_message_state is state
-            and request.status_message_id == message_id
-            and request.status_message_updated_at is not None
-            and request.status_message_updated_at >= request.updated_at
-        ):
-            return request
+        if request.status_message_state is state:
+            current = self._status_work(request.interaction_id)
+            if (
+                current is None
+                or current.publication.request_sort_key != ingress_request_sort_key(request)
+                or current.request.status_message_state is not state
+            ):
+                raise RepositoryConflict("status publication replay is stale")
+            return current.request
         updated = replace(
             request,
             status_message_state=state,
-            status_message_id=message_id,
-            status_message_updated_at=at,
             updated_at=at,
         )
         try:
@@ -668,17 +1482,16 @@ class DynamoDbIngressRepository:
                 updated=updated,
                 condition=self._request_condition(request),
                 values=self._expected_values(request),
-                token_suffix=f"status-message:{state.value}:{message_id}:{at}",
+                extra_actions=self._rearm_status_actions(
+                    request=updated,
+                    state=state,
+                    at=at,
+                ),
+                token_suffix=f"status-desired:{state.value}:{at}",
             )
         except RepositoryConflict:
             current = self._load_current(request)
-            if (
-                current is not None
-                and current.status_message_state is state
-                and current.status_message_id == message_id
-                and current.status_message_updated_at is not None
-                and current.status_message_updated_at >= request.updated_at
-            ):
+            if current is not None and current.status_message_state is state:
                 return current
             raise
         return updated
@@ -739,6 +1552,164 @@ class DynamoDbIngressRepository:
             if not exclusive_start_key:
                 return tuple(requests)
 
+    def _rearm_status_actions(
+        self,
+        *,
+        request: IngressRequest,
+        state: StatusMessageState,
+        at: datetime,
+    ) -> tuple[TransactWriteItemTypeDef, ...]:
+        publication = self._get_status_publication(request.interaction_id)
+        if publication is None:
+            raise RepositoryConflict("ingress request has no status publication")
+        if (
+            publication.request_sort_key != ingress_request_sort_key(request)
+            or publication.status_channel_id != request.status_channel_id
+        ):
+            raise RepositoryConflict("ingress status publication identity is inconsistent")
+        content = render_public_status(request, state)
+        if (
+            publication.desired_state is state
+            and publication.content == content
+            and publication.state.counts_as_pending
+        ):
+            return ()
+        claim_is_active = publication.state is StatusPublicationState.CLAIMED
+        history_required = publication.history_reconciliation_required
+        updated = replace(
+            publication,
+            desired_state=state,
+            state=(
+                StatusPublicationState.CLAIMED
+                if claim_is_active
+                else StatusPublicationState.PREPARED
+            ),
+            content=content,
+            content_hash=status_content_hash(content),
+            updated_at=at,
+            next_attempt_at=None if claim_is_active else at,
+            claim_owner=publication.claim_owner if claim_is_active else None,
+            claim_expires_at=publication.claim_expires_at if claim_is_active else None,
+            delivery_attempt=(publication.delivery_attempt if claim_is_active else 0),
+            history_reconciliation_required=(
+                history_required if publication.status_message_id is None else False
+            ),
+            error_code=None,
+        )
+        actions = [
+            self._put_status_publication_action(
+                previous=publication,
+                updated=updated,
+            )
+        ]
+        if not publication.state.counts_as_pending:
+            actions.append(self._increment_status_counter_action(at))
+        return tuple(actions)
+
+    def _put_status_publication_action(
+        self,
+        *,
+        previous: IngressStatusPublication,
+        updated: IngressStatusPublication,
+        extra_condition: str | None = None,
+        extra_values: Mapping[str, DynamoValue] | None = None,
+    ) -> TransactWriteItemTypeDef:
+        condition = (
+            "publication_state=:publication_state AND desired_state=:desired_state "
+            "AND updated_at=:publication_updated AND incarnation=:incarnation "
+            "AND nonce=:nonce AND content_hash=:content_hash "
+            "AND history_reconciliation_required=:history_required "
+            "AND schema_version=:schema AND record_schema_version=:record_schema "
+            "AND record_type=:publication_type "
+            "AND canonical_interaction_id=:interaction_id "
+            "AND request_sort_key=:request_sort_key"
+        )
+        checkpoint_values = _history_checkpoint_values(previous.history_checkpoint)
+        for field, value in checkpoint_values.items():
+            placeholder = f":expected_{field}"
+            if value is None:
+                condition += f" AND attribute_not_exists({field})"
+            else:
+                condition += f" AND {field}={placeholder}"
+        if extra_condition is not None:
+            condition += f" AND {extra_condition}"
+        values: DynamoItem = {
+            ":publication_state": previous.state.value,
+            ":desired_state": previous.desired_state.value,
+            ":publication_updated": _timestamp(previous.updated_at),
+            ":incarnation": previous.incarnation,
+            ":nonce": previous.nonce,
+            ":content_hash": previous.content_hash,
+            ":history_required": previous.history_reconciliation_required,
+            ":schema": CURRENT_SCHEMA_VERSION,
+            ":record_schema": INGRESS_STATUS_PUBLICATION_RECORD_SCHEMA_VERSION,
+            ":publication_type": "ingress_status_publication",
+            ":interaction_id": previous.canonical_interaction_id,
+            ":request_sort_key": previous.request_sort_key,
+        }
+        for field, value in checkpoint_values.items():
+            if value is not None:
+                values[f":expected_{field}"] = value
+        if extra_values is not None:
+            values.update(extra_values)
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(serialize_ingress_status_publication(updated)),
+                    "ConditionExpression": condition,
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
+        )
+
+    def _check_status_request_action(
+        self,
+        request: IngressRequest,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(_request_key(ingress_request_sort_key(request))),
+                    "ConditionExpression": self._status_request_condition(request),
+                    "ExpressionAttributeNames": {"#status": "status"},
+                    "ExpressionAttributeValues": marshal_item(
+                        self._status_request_expected_values(request)
+                    ),
+                }
+            },
+        )
+
+    def _put_status_request_metadata_action(
+        self,
+        *,
+        previous: IngressRequest,
+        updated: IngressRequest,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(serialize_ingress_request(updated)),
+                    "ConditionExpression": self._status_request_condition(previous),
+                    "ExpressionAttributeNames": {"#status": "status"},
+                    "ExpressionAttributeValues": marshal_item(
+                        self._status_request_expected_values(previous)
+                    ),
+                }
+            },
+        )
+
+    def _status_request_condition(self, request: IngressRequest) -> str:
+        return self._request_condition(request)
+
+    def _status_request_expected_values(self, request: IngressRequest) -> DynamoItem:
+        return self._expected_values(request)
+
     def _replace_request_and_operation(
         self,
         *,
@@ -789,17 +1760,28 @@ class DynamoDbIngressRepository:
         )
 
     def _request_condition(self, request: IngressRequest) -> str:
-        return (
+        condition = (
             "#status=:expected_status AND updated_at=:expected_updated "
             "AND schema_version=:schema AND record_schema_version=:record_schema "
             "AND record_type=:request_type "
             "AND interaction_id=:interaction_id AND operation_id=:operation_id "
             "AND created_at=:created_at AND startup_deadline_at=:startup_deadline "
-            "AND terminal_deadline_at=:terminal_deadline"
+            "AND terminal_deadline_at=:terminal_deadline "
+            "AND status_message_state=:expected_message_state "
+            "AND status_channel_id=:expected_status_channel"
+        )
+        if request.status_message_id is None:
+            return (
+                condition + " AND attribute_not_exists(status_message_id) "
+                "AND attribute_not_exists(status_message_updated_at)"
+            )
+        return (
+            condition + " AND status_message_id=:expected_message_id "
+            "AND status_message_updated_at=:expected_message_updated"
         )
 
     def _expected_values(self, request: IngressRequest) -> DynamoItem:
-        return {
+        values: DynamoItem = {
             ":expected_status": request.status.value,
             ":expected_updated": _timestamp(request.updated_at),
             ":schema": CURRENT_SCHEMA_VERSION,
@@ -810,7 +1792,15 @@ class DynamoDbIngressRepository:
             ":created_at": _timestamp(request.created_at),
             ":startup_deadline": _timestamp(request.startup_deadline_at),
             ":terminal_deadline": _timestamp(request.terminal_deadline_at),
+            ":expected_message_state": request.status_message_state.value,
+            ":expected_status_channel": request.status_channel_id,
         }
+        if request.status_message_id is not None:
+            if request.status_message_updated_at is None:
+                raise RepositoryConflict("status message ID has no update timestamp")
+            values[":expected_message_id"] = request.status_message_id
+            values[":expected_message_updated"] = _timestamp(request.status_message_updated_at)
+        return values
 
     def _operation_expected_values(self, request: IngressRequest) -> DynamoItem:
         return {
@@ -878,6 +1868,34 @@ class DynamoDbIngressRepository:
                         "(#count >= :zero AND record_type=:type "
                         "AND schema_version=:schema "
                         "AND record_schema_version=:record_schema)"
+                    ),
+                    "ExpressionAttributeNames": {"#count": "count"},
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":zero": 0,
+                            ":one": 1,
+                            ":type": "ingress_status_pending_counter",
+                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
+                            ":at": _timestamp(at),
+                        }
+                    ),
+                }
+            },
+        )
+
+    def _decrement_status_counter_action(self, at: datetime) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Update": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(_status_counter_key()),
+                    "UpdateExpression": "SET #count=#count-:one, updated_at=:at",
+                    "ConditionExpression": (
+                        "#count > :zero AND record_type=:type "
+                        "AND schema_version=:schema "
+                        "AND record_schema_version=:record_schema"
                     ),
                     "ExpressionAttributeNames": {"#count": "count"},
                     "ExpressionAttributeValues": marshal_item(
@@ -1063,6 +2081,67 @@ def _status_publication_key(canonical_interaction_id: str) -> DynamoItem:
     }
 
 
+def _history_checkpoint_values(
+    checkpoint: StatusHistoryCheckpoint | None,
+) -> dict[str, str | None]:
+    return {
+        "history_cursor_message_id": (
+            checkpoint.history_cursor_message_id if checkpoint is not None else None
+        ),
+        "history_verified_head_message_id": (
+            checkpoint.history_verified_head_message_id if checkpoint is not None else None
+        ),
+        "history_gap_cursor_message_id": (
+            checkpoint.history_gap_cursor_message_id if checkpoint is not None else None
+        ),
+        "history_gap_upper_message_id": (
+            checkpoint.history_gap_upper_message_id if checkpoint is not None else None
+        ),
+    }
+
+
+def _history_checkpoint_token(checkpoint: StatusHistoryCheckpoint | None) -> str:
+    values = _history_checkpoint_values(checkpoint)
+    return ":".join(values[field] or "-" for field in sorted(values))
+
+
+def _validate_history_checkpoint_progress(
+    previous: StatusHistoryCheckpoint | None,
+    updated: StatusHistoryCheckpoint,
+) -> None:
+    if previous is None:
+        return
+    previous_head = int(previous.history_verified_head_message_id)
+    updated_head = int(updated.history_verified_head_message_id)
+    if updated_head < previous_head:
+        raise ValueError("status history verified head cannot move backwards")
+    previous_cursor = previous.history_cursor_message_id
+    updated_cursor = updated.history_cursor_message_id
+    if previous_cursor is None and updated_cursor is not None:
+        raise ValueError("completed status history baseline cannot be reopened")
+    if (
+        previous_cursor is not None
+        and updated_cursor is not None
+        and int(updated_cursor) > int(previous_cursor)
+    ):
+        raise ValueError("status history cursor cannot move towards newer messages")
+    previous_gap_cursor = previous.history_gap_cursor_message_id
+    previous_gap_upper = previous.history_gap_upper_message_id
+    if previous_gap_cursor is None or previous_gap_upper is None:
+        return
+    if updated_head == previous_head:
+        if (
+            updated.history_gap_cursor_message_id is None
+            or updated.history_gap_upper_message_id != previous_gap_upper
+        ):
+            raise ValueError("active status history gap must be resumed or completed")
+        if int(updated.history_gap_cursor_message_id) > int(previous_gap_cursor):
+            raise ValueError("status history gap cursor cannot move towards newer messages")
+        return
+    if updated_head < int(previous_gap_upper):
+        raise ValueError("status history verified head cannot skip an active gap")
+
+
 def _request_key(request_sort_key: str) -> DynamoItem:
     return {"PK": "CONTROL#INGRESS", "SK": request_sort_key}
 
@@ -1165,6 +2244,46 @@ def _is_ready(request: IngressRequest, at: datetime) -> bool:
         and request.claim_expires_at is not None
         and request.claim_expires_at <= at
     )
+
+
+def _status_publication_is_due(
+    publication: IngressStatusPublication,
+    at: datetime,
+) -> bool:
+    if publication.state in {
+        StatusPublicationState.PREPARED,
+        StatusPublicationState.RETRYING,
+    }:
+        return publication.next_attempt_at is not None and publication.next_attempt_at <= at
+    return (
+        publication.state is StatusPublicationState.CLAIMED
+        and publication.claim_expires_at is not None
+        and publication.claim_expires_at <= at
+    )
+
+
+def _status_due_condition(publication: IngressStatusPublication) -> str:
+    if publication.state in {
+        StatusPublicationState.PREPARED,
+        StatusPublicationState.RETRYING,
+    }:
+        return "next_attempt_at <= :claim_at"
+    if publication.state is StatusPublicationState.CLAIMED:
+        return "claim_expiry <= :claim_at"
+    raise ValueError("only a due status publication can be claimed")
+
+
+def _require_status_claim(
+    publication: IngressStatusPublication,
+    claim_owner: str,
+) -> None:
+    if not claim_owner.strip():
+        raise ValueError("status claim owner must not be empty")
+    if (
+        publication.state is not StatusPublicationState.CLAIMED
+        or publication.claim_owner != claim_owner
+    ):
+        raise RepositoryConflict("only the current status claimant may settle publication")
 
 
 def _client_token(value: str) -> str:

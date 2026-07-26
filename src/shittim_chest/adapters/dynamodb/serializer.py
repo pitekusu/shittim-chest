@@ -24,6 +24,7 @@ from shittim_chest.application.scale_to_zero import (
     RuntimeState,
     RuntimeStatus,
     RuntimeWakeResult,
+    StatusHistoryCheckpoint,
     StatusMessageState,
     StatusPublicationState,
 )
@@ -677,6 +678,9 @@ def serialize_ingress_status_publication(
         "desired_state": publication.desired_state.value,
         "publication_state": publication.state.value,
         "nonce": publication.nonce,
+        "content": publication.content,
+        "content_hash": publication.content_hash,
+        "history_reconciliation_required": publication.history_reconciliation_required,
         "created_at": _timestamp(publication.created_at),
         "updated_at": _timestamp(publication.updated_at),
         "delivery_attempt": publication.delivery_attempt,
@@ -692,8 +696,38 @@ def serialize_ingress_status_publication(
             "status_message_updated_at",
             _optional_timestamp(publication.status_message_updated_at),
         ),
-        ("content_hash", publication.content_hash),
-        ("history_cursor_message_id", publication.history_cursor_message_id),
+        (
+            "history_cursor_message_id",
+            (
+                publication.history_checkpoint.history_cursor_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
+        (
+            "history_verified_head_message_id",
+            (
+                publication.history_checkpoint.history_verified_head_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
+        (
+            "history_gap_cursor_message_id",
+            (
+                publication.history_checkpoint.history_gap_cursor_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
+        (
+            "history_gap_upper_message_id",
+            (
+                publication.history_checkpoint.history_gap_upper_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
         ("next_attempt_at", _optional_timestamp(publication.next_attempt_at)),
         ("claim_owner", publication.claim_owner),
         ("claim_expiry", _optional_timestamp(publication.claim_expires_at)),
@@ -712,8 +746,13 @@ def deserialize_ingress_status_publication(
 ) -> IngressStatusPublication:
     """Validate one durable public-status operation and its sparse due index."""
 
-    item = _validate_auxiliary_item(raw_item, expected_type="ingress_status_publication")
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="ingress_status_publication",
+        expected_record_schema_version=3,
+    )
     delivered = _optional_text(item, "delivered_state")
+    history_checkpoint = _deserialize_status_history_checkpoint(item)
     try:
         publication = IngressStatusPublication(
             canonical_interaction_id=_text(item, "canonical_interaction_id"),
@@ -723,12 +762,17 @@ def deserialize_ingress_status_publication(
             delivered_state=(StatusMessageState(delivered) if delivered is not None else None),
             state=StatusPublicationState(_text(item, "publication_state")),
             nonce=_text(item, "nonce"),
+            content=_text(item, "content"),
+            content_hash=_text(item, "content_hash"),
             created_at=_datetime(item, "created_at"),
             updated_at=_datetime(item, "updated_at"),
             status_message_id=_optional_text(item, "status_message_id"),
             status_message_updated_at=_optional_datetime(item, "status_message_updated_at"),
-            content_hash=_optional_text(item, "content_hash"),
-            history_cursor_message_id=_optional_text(item, "history_cursor_message_id"),
+            history_checkpoint=history_checkpoint,
+            history_reconciliation_required=_boolean(
+                item,
+                "history_reconciliation_required",
+            ),
             next_attempt_at=_optional_datetime(item, "next_attempt_at"),
             claim_owner=_optional_text(item, "claim_owner"),
             claim_expires_at=_optional_datetime(item, "claim_expiry"),
@@ -755,6 +799,32 @@ def deserialize_ingress_status_publication(
         if _text(item, "gsi1sk") != expected_sort_key:
             raise PersistenceFormatError("status publication has an invalid due index sort key")
     return publication
+
+
+def _deserialize_status_history_checkpoint(
+    item: Mapping[str, DynamoValue],
+) -> StatusHistoryCheckpoint | None:
+    fields = (
+        "history_cursor_message_id",
+        "history_verified_head_message_id",
+        "history_gap_cursor_message_id",
+        "history_gap_upper_message_id",
+    )
+    values = {field: _optional_text(item, field) for field in fields}
+    if all(value is None for value in values.values()):
+        return None
+    verified_head = values["history_verified_head_message_id"]
+    if verified_head is None:
+        raise PersistenceFormatError("status history checkpoint has no verified head")
+    try:
+        return StatusHistoryCheckpoint(
+            history_cursor_message_id=values["history_cursor_message_id"],
+            history_verified_head_message_id=verified_head,
+            history_gap_cursor_message_id=values["history_gap_cursor_message_id"],
+            history_gap_upper_message_id=values["history_gap_upper_message_id"],
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid status history checkpoint") from error
 
 
 def _status_publication_due_at(publication: IngressStatusPublication) -> datetime | None:
@@ -1006,11 +1076,12 @@ def _validate_auxiliary_item(
     raw_item: Mapping[str, DynamoValue],
     *,
     expected_type: str,
+    expected_record_schema_version: int = 1,
 ) -> DynamoItem:
     item = dict(raw_item)
     if _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION:
         raise PersistenceFormatError("unsupported shared table schema version")
-    if _integer(item, "record_schema_version") != 1:
+    if _integer(item, "record_schema_version") != expected_record_schema_version:
         raise PersistenceFormatError("unsupported auxiliary record schema version")
     if _text(item, "record_type") != expected_type:
         raise PersistenceFormatError(f"record is not an {expected_type}")

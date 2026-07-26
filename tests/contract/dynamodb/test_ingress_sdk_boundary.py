@@ -29,6 +29,7 @@ from shittim_chest.application import (
     IngressStatusPublication,
 )
 from shittim_chest.application.ports import RepositoryUnavailable
+from shittim_chest.application.status_publication import render_public_status
 from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 7, 26, 4, 0, tzinfo=UTC)
@@ -134,6 +135,71 @@ async def test_active_gsi_query_consumes_every_page_in_fifo_order() -> None:
 
 
 @pytest.mark.asyncio
+async def test_due_status_query_consumes_pages_until_the_requested_limit() -> None:
+    sdk = client()
+    repository = DynamoDbIngressRepository(client=sdk, table_name="test-table")
+    first_request = request(1)
+    second_request = request(2)
+    first = IngressStatusPublication.prepared(
+        first_request,
+        content=render_public_status(first_request, first_request.status_message_state),
+    )
+    second = IngressStatusPublication.prepared(
+        second_request,
+        content=render_public_status(second_request, second_request.status_message_state),
+    )
+    assert first.next_attempt_at is not None
+    first_due = first.next_attempt_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    last_key = marshal_item(
+        {
+            "PK": f"INGRESS_OPERATION#{first.canonical_interaction_id}",
+            "SK": "STATUS_PUBLICATION",
+            "gsi1pk": "INGRESS#STATUS_DUE",
+            "gsi1sk": f"{first_due}#{first.canonical_interaction_id}",
+        }
+    )
+    common = {
+        "TableName": "test-table",
+        "IndexName": "gsi1",
+        "KeyConditionExpression": "gsi1pk=:due AND gsi1sk <= :at",
+        "ExpressionAttributeValues": marshal_item(
+            {
+                ":due": "INGRESS#STATUS_DUE",
+                ":at": f"{NOW.isoformat(timespec='microseconds').replace('+00:00', 'Z')}#\uffff",
+            }
+        ),
+        "ScanIndexForward": True,
+    }
+
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "query",
+            {
+                "Items": [marshal_item(serialize_ingress_status_publication(first))],
+                "Count": 1,
+                "ScannedCount": 1,
+                "LastEvaluatedKey": last_key,
+            },
+            {**common, "Limit": 2},
+        )
+        stubber.add_response(
+            "query",
+            {
+                "Items": [marshal_item(serialize_ingress_status_publication(second))],
+                "Count": 1,
+                "ScannedCount": 1,
+            },
+            {**common, "Limit": 1, "ExclusiveStartKey": last_key},
+        )
+
+        assert await repository.list_due_status_publications(at=NOW, limit=2) == (
+            first,
+            second,
+        )
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
 async def test_operation_replay_uses_a_strongly_consistent_get() -> None:
     sdk = client()
     repository = DynamoDbIngressRepository(client=sdk, table_name="test-table")
@@ -185,7 +251,10 @@ async def test_component_semantic_replay_is_bounded_to_two_sdk_rounds() -> None:
         request_sort_key=request_sort_key,
         created_at=canonical.created_at,
     )
-    publication = IngressStatusPublication.prepared(canonical)
+    publication = IngressStatusPublication.prepared(
+        canonical,
+        content=render_public_status(canonical, canonical.status_message_state),
+    )
 
     with Stubber(sdk) as stubber:
         stubber.add_response(

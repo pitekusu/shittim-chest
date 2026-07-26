@@ -15,9 +15,11 @@ from shittim_chest.application import (
 from shittim_chest.application.scale_to_zero import (
     IngressKind,
     IngressStatusPublication,
+    StatusHistoryCheckpoint,
     StatusMessageState,
     StatusPublicationState,
 )
+from shittim_chest.application.status_publication import render_public_status
 from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 7, 26, 3, 0, tzinfo=UTC)
@@ -167,7 +169,11 @@ def test_control_request_requires_complete_immutable_context_and_hides_repr() ->
 
 
 def test_prepared_status_publication_is_due_and_validates_nonce() -> None:
-    publication = IngressStatusPublication.prepared(request())
+    source_request = request()
+    publication = IngressStatusPublication.prepared(
+        source_request,
+        content=render_public_status(source_request, StatusMessageState.STARTING),
+    )
 
     assert publication.state is StatusPublicationState.PREPARED
     assert publication.desired_state is StatusMessageState.STARTING
@@ -177,6 +183,69 @@ def test_prepared_status_publication_is_due_and_validates_nonce() -> None:
     assert "interaction-id" not in repr(publication)
     with pytest.raises(ValueError, match="22 base64url"):
         replace(publication, nonce="not-valid")
+
+
+def test_status_history_checkpoint_validates_gap_and_publication_bounds() -> None:
+    source_request = replace(request(), interaction_id="300", operation_id="300")
+    publication = IngressStatusPublication.prepared(
+        source_request,
+        content=render_public_status(source_request, StatusMessageState.STARTING),
+    )
+    checkpoint = StatusHistoryCheckpoint(
+        history_cursor_message_id="500",
+        history_verified_head_message_id="700",
+        history_gap_cursor_message_id="800",
+        history_gap_upper_message_id="900",
+    )
+
+    scanning = replace(
+        publication,
+        history_checkpoint=checkpoint,
+        history_reconciliation_required=True,
+    )
+
+    assert scanning.history_checkpoint == checkpoint
+    assert "700" not in repr(checkpoint)
+    with pytest.raises(ValueError, match="set together"):
+        StatusHistoryCheckpoint(
+            history_verified_head_message_id="700",
+            history_gap_cursor_message_id="800",
+        )
+    with pytest.raises(ValueError, match="verified head"):
+        StatusHistoryCheckpoint(
+            history_cursor_message_id="800",
+            history_verified_head_message_id="700",
+        )
+    with pytest.raises(ValueError, match="gap cursor must follow"):
+        StatusHistoryCheckpoint(
+            history_verified_head_message_id="700",
+            history_gap_cursor_message_id="600",
+            history_gap_upper_message_id="900",
+        )
+    with pytest.raises(ValueError, match="cannot follow the gap upper"):
+        StatusHistoryCheckpoint(
+            history_verified_head_message_id="700",
+            history_gap_cursor_message_id="900",
+            history_gap_upper_message_id="800",
+        )
+    with pytest.raises(ValueError, match="requires an unresolved"):
+        replace(publication, history_checkpoint=checkpoint)
+    with pytest.raises(ValueError, match="must follow"):
+        replace(
+            publication,
+            history_checkpoint=StatusHistoryCheckpoint(
+                history_verified_head_message_id="200",
+            ),
+            history_reconciliation_required=True,
+        )
+    with pytest.raises(ValueError, match="must follow"):
+        replace(
+            publication,
+            history_checkpoint=StatusHistoryCheckpoint(
+                history_verified_head_message_id="300",
+            ),
+            history_reconciliation_required=True,
+        )
 
 
 def test_request_accepts_claimed_accepted_and_terminal_shapes() -> None:
