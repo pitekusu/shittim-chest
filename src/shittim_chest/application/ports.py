@@ -12,6 +12,15 @@ from shittim_chest.application.models import (
     LeaseGrant,
     MetricEvent,
 )
+from shittim_chest.application.scale_to_zero import (
+    EcsRuntimeSnapshot,
+    EnqueuedIngress,
+    IngressOperationResult,
+    IngressRequest,
+    RuntimeActivity,
+    RuntimeState,
+    StatusMessageState,
+)
 from shittim_chest.domain import (
     AttemptId,
     DebateId,
@@ -55,6 +64,107 @@ class Metrics(Protocol):
     """Record low-cardinality application events without user content."""
 
     def increment(self, event: MetricEvent, *, debate_id: DebateId) -> None: ...
+
+
+class IngressRepository(Protocol):
+    """Persist a bounded FIFO and its strongly consistent operation results."""
+
+    async def enqueue(self, request: IngressRequest) -> EnqueuedIngress: ...
+
+    async def get_operation_result(
+        self,
+        operation_id: str,
+    ) -> IngressOperationResult | None: ...
+
+    async def list_ready(self, *, at: datetime) -> tuple[IngressRequest, ...]: ...
+
+    async def claim(
+        self,
+        *,
+        request: IngressRequest,
+        claim_owner: str,
+        at: datetime,
+    ) -> IngressRequest | None: ...
+
+    async def reschedule(
+        self,
+        *,
+        request: IngressRequest,
+        claim_owner: str,
+        at: datetime,
+        next_attempt_at: datetime,
+        error_code: str,
+    ) -> IngressRequest: ...
+
+    async def mark_startup_timeout(
+        self,
+        *,
+        request: IngressRequest,
+        at: datetime,
+    ) -> IngressRequest: ...
+
+    async def mark_terminal(
+        self,
+        *,
+        request: IngressRequest,
+        at: datetime,
+        error_code: str,
+    ) -> IngressRequest: ...
+
+    async def update_status_message(
+        self,
+        *,
+        request: IngressRequest,
+        state: StatusMessageState,
+        message_id: str,
+        at: datetime,
+    ) -> IngressRequest: ...
+
+    async def list_startup_deadlines(self, *, at: datetime) -> tuple[IngressRequest, ...]: ...
+
+    async def list_terminal_deadlines(self, *, at: datetime) -> tuple[IngressRequest, ...]: ...
+
+    async def active_count(self) -> int: ...
+
+
+class RuntimeStateRepository(Protocol):
+    """Store one strongly consistent, generation-fenced runtime aggregate."""
+
+    async def get(self) -> RuntimeState: ...
+
+    async def request_wake(
+        self,
+        *,
+        operation_id: str,
+        at: datetime,
+    ) -> RuntimeState: ...
+
+    async def replace(
+        self,
+        *,
+        expected: RuntimeState,
+        updated: RuntimeState,
+    ) -> RuntimeState: ...
+
+
+class EcsRuntimeControl(Protocol):
+    """Control only the configured singleton ECS service through typed values."""
+
+    async def describe(self) -> EcsRuntimeSnapshot: ...
+
+    async def set_desired_count(self, desired_count: int) -> EcsRuntimeSnapshot: ...
+
+
+class DiscordStatusPublisher(Protocol):
+    """Create or update one persisted public startup-status message."""
+
+    async def publish(self, *, request: IngressRequest) -> IngressRequest: ...
+
+
+class RuntimeActivityInspector(Protocol):
+    """Aggregate every durable and process-owned activity required for IDLE."""
+
+    async def inspect(self, *, at: datetime) -> RuntimeActivity: ...
 
 
 class DiscordGateway(Protocol):
