@@ -17,21 +17,28 @@ DEFAULT_POLICY_PATH: Final = REPOSITORY_ROOT / "container-policy.json"
 DEFAULT_DOCKERFILE_PATH: Final = REPOSITORY_ROOT / "Dockerfile"
 MAX_POLICY_BYTES: Final = 64 * 1024
 DIGEST_PATTERN: Final = re.compile(r"^sha256:[0-9a-f]{64}$")
-REFERENCE_PATTERN: Final = re.compile(
-    r"^dhi\.io/python:(?P<tag>3\.14\.6-debian13(?P<dev>-dev)?)@(?P<digest>sha256:[0-9a-f]{64})$"
-)
 FROM_PATTERN: Final = re.compile(
     r"^FROM\s+(?P<reference>\S+)\s+AS\s+(?P<stage>[A-Za-z0-9._-]+)\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
-# Dockerfile is the sole pin for the exact uv image digest. Dependabot updates that
-# line alone; this pattern only enforces registry, digest pin, and allowed range.
+# Dockerfile is the sole pin for exact image digests. Dependabot updates those
+# lines alone; policy only constrains registry, tag family, and digest form.
 UV_REFERENCE_PATTERN: Final = re.compile(
     r"^ghcr\.io/astral-sh/uv:(?P<version>\d+\.\d+\.\d+)@"
     r"(?P<digest>sha256:[0-9a-f]{64})$"
 )
 UV_MIN_VERSION: Final = (0, 11, 8)
 UV_MAX_VERSION_EXCLUSIVE: Final = (0, 12, 0)
+DHI_REFERENCE_PATTERN: Final = re.compile(
+    r"^dhi\.io/python:(?P<tag>3\.14\.6-debian13(?P<dev>-dev)?)"
+    r"@(?P<digest>sha256:[0-9a-f]{64})$"
+)
+STAGE_ALIASES: Final = {
+    "builder": "builder",
+    "runtime": "runtime-base",
+    "runtime-base": "runtime-base",
+    "uv": "uv",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +72,8 @@ class HeartbeatTmpfs:
 class ContainerPolicy:
     """Strictly validated container policy shared by tests and CDK."""
 
-    builder_reference: str
-    builder_arm64_manifest_digest: str
-    runtime_reference: str
-    runtime_arm64_manifest_digest: str
+    builder_tag: str
+    runtime_tag: str
     identity: RuntimeIdentity
     heartbeat_tmpfs: HeartbeatTmpfs
 
@@ -102,13 +107,6 @@ def _integer(data: dict[str, object], field: str, label: str) -> int:
     return value
 
 
-def _validate_reference(reference: str, *, dev: bool) -> None:
-    match = REFERENCE_PATTERN.fullmatch(reference)
-    if match is None or bool(match.group("dev")) is not dev:
-        variant = "builder" if dev else "runtime"
-        raise ValueError(f"invalid pinned DHI {variant} reference")
-
-
 def load_container_policy(path: Path = DEFAULT_POLICY_PATH) -> ContainerPolicy:
     """Load the single container policy with strict field and value checks."""
 
@@ -124,27 +122,18 @@ def load_container_policy(path: Path = DEFAULT_POLICY_PATH) -> ContainerPolicy:
     root = _object(root, "container policy")
     if set(root) != {"schema_version", "dhi", "runtime_identity", "heartbeat_tmpfs"}:
         raise ValueError("container policy has unexpected root fields")
-    if root["schema_version"] != 1:
+    if root["schema_version"] != 2:
         raise ValueError("unsupported container policy schema_version")
 
     dhi = _object(root["dhi"], "dhi")
-    if set(dhi) != {"builder", "runtime"}:
-        raise ValueError("dhi requires builder and runtime")
-    builder = _object(dhi["builder"], "dhi.builder")
-    runtime = _object(dhi["runtime"], "dhi.runtime")
-    expected_image_fields = {"reference", "arm64_manifest_digest"}
-    if set(builder) != expected_image_fields or set(runtime) != expected_image_fields:
-        raise ValueError("DHI image entries have unexpected fields")
-    builder_reference = _string(builder, "reference", "dhi.builder")
-    runtime_reference = _string(runtime, "reference", "dhi.runtime")
-    _validate_reference(builder_reference, dev=True)
-    _validate_reference(runtime_reference, dev=False)
-    builder_manifest = _string(builder, "arm64_manifest_digest", "dhi.builder")
-    runtime_manifest = _string(runtime, "arm64_manifest_digest", "dhi.runtime")
-    if DIGEST_PATTERN.fullmatch(builder_manifest) is None:
-        raise ValueError("invalid builder ARM64 manifest digest")
-    if DIGEST_PATTERN.fullmatch(runtime_manifest) is None:
-        raise ValueError("invalid runtime ARM64 manifest digest")
+    if set(dhi) != {"builder_tag", "runtime_tag"}:
+        raise ValueError("dhi requires builder_tag and runtime_tag")
+    builder_tag = _string(dhi, "builder_tag", "dhi")
+    runtime_tag = _string(dhi, "runtime_tag", "dhi")
+    if builder_tag != "3.14.6-debian13-dev":
+        raise ValueError("dhi.builder_tag must be the approved DHI builder tag")
+    if runtime_tag != "3.14.6-debian13":
+        raise ValueError("dhi.runtime_tag must be the approved DHI runtime tag")
 
     identity_data = _object(root["runtime_identity"], "runtime_identity")
     if set(identity_data) != {"username", "groupname", "uid", "gid", "home"}:
@@ -180,13 +169,36 @@ def load_container_policy(path: Path = DEFAULT_POLICY_PATH) -> ContainerPolicy:
         raise ValueError("heartbeat_tmpfs does not match the production contract")
 
     return ContainerPolicy(
-        builder_reference=builder_reference,
-        builder_arm64_manifest_digest=builder_manifest,
-        runtime_reference=runtime_reference,
-        runtime_arm64_manifest_digest=runtime_manifest,
+        builder_tag=builder_tag,
+        runtime_tag=runtime_tag,
         identity=identity,
         heartbeat_tmpfs=tmpfs,
     )
+
+
+def parse_dockerfile_stages(dockerfile: Path) -> list[tuple[str, str]]:
+    """Return ordered Dockerfile stages as (name, reference) pairs."""
+
+    text = dockerfile.read_text(encoding="utf-8")
+    return [
+        (match.group("stage").lower(), match.group("reference"))
+        for match in FROM_PATTERN.finditer(text)
+    ]
+
+
+def dockerfile_stage_reference(
+    stage: str,
+    dockerfile: Path = DEFAULT_DOCKERFILE_PATH,
+) -> str:
+    """Return one digest-pinned stage reference from the authoritative Dockerfile."""
+
+    requested = STAGE_ALIASES.get(stage.casefold())
+    if requested is None:
+        raise ValueError(f"unknown Dockerfile stage: {stage}")
+    for name, reference in parse_dockerfile_stages(dockerfile):
+        if name == requested:
+            return reference
+    raise ValueError(f"Dockerfile is missing stage {requested}")
 
 
 def _parse_semver_triplet(version: str) -> tuple[int, int, int]:
@@ -212,26 +224,49 @@ def validate_uv_reference(reference: str) -> None:
         )
 
 
+def validate_dhi_reference(reference: str, *, expected_tag: str, dev: bool) -> None:
+    """Require a digest-pinned DHI image with the approved tag family."""
+
+    match = DHI_REFERENCE_PATTERN.fullmatch(reference)
+    if match is None:
+        raise ValueError("Dockerfile DHI stage must use a digest-pinned dhi.io/python image")
+    if match.group("tag") != expected_tag or bool(match.group("dev")) is not dev:
+        variant = "builder" if dev else "runtime"
+        raise ValueError(f"Dockerfile {variant} tag must be {expected_tag}")
+    if DIGEST_PATTERN.fullmatch(match.group("digest")) is None:
+        raise ValueError("Dockerfile DHI stage digest is invalid")
+
+
 def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     """Require Dockerfile stages and numeric identities to match the policy."""
 
     text = dockerfile.read_text(encoding="utf-8")
-    stages = [
-        (match.group("stage").lower(), match.group("reference"))
-        for match in FROM_PATTERN.finditer(text)
-    ]
-    if not stages or stages[0][0] != "uv":
-        raise ValueError("Dockerfile must start with a digest-pinned uv stage")
-    validate_uv_reference(stages[0][1])
-    expected_tail = [
-        ("builder", policy.builder_reference),
-        ("runtime-base", policy.runtime_reference),
-        ("production", "runtime-base"),
-        ("fault-test", "production"),
-        ("break-glass", policy.builder_reference),
-    ]
-    if stages[1:] != expected_tail:
-        raise ValueError("Dockerfile stages do not match container-policy.json")
+    stages = parse_dockerfile_stages(dockerfile)
+    if len(stages) != 6:
+        raise ValueError("Dockerfile must declare the six approved stages")
+    names = [name for name, _reference in stages]
+    if names != [
+        "uv",
+        "builder",
+        "runtime-base",
+        "production",
+        "fault-test",
+        "break-glass",
+    ]:
+        raise ValueError("Dockerfile stages do not match the approved order")
+
+    uv_reference = stages[0][1]
+    builder_reference = stages[1][1]
+    runtime_reference = stages[2][1]
+    validate_uv_reference(uv_reference)
+    validate_dhi_reference(builder_reference, expected_tag=policy.builder_tag, dev=True)
+    validate_dhi_reference(runtime_reference, expected_tag=policy.runtime_tag, dev=False)
+    if stages[3] != ("production", "runtime-base"):
+        raise ValueError("production stage must derive from runtime-base")
+    if stages[4] != ("fault-test", "production"):
+        raise ValueError("fault-test stage must derive from production")
+    if stages[5] != ("break-glass", builder_reference):
+        raise ValueError("break-glass stage must reuse the builder image pin")
     if f"USER {policy.identity.user_spec}" not in text:
         raise ValueError("Dockerfile USER does not match the DHI runtime identity")
     if "10001" in text:
@@ -242,12 +277,20 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
     parser.add_argument("--dockerfile", type=Path, default=DEFAULT_DOCKERFILE_PATH)
+    parser.add_argument(
+        "--print-reference",
+        choices=sorted(STAGE_ALIASES),
+        help="print one digest-pinned Dockerfile stage reference and exit",
+    )
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
     try:
+        if args.print_reference is not None:
+            print(dockerfile_stage_reference(args.print_reference, args.dockerfile))
+            return 0
         policy = load_container_policy(args.policy)
         validate_dockerfile(policy, args.dockerfile)
     except (OSError, ValueError) as error:

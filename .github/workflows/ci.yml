@@ -280,16 +280,19 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Verify the pinned DHI ARM64 manifests
         run: |
+          # Dockerfile is the sole exact digest pin; require the index to publish
+          # a linux/arm64 manifest under that pin without storing a second digest.
+          # This job does not install the project uv env; the policy tool is stdlib-only.
           verify_manifest() {
-            policy_key=$1
-            reference=$(jq --raw-output ".dhi.${policy_key}.reference" container-policy.json)
-            expected=$(jq --raw-output ".dhi.${policy_key}.arm64_manifest_digest" container-policy.json)
+            stage=$1
+            reference=$(python3 tools/check_container_policy.py \
+              --print-reference "${stage}")
             actual=$(docker buildx imagetools inspect --raw "${reference}" | jq --raw-output '
               .manifests[]
               | select(.platform.os == "linux" and .platform.architecture == "arm64")
               | .digest
             ')
-            test "${actual}" = "${expected}"
+            test "$(printf '%s' "${actual}" | grep -E '^sha256:[0-9a-f]{64}$')" = "${actual}"
           }
           verify_manifest builder
           verify_manifest runtime
@@ -354,7 +357,8 @@ jobs:
           test "${installed_version}" = "${scout_version}"
       - name: Fetch and verify the DHI VEX attestation
         run: |
-          runtime_reference=$(jq --raw-output '.dhi.runtime.reference' container-policy.json)
+          runtime_reference=$(python3 tools/check_container_policy.py \
+            --print-reference runtime)
           "${RUNNER_TEMP}/docker-scout" vex get \
             --verify \
             --skip-tlog \

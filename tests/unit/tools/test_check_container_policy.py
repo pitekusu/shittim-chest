@@ -10,7 +10,9 @@ import pytest
 from tools.check_container_policy import (
     DEFAULT_DOCKERFILE_PATH,
     DEFAULT_POLICY_PATH,
+    dockerfile_stage_reference,
     load_container_policy,
+    validate_dhi_reference,
     validate_dockerfile,
     validate_uv_reference,
 )
@@ -20,6 +22,11 @@ _UV_FROM = re.compile(
     r"(?P<digest>sha256:[0-9a-f]{64}) AS uv$",
     re.MULTILINE,
 )
+_RUNTIME_FROM = re.compile(
+    r"^FROM dhi\.io/python:3\.14\.6-debian13@"
+    r"(?P<digest>sha256:[0-9a-f]{64}) AS runtime-base$",
+    re.MULTILINE,
+)
 
 
 def test_repository_container_policy_matches_dockerfile() -> None:
@@ -27,7 +34,10 @@ def test_repository_container_policy_matches_dockerfile() -> None:
 
     assert policy.identity.user_spec == "65532:65532"
     assert policy.heartbeat_tmpfs.path == "/tmp/shittim-chest"  # noqa: S108
+    assert policy.builder_tag == "3.14.6-debian13-dev"
+    assert policy.runtime_tag == "3.14.6-debian13"
     validate_dockerfile(policy, DEFAULT_DOCKERFILE_PATH)
+    assert dockerfile_stage_reference("runtime").startswith("dhi.io/python:3.14.6-debian13@")
 
 
 def test_policy_rejects_legacy_runtime_identity(tmp_path: Path) -> None:
@@ -40,18 +50,53 @@ def test_policy_rejects_legacy_runtime_identity(tmp_path: Path) -> None:
         load_container_policy(path)
 
 
-def test_dockerfile_must_match_pinned_policy(tmp_path: Path) -> None:
+def test_policy_rejects_legacy_schema_with_digests(tmp_path: Path) -> None:
+    document = {
+        "schema_version": 1,
+        "dhi": {
+            "builder": {
+                "reference": "dhi.io/python:3.14.6-debian13-dev@sha256:" + ("a" * 64),
+                "arm64_manifest_digest": "sha256:" + ("b" * 64),
+            },
+            "runtime": {
+                "reference": "dhi.io/python:3.14.6-debian13@sha256:" + ("c" * 64),
+                "arm64_manifest_digest": "sha256:" + ("d" * 64),
+            },
+        },
+        "runtime_identity": {
+            "username": "nonroot",
+            "groupname": "nonroot",
+            "uid": 65532,
+            "gid": 65532,
+            "home": "/home/nonroot",
+        },
+        "heartbeat_tmpfs": {
+            "path": "/tmp/shittim-chest",  # noqa: S108 - fixture mirrors production contract
+            "size_mib": 1,
+            "mode": "0700",
+            "mount_options": ["nosuid", "nodev", "noexec"],
+        },
+    }
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schema_version"):
+        load_container_policy(path)
+
+
+def test_dockerfile_rejects_wrong_stage_graph(tmp_path: Path) -> None:
     policy = load_container_policy(DEFAULT_POLICY_PATH)
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(
         DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(
-            policy.runtime_reference,
-            policy.runtime_reference[:-1] + "0",
+            "AS production",
+            "AS prod",
+            1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="stages do not match"):
+    with pytest.raises(ValueError, match="approved order"):
         validate_dockerfile(policy, dockerfile)
 
 
@@ -75,6 +120,28 @@ def test_dependabot_uv_digest_bump_does_not_require_python_constant(tmp_path: Pa
     validate_dockerfile(policy, dockerfile)
 
 
+def test_dependabot_dhi_digest_bump_does_not_require_policy_digest(tmp_path: Path) -> None:
+    """Dockerfile remains the sole exact pin for DHI image digests."""
+
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    source = DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8")
+    match = _RUNTIME_FROM.search(source)
+    assert match is not None
+    bumped = source.replace(
+        match.group(0),
+        "FROM dhi.io/python:3.14.6-debian13@"
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "
+        "AS runtime-base",
+        1,
+    )
+    assert bumped != source
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(bumped, encoding="utf-8")
+
+    validate_dockerfile(policy, dockerfile)
+    assert dockerfile_stage_reference("runtime", dockerfile).endswith("b" * 64)
+
+
 @pytest.mark.parametrize(
     "reference",
     [
@@ -95,3 +162,24 @@ def test_uv_reference_accepts_allowed_digest_pin() -> None:
         "ghcr.io/astral-sh/uv:0.11.32@sha256:"
         "df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c"
     )
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected_tag", "dev"),
+    [
+        ("dhi.io/python:3.14.6-debian13", "3.14.6-debian13", False),
+        ("dhi.io/python:latest@sha256:" + ("a" * 64), "3.14.6-debian13", False),
+        (
+            "dhi.io/python:3.14.6-debian13-dev@sha256:" + ("a" * 64),
+            "3.14.6-debian13",
+            False,
+        ),
+    ],
+)
+def test_dhi_reference_rejects_unpinned_or_wrong_tag(
+    reference: str,
+    expected_tag: str,
+    dev: bool,
+) -> None:
+    with pytest.raises(ValueError, match=r"DHI|tag"):
+        validate_dhi_reference(reference, expected_tag=expected_tag, dev=dev)
