@@ -15,6 +15,7 @@ from discord import app_commands
 from shittim_chest.adapters.discord.errors import DiscordAdapterError
 from shittim_chest.adapters.discord.gateway import DiscordModeratorClient
 from shittim_chest.application import (
+    SHITTIM_COMMAND_NAME,
     AcceptDebateRequest,
     AcceptedDebate,
     AcceptedRetry,
@@ -37,7 +38,7 @@ from shittim_chest.application.ports import (
 )
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
-COMMAND_NAME = "shittim"
+COMMAND_NAME = SHITTIM_COMMAND_NAME
 COMMAND_DESCRIPTION = "3つの視点で質問を合議します"
 QUESTION_DESCRIPTION = "合議したい質問"
 HISTORY_LIMIT = 100

@@ -18,6 +18,12 @@ from shittim_chest.application.discord import (
     prepare_outbox_operations,
     split_discord_message,
 )
+from shittim_chest.application.discord_http import (
+    SHITTIM_COMMAND_NAME,
+    DiscordHttpInput,
+    DiscordHttpOperation,
+    DiscordHttpPing,
+)
 from shittim_chest.application.errors import (
     ApplicationError,
     DebateNotFound,
@@ -79,6 +85,7 @@ __all__ = (
     "LUNA_STANDARD",
     "OUTBOX_CLAIM_SECONDS",
     "PRODUCTION_POLICY",
+    "SHITTIM_COMMAND_NAME",
     "STARTUP_TIMEOUT",
     "TERMINAL_TIMEOUT",
     "TERRA_STANDARD",
@@ -95,6 +102,9 @@ __all__ = (
     "DebateSnapshot",
     "DiscordBotSlot",
     "DiscordErrorCode",
+    "DiscordHttpInput",
+    "DiscordHttpOperation",
+    "DiscordHttpPing",
     "DiscordIdentityConfig",
     "DiscordRuntimeConfig",
     "EcsRuntimeSnapshot",
