@@ -230,10 +230,17 @@ class DiscordInteractionController:
             or not isinstance(channel, discord.TextChannel)
         ):
             raise ValueError("the command requires a Guild text channel")
+        user = interaction.user
+        username = user.name
+        display_name = user.display_name
+        if not isinstance(username, str) or not isinstance(display_name, str):
+            raise ValueError("Discord user name fields must be strings")
         return (
             AcceptDebateRequest(
                 question=question,
-                requester_id=str(interaction.user.id),
+                requester_id=str(user.id),
+                requester_username=username,
+                requester_display_name=display_name,
                 guild_id=str(interaction.guild_id),
                 channel_id=str(interaction.channel_id),
                 operation_id=str(interaction.id),

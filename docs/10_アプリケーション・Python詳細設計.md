@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-19
+updated: 2026-07-26
 ---
 
 # アプリケーション・Python詳細設計
@@ -74,7 +74,7 @@ async def resume_recoverable() -> None: ...
 
 Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`DiscordOutboxRepository`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに最大1つのResponses requestでimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher.publish_persisted`はexpected leased `DebateSnapshot`とattempt内operation IDを受け、永続化・claim済みoutbox operation以外を投稿してはならない。既に`SENT`なら同じrecord、claim不能なら`None`、成功または履歴照合成功なら`SENT` recordを返す。必須Evidence取得不能は`required_evidence_unavailable`としてFAILEDへ保存し、任意取得不能は`optional_unavailable`を保存して続行する。
 
-STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。STEP-04Aでは`DebateSnapshot`へGuild/channel、debate/attempt作成時刻、Discord starter/thread ID、`LeaseGrant`を追加した。STEP-06Aではstarter message、thread、control panel messageを別fieldに分離し、`ACCEPTED`中だけ3 IDを一括bindingでき、同一値の再送は同じ結果、部分bindingまたは別値へのrebindは副作用なしで拒否する。STEP-06Cはadapterがcurrent snapshotを参照するための`get_debate`を公開し、Cancel/Retry commandへoptionalな`expected_attempt_id`を追加した。panel由来操作は永続化済みoperation ID、debate、actorに加えてsource attemptも一致しなければ副作用前に拒否する。
+STEP-03の`DebateApplication`は外部SDKをimportせず、これらのProtocolとimmutable `DebateSnapshot`だけを扱う。STEP-04Aでは`DebateSnapshot`へGuild/channel、debate/attempt作成時刻、Discord starter/thread ID、`LeaseGrant`を追加した。STEP-06Aではstarter message、thread、control panel messageを別fieldに分離し、`ACCEPTED`中だけ3 IDを一括bindingでき、同一値の再送は同じ結果、部分bindingまたは別値へのrebindは副作用なしで拒否する。STEP-06Cはadapterがcurrent snapshotを参照するための`get_debate`を公開し、Cancel/Retry commandへoptionalな`expected_attempt_id`を追加した。panel由来操作は永続化済みoperation ID、debate、actorに加えてsource attemptも一致しなければ副作用前に拒否する。STEP-06Dでは`AcceptDebateRequest`と`DebateSnapshot`へ受付時点のimmutable snapshotとして`requester_username`と`requester_display_name`を追加する。`requester_id`だけが認可・request bindingの不変利用者キーであり、名前は将来の認証済みWebアーカイブ表示・検索用である。operation ID replayはquestion/Guild/channel/user IDに加え両name snapshotも一致しなければfail closedとする。retryは元討論のname snapshotを引き継ぎ、Discordから再解決しない。名前はstructured log、metrics、OpenAI request、persona promptへ出さない。
 
 STEP-06CのInteraction controllerは開始したdebate taskをdebate IDごとに所有し、同一debateの重複taskを作らない。Cancelとcontroller closeではtaskをcancelして`gather`し、`CancelledError`をuse case側へ伝播させる。STEP-07Aの`RuntimeLifecycle`はsupervisor、interaction controller、`resume_recoverable`をstructural Protocolで所有し、起動・READY監視・signal・checkpoint・再開を統合する。STEP-07Bでphase前outbox drainを接続し、STEP-07Cで唯一のproduction composition root、実行entry point、process-scoped client所有を実装した。container境界はSTEP-08で実装する。
 

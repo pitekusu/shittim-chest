@@ -35,6 +35,8 @@ def new_snapshot(*, offset: int = 0) -> DebateSnapshot:
         state=DebateState.accepted(debate_id, attempt_id, at=created),
         question=f"question-{offset}",
         requester_id="requester",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id="guild",
         channel_id="channel",
         created_at=created,
@@ -57,7 +59,12 @@ async def test_accept_replay_three_slots_and_terminal_release(
             lease_owner=f"worker-{index}",
         )
         accepted.append(persisted)
-        assert await repository.get(source.state.debate_id) == persisted
+        loaded = await repository.get(source.state.debate_id)
+        assert loaded == persisted
+        assert loaded is not None
+        assert loaded.requester_username == "pitekusu"
+        assert loaded.requester_display_name == "ぬし"
+        assert loaded.requester_username != loaded.requester_id
 
     replay = await repository.create(
         new_snapshot(offset=20),
@@ -65,6 +72,8 @@ async def test_accept_replay_three_slots_and_terminal_release(
         lease_owner="another-worker",
     )
     assert replay == accepted[0]
+    assert replay.requester_username == "pitekusu"
+    assert replay.requester_display_name == "ぬし"
 
     with pytest.raises(RepositoryBusy):
         await repository.create(
@@ -88,6 +97,8 @@ async def test_accept_replay_three_slots_and_terminal_release(
     )
     assert persisted_cancel.state.phase is DebatePhase.CANCELLED
     assert persisted_cancel.lease is None
+    assert persisted_cancel.requester_username == first.requester_username
+    assert persisted_cancel.requester_display_name == first.requester_display_name
 
     replacement = await repository.create(
         new_snapshot(offset=40),
@@ -167,6 +178,8 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
 
     assert persisted_retry.state.retry_of == persisted_failed.state.attempt_id
     assert persisted_retry.lease is not None
+    assert persisted_retry.requester_username == accepted.requester_username
+    assert persisted_retry.requester_display_name == accepted.requester_display_name
     assert await repository.get_operation_result("retry") == persisted_retry
     assert (
         await repository.create_retry(

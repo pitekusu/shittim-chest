@@ -37,6 +37,8 @@ def leased_snapshot() -> DebateSnapshot:
         state=DebateState.accepted(debate_id, attempt_id, at=NOW),
         question="question",
         requester_id="requester",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
         guild_id="guild",
         channel_id="channel",
         created_at=NOW,

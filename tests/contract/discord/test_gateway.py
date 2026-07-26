@@ -37,7 +37,15 @@ def config() -> DiscordRuntimeConfig:
 
 
 def request(*, guild_id: str = "101", channel_id: str = "102") -> AcceptDebateRequest:
-    return AcceptDebateRequest("question", "301", guild_id, channel_id, "401")
+    return AcceptDebateRequest(
+        "question",
+        "301",
+        "pitekusu",
+        "ぬし",
+        guild_id,
+        channel_id,
+        "401",
+    )
 
 
 def mocked_clients() -> dict[DiscordBotSlot, discord.Client]:

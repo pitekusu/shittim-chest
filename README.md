@@ -56,7 +56,13 @@ deterministic 2,000-character message chunks, UUIDv7 nonces, content hashes,
 versioned control-panel IDs, and a typed outbox boundary. Starter message,
 thread, and control-panel message IDs are persisted separately through an
 idempotent binding use case, and DynamoDB schema v5 migrates the immediately
-previous v4 representation. STEP-06B adds the discord.py 2.7.1 publisher: it
+previous v4 representation. STEP-06D stores accept-time Discord username and
+Guild display-name snapshots beside the immutable requester user ID on Debate
+META, bumps the record schema to v6, and migrates v5 records with a
+deterministic requester-id fallback for the new fields. Authorization remains
+userester ID only; the names are display/search data for a future authenticated
+web archive and are not written to logs, metrics, or OpenAI requests.
+STEP-06B adds the discord.py 2.7.1 publisher: it
 claims only persisted outbox chunks, sends with all mentions disabled and a
 nonce that discord.py maps to `enforce_nonce=true`, then conditionally stores
 the returned message ID. A reclaimed operation scans the dedicated thread for
