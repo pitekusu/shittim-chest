@@ -24,10 +24,14 @@ FROM_PATTERN: Final = re.compile(
     r"^FROM\s+(?P<reference>\S+)\s+AS\s+(?P<stage>[A-Za-z0-9._-]+)\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
-UV_REFERENCE: Final = (
-    "ghcr.io/astral-sh/uv:0.11.32@"
-    "sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c"
+# Dockerfile is the sole pin for the exact uv image digest. Dependabot updates that
+# line alone; this pattern only enforces registry, digest pin, and allowed range.
+UV_REFERENCE_PATTERN: Final = re.compile(
+    r"^ghcr\.io/astral-sh/uv:(?P<version>\d+\.\d+\.\d+)@"
+    r"(?P<digest>sha256:[0-9a-f]{64})$"
 )
+UV_MIN_VERSION: Final = (0, 11, 8)
+UV_MAX_VERSION_EXCLUSIVE: Final = (0, 12, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +189,29 @@ def load_container_policy(path: Path = DEFAULT_POLICY_PATH) -> ContainerPolicy:
     )
 
 
+def _parse_semver_triplet(version: str) -> tuple[int, int, int]:
+    parts = version.split(".")
+    if len(parts) != 3 or not all(part.isdecimal() for part in parts):
+        raise ValueError(f"invalid semantic version: {version}")
+    return int(parts[0]), int(parts[1]), int(parts[2])
+
+
+def validate_uv_reference(reference: str) -> None:
+    """Require a digest-pinned official uv image within the project version range."""
+
+    match = UV_REFERENCE_PATTERN.fullmatch(reference)
+    if match is None:
+        raise ValueError("Dockerfile uv stage must use a digest-pinned ghcr.io/astral-sh/uv image")
+    version = _parse_semver_triplet(match.group("version"))
+    if not UV_MIN_VERSION <= version < UV_MAX_VERSION_EXCLUSIVE:
+        raise ValueError(
+            "Dockerfile uv version "
+            f"{match.group('version')} is outside the allowed range "
+            f">={UV_MIN_VERSION[0]}.{UV_MIN_VERSION[1]}.{UV_MIN_VERSION[2]},"
+            f"<{UV_MAX_VERSION_EXCLUSIVE[0]}.{UV_MAX_VERSION_EXCLUSIVE[1]}"
+        )
+
+
 def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     """Require Dockerfile stages and numeric identities to match the policy."""
 
@@ -193,15 +220,17 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         (match.group("stage").lower(), match.group("reference"))
         for match in FROM_PATTERN.finditer(text)
     ]
-    expected = [
-        ("uv", UV_REFERENCE),
+    if not stages or stages[0][0] != "uv":
+        raise ValueError("Dockerfile must start with a digest-pinned uv stage")
+    validate_uv_reference(stages[0][1])
+    expected_tail = [
         ("builder", policy.builder_reference),
         ("runtime-base", policy.runtime_reference),
         ("production", "runtime-base"),
         ("fault-test", "production"),
         ("break-glass", policy.builder_reference),
     ]
-    if stages != expected:
+    if stages[1:] != expected_tail:
         raise ValueError("Dockerfile stages do not match container-policy.json")
     if f"USER {policy.identity.user_spec}" not in text:
         raise ValueError("Dockerfile USER does not match the DHI runtime identity")

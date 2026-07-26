@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,13 @@ from tools.check_container_policy import (
     DEFAULT_POLICY_PATH,
     load_container_policy,
     validate_dockerfile,
+    validate_uv_reference,
+)
+
+_UV_FROM = re.compile(
+    r"^FROM ghcr\.io/astral-sh/uv:(?P<version>\d+\.\d+\.\d+)@"
+    r"(?P<digest>sha256:[0-9a-f]{64}) AS uv$",
+    re.MULTILINE,
 )
 
 
@@ -45,3 +53,45 @@ def test_dockerfile_must_match_pinned_policy(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="stages do not match"):
         validate_dockerfile(policy, dockerfile)
+
+
+def test_dependabot_uv_digest_bump_does_not_require_python_constant(tmp_path: Path) -> None:
+    """Dockerfile remains the sole exact pin for the uv image digest."""
+
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    source = DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8")
+    match = _UV_FROM.search(source)
+    assert match is not None
+    bumped = source.replace(
+        match.group(0),
+        "FROM ghcr.io/astral-sh/uv:0.11.99@"
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa AS uv",
+        1,
+    )
+    assert bumped != source
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(bumped, encoding="utf-8")
+
+    validate_dockerfile(policy, dockerfile)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "ghcr.io/astral-sh/uv:0.11.32",
+        "ghcr.io/astral-sh/uv:latest@sha256:" + ("a" * 64),
+        "docker.io/astral-sh/uv:0.11.32@sha256:" + ("a" * 64),
+        "ghcr.io/astral-sh/uv:0.12.0@sha256:" + ("a" * 64),
+        "ghcr.io/astral-sh/uv:0.11.7@sha256:" + ("a" * 64),
+    ],
+)
+def test_uv_reference_rejects_unpinned_or_out_of_range_images(reference: str) -> None:
+    with pytest.raises(ValueError, match="uv"):
+        validate_uv_reference(reference)
+
+
+def test_uv_reference_accepts_allowed_digest_pin() -> None:
+    validate_uv_reference(
+        "ghcr.io/astral-sh/uv:0.11.32@sha256:"
+        "df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c"
+    )
