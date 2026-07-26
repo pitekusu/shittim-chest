@@ -176,6 +176,7 @@ class IngressRequest:
     updated_at: datetime
     startup_deadline_at: datetime
     terminal_deadline_at: datetime
+    processing_started_at: datetime | None = None
     command_name: str | None = None
     custom_id: str | None = None
     question: str | None = None
@@ -225,6 +226,7 @@ class IngressRequest:
             ("next attempt timestamp", self.next_attempt_at),
             ("claim expiry", self.claim_expires_at),
             ("completion timestamp", self.completed_at),
+            ("processing start timestamp", self.processing_started_at),
         ):
             _require_optional_utc(value, label=label)
         if (self.status_message_id is None) is not (self.status_message_updated_at is None):
@@ -235,6 +237,11 @@ class IngressRequest:
             raise ValueError("startup deadline must be exactly three minutes after creation")
         if self.terminal_deadline_at != self.created_at + TERMINAL_TIMEOUT:
             raise ValueError("terminal deadline must be exactly fifteen minutes after creation")
+        if self.processing_started_at is not None:
+            if not self.created_at <= self.processing_started_at < self.terminal_deadline_at:
+                raise ValueError("processing must start before the terminal deadline")
+            if self.status is IngressStatus.PENDING:
+                raise ValueError("pending ingress cannot have started processing")
         if self.kind is IngressKind.NEW_DEBATE:
             if self.question is None or not 1 <= len(self.question) <= 1000:
                 raise ValueError("new debate requires a 1-1000 character question")
@@ -396,6 +403,7 @@ class IngressClaimFence:
     operation_id: str
     kind: IngressKind
     created_at: datetime
+    terminal_deadline_at: datetime
     claim_owner: str
     claim_expires_at: datetime
     delivery_attempt: int
@@ -413,12 +421,19 @@ class IngressClaimFence:
             _require_text(value, label=label)
         for label, value in (
             ("creation timestamp", self.created_at),
+            ("terminal deadline", self.terminal_deadline_at),
             ("claim expiry", self.claim_expires_at),
             ("write timestamp", self.write_at),
         ):
             _require_utc(value, label=label)
         if self.claim_expires_at <= self.created_at:
             raise ValueError("claim expiry must follow creation")
+        if self.write_at < self.created_at:
+            raise ValueError("claim write timestamp cannot precede creation")
+        if self.terminal_deadline_at != self.created_at + TERMINAL_TIMEOUT:
+            raise ValueError(
+                "claim terminal deadline must be exactly fifteen minutes after creation"
+            )
         if self.claim_expires_at <= self.write_at:
             raise ValueError("ingress claim must remain live at write time")
         if isinstance(self.delivery_attempt, bool) or self.delivery_attempt <= 0:
@@ -447,6 +462,7 @@ class IngressClaimFence:
             operation_id=request.operation_id,
             kind=request.kind,
             created_at=request.created_at,
+            terminal_deadline_at=request.terminal_deadline_at,
             claim_owner=claim_owner,
             claim_expires_at=request.claim_expires_at,
             delivery_attempt=request.delivery_attempt,
@@ -749,6 +765,60 @@ class EnqueuedIngress:
     created: bool
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class IngressWakeCandidate:
+    """PII-free identity and deadline state used by the runtime reconciler."""
+
+    interaction_id: str
+    status: IngressStatus
+    status_message_state: StatusMessageState
+    created_at: datetime
+    terminal_deadline_at: datetime
+    next_attempt_at: datetime | None = None
+    claim_expires_at: datetime | None = None
+    processing_started_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _require_text(self.interaction_id, label="interaction ID")
+        _require_utc(self.created_at, label="creation timestamp")
+        _require_utc(self.terminal_deadline_at, label="terminal deadline")
+        for label, value in (
+            ("next attempt timestamp", self.next_attempt_at),
+            ("claim expiry", self.claim_expires_at),
+            ("processing start timestamp", self.processing_started_at),
+        ):
+            _require_optional_utc(value, label=label)
+        if self.terminal_deadline_at != self.created_at + TERMINAL_TIMEOUT:
+            raise ValueError("terminal deadline must be exactly fifteen minutes after creation")
+        if not self.status.counts_toward_queue_limit:
+            raise ValueError("only active ingress may become a wake candidate")
+        if (self.status is IngressStatus.CLAIMED) is not (self.claim_expires_at is not None):
+            raise ValueError("wake candidate claim state and expiry must match")
+        if self.status is not IngressStatus.RETRYING and self.next_attempt_at is not None:
+            raise ValueError("only a retrying wake candidate may have a next attempt")
+        if self.processing_started_at is not None and not (
+            self.created_at <= self.processing_started_at < self.terminal_deadline_at
+        ):
+            raise ValueError("processing must start before the terminal deadline")
+
+    @classmethod
+    def from_request(cls, request: IngressRequest) -> IngressWakeCandidate:
+        """Drop all user content while preserving reconciliation facts."""
+
+        if not request.status.counts_toward_queue_limit:
+            raise ValueError("only active ingress may become a wake candidate")
+        return cls(
+            interaction_id=request.interaction_id,
+            status=request.status,
+            status_message_state=request.status_message_state,
+            created_at=request.created_at,
+            terminal_deadline_at=request.terminal_deadline_at,
+            next_attempt_at=request.next_attempt_at,
+            claim_expires_at=request.claim_expires_at,
+            processing_started_at=request.processing_started_at,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeActivity:
     """Complete activity snapshot used to decide whether IDLE is safe."""
@@ -815,6 +885,8 @@ class EcsRuntimeSnapshot:
         for value in (self.desired_count, self.running_count, self.pending_count):
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1:
                 raise ValueError("singleton ECS counts must be either zero or one")
+        if self.running_count + self.pending_count > 1:
+            raise ValueError("singleton ECS service cannot have more than one active task")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1004,6 +1076,36 @@ class RuntimeState:
             updated_at=at,
         )
 
+    def fence_stale_instance(self, *, at: datetime) -> RuntimeState:
+        """Fence a bound owner proven stale by ECS or a replacement task."""
+
+        _require_utc(at, label="runtime repair timestamp")
+        bound_starting = (
+            self.status is RuntimeStatus.STARTING and self.runtime_instance_id is not None
+        )
+        if self.status not in {RuntimeStatus.READY, RuntimeStatus.BUSY} and not bound_starting:
+            raise ValueError("only a stale bound runtime may be repaired")
+        if at < self.updated_at:
+            raise ValueError("runtime repair timestamp cannot precede runtime update")
+        return replace(
+            self,
+            status=RuntimeStatus.STARTING,
+            generation=self.generation + 1,
+            desired_count=1,
+            version=self.version + 1,
+            updated_at=at,
+            runtime_instance_id=None,
+            wake_started_at=at,
+            started_at=None,
+            ready_at=None,
+            busy_since=None,
+            idle_since=None,
+            stop_eligible_at=None,
+            stopping_at=None,
+            stopped_at=None,
+            last_error_code=None,
+        )
+
     def transition(
         self,
         next_status: RuntimeStatus,
@@ -1112,7 +1214,17 @@ class RuntimeState:
         if updated.schema_version != self.schema_version:
             raise ValueError("runtime replacement cannot change schema version")
         if updated.generation != self.generation:
-            raise ValueError("only request_wake may change runtime generation")
+            repairable_runtime = self.status in {RuntimeStatus.READY, RuntimeStatus.BUSY} or (
+                self.status is RuntimeStatus.STARTING and self.runtime_instance_id is not None
+            )
+            is_missing_task_repair = (
+                repairable_runtime
+                and updated.generation == self.generation + 1
+                and updated == self.fence_stale_instance(at=updated.updated_at)
+            )
+            if is_missing_task_repair:
+                return
+            raise ValueError("only wake or missing-task repair may change runtime generation")
         if updated.version != self.version + 1:
             raise ValueError("runtime replacement must increment version exactly once")
         if updated.updated_at < self.updated_at:

@@ -204,6 +204,9 @@ wheels = [
 dynamodb = [
     { name = "mypy-boto3-dynamodb" },
 ]
+ecs = [
+    { name = "mypy-boto3-ecs" },
+]
 lambda = [
     { name = "mypy-boto3-lambda" },
 ]
@@ -875,6 +878,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-ecs"
+version = "1.43.43"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/03/d5ddefaad7537b8cec58fe799087c58fab0f80cee3c12b53279092cc4ea4/mypy_boto3_ecs-1.43.43.tar.gz", hash = "sha256:31857accf9a2b96c010aff499dcc39192e04dfea57fbe280463f0bf16eb22b4e", size = 61043, upload-time = "2026-07-08T20:16:20.102Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/df/0eb4519b26007e46de8a12c94d005f9f4c25067761c16453c3d89a12d577/mypy_boto3_ecs-1.43.43-py3-none-any.whl", hash = "sha256:21c835d6a22831f4fb2c7962f6bf45ecddecb2a539fbdaff593061ffe16be83e", size = 70017, upload-time = "2026-07-08T20:16:17.437Z" },
+]
+
+[[package]]
 name = "mypy-boto3-lambda"
 version = "1.43.48"
 source = { registry = "https://pypi.org/simple" }
@@ -1392,7 +1404,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "boto3-stubs", extra = ["dynamodb", "lambda", "ssm"] },
+    { name = "boto3-stubs", extra = ["dynamodb", "ecs", "lambda", "ssm"] },
     { name = "cyclonedx-python-lib", extra = ["json-validation"] },
     { name = "hypothesis" },
     { name = "import-linter" },
@@ -1416,7 +1428,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", extras = ["dynamodb", "lambda", "ssm"], specifier = ">=1.43.53,<2" },
+    { name = "boto3-stubs", extras = ["dynamodb", "ecs", "lambda", "ssm"], specifier = ">=1.43.53,<2" },
     { name = "cyclonedx-python-lib", extras = ["json-validation"], specifier = ">=11.11.0,<12" },
     { name = "hypothesis", specifier = ">=6.159.0,<7" },
     { name = "import-linter", specifier = ">=2.13,<3" },

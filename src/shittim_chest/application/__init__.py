@@ -71,6 +71,12 @@ from shittim_chest.application.models import (
     PanelRefreshState,
     RetryDebateCommand,
 )
+from shittim_chest.application.runtime_reconciler import (
+    STARTUP_TERMINAL_DEADLINE_ERROR,
+    STATUS_PUBLICATION_SWEEP_LIMIT,
+    RuntimeReconciler,
+    RuntimeReconciliationReport,
+)
 from shittim_chest.application.scale_to_zero import (
     IDLE_TIMEOUT,
     INGRESS_CLAIM_SECONDS,
@@ -86,6 +92,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressSemanticOperationBinding,
     IngressStatus,
     IngressStatusPublication,
+    IngressWakeCandidate,
     RuntimeActivity,
     RuntimeState,
     RuntimeStatus,
@@ -125,7 +132,9 @@ __all__ = (
     "POST_PERSISTENCE_ACCELERATOR_BUDGET",
     "PRODUCTION_POLICY",
     "SHITTIM_COMMAND_NAME",
+    "STARTUP_TERMINAL_DEADLINE_ERROR",
     "STARTUP_TIMEOUT",
+    "STATUS_PUBLICATION_SWEEP_LIMIT",
     "TERMINAL_TIMEOUT",
     "TERRA_STANDARD",
     "AcceptDebateRequest",
@@ -165,6 +174,7 @@ __all__ = (
     "IngressSemanticOperationBinding",
     "IngressStatus",
     "IngressStatusPublication",
+    "IngressWakeCandidate",
     "InvalidApplicationOperation",
     "LeaseGrant",
     "OutboxOperation",
@@ -184,6 +194,8 @@ __all__ = (
     "RetryDebateCommand",
     "RuntimeActivity",
     "RuntimeNotReady",
+    "RuntimeReconciler",
+    "RuntimeReconciliationReport",
     "RuntimeState",
     "RuntimeStatus",
     "RuntimeWakeResult",

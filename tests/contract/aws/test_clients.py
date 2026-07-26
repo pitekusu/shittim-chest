@@ -15,15 +15,22 @@ from shittim_chest.adapters.aws.clients import (
     INGRESS_READ_TIMEOUT_SECONDS,
     INGRESS_RESPONSE_MARGIN_SECONDS,
     INGRESS_TOTAL_MAX_ATTEMPTS,
+    RECONCILER_CONNECT_TIMEOUT_SECONDS,
+    RECONCILER_READ_TIMEOUT_SECONDS,
+    RECONCILER_TOTAL_MAX_ATTEMPTS,
     STATUS_CONNECT_TIMEOUT_SECONDS,
     STATUS_READ_TIMEOUT_SECONDS,
     STATUS_TOTAL_MAX_ATTEMPTS,
     create_ingress_dynamodb_client,
     create_lambda_client,
+    create_runtime_reconciler_dynamodb_client,
+    create_runtime_reconciler_ecs_client,
+    create_runtime_reconciler_lambda_client,
     create_ssm_client,
     create_status_dynamodb_client,
     create_status_ssm_client,
     ingress_sdk_config,
+    runtime_reconciler_sdk_config,
     status_sdk_config,
 )
 from shittim_chest.config.models import DEFAULT_AWS_REGION
@@ -76,6 +83,19 @@ def test_status_sdk_config_has_bounded_standard_retries() -> None:
     assert config.tcp_keepalive is True
 
 
+def test_runtime_reconciler_sdk_config_has_bounded_standard_retries() -> None:
+    config = config_view(runtime_reconciler_sdk_config())
+
+    assert config.connect_timeout == RECONCILER_CONNECT_TIMEOUT_SECONDS
+    assert config.read_timeout == RECONCILER_READ_TIMEOUT_SECONDS
+    assert config.retries == {
+        "mode": "standard",
+        "total_max_attempts": RECONCILER_TOTAL_MAX_ATTEMPTS,
+    }
+    assert RECONCILER_TOTAL_MAX_ATTEMPTS == 3
+    assert config.tcp_keepalive is True
+
+
 def test_client_factories_use_tokyo_and_the_bounded_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -117,11 +137,35 @@ def test_status_client_factories_use_tokyo_and_the_status_policy(
         assert config.retries["total_max_attempts"] == STATUS_TOTAL_MAX_ATTEMPTS
 
 
+def test_runtime_reconciler_ecs_factory_uses_tokyo_and_the_bounded_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+    clients = (
+        create_runtime_reconciler_dynamodb_client(region_name=DEFAULT_AWS_REGION),
+        create_runtime_reconciler_ecs_client(region_name=DEFAULT_AWS_REGION),
+        create_runtime_reconciler_lambda_client(region_name=DEFAULT_AWS_REGION),
+    )
+
+    assert {client.meta.region_name for client in clients} == {DEFAULT_AWS_REGION}
+    for client in clients:
+        config = config_view(client.meta.config)
+        assert config.connect_timeout == RECONCILER_CONNECT_TIMEOUT_SECONDS
+        assert config.read_timeout == RECONCILER_READ_TIMEOUT_SECONDS
+        assert config.retries["total_max_attempts"] == RECONCILER_TOTAL_MAX_ATTEMPTS
+
+
 @pytest.mark.parametrize(
     "factory",
     [
         create_ingress_dynamodb_client,
         create_lambda_client,
+        create_runtime_reconciler_dynamodb_client,
+        create_runtime_reconciler_ecs_client,
+        create_runtime_reconciler_lambda_client,
         create_ssm_client,
         create_status_dynamodb_client,
         create_status_ssm_client,

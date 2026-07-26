@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
+from datetime import timedelta
 from typing import TYPE_CHECKING, cast
 
 import boto3
@@ -14,9 +16,11 @@ from botocore.stub import ANY, Stubber
 from mypy_boto3_dynamodb.client import DynamoDBClient
 
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
+from shittim_chest.adapters.dynamodb.repository import _ingress_claim_token_component
 from shittim_chest.adapters.dynamodb.transaction_errors import (
     is_condition_only_cancellation,
 )
+from shittim_chest.application import IngressClaimFence, IngressStatus
 from shittim_chest.application.ports import RepositoryUnavailable
 from tests.contract.dynamodb.test_ingress_sdk_boundary import request
 
@@ -76,6 +80,25 @@ def client() -> DynamoDBClient:
         region_name="ap-northeast-1",
         config=Config(signature_version=UNSIGNED),
     )
+
+
+def test_ingress_claim_transaction_token_covers_write_timestamp() -> None:
+    source = request(1)
+    claimed = replace(
+        source,
+        status=IngressStatus.CLAIMED,
+        claim_owner="runtime-1",
+        claim_expires_at=source.created_at + timedelta(minutes=1),
+        delivery_attempt=1,
+    )
+    first = IngressClaimFence.from_claimed_request(
+        claimed,
+        claim_owner="runtime-1",
+        write_at=source.created_at + timedelta(seconds=1),
+    )
+    later = first.for_write_at(source.created_at + timedelta(seconds=2))
+
+    assert _ingress_claim_token_component(first) != _ingress_claim_token_component(later)
 
 
 @pytest.mark.asyncio

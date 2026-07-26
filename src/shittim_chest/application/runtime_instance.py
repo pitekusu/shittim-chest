@@ -28,7 +28,12 @@ class _RuntimeStateStore(Protocol):
 
 
 class RuntimeInstanceState:
-    """Bind and advance only the Runtime State owned by this process."""
+    """Bind and advance state owned by the sole physical ECS task.
+
+    Production composition supplies an identity derived from task metadata.
+    Safe takeover therefore relies on the ECS service invariant that at most
+    one physical task is active; process-random identities are not sufficient.
+    """
 
     def __init__(
         self,
@@ -58,10 +63,26 @@ class RuntimeInstanceState:
     async def mark_started(self) -> RuntimeState:
         """Bind the current STARTING generation before external clients start."""
 
+        stale_owner: str | None = None
+        attempted_unbound_bind = False
         for _attempt in range(self._cas_attempts):
             current = await self._require_state()
             if self._is_current_ready_state(current):
                 return current
+            if self._is_foreign_bound_state(current):
+                if stale_owner is None and attempted_unbound_bind:
+                    raise RuntimeNotReady("runtime replacement lost the ownership race")
+                if stale_owner is not None and current.runtime_instance_id != stale_owner:
+                    raise RuntimeNotReady("runtime replacement lost the ownership race")
+                stale_owner = current.runtime_instance_id
+                updated = current.fence_stale_instance(
+                    at=max(self._clock.now(), current.updated_at),
+                )
+                try:
+                    await self._repository.replace(expected=current, updated=updated)
+                except RepositoryConflict:
+                    continue
+                continue
             if current.status is not RuntimeStatus.STARTING:
                 raise RuntimeNotReady("persisted runtime is not starting")
             if current.runtime_instance_id not in {None, self._runtime_instance_id}:
@@ -71,6 +92,8 @@ class RuntimeInstanceState:
                 and current.started_at is not None
             ):
                 return current
+            if current.runtime_instance_id is None:
+                attempted_unbound_bind = True
             updated = current.mark_started(
                 at=max(self._clock.now(), current.updated_at),
                 runtime_instance_id=self._runtime_instance_id,
@@ -122,6 +145,8 @@ class RuntimeInstanceState:
         current = await self._require_state()
         if current.status is not RuntimeStatus.STARTING:
             return False
+        if current.runtime_instance_id not in {None, self._runtime_instance_id}:
+            raise RuntimeNotReady("runtime generation belongs to another instance")
         await self.mark_started()
         return True
 
@@ -141,6 +166,18 @@ class RuntimeInstanceState:
             RuntimeStatus.READY,
             RuntimeStatus.BUSY,
         }
+
+    def _is_foreign_bound_state(self, state: RuntimeState) -> bool:
+        return (
+            state.runtime_instance_id is not None
+            and state.runtime_instance_id != self._runtime_instance_id
+            and state.status
+            in {
+                RuntimeStatus.STARTING,
+                RuntimeStatus.READY,
+                RuntimeStatus.BUSY,
+            }
+        )
 
     def _require_current_instance(self, state: RuntimeState) -> None:
         if state.runtime_instance_id != self._runtime_instance_id:

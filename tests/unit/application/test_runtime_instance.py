@@ -29,6 +29,7 @@ class FakeClock:
 class FakeRuntimeRepository:
     state: RuntimeState | None
     conflicts: int = 0
+    conflict_state: RuntimeState | None = None
     replacements: list[tuple[RuntimeState, RuntimeState]] = field(default_factory=list)
 
     async def get(self) -> RuntimeState | None:
@@ -43,7 +44,9 @@ class FakeRuntimeRepository:
         self.replacements.append((expected, updated))
         if self.conflicts:
             self.conflicts -= 1
-            if self.state is not None:
+            if self.conflict_state is not None:
+                self.state = self.conflict_state
+            elif self.state is not None:
                 self.state = self.state.request_wake(at=updated.updated_at)
             raise RepositoryConflict("race")
         if self.state != expected:
@@ -157,11 +160,118 @@ async def test_live_runtime_cannot_claim_a_foreign_starting_generation() -> None
 
 
 @pytest.mark.asyncio
-async def test_foreign_or_missing_runtime_state_fails_closed() -> None:
-    foreign = starting().mark_started(at=NOW, runtime_instance_id="runtime-b")
+@pytest.mark.parametrize(
+    "status",
+    [RuntimeStatus.READY, RuntimeStatus.BUSY],
+)
+async def test_replacement_ecs_task_fences_foreign_physical_owner(
+    status: RuntimeStatus,
+) -> None:
+    foreign = starting().mark_started(at=NOW, runtime_instance_id="ecs-task-old")
+    if status is RuntimeStatus.READY:
+        foreign = foreign.transition(
+            RuntimeStatus.READY,
+            at=NOW + timedelta(seconds=1),
+            runtime_instance_id="ecs-task-old",
+        )
+    elif status is RuntimeStatus.BUSY:
+        foreign = foreign.transition(
+            RuntimeStatus.BUSY,
+            at=NOW + timedelta(seconds=1),
+            runtime_instance_id="ecs-task-old",
+        )
+    repository = FakeRuntimeRepository(foreign)
 
-    with pytest.raises(RuntimeNotReady, match="another instance"):
-        await session(FakeRuntimeRepository(foreign)).mark_started()
+    rebound = await session(repository, owner="ecs-task-new").mark_started()
+
+    assert rebound.status is RuntimeStatus.STARTING
+    assert rebound.runtime_instance_id == "ecs-task-new"
+    assert rebound.generation == foreign.generation + 1
+    assert len(repository.replacements) == 2
+
+
+@pytest.mark.asyncio
+async def test_replacement_ecs_task_fences_foreign_bound_starting_owner() -> None:
+    foreign = starting().mark_started(at=NOW, runtime_instance_id="ecs-task-other")
+    repository = FakeRuntimeRepository(foreign)
+
+    rebound = await session(repository, owner="ecs-task-current").mark_started()
+
+    assert rebound.status is RuntimeStatus.STARTING
+    assert rebound.runtime_instance_id == "ecs-task-current"
+    assert rebound.generation == foreign.generation + 1
+    assert len(repository.replacements) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_live_ecs_task_owner_is_not_repaired() -> None:
+    ready = (
+        starting()
+        .mark_started(at=NOW, runtime_instance_id="ecs-task-live")
+        .transition(
+            RuntimeStatus.READY,
+            at=NOW + timedelta(seconds=1),
+            runtime_instance_id="ecs-task-live",
+        )
+    )
+    repository = FakeRuntimeRepository(ready)
+
+    replay = await session(repository, owner="ecs-task-live").mark_started()
+
+    assert replay == ready
+    assert repository.replacements == []
+
+
+@pytest.mark.asyncio
+async def test_replacement_loser_does_not_fence_the_new_physical_owner() -> None:
+    old = (
+        starting()
+        .mark_started(at=NOW, runtime_instance_id="ecs-task-old")
+        .transition(
+            RuntimeStatus.READY,
+            at=NOW + timedelta(seconds=1),
+            runtime_instance_id="ecs-task-old",
+        )
+    )
+    competitor = (
+        old.fence_stale_instance(at=NOW + timedelta(seconds=2))
+        .mark_started(
+            at=NOW + timedelta(seconds=3),
+            runtime_instance_id="ecs-task-competitor",
+        )
+        .transition(
+            RuntimeStatus.READY,
+            at=NOW + timedelta(seconds=4),
+            runtime_instance_id="ecs-task-competitor",
+        )
+    )
+    repository = FakeRuntimeRepository(old, conflicts=1, conflict_state=competitor)
+
+    with pytest.raises(RuntimeNotReady, match="ownership race"):
+        await session(repository, owner="ecs-task-loser").mark_started()
+
+    assert repository.state == competitor
+    assert len(repository.replacements) == 1
+
+
+@pytest.mark.asyncio
+async def test_unbound_bind_loser_does_not_repair_the_cas_winner() -> None:
+    unbound = starting()
+    winner = unbound.mark_started(
+        at=NOW,
+        runtime_instance_id="ecs-task-winner",
+    )
+    repository = FakeRuntimeRepository(unbound, conflicts=1, conflict_state=winner)
+
+    with pytest.raises(RuntimeNotReady, match="ownership race"):
+        await session(repository, owner="ecs-task-loser").mark_started()
+
+    assert repository.state == winner
+    assert len(repository.replacements) == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_runtime_state_fails_closed() -> None:
     with pytest.raises(RuntimeNotReady, match="missing"):
         await session(FakeRuntimeRepository(None)).mark_started()
 

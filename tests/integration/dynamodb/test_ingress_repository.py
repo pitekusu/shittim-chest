@@ -2002,6 +2002,8 @@ async def test_stale_timeout_replay_cannot_hide_a_later_acceptance(
         attempt_id=AttemptId.new(),
     )
     assert accepted.status is IngressStatus.ACCEPTED
+    assert accepted.status_message_state is StatusMessageState.RECOVERED
+    assert await repository.list_startup_deadlines(at=NOW + timedelta(minutes=4)) == ()
 
     with pytest.raises(RepositoryConflict, match="stale"):
         await repository.mark_startup_timeout(

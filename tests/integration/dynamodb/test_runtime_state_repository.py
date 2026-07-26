@@ -20,7 +20,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_runtime_state,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item
-from shittim_chest.application import IngressRequest, RuntimeStatus
+from shittim_chest.application import IngressRequest, RuntimeState, RuntimeStatus
 from shittim_chest.application.ports import RepositoryConflict
 
 NOW = datetime(2026, 7, 26, 6, 0, tzinfo=UTC)
@@ -41,6 +41,250 @@ def new_request(index: int, *, created_at: datetime | None = None) -> IngressReq
         command_name="shittim",
         created_at=created_at or NOW + timedelta(microseconds=index),
     )
+
+
+def force_stopped_runtime(
+    client: DynamoDBClient,
+    table_name: str,
+    *,
+    previous: RuntimeState,
+    at: datetime,
+) -> RuntimeState:
+    """Persist a valid stopped observation produced outside the runtime task."""
+
+    stopped = RuntimeState(
+        status=RuntimeStatus.STOPPED,
+        generation=previous.generation,
+        desired_count=0,
+        version=previous.version + 1,
+        updated_at=at,
+        stopped_at=at,
+    )
+    client.put_item(
+        TableName=table_name,
+        Item=marshal_item(serialize_runtime_state(stopped)),
+    )
+    return stopped
+
+
+def wake_marker(client: DynamoDBClient, table_name: str, interaction_id: str) -> object:
+    response = client.get_item(
+        TableName=table_name,
+        Key=marshal_item(
+            {
+                "PK": f"INGRESS_OPERATION#{interaction_id}",
+                "SK": "RUNTIME_WAKE",
+            }
+        ),
+        ConsistentRead=True,
+    )
+    return response.get("Item")
+
+
+@pytest.mark.asyncio
+async def test_ensure_wake_creates_the_single_initial_marker_when_missing(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    runtime = DynamoDbRuntimeStateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+    await ingress.enqueue(request)
+
+    first = await runtime.ensure_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    marker_before = wake_marker(dynamodb_client, dynamodb_table, request.interaction_id)
+    replay = await runtime.ensure_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=2),
+    )
+
+    assert first.status is RuntimeStatus.STARTING
+    assert replay == first
+    assert marker_before is not None
+    assert wake_marker(dynamodb_client, dynamodb_table, request.interaction_id) == marker_before
+
+
+@pytest.mark.asyncio
+async def test_ensure_wake_restarts_stopped_runtime_without_replacing_marker(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    runtime = DynamoDbRuntimeStateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+    await ingress.enqueue(request)
+    first = await runtime.request_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    marker_before = wake_marker(dynamodb_client, dynamodb_table, request.interaction_id)
+    force_stopped_runtime(
+        dynamodb_client,
+        dynamodb_table,
+        previous=first,
+        at=NOW + timedelta(seconds=2),
+    )
+
+    restarted = await runtime.ensure_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=3),
+    )
+
+    assert restarted.status is RuntimeStatus.STARTING
+    assert restarted.desired_count == 1
+    assert restarted.generation == first.generation + 1
+    assert restarted.version == first.version + 2
+    assert wake_marker(dynamodb_client, dynamodb_table, request.interaction_id) == marker_before
+
+
+@pytest.mark.asyncio
+async def test_ensure_wake_fails_closed_when_active_pointer_is_missing(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    runtime = DynamoDbRuntimeStateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+    await ingress.enqueue(request)
+    await runtime.request_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    dynamodb_client.delete_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": "CONTROL#INGRESS#ACTIVE",
+                "SK": ingress_request_sort_key(request),
+            }
+        ),
+    )
+
+    with pytest.raises(RepositoryConflict, match="active ingress pointer"):
+        await runtime.ensure_wake(
+            interaction_id=request.interaction_id,
+            at=NOW + timedelta(seconds=2),
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_ensure_wake_restarts_one_generation_exactly_once(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    runtime = DynamoDbRuntimeStateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+    await ingress.enqueue(request)
+    first = await runtime.request_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    force_stopped_runtime(
+        dynamodb_client,
+        dynamodb_table,
+        previous=first,
+        at=NOW + timedelta(seconds=2),
+    )
+
+    results = await asyncio.gather(
+        *(
+            runtime.ensure_wake(
+                interaction_id=request.interaction_id,
+                at=NOW + timedelta(seconds=3),
+            )
+            for _ in range(8)
+        )
+    )
+
+    assert all(result.generation == first.generation + 1 for result in results)
+    current = await runtime.get()
+    assert current is not None
+    assert current.generation == first.generation + 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_wake_repairs_postdeadline_only_with_predeadline_processing_marker(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    runtime = DynamoDbRuntimeStateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+    await ingress.enqueue(request)
+    first = await runtime.request_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    claimed = await ingress.claim(
+        request=request,
+        claim_owner="runtime-alpha",
+        at=NOW + timedelta(seconds=2),
+    )
+    assert claimed is not None
+    processing_started_at = NOW + timedelta(seconds=3)
+    dynamodb_client.update_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": "CONTROL#INGRESS",
+                "SK": ingress_request_sort_key(claimed),
+            }
+        ),
+        UpdateExpression="SET processing_started_at=:processing_started_at",
+        ExpressionAttributeValues=marshal_item(
+            {
+                ":processing_started_at": processing_started_at.isoformat(
+                    timespec="microseconds"
+                ).replace("+00:00", "Z")
+            }
+        ),
+    )
+    force_stopped_runtime(
+        dynamodb_client,
+        dynamodb_table,
+        previous=first,
+        at=request.terminal_deadline_at + timedelta(seconds=1),
+    )
+
+    restarted = await runtime.ensure_wake(
+        interaction_id=request.interaction_id,
+        at=request.terminal_deadline_at + timedelta(seconds=2),
+    )
+
+    assert restarted.status is RuntimeStatus.STARTING
+    assert restarted.generation == first.generation + 1
+
+
+@pytest.mark.asyncio
+async def test_ensure_wake_rejects_postdeadline_unstarted_request(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    runtime = DynamoDbRuntimeStateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = new_request(1)
+    await ingress.enqueue(request)
+    first = await runtime.request_wake(
+        interaction_id=request.interaction_id,
+        at=NOW + timedelta(seconds=1),
+    )
+    stopped = force_stopped_runtime(
+        dynamodb_client,
+        dynamodb_table,
+        previous=first,
+        at=request.terminal_deadline_at + timedelta(seconds=1),
+    )
+
+    with pytest.raises(RepositoryConflict, match="terminal deadline"):
+        await runtime.ensure_wake(
+            interaction_id=request.interaction_id,
+            at=request.terminal_deadline_at + timedelta(seconds=2),
+        )
+    assert await runtime.get() == stopped
 
 
 @pytest.mark.asyncio

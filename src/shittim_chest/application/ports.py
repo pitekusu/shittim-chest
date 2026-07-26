@@ -29,6 +29,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressRequest,
     IngressStatus,
     IngressStatusPublication,
+    IngressWakeCandidate,
     RuntimeActivity,
     RuntimeState,
     StatusHistoryCheckpoint,
@@ -98,6 +99,13 @@ class ParameterReadUnavailable(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("parameter_read_unavailable")
+
+
+class EcsRuntimeUnavailable(RuntimeError):
+    """Raised when the configured ECS singleton cannot be inspected or updated."""
+
+    def __init__(self) -> None:
+        super().__init__("ecs_runtime_unavailable")
 
 
 class Clock(Protocol):
@@ -184,6 +192,8 @@ class IngressRepository(Protocol):
 
     async def list_ready(self, *, at: datetime) -> tuple[IngressRequest, ...]: ...
 
+    async def list_active_wake_candidates(self) -> tuple[IngressWakeCandidate, ...]: ...
+
     async def claim(
         self,
         *,
@@ -226,6 +236,14 @@ class IngressRepository(Protocol):
         at: datetime,
         status: IngressStatus,
         error_code: str | None,
+    ) -> IngressRequest: ...
+
+    async def mark_terminal_deadline(
+        self,
+        *,
+        request: IngressRequest,
+        at: datetime,
+        error_code: str,
     ) -> IngressRequest: ...
 
     async def mark_claim_terminal(
@@ -324,6 +342,13 @@ class RuntimeStateRepository(Protocol):
     async def get(self) -> RuntimeState | None: ...
 
     async def request_wake(
+        self,
+        *,
+        interaction_id: str,
+        at: datetime,
+    ) -> RuntimeState: ...
+
+    async def ensure_wake(
         self,
         *,
         interaction_id: str,

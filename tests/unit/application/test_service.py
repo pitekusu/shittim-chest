@@ -133,6 +133,7 @@ def ingress_claim(
         operation_id=operation_id,
         kind=kind,
         created_at=at - timedelta(seconds=1),
+        terminal_deadline_at=at - timedelta(seconds=1) + timedelta(minutes=15),
         claim_owner=claim_owner,
         claim_expires_at=at + timedelta(minutes=2),
         delivery_attempt=2,

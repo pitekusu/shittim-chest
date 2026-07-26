@@ -11,7 +11,6 @@ from shittim_chest.runtime.primitives import (
     SecureCandidateOrderer,
     SystemClock,
     Uuid7IdGenerator,
-    lease_owner_id,
 )
 
 __all__ = (
@@ -23,5 +22,4 @@ __all__ = (
     "SystemClock",
     "UnixSignalHandlers",
     "Uuid7IdGenerator",
-    "lease_owner_id",
 )

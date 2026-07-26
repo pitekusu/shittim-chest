@@ -76,6 +76,24 @@ def test_ingress_request_round_trip_has_fifo_and_independent_schema_keys() -> No
     assert deserialize_ingress_request(item) == source
 
 
+def test_ingress_request_round_trip_preserves_predeadline_processing_marker() -> None:
+    source = request()
+    started = replace(
+        source,
+        status=IngressStatus.CLAIMED,
+        updated_at=NOW + timedelta(seconds=1),
+        processing_started_at=NOW + timedelta(seconds=1),
+        claim_owner="runtime-1",
+        claim_expires_at=NOW + timedelta(minutes=1),
+        delivery_attempt=1,
+    )
+
+    item = serialize_ingress_request(started)
+
+    assert item["processing_started_at"] == "2026-07-26T04:05:07.000789Z"
+    assert deserialize_ingress_request(item) == started
+
+
 def test_active_pointer_round_trip_is_fifo_ordered_and_contains_no_pii() -> None:
     source = request()
 

@@ -97,9 +97,3 @@ class ContentFreeTelemetry:
             **fields,
         }
         self._logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-
-
-def lease_owner_id() -> str:
-    """Create a unique owner for this process without relying on mutable host state."""
-
-    return f"runtime-{AttemptId.new()}"

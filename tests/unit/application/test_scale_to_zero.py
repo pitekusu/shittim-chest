@@ -6,9 +6,11 @@ import pytest
 from shittim_chest.application import (
     IDLE_TIMEOUT,
     EcsRuntimeSnapshot,
+    IngressClaimFence,
     IngressKind,
     IngressRequest,
     IngressStatus,
+    IngressWakeCandidate,
     RuntimeActivity,
     RuntimeState,
     RuntimeStatus,
@@ -74,6 +76,70 @@ def test_claim_and_terminal_shape_are_fail_closed() -> None:
         replace(value, status=IngressStatus.CLAIMED)
     with pytest.raises(ValueError, match="terminal request requires"):
         replace(value, status=IngressStatus.FAILED)
+
+
+def test_processing_start_marker_is_predeadline_and_survives_retry() -> None:
+    value = request()
+    started_at = value.created_at + timedelta(seconds=2)
+    with pytest.raises(ValueError, match="pending ingress"):
+        replace(value, processing_started_at=started_at)
+
+    claimed = replace(
+        value,
+        status=IngressStatus.CLAIMED,
+        claim_owner="runtime-1",
+        claim_expires_at=value.created_at + timedelta(minutes=1),
+        processing_started_at=started_at,
+    )
+    retrying = replace(
+        claimed,
+        status=IngressStatus.RETRYING,
+        claim_owner=None,
+        claim_expires_at=None,
+        next_attempt_at=value.created_at + timedelta(minutes=2),
+    )
+
+    assert retrying.processing_started_at == started_at
+    assert IngressWakeCandidate.from_request(retrying).processing_started_at == started_at
+    with pytest.raises(ValueError, match="before the terminal deadline"):
+        replace(claimed, processing_started_at=value.terminal_deadline_at)
+
+
+def test_claim_fence_write_time_is_bounded_by_creation_and_live_claim() -> None:
+    value = request()
+    claimed = replace(
+        value,
+        status=IngressStatus.CLAIMED,
+        updated_at=NOW,
+        claim_owner="runtime-1",
+        claim_expires_at=NOW + timedelta(minutes=1),
+        delivery_attempt=1,
+    )
+
+    with pytest.raises(ValueError, match="cannot precede creation"):
+        IngressClaimFence.from_claimed_request(
+            claimed,
+            claim_owner="runtime-1",
+            write_at=NOW - timedelta(microseconds=1),
+        )
+    exact = IngressClaimFence.from_claimed_request(
+        claimed,
+        claim_owner="runtime-1",
+        write_at=NOW,
+    )
+    assert exact.write_at == NOW
+
+    started = replace(
+        claimed,
+        processing_started_at=NOW + timedelta(seconds=1),
+        claim_expires_at=value.terminal_deadline_at + timedelta(minutes=1),
+    )
+    replay = IngressClaimFence.from_claimed_request(
+        started,
+        claim_owner="runtime-1",
+        write_at=value.terminal_deadline_at + timedelta(seconds=1),
+    )
+    assert replay.write_at > replay.terminal_deadline_at
 
 
 def test_runtime_wake_increments_generation_and_preserves_start_time() -> None:
@@ -149,6 +215,11 @@ def test_runtime_wake_from_idle_clears_stop_window() -> None:
 def test_ecs_snapshot_rejects_non_singleton_counts(value: int) -> None:
     with pytest.raises(ValueError, match="singleton ECS counts"):
         EcsRuntimeSnapshot(desired_count=value, running_count=0, pending_count=0)
+
+
+def test_ecs_snapshot_rejects_running_and_pending_tasks_together() -> None:
+    with pytest.raises(ValueError, match="more than one active task"):
+        EcsRuntimeSnapshot(desired_count=1, running_count=1, pending_count=1)
 
 
 def test_runtime_activity_requires_every_counter_to_be_zero() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
@@ -21,11 +22,14 @@ from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
     DynamoValue,
+    IngressActivePointer,
     PersistenceFormatError,
+    deserialize_ingress_active_pointer,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
     deserialize_runtime_state,
     deserialize_runtime_wake_result,
+    ingress_request_sort_key,
     serialize_runtime_state,
     serialize_runtime_wake_result,
 )
@@ -38,6 +42,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressOperationResult,
     IngressRequest,
     RuntimeState,
+    RuntimeStatus,
     RuntimeWakeResult,
 )
 
@@ -98,6 +103,19 @@ class DynamoDbRuntimeStateRepository:
         except PersistenceFormatError:
             raise RepositoryConflict("runtime state record is invalid") from None
 
+    async def ensure_wake(
+        self,
+        *,
+        interaction_id: str,
+        at: datetime,
+    ) -> RuntimeState:
+        try:
+            return await asyncio.to_thread(self._ensure_wake, interaction_id, at)
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
+        except PersistenceFormatError:
+            raise RepositoryConflict("runtime state record is invalid") from None
+
     async def replace(
         self,
         *,
@@ -125,6 +143,7 @@ class DynamoDbRuntimeStateRepository:
         if replay is not None:
             return self._replay_wake(replay)
         _require_active_operation(operation)
+        pointer = self._load_active_pointer(request)
 
         for _attempt in range(RUNTIME_CAS_ATTEMPTS):
             previous = self._get()
@@ -142,6 +161,7 @@ class DynamoDbRuntimeStateRepository:
                 self._transact_wake(
                     operation=operation,
                     request=request,
+                    pointer=pointer,
                     previous=previous,
                     updated=updated,
                     result=result,
@@ -154,7 +174,61 @@ class DynamoDbRuntimeStateRepository:
                 operation = self._load_ingress_operation(interaction_id)
                 _require_active_operation(operation)
                 request = self._load_ingress_request(operation)
+                pointer = self._load_active_pointer(request)
         raise RepositoryConflict("runtime wake lost repeated conditional-write races")
+
+    def _ensure_wake(self, interaction_id: str, at: datetime) -> RuntimeState:
+        if not interaction_id.strip():
+            raise ValueError("interaction ID must not be empty")
+        _require_utc(at)
+
+        for _attempt in range(RUNTIME_CAS_ATTEMPTS):
+            operation = self._load_ingress_operation(interaction_id)
+            _require_active_operation(operation)
+            request = self._load_ingress_request(operation)
+            pointer = self._load_active_pointer(request)
+            result = self._get_wake_result(interaction_id)
+            if result is None:
+                return self._request_wake(interaction_id, at)
+
+            current = self._get()
+            if current is None:
+                raise RepositoryConflict("runtime wake result points to a missing runtime state")
+            _require_marker_not_ahead(result, current)
+            effective_at = max(at, current.updated_at)
+            _require_wakeable_request(operation, request, effective_at)
+
+            if current.status in {
+                RuntimeStatus.STARTING,
+                RuntimeStatus.READY,
+                RuntimeStatus.BUSY,
+            }:
+                if current.desired_count != 1:
+                    raise RepositoryConflict("active runtime state has an invalid desired count")
+                return current
+            if current.status not in {
+                RuntimeStatus.STOPPED,
+                RuntimeStatus.STOPPING,
+                RuntimeStatus.IDLE,
+                RuntimeStatus.DEGRADED,
+            }:
+                raise RepositoryConflict("runtime state cannot be recovered by a wake request")
+
+            updated = current.request_wake(at=effective_at)
+            try:
+                self._transact_rewake(
+                    operation=operation,
+                    request=request,
+                    pointer=pointer,
+                    result=result,
+                    previous=current,
+                    updated=updated,
+                    at=effective_at,
+                )
+                return updated
+            except RepositoryConflict:
+                continue
+        raise RepositoryConflict("runtime re-wake lost repeated conditional-write races")
 
     def _replace(self, expected: RuntimeState, updated: RuntimeState) -> RuntimeState:
         expected.validate_replacement(updated)
@@ -185,73 +259,14 @@ class DynamoDbRuntimeStateRepository:
         *,
         operation: IngressOperationResult,
         request: IngressRequest,
+        pointer: IngressActivePointer,
         previous: RuntimeState | None,
         updated: RuntimeState,
         result: RuntimeWakeResult,
     ) -> None:
-        operation_check = cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_operation_key(operation.interaction_id)),
-                    "ConditionExpression": (
-                        "record_type=:operation_type AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema "
-                        "AND interaction_id=:interaction_id AND operation_id=:operation_id "
-                        "AND request_sort_key=:request_sort_key AND created_at=:created_at "
-                        "AND #operation_status IN (:pending,:claimed,:retrying)"
-                    ),
-                    "ExpressionAttributeNames": {"#operation_status": "status"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":operation_type": "ingress_operation_result",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": operation.schema_version,
-                            ":interaction_id": operation.interaction_id,
-                            ":operation_id": operation.operation_id,
-                            ":request_sort_key": operation.request_sort_key,
-                            ":created_at": _timestamp(operation.created_at),
-                            ":pending": "pending",
-                            ":claimed": "claimed",
-                            ":retrying": "retrying",
-                        }
-                    ),
-                }
-            },
-        )
-        request_check = cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_request_key(operation.request_sort_key)),
-                    "ConditionExpression": (
-                        "record_type=:request_type AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema "
-                        "AND interaction_id=:interaction_id AND operation_id=:operation_id "
-                        "AND created_at=:created_at "
-                        "AND #request_status IN (:pending,:claimed,:retrying) "
-                        "AND terminal_deadline_at > :at"
-                    ),
-                    "ExpressionAttributeNames": {"#request_status": "status"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":request_type": "ingress_request",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": request.schema_version,
-                            ":interaction_id": request.interaction_id,
-                            ":operation_id": request.operation_id,
-                            ":created_at": _timestamp(request.created_at),
-                            ":pending": "pending",
-                            ":claimed": "claimed",
-                            ":retrying": "retrying",
-                            ":at": _timestamp(result.recorded_at),
-                        }
-                    ),
-                }
-            },
-        )
+        operation_check = self._active_operation_check(operation)
+        request_check = self._active_request_check(request, at=result.recorded_at)
+        pointer_check = self._active_pointer_check(pointer)
         wake_put = cast(
             TransactWriteItemTypeDef,
             {
@@ -290,19 +305,17 @@ class DynamoDbRuntimeStateRepository:
                     }
                 },
             )
-        token_source = ":".join(
-            (
-                self._table_name,
-                result.interaction_id,
-                "missing" if previous is None else str(previous.version),
-                str(result.generation),
-                str(result.runtime_version),
-            )
-        )
+        actions = [
+            operation_check,
+            request_check,
+            pointer_check,
+            wake_put,
+            runtime_put,
+        ]
         try:
             self._client.transact_write_items(
-                TransactItems=[operation_check, request_check, wake_put, runtime_put],
-                ClientRequestToken=_client_token(token_source),
+                TransactItems=actions,
+                ClientRequestToken=_transaction_token("wake", actions),
                 ReturnConsumedCapacity="NONE",
             )
         except self._client.exceptions.TransactionCanceledException as error:
@@ -311,6 +324,197 @@ class DynamoDbRuntimeStateRepository:
             raise RepositoryUnavailable from None
         except self._client.exceptions.IdempotentParameterMismatchException:
             raise RepositoryConflict("runtime wake transaction token input changed") from None
+
+    def _transact_rewake(
+        self,
+        *,
+        operation: IngressOperationResult,
+        request: IngressRequest,
+        pointer: IngressActivePointer,
+        result: RuntimeWakeResult,
+        previous: RuntimeState,
+        updated: RuntimeState,
+        at: datetime,
+    ) -> None:
+        condition, names, values = _runtime_cas(previous)
+        runtime_put = cast(
+            TransactWriteItemTypeDef,
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(serialize_runtime_state(updated)),
+                    "ConditionExpression": condition,
+                    "ExpressionAttributeNames": names,
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
+        )
+        actions = [
+            self._active_operation_check(operation),
+            self._active_request_check(request, at=at),
+            self._active_pointer_check(pointer),
+            self._wake_result_check(result),
+            runtime_put,
+        ]
+        try:
+            self._client.transact_write_items(
+                TransactItems=actions,
+                ClientRequestToken=_transaction_token("rewake", actions),
+                ReturnConsumedCapacity="NONE",
+            )
+        except self._client.exceptions.TransactionCanceledException as error:
+            if is_condition_only_cancellation(error):
+                raise RepositoryConflict("runtime re-wake transaction condition failed") from None
+            raise RepositoryUnavailable from None
+        except self._client.exceptions.IdempotentParameterMismatchException:
+            raise RepositoryConflict("runtime re-wake transaction token input changed") from None
+
+    def _active_operation_check(
+        self,
+        operation: IngressOperationResult,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(_operation_key(operation.interaction_id)),
+                    "ConditionExpression": (
+                        "record_type=:operation_type AND schema_version=:schema "
+                        "AND record_schema_version=:record_schema "
+                        "AND interaction_id=:interaction_id AND operation_id=:operation_id "
+                        "AND request_sort_key=:request_sort_key AND created_at=:created_at "
+                        "AND updated_at=:updated_at AND #operation_status=:operation_status"
+                    ),
+                    "ExpressionAttributeNames": {"#operation_status": "status"},
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":operation_type": "ingress_operation_result",
+                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":record_schema": operation.schema_version,
+                            ":interaction_id": operation.interaction_id,
+                            ":operation_id": operation.operation_id,
+                            ":request_sort_key": operation.request_sort_key,
+                            ":created_at": _timestamp(operation.created_at),
+                            ":updated_at": _timestamp(operation.updated_at),
+                            ":operation_status": operation.status.value,
+                        }
+                    ),
+                }
+            },
+        )
+
+    def _active_request_check(
+        self,
+        request: IngressRequest,
+        *,
+        at: datetime,
+    ) -> TransactWriteItemTypeDef:
+        condition = (
+            "record_type=:request_type AND schema_version=:schema "
+            "AND record_schema_version=:record_schema "
+            "AND interaction_id=:interaction_id AND operation_id=:operation_id "
+            "AND created_at=:created_at AND updated_at=:updated_at "
+            "AND startup_deadline_at=:startup_deadline "
+            "AND terminal_deadline_at=:terminal_deadline "
+            "AND #request_status=:request_status"
+        )
+        values: DynamoItem = {
+            ":request_type": "ingress_request",
+            ":schema": CURRENT_SCHEMA_VERSION,
+            ":record_schema": request.schema_version,
+            ":interaction_id": request.interaction_id,
+            ":operation_id": request.operation_id,
+            ":created_at": _timestamp(request.created_at),
+            ":updated_at": _timestamp(request.updated_at),
+            ":startup_deadline": _timestamp(request.startup_deadline_at),
+            ":terminal_deadline": _timestamp(request.terminal_deadline_at),
+            ":request_status": request.status.value,
+        }
+        if request.processing_started_at is None:
+            condition += (
+                " AND attribute_not_exists(processing_started_at) AND terminal_deadline_at > :at"
+            )
+            values[":at"] = _timestamp(at)
+        else:
+            condition += (
+                " AND processing_started_at=:processing_started "
+                "AND processing_started_at < terminal_deadline_at"
+            )
+            values[":processing_started"] = _timestamp(request.processing_started_at)
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(_request_key(ingress_request_sort_key(request))),
+                    "ConditionExpression": condition,
+                    "ExpressionAttributeNames": {"#request_status": "status"},
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
+        )
+
+    def _active_pointer_check(
+        self,
+        pointer: IngressActivePointer,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(_active_pointer_key(pointer.request_sort_key)),
+                    "ConditionExpression": (
+                        "record_type=:pointer_type AND schema_version=:schema "
+                        "AND record_schema_version=:record_schema "
+                        "AND interaction_id=:interaction_id "
+                        "AND request_sort_key=:request_sort_key AND created_at=:created_at"
+                    ),
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":pointer_type": "ingress_active_pointer",
+                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":record_schema": pointer.schema_version,
+                            ":interaction_id": pointer.interaction_id,
+                            ":request_sort_key": pointer.request_sort_key,
+                            ":created_at": _timestamp(pointer.created_at),
+                        }
+                    ),
+                }
+            },
+        )
+
+    def _wake_result_check(
+        self,
+        result: RuntimeWakeResult,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(_wake_key(result.interaction_id)),
+                    "ConditionExpression": (
+                        "record_type=:wake_type AND schema_version=:schema "
+                        "AND record_schema_version=:record_schema "
+                        "AND interaction_id=:interaction_id AND generation=:generation "
+                        "AND runtime_version=:runtime_version AND recorded_at=:recorded_at"
+                    ),
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":wake_type": "runtime_wake_result",
+                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":record_schema": result.schema_version,
+                            ":interaction_id": result.interaction_id,
+                            ":generation": result.generation,
+                            ":runtime_version": result.runtime_version,
+                            ":recorded_at": _timestamp(result.recorded_at),
+                        }
+                    ),
+                }
+            },
+        )
 
     def _load_ingress_operation(self, interaction_id: str) -> IngressOperationResult:
         item = self._get_item(_operation_key(interaction_id))
@@ -337,12 +541,25 @@ class DynamoDbRuntimeStateRepository:
             raise RepositoryConflict("ingress request and operation result do not match")
         return request
 
+    def _load_active_pointer(self, request: IngressRequest) -> IngressActivePointer:
+        request_sort_key = ingress_request_sort_key(request)
+        item = self._get_item(_active_pointer_key(request_sort_key))
+        if item is None:
+            raise RepositoryConflict("runtime wake requires an active ingress pointer")
+        pointer = deserialize_ingress_active_pointer(item)
+        if (
+            pointer.interaction_id != request.interaction_id
+            or pointer.request_sort_key != request_sort_key
+            or pointer.created_at != request.created_at
+        ):
+            raise RepositoryConflict("ingress active pointer targets another request")
+        return pointer
+
     def _replay_wake(self, result: RuntimeWakeResult) -> RuntimeState:
         current = self._get()
         if current is None:
             raise RepositoryConflict("runtime wake result points to a missing runtime state")
-        if current.generation < result.generation or current.version < result.runtime_version:
-            raise RepositoryConflict("runtime wake result is ahead of runtime state")
+        _require_marker_not_ahead(result, current)
         return current
 
     def _get_item(self, key: Mapping[str, DynamoValue]) -> DynamoItem | None:
@@ -369,6 +586,10 @@ def _wake_key(interaction_id: str) -> DynamoItem:
 
 def _request_key(request_sort_key: str) -> DynamoItem:
     return {"PK": "CONTROL#INGRESS", "SK": request_sort_key}
+
+
+def _active_pointer_key(request_sort_key: str) -> DynamoItem:
+    return {"PK": "CONTROL#INGRESS#ACTIVE", "SK": request_sort_key}
 
 
 def _runtime_cas(
@@ -407,12 +628,26 @@ def _require_wakeable_request(
         raise RepositoryConflict("ingress request and operation result do not match")
     if not request.status.counts_toward_queue_limit:
         raise RepositoryConflict("terminal ingress request cannot wake the runtime")
-    if request.terminal_deadline_at <= at:
+    if request.status is not operation.status:
+        raise RepositoryConflict("ingress request and operation status do not match")
+    if request.terminal_deadline_at <= at and request.processing_started_at is None:
         raise RepositoryConflict("ingress request terminal deadline prevents runtime wake")
+
+
+def _require_marker_not_ahead(result: RuntimeWakeResult, current: RuntimeState) -> None:
+    if current.generation < result.generation or current.version < result.runtime_version:
+        raise RepositoryConflict("runtime wake result is ahead of runtime state")
 
 
 def _client_token(value: str) -> str:
     return f"tx-{hashlib.sha256(value.encode()).hexdigest()[:30]}"
+
+
+def _transaction_token(label: str, actions: list[TransactWriteItemTypeDef]) -> str:
+    """Bind DynamoDB idempotency to the complete transaction request body."""
+
+    canonical = json.dumps(actions, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return _client_token(f"{label}:{canonical}")
 
 
 def _timestamp(value: datetime) -> str:

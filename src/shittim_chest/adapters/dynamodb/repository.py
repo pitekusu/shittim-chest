@@ -28,7 +28,9 @@ from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
     DynamoValue,
+    PersistenceFormatError,
     deserialize_ingress_operation_result,
+    deserialize_ingress_request,
     deserialize_panel_operation,
     deserialize_snapshot,
     ingress_request_sort_key_from_identity,
@@ -43,7 +45,12 @@ from shittim_chest.application.ports import (
     RepositoryConflict,
     RepositoryQuotaExceeded,
 )
-from shittim_chest.application.scale_to_zero import IngressClaimFence, IngressStatus
+from shittim_chest.application.scale_to_zero import (
+    IngressClaimFence,
+    IngressOperationResult,
+    IngressRequest,
+    IngressStatus,
+)
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
 LEASE_SECONDS = 60
@@ -1880,6 +1887,7 @@ class DynamoDbDebateRepository:
     ) -> tuple[TransactWriteItemTypeDef, ...]:
         if ingress_claim is None:
             return ()
+        current_request = self._load_ingress_claim_request(ingress_claim)
         request_sort_key = ingress_request_sort_key_from_identity(
             created_at=ingress_claim.created_at,
             interaction_id=ingress_claim.interaction_id,
@@ -1898,9 +1906,32 @@ class DynamoDbDebateRepository:
             ":interaction_kind": ingress_claim.kind.value,
             ":claim_owner": ingress_claim.claim_owner,
             ":claim_expiry": _timestamp(ingress_claim.claim_expires_at),
+            ":terminal_deadline": _timestamp(ingress_claim.terminal_deadline_at),
             ":write_at": _timestamp(ingress_claim.write_at),
             ":delivery_attempt": ingress_claim.delivery_attempt,
         }
+        request_condition = (
+            "#status=:claimed_status AND schema_version=:schema "
+            "AND record_schema_version=:record_schema "
+            "AND record_type=:request_type "
+            "AND interaction_id=:interaction_id "
+            "AND operation_id=:operation_id AND created_at=:created_at "
+            "AND interaction_kind=:interaction_kind "
+            "AND claim_owner=:claim_owner AND claim_expiry=:claim_expiry "
+            "AND claim_expiry > :write_at "
+            "AND terminal_deadline_at=:terminal_deadline "
+            "AND delivery_attempt=:delivery_attempt"
+        )
+        if current_request.processing_started_at is None:
+            request_condition += (
+                " AND attribute_not_exists(processing_started_at) "
+                "AND terminal_deadline_at > :write_at"
+            )
+        else:
+            request_condition += " AND processing_started_at=:processing_started"
+            request_values[":processing_started"] = _timestamp(
+                current_request.processing_started_at
+            )
         operation_values: DynamoItem = {
             **common_values,
             ":operation_type": "ingress_operation_result",
@@ -1910,20 +1941,14 @@ class DynamoDbDebateRepository:
             cast(
                 TransactWriteItemTypeDef,
                 {
-                    "ConditionCheck": {
+                    "Update": {
                         "TableName": self._table_name,
                         "Key": marshal_item({"PK": "CONTROL#INGRESS", "SK": request_sort_key}),
-                        "ConditionExpression": (
-                            "#status=:claimed_status AND schema_version=:schema "
-                            "AND record_schema_version=:record_schema "
-                            "AND record_type=:request_type "
-                            "AND interaction_id=:interaction_id "
-                            "AND operation_id=:operation_id AND created_at=:created_at "
-                            "AND interaction_kind=:interaction_kind "
-                            "AND claim_owner=:claim_owner AND claim_expiry=:claim_expiry "
-                            "AND claim_expiry > :write_at "
-                            "AND delivery_attempt=:delivery_attempt"
+                        "UpdateExpression": (
+                            "SET processing_started_at="
+                            "if_not_exists(processing_started_at,:write_at)"
                         ),
+                        "ConditionExpression": request_condition,
                         "ExpressionAttributeNames": {"#status": "status"},
                         "ExpressionAttributeValues": marshal_item(request_values),
                     }
@@ -1972,39 +1997,62 @@ class DynamoDbDebateRepository:
             created_at=ingress_claim.created_at,
             interaction_id=ingress_claim.interaction_id,
         )
-        request = self._get_item({"PK": "CONTROL#INGRESS", "SK": request_sort_key})
-        operation = self._get_item(
+        request = self._load_ingress_claim_request(ingress_claim)
+        operation = self._load_ingress_claim_operation(ingress_claim)
+        if (
+            operation.schema_version != ingress_claim.schema_version
+            or operation.interaction_id != ingress_claim.interaction_id
+            or operation.operation_id != ingress_claim.operation_id
+            or operation.request_sort_key != request_sort_key
+            or operation.status is not IngressStatus.CLAIMED
+            or operation.created_at != ingress_claim.created_at
+        ):
+            raise RepositoryClaimLost("ingress claim is no longer current")
+        if (
+            ingress_claim.write_at >= ingress_claim.terminal_deadline_at
+            and request.processing_started_at is None
+        ):
+            raise RepositoryClaimLost("ingress processing did not start before its deadline")
+
+    def _load_ingress_claim_request(self, ingress_claim: IngressClaimFence) -> IngressRequest:
+        request_sort_key = ingress_request_sort_key_from_identity(
+            created_at=ingress_claim.created_at,
+            interaction_id=ingress_claim.interaction_id,
+        )
+        item = self._get_item({"PK": "CONTROL#INGRESS", "SK": request_sort_key})
+        try:
+            request = deserialize_ingress_request(item or {})
+        except PersistenceFormatError, ValueError:
+            raise RepositoryClaimLost("ingress claim request is invalid") from None
+        if (
+            request.schema_version != ingress_claim.schema_version
+            or request.interaction_id != ingress_claim.interaction_id
+            or request.operation_id != ingress_claim.operation_id
+            or request.kind is not ingress_claim.kind
+            or request.status is not IngressStatus.CLAIMED
+            or request.created_at != ingress_claim.created_at
+            or request.terminal_deadline_at != ingress_claim.terminal_deadline_at
+            or request.claim_owner != ingress_claim.claim_owner
+            or request.claim_expires_at != ingress_claim.claim_expires_at
+            or request.delivery_attempt != ingress_claim.delivery_attempt
+        ):
+            raise RepositoryClaimLost("ingress claim is no longer current")
+        return request
+
+    def _load_ingress_claim_operation(
+        self,
+        ingress_claim: IngressClaimFence,
+    ) -> IngressOperationResult:
+        item = self._get_item(
             {
                 "PK": f"INGRESS_OPERATION#{ingress_claim.interaction_id}",
                 "SK": "RESULT",
             }
         )
-        expected_common: DynamoItem = {
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "record_schema_version": ingress_claim.schema_version,
-            "interaction_id": ingress_claim.interaction_id,
-            "operation_id": ingress_claim.operation_id,
-            "status": IngressStatus.CLAIMED.value,
-            "created_at": _timestamp(ingress_claim.created_at),
-        }
-        expected_request: DynamoItem = {
-            **expected_common,
-            "record_type": "ingress_request",
-            "interaction_kind": ingress_claim.kind.value,
-            "claim_owner": ingress_claim.claim_owner,
-            "claim_expiry": _timestamp(ingress_claim.claim_expires_at),
-            "delivery_attempt": ingress_claim.delivery_attempt,
-        }
-        expected_operation: DynamoItem = {
-            **expected_common,
-            "record_type": "ingress_operation_result",
-            "request_sort_key": request_sort_key,
-        }
-        if not _contains_exact_values(request, expected_request) or not _contains_exact_values(
-            operation,
-            expected_operation,
-        ):
-            raise RepositoryClaimLost("ingress claim is no longer current")
+        try:
+            return deserialize_ingress_operation_result(item or {})
+        except PersistenceFormatError, ValueError:
+            raise RepositoryClaimLost("ingress claim operation is invalid") from None
 
     def _transact(self, actions: Iterable[TransactWriteItemTypeDef], *, token: str) -> None:
         action_list = list(actions)
@@ -2237,6 +2285,8 @@ def _ingress_claim_token_component(ingress_claim: IngressClaimFence | None) -> s
             ingress_claim.claim_owner,
             str(ingress_claim.delivery_attempt),
             _timestamp(ingress_claim.claim_expires_at),
+            _timestamp(ingress_claim.terminal_deadline_at),
+            _timestamp(ingress_claim.write_at),
             ingress_claim.kind.value,
         )
     )

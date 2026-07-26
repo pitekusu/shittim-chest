@@ -166,6 +166,38 @@ def test_degraded_recovery_clears_stale_runtime_binding() -> None:
     assert restarted.last_error_code is None
 
 
+@pytest.mark.parametrize(
+    "status",
+    [RuntimeStatus.STARTING, RuntimeStatus.READY, RuntimeStatus.BUSY],
+)
+def test_missing_task_repair_fences_stale_runtime_owner(status: RuntimeStatus) -> None:
+    stale = runtime_state(status)
+    repaired = stale.fence_stale_instance(at=stale.updated_at + timedelta(seconds=1))
+
+    stale.validate_replacement(repaired)
+    assert repaired.status is RuntimeStatus.STARTING
+    assert repaired.generation == stale.generation + 1
+    assert repaired.version == stale.version + 1
+    assert repaired.runtime_instance_id is None
+    assert repaired.started_at is None
+    assert repaired.ready_at is None
+    assert repaired.busy_since is None
+    rebound = repaired.mark_started(
+        at=repaired.updated_at + timedelta(seconds=1),
+        runtime_instance_id="runtime-beta",
+    )
+    assert rebound.runtime_instance_id == "runtime-beta"
+
+
+def test_missing_task_repair_rejects_unbound_starting_and_stale_time() -> None:
+    starting = starting_state()
+    with pytest.raises(ValueError, match="stale bound runtime"):
+        starting.fence_stale_instance(at=starting.updated_at + timedelta(seconds=1))
+    ready = runtime_state(RuntimeStatus.READY)
+    with pytest.raises(ValueError, match="cannot precede"):
+        ready.fence_stale_instance(at=ready.updated_at - timedelta(microseconds=1))
+
+
 def test_only_additional_starting_wake_preserves_runtime_binding() -> None:
     starting = starting_state().mark_started(
         at=NOW + timedelta(seconds=2),
@@ -222,7 +254,7 @@ def test_non_wake_replacement_requires_one_version_and_stable_generation() -> No
     starting.validate_replacement(started)
     starting.validate_replacement(starting)
 
-    with pytest.raises(ValueError, match="only request_wake"):
+    with pytest.raises(ValueError, match="wake or missing-task"):
         starting.validate_replacement(replace(started, generation=2))
     with pytest.raises(ValueError, match="version exactly once"):
         starting.validate_replacement(replace(started, version=3))

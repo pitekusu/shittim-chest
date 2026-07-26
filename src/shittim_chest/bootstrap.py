@@ -14,6 +14,7 @@ from openai import AsyncOpenAI
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
 
+from shittim_chest.adapters.aws import ecs_task_instance_id
 from shittim_chest.adapters.discord import (
     DiscordClientSupervisor,
     DiscordInteractionController,
@@ -49,7 +50,6 @@ from shittim_chest.runtime import (
     SecureCandidateOrderer,
     SystemClock,
     Uuid7IdGenerator,
-    lease_owner_id,
 )
 from shittim_chest.runtime.health import EventLoopHeartbeat
 
@@ -96,7 +96,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
     clock = SystemClock()
     ids = Uuid7IdGenerator()
     telemetry = ContentFreeTelemetry(logger=_LOGGER, environment=config.environment)
-    owner_id = lease_owner_id()
+    owner_id = ecs_task_instance_id()
 
     dynamodb_client = create_dynamodb_client(region_name=config.aws_region)
     repository = DynamoDbDebateRepository(

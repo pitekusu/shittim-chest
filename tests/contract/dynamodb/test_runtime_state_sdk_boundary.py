@@ -2,6 +2,7 @@
 
 import traceback
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import boto3
 import pytest
@@ -9,6 +10,7 @@ from botocore import UNSIGNED
 from botocore.config import Config
 from botocore.stub import ANY, Stubber
 from mypy_boto3_dynamodb.client import DynamoDBClient
+from mypy_boto3_dynamodb.type_defs import TransactWriteItemTypeDef
 
 from shittim_chest.adapters.dynamodb import (
     DynamoDbRuntimeStateRepository,
@@ -19,6 +21,11 @@ from shittim_chest.adapters.dynamodb import (
     serialize_runtime_wake_result,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item
+from shittim_chest.adapters.dynamodb.runtime_state import _transaction_token
+from shittim_chest.adapters.dynamodb.serializer import (
+    deserialize_ingress_active_pointer,
+    serialize_ingress_active_pointer,
+)
 from shittim_chest.application import (
     IngressOperationResult,
     IngressRequest,
@@ -26,7 +33,7 @@ from shittim_chest.application import (
     RuntimeState,
     RuntimeWakeResult,
 )
-from shittim_chest.application.ports import RepositoryUnavailable
+from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
 
 NOW = datetime(2026, 7, 26, 5, 30, tzinfo=UTC)
 
@@ -64,6 +71,89 @@ def operation(ingress_request: IngressRequest) -> IngressOperationResult:
         created_at=NOW,
         updated_at=NOW,
     )
+
+
+def test_transaction_token_covers_the_complete_canonical_body() -> None:
+    def actions_for(*, at: str, updated_at: str) -> list[TransactWriteItemTypeDef]:
+        return cast(
+            list[TransactWriteItemTypeDef],
+            [
+                {
+                    "ConditionCheck": {
+                        "TableName": "test-table",
+                        "Key": {"PK": {"S": "request"}},
+                        "ConditionExpression": "updated_at=:updated AND terminal_deadline_at>:at",
+                        "ExpressionAttributeValues": {
+                            ":updated": {"S": updated_at},
+                            ":at": {"S": at},
+                        },
+                    }
+                }
+            ],
+        )
+
+    actions = actions_for(
+        at="2026-07-26T05:30:01.000000Z",
+        updated_at="2026-07-26T05:30:00.000000Z",
+    )
+    identical = actions_for(
+        at="2026-07-26T05:30:01.000000Z",
+        updated_at="2026-07-26T05:30:00.000000Z",
+    )
+    changed_at = actions_for(
+        at="2026-07-26T05:30:02.000000Z",
+        updated_at="2026-07-26T05:30:00.000000Z",
+    )
+    changed_request = actions_for(
+        at="2026-07-26T05:30:01.000000Z",
+        updated_at="2026-07-26T05:30:00.000001Z",
+    )
+
+    token = _transaction_token("wake", actions)
+
+    assert _transaction_token("wake", identical) == token
+    assert _transaction_token("wake", changed_at) != token
+    assert _transaction_token("wake", changed_request) != token
+
+
+def test_runtime_wake_maps_idempotent_parameter_mismatch_without_provider_detail() -> None:
+    sdk = client()
+    repository = DynamoDbRuntimeStateRepository(client=sdk, table_name="test-table")
+    ingress_request = request()
+    ingress_operation = operation(ingress_request)
+    pointer = deserialize_ingress_active_pointer(serialize_ingress_active_pointer(ingress_request))
+    updated = RuntimeState.stopped(at=NOW).request_wake(at=NOW)
+    wake = RuntimeWakeResult(
+        interaction_id=ingress_request.interaction_id,
+        generation=updated.generation,
+        runtime_version=updated.version,
+        recorded_at=NOW,
+    )
+
+    with Stubber(sdk) as stubber:
+        stubber.add_client_error(
+            "transact_write_items",
+            service_error_code="IdempotentParameterMismatchException",
+            service_message="sensitive provider detail",
+            http_status_code=400,
+            expected_params={
+                "TransactItems": ANY,
+                "ClientRequestToken": ANY,
+                "ReturnConsumedCapacity": "NONE",
+            },
+        )
+
+        with pytest.raises(RepositoryConflict, match="token input changed") as caught:
+            repository._transact_wake(
+                operation=ingress_operation,
+                request=ingress_request,
+                pointer=pointer,
+                previous=None,
+                updated=updated,
+                result=wake,
+            )
+        assert "sensitive provider detail" not in "".join(traceback.format_exception(caught.value))
+        stubber.assert_no_pending_responses()
 
 
 @pytest.mark.asyncio
@@ -120,7 +210,7 @@ async def test_runtime_replace_sdk_failure_is_content_free() -> None:
 
 
 @pytest.mark.asyncio
-async def test_initial_wake_transaction_targets_four_distinct_items() -> None:
+async def test_initial_wake_transaction_targets_five_distinct_items() -> None:
     sdk = client()
     repository = DynamoDbRuntimeStateRepository(client=sdk, table_name="test-table")
     ingress_request = request()
@@ -143,6 +233,10 @@ async def test_initial_wake_transaction_targets_four_distinct_items() -> None:
     runtime_key = {"PK": "CONTROL#RUNTIME", "SK": "STATE"}
     request_key = {
         "PK": "CONTROL#INGRESS",
+        "SK": ingress_request_sort_key(ingress_request),
+    }
+    pointer_key = {
+        "PK": "CONTROL#INGRESS#ACTIVE",
         "SK": ingress_request_sort_key(ingress_request),
     }
 
@@ -176,6 +270,15 @@ async def test_initial_wake_transaction_targets_four_distinct_items() -> None:
         )
         stubber.add_response(
             "get_item",
+            {"Item": marshal_item(serialize_ingress_active_pointer(ingress_request))},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(pointer_key),
+                "ConsistentRead": True,
+            },
+        )
+        stubber.add_response(
+            "get_item",
             {},
             {
                 "TableName": "test-table",
@@ -197,7 +300,8 @@ async def test_initial_wake_transaction_targets_four_distinct_items() -> None:
                                 "AND record_schema_version=:record_schema "
                                 "AND interaction_id=:interaction_id AND operation_id=:operation_id "
                                 "AND request_sort_key=:request_sort_key AND created_at=:created_at "
-                                "AND #operation_status IN (:pending,:claimed,:retrying)"
+                                "AND updated_at=:updated_at "
+                                "AND #operation_status=:operation_status"
                             ),
                             "ExpressionAttributeNames": {"#operation_status": "status"},
                             "ExpressionAttributeValues": ANY,
@@ -211,11 +315,28 @@ async def test_initial_wake_transaction_targets_four_distinct_items() -> None:
                                 "record_type=:request_type AND schema_version=:schema "
                                 "AND record_schema_version=:record_schema "
                                 "AND interaction_id=:interaction_id AND operation_id=:operation_id "
-                                "AND created_at=:created_at "
-                                "AND #request_status IN (:pending,:claimed,:retrying) "
+                                "AND created_at=:created_at AND updated_at=:updated_at "
+                                "AND startup_deadline_at=:startup_deadline "
+                                "AND terminal_deadline_at=:terminal_deadline "
+                                "AND #request_status=:request_status "
+                                "AND attribute_not_exists(processing_started_at) "
                                 "AND terminal_deadline_at > :at"
                             ),
                             "ExpressionAttributeNames": {"#request_status": "status"},
+                            "ExpressionAttributeValues": ANY,
+                        }
+                    },
+                    {
+                        "ConditionCheck": {
+                            "TableName": "test-table",
+                            "Key": marshal_item(pointer_key),
+                            "ConditionExpression": (
+                                "record_type=:pointer_type AND schema_version=:schema "
+                                "AND record_schema_version=:record_schema "
+                                "AND interaction_id=:interaction_id "
+                                "AND request_sort_key=:request_sort_key "
+                                "AND created_at=:created_at"
+                            ),
                             "ExpressionAttributeValues": ANY,
                         }
                     },
@@ -257,9 +378,10 @@ async def test_initial_wake_transaction_targets_four_distinct_items() -> None:
             {
                 tuple(operation_key.values()),
                 tuple(request_key.values()),
+                tuple(pointer_key.values()),
                 tuple(wake_key.values()),
                 tuple(runtime_key.values()),
             }
         )
-        == 4
+        == 5
     )

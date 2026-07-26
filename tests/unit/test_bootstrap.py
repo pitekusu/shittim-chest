@@ -18,7 +18,7 @@ async def test_production_composition_builds_and_closes_without_external_request
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "local-placeholder")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "local-placeholder")
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
-    monkeypatch.setattr(bootstrap, "lease_owner_id", lambda: "runtime-owner")
+    monkeypatch.setattr(bootstrap, "ecs_task_instance_id", lambda: "runtime-owner")
     config = load_bootstrap_config(_environment())
 
     runtime = build_production_runtime(config)

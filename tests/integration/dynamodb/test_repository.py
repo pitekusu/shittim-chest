@@ -26,6 +26,7 @@ from shittim_chest.application import (
     IngressClaimFence,
     IngressKind,
     IngressRequest,
+    IngressStatus,
     PanelRefreshState,
 )
 from shittim_chest.application.ports import (
@@ -242,6 +243,248 @@ async def test_accept_transaction_requires_the_exact_live_ingress_claim(
             ingress_claim=stale_fence.for_write_at(stale_source.state.updated_at),
         )
     assert await debates.get(stale_source.state.debate_id) is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_deadline_wins_before_domain_start_without_orphan_records(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = IngressRequest.new_debate(
+        interaction_id="interaction-terminal-wins",
+        operation_id="terminal-wins",
+        application_id="application-id",
+        question="question",
+        requester_id="requester",
+        requester_username="requester",
+        requester_display_name="Requester",
+        guild_id="guild",
+        channel_id="channel",
+        command_name="shittim",
+        created_at=NOW,
+    )
+    await ingress.enqueue(request)
+    claimed = await ingress.claim(
+        request=request,
+        claim_owner="runtime-instance",
+        at=request.terminal_deadline_at - timedelta(seconds=30),
+    )
+    assert claimed is not None
+    failed = await ingress.mark_terminal_deadline(
+        request=claimed,
+        at=request.terminal_deadline_at,
+        error_code="startup_terminal_deadline_exceeded",
+    )
+    source = new_snapshot(offset=1)
+    fence = IngressClaimFence.from_claimed_request(
+        claimed,
+        claim_owner="runtime-instance",
+        write_at=request.terminal_deadline_at,
+    )
+
+    with pytest.raises(RepositoryClaimLost, match="no longer current"):
+        await debates.create(
+            source,
+            operation_id=request.operation_id,
+            lease_owner="runtime-instance",
+            ingress_claim=fence,
+        )
+
+    assert failed.status is IngressStatus.FAILED
+    assert await debates.get(source.state.debate_id) is None
+    assert await debates.get_operation_result(request.operation_id) is None
+    assert await ingress.active_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_domain_start_wins_before_terminal_deadline_and_settles_after_it(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = IngressRequest.new_debate(
+        interaction_id="interaction-domain-wins",
+        operation_id="domain-wins",
+        application_id="application-id",
+        question="question",
+        requester_id="requester",
+        requester_username="requester",
+        requester_display_name="Requester",
+        guild_id="guild",
+        channel_id="channel",
+        command_name="shittim",
+        created_at=NOW,
+    )
+    await ingress.enqueue(request)
+    claimed = await ingress.claim(
+        request=request,
+        claim_owner="runtime-instance",
+        at=request.terminal_deadline_at - timedelta(seconds=30),
+    )
+    assert claimed is not None
+    write_at = request.terminal_deadline_at - timedelta(microseconds=1)
+    fence = IngressClaimFence.from_claimed_request(
+        claimed,
+        claim_owner="runtime-instance",
+        write_at=write_at,
+    )
+    source = new_snapshot(offset=1)
+
+    persisted = await debates.create(
+        source,
+        operation_id=request.operation_id,
+        lease_owner="runtime-instance",
+        ingress_claim=fence,
+    )
+    with pytest.raises(RepositoryConflict, match="cannot overtake started processing"):
+        await ingress.mark_terminal_deadline(
+            request=claimed,
+            at=request.terminal_deadline_at,
+            error_code="startup_terminal_deadline_exceeded",
+        )
+    accepted = await ingress.mark_accepted(
+        request=claimed,
+        claim_owner="runtime-instance",
+        at=request.terminal_deadline_at + timedelta(seconds=1),
+        debate_id=persisted.state.debate_id,
+        attempt_id=persisted.state.attempt_id,
+    )
+
+    assert accepted.status is IngressStatus.ACCEPTED
+    assert accepted.processing_started_at == write_at
+    assert await ingress.active_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_predeadline_domain_start_can_be_reclaimed_after_terminal_deadline(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = IngressRequest.new_debate(
+        interaction_id="interaction-postdeadline-replay",
+        operation_id="postdeadline-replay",
+        application_id="application-id",
+        question="question",
+        requester_id="requester",
+        requester_username="requester",
+        requester_display_name="Requester",
+        guild_id="guild",
+        channel_id="channel",
+        command_name="shittim",
+        created_at=NOW,
+    )
+    await ingress.enqueue(request)
+    claimed = await ingress.claim(
+        request=request,
+        claim_owner="runtime-old",
+        at=request.terminal_deadline_at - timedelta(seconds=30),
+    )
+    assert claimed is not None
+    write_at = request.terminal_deadline_at - timedelta(microseconds=1)
+    source = new_snapshot(offset=1)
+    persisted = await debates.create(
+        source,
+        operation_id=request.operation_id,
+        lease_owner="runtime-old",
+        ingress_claim=IngressClaimFence.from_claimed_request(
+            claimed,
+            claim_owner="runtime-old",
+            write_at=write_at,
+        ),
+    )
+    assert claimed.claim_expires_at is not None
+    reclaim_at = claimed.claim_expires_at + timedelta(seconds=1)
+    ready = await ingress.list_ready(at=reclaim_at)
+    assert len(ready) == 1
+    assert ready[0].processing_started_at == write_at
+    reclaimed = await ingress.claim(
+        request=ready[0],
+        claim_owner="runtime-new",
+        at=reclaim_at,
+    )
+    assert reclaimed is not None
+    replay = await debates.create(
+        source,
+        operation_id=request.operation_id,
+        lease_owner="runtime-new",
+        ingress_claim=IngressClaimFence.from_claimed_request(
+            reclaimed,
+            claim_owner="runtime-new",
+            write_at=reclaim_at,
+        ),
+    )
+    accepted = await ingress.mark_accepted(
+        request=reclaimed,
+        claim_owner="runtime-new",
+        at=reclaim_at + timedelta(seconds=1),
+        debate_id=replay.state.debate_id,
+        attempt_id=replay.state.attempt_id,
+    )
+
+    assert replay.state.debate_id == persisted.state.debate_id
+    assert accepted.status is IngressStatus.ACCEPTED
+    assert accepted.processing_started_at == write_at
+
+
+@pytest.mark.asyncio
+async def test_malformed_processing_marker_cannot_bypass_terminal_deadline(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    request = IngressRequest.new_debate(
+        interaction_id="interaction-malformed-start-marker",
+        operation_id="malformed-start-marker",
+        application_id="application-id",
+        question="question",
+        requester_id="requester",
+        requester_username="requester",
+        requester_display_name="Requester",
+        guild_id="guild",
+        channel_id="channel",
+        command_name="shittim",
+        created_at=NOW,
+    )
+    await ingress.enqueue(request)
+    claimed = await ingress.claim(
+        request=request,
+        claim_owner="runtime-instance",
+        at=request.terminal_deadline_at - timedelta(seconds=30),
+    )
+    assert claimed is not None
+    dynamodb_client.update_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": "CONTROL#INGRESS",
+                "SK": ingress_request_sort_key(claimed),
+            }
+        ),
+        UpdateExpression="SET processing_started_at=:malformed",
+        ExpressionAttributeValues=marshal_item({":malformed": "2026-07-17T02:00:01.000000"}),
+    )
+    source = new_snapshot(offset=1)
+    fence = IngressClaimFence.from_claimed_request(
+        claimed,
+        claim_owner="runtime-instance",
+        write_at=request.terminal_deadline_at + timedelta(seconds=1),
+    )
+
+    with pytest.raises(RepositoryClaimLost, match="request is invalid"):
+        await debates.create(
+            source,
+            operation_id=request.operation_id,
+            lease_owner="runtime-instance",
+            ingress_claim=fence,
+        )
+
+    assert await debates.get(source.state.debate_id) is None
 
 
 @pytest.mark.asyncio

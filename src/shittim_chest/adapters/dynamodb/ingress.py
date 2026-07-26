@@ -62,6 +62,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressSemanticOperationBinding,
     IngressStatus,
     IngressStatusPublication,
+    IngressWakeCandidate,
     StatusHistoryCheckpoint,
     StatusMessageState,
     StatusPublicationState,
@@ -105,6 +106,9 @@ class DynamoDbIngressRepository:
 
     async def list_ready(self, *, at: datetime) -> tuple[IngressRequest, ...]:
         return await self._run(self._list_ready, at)
+
+    async def list_active_wake_candidates(self) -> tuple[IngressWakeCandidate, ...]:
+        return await self._run(self._list_active_wake_candidates)
 
     async def claim(
         self,
@@ -174,6 +178,15 @@ class DynamoDbIngressRepository:
             status,
             error_code,
         )
+
+    async def mark_terminal_deadline(
+        self,
+        *,
+        request: IngressRequest,
+        at: datetime,
+        error_code: str,
+    ) -> IngressRequest:
+        return await self._run(self._mark_terminal_deadline, request, at, error_code)
 
     async def mark_claim_terminal(
         self,
@@ -1197,6 +1210,9 @@ class DynamoDbIngressRepository:
             ready.append(request)
         return tuple(ready)
 
+    def _list_active_wake_candidates(self) -> tuple[IngressWakeCandidate, ...]:
+        return tuple(IngressWakeCandidate.from_request(request) for request in self._query_active())
+
     def _claim(
         self,
         request: IngressRequest,
@@ -1220,7 +1236,8 @@ class DynamoDbIngressRepository:
             error_detail_code=None,
         )
         condition = self._request_condition(request)
-        condition += " AND terminal_deadline_at > :at"
+        if request.processing_started_at is None:
+            condition += " AND terminal_deadline_at > :at"
         values = self._expected_values(request)
         values[":at"] = _timestamp(at)
         if request.status is IngressStatus.RETRYING:
@@ -1334,10 +1351,16 @@ class DynamoDbIngressRepository:
             claim_owner=claim_owner,
             at=at,
         )
+        recovered = current.status_message_state in {
+            StatusMessageState.STARTUP_TIMEOUT,
+            StatusMessageState.RECOVERED,
+        }
         updated = replace(
             current,
             status=IngressStatus.ACCEPTED,
-            status_message_state=StatusMessageState.ACCEPTED,
+            status_message_state=(
+                StatusMessageState.RECOVERED if recovered else StatusMessageState.ACCEPTED
+            ),
             updated_at=at,
             next_attempt_at=None,
             claim_owner=None,
@@ -1352,11 +1375,12 @@ class DynamoDbIngressRepository:
             claim_owner=claim_owner,
             at=at,
         )
-        condition += " AND terminal_deadline_at > :at"
+        if current.processing_started_at is None:
+            condition += " AND terminal_deadline_at > :at"
         try:
             status_actions = self._rearm_status_actions(
                 request=updated,
-                state=StatusMessageState.ACCEPTED,
+                state=updated.status_message_state,
                 at=at,
             )
             self._replace_request_and_operation(
@@ -1398,6 +1422,8 @@ class DynamoDbIngressRepository:
             return current.request
         if not request.status.counts_toward_queue_limit:
             raise RepositoryConflict("startup timeout applies only to queued ingress")
+        if request.processing_started_at is not None:
+            raise RepositoryConflict("startup timeout cannot overtake started processing")
         if at < request.startup_deadline_at or at >= request.terminal_deadline_at:
             raise RepositoryConflict("startup timeout is outside its request deadline window")
         updated = replace(
@@ -1430,6 +1456,71 @@ class DynamoDbIngressRepository:
                 and current.status_message_state is StatusMessageState.STARTUP_TIMEOUT
             ):
                 return current
+            raise
+        return updated
+
+    def _mark_terminal_deadline(
+        self,
+        request: IngressRequest,
+        at: datetime,
+        error_code: str,
+    ) -> IngressRequest:
+        _require_utc(at)
+        if not error_code.strip():
+            raise ValueError("terminal deadline failure requires an error code")
+        if request.status.is_terminal:
+            if request.status is IngressStatus.FAILED and request.error_code == error_code:
+                return request
+            raise RepositoryConflict("ingress request already reached another terminal state")
+        if not request.status.counts_toward_queue_limit:
+            raise RepositoryConflict("terminal deadline applies only to queued ingress")
+        if request.processing_started_at is not None:
+            raise RepositoryConflict("terminal deadline cannot overtake started processing")
+        if at < request.terminal_deadline_at:
+            raise RepositoryConflict("terminal deadline has not been reached")
+        updated = replace(
+            request,
+            status=IngressStatus.FAILED,
+            status_message_state=StatusMessageState.TERMINAL_FAILED,
+            updated_at=at,
+            next_attempt_at=None,
+            claim_owner=None,
+            claim_expires_at=None,
+            error_code=error_code,
+            completed_at=at,
+        )
+        condition = self._request_condition(request)
+        condition += (
+            " AND terminal_deadline_at <= :at AND attribute_not_exists(processing_started_at)"
+        )
+        values = self._expected_values(request)
+        values[":at"] = _timestamp(at)
+        try:
+            status_actions = self._rearm_status_actions(
+                request=updated,
+                state=StatusMessageState.TERMINAL_FAILED,
+                at=at,
+            )
+            self._replace_request_and_operation(
+                previous=request,
+                updated=updated,
+                condition=condition,
+                values=values,
+                extra_actions=(*self._leave_active_queue_actions(request, at), *status_actions),
+                token_suffix=f"terminal-deadline:{error_code}:{at}",
+            )
+        except RepositoryConflict:
+            current = self._load_current(request)
+            if (
+                current is not None
+                and current.status is IngressStatus.FAILED
+                and current.error_code == error_code
+            ):
+                return current
+            if current is not None and current.processing_started_at is not None:
+                raise RepositoryConflict(
+                    "terminal deadline cannot overtake started processing"
+                ) from None
             raise
         return updated
 
@@ -1507,6 +1598,11 @@ class DynamoDbIngressRepository:
             "AND status_message_state=:message_state "
             "AND status_channel_id=:status_channel"
         )
+        if current.processing_started_at is None:
+            request_condition += " AND attribute_not_exists(processing_started_at)"
+        else:
+            request_condition += " AND processing_started_at=:processing_started_at"
+            request_values[":processing_started_at"] = _timestamp(current.processing_started_at)
         if current.status_message_id is None:
             request_condition += (
                 " AND attribute_not_exists(status_message_id) "
@@ -1682,13 +1778,17 @@ class DynamoDbIngressRepository:
             request
             for request in self._query_active()
             if request.startup_deadline_at <= at < request.terminal_deadline_at
-            and request.status_message_state is not StatusMessageState.STARTUP_TIMEOUT
+            and request.processing_started_at is None
+            and request.status_message_state
+            not in {StatusMessageState.STARTUP_TIMEOUT, StatusMessageState.RECOVERED}
         )
 
     def _list_terminal_deadlines(self, at: datetime) -> tuple[IngressRequest, ...]:
         _require_utc(at)
         return tuple(
-            request for request in self._query_active() if request.terminal_deadline_at <= at
+            request
+            for request in self._query_active()
+            if request.terminal_deadline_at <= at and request.processing_started_at is None
         )
 
     def _active_count(self) -> int:
@@ -1986,6 +2086,11 @@ class DynamoDbIngressRepository:
             "AND status_message_state=:message_state "
             "AND status_channel_id=:status_channel"
         )
+        if request.processing_started_at is None:
+            request_condition += " AND attribute_not_exists(processing_started_at)"
+        else:
+            request_condition += " AND processing_started_at=:processing_started_at"
+            request_values[":processing_started_at"] = _timestamp(request.processing_started_at)
         if request.status_message_id is None:
             request_condition += (
                 " AND attribute_not_exists(status_message_id) "
@@ -2080,15 +2185,21 @@ class DynamoDbIngressRepository:
             "AND status_message_state=:expected_message_state "
             "AND status_channel_id=:expected_status_channel"
         )
+        if request.processing_started_at is None:
+            condition += " AND attribute_not_exists(processing_started_at)"
+        else:
+            condition += " AND processing_started_at=:expected_processing_started"
         if request.status_message_id is None:
-            return (
-                condition + " AND attribute_not_exists(status_message_id) "
+            condition += (
+                " AND attribute_not_exists(status_message_id) "
                 "AND attribute_not_exists(status_message_updated_at)"
             )
-        return (
-            condition + " AND status_message_id=:expected_message_id "
-            "AND status_message_updated_at=:expected_message_updated"
-        )
+        else:
+            condition += (
+                " AND status_message_id=:expected_message_id "
+                "AND status_message_updated_at=:expected_message_updated"
+            )
+        return condition
 
     def _expected_values(self, request: IngressRequest) -> DynamoItem:
         values: DynamoItem = {
@@ -2110,6 +2221,8 @@ class DynamoDbIngressRepository:
                 raise RepositoryConflict("status message ID has no update timestamp")
             values[":expected_message_id"] = request.status_message_id
             values[":expected_message_updated"] = _timestamp(request.status_message_updated_at)
+        if request.processing_started_at is not None:
+            values[":expected_processing_started"] = _timestamp(request.processing_started_at)
         return values
 
     def _operation_expected_values(self, request: IngressRequest) -> DynamoItem:
@@ -2605,7 +2718,7 @@ def _assert_common_identity(
 
 
 def _is_ready(request: IngressRequest, at: datetime) -> bool:
-    if at >= request.terminal_deadline_at:
+    if at >= request.terminal_deadline_at and request.processing_started_at is None:
         return False
     if request.status is IngressStatus.PENDING:
         return True
