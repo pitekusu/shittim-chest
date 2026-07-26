@@ -14,6 +14,13 @@ from shittim_chest.application.discord import (
     PanelOperationKind,
 )
 from shittim_chest.application.models import DebateSnapshot, LeaseGrant
+from shittim_chest.application.scale_to_zero import (
+    IngressKind,
+    IngressOperationResult,
+    IngressRequest,
+    IngressStatus,
+    StatusMessageState,
+)
 from shittim_chest.domain import (
     PARTICIPANTS,
     AttemptId,
@@ -422,6 +429,174 @@ def deserialize_panel_operation(raw_item: Mapping[str, DynamoValue]) -> PanelOpe
     )
 
 
+def ingress_request_sort_key(request: IngressRequest) -> str:
+    """Return the stable, UTC-sortable FIFO key for one ingress request."""
+
+    timestamp = request.created_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return f"REQUEST#{timestamp}#{request.interaction_id}"
+
+
+def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
+    """Serialize one active or historical ingress request into the shared table."""
+
+    item: DynamoItem = {
+        "PK": "CONTROL#INGRESS",
+        "SK": ingress_request_sort_key(request),
+        "record_type": "ingress_request",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": request.schema_version,
+        "interaction_id": request.interaction_id,
+        "operation_id": request.operation_id,
+        "interaction_kind": request.kind.value,
+        "requester_id": request.requester_id,
+        "requester_username": request.requester_username,
+        "requester_display_name": request.requester_display_name,
+        "guild_id": request.guild_id,
+        "channel_id": request.channel_id,
+        "status_channel_id": request.status_channel_id,
+        "status": request.status.value,
+        "status_message_state": request.status_message_state.value,
+        "created_at": _timestamp(request.created_at),
+        "updated_at": _timestamp(request.updated_at),
+        "startup_deadline_at": _timestamp(request.startup_deadline_at),
+        "terminal_deadline_at": _timestamp(request.terminal_deadline_at),
+        "delivery_attempt": request.delivery_attempt,
+    }
+    for field, value in (
+        ("command_name", request.command_name),
+        ("custom_id", request.custom_id),
+        ("question", request.question),
+        ("source_message_id", request.source_message_id),
+        ("source_thread_id", request.source_thread_id),
+        ("status_message_id", request.status_message_id),
+        ("status_message_updated_at", _optional_timestamp(request.status_message_updated_at)),
+        ("next_attempt_at", _optional_timestamp(request.next_attempt_at)),
+        ("claim_owner", request.claim_owner),
+        ("claim_expiry", _optional_timestamp(request.claim_expires_at)),
+        ("error_code", request.error_code),
+        ("error_detail_code", request.error_detail_code),
+        ("accepted_debate_id", _identifier(request.accepted_debate_id)),
+        ("accepted_attempt_id", _identifier(request.accepted_attempt_id)),
+        ("completed_at", _optional_timestamp(request.completed_at)),
+        ("ttl", request.ttl),
+    ):
+        _put_optional(item, field, value)
+    if request.status.counts_toward_queue_limit:
+        item["gsi2pk"] = "INGRESS#ACTIVE"
+        item["gsi2sk"] = ingress_request_sort_key(request)
+    return _validated_item(item)
+
+
+def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressRequest:
+    """Validate one ingress request, including its independent record schema."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="ingress_request")
+    try:
+        request = IngressRequest(
+            interaction_id=_text(item, "interaction_id"),
+            operation_id=_text(item, "operation_id"),
+            kind=IngressKind(_text(item, "interaction_kind")),
+            requester_id=_text(item, "requester_id"),
+            requester_username=_text(item, "requester_username"),
+            requester_display_name=_text(item, "requester_display_name"),
+            guild_id=_text(item, "guild_id"),
+            channel_id=_text(item, "channel_id"),
+            status_channel_id=_text(item, "status_channel_id"),
+            status=IngressStatus(_text(item, "status")),
+            status_message_state=StatusMessageState(_text(item, "status_message_state")),
+            created_at=_datetime(item, "created_at"),
+            updated_at=_datetime(item, "updated_at"),
+            startup_deadline_at=_datetime(item, "startup_deadline_at"),
+            terminal_deadline_at=_datetime(item, "terminal_deadline_at"),
+            command_name=_optional_text(item, "command_name"),
+            custom_id=_optional_text(item, "custom_id"),
+            question=_optional_text(item, "question"),
+            source_message_id=_optional_text(item, "source_message_id"),
+            source_thread_id=_optional_text(item, "source_thread_id"),
+            status_message_id=_optional_text(item, "status_message_id"),
+            status_message_updated_at=_optional_datetime(item, "status_message_updated_at"),
+            next_attempt_at=_optional_datetime(item, "next_attempt_at"),
+            claim_owner=_optional_text(item, "claim_owner"),
+            claim_expires_at=_optional_datetime(item, "claim_expiry"),
+            delivery_attempt=_integer(item, "delivery_attempt"),
+            error_code=_optional_text(item, "error_code"),
+            error_detail_code=_optional_text(item, "error_detail_code"),
+            accepted_debate_id=_optional_debate(item, "accepted_debate_id"),
+            accepted_attempt_id=_optional_attempt(item, "accepted_attempt_id"),
+            completed_at=_optional_datetime(item, "completed_at"),
+            ttl=_optional_integer(item, "ttl"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress request") from error
+    if _text(item, "PK") != "CONTROL#INGRESS":
+        raise PersistenceFormatError("ingress request has an invalid partition key")
+    if _text(item, "SK") != ingress_request_sort_key(request):
+        raise PersistenceFormatError("ingress request has an invalid sort key")
+    is_indexed = "gsi2pk" in item or "gsi2sk" in item
+    if request.status.counts_toward_queue_limit:
+        if _text(item, "gsi2pk") != "INGRESS#ACTIVE":
+            raise PersistenceFormatError("active ingress request has an invalid index key")
+        if _text(item, "gsi2sk") != ingress_request_sort_key(request):
+            raise PersistenceFormatError("active ingress request has an invalid index sort key")
+    elif is_indexed:
+        raise PersistenceFormatError("inactive ingress request must not be indexed as active")
+    return request
+
+
+def serialize_ingress_operation_result(operation: IngressOperationResult) -> DynamoItem:
+    """Serialize the strong replay record associated with one ingress operation."""
+
+    item: DynamoItem = {
+        "PK": f"INGRESS_OPERATION#{operation.interaction_id}",
+        "SK": "RESULT",
+        "record_type": "ingress_operation_result",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": operation.schema_version,
+        "operation_id": operation.operation_id,
+        "interaction_id": operation.interaction_id,
+        "request_sort_key": operation.request_sort_key,
+        "status": operation.status.value,
+        "created_at": _timestamp(operation.created_at),
+        "updated_at": _timestamp(operation.updated_at),
+    }
+    for field, value in (
+        ("accepted_debate_id", _identifier(operation.accepted_debate_id)),
+        ("accepted_attempt_id", _identifier(operation.accepted_attempt_id)),
+        ("error_code", operation.error_code),
+    ):
+        _put_optional(item, field, value)
+    return _validated_item(item)
+
+
+def deserialize_ingress_operation_result(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressOperationResult:
+    """Validate and rebuild a strongly consistent ingress replay result."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="ingress_operation_result")
+    try:
+        operation = IngressOperationResult(
+            operation_id=_text(item, "operation_id"),
+            interaction_id=_text(item, "interaction_id"),
+            request_sort_key=_text(item, "request_sort_key"),
+            status=IngressStatus(_text(item, "status")),
+            created_at=_datetime(item, "created_at"),
+            updated_at=_datetime(item, "updated_at"),
+            accepted_debate_id=_optional_debate(item, "accepted_debate_id"),
+            accepted_attempt_id=_optional_attempt(item, "accepted_attempt_id"),
+            error_code=_optional_text(item, "error_code"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress operation result") from error
+    if _text(item, "PK") != f"INGRESS_OPERATION#{operation.interaction_id}":
+        raise PersistenceFormatError("ingress operation has an invalid partition key")
+    if _text(item, "SK") != "RESULT":
+        raise PersistenceFormatError("ingress operation has an invalid sort key")
+    return operation
+
+
 def _serialize_evidence(
     common: DynamoItem,
     attempt_id: str,
@@ -553,6 +728,23 @@ def _validated_item(item: DynamoItem) -> DynamoItem:
     return item
 
 
+def _validate_auxiliary_item(
+    raw_item: Mapping[str, DynamoValue],
+    *,
+    expected_type: str,
+) -> DynamoItem:
+    item = dict(raw_item)
+    if _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION:
+        raise PersistenceFormatError("unsupported shared table schema version")
+    if _integer(item, "record_schema_version") != 1:
+        raise PersistenceFormatError("unsupported auxiliary record schema version")
+    if _text(item, "record_type") != expected_type:
+        raise PersistenceFormatError(f"record is not an {expected_type}")
+    _text(item, "PK")
+    _text(item, "SK")
+    return item
+
+
 def _value_size(value: DynamoValue) -> int:
     if isinstance(value, str):
         return len(value.encode("utf-8"))
@@ -623,7 +815,7 @@ def _by_voter(values: Iterable[Vote]) -> tuple[Vote, ...]:
     return tuple(by_slot[slot] for slot in PARTICIPANTS if slot in by_slot)
 
 
-def _identifier(value: AttemptId | None) -> str | None:
+def _identifier(value: AttemptId | DebateId | None) -> str | None:
     return str(value) if value is not None else None
 
 
@@ -674,6 +866,12 @@ def _integer(item: Mapping[str, DynamoValue], field: str) -> int:
     return value
 
 
+def _optional_integer(item: Mapping[str, DynamoValue], field: str) -> int | None:
+    if field not in item:
+        return None
+    return _integer(item, field)
+
+
 def _boolean(item: Mapping[str, DynamoValue], field: str) -> bool:
     value = item.get(field)
     if not isinstance(value, bool):
@@ -691,6 +889,11 @@ def _string_tuple(item: Mapping[str, DynamoValue], field: str) -> tuple[str, ...
 def _optional_attempt(item: Mapping[str, DynamoValue], field: str) -> AttemptId | None:
     value = _optional_text(item, field)
     return AttemptId.parse(value) if value is not None else None
+
+
+def _optional_debate(item: Mapping[str, DynamoValue], field: str) -> DebateId | None:
+    value = _optional_text(item, field)
+    return DebateId.parse(value) if value is not None else None
 
 
 def _optional_phase(item: Mapping[str, DynamoValue], field: str) -> DebatePhase | None:

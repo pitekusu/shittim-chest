@@ -17,6 +17,7 @@ from shittim_chest.application.scale_to_zero import (
     EnqueuedIngress,
     IngressOperationResult,
     IngressRequest,
+    IngressStatus,
     RuntimeActivity,
     RuntimeState,
     StatusMessageState,
@@ -46,6 +47,10 @@ class RepositoryQuotaExceeded(Exception):
     """Raised when a Guild has consumed its daily acceptance quota."""
 
 
+class RepositoryQueueFull(Exception):
+    """Raised when the bounded ingress FIFO already contains twenty requests."""
+
+
 class Clock(Protocol):
     """Provide timezone-aware UTC wall-clock timestamps."""
 
@@ -73,7 +78,7 @@ class IngressRepository(Protocol):
 
     async def get_operation_result(
         self,
-        operation_id: str,
+        interaction_id: str,
     ) -> IngressOperationResult | None: ...
 
     async def list_ready(self, *, at: datetime) -> tuple[IngressRequest, ...]: ...
@@ -96,6 +101,16 @@ class IngressRepository(Protocol):
         error_code: str,
     ) -> IngressRequest: ...
 
+    async def mark_accepted(
+        self,
+        *,
+        request: IngressRequest,
+        claim_owner: str,
+        at: datetime,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+    ) -> IngressRequest: ...
+
     async def mark_startup_timeout(
         self,
         *,
@@ -108,7 +123,8 @@ class IngressRepository(Protocol):
         *,
         request: IngressRequest,
         at: datetime,
-        error_code: str,
+        status: IngressStatus,
+        error_code: str | None,
     ) -> IngressRequest: ...
 
     async def update_status_message(
