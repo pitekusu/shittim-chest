@@ -7,7 +7,6 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
-from typing import Protocol
 
 import discord
 from discord import app_commands
@@ -18,10 +17,8 @@ from shittim_chest.application import (
     SHITTIM_COMMAND_NAME,
     AcceptDebateRequest,
     AcceptedDebate,
-    AcceptedRetry,
     BindDiscordContextCommand,
     CancelDebateCommand,
-    CancelledDebate,
     DebateSnapshot,
     DiscordBotSlot,
     DiscordRuntimeConfig,
@@ -32,6 +29,7 @@ from shittim_chest.application import (
 )
 from shittim_chest.application.errors import ApplicationError, RuntimeNotReady
 from shittim_chest.application.ports import (
+    DebateInteractionUseCases,
     RepositoryBusy,
     RepositoryConflict,
     RepositoryQuotaExceeded,
@@ -42,25 +40,6 @@ COMMAND_NAME = SHITTIM_COMMAND_NAME
 COMMAND_DESCRIPTION = "3つの視点で質問を合議します"
 QUESTION_DESCRIPTION = "合議したい質問"
 HISTORY_LIMIT = 100
-
-
-class DebateInteractionUseCases(Protocol):
-    """Application operations consumed by the Discord interaction boundary."""
-
-    async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate: ...
-
-    async def bind_discord_context(
-        self,
-        command: BindDiscordContextCommand,
-    ) -> object: ...
-
-    async def get_debate(self, debate_id: DebateId) -> DebateSnapshot: ...
-
-    async def run_debate(self, debate_id: DebateId) -> None: ...
-
-    async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate: ...
-
-    async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry: ...
 
 
 class DiscordInteractionController:

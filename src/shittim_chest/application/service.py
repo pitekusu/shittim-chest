@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable
 from dataclasses import replace
+from datetime import datetime
 from typing import TypeVar
 
 from shittim_chest.application.errors import (
@@ -148,8 +149,9 @@ class DebateApplication:
     async def run_debate(self, debate_id: DebateId) -> None:
         """Run or continue one debate until it reaches a terminal state."""
 
-        await self._require_snapshot(debate_id)
         try:
+            snapshot = await self._require_snapshot(debate_id)
+            self._require_owned_active_lease(snapshot, at=self._clock.now())
             await self._run_with_lease_heartbeat(debate_id)
         except asyncio.CancelledError:
             await self._checkpoint_current(debate_id)
@@ -195,6 +197,8 @@ class DebateApplication:
             raise InvalidApplicationOperation("Discord context is already bound")
         if snapshot.state.phase is not DebatePhase.ACCEPTED:
             raise InvalidApplicationOperation("Discord context must be bound before debate work")
+        now = self._clock.now()
+        self._require_owned_active_lease(snapshot, at=now)
 
         updated = replace(
             snapshot,
@@ -246,6 +250,7 @@ class DebateApplication:
 
     async def _recover_outbox_then_run_phases(self, debate_id: DebateId) -> None:
         snapshot = await self._require_snapshot(debate_id)
+        self._require_owned_active_lease(snapshot, at=self._clock.now())
         await self._outbox_recovery.drain(expected=snapshot)
         async with asyncio.timeout(self._session_timeout_seconds):
             await self._run_phases(debate_id)
@@ -256,8 +261,10 @@ class DebateApplication:
             snapshot = await self._require_snapshot(debate_id)
             if snapshot.state.phase.is_terminal:
                 return
+            now = self._clock.now()
+            self._require_owned_active_lease(snapshot, at=now)
             try:
-                await self._repository.renew_lease(expected=snapshot, at=self._clock.now())
+                await self._repository.renew_lease(expected=snapshot, at=now)
             except RepositoryConflict:
                 current = await self._require_snapshot(debate_id)
                 if current.state.phase.is_terminal:
@@ -282,9 +289,11 @@ class DebateApplication:
         if snapshot.state.phase.is_terminal:
             raise InvalidApplicationOperation("only an active debate may be cancelled")
 
+        now = self._clock.now()
+        self._require_owned_active_lease(snapshot, at=now)
         updated = replace(
             snapshot,
-            state=snapshot.state.transition_to(DebatePhase.CANCELLED, at=self._clock.now()),
+            state=snapshot.state.transition_to(DebatePhase.CANCELLED, at=now),
         )
         persisted = await self._repository.replace(
             expected=snapshot,
@@ -371,6 +380,7 @@ class DebateApplication:
             snapshot = await self._require_snapshot(debate_id)
             if snapshot.state.phase.is_terminal:
                 return
+            self._require_owned_active_lease(snapshot, at=self._clock.now())
             if snapshot.state.recovery_state is RecoveryState.CHECKPOINTED:
                 snapshot = await self._replace_state(
                     snapshot,
@@ -618,6 +628,7 @@ class DebateApplication:
         updated: DebateSnapshot,
         metric_event: MetricEvent = MetricEvent.PHASE_COMPLETED,
     ) -> DebateSnapshot:
+        self._require_owned_active_lease(expected, at=updated.state.updated_at)
         try:
             persisted = await self._repository.replace(expected=expected, updated=updated)
         except RepositoryConflict:
@@ -638,8 +649,10 @@ class DebateApplication:
             or current.state.recovery_state is RecoveryState.CHECKPOINTED
         ):
             return
-        checkpointed = replace(current, state=current.state.checkpoint(at=self._clock.now()))
+        now = self._clock.now()
         try:
+            self._require_owned_active_lease(current, at=now)
+            checkpointed = replace(current, state=current.state.checkpoint(at=now))
             await self._repository.replace(expected=current, updated=checkpointed)
         except RepositoryConflict:
             return
@@ -649,12 +662,14 @@ class DebateApplication:
         current = await self._require_snapshot(debate_id)
         if current.state.phase.is_terminal:
             return
-        failed = replace(
-            current,
-            state=current.state.transition_to(DebatePhase.FAILED, at=self._clock.now()),
-            error_code=error_code,
-        )
+        now = self._clock.now()
         try:
+            self._require_owned_active_lease(current, at=now)
+            failed = replace(
+                current,
+                state=current.state.transition_to(DebatePhase.FAILED, at=now),
+                error_code=error_code,
+            )
             await self._repository.replace(expected=current, updated=failed)
         except RepositoryConflict:
             return
@@ -665,6 +680,15 @@ class DebateApplication:
         if snapshot is None:
             raise DebateNotFound(f"debate not found: {debate_id}")
         return snapshot
+
+    def _require_owned_active_lease(self, snapshot: DebateSnapshot, *, at: datetime) -> None:
+        """Prevent a stale process from reusing a replacement runtime's lease."""
+
+        if snapshot.state.phase.is_terminal:
+            return
+        lease = snapshot.lease
+        if lease is None or lease.owner_id != self._lease_owner or lease.expires_at < at:
+            raise RepositoryConflict("active debate lease is not owned by this runtime")
 
     @staticmethod
     def _require_evidence(snapshot: DebateSnapshot) -> EvidenceBundle:

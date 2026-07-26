@@ -1,5 +1,11 @@
 """Application use cases and external-service ports."""
 
+from shittim_chest.application.commands import (
+    AppliedIngressCommand,
+    IngressCommandAdapter,
+    IngressDebateCommand,
+    command_from_ingress,
+)
 from shittim_chest.application.discord import (
     DISCORD_BOT_SLOTS,
     OUTBOX_CLAIM_SECONDS,
@@ -124,6 +130,7 @@ __all__ = (
     "AcceptedDebate",
     "AcceptedRetry",
     "ApplicationError",
+    "AppliedIngressCommand",
     "BindDiscordContextCommand",
     "BoundDiscordContext",
     "CancelDebateCommand",
@@ -146,6 +153,8 @@ __all__ = (
     "GenerationPolicy",
     "GenerationPolicyId",
     "IngressAcceptance",
+    "IngressCommandAdapter",
+    "IngressDebateCommand",
     "IngressKind",
     "IngressOperationResult",
     "IngressOutcome",
@@ -183,6 +192,7 @@ __all__ = (
     "StatusPublicationState",
     "StatusPublicationWork",
     "StatusWriteAmbiguous",
+    "command_from_ingress",
     "content_sha256",
     "has_exact_status_publication_marker",
     "nonce_from_uuid7",

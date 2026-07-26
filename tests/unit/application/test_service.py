@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
 
@@ -86,6 +87,7 @@ def make_application(
     phase_timeout: float = 60.0,
     lease_renewal: float = 20.0,
     outbox_recovery: FakeOutboxRecovery | None = None,
+    lease_owner: str = "worker-1",
 ) -> DebateApplication:
     clock, ids, metrics, discord, evidence, openai, repository, orderer = dependencies
     return DebateApplication(
@@ -98,7 +100,7 @@ def make_application(
         repository=repository,
         candidate_orderer=orderer,
         outbox_recovery=outbox_recovery or FakeOutboxRecovery(),
-        lease_owner="worker-1",
+        lease_owner=lease_owner,
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
         lease_renewal_seconds=lease_renewal,
@@ -410,6 +412,77 @@ async def test_cancel_is_authorized_idempotent_and_terminal(
 
     assert cancelled == repeated
     assert repository.current[accepted.debate_id].state.phase is DebatePhase.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_stale_runtime_cannot_cancel_with_the_replacement_runtime_lease(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    stale = make_application(dependencies, lease_owner="stale-runtime")
+    replacement = make_application(dependencies, lease_owner="replacement-runtime")
+    repository = dependencies[6]
+    accepted = await stale.accept_debate(request())
+    previous = repository.current[accepted.debate_id]
+    assert previous.lease is not None
+    replacement_snapshot = replace(
+        previous,
+        lease=replace(
+            previous.lease,
+            owner_id="replacement-runtime",
+            fencing_token=previous.lease.fencing_token + 1,
+        ),
+    )
+    repository.current[accepted.debate_id] = replacement_snapshot
+
+    with pytest.raises(RepositoryConflict, match="not owned"):
+        await stale.cancel_debate(
+            CancelDebateCommand(accepted.debate_id, "requester", "stale-cancel")
+        )
+
+    cancelled = await replacement.cancel_debate(
+        CancelDebateCommand(accepted.debate_id, "requester", "replacement-cancel")
+    )
+
+    assert cancelled.debate_id == accepted.debate_id
+    assert repository.current[accepted.debate_id].state.phase is DebatePhase.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_expired_debate_lease_cannot_authorize_cancellation(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    repository = dependencies[6]
+    accepted = await app.accept_debate(request())
+    current = repository.current[accepted.debate_id]
+    assert current.lease is not None
+    repository.current[accepted.debate_id] = replace(
+        current,
+        lease=replace(current.lease, expires_at=dependencies[0].current - timedelta(seconds=1)),
+    )
+
+    with pytest.raises(RepositoryConflict, match="not owned"):
+        await app.cancel_debate(
+            CancelDebateCommand(accepted.debate_id, "requester", "expired-lease-cancel")
+        )
 
 
 @pytest.mark.asyncio

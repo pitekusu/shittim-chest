@@ -23,6 +23,7 @@ from shittim_chest.application import (
     AcceptedDebate,
     AcceptedRetry,
     BindDiscordContextCommand,
+    BoundDiscordContext,
     CancelDebateCommand,
     CancelledDebate,
     DebateSnapshot,
@@ -94,7 +95,10 @@ class FakeApplication:
         self.accept_requests.append(request)
         return AcceptedDebate(self.current.state.debate_id, self.current.state.attempt_id)
 
-    async def bind_discord_context(self, command: BindDiscordContextCommand) -> object:
+    async def bind_discord_context(
+        self,
+        command: BindDiscordContextCommand,
+    ) -> BoundDiscordContext:
         self.events.append("bind")
         self.current = replace(
             self.current,
@@ -102,7 +106,12 @@ class FakeApplication:
             thread_id=command.thread_id,
             control_panel_message_id=command.control_panel_message_id,
         )
-        return object()
+        return BoundDiscordContext(
+            command.debate_id,
+            command.starter_message_id,
+            command.thread_id,
+            command.control_panel_message_id,
+        )
 
     async def get_debate(self, debate_id: DebateId) -> DebateSnapshot:
         if debate_id != self.current.state.debate_id:

@@ -8,10 +8,17 @@ from typing import Protocol
 from shittim_chest.application.discord import OutboxOperation
 from shittim_chest.application.models import (
     AcceptDebateRequest,
+    AcceptedDebate,
+    AcceptedRetry,
+    BindDiscordContextCommand,
+    BoundDiscordContext,
+    CancelDebateCommand,
+    CancelledDebate,
     DebateAuthorizationSnapshot,
     DebateSnapshot,
     LeaseGrant,
     MetricEvent,
+    RetryDebateCommand,
 )
 from shittim_chest.application.scale_to_zero import (
     EcsRuntimeSnapshot,
@@ -105,6 +112,29 @@ class Metrics(Protocol):
     """Record low-cardinality application events without user content."""
 
     def increment(self, event: MetricEvent, *, debate_id: DebateId) -> None: ...
+
+
+class DebateCommandUseCases(Protocol):
+    """SDK-independent command boundary shared by ingress implementations."""
+
+    async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate: ...
+
+    async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate: ...
+
+    async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry: ...
+
+
+class DebateInteractionUseCases(DebateCommandUseCases, Protocol):
+    """Legacy Gateway controller boundary retained until HTTP cutover is complete."""
+
+    async def bind_discord_context(
+        self,
+        command: BindDiscordContextCommand,
+    ) -> BoundDiscordContext: ...
+
+    async def get_debate(self, debate_id: DebateId) -> DebateSnapshot: ...
+
+    async def run_debate(self, debate_id: DebateId) -> None: ...
 
 
 class IngressRepository(Protocol):
