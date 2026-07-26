@@ -11,6 +11,7 @@ from shittim_chest.application import (
     IngressRequest,
     IngressStatus,
     IngressWakeCandidate,
+    OutboxActivity,
     RuntimeActivity,
     RuntimeState,
     RuntimeStatus,
@@ -224,7 +225,47 @@ def test_ecs_snapshot_rejects_running_and_pending_tasks_together() -> None:
 
 def test_runtime_activity_requires_every_counter_to_be_zero() -> None:
     assert RuntimeActivity().is_complete
+    assert not RuntimeActivity(pending_status_updates=1).requires_runtime
+    assert not RuntimeActivity(pending_status_updates=1).is_complete
+    assert RuntimeActivity(active_attempts=1).requires_runtime
     assert not RuntimeActivity(claimed_ingress=1).is_complete
     assert not RuntimeActivity(pending_panel_refreshes=1).is_complete
     with pytest.raises(ValueError, match="non-negative integers"):
         RuntimeActivity(active_leases=-1)
+
+
+def test_outbox_activity_requires_non_negative_complete_counts() -> None:
+    assert OutboxActivity().is_complete
+    assert not OutboxActivity(pending=1).is_complete
+    assert not OutboxActivity(claimed=1).is_complete
+    with pytest.raises(ValueError, match="non-negative"):
+        OutboxActivity(pending=-1)
+
+
+def test_durable_work_resume_and_stop_operations_preserve_typed_fences() -> None:
+    stopped = RuntimeState.stopped(at=NOW)
+    first = stopped.request_wake(at=NOW + timedelta(seconds=1))
+    ready = first.transition(
+        RuntimeStatus.READY,
+        at=NOW + timedelta(seconds=2),
+        runtime_instance_id="runtime-1",
+    )
+    idle = ready.begin_idle(at=NOW + timedelta(minutes=1))
+    resumed = idle.resume_for_work(at=NOW + timedelta(minutes=2))
+
+    assert resumed.status is RuntimeStatus.STARTING
+    assert resumed.generation == idle.generation + 1
+    assert resumed.last_request_at == idle.last_request_at
+    assert resumed.runtime_instance_id is None
+    assert resumed.idle_since is None
+    assert idle.stop_eligible_at is not None
+    with pytest.raises(ValueError, match="not yet eligible"):
+        idle.begin_idle_stop(at=idle.stop_eligible_at - timedelta(microseconds=1))
+    stopping = idle.begin_idle_stop(at=idle.stop_eligible_at)
+    assert stopping.status is RuntimeStatus.STOPPING
+    assert stopping.desired_count == 0
+
+    cancelled_start = resumed.begin_unneeded_start_stop(
+        at=resumed.updated_at + timedelta(seconds=1)
+    )
+    assert cancelled_start.status is RuntimeStatus.STOPPING

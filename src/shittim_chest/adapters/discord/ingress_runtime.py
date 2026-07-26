@@ -192,10 +192,7 @@ class DiscordIngressRuntime:
         snapshot = await self._validated_snapshot(request, applied)
         if request.kind is IngressKind.CANCEL:
             await self._stop_debate(applied.debate_id)
-            await self._converge_panel(
-                snapshot.state.debate_id,
-                snapshot.state.attempt_id,
-            )
+            self._start_debate(snapshot.state.debate_id)
             return
         if request.kind is IngressKind.RETRY and not await self._converge_panel(
             snapshot.state.debate_id,

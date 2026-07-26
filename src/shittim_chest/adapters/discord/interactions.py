@@ -390,8 +390,8 @@ class DiscordInteractionController:
             )
         )
         await self._stop_debate(result.debate_id)
-        current = await self._application.get_debate(result.debate_id)
-        await _edit_panel(message, current)
+        self._ensure_running()
+        self._start_debate(result.debate_id)
         await self._edit_response(interaction, "討論を中止しました。")
 
     async def _handle_retry(

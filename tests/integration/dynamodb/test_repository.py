@@ -27,7 +27,10 @@ from shittim_chest.application import (
     IngressKind,
     IngressRequest,
     IngressStatus,
+    OutboxActivity,
     PanelRefreshState,
+    TerminalDeliveryPlan,
+    prepare_terminal_outbox_operations,
 )
 from shittim_chest.application.ports import (
     RepositoryBusy,
@@ -1468,3 +1471,101 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
         debate_id=snapshot.state.debate_id,
         attempt_id=snapshot.state.attempt_id,
     ) == (second_claimed,)
+
+
+@pytest.mark.asyncio
+async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await debates.create(
+        new_snapshot(),
+        operation_id="terminal-accept",
+        lease_owner="worker-1",
+    )
+    bound = replace(
+        accepted,
+        starter_message_id="101",
+        thread_id="102",
+        control_panel_message_id="103",
+    )
+    bound = await debates.replace(expected=accepted, updated=bound)
+    staged_at = NOW + timedelta(seconds=1)
+    with pytest.raises(RepositoryConflict):
+        await debates.replace(
+            expected=bound,
+            updated=replace(
+                bound,
+                state=bound.state.transition_to(DebatePhase.CANCELLED, at=staged_at),
+            ),
+            operation_id="bound-direct-cancel",
+        )
+    operations = prepare_terminal_outbox_operations(
+        snapshot=bound,
+        target_phase=DebatePhase.CANCELLED,
+        created_at=staged_at,
+    )
+    plan = TerminalDeliveryPlan(
+        target_phase=DebatePhase.CANCELLED,
+        operation_ids=tuple(operation.operation_id for operation in operations),
+        content_hashes=tuple(operation.content_hash for operation in operations),
+        staged_at=staged_at,
+    )
+    staged = replace(
+        bound,
+        state=replace(bound.state, updated_at=staged_at),
+        terminal_delivery=plan,
+    )
+
+    persisted = await debates.stage_terminal_delivery(
+        expected=bound,
+        staged=staged,
+        operations=operations,
+        operation_id="terminal-cancel",
+    )
+    assert persisted == staged
+    assert persisted.state.phase is DebatePhase.ACCEPTED
+    assert (await outbox.activity()).pending == len(operations)
+
+    terminal_at = NOW + timedelta(seconds=4)
+    terminal = replace(
+        persisted,
+        state=persisted.state.transition_to(DebatePhase.CANCELLED, at=terminal_at),
+        terminal_delivery=plan.complete(at=terminal_at),
+    )
+    with pytest.raises(RepositoryConflict):
+        await debates.finalize_terminal(expected=persisted, updated=terminal)
+
+    for index, operation in enumerate(operations):
+        claim_at = NOW + timedelta(seconds=2, microseconds=index)
+        claimed = await outbox.claim(
+            expected=persisted,
+            operation_id=operation.operation_id,
+            claim_owner="publisher",
+            at=claim_at,
+        )
+        assert claimed is not None
+        await outbox.mark_sent(
+            expected=persisted,
+            operation_id=operation.operation_id,
+            claim_owner="publisher",
+            message_id=str(104 + index),
+            at=claim_at + timedelta(microseconds=1),
+        )
+
+    finalized = await debates.finalize_terminal(expected=persisted, updated=terminal)
+    assert finalized.state.phase is DebatePhase.CANCELLED
+    assert finalized.terminal_delivery_complete
+    assert finalized.lease is None
+    assert finalized.panel_refresh_pending
+    assert await outbox.activity() == OutboxActivity()
+
+    counter_response = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": "CONTROL#DEBATE", "SK": "ACTIVE_ATTEMPT_COUNT"}),
+        ConsistentRead=True,
+    )
+    counter_item = unmarshal_item(counter_response["Item"])
+    assert counter_item["count"] == 0

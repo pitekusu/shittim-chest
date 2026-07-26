@@ -71,12 +71,14 @@ def apply_allowed_transition(state: RuntimeState, target: RuntimeStatus) -> Runt
         (RuntimeStatus.STOPPED, RuntimeStatus.STARTING),
         (RuntimeStatus.STARTING, RuntimeStatus.READY),
         (RuntimeStatus.STARTING, RuntimeStatus.BUSY),
+        (RuntimeStatus.STARTING, RuntimeStatus.STOPPING),
         (RuntimeStatus.STARTING, RuntimeStatus.DEGRADED),
         (RuntimeStatus.READY, RuntimeStatus.BUSY),
         (RuntimeStatus.READY, RuntimeStatus.IDLE),
         (RuntimeStatus.BUSY, RuntimeStatus.IDLE),
         (RuntimeStatus.BUSY, RuntimeStatus.DEGRADED),
         (RuntimeStatus.IDLE, RuntimeStatus.STARTING),
+        (RuntimeStatus.IDLE, RuntimeStatus.READY),
         (RuntimeStatus.IDLE, RuntimeStatus.STOPPING),
         (RuntimeStatus.STOPPING, RuntimeStatus.STOPPED),
         (RuntimeStatus.STOPPING, RuntimeStatus.STARTING),
@@ -84,6 +86,7 @@ def apply_allowed_transition(state: RuntimeState, target: RuntimeStatus) -> Runt
         (RuntimeStatus.DEGRADED, RuntimeStatus.READY),
         (RuntimeStatus.DEGRADED, RuntimeStatus.BUSY),
         (RuntimeStatus.DEGRADED, RuntimeStatus.IDLE),
+        (RuntimeStatus.DEGRADED, RuntimeStatus.STOPPING),
     ],
 )
 def test_every_allowed_runtime_transition(source: RuntimeStatus, target: RuntimeStatus) -> None:
@@ -164,6 +167,37 @@ def test_degraded_recovery_clears_stale_runtime_binding() -> None:
     assert restarted.runtime_instance_id is None
     assert restarted.started_at is None
     assert restarted.last_error_code is None
+
+
+def test_external_work_leaves_idle_without_restarting_the_runtime() -> None:
+    idle = runtime_state(RuntimeStatus.IDLE)
+    interrupted_at = idle.updated_at + timedelta(seconds=1)
+
+    ready = idle.leave_idle_for_external_work(at=interrupted_at)
+
+    idle.validate_replacement(ready)
+    assert ready.status is RuntimeStatus.READY
+    assert ready.generation == idle.generation
+    assert ready.runtime_instance_id == idle.runtime_instance_id
+    assert ready.started_at == idle.started_at
+    assert ready.ready_at == idle.ready_at
+    assert ready.idle_since is None
+    assert ready.stop_eligible_at is None
+
+
+def test_only_starting_or_degraded_runtime_may_stop_as_unneeded() -> None:
+    degraded = starting_state().transition(
+        RuntimeStatus.DEGRADED,
+        at=NOW + timedelta(seconds=2),
+        error_code="runtime_not_ready",
+    )
+
+    stopping = degraded.begin_unneeded_start_stop(at=NOW + timedelta(seconds=3))
+
+    degraded.validate_replacement(stopping)
+    assert stopping.status is RuntimeStatus.STOPPING
+    with pytest.raises(ValueError, match="only STARTING or DEGRADED"):
+        runtime_state(RuntimeStatus.READY).begin_unneeded_start_stop(at=NOW + timedelta(seconds=4))
 
 
 @pytest.mark.parametrize(
@@ -258,6 +292,26 @@ def test_non_wake_replacement_requires_one_version_and_stable_generation() -> No
         starting.validate_replacement(replace(started, generation=2))
     with pytest.raises(ValueError, match="version exactly once"):
         starting.validate_replacement(replace(started, version=3))
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        RuntimeStatus.STOPPED,
+        RuntimeStatus.IDLE,
+        RuntimeStatus.STOPPING,
+        RuntimeStatus.DEGRADED,
+    ],
+)
+def test_exact_durable_work_resume_is_the_only_nonrequest_generation_change(
+    status: RuntimeStatus,
+) -> None:
+    source = runtime_state(status)
+    resumed = source.resume_for_work(at=source.updated_at + timedelta(seconds=1))
+
+    source.validate_replacement(resumed)
+    with pytest.raises(ValueError, match="wake or missing-task"):
+        source.validate_replacement(replace(resumed, last_request_at=resumed.updated_at))
 
 
 def test_reconciliation_updates_version_without_generation_or_state() -> None:

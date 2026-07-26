@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
+from shittim_chest.application.discord import OutboxOperation
 from shittim_chest.application.models import (
     AcceptDebateRequest,
     DebateSnapshot,
@@ -206,6 +207,9 @@ class FakeRepository:
         self.next_fencing_token = 1
         self.renew_calls: list[tuple[DebateId, datetime]] = []
         self.ingress_claims: list[IngressClaimFence | None] = []
+        self.terminal_operations: dict[str, OutboxOperation] = {}
+        self.terminal_stages: list[DebateSnapshot] = []
+        self.terminal_finalizations: list[DebateSnapshot] = []
 
     async def get_operation_result(
         self,
@@ -272,6 +276,59 @@ class FakeRepository:
         self.history[debate_id].append(persisted)
         if operation_id is not None:
             self.operations[operation_id] = persisted
+        return persisted
+
+    async def stage_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        staged: DebateSnapshot,
+        operations: tuple[OutboxOperation, ...],
+        operation_id: str | None = None,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot:
+        self.ingress_claims.append(ingress_claim)
+        if operation_id is not None:
+            replay = self.operations.get(operation_id)
+            if replay is not None and replay.terminal_delivery is not None:
+                return replay
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
+            raise RepositoryConflict
+        persisted = replace(staged, lease=current.lease)
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        self.terminal_stages.append(persisted)
+        for operation in operations:
+            existing = self.terminal_operations.get(operation.operation_id)
+            if existing is not None and existing != operation:
+                raise RepositoryConflict
+            self.terminal_operations[operation.operation_id] = operation
+        if operation_id is not None:
+            self.operations[operation_id] = persisted
+        return persisted
+
+    async def finalize_terminal(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
+            raise RepositoryConflict
+        persisted = replace(updated, lease=None)
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        self.terminal_finalizations.append(persisted)
+        for operation_id, result in tuple(self.operations.items()):
+            if (
+                result.state.debate_id == persisted.state.debate_id
+                and result.state.attempt_id == persisted.state.attempt_id
+            ):
+                self.operations[operation_id] = persisted
         return persisted
 
     async def create_retry(

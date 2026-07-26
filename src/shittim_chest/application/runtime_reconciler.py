@@ -11,6 +11,7 @@ from shittim_chest.application.ports import (
     EcsRuntimeUnavailable,
     IngressRepository,
     RepositoryConflict,
+    RuntimeActivityInspector,
     RuntimeStateRepository,
     StatusPublicationRepository,
     StatusPublicationTrigger,
@@ -19,6 +20,7 @@ from shittim_chest.application.ports import (
 from shittim_chest.application.scale_to_zero import (
     EcsRuntimeSnapshot,
     IngressRequest,
+    RuntimeActivity,
     RuntimeState,
     RuntimeStatus,
     StatusMessageState,
@@ -41,6 +43,9 @@ class RuntimeReconciliationReport:
     conditional_conflicts: int = 0
     ecs_observed: bool = False
     ecs_scaled_up: bool = False
+    ecs_scaled_down: bool = False
+    runtime_entered_idle: bool = False
+    runtime_stopped: bool = False
     runtime_reconciled: bool = False
 
     def __post_init__(self) -> None:
@@ -64,6 +69,7 @@ class RuntimeReconciler:
     """Converge persisted work before applying the matching ECS desired count."""
 
     __slots__ = (
+        "_activity",
         "_clock",
         "_ecs",
         "_ingress",
@@ -77,6 +83,7 @@ class RuntimeReconciler:
         *,
         clock: Clock,
         ingress: IngressRepository,
+        activity: RuntimeActivityInspector,
         runtime_state: RuntimeStateRepository,
         ecs: EcsRuntimeControl,
         status_publications: StatusPublicationRepository,
@@ -84,6 +91,7 @@ class RuntimeReconciler:
     ) -> None:
         self._clock = clock
         self._ingress = ingress
+        self._activity = activity
         self._runtime_state = runtime_state
         self._ecs = ecs
         self._status_publications = status_publications
@@ -99,16 +107,28 @@ class RuntimeReconciler:
             terminal_statuses,
         ) = await self._expire_terminal_requests(at)
         wake_candidates, wake_conflicts = await self._ensure_active_wakes(at)
-
+        activity = await self._activity.inspect(at=at)
         runtime = await self._runtime_state.get()
+        runtime, resume_conflicts = await self._resume_required_work(runtime, activity, at)
         ecs_error: EcsRuntimeUnavailable | None = None
         try:
-            ecs_snapshot, ecs_scaled_up = await self._converge_ecs_up(runtime)
+            ecs_snapshot = None if runtime is None else await self._ecs.describe()
+            (
+                runtime,
+                ecs_snapshot,
+                ecs_scaled_up,
+                repair_conflicts,
+            ) = await self._converge_required_runtime(
+                runtime=runtime,
+                activity=activity,
+                observed=ecs_snapshot,
+                at=at,
+            )
         except EcsRuntimeUnavailable as error:
             ecs_snapshot = None
             ecs_scaled_up = False
+            repair_conflicts = 0
             ecs_error = error
-        runtime, repair_conflicts = await self._repair_missing_task(runtime, ecs_snapshot, at)
         if _runtime_can_start_requests(runtime, ecs_snapshot):
             startup_timed_out = 0
             (
@@ -128,6 +148,24 @@ class RuntimeReconciler:
             at,
             immediate=(*terminal_statuses, *deadline_statuses),
         )
+        entered_idle = False
+        scaled_down = False
+        stopped = False
+        stop_conflicts = 0
+        if ecs_error is None:
+            (
+                runtime,
+                ecs_snapshot,
+                entered_idle,
+                scaled_down,
+                stopped,
+                stop_conflicts,
+            ) = await self._converge_idle_and_stop(
+                runtime=runtime,
+                activity=activity,
+                observed=ecs_snapshot,
+                at=at,
+            )
         if ecs_error is None:
             runtime_reconciled, reconcile_conflicts = await self._record_reconciled(runtime, at)
         else:
@@ -143,12 +181,17 @@ class RuntimeReconciler:
             conditional_conflicts=(
                 terminal_conflicts
                 + wake_conflicts
+                + resume_conflicts
                 + repair_conflicts
                 + deadline_conflicts
+                + stop_conflicts
                 + reconcile_conflicts
             ),
             ecs_observed=ecs_snapshot is not None,
             ecs_scaled_up=ecs_scaled_up,
+            ecs_scaled_down=scaled_down,
+            runtime_entered_idle=entered_idle,
+            runtime_stopped=stopped,
             runtime_reconciled=runtime_reconciled,
         )
         if ecs_error is not None:
@@ -264,16 +307,226 @@ class RuntimeReconciler:
                 triggered += 1
         return triggered, failed
 
-    async def _converge_ecs_up(
+    async def _resume_required_work(
         self,
         runtime: RuntimeState | None,
-    ) -> tuple[EcsRuntimeSnapshot | None, bool]:
+        activity: RuntimeActivity,
+        at: datetime,
+    ) -> tuple[RuntimeState | None, int]:
+        if not activity.requires_runtime:
+            return runtime, 0
         if runtime is None:
-            return None, False
-        observed = await self._ecs.describe()
+            raise RepositoryConflict("durable runtime work has no Runtime State")
+        updated = runtime.resume_for_work(at=max(at, runtime.updated_at))
+        if updated == runtime:
+            return runtime, 0
+        try:
+            return await self._runtime_state.replace(expected=runtime, updated=updated), 0
+        except RepositoryConflict:
+            current = await self._runtime_state.get()
+            if current is not None and current.status in {
+                RuntimeStatus.STARTING,
+                RuntimeStatus.READY,
+                RuntimeStatus.BUSY,
+            }:
+                return current, 1
+            raise
+
+    async def _converge_required_runtime(
+        self,
+        *,
+        runtime: RuntimeState | None,
+        activity: RuntimeActivity,
+        observed: EcsRuntimeSnapshot | None,
+        at: datetime,
+    ) -> tuple[RuntimeState | None, EcsRuntimeSnapshot | None, bool, int]:
+        if runtime is None or observed is None or not activity.requires_runtime:
+            return runtime, observed, False, 0
+        scaled_up = False
         if runtime.desired_count == 1 and observed.desired_count == 0:
-            return await self._ecs.set_desired_count(1), True
-        return observed, False
+            observed = await self._ecs.set_desired_count(1)
+            scaled_up = True
+        runtime, conflicts = await self._repair_missing_task(runtime, observed, at)
+        return runtime, observed, scaled_up, conflicts
+
+    async def _converge_idle_and_stop(
+        self,
+        *,
+        runtime: RuntimeState | None,
+        activity: RuntimeActivity,
+        observed: EcsRuntimeSnapshot | None,
+        at: datetime,
+    ) -> tuple[
+        RuntimeState | None,
+        EcsRuntimeSnapshot | None,
+        bool,
+        bool,
+        bool,
+        int,
+    ]:
+        if runtime is None or observed is None or activity.requires_runtime:
+            return runtime, observed, False, False, False, 0
+
+        entered_idle = False
+        conflicts = 0
+        degraded_can_idle = (
+            runtime.status is RuntimeStatus.DEGRADED
+            and runtime.desired_count == 1
+            and runtime.runtime_instance_id is not None
+            and runtime.started_at is not None
+            and runtime.ready_at is not None
+        )
+        if runtime.status in {RuntimeStatus.READY, RuntimeStatus.BUSY} or degraded_can_idle:
+            if not activity.is_complete:
+                return runtime, observed, False, False, False, 0
+            updated = runtime.begin_idle(at=max(at, runtime.updated_at))
+            try:
+                runtime = await self._runtime_state.replace(expected=runtime, updated=updated)
+                entered_idle = True
+            except RepositoryConflict:
+                runtime = await self._runtime_state.get()
+                conflicts += 1
+            return runtime, observed, entered_idle, False, False, conflicts
+
+        if runtime.status in {RuntimeStatus.STARTING, RuntimeStatus.DEGRADED}:
+            try:
+                runtime = await self._runtime_state.begin_unneeded_start_stop(
+                    expected=runtime,
+                    at=max(at, runtime.updated_at),
+                )
+            except RepositoryConflict:
+                return await self._runtime_state.get(), observed, False, False, False, 1
+        elif runtime.status is RuntimeStatus.IDLE:
+            if not activity.is_complete:
+                updated = runtime.leave_idle_for_external_work(at=max(at, runtime.updated_at))
+                try:
+                    runtime = await self._runtime_state.replace(
+                        expected=runtime,
+                        updated=updated,
+                    )
+                except RepositoryConflict:
+                    return await self._runtime_state.get(), observed, False, False, False, 1
+                return runtime, observed, False, False, False, 0
+            if not runtime.may_stop(
+                at=at,
+                expected_generation=runtime.generation,
+                activity=activity,
+            ):
+                return runtime, observed, False, False, False, 0
+            try:
+                runtime = await self._runtime_state.begin_idle_stop(
+                    expected=runtime,
+                    at=max(at, runtime.updated_at),
+                )
+            except RepositoryConflict:
+                return await self._runtime_state.get(), observed, False, False, False, 1
+        elif runtime.status is RuntimeStatus.STOPPED:
+            current = await self._runtime_state.get()
+            if current != runtime:
+                return current, observed, False, False, False, 1
+            if observed.desired_count == 0:
+                return current, observed, False, False, False, 0
+            latest_activity = await self._activity.inspect(at=at)
+            if latest_activity.requires_runtime:
+                current, resume_conflicts = await self._resume_required_work(
+                    current, latest_activity, at
+                )
+                if current is not None and current.desired_count == 1:
+                    observed = await self._ecs.set_desired_count(1)
+                return current, observed, False, False, False, resume_conflicts
+            observed = await self._ecs.set_desired_count(0)
+            return current, observed, False, True, False, 0
+        elif runtime.status is not RuntimeStatus.STOPPING:
+            return runtime, observed, False, False, False, 0
+
+        return await self._converge_stopping(
+            runtime=runtime,
+            observed=observed,
+            at=at,
+            conflicts=conflicts,
+        )
+
+    async def _converge_stopping(
+        self,
+        *,
+        runtime: RuntimeState,
+        observed: EcsRuntimeSnapshot,
+        at: datetime,
+        conflicts: int,
+    ) -> tuple[RuntimeState, EcsRuntimeSnapshot, bool, bool, bool, int]:
+        latest_activity = await self._activity.inspect(at=at)
+        if latest_activity.requires_runtime:
+            resumed, resume_conflicts = await self._resume_required_work(
+                runtime,
+                latest_activity,
+                at,
+            )
+            if resumed is None:
+                raise RepositoryConflict("Runtime State disappeared while stopping")
+            if resumed.desired_count == 1 and observed.desired_count == 0:
+                observed = await self._ecs.set_desired_count(1)
+            return resumed, observed, False, False, False, conflicts + resume_conflicts
+
+        current = await self._runtime_state.get()
+        if current != runtime:
+            if current is None:
+                raise RepositoryConflict("Runtime State disappeared while stopping")
+            if (
+                current.status in {RuntimeStatus.STARTING, RuntimeStatus.READY, RuntimeStatus.BUSY}
+                and current.desired_count == 1
+                and observed.desired_count == 0
+            ):
+                observed = await self._ecs.set_desired_count(1)
+            return current, observed, False, False, False, conflicts + 1
+
+        scaled_down = False
+        if observed.desired_count != 0:
+            observed = await self._ecs.set_desired_count(0)
+            scaled_down = True
+
+        latest_activity = await self._activity.inspect(at=at)
+        if latest_activity.requires_runtime:
+            current = await self._runtime_state.get()
+            if current is None:
+                raise RepositoryConflict("Runtime State disappeared after scale down")
+            resumed, resume_conflicts = await self._resume_required_work(
+                current,
+                latest_activity,
+                at,
+            )
+            if resumed is None:
+                raise RepositoryConflict("Runtime State disappeared after scale down")
+            if observed.desired_count == 0:
+                observed = await self._ecs.set_desired_count(1)
+            return resumed, observed, False, scaled_down, False, conflicts + resume_conflicts
+
+        current = await self._runtime_state.get()
+        if current != runtime:
+            if current is None:
+                raise RepositoryConflict("Runtime State disappeared after scale down")
+            if (
+                current.status in {RuntimeStatus.STARTING, RuntimeStatus.READY, RuntimeStatus.BUSY}
+                and current.desired_count == 1
+                and observed.desired_count == 0
+            ):
+                observed = await self._ecs.set_desired_count(1)
+            return current, observed, False, scaled_down, False, conflicts + 1
+        if current is None:
+            raise RepositoryConflict("Runtime State disappeared after scale down")
+        if observed.desired_count or observed.running_count or observed.pending_count:
+            return current, observed, False, scaled_down, False, conflicts
+
+        stopped = current.transition(RuntimeStatus.STOPPED, at=max(at, current.updated_at))
+        try:
+            current = await self._runtime_state.replace(expected=current, updated=stopped)
+        except RepositoryConflict:
+            current = await self._runtime_state.get()
+            if current is None:
+                raise RepositoryConflict(
+                    "Runtime State disappeared at STOPPED convergence"
+                ) from None
+            return current, observed, False, scaled_down, False, conflicts + 1
+        return current, observed, False, scaled_down, True, conflicts
 
     async def _record_reconciled(
         self,

@@ -56,6 +56,13 @@ def test_runtime_state_round_trip_uses_canonical_singleton_key() -> None:
     assert deserialize_runtime_state(item) == source
 
 
+def test_runtime_state_previous_shared_schema_is_upconverted() -> None:
+    source = ready_state()
+    previous = {**serialize_runtime_state(source), "schema_version": 6}
+
+    assert deserialize_runtime_state(previous) == source
+
+
 def test_persisted_timestamps_are_fixed_width_and_lexically_ordered() -> None:
     zero = serialize_runtime_state(RuntimeState.stopped(at=NOW))["updated_at"]
     half_second = serialize_runtime_state(
@@ -88,7 +95,7 @@ def test_runtime_wake_result_round_trip_is_keyed_by_interaction_id() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("schema_version", CURRENT_SCHEMA_VERSION - 1, "shared table schema"),
+        ("schema_version", CURRENT_SCHEMA_VERSION - 2, "unsupported schema"),
         ("record_schema_version", 2, "auxiliary record schema"),
         ("PK", "CONTROL#OTHER", "invalid key"),
         ("state", "unknown", "invalid runtime state"),

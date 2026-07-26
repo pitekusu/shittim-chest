@@ -36,6 +36,9 @@ class FakeReconciler:
             conditional_conflicts=6,
             ecs_observed=True,
             ecs_scaled_up=True,
+            ecs_scaled_down=True,
+            runtime_entered_idle=True,
+            runtime_stopped=True,
             runtime_reconciled=True,
         )
 
@@ -63,9 +66,12 @@ def test_handler_accepts_only_content_free_scheduled_or_hint_events(
     assert result == {
         "conditional_conflicts": 6,
         "ecs_observed": True,
+        "ecs_scaled_down": True,
         "ecs_scaled_up": True,
         "observed_at": "2026-07-26T01:02:03Z",
         "runtime_reconciled": True,
+        "runtime_entered_idle": True,
+        "runtime_stopped": True,
         "startup_recovered": 4,
         "startup_timed_out": 3,
         "status_publications_triggered": 5,

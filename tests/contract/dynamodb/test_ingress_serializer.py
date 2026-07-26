@@ -76,6 +76,13 @@ def test_ingress_request_round_trip_has_fifo_and_independent_schema_keys() -> No
     assert deserialize_ingress_request(item) == source
 
 
+def test_ingress_request_previous_shared_schema_is_upconverted() -> None:
+    source = request()
+    previous = {**serialize_ingress_request(source), "schema_version": 6}
+
+    assert deserialize_ingress_request(previous) == source
+
+
 def test_ingress_request_round_trip_preserves_predeadline_processing_marker() -> None:
     source = request()
     started = replace(
@@ -288,7 +295,7 @@ def test_prepared_status_publication_round_trip_separates_desired_and_delivered(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("schema_version", CURRENT_SCHEMA_VERSION - 1, "shared table schema"),
+        ("schema_version", CURRENT_SCHEMA_VERSION - 2, "unsupported schema"),
         ("record_schema_version", 2, "auxiliary record schema"),
         ("PK", "CONTROL#OTHER", "partition key"),
         ("gsi2pk", "OTHER", "recoverable debate index"),

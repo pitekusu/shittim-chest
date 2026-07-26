@@ -18,6 +18,14 @@ else:
     TransactWriteItemTypeDef = object
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.ingress import INGRESS_RECORD_SCHEMA_VERSION
+from shittim_chest.adapters.dynamodb.outbox import (
+    OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION,
+)
+from shittim_chest.adapters.dynamodb.repository import (
+    ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
+    GLOBAL_LEASE_SLOTS,
+)
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
@@ -47,6 +55,8 @@ from shittim_chest.application.scale_to_zero import (
 )
 
 RUNTIME_RECORD_SCHEMA_VERSION = 1
+RUNTIME_ACTIVITY_SCHEMA_VERSION = 1
+RUNTIME_ACTIVITY_SCHEMA_RECORD_TYPE = "runtime_activity_schema"
 RUNTIME_CAS_ATTEMPTS = INGRESS_QUEUE_LIMIT + 1
 _ACTIVE_INGRESS_STATUSES = frozenset({"pending", "claimed", "retrying"})
 _RUNTIME_STATE_ATTRIBUTES = (
@@ -124,6 +134,32 @@ class DynamoDbRuntimeStateRepository:
     ) -> RuntimeState:
         try:
             return await asyncio.to_thread(self._replace, expected, updated)
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
+        except PersistenceFormatError:
+            raise RepositoryConflict("runtime state record is invalid") from None
+
+    async def begin_idle_stop(
+        self,
+        *,
+        expected: RuntimeState,
+        at: datetime,
+    ) -> RuntimeState:
+        try:
+            return await asyncio.to_thread(self._begin_idle_stop, expected, at)
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
+        except PersistenceFormatError:
+            raise RepositoryConflict("runtime state record is invalid") from None
+
+    async def begin_unneeded_start_stop(
+        self,
+        *,
+        expected: RuntimeState,
+        at: datetime,
+    ) -> RuntimeState:
+        try:
+            return await asyncio.to_thread(self._begin_unneeded_start_stop, expected, at)
         except BotoCoreError, ClientError:
             raise RepositoryUnavailable from None
         except PersistenceFormatError:
@@ -232,6 +268,11 @@ class DynamoDbRuntimeStateRepository:
 
     def _replace(self, expected: RuntimeState, updated: RuntimeState) -> RuntimeState:
         expected.validate_replacement(updated)
+        if (
+            expected.status is not RuntimeStatus.STOPPING
+            and updated.status is RuntimeStatus.STOPPING
+        ):
+            raise ValueError("STOPPING requires the complete activity transaction fence")
         if expected == updated:
             current = self._get()
             if current == expected:
@@ -252,6 +293,106 @@ class DynamoDbRuntimeStateRepository:
             if current == updated:
                 return updated
             raise RepositoryConflict("runtime state changed before replacement") from None
+        return updated
+
+    def _begin_idle_stop(self, expected: RuntimeState, at: datetime) -> RuntimeState:
+        updated = expected.begin_idle_stop(at=at)
+        return self._transact_stop(
+            expected=expected,
+            updated=updated,
+            transaction_kind="idle-stop",
+        )
+
+    def _begin_unneeded_start_stop(
+        self,
+        expected: RuntimeState,
+        at: datetime,
+    ) -> RuntimeState:
+        updated = expected.begin_unneeded_start_stop(at=at)
+        return self._transact_stop(
+            expected=expected,
+            updated=updated,
+            transaction_kind="unneeded-start-stop",
+        )
+
+    def _transact_stop(
+        self,
+        *,
+        expected: RuntimeState,
+        updated: RuntimeState,
+        transaction_kind: str,
+    ) -> RuntimeState:
+        expected.validate_replacement(updated)
+        condition, names, values = _runtime_cas(expected)
+        actions: list[TransactWriteItemTypeDef] = [
+            cast(
+                TransactWriteItemTypeDef,
+                {
+                    "Put": {
+                        "TableName": self._table_name,
+                        "Item": marshal_item(serialize_runtime_state(updated)),
+                        "ConditionExpression": condition,
+                        "ExpressionAttributeNames": names,
+                        "ExpressionAttributeValues": marshal_item(values),
+                    }
+                },
+            ),
+            _activity_schema_check(table_name=self._table_name),
+            _zero_counter_check(
+                table_name=self._table_name,
+                key={"PK": "CONTROL#INGRESS", "SK": "COUNTER"},
+                record_type="ingress_queue_counter",
+                record_schema_version=INGRESS_RECORD_SCHEMA_VERSION,
+                fields=("count",),
+            ),
+            _zero_counter_check(
+                table_name=self._table_name,
+                key={"PK": "CONTROL#INGRESS", "SK": "STATUS_PENDING_COUNTER"},
+                record_type="ingress_status_pending_counter",
+                record_schema_version=INGRESS_RECORD_SCHEMA_VERSION,
+                fields=("count",),
+            ),
+            _zero_counter_check(
+                table_name=self._table_name,
+                key={"PK": "CONTROL#PANEL_REFRESH", "SK": "PENDING_COUNT"},
+                record_type="panel_refresh_pending_counter",
+                record_schema_version=None,
+                fields=("count",),
+            ),
+            _zero_counter_check(
+                table_name=self._table_name,
+                key={"PK": "CONTROL#OUTBOX", "SK": "ACTIVITY"},
+                record_type="outbox_activity_counter",
+                record_schema_version=OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION,
+                fields=("pending_count", "claimed_count"),
+            ),
+            _zero_counter_check(
+                table_name=self._table_name,
+                key={"PK": "CONTROL#DEBATE", "SK": "ACTIVE_ATTEMPT_COUNT"},
+                record_type="active_attempt_counter",
+                record_schema_version=ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
+                fields=("count",),
+            ),
+            *(
+                _free_slot_check(table_name=self._table_name, slot=slot)
+                for slot in range(GLOBAL_LEASE_SLOTS)
+            ),
+        ]
+        try:
+            self._client.transact_write_items(
+                TransactItems=actions,
+                ClientRequestToken=_transaction_token(transaction_kind, actions),
+                ReturnConsumedCapacity="NONE",
+            )
+        except self._client.exceptions.TransactionCanceledException as error:
+            current = self._get()
+            if current == updated:
+                return updated
+            if is_condition_only_cancellation(error):
+                raise RepositoryConflict("runtime stop activity fence rejected") from None
+            raise RepositoryUnavailable from None
+        except self._client.exceptions.IdempotentParameterMismatchException:
+            raise RepositoryConflict("runtime stop transaction token input changed") from None
         return updated
 
     def _transact_wake(
@@ -590,6 +731,97 @@ def _request_key(request_sort_key: str) -> DynamoItem:
 
 def _active_pointer_key(request_sort_key: str) -> DynamoItem:
     return {"PK": "CONTROL#INGRESS#ACTIVE", "SK": request_sort_key}
+
+
+def _activity_schema_key() -> DynamoItem:
+    return {"PK": "CONTROL#RUNTIME", "SK": "ACTIVITY_SCHEMA"}
+
+
+def _activity_schema_check(*, table_name: str) -> TransactWriteItemTypeDef:
+    return cast(
+        TransactWriteItemTypeDef,
+        {
+            "ConditionCheck": {
+                "TableName": table_name,
+                "Key": marshal_item(_activity_schema_key()),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": RUNTIME_ACTIVITY_SCHEMA_RECORD_TYPE,
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": RUNTIME_ACTIVITY_SCHEMA_VERSION,
+                    }
+                ),
+            }
+        },
+    )
+
+
+def _zero_counter_check(
+    *,
+    table_name: str,
+    key: DynamoItem,
+    record_type: str,
+    record_schema_version: int | None,
+    fields: tuple[str, ...],
+) -> TransactWriteItemTypeDef:
+    names = {f"#count{index}": field for index, field in enumerate(fields)}
+    values: DynamoItem = {
+        ":zero": 0,
+        ":type": record_type,
+        ":schema": CURRENT_SCHEMA_VERSION,
+    }
+    valid = [
+        "record_type=:type",
+        "schema_version=:schema",
+        *(f"{name}=:zero" for name in names),
+    ]
+    if record_schema_version is not None:
+        values[":record_schema"] = record_schema_version
+        valid.append("record_schema_version=:record_schema")
+    else:
+        valid.append("attribute_not_exists(record_schema_version)")
+    return cast(
+        TransactWriteItemTypeDef,
+        {
+            "ConditionCheck": {
+                "TableName": table_name,
+                "Key": marshal_item(key),
+                "ConditionExpression": " AND ".join(valid),
+                "ExpressionAttributeNames": names,
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        },
+    )
+
+
+def _free_slot_check(*, table_name: str, slot: int) -> TransactWriteItemTypeDef:
+    return cast(
+        TransactWriteItemTypeDef,
+        {
+            "ConditionCheck": {
+                "TableName": table_name,
+                "Key": marshal_item({"PK": "CONTROL#GLOBAL", "SK": f"SLOT#{slot}"}),
+                "ConditionExpression": (
+                    "attribute_not_exists(PK) OR "
+                    "(record_type=:type AND schema_version=:schema AND slot=:slot "
+                    "AND attribute_exists(fencing_token) "
+                    "AND attribute_not_exists(lease_owner) "
+                    "AND attribute_not_exists(lease_expiry))"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": "lease_slot",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":slot": slot,
+                    }
+                ),
+            }
+        },
+    )
 
 
 def _runtime_cas(

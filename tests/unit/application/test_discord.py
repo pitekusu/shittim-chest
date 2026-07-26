@@ -195,6 +195,7 @@ def test_outbox_and_panel_contracts_reject_invalid_external_identifiers_and_stat
         status=OutboxStatus.CLAIMED,
         claim_owner="publisher",
         claim_expires_at=NOW + timedelta(seconds=60),
+        delivery_attempt=1,
     )
     sent = replace(
         claimed,

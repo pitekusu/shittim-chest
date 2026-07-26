@@ -10,12 +10,14 @@ from datetime import datetime, timedelta
 from enum import StrEnum, unique
 from uuid import RFC_4122, UUID
 
-from shittim_chest.domain import AttemptId, DebateId
+from shittim_chest.application.models import DebateSnapshot
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
 DISCORD_MESSAGE_LIMIT = 2_000
 DISCORD_CUSTOM_ID_LIMIT = 100
 DISCORD_NONCE_LIMIT = 25
 OUTBOX_CLAIM_SECONDS = 60
+MAX_TERMINAL_OUTBOX_CHUNKS = 20
 
 _NONCE_PATTERN = re.compile(r"[A-Za-z0-9_-]{22}\Z")
 _OPERATION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,36}\Z")
@@ -155,6 +157,8 @@ class OutboxOperation:
             raise ValueError("outbox content must be at most 2000 characters")
         if _SHA256_PATTERN.fullmatch(self.content_hash) is None:
             raise ValueError("content hash must be a lowercase SHA-256 hexadecimal digest")
+        if hashlib.sha256(self.content.encode("utf-8")).hexdigest() != self.content_hash:
+            raise ValueError("content hash must match the UTF-8 message content")
         if _NONCE_PATTERN.fullmatch(self.nonce) is None:
             raise ValueError("nonce must be 22 unpadded base64url characters")
         if len(self.nonce) > DISCORD_NONCE_LIMIT:
@@ -186,6 +190,8 @@ class OutboxOperation:
         if self.status is OutboxStatus.SENT:
             if self.message_id is None or self.sent_at is None:
                 raise ValueError("sent outbox operation requires message ID and sent timestamp")
+            if self.delivery_attempt < 1:
+                raise ValueError("sent outbox operation requires a positive delivery attempt")
             _require_snowflake(self.message_id, label="message ID")
         elif self.message_id is not None or self.sent_at is not None:
             raise ValueError("only a sent outbox operation may contain delivery result fields")
@@ -379,6 +385,104 @@ def prepare_outbox_operations(
         )
         for sequence, chunk in enumerate(chunks)
     )
+
+
+def prepare_terminal_outbox_operations(
+    *,
+    snapshot: DebateSnapshot,
+    target_phase: DebatePhase,
+    created_at: datetime,
+    error_code: str | None = None,
+) -> tuple[OutboxOperation, ...]:
+    """Build deterministic required delivery for one terminal outcome."""
+
+    _require_utc(created_at, label="terminal delivery creation timestamp")
+    if snapshot.state.phase.is_terminal:
+        raise ValueError("terminal delivery must be staged from an active attempt")
+    if snapshot.thread_id is None:
+        raise ValueError("terminal delivery requires a bound Discord thread")
+    content = _terminal_content(snapshot, target_phase=target_phase, error_code=error_code)
+    chunks = split_discord_message(content)
+    if len(chunks) > MAX_TERMINAL_OUTBOX_CHUNKS:
+        raise ValueError("terminal delivery exceeds the bounded chunk count")
+    operation_prefix = f"terminal-{target_phase.value}"
+    nonce_sources = tuple(
+        _derived_uuid7(
+            snapshot.state.attempt_id,
+            operation_prefix=operation_prefix,
+            sequence=sequence,
+        )
+        for sequence in range(len(chunks))
+    )
+    return prepare_outbox_operations(
+        operation_prefix=operation_prefix,
+        debate_id=snapshot.state.debate_id,
+        attempt_id=snapshot.state.attempt_id,
+        bot_slot=DiscordBotSlot.MODERATOR,
+        thread_id=snapshot.thread_id,
+        content=content,
+        nonce_sources=nonce_sources,
+        created_at=created_at,
+    )
+
+
+def _terminal_content(
+    snapshot: DebateSnapshot,
+    *,
+    target_phase: DebatePhase,
+    error_code: str | None,
+) -> str:
+    disclaimer = "この出力はAI生成であり、正確性や専門的判断を保証するものではありません。"
+    if target_phase is DebatePhase.COMPLETED:
+        decision = snapshot.final_decision
+        if decision is None or error_code is not None:
+            raise ValueError("completed delivery requires a decision without an error")
+        sections = ["**最終決定**", decision.decision]
+        if decision.actions:
+            sections.extend(("**実行案**", *(f"- {action}" for action in decision.actions)))
+        if decision.caveats:
+            sections.extend(("**注意点**", *(f"- {caveat}" for caveat in decision.caveats)))
+        sections.extend(("", disclaimer))
+        return "\n".join(sections)
+    if target_phase is DebatePhase.FAILED:
+        if error_code is None or not error_code.strip():
+            raise ValueError("failed delivery requires an error code")
+        return "\n".join(
+            (
+                "**討論を完了できませんでした**",
+                f"エラーコード: `{error_code}`",
+                "再試行は操作パネルから行えます。",
+                "",
+                disclaimer,
+            )
+        )
+    if target_phase is DebatePhase.CANCELLED:
+        if error_code is not None:
+            raise ValueError("cancelled delivery cannot contain an error code")
+        return "\n".join(("**討論を中止しました**", "", disclaimer))
+    raise ValueError("terminal delivery target must be completed, failed, or cancelled")
+
+
+def _derived_uuid7(
+    attempt_id: AttemptId,
+    *,
+    operation_prefix: str,
+    sequence: int,
+) -> UUID:
+    """Derive a replay-stable UUIDv7 nonce while retaining attempt time bits."""
+
+    if sequence < 0:
+        raise ValueError("terminal delivery sequence must be non-negative")
+    digest = hashlib.sha256(
+        attempt_id.value.bytes + operation_prefix.encode("ascii") + sequence.to_bytes(4, "big")
+    ).digest()
+    raw = bytearray(attempt_id.value.bytes)
+    raw[8:] = digest[:8]
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    derived = UUID(bytes=bytes(raw))
+    if derived.version != 7 or derived.variant != RFC_4122:  # pragma: no cover - construction
+        raise AssertionError("derived terminal nonce is not an RFC 9562 UUIDv7")
+    return derived
 
 
 def _split_with_limit(content: str, limit: int) -> tuple[str, ...]:

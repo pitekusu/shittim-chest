@@ -18,6 +18,7 @@ from shittim_chest.adapters.aws import (
 )
 from shittim_chest.adapters.dynamodb import (
     DynamoDbIngressRepository,
+    DynamoDbRuntimeActivityInspector,
     DynamoDbRuntimeStateRepository,
 )
 from shittim_chest.application.ports import (
@@ -98,6 +99,11 @@ def _get_handler() -> RuntimeReconcilerLambda:
             reconciler=RuntimeReconciler(
                 clock=SystemClock(),
                 ingress=ingress,
+                activity=DynamoDbRuntimeActivityInspector(
+                    client=dynamodb,
+                    table_name=settings.table_name,
+                    ingress=ingress,
+                ),
                 runtime_state=DynamoDbRuntimeStateRepository(
                     client=dynamodb,
                     table_name=settings.table_name,
@@ -144,9 +150,12 @@ def _report_event(report: RuntimeReconciliationReport) -> dict[str, object]:
     return {
         "conditional_conflicts": report.conditional_conflicts,
         "ecs_observed": report.ecs_observed,
+        "ecs_scaled_down": report.ecs_scaled_down,
         "ecs_scaled_up": report.ecs_scaled_up,
         "observed_at": report.observed_at.isoformat().replace("+00:00", "Z"),
         "runtime_reconciled": report.runtime_reconciled,
+        "runtime_entered_idle": report.runtime_entered_idle,
+        "runtime_stopped": report.runtime_stopped,
         "startup_recovered": report.startup_recovered,
         "startup_timed_out": report.startup_timed_out,
         "status_publications_triggered": report.status_publications_triggered,

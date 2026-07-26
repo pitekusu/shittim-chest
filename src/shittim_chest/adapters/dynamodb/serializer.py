@@ -14,7 +14,7 @@ from shittim_chest.application.discord import (
     PanelOperation,
     PanelOperationKind,
 )
-from shittim_chest.application.models import DebateSnapshot, LeaseGrant
+from shittim_chest.application.models import DebateSnapshot, LeaseGrant, TerminalDeliveryPlan
 from shittim_chest.application.scale_to_zero import (
     IngressKind,
     IngressOperationResult,
@@ -52,8 +52,8 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 6
-PREVIOUS_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 7
+PREVIOUS_SCHEMA_VERSION = 6
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
@@ -82,13 +82,9 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
-        # v5 debate_meta has no Discord name snapshots. Use the immutable
-        # requester_id as a deterministic non-empty legacy fallback — not a
-        # recovered Discord username or Guild display name.
-        if migrated.get("record_type") == "debate_meta":
-            requester_id = _text(migrated, "requester_id")
-            migrated.setdefault("requester_username", requester_id)
-            migrated.setdefault("requester_display_name", requester_id)
+        # v6 predates staged terminal delivery. Missing optional delivery
+        # fields remain absent; deployment validation rejects unsafe legacy
+        # activity before the scale-to-zero control records are initialized.
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -157,6 +153,21 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         snapshot.state.failed_from_phase.value if snapshot.state.failed_from_phase else None,
     )
     _put_optional(attempt_meta, "error_code", snapshot.error_code)
+    terminal_delivery = snapshot.terminal_delivery
+    if terminal_delivery is not None:
+        attempt_meta.update(
+            {
+                "terminal_delivery_target": terminal_delivery.target_phase.value,
+                "terminal_delivery_operation_ids": list(terminal_delivery.operation_ids),
+                "terminal_delivery_content_hashes": list(terminal_delivery.content_hashes),
+                "terminal_delivery_staged_at": _timestamp(terminal_delivery.staged_at),
+            }
+        )
+        _put_optional(
+            attempt_meta,
+            "terminal_delivery_completed_at",
+            _optional_timestamp(terminal_delivery.completed_at),
+        )
     _put_optional(
         attempt_meta,
         "panel_refresh_required_at",
@@ -381,6 +392,33 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             executed_policy_id=_optional_text(escalation_item, "executed_policy_id"),
             execution_count=_integer(escalation_item, "execution_count"),
         )
+    terminal_fields = frozenset(
+        {
+            "terminal_delivery_target",
+            "terminal_delivery_operation_ids",
+            "terminal_delivery_content_hashes",
+            "terminal_delivery_staged_at",
+        }
+    )
+    present_terminal_fields = terminal_fields.intersection(attempt_meta)
+    completed_field_present = "terminal_delivery_completed_at" in attempt_meta
+    if present_terminal_fields and present_terminal_fields != terminal_fields:
+        raise PersistenceFormatError("terminal delivery fields are incomplete")
+    if completed_field_present and present_terminal_fields != terminal_fields:
+        raise PersistenceFormatError("terminal delivery completion has no staged plan")
+
+    terminal_delivery = None
+    if present_terminal_fields:
+        terminal_delivery = TerminalDeliveryPlan(
+            target_phase=DebatePhase(_text(attempt_meta, "terminal_delivery_target")),
+            operation_ids=_string_tuple(attempt_meta, "terminal_delivery_operation_ids"),
+            content_hashes=_string_tuple(attempt_meta, "terminal_delivery_content_hashes"),
+            staged_at=_datetime(attempt_meta, "terminal_delivery_staged_at"),
+            completed_at=_optional_datetime(
+                attempt_meta,
+                "terminal_delivery_completed_at",
+            ),
+        )
     return DebateSnapshot(
         state=state,
         question=_text(debate_meta, "question"),
@@ -436,6 +474,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         final_decision=decision,
         escalation_assessment=escalation_assessment,
         error_code=_optional_text(attempt_meta, "error_code"),
+        terminal_delivery=terminal_delivery,
     )
 
 
@@ -1236,9 +1275,7 @@ def _validate_auxiliary_item(
     expected_type: str,
     expected_record_schema_version: int = 1,
 ) -> DynamoItem:
-    item = dict(raw_item)
-    if _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION:
-        raise PersistenceFormatError("unsupported shared table schema version")
+    item = migrate_item(raw_item)
     if _integer(item, "record_schema_version") != expected_record_schema_version:
         raise PersistenceFormatError("unsupported auxiliary record schema version")
     if _text(item, "record_type") != expected_type:

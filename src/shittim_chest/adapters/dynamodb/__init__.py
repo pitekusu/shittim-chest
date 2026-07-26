@@ -9,6 +9,9 @@ from shittim_chest.adapters.dynamodb.repository import (
     DynamoDbDebateRepository,
     create_dynamodb_client,
 )
+from shittim_chest.adapters.dynamodb.runtime_activity import (
+    DynamoDbRuntimeActivityInspector,
+)
 from shittim_chest.adapters.dynamodb.runtime_state import DynamoDbRuntimeStateRepository
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
@@ -48,6 +51,7 @@ __all__ = (
     "DynamoDbDebateRepository",
     "DynamoDbIngressRepository",
     "DynamoDbOutboxRepository",
+    "DynamoDbRuntimeActivityInspector",
     "DynamoDbRuntimeStateRepository",
     "ItemTooLarge",
     "OutboxOperation",

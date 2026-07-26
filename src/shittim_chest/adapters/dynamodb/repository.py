@@ -24,6 +24,7 @@ else:
     TransactWriteItemTypeDef = object
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
@@ -34,11 +35,20 @@ from shittim_chest.adapters.dynamodb.serializer import (
     deserialize_panel_operation,
     deserialize_snapshot,
     ingress_request_sort_key_from_identity,
+    serialize_outbox,
     serialize_panel_operation,
     serialize_snapshot,
 )
-from shittim_chest.application.discord import PanelOperation, PanelOperationKind
-from shittim_chest.application.models import DebateSnapshot, LeaseGrant
+from shittim_chest.application.discord import (
+    MAX_TERMINAL_OUTBOX_CHUNKS,
+    DiscordBotSlot,
+    OutboxOperation,
+    OutboxStatus,
+    PanelOperation,
+    PanelOperationKind,
+    content_sha256,
+)
+from shittim_chest.application.models import DebateSnapshot, LeaseGrant, TerminalDeliveryPlan
 from shittim_chest.application.ports import (
     RepositoryBusy,
     RepositoryClaimLost,
@@ -58,6 +68,8 @@ INGRESS_PREPARE_LEASE_MIN_SECONDS = 50
 PANEL_REFRESH_CLAIM_SECONDS = 60
 PANEL_REFRESH_COUNT_LIMIT = 100_000
 PANEL_REFRESH_QUERY_LIMIT = 20
+ACTIVE_ATTEMPT_COUNT_LIMIT = 100_000
+ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION = 1
 DAILY_GUILD_QUOTA = 30
 GLOBAL_LEASE_SLOTS = 3
 RECOVERABLE_INDEX = "gsi2"
@@ -145,6 +157,32 @@ class DynamoDbDebateRepository:
             operation_id,
             ingress_claim,
         )
+
+    async def stage_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        staged: DebateSnapshot,
+        operations: tuple[OutboxOperation, ...],
+        operation_id: str | None = None,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(
+            self._stage_terminal_delivery,
+            expected,
+            staged,
+            operations,
+            operation_id,
+            ingress_claim,
+        )
+
+    async def finalize_terminal(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(self._finalize_terminal, expected, updated)
 
     async def create_retry(
         self,
@@ -286,6 +324,11 @@ class DynamoDbDebateRepository:
     async def abandoned_panel_refresh_count(self) -> int:
         return await asyncio.to_thread(self._abandoned_panel_refresh_count)
 
+    async def active_attempt_count(self) -> int:
+        """Return the strong count of current nonterminal attempts."""
+
+        return await asyncio.to_thread(self._active_attempt_count)
+
     def _create(
         self,
         snapshot: DebateSnapshot,
@@ -315,6 +358,7 @@ class DynamoDbDebateRepository:
                 *self._ingress_claim_actions(ingress_claim),
                 candidate.action,
                 self._quota_action(persisted.guild_id, now),
+                self._active_attempt_count_action(1, now),
                 *(self._put_new(item) for item in serialize_snapshot(persisted)),
                 self._put_new(serialize_panel_operation(operation)),
             ]
@@ -355,6 +399,19 @@ class DynamoDbDebateRepository:
             if replay is not None:
                 return replay
         _require_same_attempt(expected, updated)
+        if expected.terminal_delivery is not None or updated.terminal_delivery is not None:
+            raise RepositoryConflict("terminal delivery requires its dedicated repository path")
+        direct_unbound_cancel = _is_direct_unbound_cancellation(
+            expected,
+            updated,
+            operation_id=operation_id,
+        )
+        if (
+            not expected.state.phase.is_terminal
+            and updated.state.phase.is_terminal
+            and not direct_unbound_cancel
+        ):
+            raise RepositoryConflict("direct terminal replacement is forbidden")
         lease = expected.lease
         if lease is None:
             raise RepositoryConflict("active write requires a fenced lease")
@@ -380,6 +437,7 @@ class DynamoDbDebateRepository:
                 actions.append(self._put(item))
         if persisted.state.phase.is_terminal:
             actions.append(self._release_slot_action(lease, persisted.state.updated_at))
+            actions.append(self._active_attempt_count_action(-1, persisted.state.updated_at))
         if not expected.panel_refresh_pending and persisted.panel_refresh_pending:
             actions.append(self._panel_refresh_count_action(1, persisted.state.updated_at))
         if operation_id is not None:
@@ -412,6 +470,184 @@ class DynamoDbDebateRepository:
                     )
                     return replay
             self._require_current_ingress_claim(ingress_claim, operation_id=operation_id)
+            raise
+        return persisted
+
+    def _stage_terminal_delivery(
+        self,
+        expected: DebateSnapshot,
+        staged: DebateSnapshot,
+        operations: tuple[OutboxOperation, ...],
+        operation_id: str | None,
+        ingress_claim: IngressClaimFence | None,
+    ) -> DebateSnapshot:
+        _require_terminal_stage(
+            expected,
+            staged,
+            operations,
+            operation_id=operation_id,
+            ingress_claim=ingress_claim,
+        )
+        plan = staged.terminal_delivery
+        if plan is None:  # pragma: no cover - validated above
+            raise AssertionError("terminal delivery plan disappeared after validation")
+        self._require_current_ingress_claim(ingress_claim, operation_id=operation_id)
+        if operation_id is not None:
+            replay = self._get_operation_result(operation_id)
+            if replay is not None:
+                if _same_terminal_delivery_plan(replay.terminal_delivery, plan):
+                    return replay
+                if replay != expected:
+                    raise RepositoryConflict(
+                        "terminal operation is bound to another attempt version"
+                    )
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(staged))
+        attempt_key = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+        attempt_item = new_items.pop(attempt_tuple)
+        actions: list[TransactWriteItemTypeDef] = [
+            *self._ingress_claim_actions(ingress_claim),
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=attempt_item,
+                expected=expected,
+                write_at=staged.state.updated_at,
+            ),
+        ]
+        for key, item in new_items.items():
+            if old_items.get(key) != item:
+                actions.append(self._put(item))
+        actions.extend(_put_new_outbox(self._table_name, operation) for operation in operations)
+        actions.append(
+            outbox_activity_action(
+                table_name=self._table_name,
+                pending_delta=len(operations),
+                claimed_delta=0,
+                at=staged.state.updated_at,
+            )
+        )
+        if operation_id is not None and plan.target_phase is DebatePhase.CANCELLED:
+            operation = _panel_operation(
+                staged,
+                operation_id=operation_id,
+                kind=PanelOperationKind.CANCEL,
+                source_attempt_id=staged.state.attempt_id,
+            )
+            actions.append(self._put_new(serialize_panel_operation(operation)))
+        _require_transaction_size(actions)
+        token_source = ":".join(
+            (
+                self._table_name,
+                operation_id or "terminal-stage",
+                str(staged.state.debate_id),
+                str(staged.state.attempt_id),
+                str(staged.state.updated_at),
+                *(operation.content_hash for operation in operations),
+                _ingress_claim_token_component(ingress_claim),
+            )
+        )
+        try:
+            self._transact(actions, token=_client_token(token_source))
+        except RepositoryConflict:
+            if operation_id is not None:
+                replay = self._get_operation_result(operation_id)
+                if replay is not None and _same_terminal_delivery_plan(
+                    replay.terminal_delivery,
+                    plan,
+                ):
+                    self._require_current_ingress_claim(
+                        ingress_claim,
+                        operation_id=operation_id,
+                    )
+                    return replay
+            current = self._load_snapshot(expected.state.debate_id, None)
+            if current is not None and _same_terminal_delivery_plan(
+                current.terminal_delivery,
+                plan,
+            ):
+                return current
+            self._require_current_ingress_claim(ingress_claim, operation_id=operation_id)
+            raise
+        return staged
+
+    def _finalize_terminal(
+        self,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        _require_terminal_finalization(expected, updated)
+        lease = expected.lease
+        if lease is None:
+            raise RepositoryConflict("terminal finalization requires a fenced lease")
+        persisted = _require_panel_refresh(replace(updated, lease=None))
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(persisted))
+        attempt_key = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+        attempt_item = new_items.pop(attempt_tuple)
+        actions: list[TransactWriteItemTypeDef] = [
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=attempt_item,
+                expected=expected,
+                write_at=persisted.state.updated_at,
+            ),
+        ]
+        delivery = expected.terminal_delivery
+        if delivery is None:  # pragma: no cover - validated above
+            raise AssertionError("terminal delivery disappeared during finalization")
+        actions.extend(
+            _sent_outbox_check(
+                self._table_name,
+                expected,
+                operation_id=operation_id,
+                content_hash=content_hash,
+                chunk_sequence=chunk_sequence,
+            )
+            for chunk_sequence, (operation_id, content_hash) in enumerate(
+                zip(
+                    delivery.operation_ids,
+                    delivery.content_hashes,
+                    strict=True,
+                )
+            )
+        )
+        for key, item in new_items.items():
+            if old_items.get(key) != item:
+                actions.append(self._put(item))
+        actions.extend(
+            (
+                self._release_slot_action(lease, persisted.state.updated_at),
+                self._active_attempt_count_action(-1, persisted.state.updated_at),
+            )
+        )
+        if not expected.panel_refresh_pending and persisted.panel_refresh_pending:
+            actions.append(self._panel_refresh_count_action(1, persisted.state.updated_at))
+        _require_transaction_size(actions)
+        token_source = ":".join(
+            (
+                self._table_name,
+                "terminal-finalize",
+                str(persisted.state.debate_id),
+                str(persisted.state.attempt_id),
+                persisted.state.phase.value,
+                str(persisted.state.updated_at),
+                *delivery.content_hashes,
+            )
+        )
+        try:
+            self._transact(actions, token=_client_token(token_source))
+        except RepositoryConflict:
+            current = self._load_snapshot(expected.state.debate_id, None)
+            if (
+                current is not None
+                and current.state.attempt_id == expected.state.attempt_id
+                and current.state.phase is persisted.state.phase
+                and current.terminal_delivery == persisted.terminal_delivery
+                and current.lease is None
+            ):
+                return current
             raise
         return persisted
 
@@ -458,6 +694,7 @@ class DynamoDbDebateRepository:
             actions: list[TransactWriteItemTypeDef] = [
                 *self._ingress_claim_actions(ingress_claim),
                 candidate.action,
+                self._active_attempt_count_action(1, persisted.state.updated_at),
                 self._condition_failed_attempt(expected_failed),
                 self._put_current_attempt(debate_item, expected_failed.state.attempt_id),
                 self._put_new(attempt_item),
@@ -1176,6 +1413,7 @@ class DynamoDbDebateRepository:
                     )
             if not expected.panel_refresh_pending and persisted.panel_refresh_pending:
                 actions.append(self._panel_refresh_count_action(1, persisted.state.updated_at))
+            actions.append(self._active_attempt_count_action(-1, persisted.state.updated_at))
             slot = self._get_item(_slot_key(lease.slot))
             if (
                 slot is not None
@@ -1279,6 +1517,11 @@ class DynamoDbDebateRepository:
         )
 
     def _origin_ingress_is_accepted(self, snapshot: DebateSnapshot) -> bool:
+        if snapshot.terminal_delivery is not None:
+            # A bound RETRY can stage its required failure Outbox before the
+            # ingress record is terminalized.  Recovery must finish that plan
+            # even though the originating ingress is no longer ACCEPTED.
+            return True
         interaction_id = snapshot.origin_ingress_interaction_id
         if interaction_id is None:
             return True
@@ -1601,6 +1844,54 @@ class DynamoDbDebateRepository:
             },
         )
 
+    def _active_attempt_count_action(
+        self,
+        delta: int,
+        at: datetime,
+    ) -> TransactWriteItemTypeDef:
+        if delta not in {-1, 1}:
+            raise ValueError("active attempt counter delta must be minus or plus one")
+        values: DynamoItem = {
+            ":zero": 0,
+            ":one": 1,
+            ":limit": ACTIVE_ATTEMPT_COUNT_LIMIT,
+            ":type": "active_attempt_counter",
+            ":schema": CURRENT_SCHEMA_VERSION,
+            ":record_schema": ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
+            ":at": _timestamp(at),
+        }
+        if delta > 0:
+            update_expression = (
+                "SET #count=if_not_exists(#count,:zero)+:one, "
+                "record_type=:type, schema_version=:schema, "
+                "record_schema_version=:record_schema, "
+                "created_at=if_not_exists(created_at,:at), updated_at=:at"
+            )
+            condition = (
+                "attribute_not_exists(PK) OR "
+                "(#count >= :zero AND #count < :limit AND record_type=:type "
+                "AND schema_version=:schema AND record_schema_version=:record_schema)"
+            )
+        else:
+            update_expression = "SET #count=#count-:one, updated_at=:at"
+            condition = (
+                "#count >= :one AND #count <= :limit AND record_type=:type "
+                "AND schema_version=:schema AND record_schema_version=:record_schema"
+            )
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Update": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(_active_attempt_count_key()),
+                    "UpdateExpression": update_expression,
+                    "ConditionExpression": condition,
+                    "ExpressionAttributeNames": {"#count": "count"},
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
+        )
+
     def _panel_refresh_abandoned_count_action(
         self,
         at: datetime,
@@ -1646,6 +1937,22 @@ class DynamoDbDebateRepository:
         count = _integer(item, "count")
         if not 0 <= count <= PANEL_REFRESH_COUNT_LIMIT:
             raise RepositoryConflict("panel refresh counter is outside its bounds")
+        return count
+
+    def _active_attempt_count(self) -> int:
+        item = self._get_item(_active_attempt_count_key())
+        if item is None:
+            return 0
+        if (
+            _text(item, "record_type") != "active_attempt_counter"
+            or _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION
+            or _integer(item, "record_schema_version")
+            != ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION
+        ):
+            raise RepositoryConflict("active attempt counter is invalid")
+        count = _integer(item, "count")
+        if not 0 <= count <= ACTIVE_ATTEMPT_COUNT_LIMIT:
+            raise RepositoryConflict("active attempt counter is outside its bounds")
         return count
 
     def _abandoned_panel_refresh_count(self) -> int:
@@ -2244,6 +2551,209 @@ def _operation_key(operation_id: str) -> DynamoItem:
 
 def _slot_key(slot: int) -> DynamoItem:
     return {"PK": "CONTROL#GLOBAL", "SK": f"SLOT#{slot}"}
+
+
+def _active_attempt_count_key() -> DynamoItem:
+    return {"PK": "CONTROL#DEBATE", "SK": "ACTIVE_ATTEMPT_COUNT"}
+
+
+def _is_direct_unbound_cancellation(
+    expected: DebateSnapshot,
+    updated: DebateSnapshot,
+    *,
+    operation_id: str | None,
+) -> bool:
+    """Allow only the pre-thread cancellation compensation that cannot use Outbox."""
+
+    if operation_id is None or updated.state.phase is not DebatePhase.CANCELLED:
+        return False
+    if any(
+        value is not None
+        for value in (
+            expected.starter_message_id,
+            expected.thread_id,
+            expected.control_panel_message_id,
+        )
+    ):
+        return False
+    try:
+        cancelled_state = expected.state.transition_to(
+            DebatePhase.CANCELLED,
+            at=updated.state.updated_at,
+        )
+    except ValueError:
+        return False
+    return updated == replace(expected, state=cancelled_state)
+
+
+def _same_terminal_delivery_plan(
+    actual: TerminalDeliveryPlan | None,
+    requested: TerminalDeliveryPlan,
+) -> bool:
+    """Compare the immutable plan identity while allowing completion to differ."""
+
+    return (
+        actual is not None
+        and actual.target_phase is requested.target_phase
+        and actual.operation_ids == requested.operation_ids
+        and actual.content_hashes == requested.content_hashes
+        and actual.staged_at == requested.staged_at
+    )
+
+
+def _require_terminal_stage(
+    expected: DebateSnapshot,
+    staged: DebateSnapshot,
+    operations: tuple[OutboxOperation, ...],
+    *,
+    operation_id: str | None,
+    ingress_claim: IngressClaimFence | None,
+) -> None:
+    _require_same_attempt(expected, staged)
+    plan = staged.terminal_delivery
+    if expected.state.phase.is_terminal or expected.terminal_delivery is not None:
+        raise RepositoryConflict("terminal delivery is already staged or finalized")
+    if expected.lease is None or staged.lease != expected.lease:
+        raise RepositoryConflict("terminal delivery staging requires the current fenced lease")
+    if plan is None or plan.completed_at is not None:
+        raise RepositoryConflict("terminal delivery staging requires an incomplete plan")
+    expected.state.transition_to(plan.target_phase, at=plan.staged_at)
+    staged_state = replace(expected.state, updated_at=plan.staged_at)
+    baseline = replace(expected, state=staged_state, terminal_delivery=plan)
+    if plan.target_phase is DebatePhase.COMPLETED:
+        baseline = replace(baseline, final_decision=staged.final_decision)
+    elif plan.target_phase is DebatePhase.FAILED:
+        baseline = replace(baseline, error_code=staged.error_code)
+    if staged != baseline:
+        raise RepositoryConflict("terminal delivery staging changed unrelated debate state")
+    if (
+        operation_id is not None
+        and plan.target_phase is not DebatePhase.CANCELLED
+        and (ingress_claim is None or ingress_claim.operation_id != operation_id)
+    ):
+        raise RepositoryConflict(
+            "non-cancellation terminal staging requires its exact ingress claim"
+        )
+    if not operations or len(operations) > MAX_TERMINAL_OUTBOX_CHUNKS:
+        raise RepositoryConflict("terminal delivery operation count is outside its bounds")
+    operation_ids = tuple(operation.operation_id for operation in operations)
+    content_hashes = tuple(operation.content_hash for operation in operations)
+    if operation_ids != plan.operation_ids or content_hashes != plan.content_hashes:
+        raise RepositoryConflict("terminal delivery operations do not match their durable plan")
+    nonces: set[str] = set()
+    for sequence, operation in enumerate(operations):
+        if (
+            operation.debate_id != expected.state.debate_id
+            or operation.attempt_id != expected.state.attempt_id
+            or operation.bot_slot is not DiscordBotSlot.MODERATOR
+            or operation.thread_id != expected.thread_id
+            or operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
+            or operation.chunk_sequence != sequence
+            or operation.status is not OutboxStatus.PREPARED
+            or operation.delivery_attempt != 0
+            or operation.claim_owner is not None
+            or operation.claim_expires_at is not None
+            or operation.next_retry_at is not None
+            or operation.message_id is not None
+            or operation.sent_at is not None
+            or operation.created_at != plan.staged_at
+            or operation.content_hash != content_sha256(operation.content)
+            or operation.nonce in nonces
+        ):
+            raise RepositoryConflict("terminal delivery operation violates its attempt fence")
+        nonces.add(operation.nonce)
+
+
+def _require_terminal_finalization(
+    expected: DebateSnapshot,
+    updated: DebateSnapshot,
+) -> None:
+    _require_same_attempt(expected, updated)
+    plan = expected.terminal_delivery
+    if expected.state.phase.is_terminal or plan is None or plan.completed_at is not None:
+        raise RepositoryConflict("terminal finalization requires an active staged delivery")
+    transitioned = expected.state.transition_to(plan.target_phase, at=updated.state.updated_at)
+    completed_delivery = plan.complete(at=updated.state.updated_at)
+    if updated != replace(
+        expected,
+        state=transitioned,
+        terminal_delivery=completed_delivery,
+    ):
+        raise RepositoryConflict("terminal finalization does not match its staged delivery")
+
+
+def _put_new_outbox(
+    table_name: str,
+    operation: OutboxOperation,
+) -> TransactWriteItemTypeDef:
+    return cast(
+        TransactWriteItemTypeDef,
+        {
+            "Put": {
+                "TableName": table_name,
+                "Item": marshal_item(serialize_outbox(operation)),
+                "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            }
+        },
+    )
+
+
+def _sent_outbox_check(
+    table_name: str,
+    expected: DebateSnapshot,
+    *,
+    operation_id: str,
+    content_hash: str,
+    chunk_sequence: int,
+) -> TransactWriteItemTypeDef:
+    thread_id = expected.thread_id
+    if thread_id is None:  # pragma: no cover - staged delivery invariant narrows this
+        raise RepositoryConflict("terminal delivery has no Discord thread")
+    return cast(
+        TransactWriteItemTypeDef,
+        {
+            "ConditionCheck": {
+                "TableName": table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": f"DEBATE#{expected.state.debate_id}",
+                        "SK": (f"ATTEMPT#{expected.state.attempt_id}#OUTBOX#{operation_id}"),
+                    }
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND debate_id=:debate AND attempt_id=:attempt "
+                    "AND operation_id=:operation AND #status=:sent "
+                    "AND bot_slot=:moderator AND thread_id=:thread "
+                    "AND chunk_sequence=:chunk_sequence "
+                    "AND content_hash=:content_hash "
+                    "AND attribute_exists(nonce) AND attribute_exists(message_id) "
+                    "AND attribute_exists(sent_at) AND delivery_attempt >= :one"
+                ),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": "outbox",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":debate": str(expected.state.debate_id),
+                        ":attempt": str(expected.state.attempt_id),
+                        ":operation": operation_id,
+                        ":sent": OutboxStatus.SENT.value,
+                        ":moderator": DiscordBotSlot.MODERATOR.value,
+                        ":thread": thread_id,
+                        ":chunk_sequence": chunk_sequence,
+                        ":content_hash": content_hash,
+                        ":one": 1,
+                    }
+                ),
+            }
+        },
+    )
+
+
+def _require_transaction_size(actions: list[TransactWriteItemTypeDef]) -> None:
+    if not 1 <= len(actions) <= 100:
+        raise RepositoryConflict("DynamoDB transaction action count is outside its bounds")
 
 
 def _require_same_attempt(expected: DebateSnapshot, updated: DebateSnapshot) -> None:

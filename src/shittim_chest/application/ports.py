@@ -362,6 +362,20 @@ class RuntimeStateRepository(Protocol):
         updated: RuntimeState,
     ) -> RuntimeState: ...
 
+    async def begin_idle_stop(
+        self,
+        *,
+        expected: RuntimeState,
+        at: datetime,
+    ) -> RuntimeState: ...
+
+    async def begin_unneeded_start_stop(
+        self,
+        *,
+        expected: RuntimeState,
+        at: datetime,
+    ) -> RuntimeState: ...
+
 
 class EcsRuntimeControl(Protocol):
     """Control only the configured singleton ECS service through typed values."""
@@ -619,6 +633,23 @@ class DebateRepository(Protocol):
         updated: DebateSnapshot,
         operation_id: str | None = None,
         ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot: ...
+
+    async def stage_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        staged: DebateSnapshot,
+        operations: tuple[OutboxOperation, ...],
+        operation_id: str | None = None,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot: ...
+
+    async def finalize_terminal(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
     ) -> DebateSnapshot: ...
 
     async def create_retry(

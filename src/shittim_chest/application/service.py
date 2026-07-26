@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TypeVar
 
+from shittim_chest.application.discord import prepare_terminal_outbox_operations
 from shittim_chest.application.errors import (
     DebateNotFound,
     InvalidApplicationOperation,
@@ -27,6 +28,7 @@ from shittim_chest.application.models import (
     DebateSnapshot,
     MetricEvent,
     RetryDebateCommand,
+    TerminalDeliveryPlan,
 )
 from shittim_chest.application.ports import (
     CandidateOrderer,
@@ -49,6 +51,7 @@ from shittim_chest.domain import (
     DebatePhase,
     DebateState,
     EvidenceBundle,
+    FinalDecision,
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
@@ -177,16 +180,10 @@ class DebateApplication:
             raise
         except RepositoryConflict:
             return
-        except _PhaseDeadlineExceeded:
-            await self._fail_current(debate_id, error_code="phase_deadline_exceeded")
-        except TimeoutError:
-            await self._fail_current(debate_id, error_code="session_deadline_exceeded")
-        except RequiredEvidenceUnavailable:
-            await self._fail_current(debate_id, error_code=RequiredEvidenceUnavailable.code)
-        except OutboxRecoveryFailed as error:
-            await self._fail_current(debate_id, error_code=error.delivery_code)
-        except Exception:
-            await self._fail_current(debate_id, error_code="phase_failed")
+        except OutboxRecoveryFailed:
+            # Required delivery remains durable and recoverable.  Releasing the
+            # lease here would incorrectly make the attempt look complete.
+            return
 
     async def get_debate(self, debate_id: DebateId) -> DebateSnapshot:
         """Return the current persisted snapshot through an application read boundary."""
@@ -241,7 +238,7 @@ class DebateApplication:
 
     async def _run_with_lease_heartbeat(self, debate_id: DebateId) -> None:
         phase_task = asyncio.create_task(
-            self._recover_outbox_then_run_phases(debate_id),
+            self._run_owned_attempt(debate_id),
             name=f"phases:{debate_id}",
         )
         heartbeat_task = asyncio.create_task(
@@ -267,12 +264,38 @@ class DebateApplication:
                     task.cancel()
             await asyncio.gather(phase_task, heartbeat_task, return_exceptions=True)
 
+    async def _run_owned_attempt(self, debate_id: DebateId) -> None:
+        """Keep failure delivery under the same live lease heartbeat as phase work."""
+
+        try:
+            await self._recover_outbox_then_run_phases(debate_id)
+        except asyncio.CancelledError:
+            raise
+        except RepositoryConflict:
+            raise
+        except _PhaseDeadlineExceeded:
+            await self._fail_current(debate_id, error_code="phase_deadline_exceeded")
+        except TimeoutError:
+            await self._fail_current(debate_id, error_code="session_deadline_exceeded")
+        except RequiredEvidenceUnavailable:
+            await self._fail_current(
+                debate_id,
+                error_code=RequiredEvidenceUnavailable.code,
+            )
+        except OutboxRecoveryFailed as error:
+            await self._fail_current(debate_id, error_code=error.delivery_code)
+        except Exception:
+            await self._fail_current(debate_id, error_code="phase_failed")
+
     async def _recover_outbox_then_run_phases(self, debate_id: DebateId) -> None:
         snapshot = await self._require_snapshot(debate_id)
         self._require_owned_active_lease(snapshot, at=self._clock.now())
         await self._outbox_recovery.drain(expected=snapshot)
         async with asyncio.timeout(self._session_timeout_seconds):
             await self._run_phases(debate_id)
+        current = await self._require_snapshot(debate_id)
+        if current.terminal_delivery is not None and not current.state.phase.is_terminal:
+            await self._finish_terminal_delivery(current)
 
     async def _renew_lease_until_stopped(self, debate_id: DebateId) -> None:
         while True:
@@ -314,13 +337,29 @@ class DebateApplication:
         ):
             raise InvalidApplicationOperation("panel operation is bound to another attempt")
         self._authorize_actor(snapshot, command.actor_id, command.can_manage_messages)
-        if snapshot.state.phase is DebatePhase.CANCELLED:
+        if snapshot.state.phase is DebatePhase.CANCELLED or (
+            snapshot.terminal_delivery is not None
+            and snapshot.terminal_delivery.target_phase is DebatePhase.CANCELLED
+        ):
             return CancelledDebate(command.debate_id, snapshot.state.attempt_id)
         if snapshot.state.phase.is_terminal:
             raise InvalidApplicationOperation("only an active debate may be cancelled")
 
         now = self._clock.now()
         self._require_owned_active_lease(snapshot, at=now)
+        if snapshot.thread_id is not None:
+            persisted = await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.CANCELLED,
+                operation_id=command.operation_id,
+                ingress_claim=_claim_for_write(ingress_claim, at=now),
+                at=now,
+            )
+            return CancelledDebate(command.debate_id, persisted.state.attempt_id)
+
+        # A context-creation failure can cancel a NEW attempt before a thread
+        # exists.  Its public status message is the durable user notification;
+        # a thread Outbox operation cannot be constructed in this state.
         updated = replace(
             snapshot,
             state=snapshot.state.transition_to(DebatePhase.CANCELLED, at=now),
@@ -395,6 +434,7 @@ class DebateApplication:
             lease=None,
             error_code=None,
             final_decision=None,
+            terminal_delivery=None,
         )
         persisted = await self._repository.create_retry(
             expected_failed=failed,
@@ -462,6 +502,12 @@ class DebateApplication:
             if snapshot.state.phase is DebatePhase.FAILED and snapshot.error_code is not None:
                 return snapshot.error_code
             raise RepositoryConflict("pre-activation attempt reached another terminal state")
+        if (
+            snapshot.terminal_delivery is not None
+            and snapshot.terminal_delivery.target_phase is DebatePhase.FAILED
+            and snapshot.error_code is not None
+        ):
+            return snapshot.error_code
         context = (
             snapshot.starter_message_id,
             snapshot.thread_id,
@@ -479,6 +525,17 @@ class DebateApplication:
         if lease is None or lease.owner_id != self._lease_owner:
             raise RepositoryConflict("pre-activation lease belongs to another runtime")
         now = self._clock.now()
+        if kind is IngressKind.RETRY:
+            await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.FAILED,
+                error_code=error_code,
+                operation_id=ingress_claim.operation_id,
+                ingress_claim=_require_claim_for_write(ingress_claim, at=now),
+                at=now,
+            )
+            return error_code
+
         updated = replace(
             snapshot,
             state=snapshot.state.transition_to(DebatePhase.FAILED, at=now),
@@ -498,6 +555,8 @@ class DebateApplication:
         while True:
             snapshot = await self._require_snapshot(debate_id)
             if snapshot.state.phase.is_terminal:
+                return
+            if snapshot.terminal_delivery is not None:
                 return
             self._require_owned_active_lease(snapshot, at=self._clock.now())
             if snapshot.state.recovery_state is RecoveryState.CHECKPOINTED:
@@ -608,13 +667,11 @@ class DebateApplication:
             )
         if decision.winner is not voting_result.winner:
             raise ValueError("generated decision must preserve the mechanically selected winner")
-        completed = await self._replace_with_phase(
-            replace(snapshot, final_decision=decision),
-            expected=snapshot,
+        await self._stage_terminal_delivery(
+            snapshot,
             target=DebatePhase.COMPLETED,
+            final_decision=decision,
         )
-        if completed.state.phase is DebatePhase.COMPLETED:
-            self._metrics.increment(MetricEvent.COMPLETED, debate_id=snapshot.state.debate_id)
 
     async def _generate_initial_opinions(
         self,
@@ -766,6 +823,7 @@ class DebateApplication:
         if (
             current.state.phase.is_terminal
             or current.state.recovery_state is RecoveryState.CHECKPOINTED
+            or current.terminal_delivery is not None
         ):
             return
         now = self._clock.now()
@@ -781,18 +839,100 @@ class DebateApplication:
         current = await self._require_snapshot(debate_id)
         if current.state.phase.is_terminal:
             return
-        now = self._clock.now()
+        if current.terminal_delivery is not None:
+            await self._finish_terminal_delivery(current)
+            return
         try:
-            self._require_owned_active_lease(current, at=now)
-            failed = replace(
+            staged = await self._stage_terminal_delivery(
                 current,
-                state=current.state.transition_to(DebatePhase.FAILED, at=now),
+                target=DebatePhase.FAILED,
                 error_code=error_code,
             )
-            await self._repository.replace(expected=current, updated=failed)
+            await self._finish_terminal_delivery(staged)
         except RepositoryConflict:
             return
-        self._metrics.increment(MetricEvent.FAILED, debate_id=debate_id)
+
+    async def _stage_terminal_delivery(
+        self,
+        snapshot: DebateSnapshot,
+        *,
+        target: DebatePhase,
+        error_code: str | None = None,
+        final_decision: FinalDecision | None = None,
+        operation_id: str | None = None,
+        ingress_claim: IngressClaimFence | None = None,
+        at: datetime | None = None,
+    ) -> DebateSnapshot:
+        """Atomically freeze a terminal outcome and its required Discord Outbox."""
+
+        staged_at = self._clock.now() if at is None else at
+        self._require_owned_active_lease(snapshot, at=staged_at)
+        payload = replace(snapshot, error_code=error_code)
+        if target is DebatePhase.COMPLETED:
+            payload = replace(
+                payload,
+                final_decision=final_decision or snapshot.final_decision,
+            )
+        elif final_decision is not None:
+            raise ValueError("only completed delivery may supply a final decision")
+        operations = prepare_terminal_outbox_operations(
+            snapshot=payload,
+            target_phase=target,
+            created_at=staged_at,
+            error_code=error_code,
+        )
+        delivery = TerminalDeliveryPlan(
+            target_phase=target,
+            operation_ids=tuple(operation.operation_id for operation in operations),
+            content_hashes=tuple(operation.content_hash for operation in operations),
+            staged_at=staged_at,
+        )
+        staged = replace(
+            payload,
+            state=replace(payload.state, updated_at=staged_at),
+            terminal_delivery=delivery,
+        )
+        return await self._repository.stage_terminal_delivery(
+            expected=snapshot,
+            staged=staged,
+            operations=operations,
+            operation_id=operation_id,
+            ingress_claim=ingress_claim,
+        )
+
+    async def _finish_terminal_delivery(self, snapshot: DebateSnapshot) -> DebateSnapshot:
+        """Drain required Outbox and atomically terminalize only after every SENT check."""
+
+        delivery = snapshot.terminal_delivery
+        if delivery is None:
+            raise InvalidApplicationOperation("terminal delivery is not staged")
+        if snapshot.state.phase.is_terminal:
+            return snapshot
+        self._require_owned_active_lease(snapshot, at=self._clock.now())
+        await self._outbox_recovery.drain(expected=snapshot)
+        current = await self._require_snapshot(snapshot.state.debate_id)
+        if current.state.phase.is_terminal:
+            return current
+        if current.terminal_delivery != delivery:
+            raise RepositoryConflict("terminal delivery changed while it was being drained")
+        at = self._clock.now()
+        self._require_owned_active_lease(current, at=at)
+        finalized = replace(
+            current,
+            state=current.state.transition_to(delivery.target_phase, at=at),
+            terminal_delivery=delivery.complete(at=at),
+        )
+        persisted = await self._repository.finalize_terminal(
+            expected=current,
+            updated=finalized,
+        )
+        metric = {
+            DebatePhase.COMPLETED: MetricEvent.COMPLETED,
+            DebatePhase.FAILED: MetricEvent.FAILED,
+            DebatePhase.CANCELLED: MetricEvent.CANCELLED,
+        }[delivery.target_phase]
+        self._metrics.increment(metric, debate_id=persisted.state.debate_id)
+        return persisted
 
     async def _require_snapshot(self, debate_id: DebateId) -> DebateSnapshot:
         snapshot = await self._repository.get(debate_id)

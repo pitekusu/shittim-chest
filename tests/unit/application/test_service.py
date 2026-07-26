@@ -10,6 +10,7 @@ import pytest
 
 from shittim_chest.application import (
     AcceptDebateRequest,
+    AcceptedDebate,
     BindDiscordContextCommand,
     CancelDebateCommand,
     DebateApplication,
@@ -119,6 +120,24 @@ def request(*, requester_id: str = "requester") -> AcceptDebateRequest:
         channel_id="channel",
         operation_id="accept-operation",
     )
+
+
+async def accept_bound_debate(
+    application: DebateApplication,
+    debate_request: AcceptDebateRequest | None = None,
+) -> AcceptedDebate:
+    """Create the production-valid Discord context required for terminal Outbox delivery."""
+
+    accepted = await application.accept_debate(debate_request or request())
+    await application.bind_discord_context(
+        BindDiscordContextCommand(
+            debate_id=accepted.debate_id,
+            starter_message_id="101",
+            thread_id="102",
+            control_panel_message_id="103",
+        )
+    )
+    return accepted
 
 
 def ingress_claim(
@@ -241,6 +260,77 @@ async def test_pre_activation_failure_keeps_quota_semantics_but_releases_attempt
 
 
 @pytest.mark.asyncio
+async def test_bound_retry_pre_activation_failure_waits_for_required_outbox(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies, lease_owner="new-worker")
+    clock, _, _, _, _, _, repository, _ = dependencies
+    accepted = await accept_bound_debate(app)
+    source = repository.current[accepted.debate_id]
+    failed = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.FAILED, at=clock.now()),
+        error_code="source_failure",
+    )
+    await repository.replace(expected=source, updated=failed)
+    claim = ingress_claim(
+        operation_id="retry-operation",
+        at=clock.current,
+        kind=IngressKind.RETRY,
+    )
+    retry = await app.retry_debate(
+        RetryDebateCommand(
+            accepted.debate_id,
+            "requester",
+            "retry-operation",
+            expected_attempt_id=failed.state.attempt_id,
+        ),
+        ingress_claim=claim,
+    )
+
+    error_code = await app.fail_pre_activation(
+        debate_id=retry.debate_id,
+        attempt_id=retry.attempt_id,
+        kind=IngressKind.RETRY,
+        ingress_claim=claim,
+        error_code="discord_context_invalid",
+    )
+    staged = repository.current[retry.debate_id]
+    assert error_code == "discord_context_invalid"
+    assert staged.state.phase is DebatePhase.ACCEPTED
+    assert staged.error_code == error_code
+    assert staged.terminal_delivery is not None
+    assert staged.terminal_delivery.target_phase is DebatePhase.FAILED
+    assert staged.lease is not None
+    assert (
+        await app.fail_pre_activation(
+            debate_id=retry.debate_id,
+            attempt_id=retry.attempt_id,
+            kind=IngressKind.RETRY,
+            ingress_claim=claim,
+            error_code="different_replay_code",
+        )
+        == error_code
+    )
+
+    await app.run_debate(retry.debate_id)
+
+    terminal = repository.current[retry.debate_id]
+    assert terminal.state.phase is DebatePhase.FAILED
+    assert terminal.terminal_delivery_complete
+    assert terminal.lease is None
+
+
+@pytest.mark.asyncio
 async def test_bind_discord_context_is_idempotent_and_rebinding_fails(
     dependencies: tuple[
         FakeClock,
@@ -324,7 +414,7 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     app = make_application(dependencies)
     _, _, metrics, _, evidence, openai, repository, orderer = dependencies
 
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
     await app.run_debate(accepted.debate_id)
 
     completed = repository.current[accepted.debate_id]
@@ -348,9 +438,18 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert len(orderer.calls) == 3
     assert all(voter not in candidates for voter, candidates in orderer.calls)
     assert MetricEvent.COMPLETED in {event for event, _ in metrics.events}
-    assert [item.state.phase for item in repository.history[accepted.debate_id]] == list(
-        DebatePhase
-    )[:8]
+    assert [item.state.phase for item in repository.history[accepted.debate_id]] == [
+        DebatePhase.ACCEPTED,
+        DebatePhase.ACCEPTED,
+        DebatePhase.PREPARING_EVIDENCE,
+        DebatePhase.COLLECTING_INITIAL_OPINIONS,
+        DebatePhase.DISCUSSING,
+        DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        DebatePhase.SELECTING_WINNER,
+        DebatePhase.GENERATING_DECISION,
+        DebatePhase.GENERATING_DECISION,
+        DebatePhase.COMPLETED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -370,7 +469,7 @@ async def test_run_renews_lease_while_a_phase_is_in_progress(
     _, _, _, _, evidence, _, repository, _ = dependencies
     evidence.delay = 0.01
 
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
     await app.run_debate(accepted.debate_id)
 
     assert repository.renew_calls
@@ -519,7 +618,7 @@ async def test_cancel_is_authorized_idempotent_and_terminal(
 ) -> None:
     app = make_application(dependencies)
     repository = dependencies[6]
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     with pytest.raises(RequestNotAllowed):
         await app.cancel_debate(CancelDebateCommand(accepted.debate_id, "other", "cancel-other"))
@@ -533,6 +632,7 @@ async def test_cancel_is_authorized_idempotent_and_terminal(
 
     assert cancelled == repeated
     assert repository.current[accepted.debate_id].state.phase is DebatePhase.CANCELLED
+    assert repository.current[accepted.debate_id].terminal_delivery_complete
 
 
 @pytest.mark.asyncio
@@ -551,7 +651,7 @@ async def test_stale_runtime_cannot_cancel_with_the_replacement_runtime_lease(
     stale = make_application(dependencies, lease_owner="stale-runtime")
     replacement = make_application(dependencies, lease_owner="replacement-runtime")
     repository = dependencies[6]
-    accepted = await stale.accept_debate(request())
+    accepted = await accept_bound_debate(stale)
     previous = repository.current[accepted.debate_id]
     assert previous.lease is not None
     replacement_snapshot = replace(
@@ -572,6 +672,7 @@ async def test_stale_runtime_cannot_cancel_with_the_replacement_runtime_lease(
     cancelled = await replacement.cancel_debate(
         CancelDebateCommand(accepted.debate_id, "requester", "replacement-cancel")
     )
+    await replacement.run_debate(accepted.debate_id)
 
     assert cancelled.debate_id == accepted.debate_id
     assert repository.current[accepted.debate_id].state.phase is DebatePhase.CANCELLED
@@ -620,7 +721,7 @@ async def test_completed_debate_cannot_be_cancelled(
     ],
 ) -> None:
     app = make_application(dependencies)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
     await app.run_debate(accepted.debate_id)
 
     with pytest.raises(InvalidApplicationOperation):
@@ -801,7 +902,7 @@ async def test_phase_timeout_marks_attempt_failed(
     repository = dependencies[6]
     evidence.delay = 0.05
     app = make_application(dependencies, phase_timeout=0.001)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
@@ -828,7 +929,7 @@ async def test_session_timeout_has_distinct_stable_error_code(
     dependencies[4].delay = 0.05
     repository = dependencies[6]
     app = make_application(dependencies, session_timeout=0.001, phase_timeout=1.0)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
@@ -853,7 +954,7 @@ async def test_required_evidence_failure_has_distinct_stable_error_code(
     dependencies[4].error = RequiredEvidenceUnavailable("search failed")
     repository = dependencies[6]
     app = make_application(dependencies)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
@@ -880,7 +981,7 @@ async def test_task_group_cancels_siblings_and_persists_failure(
     openai.block_initial = True
     openai.fail_initial_for = ParticipantSlot.PARTICIPANT_A
     app = make_application(dependencies)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
@@ -907,7 +1008,7 @@ async def test_external_cancellation_checkpoints_and_propagates_cancelled_error(
     dependencies[4].delay = 10.0
     repository = dependencies[6]
     app = make_application(dependencies)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
     running = asyncio.create_task(app.run_debate(accepted.debate_id))
     await asyncio.sleep(0)
     await asyncio.sleep(0)
@@ -938,7 +1039,7 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
     app = make_application(dependencies, outbox_recovery=outbox_recovery)
     clock = dependencies[0]
     repository = dependencies[6]
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
     source = repository.current[accepted.debate_id]
     checkpointed = replace(source, state=source.state.checkpoint(at=clock.now()))
     await repository.replace(expected=source, updated=checkpointed)
@@ -947,8 +1048,9 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
     await app.resume_recoverable()
 
     assert repository.current[accepted.debate_id].state.phase is DebatePhase.COMPLETED
-    assert len(outbox_recovery.calls) == 1
+    assert len(outbox_recovery.calls) == 2
     assert outbox_recovery.calls[0].state.recovery_state is RecoveryState.CHECKPOINTED
+    assert outbox_recovery.calls[1].terminal_delivery is not None
     assert MetricEvent.RESUMED in {event for event, _ in dependencies[2].events}
 
 
@@ -979,7 +1081,7 @@ async def test_claim_recoverable_does_not_start_phase_work(
 
 
 @pytest.mark.asyncio
-async def test_nonretryable_outbox_recovery_failure_preserves_delivery_error_code(
+async def test_nonretryable_outbox_recovery_failure_preserves_required_delivery_plan(
     dependencies: tuple[
         FakeClock,
         FakeIds,
@@ -994,14 +1096,18 @@ async def test_nonretryable_outbox_recovery_failure_preserves_delivery_error_cod
     outbox_recovery = FakeOutboxRecovery(error=OutboxRecoveryFailed("DISCORD_OUTBOX_CONFLICT"))
     app = make_application(dependencies, outbox_recovery=outbox_recovery)
     repository = dependencies[6]
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
-    failed = repository.current[accepted.debate_id]
-    assert failed.state.phase is DebatePhase.FAILED
-    assert failed.error_code == "DISCORD_OUTBOX_CONFLICT"
-    assert len(outbox_recovery.calls) == 1
+    pending = repository.current[accepted.debate_id]
+    assert pending.state.phase is DebatePhase.ACCEPTED
+    assert pending.error_code == "DISCORD_OUTBOX_CONFLICT"
+    assert pending.terminal_delivery is not None
+    assert pending.terminal_delivery.target_phase is DebatePhase.FAILED
+    assert pending.terminal_delivery.completed_at is None
+    assert pending.lease is not None
+    assert len(outbox_recovery.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -1025,7 +1131,7 @@ async def test_outbox_recovery_wait_is_outside_session_deadline_and_renews_lease
         lease_renewal=0.005,
     )
     repository = dependencies[6]
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
@@ -1051,7 +1157,7 @@ async def test_outbox_fencing_conflict_does_not_terminalize_the_attempt(
         outbox_recovery=FakeOutboxRecovery(error=RepositoryConflict("lost fencing")),
     )
     repository = dependencies[6]
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
@@ -1099,6 +1205,9 @@ async def test_recovery_reuses_every_completed_phase_artifact(
         channel_id="channel",
         created_at=state.updated_at,
         attempt_created_at=state.updated_at,
+        starter_message_id="101",
+        thread_id="102",
+        control_panel_message_id="103",
         evidence=evidence,
         initial_opinions=opinions,
         final_proposals=proposals,
@@ -1160,7 +1269,7 @@ async def test_corrupt_candidate_order_fails_attempt(
     dependencies[7].corrupt = True
     repository = dependencies[6]
     app = make_application(dependencies)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 
@@ -1183,7 +1292,7 @@ async def test_duplicate_candidate_order_fails_attempt(
     dependencies[7].duplicate = True
     repository = dependencies[6]
     app = make_application(dependencies)
-    accepted = await app.accept_debate(request())
+    accepted = await accept_bound_debate(app)
 
     await app.run_debate(accepted.debate_id)
 

@@ -14,6 +14,7 @@ from shittim_chest.application import (
     IngressRequest,
     IngressStatus,
     IngressStatusPublication,
+    RuntimeActivity,
     RuntimeReconciler,
     RuntimeReconciliationReport,
     RuntimeState,
@@ -26,6 +27,7 @@ from shittim_chest.application.ports import (
     EcsRuntimeUnavailable,
     IngressRepository,
     RepositoryConflict,
+    RuntimeActivityInspector,
     RuntimeStateRepository,
     StatusPublicationRepository,
     StatusPublicationTrigger,
@@ -203,6 +205,51 @@ class FakeRuntimeRepository:
         self.state = updated
         return updated
 
+    async def begin_idle_stop(
+        self,
+        *,
+        expected: RuntimeState,
+        at: datetime,
+    ) -> RuntimeState:
+        return await self.replace(expected=expected, updated=expected.begin_idle_stop(at=at))
+
+    async def begin_unneeded_start_stop(
+        self,
+        *,
+        expected: RuntimeState,
+        at: datetime,
+    ) -> RuntimeState:
+        return await self.replace(
+            expected=expected,
+            updated=expected.begin_unneeded_start_stop(at=at),
+        )
+
+
+class FakeActivity:
+    def __init__(
+        self,
+        ingress: FakeIngress,
+        snapshots: tuple[RuntimeActivity, ...] = (),
+    ) -> None:
+        self.ingress = ingress
+        self.snapshots = list(snapshots)
+        self.calls: list[datetime] = []
+
+    async def inspect(self, *, at: datetime) -> RuntimeActivity:
+        self.calls.append(at)
+        if self.snapshots:
+            return self.snapshots.pop(0)
+        pending = sum(request.status is IngressStatus.PENDING for request in self.ingress.requests)
+        claimed = sum(request.status is IngressStatus.CLAIMED for request in self.ingress.requests)
+        retrying = sum(
+            request.status is IngressStatus.RETRYING for request in self.ingress.requests
+        )
+        return RuntimeActivity(
+            pending_ingress=pending,
+            claimed_ingress=claimed,
+            retrying_ingress=retrying,
+        )
+
 
 class FakeEcs:
     def __init__(self, snapshot: EcsRuntimeSnapshot) -> None:
@@ -283,14 +330,17 @@ def reconciler(
     ecs: FakeEcs | None = None,
     statuses: FakeStatusRepository | None = None,
     trigger: FakeStatusTrigger | None = None,
+    activity: FakeActivity | None = None,
 ) -> tuple[RuntimeReconciler, FakeClock, FakeEcs, FakeStatusRepository, FakeStatusTrigger]:
     clock = FakeClock(at)
     ecs = ecs or FakeEcs(EcsRuntimeSnapshot(0, 0, 0))
     statuses = statuses or FakeStatusRepository()
     trigger = trigger or FakeStatusTrigger()
+    activity = activity or FakeActivity(ingress)
     value = RuntimeReconciler(
         clock=cast(Clock, clock),
         ingress=cast(IngressRepository, ingress),
+        activity=cast(RuntimeActivityInspector, activity),
         runtime_state=cast(RuntimeStateRepository, runtime),
         ecs=cast(EcsRuntimeControl, ecs),
         status_publications=cast(StatusPublicationRepository, statuses),
@@ -828,3 +878,293 @@ def test_reconciliation_report_rejects_invalid_counters() -> None:
         RuntimeReconciliationReport(observed_at=CREATED_AT.replace(tzinfo=None))
     with pytest.raises(ValueError, match="non-negative"):
         RuntimeReconciliationReport(observed_at=CREATED_AT, terminal_failed=cast(int, 1.5))
+
+
+@pytest.mark.asyncio
+async def test_complete_ready_runtime_enters_idle_once_without_scaling_down() -> None:
+    at = CREATED_AT + timedelta(minutes=20)
+    runtime = FakeRuntimeRepository(ready_runtime(at - timedelta(seconds=1)))
+    ingress = FakeIngress(())
+    value, _, ecs, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=FakeEcs(EcsRuntimeSnapshot(1, 1, 0)),
+    )
+
+    report = await value.reconcile()
+
+    assert report.runtime_entered_idle
+    assert not report.ecs_scaled_down
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.IDLE
+    assert runtime.state.idle_since == at
+    assert ecs.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_idle_stops_at_thirty_minutes_but_not_one_microsecond_before() -> None:
+    idle_at = CREATED_AT + timedelta(minutes=1)
+    idle = ready_runtime(idle_at - timedelta(seconds=1)).begin_idle(at=idle_at)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(idle)
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 0, 0))
+    before, _, _, _, _ = reconciler(
+        at=idle_at + timedelta(minutes=30) - timedelta(microseconds=1),
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+
+    before_report = await before.reconcile()
+
+    assert not before_report.ecs_scaled_down
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.IDLE
+    assert runtime.state.idle_since == idle_at
+
+    at_deadline, _, _, _, _ = reconciler(
+        at=idle_at + timedelta(minutes=30),
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    deadline_report = await at_deadline.reconcile()
+
+    assert deadline_report.ecs_scaled_down
+    assert deadline_report.runtime_stopped
+    assert ecs.update_calls == [0]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_status_only_does_not_start_fargate_and_cancels_unneeded_start() -> None:
+    at = CREATED_AT + timedelta(minutes=16)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(RuntimeState.stopped(at=CREATED_AT).request_wake(at=CREATED_AT))
+    activity = FakeActivity(ingress, (RuntimeActivity(pending_status_updates=1),))
+    value, _, ecs, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        activity=activity,
+    )
+
+    report = await value.reconcile()
+
+    assert not report.ecs_scaled_up
+    assert ecs.update_calls == []
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_active_attempt_resumes_stopped_generation_and_scales_up() -> None:
+    at = CREATED_AT + timedelta(minutes=1)
+    ingress = FakeIngress(())
+    stopped = RuntimeState.stopped(at=CREATED_AT)
+    runtime = FakeRuntimeRepository(stopped)
+    activity = FakeActivity(ingress, (RuntimeActivity(active_attempts=1),))
+    value, _, ecs, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        activity=activity,
+    )
+
+    report = await value.reconcile()
+
+    assert report.ecs_scaled_up
+    assert ecs.update_calls == [1]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == stopped.generation + 1
+    assert runtime.state.last_request_at is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_deadline_does_not_scale_up_after_last_work_disappears() -> None:
+    source = request()
+    at = source.terminal_deadline_at
+    ingress = FakeIngress((source,))
+    starting = RuntimeState.stopped(at=source.created_at).request_wake(at=source.created_at)
+    runtime = FakeRuntimeRepository(starting)
+    value, _, ecs, _, trigger = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+    )
+
+    report = await value.reconcile()
+
+    assert report.terminal_failed == 1
+    assert not report.ecs_scaled_up
+    assert ecs.update_calls == []
+    assert trigger.calls == [source.interaction_id]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_bound_ready_degraded_runtime_enters_idle_after_work_completes() -> None:
+    at = CREATED_AT + timedelta(minutes=20)
+    ready = ready_runtime(at - timedelta(seconds=3))
+    busy = ready.transition(RuntimeStatus.BUSY, at=at - timedelta(seconds=2))
+    degraded = busy.transition(
+        RuntimeStatus.DEGRADED,
+        at=at - timedelta(seconds=1),
+        error_code="discord_not_ready",
+    )
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(degraded)
+    value, _, ecs, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=FakeEcs(EcsRuntimeSnapshot(1, 1, 0)),
+    )
+
+    report = await value.reconcile()
+
+    assert report.runtime_entered_idle
+    assert not report.ecs_scaled_down
+    assert ecs.update_calls == []
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.IDLE
+    assert runtime.state.idle_since == at
+
+
+@pytest.mark.asyncio
+async def test_unbound_degraded_runtime_uses_fenced_stop_instead_of_entering_idle() -> None:
+    degraded = RuntimeState.stopped(at=CREATED_AT).request_wake(
+        at=CREATED_AT + timedelta(seconds=1)
+    )
+    degraded = degraded.transition(
+        RuntimeStatus.DEGRADED,
+        at=CREATED_AT + timedelta(seconds=2),
+        error_code="startup_failed",
+    )
+    at = CREATED_AT + timedelta(seconds=3)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(degraded)
+    value, _, ecs, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=FakeEcs(EcsRuntimeSnapshot(0, 0, 0)),
+    )
+
+    report = await value.reconcile()
+
+    assert report.runtime_stopped
+    assert not report.runtime_entered_idle
+    assert ecs.update_calls == []
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_status_only_activity_resets_idle_timer_without_waking_fargate() -> None:
+    idle_at = CREATED_AT + timedelta(minutes=1)
+    idle = ready_runtime(idle_at - timedelta(seconds=1)).begin_idle(at=idle_at)
+    status_at = idle_at + timedelta(minutes=29)
+    completed_at = status_at + timedelta(seconds=1)
+    old_stop_deadline = idle_at + timedelta(minutes=30)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(idle)
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 1, 0))
+    status_activity = FakeActivity(
+        ingress,
+        (RuntimeActivity(pending_status_updates=1),),
+    )
+    interrupted, _, _, _, _ = reconciler(
+        at=status_at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=status_activity,
+    )
+
+    interrupted_report = await interrupted.reconcile()
+
+    assert not interrupted_report.ecs_scaled_up
+    assert not interrupted_report.ecs_scaled_down
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.READY
+    assert runtime.state.idle_since is None
+    assert runtime.state.stop_eligible_at is None
+
+    completed, _, _, _, _ = reconciler(
+        at=completed_at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    completed_report = await completed.reconcile()
+
+    assert completed_report.runtime_entered_idle
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.IDLE
+    assert runtime.state.idle_since == completed_at
+    assert runtime.state.stop_eligible_at == completed_at + timedelta(minutes=30)
+
+    old_deadline, _, _, _, _ = reconciler(
+        at=old_stop_deadline,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    old_deadline_report = await old_deadline.reconcile()
+
+    assert not old_deadline_report.ecs_scaled_down
+    assert ecs.update_calls == []
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.IDLE
+    assert runtime.state.idle_since == completed_at
+
+
+@pytest.mark.asyncio
+async def test_stopping_with_status_only_work_never_restarts_fargate() -> None:
+    idle_at = CREATED_AT + timedelta(minutes=1)
+    idle = ready_runtime(idle_at - timedelta(seconds=1)).begin_idle(at=idle_at)
+    assert idle.stop_eligible_at is not None
+    stopping = idle.begin_idle_stop(at=idle.stop_eligible_at)
+    first_at = stopping.updated_at + timedelta(seconds=1)
+    second_at = first_at + timedelta(seconds=1)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopping)
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 1, 0))
+    status_only = RuntimeActivity(pending_status_updates=1)
+    activity = FakeActivity(ingress, (status_only,) * 6)
+    first, _, _, _, _ = reconciler(
+        at=first_at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=activity,
+    )
+
+    first_report = await first.reconcile()
+
+    assert first_report.ecs_scaled_down
+    assert not first_report.runtime_stopped
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPING
+    assert ecs.update_calls == [0]
+
+    ecs.snapshot = EcsRuntimeSnapshot(0, 0, 0)
+    second, _, _, _, _ = reconciler(
+        at=second_at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=activity,
+    )
+    second_report = await second.reconcile()
+
+    assert second_report.runtime_stopped
+    assert not second_report.ecs_scaled_up
+    assert ecs.update_calls == [0]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED

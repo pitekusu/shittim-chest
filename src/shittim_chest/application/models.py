@@ -202,6 +202,53 @@ class PanelRefreshState(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class TerminalDeliveryPlan:
+    """Durable required Discord delivery staged before a terminal transition."""
+
+    target_phase: DebatePhase
+    operation_ids: tuple[str, ...]
+    content_hashes: tuple[str, ...]
+    staged_at: datetime
+    completed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not self.target_phase.is_terminal:
+            raise ValueError("terminal delivery target must be a terminal phase")
+        if not self.operation_ids or len(set(self.operation_ids)) != len(self.operation_ids):
+            raise ValueError("terminal delivery operation IDs must be non-empty and unique")
+        if len(self.content_hashes) != len(self.operation_ids):
+            raise ValueError("terminal delivery hashes must match operation IDs")
+        for operation_id in self.operation_ids:
+            _require_identifier(operation_id, label="terminal delivery operation ID")
+        for content_hash in self.content_hashes:
+            if len(content_hash) != 64 or any(
+                character not in "0123456789abcdef" for character in content_hash
+            ):
+                raise ValueError("terminal delivery content hash must be lowercase SHA-256")
+        _require_utc(self.staged_at, label="terminal delivery staging timestamp")
+        if self.completed_at is not None:
+            _require_utc(self.completed_at, label="terminal delivery completion timestamp")
+            if self.completed_at < self.staged_at:
+                raise ValueError("terminal delivery cannot complete before it is staged")
+
+    def complete(self, *, at: datetime) -> TerminalDeliveryPlan:
+        """Record that every required persisted operation is SENT."""
+
+        _require_utc(at, label="terminal delivery completion timestamp")
+        if at < self.staged_at:
+            raise ValueError("terminal delivery cannot complete before it is staged")
+        if self.completed_at is not None:
+            return self
+        return TerminalDeliveryPlan(
+            target_phase=self.target_phase,
+            operation_ids=self.operation_ids,
+            content_hashes=self.content_hashes,
+            staged_at=self.staged_at,
+            completed_at=at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DebateSnapshot:
     """Application aggregate transferred through the repository Protocol."""
 
@@ -234,6 +281,7 @@ class DebateSnapshot:
     final_decision: FinalDecision | None = None
     escalation_assessment: EscalationAssessment | None = None
     error_code: str | None = None
+    terminal_delivery: TerminalDeliveryPlan | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.question) <= 1000 or not self.question.strip():
@@ -318,6 +366,42 @@ class DebateSnapshot:
             raise ValueError("settled panel refresh cannot retain retry or claim state")
         if self.error_code is not None and not self.error_code.strip():
             raise ValueError("error code must be non-empty when present")
+        delivery = self.terminal_delivery
+        if delivery is not None:
+            if any(
+                value is None
+                for value in (
+                    self.starter_message_id,
+                    self.thread_id,
+                    self.control_panel_message_id,
+                )
+            ):
+                raise ValueError("terminal delivery requires a complete Discord binding")
+            if self.state.phase.is_terminal:
+                if delivery.target_phase is not self.state.phase or delivery.completed_at is None:
+                    raise ValueError("terminal phase requires its completed delivery plan")
+            elif delivery.completed_at is not None:
+                raise ValueError("active attempt cannot retain a completed terminal delivery")
+            if delivery.target_phase is DebatePhase.COMPLETED:
+                if self.final_decision is None or self.error_code is not None:
+                    raise ValueError("completed delivery requires a decision without an error")
+            elif delivery.target_phase is DebatePhase.FAILED:
+                if self.error_code is None:
+                    raise ValueError("failed delivery requires an error code")
+            elif self.error_code is not None:
+                raise ValueError("cancelled delivery cannot retain an error code")
+
+    @property
+    def terminal_delivery_complete(self) -> bool:
+        """Return whether the staged required delivery matches the terminal phase."""
+
+        delivery = self.terminal_delivery
+        return (
+            self.state.phase.is_terminal
+            and delivery is not None
+            and delivery.target_phase is self.state.phase
+            and delivery.completed_at is not None
+        )
 
     @property
     def panel_refresh_pending(self) -> bool:

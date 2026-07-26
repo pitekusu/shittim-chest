@@ -138,11 +138,18 @@ class RuntimeStatus(StrEnum):
 _ALLOWED_RUNTIME_TRANSITIONS: dict[RuntimeStatus, frozenset[RuntimeStatus]] = {
     RuntimeStatus.STOPPED: frozenset({RuntimeStatus.STARTING}),
     RuntimeStatus.STARTING: frozenset(
-        {RuntimeStatus.READY, RuntimeStatus.BUSY, RuntimeStatus.DEGRADED}
+        {
+            RuntimeStatus.READY,
+            RuntimeStatus.BUSY,
+            RuntimeStatus.STOPPING,
+            RuntimeStatus.DEGRADED,
+        }
     ),
     RuntimeStatus.READY: frozenset({RuntimeStatus.BUSY, RuntimeStatus.IDLE}),
     RuntimeStatus.BUSY: frozenset({RuntimeStatus.IDLE, RuntimeStatus.DEGRADED}),
-    RuntimeStatus.IDLE: frozenset({RuntimeStatus.STARTING, RuntimeStatus.STOPPING}),
+    RuntimeStatus.IDLE: frozenset(
+        {RuntimeStatus.STARTING, RuntimeStatus.READY, RuntimeStatus.STOPPING}
+    ),
     RuntimeStatus.STOPPING: frozenset({RuntimeStatus.STOPPED, RuntimeStatus.STARTING}),
     RuntimeStatus.DEGRADED: frozenset(
         {
@@ -150,6 +157,7 @@ _ALLOWED_RUNTIME_TRANSITIONS: dict[RuntimeStatus, frozenset[RuntimeStatus]] = {
             RuntimeStatus.READY,
             RuntimeStatus.BUSY,
             RuntimeStatus.IDLE,
+            RuntimeStatus.STOPPING,
         }
     ),
 }
@@ -826,6 +834,7 @@ class RuntimeActivity:
     pending_ingress: int = 0
     claimed_ingress: int = 0
     retrying_ingress: int = 0
+    active_attempts: int = 0
     application_tasks: int = 0
     active_leases: int = 0
     recovery_tasks: int = 0
@@ -840,6 +849,7 @@ class RuntimeActivity:
             self.pending_ingress,
             self.claimed_ingress,
             self.retrying_ingress,
+            self.active_attempts,
             self.application_tasks,
             self.active_leases,
             self.recovery_tasks,
@@ -861,6 +871,7 @@ class RuntimeActivity:
                 self.pending_ingress,
                 self.claimed_ingress,
                 self.retrying_ingress,
+                self.active_attempts,
                 self.application_tasks,
                 self.active_leases,
                 self.recovery_tasks,
@@ -871,6 +882,49 @@ class RuntimeActivity:
                 self.checkpoint_tasks,
             )
         )
+
+    @property
+    def requires_runtime(self) -> bool:
+        """Return whether durable work requires the ECS/Discord process.
+
+        Public status publication is owned by Lambda and therefore blocks the
+        transition into IDLE without becoming a reason to start Fargate.
+        """
+
+        return any(
+            (
+                self.pending_ingress,
+                self.claimed_ingress,
+                self.retrying_ingress,
+                self.active_attempts,
+                self.application_tasks,
+                self.active_leases,
+                self.recovery_tasks,
+                self.pending_outbox,
+                self.claimed_outbox,
+                self.pending_panel_refreshes,
+                self.checkpoint_tasks,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxActivity:
+    """Strongly consistent global Discord Outbox activity counts."""
+
+    pending: int = 0
+    claimed: int = 0
+
+    def __post_init__(self) -> None:
+        for value in (self.pending, self.claimed):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("outbox activity counts must be non-negative integers")
+
+    @property
+    def is_complete(self) -> bool:
+        """Return whether every persisted Discord operation is SENT."""
+
+        return self.pending == 0 and self.claimed == 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1106,6 +1160,40 @@ class RuntimeState:
             last_error_code=None,
         )
 
+    def resume_for_work(self, *, at: datetime) -> RuntimeState:
+        """Start a fresh generation for durable work not tied to a new request."""
+
+        _require_utc(at, label="runtime work timestamp")
+        if at < self.updated_at:
+            raise ValueError("runtime work timestamp cannot precede runtime update")
+        if self.status in {RuntimeStatus.STARTING, RuntimeStatus.READY, RuntimeStatus.BUSY}:
+            return self
+        if self.status not in {
+            RuntimeStatus.STOPPED,
+            RuntimeStatus.IDLE,
+            RuntimeStatus.STOPPING,
+            RuntimeStatus.DEGRADED,
+        }:
+            raise ValueError("runtime state cannot resume durable work")
+        return replace(
+            self,
+            status=RuntimeStatus.STARTING,
+            generation=self.generation + 1,
+            desired_count=1,
+            version=self.version + 1,
+            updated_at=at,
+            runtime_instance_id=None,
+            wake_started_at=at,
+            started_at=None,
+            ready_at=None,
+            busy_since=None,
+            idle_since=None,
+            stop_eligible_at=None,
+            stopping_at=None,
+            stopped_at=None,
+            last_error_code=None,
+        )
+
     def transition(
         self,
         next_status: RuntimeStatus,
@@ -1193,6 +1281,47 @@ class RuntimeState:
             last_error_code=None,
         )
 
+    def leave_idle_for_external_work(self, *, at: datetime) -> RuntimeState:
+        """Invalidate the idle timer without starting a new ECS generation.
+
+        Lambda-owned status publication does not require Fargate, but it still
+        means the runtime is not completely idle.  The physical task remains
+        bound and READY while the external work drains; a later ``begin_idle``
+        starts a fresh thirty-minute interval.
+        """
+
+        _require_utc(at, label="idle interruption timestamp")
+        if self.status is not RuntimeStatus.IDLE:
+            raise ValueError("only IDLE runtime may leave idle for external work")
+        if at < self.updated_at:
+            raise ValueError("idle interruption timestamp cannot precede runtime update")
+        return replace(
+            self,
+            status=RuntimeStatus.READY,
+            version=self.version + 1,
+            updated_at=at,
+            idle_since=None,
+            stop_eligible_at=None,
+        )
+
+    def begin_idle_stop(self, *, at: datetime) -> RuntimeState:
+        """Enter STOPPING only after the fixed thirty-minute IDLE deadline."""
+
+        _require_utc(at, label="runtime stop timestamp")
+        if self.status is not RuntimeStatus.IDLE:
+            raise ValueError("only IDLE runtime may begin an idle stop")
+        if self.stop_eligible_at is None or at < self.stop_eligible_at:
+            raise ValueError("runtime is not yet eligible to stop")
+        return self.transition(RuntimeStatus.STOPPING, at=at)
+
+    def begin_unneeded_start_stop(self, *, at: datetime) -> RuntimeState:
+        """Stop an unneeded STARTING or non-ready DEGRADED runtime."""
+
+        _require_utc(at, label="runtime stop timestamp")
+        if self.status not in {RuntimeStatus.STARTING, RuntimeStatus.DEGRADED}:
+            raise ValueError("only STARTING or DEGRADED runtime may stop as unneeded")
+        return self.transition(RuntimeStatus.STOPPING, at=at)
+
     def record_reconciled(self, *, at: datetime) -> RuntimeState:
         """Record a successful reconciliation without changing generation or state."""
 
@@ -1223,6 +1352,19 @@ class RuntimeState:
                 and updated == self.fence_stale_instance(at=updated.updated_at)
             )
             if is_missing_task_repair:
+                return
+            is_durable_work_resume = (
+                self.status
+                in {
+                    RuntimeStatus.STOPPED,
+                    RuntimeStatus.IDLE,
+                    RuntimeStatus.STOPPING,
+                    RuntimeStatus.DEGRADED,
+                }
+                and updated.generation == self.generation + 1
+                and updated == self.resume_for_work(at=updated.updated_at)
+            )
+            if is_durable_work_resume:
                 return
             raise ValueError("only wake or missing-task repair may change runtime generation")
         if updated.version != self.version + 1:

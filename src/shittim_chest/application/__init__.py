@@ -22,6 +22,7 @@ from shittim_chest.application.discord import (
     content_sha256,
     nonce_from_uuid7,
     prepare_outbox_operations,
+    prepare_terminal_outbox_operations,
     split_discord_message,
 )
 from shittim_chest.application.discord_http import (
@@ -70,6 +71,7 @@ from shittim_chest.application.models import (
     LeaseGrant,
     PanelRefreshState,
     RetryDebateCommand,
+    TerminalDeliveryPlan,
 )
 from shittim_chest.application.runtime_reconciler import (
     STARTUP_TERMINAL_DEADLINE_ERROR,
@@ -93,6 +95,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressStatus,
     IngressStatusPublication,
     IngressWakeCandidate,
+    OutboxActivity,
     RuntimeActivity,
     RuntimeState,
     RuntimeStatus,
@@ -177,6 +180,7 @@ __all__ = (
     "IngressWakeCandidate",
     "InvalidApplicationOperation",
     "LeaseGrant",
+    "OutboxActivity",
     "OutboxOperation",
     "OutboxRecoveryFailed",
     "OutboxStatus",
@@ -208,11 +212,13 @@ __all__ = (
     "StatusPublicationState",
     "StatusPublicationWork",
     "StatusWriteAmbiguous",
+    "TerminalDeliveryPlan",
     "command_from_ingress",
     "content_sha256",
     "has_exact_status_publication_marker",
     "nonce_from_uuid7",
     "prepare_outbox_operations",
+    "prepare_terminal_outbox_operations",
     "render_public_status",
     "sanitize_status_text",
     "split_discord_message",
