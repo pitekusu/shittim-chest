@@ -4,249 +4,46 @@
 [![Release Tool Versions](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml)
 [![Dependency Graph](https://img.shields.io/badge/GitHub-Dependency%20Graph-181717?logo=github)](https://github.com/pitekusu/shittim-chest/network/dependencies)
 
-The Shittim Chest is a Discord multi-agent debate Bot under incremental
-development. A moderator
-coordinates three configurable participant slots, shared evidence, revised
-proposals, anonymous voting, and a mechanically calculated result through the
-`/shittim` command.
+Discord multi-agent debate bot. One moderator Bot coordinates three participant
+personas, shared evidence, revised proposals, anonymous voting, and a
+**mechanically calculated** result via `/shittim`.
+
+Japanese name: **シッテムの箱** (`shittim_chest`).
 
 ## Status
 
-Requirements and detailed design are available in the
-[design-document mirror](https://github.com/pitekusu/shittim-chest/tree/main/docs).
-The Python 3.14.6/uv project foundation, UUIDv7 debate/attempt identifiers,
-immutable phase and Spot-recovery state machine, deterministic voting, and the
-SDK-independent application core are implemented. STEP-04B also provides the
-concrete DynamoDB persistence adapter: transactional acceptance/retry/terminal
-updates, three fenced lease slots, 20-second lease renewal, strongly consistent
-operation-result idempotency, recoverable-session pagination, and a durable
-outbox. The application layer exposes typed accept/run/cancel/retry/resume use
-cases through Protocol boundaries and fake-based async tests. Pull requests are
-checked with read-only GitHub
-Actions jobs for quality, tests, security, packaging, source SBOM, and public
-documentation safety. GitHub's managed Dependency Graph is compared with the
-tested uv inventory on a weekly schedule. Betterleaks scans the complete Git
-history; release assets are digest-pinned and its checksums are verified with
-Sigstore. The persistence suite runs against digest-pinned DynamoDB Local and
-SDK Stubber. STEP-05A adds an OpenAI adapter for initial opinions, final
-proposals, voting, and final decisions using the stable Responses API, strict
-Pydantic schemas, private persona configuration, bounded concurrency,
-content-free usage records, and domain-safe error mapping. Its contract tests
-use the official SDK with a mock HTTP transport and make no paid API calls.
-STEP-05B adds a fail-safe deterministic question router and hosted
-Responses API Web search boundary. It classifies searches as none, optional,
-or required, defaults unknown wording to optional search, and stores the router
-version/reason with one immutable summary and source set for every participant;
-persists optional search failure while continuing; and fails closed when
-current evidence is required. Evidence persistence was introduced in schema v3.
-STEP-05C adds deterministic post-vote shadow quality signals,
-SDK-independent Luna standard, Terra standard, and Luna pro policies, schema v4
-persistence, and an explicitly gated blind A/B evaluation tool. Shadow mode
-does not make an additional OpenAI request.
-STEP-05C.1A hardens that evaluator by separating the scorer artifact from the
-policy key and performance metrics, preserving per-policy refusals and
-operational failures without aborting the complete run, and producing a
-content-free aggregate recommendation. STEP-05C.1B uses preference-only blind
-review because requiring 100 independent rubric scores was not operationally
-reasonable for one maintainer.
+Design is complete under [`docs/`](docs/). Implementation on `main` covers the
+application core through production composition, Discord interaction runtime,
+OpenAI + Web search, DynamoDB persistence (schema v6), ARM64 container gates,
+and **synth-only** CDK stacks (Stateful + Runtime).
 
-STEP-06A now provides the SDK-independent Discord contract foundation: four
-generic Bot slots, fail-closed Guild/channel/Application configuration,
-deterministic 2,000-character message chunks, UUIDv7 nonces, content hashes,
-versioned control-panel IDs, and a typed outbox boundary. Starter message,
-thread, and control-panel message IDs are persisted separately through an
-idempotent binding use case, and DynamoDB schema v5 migrates the immediately
-previous v4 representation. STEP-06D stores accept-time Discord username and
-Guild display-name snapshots beside the immutable requester user ID on Debate
-META, bumps the record schema to v6, and migrates v5 records with a
-deterministic requester-id fallback for the new fields. Authorization remains
-userester ID only; the names are display/search data for a future authenticated
-web archive and are not written to logs, metrics, or OpenAI requests.
-STEP-06B adds the discord.py 2.7.1 publisher: it
-claims only persisted outbox chunks, sends with all mentions disabled and a
-nonce that discord.py maps to `enforce_nonce=true`, then conditionally stores
-the returned message ID. A reclaimed operation scans the dedicated thread for
-the same Bot author, nonce, and content hash before sending, so a Discord
-success followed by a DynamoDB completion failure does not immediately create
-a duplicate. SDK-exhausted 429/408/409/5xx failures are rescheduled without an
-additional in-process retry loop. Every client uses a 30-second maximum SDK
-rate-limit wait, and Discord operations have a 45-second timeout within the
-shared 60-second outbox claim.
+| Done | Not done |
+|---|---|
+| Domain, voting, Protocols, use cases | STEP-09C ops/budgets/alarms |
+| DynamoDB adapter, leases, outbox | STEP-10 release signing / deploy workflows |
+| OpenAI Responses API, router, Evidence | Real Discord Applications / live tokens |
+| Discord publisher + `/shittim` + panel | Paid OpenAI in CI |
+| Lifecycle, SIGTERM/SIGKILL recovery tests | AWS bootstrap or stack deploy |
+| Container + native ARM64 CI | |
+| GitHub → Discord Forum notifications (STEP-02D) | |
 
-STEP-06C adds the offline Discord interaction runtime. Four independent clients
-use only the GUILDS Intent and new debates are accepted only while all four are
-READY. The moderator registers a Guild-scoped `/shittim` schema, defers command
-and component responses immediately, creates a nonce-protected starter message,
-Public Thread, and control panel, and reconciles an interrupted setup from
-Discord history before creating another resource. Cancel/retry buttons are
-bound to the immutable source attempt and are accepted only after Application,
-Guild, thread, panel message, debate, attempt, and actor checks. The controller
-owns and awaits its debate tasks, and one client exiting causes all four clients
-to close.
+Production generation is fixed to **Luna standard** (no runtime escalation).
+Responses API Multi-agent beta is intentionally unused; Python owns orchestration.
 
-STEP-07A adds the process runtime lifecycle. A separate fail-closed admission
-gate stays closed through startup until all four Discord identities are READY,
-the Guild Command schema is synchronized when needed, and recoverable debates
-are started as an owned task. SIGINT and SIGTERM immediately close admission
-and interaction dispatch; owned debate/recovery tasks are cancelled and awaited
-so the existing application checkpoint contract runs. One Bot disconnect closes
-admission immediately, checkpoints after a 60-second continuous outage, and
-automatically resumes after all four identities return READY without marking a
-connectivity failure as a failed debate. Graceful cleanup has a 90-second
-application deadline, leaving 30 seconds below the planned Fargate
-`stopTimeout=120` for client, logging, and container-runtime shutdown.
+Slice evidence and PR links: [`docs/20_実装・試験・検証記録.md`](docs/20_実装・試験・検証記録.md),
+[`docs/19_実装計画・トレーサビリティ.md`](docs/19_実装計画・トレーサビリティ.md).
+Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
 
-STEP-07B connects persisted outbox recovery to every leased debate before phase
-work resumes. Pending chunks are read with a strongly consistent, paginated
-DynamoDB Query and drained in persisted order. Future retry times and live claim
-expiries are awaited without busy looping while the lease heartbeat continues.
-Retryable Discord failures use the publisher's persisted reschedule; permanent
-delivery conflicts fail with the stable Discord code. Cancellation stops new
-delivery immediately and leaves the outbox for the next fenced owner. Outbox
-waiting is excluded from the debate's active-processing deadline.
+## Stack (design)
 
-STEP-07C adds the production composition root and the executable
-`python -m shittim_chest` entry point. Strict Pydantic configuration validates
-the generic runtime and four private persona payloads before any SDK client is
-created. The process then owns one reusable DynamoDB client, one reusable
-OpenAI client and shared limiter, and exactly four Discord clients. Startup and
-runtime failures emit stable, content-free error codes; shutdown closes all
-owned clients deterministically. `.env.example` documents names and generic
-shapes only and contains no production identifiers or credentials. Real
-subprocess tests verify graceful SIGTERM checkpoint/cleanup and SIGKILL
-replacement-process recovery.
-
-Production is fixed to Luna standard for every generation phase. Terra standard
-and Luna pro remain evaluation-only policies and cannot be selected by runtime
-configuration or Discord operations. The shadow assessment remains observable
-with `executed=false` and never causes another model request. Response variety
-comes from three private, versioned persona prompts with distinct practical,
-verification/safety, and creative/alternative lenses while sharing the same
-evidence, safety constraints, and structured-output schema.
-
-The Discord interaction, lifecycle, outbox-recovery, production-composition,
-and process-signal runtimes are implemented and offline-tested. STEP-08A adds a
-digest-pinned multi-stage production container, a separately selectable
-break-glass target, numeric non-root execution, and a content-free event-loop
-heartbeat health check. STEP-08B adds a native `ubuntu-24.04-arm` required
-check that builds and runs the ARM64 image with a read-only root filesystem,
-a writable temporary mount, all Linux capabilities dropped, and
-no-new-privileges. The same check injects SIGTERM at every non-terminal debate
-phase, injects SIGKILL immediately before and after the transaction and
-Discord-post boundaries, and validates replacement recovery without duplicate
-commits or displayed messages. A pinned Syft release generates and validates a
-30-day SPDX artifact covering Debian and production Python packages. They have
-not been connected to real Bot tokens or external services. Discord
-Applications, deployed AWS resources, release attestations, and production workflows
-remain for later slices. STEP-09A adds the local CDK TypeScript foundation and a
-strictly tested `ShittimChest-Prod-Stateful` stack for the retained DynamoDB table
-and the default-encrypted, fully immutable ECR repository. It also defines an
-AWS Signer profile and ECR Managed Signing rule. Future releases deploy only an
-approved image digest and attach the signature, SPDX SBOM, build provenance, and
-vulnerability assessment to that digest as OCI reference artifacts. STEP-09A
-does not bootstrap or deploy the AWS account. STEP-09B adds the strictly tested
-`ShittimChest-Prod-Runtime` stack: a public-only VPC without NAT or a load balancer,
-HTTPS-only task egress, an ARM64 Fargate Spot singleton, digest-only image parameters,
-versioned private SSM references, least-privilege execution/task roles, and isolated
-normal and break-glass task definitions. The normal service keeps ECS Exec and
-Container Insights disabled, uses a read-only root filesystem, and writes only to
-the task-local `/tmp/shittim-chest` mount. This stack is also synth-only and has not
-been deployed. Responses API
-Multi-agent beta is intentionally not used; Python application orchestration
-remains the authority for persona concurrency, voting, checkpoints, and resume.
-No production AWS or OpenAI service is contacted by the current tests.
-
-STEP-02D adds an independent GitHub Actions to a server-visible Discord Forum
-notification path. The first slice observes only the repository-managed `CI`,
-`Dependency Graph`, and `Release Tool Versions` workflows, validates both the
-workflow name and path, and sends bounded, sanitized embeds with finite retry.
-The repository-event slice adds metadata-only PR lifecycle notifications,
-suppresses merge-derived main pushes, and flags direct or API-unclassified
-pushes. Its narrowly allowed `pull_request_target` never checks out PR code,
-uses artifacts or caches, or requests write access; a dedicated negative policy
-gate protects that boundary. The security digest slice, four Forum threads,
-Actions secret, and repository variables were configured and notifications
-were activated on 2026-07-23. The daily digest implementation reads all Dependabot alert,
-code-scanning alert, Dependabot PR, and check-run pages before rendering any
-count. It also detects stale repository workflows, failed or stale CodeQL, and
-missing CodeQL/Grype analysis for current `main`; incomplete API reads produce
-only a count-free monitor-failure alert. Notification failure never changes the
-source workflow result. Manual Security Digest, CI completion, and PR lifecycle
-smoke tests succeeded before permanent activation.
-The friend-only Discord server intentionally exposes the Forum to `@everyone`
-and does not use an alert role. Every webhook payload therefore disables all
-mentions, including failure and High/Critical notifications.
-Notification fields preserve safe line breaks and readable dependency/version
-text, and human-facing workflow start times are rendered in Japan Standard Time.
-
-The current container policy adopts the free DHI Community Python 3.14.6
-Debian 13 images. The shell-less production runtime uses DHI's `nonroot`
-identity (`65532:65532`); the independently built break-glass target uses the
-matching `-dev` image. Exact index and ARM64 manifest digests, the runtime
-identity, and the dedicated 1 MiB heartbeat tmpfs are recorded in
-`container-policy.json` and shared with Docker, native tests, and CDK.
-
-The builder installs locked third-party dependencies before copying application
-source by using `uv sync --no-install-project`. A second sync installs only the
-project, so source-only changes preserve the dependency layer. uv downloads use
-a BuildKit cache mount and are never copied into the runtime image;
-`UV_PYTHON_DOWNLOADS=0` also prevents an unexpected Python download because the
-builder image already provides the pinned interpreter. `UV_NO_CACHE=1` is not
-used during image builds.
-
-Build the two local image targets with Docker-format metadata so the health
-configuration is retained:
-
-```sh
-podman build --format docker --target production -t shittim-chest:production .
-podman build --format docker --target break-glass -t shittim-chest:break-glass .
-```
-
-Repeat the build without changing `pyproject.toml` or `uv.lock` to verify that
-the dependency sync layer is reused. The local cache is a performance
-optimization only; frozen lock validation remains the correctness boundary.
-
-The native ARM64 CI job uses Docker Buildx and `docker/build-push-action` to
-build and load both local test images. The production build exports a
-ref-scoped GitHub Actions cache under `container-arm64-production`; the fault
-build reuses the same in-job Buildx builder. Neither image is pushed. Cache
-export failure is non-blocking, while image build, container gates, and SBOM
-validation remain mandatory. Buildx summaries and compact diagnostic build
-records are retained for 30 days with the image SBOM.
-
-DHI pulls require a read-only Docker account token. Maintainers configure
-`DHI_USERNAME` and `DHI_TOKEN` separately as GitHub Actions secrets and
-Dependabot secrets; values never belong in the repository. Docker image updates
-run daily. CI retains complete Grype JSON for audit and trends, publishes
-actionable `--only-fixed` SARIF, blocks fixable High/Critical findings, verifies
-Docker's signed DHI OpenVEX, and requires any remaining unfixable High/Critical
-risk to have a digest-bound acceptance that expires within 90 days. Vendor VEX
-does not remove the unfiltered report, and Security-tab bulk dismissal is not a
-risk-acceptance mechanism.
-
-The optional paid evaluator requires both `--live` and `OPENAI_API_KEY`, writes
-the scorer artifact and unblinding key to separate repository-external directory
-trees, and is not run by CI. Its model prices must be supplied at execution
-time rather than being hard-coded. After blind scoring, `tools/score_escalation.py`
-supports the original five-axis rubric and the default operator-friendly
-`--preference-only` workflow. Run `python -m tools.review_escalation` to review
-one case at a time, save after every A/B/tie choice, and resume safely. In
-preference-only mode the recommendation uses blind preference wins first, then
-cost and p95 latency when preferences tie.
-
-The 2026-07-17 STEP-05C.1B run completed 10 cases and 20 successful policy
-runs. Blind preference review produced 4 wins for Luna pro, 2 wins for Terra
-standard, and 4 ties. The operator subsequently chose the simpler production
-policy: Luna standard only, with no escalation. The result is retained solely
-as evaluation history.
-
-The planned runtime uses Python, Discord, the OpenAI Responses API, DynamoDB,
-and one ARM64 ECS Fargate Spot task in the Tokyo Region. Fargate Spot
-interruption is handled with checkpoints, fenced leases, and an outbox.
+- **Python 3.14.6** / **uv** (locked), discord.py, OpenAI Responses API, boto3
+- **DynamoDB** (on-demand, PITR), **ECS Fargate Spot** ARM64 singleton (Tokyo)
+- **CDK** TypeScript (local synth; not deployed from this repo yet)
+- Digest-pinned **DHI** Community images; identity and tmpfs in `container-policy.json`
 
 ## Local validation
 
-Install uv 0.11.29, then run:
+Install a current **uv 0.11.x**, then from the repo root:
 
 ```sh
 uv lock --check
@@ -272,39 +69,38 @@ uv run --frozen pip-audit --strict --require-hashes \
 uv build --no-sources
 ```
 
-`tools/run_dynamodb_local.py` is the local equivalent of the CI persistence
-service: it selects Podman first (or Docker), starts the digest-pinned DynamoDB
-Local image on an automatically assigned loopback port, waits for a signed
-`ListTables` request, runs the locked full pytest suite, and removes only its
-own uniquely named container. It avoids a fixed port-8000 conflict and never
-contacts AWS. Use `--container-cli docker` to override the runtime or append a
-command after `--` for a focused run. If Codex's restricted sandbox cannot
-access the rootless Podman runtime directory, run this command in the host
-terminal; the repository runner itself requires no AWS credential.
+`tools/run_dynamodb_local.py` starts digest-pinned DynamoDB Local (Podman or
+Docker) on a random loopback port and runs the full locked suite—no AWS
+credentials. Prefer the host terminal if a restricted sandbox blocks rootless
+Podman.
 
-The weekly `Release Tool Versions` workflow compares the actionlint and
-Betterleaks pins with their latest stable GitHub releases. It
-reports drift but never updates or merges a version automatically.
+### Optional images (local)
 
-The lock file selects Python 3.14.6 through `.python-version`. The domain remains
-standard-library-only; boto3 is isolated at the DynamoDB adapter boundary and
-synchronous SDK calls are moved off the event loop.
+```sh
+podman build --format docker --target production -t shittim-chest:production .
+podman build --format docker --target break-glass -t shittim-chest:break-glass .
+```
 
-## Public and private boundaries
+DHI pulls need a read-only registry account (`DHI_USERNAME` / `DHI_TOKEN` as
+Actions and Dependabot secrets—not in Git).
 
-This repository contains generic slots and public-safe design information only.
-Production Guild/channel/Application IDs, display names, persona prompts, Bot
-tokens, and API keys are not stored here. Runtime configuration is designed to
-be loaded from versioned AWS Systems Manager Parameter Store parameters.
+### Optional paid evaluation
 
-Report security issues through GitHub's private vulnerability reporting rather
-than a public Issue. See the
-[security policy](https://github.com/pitekusu/shittim-chest/blob/main/SECURITY.md).
+`tools/evaluate_escalation.py` and related scorers require `--live` and
+`OPENAI_API_KEY`, write artifacts **outside** the repository, and are not run by
+CI. Production remains Luna standard regardless of historical A/B results.
+
+## Public vs private
+
+This repository holds generic slots and public-safe design only. Production
+Guild/channel/Application IDs, display names, persona prompts, Bot tokens, and
+API keys are loaded from versioned SSM at deploy time—not stored here.
+
+Report security issues via GitHub private vulnerability reporting:
+[SECURITY.md](SECURITY.md).
 
 ## Contributing and license
 
-Implementation contributions are welcome; read the
-[contribution guide](https://github.com/pitekusu/shittim-chest/blob/main/CONTRIBUTING.md).
-Source code, infrastructure as code, tools, and samples are licensed under the
-MIT License. Design documents and `AGENTS.md` are excluded; see
-[the license scope](https://github.com/pitekusu/shittim-chest/blob/main/LICENSE-SCOPE.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Source, IaC, tools, and samples are MIT.
+Design documents under `docs/` and `AGENTS.md` are all rights reserved—see
+[LICENSE-SCOPE.md](LICENSE-SCOPE.md).
