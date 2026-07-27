@@ -256,7 +256,7 @@ The finalized design assumes the following baseline as of 2026-07-16:
 - `boto3` and `boto3-stubs` 1.43.50;
 - Amazon ECS on ARM64 Fargate Spot, ECR, DynamoDB, SSM Parameter Store, and
   CloudWatch Logs;
-- Ruff 0.15.22, ty 0.0.61, pytest 9.1.1, import-linter 2.13, Hypothesis,
+- Ruff 0.16.0, ty 0.0.61, pytest 9.1.1, import-linter 2.13, Hypothesis,
   respx, pip-audit, and the other versions recorded in the detailed design.
 
 These are design inputs, not permission to create cloud resources. Do not
