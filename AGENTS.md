@@ -97,14 +97,14 @@ The Vault source directory must contain **only** the expected public notes
 Connected GitHub App is **read-only** for mutations (PR create/merge → 403).
 Use authenticated **`gh` as pitekusu** for all GitHub writes.
 
-1. Preflight on the host (not a restricted sandbox):  
-   `gh auth status` and `gh api user --jq '.login'` → must be `pitekusu`.  
+1. Preflight on the host (not a restricted sandbox):
+   `gh auth status` and `gh api user --jq '.login'` → must be `pitekusu`.
    Never print or store the token. Sandbox `gh` failures are not proof of
    expired credentials.
 2. Local `git` for branch, stage, commit, push.
 3. `gh` for PR create/update, checks, comments, merge.
 4. Protect `main`: PR + **squash** merge + required checks green + no open review
-   threads. Merge with  
+   threads. Merge with
    `gh pr merge --match-head-commit <full-sha>` and delete the remote branch.
 
 Prefer managed CodeQL, Secret scanning, Dependabot for inventory/alerts; this
@@ -221,16 +221,16 @@ SDK imports stay in adapters. Do not add empty placeholder packages.
 ## Python style
 
 - UTF-8, LF, 4 spaces, double quotes, line length 100.
-- Full types; `ty check` on `src`, `tests`, `tools`.  
+- Full types; `ty check` on `src`, `tests`, `tools`.
   `missing-type-argument=error`, `possibly-unresolved-reference=warn`.
 - Prefer `@dataclass(frozen=True, slots=True)`, `StrEnum`. Pydantic only at
   settings / structured output / external boundaries.
 - No `dict[str, Any]` into the application layer.
 - IDs: `uuid.uuid7()`; timestamps timezone-aware UTC; `schema_version` on records.
-- Phases only via state machine:  
-  `ACCEPTED` → `PREPARING_EVIDENCE` → `COLLECTING_INITIAL_OPINIONS` →  
-  `DISCUSSING` → `COLLECTING_FINAL_PROPOSALS` → `SELECTING_WINNER` →  
-  `GENERATING_DECISION` → `COMPLETED`; terminals `CANCELLED` / `FAILED`.  
+- Phases only via state machine:
+  `ACCEPTED` → `PREPARING_EVIDENCE` → `COLLECTING_INITIAL_OPINIONS` →
+  `DISCUSSING` → `COLLECTING_FINAL_PROPOSALS` → `SELECTING_WINNER` →
+  `GENERATING_DECISION` → `COMPLETED`; terminals `CANCELLED` / `FAILED`.
   Spot interrupt ⇒ `recovery_state=checkpointed`, not a new phase.
 - Async: `TaskGroup`, `asyncio.timeout()`, owned semaphores; never swallow
   `CancelledError`. OpenAI concurrency ≤ 6/process. boto3 off the event loop.
@@ -256,7 +256,7 @@ SDK imports stay in adapters. Do not add empty placeholder packages.
 ## OpenAI
 
 - Read current official docs before changing model/API/schema/retry choices.
-- One `AsyncOpenAI`/process; stable Responses API; `store=false`.  
+- One `AsyncOpenAI`/process; stable Responses API; `store=false`.
   **No** Multi-agent beta / `client.beta.responses` / `multi_agent`.
 - Web search only when router says optional/required; persist tool source
   metadata (`web_search_call.action.sources`), not model-invented URLs.
