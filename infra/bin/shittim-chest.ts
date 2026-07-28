@@ -2,14 +2,20 @@
 import { App, Environment, Tags, Validations } from "aws-cdk-lib";
 import { AwsSolutionsChecks } from "cdk-nag";
 
-import { RuntimeStack } from "../lib/runtime-stack";
+import { CostGovernanceStack } from "../lib/cost-governance-stack";
 import { OperationsStack } from "../lib/operations-stack";
+import { RuntimeStack } from "../lib/runtime-stack";
 import { StatefulStack } from "../lib/stateful-stack";
 
+const COST_MANAGEMENT_REGION = "us-east-1";
 const PRODUCTION_REGION = "ap-northeast-1";
 
 function productionEnvironment(): Environment {
   return { region: PRODUCTION_REGION };
+}
+
+function costManagementEnvironment(): Environment {
+  return { region: COST_MANAGEMENT_REGION };
 }
 
 const app = new App();
@@ -39,5 +45,9 @@ const operations = new OperationsStack(app, "Operations", {
   stackName: "ShittimChest-Prod-Operations",
 });
 operations.addDependency(runtime);
+new CostGovernanceStack(app, "CostGovernance", {
+  env: costManagementEnvironment(),
+  stackName: "ShittimChest-Prod-CostGovernance",
+});
 
 app.synth();

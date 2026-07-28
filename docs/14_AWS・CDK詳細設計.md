@@ -11,7 +11,7 @@ updated: 2026-07-29
 
 ## 1. Environment
 
-- 本番は単一AWS accountの`ap-northeast-1`だけとし、別のAWS開発環境を作らない。
+- 本番workloadは単一AWS accountの`ap-northeast-1`とし、別のAWS開発環境を作らない。AWS BudgetsとCost Explorer APIは東京endpointを提供しないため、account-globalなcost governance stackだけを`us-east-1`へ配置する。
 - localとCIはfake、DynamoDB Local、SDK contract testを使用し、AWS credentialをCIへ渡さない。外部接続確認は本番deploy後の限定smoke testで行う。
 - 全resourceへ`Project=shittim-chest`、`Environment=production`、`ManagedBy=cdk`を付ける。
 
@@ -21,7 +21,8 @@ updated: 2026-07-29
 |---|---|---|
 | `ShittimChest-Prod-Stateful` | DynamoDB、ECR、AWS Signer profile、ECR Managed Signing configuration | termination protection、DynamoDB/ECR/Signer profile `RETAIN` |
 | `ShittimChest-Prod-Runtime` | VPC、SG、ECS cluster/service/task、HTTP API、Ingress/Status Publisher/Reconciler Lambda、IAM、app/break-glass Exec log group | Statefulへ一方向依存 |
-| `ShittimChest-Prod-Operations` | dashboard、alarm、SNS、EventBridge、Budget、Cost Anomaly Detection | Runtime/Statefulを監視。Container Insightsは作成・有効化しない |
+| `ShittimChest-Prod-Operations` | dashboard、alarm、SNS、EventBridge | `ap-northeast-1`でRuntime/Statefulを監視。Container Insightsは作成・有効化しない |
+| `ShittimChest-Prod-CostGovernance` | Budget、Cost Anomaly Detection subscription | Cost Management endpointに合わせ`us-east-1`。workload stackへ依存しない |
 
 L2 constructを優先し、L1/escape hatchはADRで理由を残す。construct IDとlogical IDは初回deploy後に変更しない。`cdk.context.json`をcommitし、`cdk-nag`の`AwsSolutionsChecks`と`cdk synth --strict`を必須とする。
 
@@ -43,6 +44,10 @@ Scale-to-ZeroのCDKとapplicationはfeature branch上でlocal実装されたが�
 STEP-09C-Bでは`OperationsStack`を追加し、Runtime/Statefulの後に一方向依存させる。deploy時必須・defaultなし・`NoEcho`の`OperatorNotificationEmail` parameter、TLS必須の単一SNS topic、email subscription、9 metric alarm、critical/warningの2 composite alarm、1 dashboard、異常ECS task stop用EventBridge ruleだけを作成する。Container Insights、helper Lambda、CloudWatch Logs event capture、KMS customer keyは追加しない。SNSは本文やuser contentではなくalarmと絞り込んだlifecycle metadataだけを扱うため、費用とkey-policy運用を増やすcustomer managed KMS keyを使用しない。subscriptionはdeploy後にoperatorが受信emailから確認するまで`PendingConfirmation`であり、未確認状態を運用開始扱いにしない。
 
 EventBridgeは`ECS Task State Change`、対象cluster/service、`lastStatus=STOPPED`に加え、AWS公式の異常系`stopCode`である`TaskFailedToStart`、`EssentialContainerExited`、`SpotInterruption`、`TerminationNotice`だけをSNSへ送る。`UserInitiated`と`ServiceSchedulerInitiated`は計画scale-down/deploy通知ノイズを避けるため除外する。target payloadはtask ARN、cluster ARN、stop code/reason、exit code、時刻だけに絞り、元event全体を転送しない。
+
+STEP-09C-Cでは`us-east-1`へ独立`CostGovernanceStack`を追加する。Project 20 USDとaccount 30 USDの月次`NET_UNBLENDED_COST` Budgetを作成し、各Budgetはactual 80%、actual 100%、forecasted 100%を`GREATER_THAN`で通知する。自動停止やBudget Actionは作成しない。Project Budgetはdeprecatedな`CostFilters`ではなく`FilterExpression`を使い、activeなuser-defined tag `user:Project=shittim-chest`だけを対象にする。
+
+Cost Anomaly Detectionは`AWS::CE::AnomalyMonitor`を作成せず、deploy時必須の`ExistingServiceAnomalyMonitorArn`でaccount既存のAWS managed `SERVICE` monitorを参照する。subscriptionはDAILY email、`ANOMALY_TOTAL_IMPACT_ABSOLUTE >= 10 USD`の`ThresholdExpression`を使用する。Cost ManagementとOperationsはそれぞれdefaultなし`NoEcho`の`OperatorNotificationEmail`を持ち、release manifestが同じ値を両stackへ渡す。実addressとmonitor ARN実値はGit、Obsidian、template outputへ保存しない。
 
 ## 3. Network
 
@@ -173,8 +178,8 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 - scale-to-zero待受ではAPI Gateway HTTP APIのrequest数、3 Lambdaのinvocation/compute、1分周期EventBridge rule、DynamoDB on-demand request/storage、CloudWatch Logs/metricsが少量の常時cost候補となる。NAT Gateway、ALB、常駐Gateway processは追加しない。
 - ECR連携でのAWS Signer利用自体に追加Signer料金はない。ただしsignature、SBOM、provenance、vulnerability assessmentは各reference artifactとしてECR image quotaと保存容量を消費するため、repository容量とartifact数を月次確認する。
 - Fargate既定20 GiB ephemeral storageは追加料金なしとし、追加容量は設定しない。Container Insightsは無効とする。単一taskのMVPではECS標準CPU・メモリ、EventBridge通知、少数のapplication metricを使い、task/container単位のContainer Insights固定費を負担しない。
-- `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 20 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。Cost Anomaly Detectionは月額予算ではなく異常の総影響額を評価するため、notification thresholdは10 USDとする。
-- Budgetはactual 80%/100%とforecasted 100%を通知し、自動停止actionは設けない。Runtime alarm、AWS Budget、Cost Anomaly Detectionは同一のoperator emailをdeploy時parameterで受け取り、実addressをGit、Obsidian、CloudFormation outputへ保存しない。Cost Anomaly Detectionは既存のservice monitorを再利用し、同一accountのAWS managed service monitorを重複作成しない。STEP-09C-B/Cでは新しいCDK管理通知を作成してsubscription到達を確認した後、既存の手動10 USD BudgetとCAD subscriptionを撤去する。`Project` tagがBillingで`Active`になるまではtag budgetをdeployしない。
+- `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 20 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。Cost Anomaly Detectionは月額予算ではなく異常の総影響額を評価するため、notification thresholdは10 USDとする。AWS側2 BudgetとCADは`us-east-1`の独立stackで管理する。
+- Budgetはactual 80%/100%とforecasted 100%を通知し、自動停止actionは設けない。Runtime alarm、AWS Budget、Cost Anomaly Detectionは同一のoperator emailをdeploy時parameterで受け取り、実addressをGit、Obsidian、CloudFormation outputへ保存しない。Cost Anomaly Detectionは既存のAWS managed service monitorをARN parameterで再利用し、quota 1の同種monitorを重複作成しない。新しいCDK管理通知の作成・到達確認後に、既存の手動10 USD Budget/CAD subscriptionをoperatorが撤去する。`Project` tagがBillingで`Active`になるまではtag budgetをdeployしない。
 - DynamoDB PITRは35日、stack削除でもtableをretainする。業務dataにTTLを設定しないが35日より古い状態の復旧は保証せず、AWS Backupは作成しない。
 - DynamoDB on-demand maximum throughputは負荷試験前に推測値を設定しない。初回本番計測後に必要性と値をADRで決定し、設定する場合はthrottle alarmと同時に導入する。
 
@@ -191,6 +196,10 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-29 | ECS task state change events | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_task_events.html | STOPPED event、stopCode/reason、EventBridge delivery |
 | 2026-07-29 | CloudWatch composite alarms | https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarm-combining.html | underlying alarmをcritical/warningへ集約し通知noiseを抑制 |
 | 2026-07-29 | SNS email subscription | https://docs.aws.amazon.com/sns/latest/dg/sns-email-notifications.html | deploy後のemail確認とPendingConfirmation運用 |
+| 2026-07-29 | Billing and Cost Management endpoints | https://docs.aws.amazon.com/general/latest/gr/billing.html | Budgets/Cost Explorerに東京endpointがないためcost governanceだけ`us-east-1`へ分離 |
+| 2026-07-29 | CreateBudget API | https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_budgets_CreateBudget.html | `FilterExpression`/`Metrics`、`user:Project` tag filter、email通知 |
+| 2026-07-29 | Cost Anomaly Detection quotas | https://docs.aws.amazon.com/cost-management/latest/userguide/management-limits.html | AWS managed service monitorはaccountあたり1件のため既存ARNを再利用 |
+| 2026-07-29 | AnomalySubscription | https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ce-anomalysubscription.html | DAILY email、absolute impact 10 USDのThresholdExpression |
 | 2026-07-16 | Task definition | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | CPU/memory、stop timeout、awslogs |
 | 2026-07-16 | CDK | https://docs.aws.amazon.com/cdk/v2/guide/home.html | stack、synth/diff、logical ID |
 | 2026-07-16 | VPC pricing | https://aws.amazon.com/vpc/pricing/ | Public IPv4費用 |
