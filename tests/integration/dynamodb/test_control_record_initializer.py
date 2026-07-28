@@ -17,6 +17,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_runtime_state,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.control_records import ControlRecordInitializationError
 from shittim_chest.adapters.dynamodb.serializer import PREVIOUS_SCHEMA_VERSION, DynamoItem
 from shittim_chest.application import IngressRequest, RuntimeState, RuntimeStatus
 
@@ -42,6 +43,14 @@ def _request() -> IngressRequest:
         channel_id="channel-id",
         command_name="shittim",
         created_at=NOW + timedelta(seconds=1),
+    )
+
+
+def _table_snapshot(client: DynamoDBClient, table_name: str) -> list[DynamoItem]:
+    response = client.scan(TableName=table_name, ConsistentRead=True)
+    return sorted(
+        (unmarshal_item(item) for item in response["Items"]),
+        key=lambda item: (str(item["PK"]), str(item["SK"])),
     )
 
 
@@ -131,3 +140,32 @@ async def test_previous_idle_controls_migrate_then_enqueue_and_wake(
     assert started.desired_count == 1
     assert started.generation == 5
     assert started.version == 10
+
+
+def test_installed_manifest_v1_fails_closed_without_repairing_any_record(
+    dynamodb_client: DynamoDBClient,
+    empty_dynamodb_table: str,
+) -> None:
+    activity_items = [spec.install_item for spec in CONTROL_RECORD_MANIFEST.activity_records]
+    activity_items[0] = {
+        **activity_items[0],
+        "manifest_version": 1,
+        "manifest_hash": "7c43ef2665d386482afb0655ccc5ac1e163d7f8fe14e7bc4fc3625be2daea320",
+    }
+    for item in (*activity_items, CONTROL_RECORD_MANIFEST.initial_runtime_item):
+        dynamodb_client.put_item(
+            TableName=empty_dynamodb_table,
+            Item=marshal_item(item),
+        )
+    before = _table_snapshot(dynamodb_client, empty_dynamodb_table)
+
+    with pytest.raises(ControlRecordInitializationError, match=r"schema|marker"):
+        DynamoDbControlRecordInitializer(
+            client=dynamodb_client,
+            table_name=empty_dynamodb_table,
+        ).initialize()
+
+    after = _table_snapshot(dynamodb_client, empty_dynamodb_table)
+    assert after == before
+    assert len(after) == 10
+    assert not any(item["PK"] == "CONTROL#DEPLOYMENT" and item["SK"] == "LOCK" for item in after)
