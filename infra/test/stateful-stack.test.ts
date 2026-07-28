@@ -76,6 +76,19 @@ describe("StatefulStack", () => {
     });
   });
 
+  test("keeps deployment initialization out of persistent Lambda resources", () => {
+    const { template } = synthesize();
+
+    template.resourceCountIs("AWS::Lambda::Function", 0);
+    template.resourceCountIs("Custom::ShittimChestControlRecords", 0);
+    expect(template.toJSON().Parameters ?? {}).not.toHaveProperty(
+      "LambdaBundleBucketName",
+    );
+    expect(template.toJSON().Parameters ?? {}).not.toHaveProperty(
+      "LambdaBundleObjectKey",
+    );
+  });
+
   test("creates a retained immutable repository that keeps only the newest 5 images", () => {
     const { template } = synthesize();
 

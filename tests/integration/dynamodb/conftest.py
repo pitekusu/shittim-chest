@@ -10,6 +10,9 @@ import boto3
 import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
 
+from shittim_chest.adapters.dynamodb.codec import marshal_item
+from shittim_chest.adapters.dynamodb.control_records import CONTROL_RECORD_MANIFEST
+
 
 @pytest.fixture
 def dynamodb_client() -> DynamoDBClient:
@@ -26,7 +29,9 @@ def dynamodb_client() -> DynamoDBClient:
 
 
 @pytest.fixture
-def dynamodb_table(dynamodb_client: DynamoDBClient) -> Iterator[str]:
+def empty_dynamodb_table(dynamodb_client: DynamoDBClient) -> Iterator[str]:
+    """Create one production-shaped table without deployment-owned records."""
+
     table_name = f"shittim-chest-test-{uuid.uuid4().hex}"
     dynamodb_client.create_table(
         TableName=table_name,
@@ -67,3 +72,20 @@ def dynamodb_table(dynamodb_client: DynamoDBClient) -> Iterator[str]:
         yield table_name
     finally:
         dynamodb_client.delete_table(TableName=table_name)
+
+
+@pytest.fixture
+def dynamodb_table(
+    dynamodb_client: DynamoDBClient,
+    empty_dynamodb_table: str,
+) -> str:
+    """Seed the normal current control manifest for repository integration tests."""
+
+    control_items = (
+        *(spec.install_item for spec in CONTROL_RECORD_MANIFEST.activity_records),
+        CONTROL_RECORD_MANIFEST.initial_runtime_item,
+        CONTROL_RECORD_MANIFEST.initial_deployment_lock_item,
+    )
+    for item in control_items:
+        dynamodb_client.put_item(TableName=empty_dynamodb_table, Item=marshal_item(item))
+    return empty_dynamodb_table

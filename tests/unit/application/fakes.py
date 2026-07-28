@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
+from shittim_chest.application.discord import OutboxOperation
 from shittim_chest.application.models import (
     AcceptDebateRequest,
     DebateSnapshot,
@@ -14,6 +15,7 @@ from shittim_chest.application.models import (
     MetricEvent,
 )
 from shittim_chest.application.ports import RepositoryConflict
+from shittim_chest.application.scale_to_zero import IngressClaimFence
 from shittim_chest.domain import (
     AttemptId,
     DebateId,
@@ -204,8 +206,18 @@ class FakeRepository:
         self.operations: dict[str, DebateSnapshot] = {}
         self.next_fencing_token = 1
         self.renew_calls: list[tuple[DebateId, datetime]] = []
+        self.ingress_claims: list[IngressClaimFence | None] = []
+        self.terminal_operations: dict[str, OutboxOperation] = {}
+        self.terminal_stages: list[DebateSnapshot] = []
+        self.terminal_finalizations: list[DebateSnapshot] = []
 
-    async def get_operation_result(self, operation_id: str) -> DebateSnapshot | None:
+    async def get_operation_result(
+        self,
+        operation_id: str,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot | None:
+        del ingress_claim
         return self.operations.get(operation_id)
 
     def _grant(self, snapshot: DebateSnapshot, lease_owner: str) -> DebateSnapshot:
@@ -224,7 +236,9 @@ class FakeRepository:
         *,
         operation_id: str,
         lease_owner: str,
+        ingress_claim: IngressClaimFence | None = None,
     ) -> DebateSnapshot:
+        self.ingress_claims.append(ingress_claim)
         if operation_id in self.operations:
             return self.operations[operation_id]
         if snapshot.state.debate_id in self.current:
@@ -244,7 +258,9 @@ class FakeRepository:
         expected: DebateSnapshot,
         updated: DebateSnapshot,
         operation_id: str | None = None,
+        ingress_claim: IngressClaimFence | None = None,
     ) -> DebateSnapshot:
+        self.ingress_claims.append(ingress_claim)
         if operation_id is not None and operation_id in self.operations:
             return self.operations[operation_id]
         debate_id = expected.state.debate_id
@@ -262,6 +278,59 @@ class FakeRepository:
             self.operations[operation_id] = persisted
         return persisted
 
+    async def stage_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        staged: DebateSnapshot,
+        operations: tuple[OutboxOperation, ...],
+        operation_id: str | None = None,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> DebateSnapshot:
+        self.ingress_claims.append(ingress_claim)
+        if operation_id is not None:
+            replay = self.operations.get(operation_id)
+            if replay is not None and replay.terminal_delivery is not None:
+                return replay
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
+            raise RepositoryConflict
+        persisted = replace(staged, lease=current.lease)
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        self.terminal_stages.append(persisted)
+        for operation in operations:
+            existing = self.terminal_operations.get(operation.operation_id)
+            if existing is not None and existing != operation:
+                raise RepositoryConflict
+            self.terminal_operations[operation.operation_id] = operation
+        if operation_id is not None:
+            self.operations[operation_id] = persisted
+        return persisted
+
+    async def finalize_terminal(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
+            raise RepositoryConflict
+        persisted = replace(updated, lease=None)
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        self.terminal_finalizations.append(persisted)
+        for operation_id, result in tuple(self.operations.items()):
+            if (
+                result.state.debate_id == persisted.state.debate_id
+                and result.state.attempt_id == persisted.state.attempt_id
+            ):
+                self.operations[operation_id] = persisted
+        return persisted
+
     async def create_retry(
         self,
         *,
@@ -269,7 +338,9 @@ class FakeRepository:
         retry: DebateSnapshot,
         operation_id: str,
         lease_owner: str,
+        ingress_claim: IngressClaimFence | None = None,
     ) -> DebateSnapshot:
+        self.ingress_claims.append(ingress_claim)
         if operation_id in self.operations:
             return self.operations[operation_id]
         debate_id = expected_failed.state.debate_id
@@ -279,6 +350,54 @@ class FakeRepository:
         self.current[debate_id] = persisted
         self.history[debate_id].append(persisted)
         self.operations[operation_id] = persisted
+        return persisted
+
+    async def reclaim_for_ingress(
+        self,
+        *,
+        expected: DebateSnapshot,
+        lease_owner: str,
+        at: datetime,
+        ingress_claim: IngressClaimFence,
+    ) -> DebateSnapshot:
+        del ingress_claim
+        current = self.current.get(expected.state.debate_id)
+        if current != expected:
+            raise RepositoryConflict
+        persisted = replace(
+            expected,
+            lease=LeaseGrant(
+                owner_id=lease_owner,
+                slot=0,
+                fencing_token=self.next_fencing_token,
+                expires_at=at + timedelta(seconds=60),
+            ),
+        )
+        self.next_fencing_token += 1
+        self.current[expected.state.debate_id] = persisted
+        self.history[expected.state.debate_id].append(persisted)
+        return persisted
+
+    async def fail_pre_activation(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+        ingress_claim: IngressClaimFence,
+    ) -> DebateSnapshot:
+        self.ingress_claims.append(ingress_claim)
+        current = self.current.get(expected.state.debate_id)
+        if current != expected:
+            raise RepositoryConflict
+        persisted = replace(updated, lease=None)
+        self.current[expected.state.debate_id] = persisted
+        self.history[expected.state.debate_id].append(persisted)
+        for operation_id, result in tuple(self.operations.items()):
+            if (
+                result.state.debate_id == persisted.state.debate_id
+                and result.state.attempt_id == persisted.state.attempt_id
+            ):
+                self.operations[operation_id] = persisted
         return persisted
 
     async def claim_recoverable(

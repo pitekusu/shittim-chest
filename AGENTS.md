@@ -14,34 +14,39 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (main, 2026-07-27)
+## Status (scale-to-zero feature branch, 2026-07-28)
 
-**Implemented and offline-tested through STEP-09B** (plus STEP-02D notifications
-and STEP-06D requester name snapshots). Evidence: `docs/20_実装・試験・検証記録.md`
-and the progress table in `docs/19_実装計画・トレーサビリティ.md`.
+The merged `main` baseline is implemented through STEP-09B. Draft PR `#85`
+adds the locally/offline-tested scale-to-zero integration slice. STEP-02D
+notifications and STEP-06D requester name snapshots are also present. Evidence:
+`docs/20_実装・試験・検証記録.md` and the progress table in
+`docs/19_実装計画・トレーサビリティ.md`. AWS and Discord production state remain
+unchanged.
 
-| Area | On main |
+| Area | On the current feature branch |
 |---|---|
 | Domain / application | Phases, voting, Protocols, accept/run/cancel/retry/resume, deadlines |
-| Persistence | DynamoDB adapter, schema **v6**, 3 fenced leases, outbox |
+| Persistence | DynamoDB adapter, schema **v7**, control manifest **v2**, 3 fenced leases, outbox |
 | OpenAI | Responses API, structured outputs, question router, Web search, Luna standard only |
-| Discord | 4 GUILDS-only clients, `/shittim`, publisher + outbox reconcile, control panel |
+| Discord | Signed HTTP ingress, `/shittim`, 4 runtime clients, publisher + outbox reconcile, panel |
 | Runtime | Admission gate, signals, outbox drain before phase work, `python -m shittim_chest` |
 | Container | Digest-pinned multi-stage image, ARM64 CI, SIGTERM/SIGKILL fault gates |
-| Infra (synth-only) | CDK Stateful + Runtime (Spot Fargate singleton, public VPC) |
+| Scale-to-zero | Durable FIFO 20, 3/15/30-minute semantics, wake/drain/reconcile, race fences |
+| Infra (synth-only) | HTTP API, 3 Lambdas, On-Demand Fargate desired 0/max 1, public VPC |
 | Ops notifications | GitHub → Discord Forum (STEP-02D); friend server; no alert role |
 
 **Not done**
 
 - STEP-09C: Budgets, Cost Anomaly Detection, metrics/alarms, image admission
 - STEP-10: signing/referrer verification, release workflows, AWS bootstrap/deploy
-- Real Discord Applications, live Bot tokens, paid OpenAI in CI
+- Real Discord Application endpoint switch, live Bot tokens, paid OpenAI in CI
 - No AWS account bootstrap or stack deploy
+- Deployment guard is diagnostic-only; no production workflow enforces it
 
 Slices ship as isolated PRs (squash merge). After each slice, update `docs/20_…`
 and the plan/progress notes so this boundary does not go stale.
 
-### Hard constraints from merged work
+### Hard constraints on the current feature branch
 
 - Discord clients: `max_ratelimit_timeout=30`; adapter Discord op timeout **45s**
   must stay under `OUTBOX_CLAIM_SECONDS=60`.
@@ -49,7 +54,21 @@ and the plan/progress notes so this boundary does not go stale.
   interaction listener (deprecated asyncio path; tests treat warnings as
   errors). Use the moderator client’s explicit `on_interaction` dispatch.
 - DynamoDB readers migrate only **previous → current** schema; fail closed on
-  unknowns. Current schema version is **6**.
+  unknowns. Current schema version is **7** and the control-record manifest is
+  **v2**.
+- Discord HTTP ingress must validate the Ed25519 signature and timestamp over
+  the untouched raw body before JSON parsing. Never persist Interaction tokens
+  or log raw bodies, signatures, questions, or credentials.
+- Scale-to-zero is one ARM64 On-Demand Fargate task at most (`512` CPU units /
+  `1024` MiB): `desiredCount=0` when idle, converge to 1 only after durable
+  ingress acceptance. Fargate Spot and the old always-on `desiredCount=1`
+  baseline are superseded.
+- The ingress FIFO contains at most 20 PENDING/CLAIMED/RETRYING requests.
+  Accepted debates leave the FIFO and continue to consume the existing three
+  fenced global slots.
+- Startup warning at 3 minutes is non-terminal; the request remains recoverable
+  until terminal failure at 15 minutes. Scale-down is eligible 30 minutes after
+  the last debate is fully complete, not 30 minutes after the last request.
 - Drain outbox before phase resume; outbox wait does **not** count toward the
   300s active-processing deadline. `RepositoryConflict` ⇒ lost fencing; do not
   terminalize the attempt.
@@ -77,6 +96,12 @@ and the plan/progress notes so this boundary does not go stale.
 | Source of truth | Operator Obsidian public-safe notes (`SHITTIM_DOCS_SOURCE`) |
 | Public mirror | `docs/` (read-only relative to Vault) |
 | Responsibilities | Index in `docs/00_…`: requirements / decisions / detailed design / tests / traceability |
+
+The source-only supplemental specification directory named exactly
+`100_Ondemand Fargate/` contains the canonical goal, commit plan, and completion
+checklist for scale-to-zero. `tools/sync_docs.py` validates that directory at
+the configured source but intentionally does not copy it into public `docs/`.
+Do not publish its local filesystem location.
 
 There is **no** silent precedence: on conflict, stop, ADR, update every affected
 note in the same change.
@@ -124,7 +149,13 @@ policy only changes the **mutation** control path.
 - Active target 180s, hard 300s; 3 concurrent sessions; 30 starts/Guild/day.
 - Persist debates/threads (no auto-expiry). DynamoDB PITR 35 days; no AWS Backup
   MVP. Logs 90 days.
-- One ARM64 **Fargate Spot** task; checkpoint/resume on interrupt; Spot downtime OK.
+- Signed Discord HTTP ingress with three responsibility-separated Lambdas:
+  ingress, status publisher, and one-minute runtime reconciler.
+- One ARM64 **On-Demand Fargate** task at most, `512` CPU units / `1024` MiB;
+  normally scaled to zero and woken only after the request is durably stored.
+- FIFO waiting limit 20 and active-debate limit 3 are independent boundaries.
+- 3-minute startup warning is non-terminal; 15 minutes is terminal; automatic
+  stop is 30 minutes after the last fully completed debate.
 - CDK TypeScript + GHA OIDC. Budgets: project $20 / account $30 / OpenAI $50;
   CAD total-impact $10. Tag `Project=shittim-chest`. Activate cost-allocation tag
   before tag budgets. Verify new CDK notifications before removing legacy $10.
@@ -151,7 +182,7 @@ policy only changes the **mutation** control path.
 | uv | local/CI **0.11.x**; `[tool.uv] required-version = ">=0.11.8,<0.12"` (Dependabot embed); `uv_build>=0.11.32,<0.12` |
 | Runtime deps | discord.py 2.7.1, openai 2.48.x, httpx 0.28.1, boto3 1.43.x, pydantic 2.13.x |
 | Dev | Ruff **0.16.x** (`<0.17`), ty 0.0.63, pytest 9.1.x, import-linter 2.13, Hypothesis, pip-audit |
-| Cloud design | ECS ARM64 Fargate Spot, ECR, DynamoDB, SSM, CloudWatch, CDK TS (Node 24 LTS) |
+| Cloud design | HTTP API + 3 Lambdas, ECS ARM64 On-Demand Fargate 0↔1, ECR, DynamoDB, SSM, CloudWatch, CDK TS (Node 24 LTS) |
 
 Versions move via Dependabot / dedicated tooling PRs; always trust `uv.lock`.
 Do not provision AWS, create Discord apps, or make paid API calls unless the
@@ -231,7 +262,7 @@ SDK imports stay in adapters. Do not add empty placeholder packages.
   `ACCEPTED` → `PREPARING_EVIDENCE` → `COLLECTING_INITIAL_OPINIONS` →
   `DISCUSSING` → `COLLECTING_FINAL_PROPOSALS` → `SELECTING_WINNER` →
   `GENERATING_DECISION` → `COMPLETED`; terminals `CANCELLED` / `FAILED`.
-  Spot interrupt ⇒ `recovery_state=checkpointed`, not a new phase.
+  Task termination ⇒ `recovery_state=checkpointed`, not a new phase.
 - Async: `TaskGroup`, `asyncio.timeout()`, owned semaphores; never swallow
   `CancelledError`. OpenAI concurrency ≤ 6/process. boto3 off the event loop.
 - Explicit deadlines; retry only retryable errors if deadline allows.
@@ -241,11 +272,16 @@ SDK imports stay in adapters. Do not add empty placeholder packages.
 
 ## Discord
 
-- Moderator owns command registration and Interaction ack (unless a later ADR).
+- Moderator owns command registration. API Gateway + the ingress Lambda own the
+  initial Interaction response; the ECS Gateway runtime must not also accept
+  the same command/component.
 - Four Guild-install-only apps; Public Bot off; OAuth2 Code Grant off; 2FA.
-- Intent: `GUILDS` only. Command: Guild-scoped `/shittim`. Defer ephemerally
-  within 3s; then starter message + Public Thread + panel; ephemeral thread link.
-- Accept work only when all four clients are READY.
+- Runtime intent: `GUILDS` only. Command: Guild-scoped `/shittim`. Signed HTTP
+  ingress responds ephemerally within Discord's deadline, persists the request
+  before wake, and requests a public status message. ECS later creates the
+  starter message + Public Thread + panel after READY/recovery.
+- Claim/drain persisted work only when all four clients are READY. HTTP durable
+  acceptance remains available while the runtime is stopped or not READY.
 - `allowed_mentions.parse=[]`; chunk at 2000 on paragraphs; deterministic labels.
 - Publish **only** persisted outbox ops (22-char unpadded base64url UUIDv7 nonce,
   content hash, claim owner/expiry). Long outages: reconcile thread history +
@@ -276,21 +312,28 @@ SDK imports stay in adapters. Do not add empty placeholder packages.
   image push, `contents: read`, no deploy secrets/OIDC. Production cache export
   may fail without failing the gate.
 
-## AWS (design defaults; stacks synth-only)
+## AWS (implemented templates; synth/local tests only)
 
 - Region `ap-northeast-1`. SSO for interactive work; no new long-lived keys.
 - CDK: Node 24 LTS, exact npm pins, cdk-nag, strict TS, Vitest. **No bootstrap/
   deploy** unless the task explicitly requests it.
-- Runtime design: public IPv4 VPC, Spot only, `desiredCount=1`, ARM64,
-  `stopTimeout=120`, app cleanup ≤90s, no on-demand fallback, stop-before-start
-  deploys, non-root, read-only root, Exec off (break-glass separate revision).
+- Runtime design: public IPv4 VPC, On-Demand FARGATE only, `desiredCount=0`,
+  maximum/running task count 1, ARM64 `512/1024`, `stopTimeout=120`, app cleanup
+  ≤90s, non-root, read-only root, Exec off (break-glass separate revision).
+- Control plane: API Gateway HTTP API, exactly three application Lambdas outside
+  the VPC, and a one-minute EventBridge reconciler. No ALB, NAT Gateway, new
+  DynamoDB table, ECS Service Auto Scaling, or FARGATE_SPOT.
+- Runtime wake follows durable ingress acceptance. Scale-down requires a stable
+  generation and zero pending ingress/tasks/leases/outbox/status work after the
+  30-minute fully-idle boundary.
 - DynamoDB: on-demand, deletion protection, RETAIN, 35d PITR; 3 lease slots;
   cross-item writes need META `ConditionCheck` in the same transaction.
 - ECR: fully immutable tags; deploy by `repository@sha256:<digest>` only.
   Release verification is fail-closed (Signer + Notation + attestations +
   referrers)—STEP-10.
 - OIDC: plan/drift = immutable main subject; deploy = `production` environment;
-  `aud=sts.amazonaws.com`.
+  `aud=sts.amazonaws.com`. The deployment guard currently performs read-only
+  diagnostic evaluation and is not connected to a production deploy job.
 
 ## Official docs policy
 

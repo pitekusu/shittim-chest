@@ -120,6 +120,7 @@ class FakePublisher:
                         status=OutboxStatus.PREPARED,
                         claim_owner=None,
                         claim_expires_at=None,
+                        delivery_attempt=operation.delivery_attempt + 1,
                         next_retry_at=self._clock.current + timedelta(seconds=30),
                     )
                 )
@@ -129,6 +130,7 @@ class FakePublisher:
             status=OutboxStatus.SENT,
             claim_owner=None,
             claim_expires_at=None,
+            delivery_attempt=operation.delivery_attempt + 1,
             next_retry_at=None,
             message_id=str(900 + operation.chunk_sequence),
             sent_at=self._clock.current,

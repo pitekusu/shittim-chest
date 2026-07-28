@@ -1,17 +1,22 @@
 import {
   Aws,
+  CfnOutput,
   CfnParameter,
   Duration,
   RemovalPolicy,
   Stack,
   StackProps,
   Validations,
+  aws_apigatewayv2 as apigatewayv2,
+  aws_apigatewayv2_integrations as apigatewayv2Integrations,
   aws_dynamodb as dynamodb,
   aws_ec2 as ec2,
   aws_ecr as ecr,
   aws_ecs as ecs,
   aws_iam as iam,
+  aws_lambda as lambda,
   aws_logs as logs,
+  aws_scheduler as scheduler,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
@@ -19,11 +24,101 @@ import containerPolicy from "../../container-policy.json";
 
 const IMAGE_DIGEST_PATTERN = "^sha256:[0-9a-f]{64}$";
 const CONFIG_VERSION_PATTERN = "^v[0-9]{4}$";
+const LAMBDA_BUNDLE_BUCKET_PATTERN = "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$";
+const LAMBDA_BUNDLE_KEY_PATTERN =
+  "^lambda/shittim-chest/[0-9a-f]{64}/shittim-chest-lambda-arm64\\.zip$";
 const PARAMETER_ROOT = "/shittim-chest/production";
+const DISCORD_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/public-key`;
+const MODERATOR_TOKEN_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/token`;
+const RECONCILER_SCHEDULE_NAME = "shittim-chest-production-runtime-reconciler";
+const DISCORD_INGRESS_HANDLER =
+  "shittim_chest.lambda_handlers.discord_ingress.lambda_handler";
+const DISCORD_STATUS_HANDLER =
+  "shittim_chest.lambda_handlers.discord_status_publisher.lambda_handler";
+const RUNTIME_RECONCILER_HANDLER =
+  "shittim_chest.lambda_handlers.runtime_reconciler.lambda_handler";
 const RUNTIME_UID = containerPolicy.runtime_identity.uid;
 const RUNTIME_GID = containerPolicy.runtime_identity.gid;
 const RUNTIME_USER = `${RUNTIME_UID}:${RUNTIME_GID}`;
 const HEARTBEAT_TMPFS = containerPolicy.heartbeat_tmpfs;
+const DEPLOYMENT_LOCK_PARTITION = "CONTROL#DEPLOYMENT";
+const INGRESS_READABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "CONTROL#RUNTIME",
+  "DEBATE#*",
+  "INGRESS_OPERATION#*",
+  "INGRESS_SEMANTIC_OPERATION#*",
+];
+const INGRESS_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "INGRESS_OPERATION#*",
+  "INGRESS_SEMANTIC_OPERATION#*",
+];
+const STATUS_PUBLISHER_READABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "INGRESS_OPERATION#*",
+];
+const STATUS_PUBLISHER_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "INGRESS_OPERATION#*",
+];
+const RECONCILER_READABLE_PARTITION_PATTERNS = [
+  "CONTROL#DEBATE",
+  "CONTROL#GLOBAL",
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#OUTBOX",
+  "CONTROL#PANEL_REFRESH",
+  "CONTROL#RUNTIME",
+  "INGRESS_OPERATION#*",
+];
+const RECONCILER_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#RUNTIME",
+  "INGRESS_OPERATION#*",
+];
+const APPLICATION_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#DEBATE",
+  "CONTROL#GLOBAL",
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#OUTBOX",
+  "CONTROL#PANEL_REFRESH",
+  "CONTROL#RUNTIME",
+  "DEBATE#*",
+  "INGRESS_OPERATION#*",
+  "INGRESS_SEMANTIC_OPERATION#*",
+  "OPERATION#*",
+  "QUOTA#GUILD#*",
+];
+const APPLICATION_READABLE_PARTITION_PATTERNS = [
+  ...APPLICATION_WRITABLE_PARTITION_PATTERNS,
+];
+const INGRESS_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  "CONTROL#INGRESS",
+];
+const STATUS_PUBLISHER_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  "CONTROL#INGRESS",
+];
+const RECONCILER_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  "CONTROL#DEBATE",
+  "CONTROL#GLOBAL",
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#OUTBOX",
+  "CONTROL#PANEL_REFRESH",
+  "CONTROL#RUNTIME",
+  "INGRESS_OPERATION#*",
+];
+const APPLICATION_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  ...APPLICATION_WRITABLE_PARTITION_PATTERNS,
+];
 
 export interface RuntimeStackProps extends StackProps {
   readonly debateTable: dynamodb.ITable;
@@ -39,7 +134,12 @@ export class RuntimeStack extends Stack {
   public readonly breakGlassLogGroup: logs.LogGroup;
   public readonly breakGlassTaskDefinition: ecs.FargateTaskDefinition;
   public readonly cluster: ecs.Cluster;
+  public readonly discordIngressFunction: lambda.Function;
+  public readonly discordStatusPublisherFunction: lambda.Function;
+  public readonly interactionsApi: apigatewayv2.HttpApi;
   public readonly normalTaskDefinition: ecs.FargateTaskDefinition;
+  public readonly runtimeReconcilerFunction: lambda.Function;
+  public readonly runtimeReconcilerSchedule: scheduler.CfnSchedule;
   public readonly service: ecs.FargateService;
   public readonly taskSecurityGroup: ec2.SecurityGroup;
   public readonly vpc: ec2.Vpc;
@@ -131,7 +231,6 @@ export class RuntimeStack extends Stack {
       },
       vpc: this.vpc,
     });
-    this.cluster.enableFargateCapacityProviders();
     Validations.of(this.cluster).acknowledge({
       id: "AwsSolutions-ECS4",
       reason:
@@ -183,10 +282,9 @@ export class RuntimeStack extends Stack {
     this.service = new ecs.FargateService(this, "Service", {
       assignPublicIp: true,
       availabilityZoneRebalancing: ecs.AvailabilityZoneRebalancing.DISABLED,
-      capacityProviderStrategies: [{ capacityProvider: "FARGATE_SPOT", weight: 1 }],
       circuitBreaker: { rollback: true },
       cluster: this.cluster,
-      desiredCount: 1,
+      desiredCount: 0,
       enableECSManagedTags: true,
       enableExecuteCommand: false,
       maxHealthyPercent: 100,
@@ -198,6 +296,412 @@ export class RuntimeStack extends Stack {
       taskDefinition: this.normalTaskDefinition,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
+
+    const sharedLambdaCode = this.applicationLambdaCode();
+    const runtimeConfigParameter = `${PARAMETER_ROOT}/runtime/${configVersion.valueAsString}`;
+    this.discordStatusPublisherFunction = this.createApplicationFunction({
+      code: sharedLambdaCode,
+      environment: {
+        SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
+        SHITTIM_MODERATOR_TOKEN_PARAMETER: MODERATOR_TOKEN_PARAMETER,
+        SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
+      },
+      functionName: "shittim-chest-production-discord-status-publisher",
+      handler: DISCORD_STATUS_HANDLER,
+      id: "DiscordStatusPublisherFunction",
+      memorySize: 256,
+      reservedConcurrency: 2,
+      timeout: Duration.seconds(120),
+    });
+    this.runtimeReconcilerFunction = this.createApplicationFunction({
+      code: sharedLambdaCode,
+      environment: {
+        SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
+        SHITTIM_ECS_CLUSTER: this.cluster.clusterName,
+        SHITTIM_ECS_SERVICE: this.service.serviceName,
+        SHITTIM_STATUS_PUBLISHER_FUNCTION:
+          this.discordStatusPublisherFunction.functionName,
+      },
+      functionName: "shittim-chest-production-runtime-reconciler",
+      handler: RUNTIME_RECONCILER_HANDLER,
+      id: "RuntimeReconcilerFunction",
+      memorySize: 256,
+      reservedConcurrency: 1,
+      timeout: Duration.seconds(55),
+    });
+    this.discordIngressFunction = this.createApplicationFunction({
+      code: sharedLambdaCode,
+      environment: {
+        SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER: DISCORD_PUBLIC_KEY_PARAMETER,
+        SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
+        SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
+        SHITTIM_RUNTIME_RECONCILER_FUNCTION:
+          this.runtimeReconcilerFunction.functionName,
+        SHITTIM_STATUS_PUBLISHER_FUNCTION:
+          this.discordStatusPublisherFunction.functionName,
+      },
+      functionName: "shittim-chest-production-discord-ingress",
+      handler: DISCORD_INGRESS_HANDLER,
+      id: "DiscordIngressFunction",
+      memorySize: 512,
+      reservedConcurrency: 5,
+      // The application stops at 2.2s; 5s is only a final safety net for an
+      // SDK call unwinding after cancellation and must not define Discord UX.
+      timeout: Duration.seconds(5),
+    });
+
+    this.grantApplicationLambdaAccess(props.debateTable, runtimeConfigParameter);
+    this.discordStatusPublisherFunction.configureAsyncInvoke({
+      maxEventAge: Duration.minutes(15),
+      retryAttempts: 2,
+    });
+    this.runtimeReconcilerFunction.configureAsyncInvoke({
+      maxEventAge: Duration.minutes(2),
+      retryAttempts: 1,
+    });
+
+    this.interactionsApi = this.createDiscordInteractionsApi(
+      this.discordIngressFunction,
+    );
+    this.runtimeReconcilerSchedule = this.createRuntimeReconcilerSchedule(
+      this.runtimeReconcilerFunction,
+    );
+  }
+
+  private applicationLambdaCode(): lambda.CfnParametersCode {
+    const bundleBucket = new CfnParameter(this, "LambdaBundleBucketName", {
+      allowedPattern: LAMBDA_BUNDLE_BUCKET_PATTERN,
+      description: "S3 bucket containing the verified shared Python Lambda bundle",
+      type: "String",
+    });
+    const bundleKey = new CfnParameter(this, "LambdaBundleObjectKey", {
+      allowedPattern: LAMBDA_BUNDLE_KEY_PATTERN,
+      description: "Content-addressed key for the verified shared Python Lambda bundle",
+      type: "String",
+    });
+    return lambda.Code.fromCfnParameters({
+      bucketNameParam: bundleBucket,
+      objectKeyParam: bundleKey,
+    });
+  }
+
+  private createApplicationFunction(options: {
+    readonly code: lambda.Code;
+    readonly environment: Record<string, string>;
+    readonly functionName: string;
+    readonly handler: string;
+    readonly id: string;
+    readonly memorySize: number;
+    readonly reservedConcurrency: number;
+    readonly timeout: Duration;
+  }): lambda.Function {
+    const logGroup = new logs.LogGroup(this, `${options.id}LogGroup`, {
+      dataProtectionPolicy: this.lambdaDataProtectionPolicy(
+        `${options.functionName}-log-protection`,
+      ),
+      logGroupName: `/aws/lambda/${options.functionName}`,
+      removalPolicy: RemovalPolicy.RETAIN,
+      retention: logs.RetentionDays.THREE_MONTHS,
+    });
+    const role = this.lambdaRole(
+      `${options.id}Role`,
+      `${options.functionName}-role`,
+      logGroup,
+    );
+    const function_ = new lambda.Function(this, options.id, {
+      architecture: lambda.Architecture.ARM_64,
+      code: options.code,
+      environment: options.environment,
+      functionName: options.functionName,
+      handler: options.handler,
+      logGroup,
+      loggingFormat: lambda.LoggingFormat.JSON,
+      memorySize: options.memorySize,
+      reservedConcurrentExecutions: options.reservedConcurrency,
+      role,
+      runtime: lambda.Runtime.PYTHON_3_14,
+      timeout: options.timeout,
+      tracing: lambda.Tracing.DISABLED,
+    });
+    Validations.of(function_).acknowledge({
+      id: "AwsSolutions-L1",
+      reason:
+        "Python 3.14 is the current project runtime and is explicitly selected instead of an unpinned latest runtime.",
+    });
+    return function_;
+  }
+
+  private grantApplicationLambdaAccess(
+    table: dynamodb.ITable,
+    runtimeConfigParameter: string,
+  ): void {
+    this.addTableActions(this.discordIngressFunction, table, {
+      conditionCheckPartitionPatterns: INGRESS_CONDITION_CHECK_PARTITION_PATTERNS,
+      readActions: ["dynamodb:GetItem"],
+      readablePartitionPatterns: INGRESS_READABLE_PARTITION_PATTERNS,
+      writablePartitionPatterns: INGRESS_WRITABLE_PARTITION_PATTERNS,
+      writeActions: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
+    });
+    this.addTableActions(this.discordStatusPublisherFunction, table, {
+      conditionCheckPartitionPatterns:
+        STATUS_PUBLISHER_CONDITION_CHECK_PARTITION_PATTERNS,
+      readActions: ["dynamodb:GetItem"],
+      readablePartitionPatterns: STATUS_PUBLISHER_READABLE_PARTITION_PATTERNS,
+      writablePartitionPatterns: STATUS_PUBLISHER_WRITABLE_PARTITION_PATTERNS,
+      writeActions: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
+    });
+    this.addTableActions(this.runtimeReconcilerFunction, table, {
+      conditionCheckPartitionPatterns: RECONCILER_CONDITION_CHECK_PARTITION_PATTERNS,
+      readActions: ["dynamodb:GetItem"],
+      readablePartitionPatterns: RECONCILER_READABLE_PARTITION_PATTERNS,
+      writablePartitionPatterns: RECONCILER_WRITABLE_PARTITION_PATTERNS,
+      writeActions: [
+        "dynamodb:DeleteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+      ],
+    });
+    this.addTableQueryActions(
+      this.runtimeReconcilerFunction,
+      table,
+      RECONCILER_READABLE_PARTITION_PATTERNS,
+    );
+
+    this.grantParameterRead(
+      this.discordIngressFunction,
+      runtimeConfigParameter,
+    );
+    this.grantParameterRead(this.discordIngressFunction, DISCORD_PUBLIC_KEY_PARAMETER);
+    this.grantParameterRead(
+      this.discordStatusPublisherFunction,
+      runtimeConfigParameter,
+    );
+    this.grantParameterRead(
+      this.discordStatusPublisherFunction,
+      MODERATOR_TOKEN_PARAMETER,
+    );
+
+    this.discordIngressFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["lambda:InvokeFunction"],
+        resources: [
+          this.discordStatusPublisherFunction.functionArn,
+          this.runtimeReconcilerFunction.functionArn,
+        ],
+      }),
+    );
+    this.runtimeReconcilerFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["lambda:InvokeFunction"],
+        resources: [this.discordStatusPublisherFunction.functionArn],
+      }),
+    );
+
+    this.runtimeReconcilerFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ecs:DescribeServices", "ecs:UpdateService"],
+        resources: [this.service.serviceArn],
+      }),
+    );
+  }
+
+  private addTableActions(
+    function_: lambda.Function,
+    table: dynamodb.ITable,
+    options: {
+      conditionCheckPartitionPatterns: string[];
+      readActions: string[];
+      readablePartitionPatterns: string[];
+      writablePartitionPatterns: string[];
+      writeActions: string[];
+    },
+  ): void {
+    function_.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:ConditionCheckItem"],
+        conditions: this.leadingKeyConditions(
+          options.conditionCheckPartitionPatterns,
+        ),
+        resources: [table.tableArn],
+      }),
+    );
+    if (options.readActions.length > 0) {
+      function_.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: options.readActions,
+          conditions: this.leadingKeyConditions(options.readablePartitionPatterns),
+          resources: [table.tableArn],
+        }),
+      );
+    }
+    if (options.writeActions.length > 0) {
+      function_.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: options.writeActions,
+          conditions: this.leadingKeyConditions(options.writablePartitionPatterns),
+          resources: [table.tableArn],
+        }),
+      );
+    }
+  }
+
+  private grantParameterRead(function_: lambda.Function, parameterName: string): void {
+    function_.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: [this.parameterArn(parameterName)],
+      }),
+    );
+  }
+
+  private parameterArn(parameterName: string): string {
+    return this.formatArn({
+      resource: "parameter",
+      resourceName: parameterName.slice(1),
+      service: "ssm",
+    });
+  }
+
+  private createDiscordInteractionsApi(
+    ingress: lambda.IFunction,
+  ): apigatewayv2.HttpApi {
+    const accessLogs = new logs.LogGroup(this, "DiscordInteractionsAccessLogGroup", {
+      dataProtectionPolicy: this.lambdaDataProtectionPolicy(
+        "shittim-chest-discord-interactions-access-log-protection",
+      ),
+      logGroupName: "/aws/apigateway/shittim-chest/production/discord-interactions",
+      removalPolicy: RemovalPolicy.RETAIN,
+      retention: logs.RetentionDays.THREE_MONTHS,
+    });
+    const api = new apigatewayv2.HttpApi(this, "DiscordInteractionsApi", {
+      apiName: "shittim-chest-production-discord-interactions",
+      createDefaultStage: false,
+      description: "Signed Discord Interaction endpoint",
+      disableExecuteApiEndpoint: false,
+    });
+    api.addRoutes({
+      integration: new apigatewayv2Integrations.HttpLambdaIntegration(
+        "DiscordIngressIntegration",
+        ingress,
+        { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+      ),
+      methods: [apigatewayv2.HttpMethod.POST],
+      path: "/interactions",
+    });
+    const stage = new apigatewayv2.HttpStage(this, "DiscordInteractionsStage", {
+      autoDeploy: true,
+      httpApi: api,
+      stageName: "$default",
+      throttle: {
+        // Keep API admission within the ingress function's reserved concurrency
+        // instead of accepting a burst that Lambda must synchronously throttle.
+        burstLimit: 5,
+        rateLimit: 2,
+      },
+    });
+    const cfnStage = stage.node.defaultChild as apigatewayv2.CfnStage;
+    cfnStage.accessLogSettings = {
+      destinationArn: accessLogs.logGroupArn,
+      format: JSON.stringify({
+        integrationStatus: "$context.integration.status",
+        requestId: "$context.requestId",
+        responseLength: "$context.responseLength",
+        routeKey: "$context.routeKey",
+        status: "$context.status",
+      }),
+    };
+    new CfnOutput(this, "DiscordInteractionsEndpointUrl", {
+      description: "Register this URL as the Discord Interactions Endpoint after rollout gates",
+      value: `${api.apiEndpoint}/interactions`,
+    });
+    Validations.of(api).acknowledge({
+      id: "AwsSolutions-APIG4",
+      reason:
+        "Discord cannot use an API Gateway authorizer; the only POST route validates Ed25519 over the untouched raw body before parsing.",
+    });
+    return api;
+  }
+
+  private createRuntimeReconcilerSchedule(
+    reconciler: lambda.IFunction,
+  ): scheduler.CfnSchedule {
+    const scheduleGroupArn = this.formatArn({
+      resource: "schedule-group",
+      resourceName: "default",
+      service: "scheduler",
+    });
+    const role = new iam.Role(this, "RuntimeReconcilerSchedulerRole", {
+      assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com", {
+        conditions: {
+          ArnEquals: { "aws:SourceArn": scheduleGroupArn },
+          StringEquals: { "aws:SourceAccount": Aws.ACCOUNT_ID },
+        },
+      }),
+      description: "Invoke only the runtime reconciler on its one-minute schedule",
+      roleName: "ShittimChest-Prod-RuntimeReconcilerScheduler",
+    });
+    const invokePolicy = new iam.Policy(this, "RuntimeReconcilerSchedulerPolicy", {
+      statements: [
+        new iam.PolicyStatement({
+          actions: ["lambda:InvokeFunction"],
+          resources: [reconciler.functionArn],
+        }),
+      ],
+    });
+    invokePolicy.attachToRole(role);
+    const schedule = new scheduler.CfnSchedule(this, "RuntimeReconcilerSchedule", {
+      flexibleTimeWindow: { mode: "OFF" },
+      name: RECONCILER_SCHEDULE_NAME,
+      scheduleExpression: "rate(1 minute)",
+      state: "ENABLED",
+      target: {
+        arn: reconciler.functionArn,
+        input: JSON.stringify({ schema_version: 1, trigger: "scheduled" }),
+        retryPolicy: {
+          maximumEventAgeInSeconds: 120,
+          maximumRetryAttempts: 2,
+        },
+        roleArn: role.roleArn,
+      },
+    });
+    schedule.node.addDependency(invokePolicy);
+    return schedule;
+  }
+
+  private lambdaDataProtectionPolicy(name: string): logs.DataProtectionPolicy {
+    return new logs.DataProtectionPolicy({
+      description: "Mask common credentials and identifiers in serverless logs",
+      identifiers: [
+        logs.DataIdentifier.AWSSECRETKEY,
+        logs.DataIdentifier.EMAILADDRESS,
+        logs.DataIdentifier.IPADDRESS,
+        logs.DataIdentifier.OPENSSHPRIVATEKEY,
+        logs.DataIdentifier.PGPPRIVATEKEY,
+        logs.DataIdentifier.PKCSPRIVATEKEY,
+      ],
+      name,
+    });
+  }
+
+  private lambdaRole(id: string, roleName: string, logGroup: logs.LogGroup): iam.Role {
+    const role = new iam.Role(this, id, {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      description: `Write only to ${logGroup.logGroupName} and use explicitly added service actions`,
+      roleName,
+    });
+    role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+        resources: [`${logGroup.logGroupArn}:*`],
+      }),
+    );
+    const logResource = logGroup.node.defaultChild as logs.CfnLogGroup;
+    Validations.of(role).acknowledge({
+      id: `AwsSolutions-IAM5[Resource::<${this.getLogicalId(logResource)}.Arn>:*]`,
+      reason:
+        "CloudWatch Logs creates unpredictable stream names; access remains confined to this function's dedicated retained log group.",
+    });
+    return role;
   }
 
   private imageDigestParameter(
@@ -247,25 +751,74 @@ export class RuntimeStack extends Stack {
   private grantApplicationData(role: iam.Role, table: dynamodb.ITable): void {
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
-        actions: [
-          "dynamodb:ConditionCheckItem",
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:UpdateItem",
-        ],
+        actions: ["dynamodb:GetItem"],
+        conditions: this.leadingKeyConditions(
+          APPLICATION_READABLE_PARTITION_PATTERNS,
+        ),
         resources: [table.tableArn],
       }),
     );
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
+        actions: ["dynamodb:ConditionCheckItem"],
+        conditions: this.leadingKeyConditions(
+          APPLICATION_CONDITION_CHECK_PARTITION_PATTERNS,
+        ),
+        resources: [table.tableArn],
+      }),
+    );
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "dynamodb:DeleteItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+        ],
+        conditions: this.leadingKeyConditions(
+          APPLICATION_WRITABLE_PARTITION_PATTERNS,
+        ),
+        resources: [table.tableArn],
+      }),
+    );
+    this.addTableQueryActions(
+      role,
+      table,
+      APPLICATION_READABLE_PARTITION_PATTERNS,
+    );
+  }
+
+  private addTableQueryActions(
+    grantee: iam.IGrantable,
+    table: dynamodb.ITable,
+    readablePartitionPatterns: string[],
+  ): void {
+    grantee.grantPrincipal.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:Query"],
+        conditions: this.leadingKeyConditions(readablePartitionPatterns),
+        resources: [table.tableArn],
+      }),
+    );
+    grantee.grantPrincipal.addToPrincipalPolicy(
+      new iam.PolicyStatement({
         actions: ["dynamodb:Query"],
         resources: [
-          table.tableArn,
           `${table.tableArn}/index/gsi1`,
           `${table.tableArn}/index/gsi2`,
         ],
       }),
     );
+  }
+
+  private leadingKeyConditions(
+    partitionPatterns: string[],
+  ): Record<string, Record<string, string | string[]>> {
+    return {
+      "ForAllValues:StringLike": {
+        "dynamodb:LeadingKeys": partitionPatterns,
+      },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    };
   }
 
   private grantBreakGlassAccess(role: iam.Role): void {

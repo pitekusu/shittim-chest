@@ -30,6 +30,13 @@ EXPECTED_FILES = (
     "20_実装・試験・検証記録.md",
     "21_GitHub・Discord通知運用設計.md",
 )
+SOURCE_ONLY_DIRECTORIES = {
+    "100_Ondemand Fargate": (
+        "10_scale-to-zero-goal.md",
+        "20_scale-to-zero-completion-checklist.md",
+        "30_scale-to-zero-commit-plan.md",
+    ),
+}
 ALLOWED_DESTINATION_EXTRAS = {"LICENSE.md", "README.md"}
 SECRET_PATTERNS = {
     "AWS access key": re.compile(rb"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
@@ -89,17 +96,30 @@ def read_safe_file(path: Path) -> bytes:
 
 
 def source_documents(source: Path) -> dict[str, bytes]:
-    expected = set(EXPECTED_FILES)
+    expected = set(EXPECTED_FILES) | set(SOURCE_ONLY_DIRECTORIES)
     validate_directory(source, expected_names=expected)
+    for directory_name, expected_files in SOURCE_ONLY_DIRECTORIES.items():
+        source_only = source / directory_name
+        validate_directory(source_only, expected_names=set(expected_files))
+        for name in expected_files:
+            read_safe_file(source_only / name)
     return {name: read_safe_file(source / name) for name in EXPECTED_FILES}
+
+
+def validate_destination(destination: Path) -> None:
+    allowed = set(EXPECTED_FILES) | ALLOWED_DESTINATION_EXTRAS
+    validate_directory(destination, expected_names=allowed)
+    for name in ALLOWED_DESTINATION_EXTRAS:
+        extra = destination / name
+        if extra.exists() or extra.is_symlink():
+            read_safe_file(extra)
 
 
 def write_mirror(documents: dict[str, bytes], destination: Path) -> None:
     if destination.is_symlink():
         raise SyncError(f"symlink directory is not allowed: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
-    allowed = set(EXPECTED_FILES) | ALLOWED_DESTINATION_EXTRAS
-    validate_directory(destination, expected_names=allowed)
+    validate_destination(destination)
     for name, data in documents.items():
         target = destination / name
         if target.is_symlink():
@@ -110,8 +130,7 @@ def write_mirror(documents: dict[str, bytes], destination: Path) -> None:
 
 
 def check_mirror(documents: dict[str, bytes], destination: Path) -> None:
-    allowed = set(EXPECTED_FILES) | ALLOWED_DESTINATION_EXTRAS
-    validate_directory(destination, expected_names=allowed)
+    validate_destination(destination)
     mismatches: list[str] = []
     for name, source_data in documents.items():
         target = destination / name

@@ -2,9 +2,9 @@
 aliases:
   - The Shittim Chest GitHub Discord通知運用設計
 tags: [project, shittim-chest, github, discord, operations, notifications]
-status: implementing
+status: implemented
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-28
 ---
 
 # GitHub・Discord通知運用設計
@@ -51,8 +51,11 @@ Actions Secretは`DISCORD_WEBHOOK_URL`だけとする。Repository Variablesは�
 - `Discord Workflow Notifications`: repository管理の`CI`、`Dependency Graph`、`Release Tool Versions`完了を`workflow_run`で受ける。workflow nameとpathを組でallowlistし、GitHub管理の同名`Dependency Graph`を除外する。
 - `Discord Repository Events`: notification専用の限定`pull_request_target`と`main` pushを扱う。PR head、artifact、cache、PR由来scriptを取得・実行しない。
 - `Discord Security Digest`: 毎日09:37 JSTとmanual dispatchでDependabot Alerts、Code Scanning Alerts、Dependabot PR、monitor freshnessを集約する。
+- `Production Deploy Guard`: production control recordの読取り評価結果をmanual dispatchで報告する。通知基盤はworkflow nameと`.github/workflows/production-deploy-guard.yml`のpathが一致する完了eventだけをSecurity固定投稿へ送る。
 
 通知workflowは元CIと独立し、通知失敗で元CIのconclusionを変更しない。各workflowは`cancel-in-progress=false`、5分または10分のtimeout、必要最小限のread permissionを指定する。
+
+`Production Deploy Guard`は現在、DynamoDB snapshotを読んでadmission可否とcontent-free audit artifactを出す診断workflowである。ECSの更新、deployment lockの取得・解放、rollbackは行わない。将来のdeploy workflowは別実装でatomic acquireした同一fencing tokenをdeploy、smoke test、必要なrollbackまで保持し、非cancel型cleanupでexact releaseする。通知はその成否を表示するだけで、guardの安全境界を変更しない。
 
 ### 3.3 共通実装
 
@@ -84,6 +87,7 @@ GitHub公式の`vulnerability-alerts: read`をDependabot Alerts専用に使用�
 - GitHub API failure: 不完全な件数を正常Digestとして送らず、monitor failureとして扱う。
 - Webhook漏えい疑い: DiscordでWebhookを削除・再作成し、Actions Secretだけを更新する。値をIssue、PR、logへ貼らない。
 - 一時停止: `DISCORD_NOTIFICATIONS_ENABLED=false`とし、workflow fileやSecretを削除しない。
+- Deploy Guard診断失敗: Security投稿のGitHub run URLとaudit artifactの有無を確認する。expired lockは通知から解除せず、[[17_運用保守・監視・障害対応設計]]のexact owner/guard ID/fencing token手順へエスカレートする。
 
 ## 6. 公式資料
 

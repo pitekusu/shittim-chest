@@ -7,7 +7,6 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
-from typing import Protocol
 
 import discord
 from discord import app_commands
@@ -15,12 +14,11 @@ from discord import app_commands
 from shittim_chest.adapters.discord.errors import DiscordAdapterError
 from shittim_chest.adapters.discord.gateway import DiscordModeratorClient
 from shittim_chest.application import (
+    SHITTIM_COMMAND_NAME,
     AcceptDebateRequest,
     AcceptedDebate,
-    AcceptedRetry,
     BindDiscordContextCommand,
     CancelDebateCommand,
-    CancelledDebate,
     DebateSnapshot,
     DiscordBotSlot,
     DiscordRuntimeConfig,
@@ -31,35 +29,18 @@ from shittim_chest.application import (
 )
 from shittim_chest.application.errors import ApplicationError, RuntimeNotReady
 from shittim_chest.application.ports import (
+    DebateInteractionUseCases,
     RepositoryBusy,
     RepositoryConflict,
     RepositoryQuotaExceeded,
 )
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
-COMMAND_NAME = "shittim"
+COMMAND_NAME = SHITTIM_COMMAND_NAME
 COMMAND_DESCRIPTION = "3つの視点で質問を合議します"
 QUESTION_DESCRIPTION = "合議したい質問"
 HISTORY_LIMIT = 100
-
-
-class DebateInteractionUseCases(Protocol):
-    """Application operations consumed by the Discord interaction boundary."""
-
-    async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate: ...
-
-    async def bind_discord_context(
-        self,
-        command: BindDiscordContextCommand,
-    ) -> object: ...
-
-    async def get_debate(self, debate_id: DebateId) -> DebateSnapshot: ...
-
-    async def run_debate(self, debate_id: DebateId) -> None: ...
-
-    async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate: ...
-
-    async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry: ...
+HTTP_ONLY_GATEWAY_MESSAGE = "このコマンドはHTTP受付専用です。時間をおいて再度お試しください。"
 
 
 class DiscordInteractionController:
@@ -86,7 +67,6 @@ class DiscordInteractionController:
         self._tasks: dict[DebateId, asyncio.Task[None]] = {}
         self._shutting_down = False
         self._register_command()
-        self._register_component_listener()
 
     @property
     def command_tree(self) -> app_commands.CommandTree[discord.Client]:
@@ -142,9 +122,24 @@ class DiscordInteractionController:
         command: app_commands.Command[app_commands.Group, ..., None] = app_commands.Command(
             name=COMMAND_NAME,
             description=COMMAND_DESCRIPTION,
-            callback=self._command_callback,
+            callback=self._http_only_callback,
         )
         self._tree.add_command(command, guild=self._guild)
+
+    @app_commands.describe(question=QUESTION_DESCRIPTION)
+    async def _http_only_callback(
+        self,
+        interaction: discord.Interaction[discord.Client],
+        question: app_commands.Range[str, 1, 1000],
+    ) -> None:
+        """Fail closed if Discord unexpectedly delivers the HTTP command via Gateway."""
+
+        del question
+        await interaction.response.send_message(
+            HTTP_ONLY_GATEWAY_MESSAGE,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     def _register_component_listener(self) -> None:
         self._moderator.set_interaction_handler(self._on_interaction)
@@ -395,8 +390,8 @@ class DiscordInteractionController:
             )
         )
         await self._stop_debate(result.debate_id)
-        current = await self._application.get_debate(result.debate_id)
-        await _edit_panel(message, current)
+        self._ensure_running()
+        self._start_debate(result.debate_id)
         await self._edit_response(interaction, "討論を中止しました。")
 
     async def _handle_retry(

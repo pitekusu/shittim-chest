@@ -122,6 +122,25 @@ class BootstrapConfig:
         )
 
 
+def parse_discord_runtime_config(raw_json: str) -> tuple[DiscordRuntimeConfig, str]:
+    """Validate the token-free shared runtime parameter for ECS or Lambda."""
+
+    try:
+        payload = RuntimeConfigPayload.model_validate_json(raw_json)
+        runtime = DiscordRuntimeConfig(
+            guild_id=payload.guild_id,
+            allowed_channel_ids=frozenset(payload.allowed_channel_ids),
+            identities=tuple(
+                DiscordIdentityConfig(slot=item.slot, application_id=item.application_id)
+                for item in payload.identities
+            ),
+            schema_version=payload.schema_version,
+        )
+    except TypeError, ValueError, ValidationError:
+        raise StartupConfigurationError from None
+    return runtime, payload.config_version
+
+
 def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
     """Load only injected values; invalid or incomplete input fails without value echoing."""
 
@@ -139,17 +158,8 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("unsupported log level")
 
-        runtime_payload = RuntimeConfigPayload.model_validate_json(
+        runtime, runtime_version = parse_discord_runtime_config(
             _required(environ, _RUNTIME_CONFIG_ENV)
-        )
-        runtime = DiscordRuntimeConfig(
-            guild_id=runtime_payload.guild_id,
-            allowed_channel_ids=frozenset(runtime_payload.allowed_channel_ids),
-            identities=tuple(
-                DiscordIdentityConfig(slot=item.slot, application_id=item.application_id)
-                for item in runtime_payload.identities
-            ),
-            schema_version=runtime_payload.schema_version,
         )
         personas = {
             slot: _persona_from_json(_required(environ, env_name))
@@ -157,9 +167,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         }
         if any(persona.slot is not slot for slot, persona in personas.items()):
             raise ValueError("persona slot mismatch")
-        versions = {runtime_payload.config_version} | {
-            persona.config_version for persona in personas.values()
-        }
+        versions = {runtime_version} | {persona.config_version for persona in personas.values()}
         if len(versions) != 1:
             raise ValueError("configuration version mismatch")
 
@@ -181,7 +189,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             table_name=table_name,
             log_level=log_level,
             runtime=runtime,
-            config_version=runtime_payload.config_version,
+            config_version=runtime_version,
             personas=MappingProxyType(personas),
             discord_tokens=MappingProxyType(tokens),
             openai_api_key=_required(environ, "OPENAI_API_KEY"),

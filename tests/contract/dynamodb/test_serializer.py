@@ -24,7 +24,14 @@ from shittim_chest.adapters.dynamodb import (
     serialize_snapshot,
 )
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
-from shittim_chest.application import DebateSnapshot, DiscordBotSlot, LeaseGrant
+from shittim_chest.application import (
+    DebateSnapshot,
+    DiscordBotSlot,
+    LeaseGrant,
+    PanelRefreshState,
+    TerminalDeliveryPlan,
+    content_sha256,
+)
 from shittim_chest.domain import (
     PARTICIPANTS,
     AttemptId,
@@ -47,13 +54,10 @@ NOW = datetime(2026, 7, 17, 1, 2, 3, tzinfo=UTC)
 
 
 def _as_previous_schema(item: DynamoItem) -> DynamoItem:
-    """Build a v5 item from a current snapshot item for migration tests."""
+    """Build a v6 item from a current snapshot item for migration tests."""
 
     migrated: DynamoItem = {key: value for key, value in item.items()}
-    if migrated.get("record_type") == "debate_meta":
-        migrated.pop("requester_username", None)
-        migrated.pop("requester_display_name", None)
-    migrated["schema_version"] = 5
+    migrated["schema_version"] = 6
     return migrated
 
 
@@ -173,6 +177,122 @@ def test_terminal_snapshot_removes_recoverable_index() -> None:
     assert deserialize_snapshot(items).state.phase is DebatePhase.COMPLETED
 
 
+def test_terminal_delivery_round_trip_and_partial_fields_fail_closed() -> None:
+    source = snapshot()
+    staged_at = NOW + timedelta(seconds=7)
+    plan = TerminalDeliveryPlan(
+        target_phase=DebatePhase.COMPLETED,
+        operation_ids=("terminal-completed-0000",),
+        content_hashes=("a" * 64,),
+        staged_at=staged_at,
+    )
+    staged = replace(
+        source,
+        state=replace(source.state, updated_at=staged_at),
+        terminal_delivery=plan,
+    )
+    staged_items = serialize_snapshot(staged)
+
+    assert deserialize_snapshot(staged_items) == staged
+    terminal_fields = (
+        "terminal_delivery_target",
+        "terminal_delivery_operation_ids",
+        "terminal_delivery_content_hashes",
+        "terminal_delivery_staged_at",
+    )
+    for field in terminal_fields:
+        malformed = tuple(
+            {key: value for key, value in item.items() if key != field}
+            if item["record_type"] == "attempt_meta"
+            else item
+            for item in staged_items
+        )
+        with pytest.raises(PersistenceFormatError, match="terminal delivery"):
+            deserialize_snapshot(malformed)
+
+    without_plan = tuple(
+        {
+            key: value
+            for key, value in item.items()
+            if key not in {*terminal_fields, "terminal_delivery_completed_at"}
+        }
+        if item["record_type"] == "attempt_meta"
+        else item
+        for item in staged_items
+    )
+    completed_without_plan = tuple(
+        {
+            **item,
+            "terminal_delivery_completed_at": staged_at.isoformat(timespec="microseconds").replace(
+                "+00:00", "Z"
+            ),
+        }
+        if item["record_type"] == "attempt_meta"
+        else item
+        for item in without_plan
+    )
+    with pytest.raises(PersistenceFormatError, match="no staged plan"):
+        deserialize_snapshot(completed_without_plan)
+
+    completed_at = NOW + timedelta(seconds=8)
+    completed = replace(
+        staged,
+        state=staged.state.transition_to(DebatePhase.COMPLETED, at=completed_at),
+        lease=None,
+        terminal_delivery=plan.complete(at=completed_at),
+    )
+    restored = deserialize_snapshot(serialize_snapshot(completed))
+    assert restored == completed
+    assert restored.terminal_delivery_complete
+
+
+def test_pending_terminal_panel_refresh_uses_distinct_due_index_and_round_trips() -> None:
+    source = snapshot()
+    completed_at = NOW + timedelta(seconds=7)
+    pending = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.COMPLETED, at=completed_at),
+        lease=None,
+        panel_refresh_required_at=completed_at,
+        panel_refresh_claim_owner="panel-worker",
+        panel_refresh_claim_expires_at=completed_at + timedelta(seconds=60),
+        panel_refresh_delivery_attempt=1,
+    )
+
+    items = serialize_snapshot(pending)
+    attempt_meta = next(item for item in items if item["record_type"] == "attempt_meta")
+
+    assert attempt_meta["gsi2pk"] == "PANEL_REFRESH"
+    assert str(attempt_meta["gsi2sk"]).startswith("2026-07-17T01:03:10")
+    assert deserialize_snapshot(items) == pending
+
+
+def test_abandoned_panel_refresh_round_trips_without_a_due_index() -> None:
+    source = snapshot()
+    completed_at = NOW + timedelta(seconds=7)
+    failed_at = completed_at + timedelta(seconds=30)
+    abandoned = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.COMPLETED, at=completed_at),
+        lease=None,
+        panel_refresh_required_at=completed_at,
+        panel_refresh_delivery_attempt=3,
+        panel_refresh_failed_at=failed_at,
+        panel_refresh_error_code="discord_permission_denied",
+    )
+
+    items = serialize_snapshot(abandoned)
+    attempt_meta = next(item for item in items if item["record_type"] == "attempt_meta")
+    restored = deserialize_snapshot(items)
+
+    assert attempt_meta["panel_refresh_failed_at"] == failed_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    assert attempt_meta["panel_refresh_error_code"] == "discord_permission_denied"
+    assert "gsi2pk" not in attempt_meta
+    assert "gsi2sk" not in attempt_meta
+    assert restored == abandoned
+    assert restored.panel_refresh_state is PanelRefreshState.ABANDONED
+
+
 def test_empty_evidence_bundle_is_distinct_from_missing_evidence() -> None:
     unavailable = EvidenceBundle(
         required_search_satisfied=False,
@@ -192,23 +312,23 @@ def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> Non
     previous = tuple(_as_previous_schema(item) for item in current)
     restored = deserialize_snapshot(previous)
     assert restored.state.schema_version == CURRENT_SCHEMA_VERSION
-    assert restored.requester_username == restored.requester_id
-    assert restored.requester_display_name == restored.requester_id
+    assert restored.requester_username == "pitekusu"
+    assert restored.requester_display_name == "ぬし"
     assert all(migrate_item(item)["schema_version"] == CURRENT_SCHEMA_VERSION for item in previous)
 
     re_serialized = serialize_snapshot(restored)
     assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in re_serialized)
     debate_meta = next(item for item in re_serialized if item["record_type"] == "debate_meta")
-    assert debate_meta["requester_username"] == restored.requester_id
-    assert debate_meta["requester_display_name"] == restored.requester_id
+    assert debate_meta["requester_username"] == restored.requester_username
+    assert debate_meta["requester_display_name"] == restored.requester_display_name
 
     with pytest.raises(PersistenceFormatError, match="unsupported schema"):
-        migrate_item({**current[0], "schema_version": 4})
+        migrate_item({**current[0], "schema_version": 5})
     with pytest.raises(PersistenceFormatError, match="unsupported schema"):
         migrate_item({**current[0], "schema_version": 99})
 
 
-def test_v6_debate_meta_requires_requester_name_snapshots() -> None:
+def test_current_debate_meta_requires_requester_name_snapshots() -> None:
     items = list(serialize_snapshot(snapshot()))
     debate_meta = next(item for item in items if item["record_type"] == "debate_meta")
     for field in ("requester_username", "requester_display_name"):
@@ -273,7 +393,7 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
         bot_slot=DiscordBotSlot.MODERATOR,
         thread_id="102",
         content="message",
-        content_hash="b" * 64,
+        content_hash=content_sha256("message"),
         nonce="A" * 22,
         chunk_sequence=0,
         status=OutboxStatus.PREPARED,
@@ -307,7 +427,7 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
     with pytest.raises(PersistenceFormatError, match="not a panel"):
         deserialize_panel_operation(outbox_item)
 
-    previous_outbox = {**outbox_item, "schema_version": 5}
+    previous_outbox = {**outbox_item, "schema_version": 6}
     assert previous_outbox["bot_slot"] == DiscordBotSlot.MODERATOR.value
     assert deserialize_outbox(previous_outbox) == outbox
     with pytest.raises(PersistenceFormatError, match="unsupported schema"):
@@ -315,7 +435,7 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
             {
                 **{key: value for key, value in outbox_item.items() if key != "bot_slot"},
                 "bot_id": "moderator",
-                "schema_version": 4,
+                "schema_version": 5,
             }
         )
 
@@ -355,7 +475,7 @@ def test_outbox_validation_rejects_inconsistent_records() -> None:
         bot_slot=DiscordBotSlot.MODERATOR,
         thread_id="102",
         content="message",
-        content_hash="d" * 64,
+        content_hash=content_sha256("message"),
         nonce="A" * 22,
         chunk_sequence=0,
         status=OutboxStatus.PREPARED,
@@ -365,6 +485,8 @@ def test_outbox_validation_rejects_inconsistent_records() -> None:
         replace(valid, nonce="short")
     with pytest.raises(ValueError, match="content hash"):
         replace(valid, content_hash="BAD")
+    with pytest.raises(ValueError, match="must match"):
+        replace(valid, content_hash="d" * 64)
     with pytest.raises(ValueError, match="chunk sequence"):
         replace(valid, chunk_sequence=-1)
     with pytest.raises(ValueError, match="delivery attempt"):
@@ -386,11 +508,12 @@ def test_sent_outbox_requires_complete_delivery_result() -> None:
         bot_slot=DiscordBotSlot.MODERATOR,
         thread_id="102",
         content="message",
-        content_hash="e" * 64,
+        content_hash=content_sha256("message"),
         nonce="A" * 22,
         chunk_sequence=0,
         status=OutboxStatus.SENT,
         created_at=NOW,
+        delivery_attempt=1,
         message_id="104",
         sent_at=NOW + timedelta(seconds=1),
     )

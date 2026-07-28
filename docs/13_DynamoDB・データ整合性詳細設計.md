@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-26
+updated: 2026-07-28
 ---
 
 # DynamoDB・データ整合性詳細設計
@@ -12,7 +12,7 @@ updated: 2026-07-26
 ## 1. Table設定
 
 - 単一table、on-demand、PK/SKはstring、PITR 35日、deletion protection有効、`RETAIN`とする。
-- 全itemに`schema_version`、`created_at`、`updated_at`をUTCで保存する。STEP-06Dのcurrent record schemaは`6`とし、readerは直前schema `5`を構造検証後に`6`へup-convertする。未知versionはfail closedとする。
+- 全共有recordに`schema_version`を保存し、record種別に必要な`created_at`、`updated_at`はUTCとする。Scale-to-Zero実装後のcurrent shared schemaは`7`、直前versionは`6`とし、readerは構造検証後の`6 -> 7`だけをup-convertする。未知versionはfail closedとする。
 - debate本文とDiscord threadは自動期限なしで保存し、TTLを設定しない。「永久保存」は自動削除しない意味であり、過去状態への復旧保証はPITRの35日までとする。AWS Backupは採用しない。
 - TTLは期限切れ補助recordだけに使用し、lease解放やsecurity処理へ依存しない。
 
@@ -31,6 +31,17 @@ updated: 2026-07-26
 | operation result | `OPERATION#<operation-id>` | `RESULT` |
 | global slot | `CONTROL#GLOBAL` | `SLOT#0..2` |
 | Guild quota | `QUOTA#GUILD#<guild-id>` | `DAY#<JST-YYYY-MM-DD>` |
+| Ingress FIFO request | `CONTROL#INGRESS` | `REQUEST#<UTC-microseconds>#<interaction-id>` |
+| Ingress active pointer | `CONTROL#INGRESS#ACTIVE` | requestと同じsort key |
+| Interaction result | `INGRESS_OPERATION#<interaction-id>` | `RESULT` |
+| component semantic binding | `INGRESS_SEMANTIC_OPERATION#<operation-id>` | `BINDING` |
+| 公開Status publication | `INGRESS_OPERATION#<interaction-id>` | `STATUS_PUBLICATION` |
+| Runtime wake result | `INGRESS_OPERATION#<interaction-id>` | `RUNTIME_WAKE` |
+| Runtime state | `CONTROL#RUNTIME` | `STATE` |
+| activity manifest marker | `CONTROL#RUNTIME` | `ACTIVITY_SCHEMA` |
+| Ingress/status/panel/outbox/debate counter | 各`CONTROL#...` | 固定sort key |
+| deployment lock | `CONTROL#DEPLOYMENT` | `LOCK` |
+| deployment audit | `CONTROL#DEPLOYMENT#AUDIT#<guard-id>` | `ACQUIRE` / `RELEASE` |
 
 ## 3. GSI
 
@@ -46,7 +57,40 @@ Debate META itemへ`gsi1pk=THREAD#<thread-id>`、`gsi1sk=DEBATE#<uuid7>`を設�
 
 Debate METAは`debate_id`、Guild/channel、starter message ID、thread ID、control panel message ID、`requester_id`（Discord user ID）、受付時点の`requester_username`と`requester_display_name`、question、`current_attempt_id`、schema versionを保存する。username/display nameは将来の認証済みWebアーカイブ表示・検索用の不変snapshotであり、認可・PK/SK/GSI/lease/fencingには使わない。Attempt METAやartifactへは重複保存しない。Attempt METAは`attempt_id`、`retry_of`、phase、`failed_from_phase`、recovery state、winner、model/prompt/schema version、active elapsed、lease owner、lease expiry、fencing token、error codeを保存する。400KB制限へ近づけないようartifactを別itemへ分離する。
 
-## 5. 受付transaction
+### 4.1 Scale-to-Zero補助record
+
+- Ingress Requestはquestion、requester snapshot、Guild/channel、command/component context、`PENDING/CLAIMED/RETRYING/ACCEPTED/COMPLETED/REJECTED/FAILED`、受付から3分/15分のdeadline、claim owner/expiry/delivery attempt、accepted debate/attempt IDを持つ。Interaction tokenは属性に含めない。
+- active pointerはPIIを持たず、最大20件の非terminal requestをstrongly consistentなFIFO Queryで列挙する。terminal遷移と同じtransactionでpointer削除とcounter減算を行う。
+- operation resultはInteraction IDごとの冪等結果、semantic bindingはRetry/Cancelの決定的operation IDを最初のcanonical Interaction IDへ結び付ける。どちらもstrongly consistent readを正本とする。
+- Status publicationはdesired/delivered state、moderator nonce、content hash、message ID、claim/retry、履歴照合checkpointを持ち、Lambdaから冪等に公開messageを作成/更新する。Interaction tokenは使用しない。
+- Runtime Stateは`STOPPED/STARTING/READY/BUSY/IDLE/STOPPING/DEGRADED`、generation、desired count、runtime instance ID、固定した`idle_since`/`stop_eligible_at`を持つ。Debate/lease/Outboxの代替正本にはしない。
+- deployment lockはowner、UUIDv7 guard ID、fencing token、version、expiry、normal/break-glass modeを持つ。ACQUIRE/RELEASE auditはcommit SHA、actor、run ID、安定codeなどのcontent-free属性だけをimmutableに保存する。
+
+### 4.2 固定control-record manifest v2
+
+deployment toolingは次の11 recordをSHA-256で固定したmanifest v2として一度の`TransactWriteItems`でinstallする。
+
+1. `CONTROL#RUNTIME / ACTIVITY_SCHEMA` manifest marker
+2. Ingress queue counter
+3. Status pending counter
+4. Panel refresh pending counter
+5. Outbox pending/claimed counter
+6. Active attempt counter
+7. global lease `SLOT#0`
+8. global lease `SLOT#1`
+9. global lease `SLOT#2`
+10. Runtime State
+11. deployment lock
+
+markerがある場合は11 recordの完全性、current schema、未知属性、manifest hashを全件検証し、欠落・破損・旧schemaを自動repairしない。manifest v1は実AWSへdeployされていないが、v1 markerが存在する状態はv2へsilent migrationせずfail closedとする。markerのない旧tableはstrong readと最大4 page/400 itemの制限付きScanでactive workがないことを確認し、不活性で構造的に正しいv6固定recordだけをv7へ条件付き置換する。範囲超過、active work、未知形式はwriteせず、停止・バックアップ・dry-run付きのoffline migrationを必須とする。
+
+## 5. HTTP IngressとDebate受付transaction
+
+DiscordIngress Lambdaの受付は、deployment lockが`OPEN`であることを同じtransactionで検証し、Ingress queue counterが20未満の場合だけcounterとStatus pending counterをincrementし、Ingress Request、active pointer、Interaction operation result、Status publicationを条件付きPutする。Retry/Cancelはさらにsemantic operation bindingを同じtransactionでPutする。duplicateは新規item/counterを増やず、operation resultとrequest/status bundleの完全一致をstrongly consistent readで確認して再生する。
+
+Request永続化後のRuntime wakeは別transactionとし、Runtime Stateのgeneration/desired count更新と`RUNTIME_WAKE`結果を条件付きで結び付ける。ECS/Lambda API呼出しはDynamoDB transactionの外でbest-effortに行い、失敗してもReconcilerが永続Requestから回復する。
+
+ECS RuntimeのIngress Drainerは、正当なIngress claim owner・claim expiry・delivery attemptを`IngressClaimFence`として以下の既存Debate受付transactionへ渡す。HTTP受付とDebate/global slot受付は別段階であり、global slot不足はIngressをterminal化せず`RETRYING`へ戻す。
 
 `TransactWriteItems`で次を原子的に実行する。
 
@@ -54,7 +98,7 @@ Debate METAは`debate_id`、Guild/channel、starter message ID、thread ID、con
 2. 期限切れまたは空いている3 slotの1つへowner、expiry、fencing tokenを設定。
 3. Debate METAをcurrent attempt付きで作成し、既存PKを拒否。
 4. 初回Attempt METAを`ACCEPTED`、`retry_of=null`で作成する。
-5. operation resultを専用itemへ条件付き作成し、debate/attempt/request bindingを保存する。
+5. operation resultを専用itemへ条件付き作成し、debate/attempt/request bindingを保存する。HTTP由来の操作では同じtransactionに正確なlive `IngressClaimFence`のConditionCheckを含める。
 
 transaction cancel理由は`QUOTA_EXCEEDED`、`NO_SLOT_AVAILABLE`、`DUPLICATE_DEBATE`へ変換する。
 operation resultはoperation IDからstrongly consistent `GetItem`できる専用keyとし、eventually consistent GSIや`ClientRequestToken`の10分だけへ冪等性を依存しない。SDK tokenにはtable、operation、aggregate、slot/fencingを含む入力のhashを使い、同一AWS account内の別tableや別transactionとの衝突を防ぐ。
@@ -79,6 +123,10 @@ Guild日次quota itemは読み書きしない。空きslotがなければbusy re
 - acquireごとにfencing tokenを単調incrementする。
 - Attempt META自身のphase更新はownerとfencing tokenを`Update`のconditionにする。別itemのartifact保存、outbox作成・完了はDebate METAのcurrent attemptとAttempt METAのowner/fencingを確認する`ConditionCheck`を同じ`TransactWriteItems`へ含め、旧workerのcross-item writeを拒否する。
 - `COMPLETED`、`FAILED`、`CANCELLED`へのterminal遷移とslot解放は同一transactionで行う。graceful process終了時に進行中slotを無条件解放せず、強制終了時はexpiry後に後続taskが取得する。
+
+deployment lockはDebate leaseと別のproduction deploy fenceである。guardは11固定recordを1回の`TransactGetItems`で読み、通常deployはRuntime `STOPPED`/`IDLE`かつ全activity counter 0、break-glassは明示mode/reasonがある場合だけ許可する。どちらも既存lockを上書きできない。acquireは読み取ったRuntime、counter、slot、lockを同じtransactionで条件照合し、owner・UUIDv7 guard ID・新fencing token付きlockとimmutable ACQUIRE auditを同時に作る。Ingress enqueue、Runtime wake、IDLE stopを含むactivity変更は同一transactionでlock `OPEN`をConditionCheckし、acquire/write raceは一方だけ成立させる。
+
+`lock_expires_at`は監視・人手復旧判定用であり、期限到達でlockを自動開放・reclaimしない。releaseは取得時と完全一致するowner、guard ID、fencing tokenを指定し、lockを`OPEN`にするwriteとimmutable RELEASE auditを同じtransactionで行う。同じreleaseの再送は監査recordで冪等に返し、stale owner/guard/fenceは後続lockを開けない。汎用force-unlock API、期限切れlockの自動回収、別ownerによる強制解除は実装しない。回復不能な場合はproductionをfail closedのままとし、監査付きoffline recoveryを別Runbookで扱う。
 
 ## 8. Outbox algorithm
 

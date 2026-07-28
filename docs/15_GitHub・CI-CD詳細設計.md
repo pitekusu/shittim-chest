@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-23
+updated: 2026-07-28
 ---
 
 # GitHub・CI-CD詳細設計
@@ -68,6 +68,16 @@ Security Digestの`GITHUB_TOKEN` は`vulnerability-alerts: read`をDependabot Al
 
 Private Free向けの二つのrelease workflowは使用せず、`release.yml`へ統合する。
 
+### Deployment guard・lock lifecycle
+
+現在の`.github/workflows/production-deploy-guard.yml`は手動診断専用である。read-onlyのguard roleで9個のruntime activity record、1個のruntime state、1個のdeployment lockからなる固定11 record snapshotを取得し、STOPPED/IDLEであるか、lockがopenであるか、malformed/missing recordがないかをfail closedで報告する。このworkflowはlock取得、change set実行、deploy、rollback、lock解放を行わない。診断成功はdeploy許可やTOCTOU対策を意味しない。
+
+将来の実production releaseはEnvironment承認後、最初のlive mutation前にDynamoDB transactionでdeployment lockを`guard_id`、owner/actor、run ID、commit SHA、fencing tokenとともに原子的にacquireする。lockはchange set検証・実行、ECS deploy、smoke test、必要なrollbackの全間保持し、workflowの`finally`相当で取得時と完全一致する`guard_id`、owner/actor、fencing tokenだけを条件付きでreleaseする。並行run、stale owner、別fencing tokenによるreleaseは拒否する。
+
+lockはexpiry時刻を超えても自動reclaim・自動unlockせず`LOCKED`のままfail closedとする。workflow中断時は運用runbookでGitHub runとCloudFormation/ECSの完了を確認し、取得時の正確なmetadataを使ってidempotent releaseし、immutable release auditを残す。force unlockは設けない。metadataを復元できない場合は変更を禁止しincident扱いとする。
+
+deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別機能である。`incident-response`、`security-investigation`、`service-recovery`の理由enum、actor、run、commit、事前runtime stateを必須とし、STOPPED/IDLE以外のruntime条件だけを監査付きでoverrideできる。既存deployment lock、malformed/missing control record、不正identityはoverrideできない。
+
 ### Plan job
 
 - `workflow_dispatch`かつmain上のcommit SHAだけを受け付ける。ref、immutable repository ID、対象commitのCI成功をfail closedで検証する。
@@ -88,7 +98,8 @@ Private Free向けの二つのrelease workflowは使用せず、`release.yml`へ
 - plan jobと同一runのmanifestを取得し、GitHub artifact attestationのsubject digest、repository identity、workflow、commit、image digest、SBOM hash、scan result、Signer profile、OCI referrer artifact digest、change set ARNを再検証する。
 - `notation verify`、GitHub attestation verify、ECR signing status、`list-image-referrers`をEnvironment承認後にも再実行する。4種のreferrer不足、revoked/invalid signature、subject違い、artifact digest違いはfail closedとする。
 - task definition template内の全application image URIが`repository@sha256:<digest>`でmanifestと一致し、tag形式が0件であることを確認する。
-- change setを再生成せず実行し、READY/Discord/OpenAI/AWS connectivity smoke test後にresultとdigestをdeployment summaryへ記録する。
+- live mutation前にdeployment lockをacquireし、change setを再生成せず実行する。READY/Discord/OpenAI/AWS connectivity smoke testと、失敗時のrollbackを含む全間でlockをholdし、完了成否にかかわらず正確なmetadataでreleaseを試みる。release失敗は成功扱いにしない。
+- result、digest、guard metadata、acquire/release audit IDを本文なしでdeployment summaryへ記録する。
 - production専用`concurrency`は`cancel-in-progress=false`、job timeoutを設定する。
 
 ### Drift job
@@ -128,18 +139,20 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 - coverage/test resultは30日、production release manifest、SBOM、attestation、image digest、template/change set summaryは90日保存する。
 - secret、OpenAI output、Discord message本文、private runtime configurationをartifactへ含めない。
 - rollbackは直前の正常image digestとtask definition revisionを指定し、DynamoDB schema compatibilityを確認してから行う。
+- rollback中もdeployment lockを保持し、smoke testまで完了した後にのみ正確なmetadataでreleaseする。
 
 ## 8. Deployment failure
 
 - build/scan/synth/diff/attestation検証失敗: deployしない。
 - Managed Signing失敗・timeout、Notation検証失敗、署名revocation、OCI referrer不足・不一致: deployしない。task起動前hookで検出した場合はservice deploymentをrollbackする。
-- Runtime taskがREADYにならない: circuit breaker rollback後、直前digestへ戻す。
+- Runtime taskがREADYにならない: deployment lockをholdしたまcircuit breaker rollback後、直前digestへ戻し、rollback smoke後にexact releaseする。
+- Deployment lockがexpiredまたはrelease失敗: 自動reclaimせず新規deployを停止し、[[17_運用保守・監視・障害対応設計]]の復旧手順を実施する。
 - Stateful replacementが表示: deployを停止し、ADR、PITR、backup境界を確認する。
 - Environment、ruleset、Secret scanningを設定できない: Actionsを無効化し、解消までimplementation/deployを開始しない。
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabotのuv/GitHub Actions更新、read-only CI、managed SBOM照合、5 strict check、CodeQL ruleは運用済みである。STEP-02BでBetterleaksの段階移行gateとrelease-tool version監視を追加し、STEP-02CでGitleaksを撤去して単独運用へ移行済みである。既存`security` required check名は変更していない。application workflow、AWS OIDC role、AWS resourceは未実装である。
+Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabot、read-only CI、managed SBOM照合、CodeQL、Betterleaksは運用済みである。Scale-to-Zeroのapplication/CDKと`Production Deploy Guard`はbranch上で実装され、local testとcredentialなしのsynthの対象である。ただしguard workflowは上記のdiagnostic-onlyであり、実release workflowのacquire/hold/release、AWS OIDC role、AWS bootstrap/deploy/resource更新、Discord Application/Interactions Endpoint更新は未実施である。
 
 ## 10. 公式資料確認記録
 

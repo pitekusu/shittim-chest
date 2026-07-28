@@ -23,12 +23,15 @@ from shittim_chest.application import (
     AcceptedDebate,
     AcceptedRetry,
     BindDiscordContextCommand,
+    BoundDiscordContext,
     CancelDebateCommand,
     CancelledDebate,
     DebateSnapshot,
     DiscordBotSlot,
     DiscordIdentityConfig,
     DiscordRuntimeConfig,
+    IngressClaimFence,
+    IngressKind,
     PanelAction,
     PanelCustomId,
     RetryDebateCommand,
@@ -89,12 +92,21 @@ class FakeApplication:
     retry_commands: list[RetryDebateCommand] = field(default_factory=list)
     run_started: asyncio.Event = field(default_factory=asyncio.Event)
 
-    async def accept_debate(self, request: AcceptDebateRequest) -> AcceptedDebate:
+    async def accept_debate(
+        self,
+        request: AcceptDebateRequest,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedDebate:
+        assert ingress_claim is None
         self.events.append("accept")
         self.accept_requests.append(request)
         return AcceptedDebate(self.current.state.debate_id, self.current.state.attempt_id)
 
-    async def bind_discord_context(self, command: BindDiscordContextCommand) -> object:
+    async def bind_discord_context(
+        self,
+        command: BindDiscordContextCommand,
+    ) -> BoundDiscordContext:
         self.events.append("bind")
         self.current = replace(
             self.current,
@@ -102,7 +114,12 @@ class FakeApplication:
             thread_id=command.thread_id,
             control_panel_message_id=command.control_panel_message_id,
         )
-        return object()
+        return BoundDiscordContext(
+            command.debate_id,
+            command.starter_message_id,
+            command.thread_id,
+            command.control_panel_message_id,
+        )
 
     async def get_debate(self, debate_id: DebateId) -> DebateSnapshot:
         if debate_id != self.current.state.debate_id:
@@ -115,7 +132,13 @@ class FakeApplication:
         self.run_started.set()
         await asyncio.Event().wait()
 
-    async def cancel_debate(self, command: CancelDebateCommand) -> CancelledDebate:
+    async def cancel_debate(
+        self,
+        command: CancelDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> CancelledDebate:
+        assert ingress_claim is None
         self.cancel_commands.append(command)
         if command.expected_attempt_id != self.current.state.attempt_id:
             raise InvalidApplicationOperation("panel operation is bound to another attempt")
@@ -129,7 +152,13 @@ class FakeApplication:
             )
         return CancelledDebate(command.debate_id, self.current.state.attempt_id)
 
-    async def retry_debate(self, command: RetryDebateCommand) -> AcceptedRetry:
+    async def retry_debate(
+        self,
+        command: RetryDebateCommand,
+        *,
+        ingress_claim: IngressClaimFence | None = None,
+    ) -> AcceptedRetry:
+        assert ingress_claim is None
         self.retry_commands.append(command)
         if command.expected_attempt_id != self.current.state.attempt_id:
             raise InvalidApplicationOperation("panel operation is bound to another attempt")
@@ -148,6 +177,18 @@ class FakeApplication:
             error_code=None,
         )
         return AcceptedRetry(command.debate_id, new_attempt, source)
+
+    async def fail_pre_activation(
+        self,
+        *,
+        debate_id: DebateId,
+        attempt_id: AttemptId,
+        kind: IngressKind,
+        ingress_claim: IngressClaimFence,
+        error_code: str,
+    ) -> str:
+        del debate_id, attempt_id, kind, ingress_claim, error_code
+        raise AssertionError("legacy Gateway handling must not compensate HTTP ingress")
 
 
 def clients() -> dict[DiscordBotSlot, discord.Client]:
@@ -229,7 +270,10 @@ def interaction(
     interaction_mock.created_at = NOW
     interaction_mock.message = message
     interaction_mock.data = {"custom_id": custom_id} if custom_id is not None else {}
-    interaction_mock.response = SimpleNamespace(defer=AsyncMock())
+    interaction_mock.response = SimpleNamespace(
+        defer=AsyncMock(),
+        send_message=AsyncMock(),
+    )
     interaction_mock.edit_original_response = AsyncMock()
     return cast(discord.Interaction[discord.Client], interaction_mock)
 
@@ -262,11 +306,44 @@ async def test_command_schema_is_guild_scoped_bounded_and_synced_only_when_chang
     assert payload["name"] == "shittim"
     assert payload["options"][0]["min_length"] == 1
     assert payload["options"][0]["max_length"] == 1000
+    assert cast(Any, command).callback.__name__ == "_http_only_callback"
     assert not await controller.sync_command_if_changed(
         previous_schema_hash=controller.command_schema_hash
     )
     assert await controller.sync_command_if_changed(previous_schema_hash=None)
     sync.assert_awaited_once_with(guild=guild)
+    await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_registered_gateway_command_fails_closed_without_business_acceptance() -> None:
+    current = snapshot()
+    application = FakeApplication(current)
+    channel, _, _, _ = text_channel(events=application.events)
+    current_interaction = interaction(channel=channel)
+    controller = DiscordInteractionController(
+        clients=clients(),
+        config=config(),
+        application=application,
+    )
+    command = controller.command_tree.get_command(
+        "shittim",
+        guild=discord.Object(id=int(GUILD_ID)),
+    )
+
+    assert command is not None
+    registered = cast(Any, command)
+    await registered.callback(registered.binding, current_interaction, current.question)
+
+    assert application.accept_requests == []
+    response = cast(Any, current_interaction.response)
+    response.defer.assert_not_awaited()
+    response.send_message.assert_awaited_once()
+    assert response.send_message.await_args.args == (
+        "このコマンドはHTTP受付専用です。時間をおいて再度お試しください。",
+    )
+    assert response.send_message.await_args.kwargs["ephemeral"] is True
+    assert response.send_message.await_args.kwargs["allowed_mentions"].to_dict() == {"parse": []}
     await controller.close()
 
 
@@ -504,7 +581,7 @@ async def test_command_rejects_a_thread_invocation_after_ephemeral_defer() -> No
 
 
 @pytest.mark.asyncio
-async def test_cancel_panel_checks_context_attempt_and_actor_then_disables_panel() -> None:
+async def test_gateway_component_dispatch_is_not_registered_for_business_operations() -> None:
     current = bind_context(snapshot())
     application = FakeApplication(current)
     panel_id = PanelCustomId.for_attempt(
@@ -532,13 +609,9 @@ async def test_cancel_panel_checks_context_attempt_and_actor_then_disables_panel
     moderator = client_set[DiscordBotSlot.MODERATOR]
     await cast(Any, moderator).on_interaction(current_interaction)
 
-    command = application.cancel_commands[0]
-    assert command.expected_attempt_id == current.state.attempt_id
-    assert command.actor_id == str(REQUESTER_ID)
-    assert application.current.state.phase is DebatePhase.CANCELLED
-    cast(Any, message_mock).edit.assert_awaited_once()
-    edited_view = cast(discord.ui.View, cast(Any, message_mock).edit.await_args.kwargs["view"])
-    assert all(cast(discord.ui.Button[Any], child).disabled for child in edited_view.children)
+    assert application.cancel_commands == []
+    cast(Any, current_interaction.response).defer.assert_not_awaited()
+    cast(Any, message_mock).edit.assert_not_awaited()
     await controller.close()
 
 

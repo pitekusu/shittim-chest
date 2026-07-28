@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
+from shittim_chest.application.deployment_guard import (
+    DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION,
+    BreakGlassReason,
+    DeploymentLock,
+    DeploymentLockState,
+    DeploymentMode,
+)
 from shittim_chest.application.discord import (
     DiscordBotSlot,
     OutboxOperation,
@@ -13,7 +21,21 @@ from shittim_chest.application.discord import (
     PanelOperation,
     PanelOperationKind,
 )
-from shittim_chest.application.models import DebateSnapshot, LeaseGrant
+from shittim_chest.application.models import DebateSnapshot, LeaseGrant, TerminalDeliveryPlan
+from shittim_chest.application.scale_to_zero import (
+    IngressKind,
+    IngressOperationResult,
+    IngressRequest,
+    IngressSemanticOperationBinding,
+    IngressStatus,
+    IngressStatusPublication,
+    RuntimeState,
+    RuntimeStatus,
+    RuntimeWakeResult,
+    StatusHistoryCheckpoint,
+    StatusMessageState,
+    StatusPublicationState,
+)
 from shittim_chest.domain import (
     PARTICIPANTS,
     AttemptId,
@@ -37,9 +59,10 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 6
-PREVIOUS_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 7
+PREVIOUS_SCHEMA_VERSION = 6
 MAX_ITEM_BYTES = 400 * 1024
+INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
 
 class PersistenceFormatError(ValueError):
@@ -50,19 +73,25 @@ class ItemTooLarge(PersistenceFormatError):
     """Raised before an item can cross DynamoDB's 400 KB limit."""
 
 
+@dataclass(frozen=True, slots=True)
+class IngressActivePointer:
+    """PII-free immutable pointer to one request that still occupies the FIFO."""
+
+    interaction_id: str
+    request_sort_key: str
+    created_at: datetime
+    schema_version: int = INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION
+
+
 def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     """Up-convert the previous record schema or validate the current one."""
 
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
-        # v5 debate_meta has no Discord name snapshots. Use the immutable
-        # requester_id as a deterministic non-empty legacy fallback — not a
-        # recovered Discord username or Guild display name.
-        if migrated.get("record_type") == "debate_meta":
-            requester_id = _text(migrated, "requester_id")
-            migrated.setdefault("requester_username", requester_id)
-            migrated.setdefault("requester_display_name", requester_id)
+        # v6 predates staged terminal delivery. Missing optional delivery
+        # fields remain absent; deployment validation rejects unsafe legacy
+        # activity before the scale-to-zero control records are initialized.
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -97,6 +126,7 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         "guild_id": snapshot.guild_id,
         "channel_id": snapshot.channel_id,
         "current_attempt_id": attempt_id,
+        "current_phase": snapshot.state.phase.value,
     }
     _put_optional(debate_meta, "starter_message_id", snapshot.starter_message_id)
     _put_optional(debate_meta, "thread_id", snapshot.thread_id)
@@ -121,10 +151,67 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
     _put_optional(attempt_meta, "retry_of", _identifier(snapshot.state.retry_of))
     _put_optional(
         attempt_meta,
+        "origin_ingress_interaction_id",
+        snapshot.origin_ingress_interaction_id,
+    )
+    _put_optional(
+        attempt_meta,
         "failed_from_phase",
         snapshot.state.failed_from_phase.value if snapshot.state.failed_from_phase else None,
     )
     _put_optional(attempt_meta, "error_code", snapshot.error_code)
+    terminal_delivery = snapshot.terminal_delivery
+    if terminal_delivery is not None:
+        attempt_meta.update(
+            {
+                "terminal_delivery_target": terminal_delivery.target_phase.value,
+                "terminal_delivery_operation_ids": list(terminal_delivery.operation_ids),
+                "terminal_delivery_content_hashes": list(terminal_delivery.content_hashes),
+                "terminal_delivery_staged_at": _timestamp(terminal_delivery.staged_at),
+            }
+        )
+        _put_optional(
+            attempt_meta,
+            "terminal_delivery_completed_at",
+            _optional_timestamp(terminal_delivery.completed_at),
+        )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_required_at",
+        _optional_timestamp(snapshot.panel_refresh_required_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refreshed_at",
+        _optional_timestamp(snapshot.panel_refreshed_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_claim_owner",
+        snapshot.panel_refresh_claim_owner,
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_claim_expiry",
+        _optional_timestamp(snapshot.panel_refresh_claim_expires_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_next_attempt_at",
+        _optional_timestamp(snapshot.panel_refresh_next_attempt_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_failed_at",
+        _optional_timestamp(snapshot.panel_refresh_failed_at),
+    )
+    _put_optional(
+        attempt_meta,
+        "panel_refresh_error_code",
+        snapshot.panel_refresh_error_code,
+    )
+    if snapshot.panel_refresh_delivery_attempt:
+        attempt_meta["panel_refresh_delivery_attempt"] = snapshot.panel_refresh_delivery_attempt
     if snapshot.lease is not None:
         attempt_meta.update(
             {
@@ -134,7 +221,24 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
                 "fencing_token": snapshot.lease.fencing_token,
             }
         )
-    if not snapshot.state.phase.is_terminal:
+    if snapshot.panel_refresh_pending:
+        due_at = (
+            snapshot.panel_refresh_claim_expires_at
+            or snapshot.panel_refresh_next_attempt_at
+            or snapshot.panel_refresh_required_at
+        )
+        if due_at is None:  # pragma: no cover - model invariant narrows this
+            raise AssertionError("pending panel refresh has no due timestamp")
+        attempt_meta["gsi2pk"] = "PANEL_REFRESH"
+        attempt_meta["gsi2sk"] = f"{_timestamp(due_at)}#{debate_id}#{attempt_id}"
+    elif not snapshot.state.phase.is_terminal and all(
+        value is not None
+        for value in (
+            snapshot.starter_message_id,
+            snapshot.thread_id,
+            snapshot.control_panel_message_id,
+        )
+    ):
         attempt_meta["gsi2pk"] = "RECOVERABLE"
         attempt_meta["gsi2sk"] = f"{_timestamp(snapshot.state.updated_at)}#{debate_id}#{attempt_id}"
 
@@ -295,6 +399,33 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             executed_policy_id=_optional_text(escalation_item, "executed_policy_id"),
             execution_count=_integer(escalation_item, "execution_count"),
         )
+    terminal_fields = frozenset(
+        {
+            "terminal_delivery_target",
+            "terminal_delivery_operation_ids",
+            "terminal_delivery_content_hashes",
+            "terminal_delivery_staged_at",
+        }
+    )
+    present_terminal_fields = terminal_fields.intersection(attempt_meta)
+    completed_field_present = "terminal_delivery_completed_at" in attempt_meta
+    if present_terminal_fields and present_terminal_fields != terminal_fields:
+        raise PersistenceFormatError("terminal delivery fields are incomplete")
+    if completed_field_present and present_terminal_fields != terminal_fields:
+        raise PersistenceFormatError("terminal delivery completion has no staged plan")
+
+    terminal_delivery = None
+    if present_terminal_fields:
+        terminal_delivery = TerminalDeliveryPlan(
+            target_phase=DebatePhase(_text(attempt_meta, "terminal_delivery_target")),
+            operation_ids=_string_tuple(attempt_meta, "terminal_delivery_operation_ids"),
+            content_hashes=_string_tuple(attempt_meta, "terminal_delivery_content_hashes"),
+            staged_at=_datetime(attempt_meta, "terminal_delivery_staged_at"),
+            completed_at=_optional_datetime(
+                attempt_meta,
+                "terminal_delivery_completed_at",
+            ),
+        )
     return DebateSnapshot(
         state=state,
         question=_text(debate_meta, "question"),
@@ -305,10 +436,44 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         channel_id=_text(debate_meta, "channel_id"),
         created_at=_datetime(debate_meta, "created_at"),
         attempt_created_at=_datetime(attempt_meta, "attempt_created_at"),
+        origin_ingress_interaction_id=_optional_text(
+            attempt_meta,
+            "origin_ingress_interaction_id",
+        ),
         starter_message_id=_optional_text(debate_meta, "starter_message_id"),
         thread_id=_optional_text(debate_meta, "thread_id"),
         control_panel_message_id=_optional_text(debate_meta, "control_panel_message_id"),
         lease=lease,
+        panel_refresh_required_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_required_at",
+        ),
+        panel_refreshed_at=_optional_datetime(attempt_meta, "panel_refreshed_at"),
+        panel_refresh_claim_owner=_optional_text(
+            attempt_meta,
+            "panel_refresh_claim_owner",
+        ),
+        panel_refresh_claim_expires_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_claim_expiry",
+        ),
+        panel_refresh_next_attempt_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_next_attempt_at",
+        ),
+        panel_refresh_failed_at=_optional_datetime(
+            attempt_meta,
+            "panel_refresh_failed_at",
+        ),
+        panel_refresh_error_code=_optional_text(
+            attempt_meta,
+            "panel_refresh_error_code",
+        ),
+        panel_refresh_delivery_attempt=(
+            _integer(attempt_meta, "panel_refresh_delivery_attempt")
+            if "panel_refresh_delivery_attempt" in attempt_meta
+            else 0
+        ),
         evidence=evidence,
         initial_opinions=cast(tuple[InitialOpinion, ...], opinions),
         final_proposals=cast(tuple[FinalProposal, ...], proposals),
@@ -316,6 +481,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         final_decision=decision,
         escalation_assessment=escalation_assessment,
         error_code=_optional_text(attempt_meta, "error_code"),
+        terminal_delivery=terminal_delivery,
     )
 
 
@@ -420,6 +586,621 @@ def deserialize_panel_operation(raw_item: Mapping[str, DynamoValue]) -> PanelOpe
         thread_id=_optional_text(item, "thread_id"),
         message_id=_optional_text(item, "message_id"),
     )
+
+
+def ingress_request_sort_key(request: IngressRequest) -> str:
+    """Return the stable, UTC-sortable FIFO key for one ingress request."""
+
+    return ingress_request_sort_key_from_identity(
+        created_at=request.created_at,
+        interaction_id=request.interaction_id,
+    )
+
+
+def ingress_request_sort_key_from_identity(*, created_at: datetime, interaction_id: str) -> str:
+    """Build the stable request key from its PII-free immutable identity."""
+
+    if created_at.tzinfo is None or created_at.utcoffset() != UTC.utcoffset(created_at):
+        raise ValueError("ingress creation timestamp must be timezone-aware UTC")
+    if not interaction_id.strip():
+        raise ValueError("interaction ID must not be empty")
+    timestamp = created_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return f"REQUEST#{timestamp}#{interaction_id}"
+
+
+def serialize_ingress_active_pointer(request: IngressRequest) -> DynamoItem:
+    """Serialize the immutable bounded-workset pointer for one queued request."""
+
+    request_sort_key = ingress_request_sort_key(request)
+    return _validated_item(
+        {
+            "PK": "CONTROL#INGRESS#ACTIVE",
+            "SK": request_sort_key,
+            "record_type": "ingress_active_pointer",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION,
+            "interaction_id": request.interaction_id,
+            "request_sort_key": request_sort_key,
+            "created_at": _timestamp(request.created_at),
+        }
+    )
+
+
+def deserialize_ingress_active_pointer(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressActivePointer:
+    """Validate an active pointer without loading request payload or PII."""
+
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="ingress_active_pointer",
+        expected_record_schema_version=INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION,
+    )
+    pointer = IngressActivePointer(
+        interaction_id=_text(item, "interaction_id"),
+        request_sort_key=_text(item, "request_sort_key"),
+        created_at=_datetime(item, "created_at"),
+        schema_version=_integer(item, "record_schema_version"),
+    )
+    expected_sort_key = ingress_request_sort_key_from_identity(
+        created_at=pointer.created_at,
+        interaction_id=pointer.interaction_id,
+    )
+    if _text(item, "PK") != "CONTROL#INGRESS#ACTIVE":
+        raise PersistenceFormatError("ingress active pointer has an invalid partition key")
+    if _text(item, "SK") != expected_sort_key:
+        raise PersistenceFormatError("ingress active pointer has an invalid sort key")
+    if pointer.request_sort_key != expected_sort_key:
+        raise PersistenceFormatError("ingress active pointer targets another request")
+    return pointer
+
+
+def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
+    """Serialize one active or historical ingress request into the shared table."""
+
+    item: DynamoItem = {
+        "PK": "CONTROL#INGRESS",
+        "SK": ingress_request_sort_key(request),
+        "record_type": "ingress_request",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": request.schema_version,
+        "interaction_id": request.interaction_id,
+        "operation_id": request.operation_id,
+        "interaction_kind": request.kind.value,
+        "application_id": request.application_id,
+        "requester_id": request.requester_id,
+        "requester_username": request.requester_username,
+        "requester_display_name": request.requester_display_name,
+        "requester_can_manage_messages": request.requester_can_manage_messages,
+        "guild_id": request.guild_id,
+        "channel_id": request.channel_id,
+        "status_channel_id": request.status_channel_id,
+        "status": request.status.value,
+        "status_message_state": request.status_message_state.value,
+        "created_at": _timestamp(request.created_at),
+        "updated_at": _timestamp(request.updated_at),
+        "startup_deadline_at": _timestamp(request.startup_deadline_at),
+        "terminal_deadline_at": _timestamp(request.terminal_deadline_at),
+        "delivery_attempt": request.delivery_attempt,
+    }
+    for field, value in (
+        ("command_name", request.command_name),
+        ("custom_id", request.custom_id),
+        ("question", request.question),
+        ("parent_channel_id", request.parent_channel_id),
+        ("source_message_id", request.source_message_id),
+        ("source_thread_id", request.source_thread_id),
+        ("target_debate_id", _identifier(request.target_debate_id)),
+        ("expected_attempt_id", _identifier(request.expected_attempt_id)),
+        ("status_message_id", request.status_message_id),
+        ("status_message_updated_at", _optional_timestamp(request.status_message_updated_at)),
+        ("next_attempt_at", _optional_timestamp(request.next_attempt_at)),
+        ("processing_started_at", _optional_timestamp(request.processing_started_at)),
+        ("claim_owner", request.claim_owner),
+        ("claim_expiry", _optional_timestamp(request.claim_expires_at)),
+        ("error_code", request.error_code),
+        ("error_detail_code", request.error_detail_code),
+        ("accepted_debate_id", _identifier(request.accepted_debate_id)),
+        ("accepted_attempt_id", _identifier(request.accepted_attempt_id)),
+        ("completed_at", _optional_timestamp(request.completed_at)),
+        ("ttl", request.ttl),
+    ):
+        _put_optional(item, field, value)
+    return _validated_item(item)
+
+
+def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressRequest:
+    """Validate one ingress request, including its independent record schema."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="ingress_request")
+    try:
+        request = IngressRequest(
+            interaction_id=_text(item, "interaction_id"),
+            operation_id=_text(item, "operation_id"),
+            kind=IngressKind(_text(item, "interaction_kind")),
+            application_id=_text(item, "application_id"),
+            requester_id=_text(item, "requester_id"),
+            requester_username=_text(item, "requester_username"),
+            requester_display_name=_text(item, "requester_display_name"),
+            requester_can_manage_messages=_boolean(item, "requester_can_manage_messages"),
+            guild_id=_text(item, "guild_id"),
+            channel_id=_text(item, "channel_id"),
+            status_channel_id=_text(item, "status_channel_id"),
+            status=IngressStatus(_text(item, "status")),
+            status_message_state=StatusMessageState(_text(item, "status_message_state")),
+            created_at=_datetime(item, "created_at"),
+            updated_at=_datetime(item, "updated_at"),
+            startup_deadline_at=_datetime(item, "startup_deadline_at"),
+            terminal_deadline_at=_datetime(item, "terminal_deadline_at"),
+            command_name=_optional_text(item, "command_name"),
+            custom_id=_optional_text(item, "custom_id"),
+            question=_optional_text(item, "question"),
+            parent_channel_id=_optional_text(item, "parent_channel_id"),
+            source_message_id=_optional_text(item, "source_message_id"),
+            source_thread_id=_optional_text(item, "source_thread_id"),
+            target_debate_id=_optional_debate(item, "target_debate_id"),
+            expected_attempt_id=_optional_attempt(item, "expected_attempt_id"),
+            status_message_id=_optional_text(item, "status_message_id"),
+            status_message_updated_at=_optional_datetime(item, "status_message_updated_at"),
+            next_attempt_at=_optional_datetime(item, "next_attempt_at"),
+            processing_started_at=_optional_datetime(item, "processing_started_at"),
+            claim_owner=_optional_text(item, "claim_owner"),
+            claim_expires_at=_optional_datetime(item, "claim_expiry"),
+            delivery_attempt=_integer(item, "delivery_attempt"),
+            error_code=_optional_text(item, "error_code"),
+            error_detail_code=_optional_text(item, "error_detail_code"),
+            accepted_debate_id=_optional_debate(item, "accepted_debate_id"),
+            accepted_attempt_id=_optional_attempt(item, "accepted_attempt_id"),
+            completed_at=_optional_datetime(item, "completed_at"),
+            ttl=_optional_integer(item, "ttl"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress request") from error
+    if _text(item, "PK") != "CONTROL#INGRESS":
+        raise PersistenceFormatError("ingress request has an invalid partition key")
+    if _text(item, "SK") != ingress_request_sort_key(request):
+        raise PersistenceFormatError("ingress request has an invalid sort key")
+    if "gsi2pk" in item or "gsi2sk" in item:
+        raise PersistenceFormatError("ingress request must not use the recoverable debate index")
+    return request
+
+
+def serialize_ingress_operation_result(operation: IngressOperationResult) -> DynamoItem:
+    """Serialize the strong replay record associated with one ingress operation."""
+
+    item: DynamoItem = {
+        "PK": f"INGRESS_OPERATION#{operation.interaction_id}",
+        "SK": "RESULT",
+        "record_type": "ingress_operation_result",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": operation.schema_version,
+        "operation_id": operation.operation_id,
+        "interaction_id": operation.interaction_id,
+        "request_sort_key": operation.request_sort_key,
+        "status": operation.status.value,
+        "created_at": _timestamp(operation.created_at),
+        "updated_at": _timestamp(operation.updated_at),
+    }
+    for field, value in (
+        ("accepted_debate_id", _identifier(operation.accepted_debate_id)),
+        ("accepted_attempt_id", _identifier(operation.accepted_attempt_id)),
+        ("error_code", operation.error_code),
+    ):
+        _put_optional(item, field, value)
+    return _validated_item(item)
+
+
+def deserialize_ingress_operation_result(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressOperationResult:
+    """Validate and rebuild a strongly consistent ingress replay result."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="ingress_operation_result")
+    try:
+        operation = IngressOperationResult(
+            operation_id=_text(item, "operation_id"),
+            interaction_id=_text(item, "interaction_id"),
+            request_sort_key=_text(item, "request_sort_key"),
+            status=IngressStatus(_text(item, "status")),
+            created_at=_datetime(item, "created_at"),
+            updated_at=_datetime(item, "updated_at"),
+            accepted_debate_id=_optional_debate(item, "accepted_debate_id"),
+            accepted_attempt_id=_optional_attempt(item, "accepted_attempt_id"),
+            error_code=_optional_text(item, "error_code"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress operation result") from error
+    if _text(item, "PK") != f"INGRESS_OPERATION#{operation.interaction_id}":
+        raise PersistenceFormatError("ingress operation has an invalid partition key")
+    if _text(item, "SK") != "RESULT":
+        raise PersistenceFormatError("ingress operation has an invalid sort key")
+    return operation
+
+
+def serialize_ingress_semantic_binding(
+    binding: IngressSemanticOperationBinding,
+) -> DynamoItem:
+    """Serialize the first Interaction ID bound to a component operation."""
+
+    return _validated_item(
+        {
+            "PK": f"INGRESS_SEMANTIC_OPERATION#{binding.operation_id}",
+            "SK": "BINDING",
+            "record_type": "ingress_semantic_operation_binding",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": binding.schema_version,
+            "operation_id": binding.operation_id,
+            "canonical_interaction_id": binding.canonical_interaction_id,
+            "request_sort_key": binding.request_sort_key,
+            "created_at": _timestamp(binding.created_at),
+        }
+    )
+
+
+def deserialize_ingress_semantic_binding(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressSemanticOperationBinding:
+    """Validate one semantic component-operation binding."""
+
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="ingress_semantic_operation_binding",
+    )
+    try:
+        binding = IngressSemanticOperationBinding(
+            operation_id=_text(item, "operation_id"),
+            canonical_interaction_id=_text(item, "canonical_interaction_id"),
+            request_sort_key=_text(item, "request_sort_key"),
+            created_at=_datetime(item, "created_at"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress semantic binding") from error
+    if _text(item, "PK") != f"INGRESS_SEMANTIC_OPERATION#{binding.operation_id}":
+        raise PersistenceFormatError("ingress semantic binding has an invalid partition key")
+    if _text(item, "SK") != "BINDING":
+        raise PersistenceFormatError("ingress semantic binding has an invalid sort key")
+    return binding
+
+
+def serialize_ingress_status_publication(
+    publication: IngressStatusPublication,
+) -> DynamoItem:
+    """Serialize a durable desired/delivered public-status operation."""
+
+    item: DynamoItem = {
+        "PK": f"INGRESS_OPERATION#{publication.canonical_interaction_id}",
+        "SK": "STATUS_PUBLICATION",
+        "record_type": "ingress_status_publication",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": publication.schema_version,
+        "canonical_interaction_id": publication.canonical_interaction_id,
+        "request_sort_key": publication.request_sort_key,
+        "status_channel_id": publication.status_channel_id,
+        "desired_state": publication.desired_state.value,
+        "publication_state": publication.state.value,
+        "nonce": publication.nonce,
+        "content": publication.content,
+        "content_hash": publication.content_hash,
+        "history_reconciliation_required": publication.history_reconciliation_required,
+        "created_at": _timestamp(publication.created_at),
+        "updated_at": _timestamp(publication.updated_at),
+        "delivery_attempt": publication.delivery_attempt,
+        "incarnation": publication.incarnation,
+    }
+    for field, value in (
+        (
+            "delivered_state",
+            publication.delivered_state.value if publication.delivered_state is not None else None,
+        ),
+        ("status_message_id", publication.status_message_id),
+        (
+            "status_message_updated_at",
+            _optional_timestamp(publication.status_message_updated_at),
+        ),
+        (
+            "history_cursor_message_id",
+            (
+                publication.history_checkpoint.history_cursor_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
+        (
+            "history_verified_head_message_id",
+            (
+                publication.history_checkpoint.history_verified_head_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
+        (
+            "history_gap_cursor_message_id",
+            (
+                publication.history_checkpoint.history_gap_cursor_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
+        (
+            "history_gap_upper_message_id",
+            (
+                publication.history_checkpoint.history_gap_upper_message_id
+                if publication.history_checkpoint is not None
+                else None
+            ),
+        ),
+        ("next_attempt_at", _optional_timestamp(publication.next_attempt_at)),
+        ("claim_owner", publication.claim_owner),
+        ("claim_expiry", _optional_timestamp(publication.claim_expires_at)),
+        ("error_code", publication.error_code),
+    ):
+        _put_optional(item, field, value)
+    due_at = _status_publication_due_at(publication)
+    if due_at is not None:
+        item["gsi1pk"] = "INGRESS#STATUS_DUE"
+        item["gsi1sk"] = f"{_timestamp(due_at)}#{publication.canonical_interaction_id}"
+    return _validated_item(item)
+
+
+def deserialize_ingress_status_publication(
+    raw_item: Mapping[str, DynamoValue],
+) -> IngressStatusPublication:
+    """Validate one durable public-status operation and its sparse due index."""
+
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="ingress_status_publication",
+        expected_record_schema_version=3,
+    )
+    delivered = _optional_text(item, "delivered_state")
+    history_checkpoint = _deserialize_status_history_checkpoint(item)
+    try:
+        publication = IngressStatusPublication(
+            canonical_interaction_id=_text(item, "canonical_interaction_id"),
+            request_sort_key=_text(item, "request_sort_key"),
+            status_channel_id=_text(item, "status_channel_id"),
+            desired_state=StatusMessageState(_text(item, "desired_state")),
+            delivered_state=(StatusMessageState(delivered) if delivered is not None else None),
+            state=StatusPublicationState(_text(item, "publication_state")),
+            nonce=_text(item, "nonce"),
+            content=_text(item, "content"),
+            content_hash=_text(item, "content_hash"),
+            created_at=_datetime(item, "created_at"),
+            updated_at=_datetime(item, "updated_at"),
+            status_message_id=_optional_text(item, "status_message_id"),
+            status_message_updated_at=_optional_datetime(item, "status_message_updated_at"),
+            history_checkpoint=history_checkpoint,
+            history_reconciliation_required=_boolean(
+                item,
+                "history_reconciliation_required",
+            ),
+            next_attempt_at=_optional_datetime(item, "next_attempt_at"),
+            claim_owner=_optional_text(item, "claim_owner"),
+            claim_expires_at=_optional_datetime(item, "claim_expiry"),
+            delivery_attempt=_integer(item, "delivery_attempt"),
+            incarnation=_integer(item, "incarnation"),
+            error_code=_optional_text(item, "error_code"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid ingress status publication") from error
+    if _text(item, "PK") != f"INGRESS_OPERATION#{publication.canonical_interaction_id}":
+        raise PersistenceFormatError("ingress status publication has an invalid partition key")
+    if _text(item, "SK") != "STATUS_PUBLICATION":
+        raise PersistenceFormatError("ingress status publication has an invalid sort key")
+    due_at = _status_publication_due_at(publication)
+    is_indexed = "gsi1pk" in item or "gsi1sk" in item
+    if due_at is None:
+        if is_indexed:
+            raise PersistenceFormatError("settled status publication must not be due-indexed")
+    else:
+        if _text(item, "gsi1pk") != "INGRESS#STATUS_DUE":
+            raise PersistenceFormatError("status publication has an invalid due index key")
+        expected_sort_key = f"{_timestamp(due_at)}#{publication.canonical_interaction_id}"
+        if _text(item, "gsi1sk") != expected_sort_key:
+            raise PersistenceFormatError("status publication has an invalid due index sort key")
+    return publication
+
+
+def _deserialize_status_history_checkpoint(
+    item: Mapping[str, DynamoValue],
+) -> StatusHistoryCheckpoint | None:
+    fields = (
+        "history_cursor_message_id",
+        "history_verified_head_message_id",
+        "history_gap_cursor_message_id",
+        "history_gap_upper_message_id",
+    )
+    values = {field: _optional_text(item, field) for field in fields}
+    if all(value is None for value in values.values()):
+        return None
+    verified_head = values["history_verified_head_message_id"]
+    if verified_head is None:
+        raise PersistenceFormatError("status history checkpoint has no verified head")
+    try:
+        return StatusHistoryCheckpoint(
+            history_cursor_message_id=values["history_cursor_message_id"],
+            history_verified_head_message_id=verified_head,
+            history_gap_cursor_message_id=values["history_gap_cursor_message_id"],
+            history_gap_upper_message_id=values["history_gap_upper_message_id"],
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid status history checkpoint") from error
+
+
+def _status_publication_due_at(publication: IngressStatusPublication) -> datetime | None:
+    if not publication.state.counts_as_pending:
+        return None
+    if publication.state is StatusPublicationState.CLAIMED:
+        return publication.claim_expires_at
+    return publication.next_attempt_at
+
+
+def serialize_runtime_state(state: RuntimeState) -> DynamoItem:
+    """Serialize the singleton generation-fenced runtime control record."""
+
+    item: DynamoItem = {
+        "PK": "CONTROL#RUNTIME",
+        "SK": "STATE",
+        "record_type": "runtime_state",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": state.schema_version,
+        "state": state.status.value,
+        "generation": state.generation,
+        "desired_count": state.desired_count,
+        "version": state.version,
+        "updated_at": _timestamp(state.updated_at),
+    }
+    for field, value in (
+        ("runtime_instance_id", state.runtime_instance_id),
+        ("wake_started_at", _optional_timestamp(state.wake_started_at)),
+        ("last_request_at", _optional_timestamp(state.last_request_at)),
+        ("started_at", _optional_timestamp(state.started_at)),
+        ("ready_at", _optional_timestamp(state.ready_at)),
+        ("busy_since", _optional_timestamp(state.busy_since)),
+        ("idle_since", _optional_timestamp(state.idle_since)),
+        ("stop_eligible_at", _optional_timestamp(state.stop_eligible_at)),
+        ("stopping_at", _optional_timestamp(state.stopping_at)),
+        ("stopped_at", _optional_timestamp(state.stopped_at)),
+        ("last_error_code", state.last_error_code),
+        ("last_reconciled_at", _optional_timestamp(state.last_reconciled_at)),
+    ):
+        _put_optional(item, field, value)
+    return _validated_item(item)
+
+
+def deserialize_runtime_state(raw_item: Mapping[str, DynamoValue]) -> RuntimeState:
+    """Validate and rebuild the singleton runtime control record."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="runtime_state")
+    try:
+        state = RuntimeState(
+            status=RuntimeStatus(_text(item, "state")),
+            generation=_integer(item, "generation"),
+            desired_count=_integer(item, "desired_count"),
+            version=_integer(item, "version"),
+            updated_at=_datetime(item, "updated_at"),
+            runtime_instance_id=_optional_text(item, "runtime_instance_id"),
+            wake_started_at=_optional_datetime(item, "wake_started_at"),
+            last_request_at=_optional_datetime(item, "last_request_at"),
+            started_at=_optional_datetime(item, "started_at"),
+            ready_at=_optional_datetime(item, "ready_at"),
+            busy_since=_optional_datetime(item, "busy_since"),
+            idle_since=_optional_datetime(item, "idle_since"),
+            stop_eligible_at=_optional_datetime(item, "stop_eligible_at"),
+            stopping_at=_optional_datetime(item, "stopping_at"),
+            stopped_at=_optional_datetime(item, "stopped_at"),
+            last_error_code=_optional_text(item, "last_error_code"),
+            last_reconciled_at=_optional_datetime(item, "last_reconciled_at"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid runtime state") from error
+    if _text(item, "PK") != "CONTROL#RUNTIME" or _text(item, "SK") != "STATE":
+        raise PersistenceFormatError("runtime state has an invalid key")
+    return state
+
+
+def serialize_deployment_lock(lock: DeploymentLock) -> DynamoItem:
+    """Serialize the fixed deployment lock without workflow secrets or free text."""
+
+    item: DynamoItem = {
+        "PK": "CONTROL#DEPLOYMENT",
+        "SK": "LOCK",
+        "record_type": "deployment_lock",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION,
+        "lock_state": lock.state.value,
+        "fencing_token": lock.fencing_token,
+        "version": lock.version,
+        "updated_at": _timestamp(lock.updated_at),
+    }
+    for field, value in (
+        ("guard_id", lock.guard_id),
+        ("lock_owner", lock.owner),
+        ("locked_at", _optional_timestamp(lock.acquired_at)),
+        ("lock_expires_at", _optional_timestamp(lock.expires_at)),
+        ("deployment_mode", lock.mode.value if lock.mode is not None else None),
+        ("break_glass_reason", lock.reason.value if lock.reason is not None else None),
+    ):
+        _put_optional(item, field, value)
+    return _validated_item(item)
+
+
+def deserialize_deployment_lock(raw_item: Mapping[str, DynamoValue]) -> DeploymentLock:
+    """Validate and rebuild the fixed deployment lock control record."""
+
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="deployment_lock",
+        expected_record_schema_version=DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION,
+    )
+    raw_mode = _optional_text(item, "deployment_mode")
+    raw_reason = _optional_text(item, "break_glass_reason")
+    try:
+        lock = DeploymentLock(
+            state=DeploymentLockState(_text(item, "lock_state")),
+            fencing_token=_integer(item, "fencing_token"),
+            version=_integer(item, "version"),
+            updated_at=_datetime(item, "updated_at"),
+            guard_id=_optional_text(item, "guard_id"),
+            owner=_optional_text(item, "lock_owner"),
+            acquired_at=_optional_datetime(item, "locked_at"),
+            expires_at=_optional_datetime(item, "lock_expires_at"),
+            mode=DeploymentMode(raw_mode) if raw_mode is not None else None,
+            reason=BreakGlassReason(raw_reason) if raw_reason is not None else None,
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid deployment lock") from error
+    if _text(item, "PK") != "CONTROL#DEPLOYMENT" or _text(item, "SK") != "LOCK":
+        raise PersistenceFormatError("deployment lock has an invalid key")
+    if item != serialize_deployment_lock(lock):
+        raise PersistenceFormatError("deployment lock has unknown attributes")
+    return lock
+
+
+def serialize_runtime_wake_result(result: RuntimeWakeResult) -> DynamoItem:
+    """Serialize one immutable interaction-to-generation binding."""
+
+    return _validated_item(
+        {
+            "PK": f"INGRESS_OPERATION#{result.interaction_id}",
+            "SK": "RUNTIME_WAKE",
+            "record_type": "runtime_wake_result",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": result.schema_version,
+            "interaction_id": result.interaction_id,
+            "generation": result.generation,
+            "runtime_version": result.runtime_version,
+            "recorded_at": _timestamp(result.recorded_at),
+        }
+    )
+
+
+def deserialize_runtime_wake_result(
+    raw_item: Mapping[str, DynamoValue],
+) -> RuntimeWakeResult:
+    """Validate one immutable interaction-to-generation binding."""
+
+    item = _validate_auxiliary_item(raw_item, expected_type="runtime_wake_result")
+    try:
+        result = RuntimeWakeResult(
+            interaction_id=_text(item, "interaction_id"),
+            generation=_integer(item, "generation"),
+            runtime_version=_integer(item, "runtime_version"),
+            recorded_at=_datetime(item, "recorded_at"),
+            schema_version=_integer(item, "record_schema_version"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid runtime wake result") from error
+    if _text(item, "PK") != f"INGRESS_OPERATION#{result.interaction_id}":
+        raise PersistenceFormatError("runtime wake result has an invalid partition key")
+    if _text(item, "SK") != "RUNTIME_WAKE":
+        raise PersistenceFormatError("runtime wake result has an invalid sort key")
+    return result
 
 
 def _serialize_evidence(
@@ -553,6 +1334,22 @@ def _validated_item(item: DynamoItem) -> DynamoItem:
     return item
 
 
+def _validate_auxiliary_item(
+    raw_item: Mapping[str, DynamoValue],
+    *,
+    expected_type: str,
+    expected_record_schema_version: int = 1,
+) -> DynamoItem:
+    item = migrate_item(raw_item)
+    if _integer(item, "record_schema_version") != expected_record_schema_version:
+        raise PersistenceFormatError("unsupported auxiliary record schema version")
+    if _text(item, "record_type") != expected_type:
+        raise PersistenceFormatError(f"record is not an {expected_type}")
+    _text(item, "PK")
+    _text(item, "SK")
+    return item
+
+
 def _value_size(value: DynamoValue) -> int:
     if isinstance(value, str):
         return len(value.encode("utf-8"))
@@ -623,14 +1420,14 @@ def _by_voter(values: Iterable[Vote]) -> tuple[Vote, ...]:
     return tuple(by_slot[slot] for slot in PARTICIPANTS if slot in by_slot)
 
 
-def _identifier(value: AttemptId | None) -> str | None:
+def _identifier(value: AttemptId | DebateId | None) -> str | None:
     return str(value) if value is not None else None
 
 
 def _timestamp(value: datetime) -> str:
     if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value):
         raise PersistenceFormatError("timestamp must be timezone-aware UTC")
-    return value.isoformat().replace("+00:00", "Z")
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _optional_timestamp(value: datetime | None) -> str | None:
@@ -674,6 +1471,12 @@ def _integer(item: Mapping[str, DynamoValue], field: str) -> int:
     return value
 
 
+def _optional_integer(item: Mapping[str, DynamoValue], field: str) -> int | None:
+    if field not in item:
+        return None
+    return _integer(item, field)
+
+
 def _boolean(item: Mapping[str, DynamoValue], field: str) -> bool:
     value = item.get(field)
     if not isinstance(value, bool):
@@ -691,6 +1494,11 @@ def _string_tuple(item: Mapping[str, DynamoValue], field: str) -> tuple[str, ...
 def _optional_attempt(item: Mapping[str, DynamoValue], field: str) -> AttemptId | None:
     value = _optional_text(item, field)
     return AttemptId.parse(value) if value is not None else None
+
+
+def _optional_debate(item: Mapping[str, DynamoValue], field: str) -> DebateId | None:
+    value = _optional_text(item, field)
+    return DebateId.parse(value) if value is not None else None
 
 
 def _optional_phase(item: Mapping[str, DynamoValue], field: str) -> DebatePhase | None:

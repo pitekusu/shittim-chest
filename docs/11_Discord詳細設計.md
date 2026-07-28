@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, discord, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-26
+updated: 2026-07-28
 ---
 
 # Discord詳細設計
@@ -18,7 +18,7 @@ updated: 2026-07-26
 | participant-b | なし | 同上 |
 | participant-c | なし | 同上 |
 
-4 Applicationは個人所有＋2FA、Guild Install限定、Public Bot無効、OAuth2 Code Grant無効とする。Application IDと表示名はprivate `RuntimeConfig`/`PersonaConfig`から読み、public sourceへ固定しない。1 Python process内に4つの独立したDiscord client instanceを生成する。
+4 Applicationは個人所有＋2FA、Guild Install限定、Public Bot無効、OAuth2 Code Grant無効とする。Application IDと表示名はprivate `RuntimeConfig`/`PersonaConfig`から読み、public sourceへ固定しない。Fargate task稼働中だけ1 Python process内に4つの独立したDiscord Gateway client instanceを生成する。`desiredCount=0`では4 Botのオフライン表示を許容し、常駐Gateway専用processは追加しない。
 
 STEP-06Aは`moderator`、`participant-a`、`participant-b`、`participant-c`を`DiscordBotSlot`としてapplication層に定義し、4 slotの過不足、Application ID重複、不正snowflake、空channel allowlistをDiscord接続前にfail closedとする。Bot token、実Application ID、表示名、persona本文はこの契約へ含めない。
 
@@ -29,12 +29,13 @@ STEP-06Aは`moderator`、`participant-a`、`participant-b`、`participant-c`を`
 - thread内でSlash Commandを直接開始せず、allowlist対象channelの起点messageからPublic Threadを作成する。
 - 必要permissionは`View Channel`、`Send Messages`、`Create Public Threads`、`Send Messages in Threads`、`Read Message History`。不要なAdministrator権限を付けない。
 
-## 3. Gateway・Intent
+## 3. HTTP Interaction・Gateway・Intent
 
+- `/shittim`、Retry、Cancelを含むApplication Command/Componentの受付経路は常にDiscord Interactions Endpoint→API Gateway HTTP API→DiscordIngress Lambdaとする。Gateway callbackで同じ操作を受けない。
 - Gateway Intentは`GUILDS`だけを有効にする。
 - Message Contentを含むPrivileged Intentsを無効にする。
-- 4 client全てがREADYのときだけ新規討論を受け付ける。
-- 1 client切断時は新規受付を即時閉じる。60秒以内に4 READYへ戻れば進行を継続し、60秒連続で戻らなければ進行中sessionを同一phaseの`CHECKPOINTED`へ退避する。通信断だけでは`FAILED`へ遷移せず、4 READY復帰後にfenced leaseを再取得して自動resumeする。
+- HTTP受付はGatewayのREADY状態にかかわらず耐久FIFOへ保存できる。ECS Runtimeは4 client全てがREADY、command schema確認済み、recovery完了のときだけIngressをclaimして討論を開始する。
+- 1 client切断時は新規Ingress claimを即時閉じる。60秒以内に4 READYへ戻れば進行を継続し、60秒連続で戻らなければ進行中sessionを同一phaseの`CHECKPOINTED`へ退避する。通信断だけでは`FAILED`へ遷移せず、4 READY復帰後にfenced leaseを再取得して自動resumeする。
 
 ## 4. Command schema
 
@@ -50,27 +51,36 @@ option:
   max_length: 1000
 ```
 
-schemaをcanonical JSONへ正規化してSHA-256を保存し、hashが変わったdeploy時だけ同期する。
+schemaをcanonical JSONへ正規化してSHA-256を保存し、hashが変わったdeploy時だけ同期する。CommandはFargate停止中もGuildへ登録済みのままとし、オフライン表示を理由に削除・再登録しない。
 
 STEP-06Cではcommandを設定済みGuildへだけlocal登録し、schema hashが前回値と異なると明示されたときだけ`CommandTree.sync(guild=...)`を呼ぶ。startupごとの自動同期は行わない。
 
 ## 5. Interaction処理
 
-1. Interaction受信から3秒以内にephemeral deferする。
-2. Guild、channel種別、allowlist、question、日次quota、lease空き、4 Bot READYを検証する。
-3. 失敗時はephemeral follow-upで安定error codeと説明を返す。
-4. 成功時は通常channelへ起点messageを投稿し、そこからPublic Threadを作る。
-5. thread ID、starter message ID、control panel message IDを別fieldとしてDynamoDBへ保存する。`ACCEPTED`中だけ3 IDを一括bindingし、同じ値の再送は冪等、部分bindingとrebindは拒否する。
-6. ephemeral follow-upでthread linkを依頼者へ返す。
+### 5.1 HTTP受付境界
 
-STEP-06CのcontrollerはDiscord SDK callbackへ入った直後、channel型やapplication use caseより先に`defer(ephemeral=True, thinking=True)`を実行する。`discord.Client.event()`はdiscord.py 2.7.1とPython 3.14でdeprecated APIを経由しwarning-as-errorになるため使用せず、moderator専用`DiscordModeratorClient.on_interaction`から1つのcontroller handlerへ明示dispatchする。4 clientは`GUILDS`だけを有効にし、tokenをclient builderへ渡さずsupervisor起動時に4つの非空・相異tokenを検証する。1 clientが終了した場合は残りのstart taskをcancelし全clientをcloseする。
+1. API Gateway HTTP API payload v2からPOSTのraw bodyを復元する。base64の有無を厳密に扱い、raw bodyは64 KiBで事前拒否する。
+2. header名をcase-insensitiveに一意化し、`X-Signature-Ed25519`、`X-Signature-Timestamp`、変更していないraw body bytesを使う。JSON parseより先にEd25519署名と現在UTCから前後5分以内のtimestampを検証し、欠落・重複・不正hex・長さ・署名・過去/未来replayを401で拒否する。
+3. 署名検証後だけUTF-8 JSONをparseし、duplicate key、非有限数、未知Interactionをfail closedとする。`PING`はDynamoDB、Lambda invoke、ECSへ触れず即時`PONG` (`{"type":1}`) を返す。
+4. `APPLICATION_COMMAND`と`MESSAGE_COMPONENT`をSDK非依存の型付きinputへ変換し、moderator Application ID、Guild、channel/thread、allowlist、question、component context、`requester_id`認可を検証する。
+5. queue counter 20件上限、Ingress Request、active pointer、operation result、公開Status publicationをDynamoDB transactionで先に永続化する。永続化不明な場合は成功応答を返さない。
+6. 永続化後だけStatus PublisherとRuntime Reconcilerをbest-effortで起動し、即時のInteraction callback type 4を`flags=64`、`allowed_mentions.parse=[]`で返す。停止中/起動中は起動中、READY/BUSYは受付済み、上限時は20件混雑を表示する。
 
-starter、thread、panel作成時はmentionsを無効にし、starterにInteraction ID、panelにAttemptId由来nonceを付与する。応答消失後の同一Interaction replayでは、moderator自身のauthor ID、nonce、完全一致contentを通常channel/thread履歴から最大100件照合して再利用する。同一nonceでcontentが異なる場合はfail closedとする。3 resourceの永続binding前に作成が失敗した場合は受付済みattemptをCANCELLEDへするbest-effort cleanupを行う。process再起動後の広域recoverable scanはSTEP-07の責務とする。
+DiscordのInteraction tokenは初回callbackに必要なhandler-scopeの一時値とし、domain/application model、DynamoDB、queue、Status publication、logへ渡さない。HTTP handlerはDiscord Gateway、discord.py client、participant token、OpenAIを初期化しない。Lambda入口から永続受付を終えるsoft deadlineは2.2秒とし、新しいAWS SDK callをその0.1秒前に閉じ、Discordの3秒初回応答までの余白を確保する。
+
+### 5.2 Runtime処理と公開Status
+
+Fargate Runtimeは4 client READY、command schema確認、recoverable debate列挙・初期復旧完了後だけFIFOをclaimする。新規討論では通常channelの起点message、Public Thread、control panelを作成し、thread/starter/panelの3 IDを`ACCEPTED`中に一括bindingする。部分bindingと異なるrebindは拒否する。
+
+DiscordStatusPublisher Lambdaはmoderator Bot tokenによるRESTで公開Status messageを作成/更新する。状態は`PENDING`、`STARTING`、`READY`、`STARTUP_TIMEOUT`、`RECOVERED`、`ACCEPTED`、`COMPLETED`、`CANCELLED`、`REJECTED`、`TERMINAL_FAILED`とし、message IDとdesired/delivered stateを永続化する。Status PublisherはAI討論、Gateway接続、Runtime起動判定、Interaction token保存を行わない。
+
+starter、thread、panel作成時はmentionsを無効にし、starterにInteraction ID、panelにAttemptId由来nonceを付与する。応答消失後の同一Interaction replayでは、moderator自身のauthor ID、nonce、完全一致contentを通常channel/thread履歴から照合して再利用する。同一nonceでcontentが異なる場合はfail closedとする。3 resourceの永続binding前に作成が失敗した場合は受付済みattemptをCANCELLEDへするbest-effort cleanupを行う。
 
 ## 6. 操作panel
 
 panelはphase、active elapsed、recovery状態、開始者を表示する。component custom IDは`shittim:v1:<debate-id>:<panel-operation-id>:cancel|retry`とし、Discordの上限内に収める。
 
+- Cancel/Retry componentはSlash Commandと同じ署名付きHTTP Interaction経路で受け、Gateway callbackと二重受付しない。
 - Cancel: 開始userまたは`Manage Messages`保持者、かつ進行中状態だけ許可。
 - Retry: 開始userまたは`Manage Messages`保持者、かつcurrent attemptが`FAILED`の場合だけ許可する。同じdebate/thread内に新attemptを作り、日次開始quotaへは加算せずglobal leaseを取得する。
 - 永続化済みpanel operation ID、Guild、thread、message、debate ID、current attempt IDのいずれかが一致しない操作はephemeral拒否する。独自署名方式は導入しない。
@@ -132,20 +142,21 @@ STEP-07Bの`DiscordOutboxRecovery`はlease取得済みattemptの全未送信oper
 | 2026-07-17 | discord.py v2.7.1 source | https://github.com/Rapptz/discord.py/blob/v2.7.1/discord/http.py#L141-L208 | nonce指定時に`enforce_nonce=true`となるSDK shapeをoffline contract testで固定 |
 | 2026-07-17 | discord.py client source | https://github.com/Rapptz/discord.py/blob/v2.7.1/discord/client.py | `max_ratelimit_timeout`を30秒へ明示し、無制限待機を禁止 |
 | 2026-07-17 | discord.py errors source | https://github.com/Rapptz/discord.py/blob/v2.7.1/discord/errors.py | pre-emptive rate-limit上限超過時の`RateLimited.retry_after`をoutbox delayへ使用 |
-| 2026-07-17 | Interactions | https://docs.discord.com/developers/interactions/receiving-and-responding | initial response 3秒、interaction token 15分を再確認しcallback先頭のephemeral deferへ反映 |
+| 2026-07-17 | Interactions | https://docs.discord.com/developers/interactions/receiving-and-responding | 当時のSTEP-06C Gateway callbackでinitial response 3秒を確認。2026-07-28以降は下記HTTP type 4応答に置換え、Gatewayでのdeferは現行受付に使用しない |
 | 2026-07-17 | Application Commands | https://docs.discord.com/developers/interactions/application-commands | Guild command、STRING 1〜1000文字、deploy時明示syncを実装 |
 | 2026-07-17 | Components | https://docs.discord.com/developers/components/reference | custom ID 100文字上限とcomponent context検証を再確認 |
-| 2026-07-17 | discord.py v2.7.1 Interaction source | https://github.com/Rapptz/discord.py/blob/v2.7.1/discord/interactions.py | defer/edit original responseとtyped interaction dataをoffline contractへ反映 |
-| 2026-07-17 | discord.py Client readiness | https://discordpy.readthedocs.io/en/stable/api.html#discord.Client.wait_until_ready | `is_ready()`をprocess gateと1秒監視へ使用し、4 client全てのREADYを受付条件として維持 |
+| 2026-07-17 | discord.py v2.7.1 Interaction source | https://github.com/Rapptz/discord.py/blob/v2.7.1/discord/interactions.py | 当時のSTEP-06C Gateway callbackのdefer/edit contract。現行はHTTP-only commandがfail closedであることと、Ingress Runtimeのthread/panel作成だけをoffline検査 |
+| 2026-07-17 | discord.py Client readiness | https://discordpy.readthedocs.io/en/stable/api.html#discord.Client.wait_until_ready | `is_ready()`をprocess gateと1秒監視へ使用し、4 client全てのREADYをRuntime claim/drain条件として維持。HTTP受付とは分離 |
 | 2026-07-17 | Discord Message API | https://docs.discord.com/developers/resources/message | Get Channel Messagesの新しい順、100件/page、Read Message History要件とCreate Messageのnonce/enforce_nonceを再確認し、SDK履歴iteratorによるreconciliationを維持 |
+| 2026-07-28 | Discord Interactions Endpoint | https://docs.discord.com/developers/interactions/receiving-and-responding | HTTP endpointのEd25519署名、timestamp、PING/PONG、3秒初回応答、ephemeral callbackをScale-to-Zero受付境界へ反映 |
 
 ## 10. STEP-06分割境界
 
 - STEP-06A（完了、PR `#27`、merge commit `47af41f`）: SDK非依存runtime/identity/error/outbox/panel契約、決定的message split、UUIDv7 nonce、SHA-256、custom ID codec、Discord context binding、schema v5。
 - STEP-06B（完了、PR `#30`、merge commit `96a1ace`）: discord.py 2.7.1 publisher、outbox claim/send/complete、`allowed_mentions`、`enforce_nonce`、SDK rate limit、長時間停止後reconciliation。
-- STEP-06C（完了、PR `#31`、merge commit `9799cb9`）: 4 client、GUILDS-only Intent、READY gate、Guild Command、先行defer、starter/Public Thread/panel、履歴reconciliation、attempt-bound Cancel/Retry、controller task ownership。CI 266 tests/92.55%合格。
+- STEP-06C（完了、PR `#31`、merge commit `9799cb9`）: 4 client、GUILDS-only Intent、READY gate、Guild Command、starter/Public Thread/panel、履歴reconciliation、attempt-bound Cancel/Retry、controller task ownershipの基盤。当時のGateway Interaction callbackはScale-to-Zero実装で署名付きHTTP受付へ置き換え、現在は二重dispatchしない。
 - STEP-06D: interaction受付時に`interaction.user.name`と`interaction.user.display_name`をsnapshot保存する。Guild Memberではdisplay_nameにnickを反映する。`str(user)`やREST再取得は使わず、Interactionに含まれる値だけを用いる。Discord上の表示文言は変更しない。
 - STEP-07A（完了、PR `#33`、merge commit `0f386f5`）: process signal、fail-closed受付gate、起動時`resume_recoverable`、60秒Gateway切断checkpoint、再接続resume、90秒graceful shutdown。
 - STEP-07B（完了、PR `#34`、merge commit `04bbda0`）: pending全件取得、永続retry/claim待機、順序drain、lease heartbeat、nonretryable error/fencing/cancellation処理。
 - STEP-07C（local実装済み）: strictなprivate runtime/persona設定からexactly 4 clientを生成し、共通gateway、READY gate、interaction controller、lifecycleへ注入するproduction composition。実process SIGTERM/SIGKILLをoffline検証済み。
-- STEP-08以降（未実装）: 実Discord Application/tokenでのsmoke、production AWS runtime、container fault injection。
+- Scale-to-Zero（local/CI実装済み）: API Gateway v2 raw request復元、Ed25519/timestamp/replay検証、PING即時応答、token非永続化、耐久Status publication、稼働中だけのGatewayとIngress drainをofflineで検証済み。実Interactions Endpointの登録、実Bot token、Discord通信、AWS deploy/smokeは未実施。

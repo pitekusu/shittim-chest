@@ -1,0 +1,119 @@
+name: Production Deploy Guard
+
+on:
+  workflow_dispatch:
+    inputs:
+      break_glass:
+        description: "緊急時だけDeploy Guardを明示的に上書きする"
+        required: true
+        default: false
+        type: boolean
+      break_glass_reason:
+        description: "break-glass時の監査理由コード"
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - incident-response
+          - security-investigation
+          - service-recovery
+
+permissions: {}
+
+concurrency:
+  group: production-deploy-guard
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  PYTHON_VERSION: 3.14.6
+  UV_VERSION: 0.11.29
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Require the immutable main branch
+        env:
+          EXPECTED_REF: refs/heads/main
+        run: |
+          if [ "${GITHUB_REF}" != "${EXPECTED_REF}" ]; then
+            echo "Deploy Guard can run only from refs/heads/main." >&2
+            exit 1
+          fi
+      - name: Check out the trusted main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install the locked tool environment
+        run: uv sync --frozen --all-groups
+      - name: Validate required repository variables
+        env:
+          GUARD_ROLE_ARN: ${{ vars.AWS_DEPLOY_GUARD_ROLE_ARN }}
+          TABLE_NAME: ${{ vars.DYNAMODB_TABLE_NAME }}
+        run: |
+          if [ -z "${GUARD_ROLE_ARN}" ] || [ -z "${TABLE_NAME}" ]; then
+            echo "Deploy Guard repository variables are not configured." >&2
+            exit 1
+          fi
+      - name: Acquire read-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_GUARD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: guard-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 900
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Evaluate the production state
+        env:
+          BREAK_GLASS: ${{ inputs.break_glass }}
+          BREAK_GLASS_REASON: ${{ inputs.break_glass_reason }}
+          TABLE_NAME: ${{ vars.DYNAMODB_TABLE_NAME }}
+        run: |
+          guard_args=(
+            --table-name "${TABLE_NAME}"
+            --region "${AWS_REGION}"
+            --commit-sha "${GITHUB_SHA}"
+            --actor "${GITHUB_TRIGGERING_ACTOR}"
+            --run-id "${GITHUB_RUN_ID}"
+            --environment production
+            --audit-output "${RUNNER_TEMP}/deploy-guard-audit.json"
+          )
+
+          if [ "${BREAK_GLASS}" = "true" ]; then
+            guard_args+=(--break-glass)
+            if [ "${BREAK_GLASS_REASON}" != "none" ]; then
+              guard_args+=(--reason "${BREAK_GLASS_REASON}")
+            fi
+          elif [ "${BREAK_GLASS_REASON}" != "none" ]; then
+            # Let the CLI reject the inconsistent context and still create the
+            # fail-closed audit artifact required by the always() upload step.
+            guard_args+=(--reason "${BREAK_GLASS_REASON}")
+          fi
+
+          uv run --frozen python -m tools.control_records guard "${guard_args[@]}"
+      - name: Upload the immutable audit record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-deploy-guard-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deploy-guard-audit.json
+          if-no-files-found: error
+          retention-days: 90
