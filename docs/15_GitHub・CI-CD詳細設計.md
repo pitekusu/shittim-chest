@@ -89,7 +89,7 @@ deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別�
 - ECR scan完了後にfindingをseverity別に正規化したcontent-free vulnerability assessmentをOCI referrerへattachする。critical/high findingは期限・owner付きrisk acceptanceがない限り停止する。
 - ECR `list-image-referrers`でAWS Signer signature、SPDX SBOM、build provenance、vulnerability assessmentが全て同じimage digestへ`ACTIVE`で紐付くことを確認する。
 - release manifestにもprovenance attestationを生成する。頻繁なtest buildやsource file単体にはattestationを生成しない。
-- 初回は`CDK bootstrap → Stateful/ECR/Signer change set実行 → image push/verify → Runtime → Operations`、通常releaseは既存ECRへのpush・署名・referrer検証後に全stackのchange setをprepareする。
+- 初回は`ap-northeast-1/us-east-1 CDK bootstrap → Stateful/ECR/Signer change set実行 → image push/verify → Runtime → Operations → CostGovernance`とする。CostGovernanceはworkloadへ依存しないが、同一releaseでOperationsと同じoperator email、既存AWS managed service monitor ARN、BillingでActiveな`Project` cost allocation tagをfail closedに確認してから実行する。通常releaseは既存ECRへのpush・署名・referrer検証後に全stackのchange setをprepareする。
 
 ### Deploy job
 

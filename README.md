@@ -16,22 +16,23 @@ Design is complete under [`docs/`](docs/). The merged `main` baseline includes
 the application core, OpenAI + Web search, signed Discord HTTP Interaction
 ingress, DynamoDB **schema v7** / control-record **manifest v2**, ARM64 container
 gates, and synth-only Stateful/Runtime CDK with On-Demand scale-to-zero. The
-current STEP-09C-B slice adds locally tested alarms, a dashboard, abnormal ECS
-task-stop notifications, and the STEP-09C-A low-cardinality CloudWatch EMF
-producers they consume. Nothing in this repository has been deployed to AWS or
-connected to a real Discord Application endpoint.
+current STEP-09C-C slice adds a locally tested, `us-east-1` cost-governance
+stack with two AWS Budgets and a Cost Anomaly Detection subscription. It builds
+on STEP-09C-A/B metrics and monitoring. Nothing in this repository has been
+deployed to AWS or connected to a real Discord Application endpoint.
 
 | Implemented locally / on merged main | Not done |
 |---|---|
-| Domain, voting, Protocols, use cases | STEP-09C-C Budget/CAD notifications |
-| DynamoDB adapter, leases, outbox | STEP-10 release signing / deploy workflows |
-| OpenAI Responses API, router, Evidence | Real Discord Applications / live tokens |
-| Signed HTTP ingress + `/shittim` + panel | Paid OpenAI in CI |
-| Lifecycle, SIGTERM/SIGKILL recovery tests | AWS bootstrap or stack deploy |
+| Domain, voting, Protocols, use cases | STEP-10 release signing / deploy workflows |
+| DynamoDB adapter, leases, outbox | Real Discord Applications / live tokens |
+| OpenAI Responses API, router, Evidence | Paid OpenAI in CI |
+| Signed HTTP ingress + `/shittim` + panel | AWS bootstrap or stack deploy |
+| Lifecycle, SIGTERM/SIGKILL recovery tests | |
 | Container + native ARM64 CI | |
 | Scale-to-zero control plane + 3 Lambda boundaries | |
 | STEP-09C-A EMF metrics foundation | |
 | STEP-09C-B alarms/dashboard/EventBridge | |
+| STEP-09C-C Budget/CAD templates | |
 | GitHub → Discord Forum notifications (STEP-02D) | |
 
 Production generation is fixed to **Luna standard** (no runtime escalation).
@@ -72,6 +73,8 @@ Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
 - **CDK** TypeScript (local synth; not deployed from this repo yet)
 - **CloudWatch** metric/composite alarms and dashboard, **EventBridge** abnormal
   ECS task-stop notifications, and one TLS-only **SNS** operator topic
+- `us-east-1` **CostGovernance** CDK stack with Project/account Budgets and an
+  existing-monitor **Cost Anomaly Detection** subscription
 - Digest-pinned **DHI** Community images; identity and tmpfs in `container-policy.json`
 
 ## Local validation
