@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-28
+updated: 2026-07-29
 ---
 
 # AWS・CDK詳細設計
@@ -39,6 +39,10 @@ STEP-09Aの`StatefulStack`は次を実装する。
 旧STEP-09BのSpot・`desiredCount=1` RuntimeStackは、PR `#85`のscale-to-zero sliceで置き換えた。現行の`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glass task definition、HTTP API、3 Lambda、1分周期EventBridge rule、IAM role、SSM SecureString参照、CloudWatch Logsを実装する。image digestとruntime config versionはCloudFormation parameterとし、形式を`^sha256:[0-9a-f]{64}$`と`^v[0-9]{4}$`でfail closedに検証する。image digestにdefaultを設けず、releaseは平常とbreak-glassの検証済みdigestを必ず明示する。local/PRでは構成assertion、cdk-nag、credentialなしのstrict synthまでとし、AWS resourceはdeployしない。
 
 Scale-to-ZeroのCDKとapplicationはfeature branch上でlocal実装されたが、AWS accountへのbootstrap、deploy、resource作成・更新は未実施である。Discord ApplicationとInteractions Endpoint URLも未変更である。
+
+STEP-09C-Bでは`OperationsStack`を追加し、Runtime/Statefulの後に一方向依存させる。deploy時必須・defaultなし・`NoEcho`の`OperatorNotificationEmail` parameter、TLS必須の単一SNS topic、email subscription、9 metric alarm、critical/warningの2 composite alarm、1 dashboard、異常ECS task stop用EventBridge ruleだけを作成する。Container Insights、helper Lambda、CloudWatch Logs event capture、KMS customer keyは追加しない。SNSは本文やuser contentではなくalarmと絞り込んだlifecycle metadataだけを扱うため、費用とkey-policy運用を増やすcustomer managed KMS keyを使用しない。subscriptionはdeploy後にoperatorが受信emailから確認するまで`PendingConfirmation`であり、未確認状態を運用開始扱いにしない。
+
+EventBridgeは`ECS Task State Change`、対象cluster/service、`lastStatus=STOPPED`に加え、AWS公式の異常系`stopCode`である`TaskFailedToStart`、`EssentialContainerExited`、`SpotInterruption`、`TerminationNotice`だけをSNSへ送る。`UserInitiated`と`ServiceSchedulerInitiated`は計画scale-down/deploy通知ノイズを避けるため除外する。target payloadはtask ARN、cluster ARN、stop code/reason、exit code、時刻だけに絞り、元event全体を転送しない。
 
 ## 3. Network
 
@@ -184,6 +188,9 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-19 | Fargate pricing | https://aws.amazon.com/fargate/pricing/ | 既定20 GiB ephemeral storageは追加料金なし、追加容量は設定しない |
 | 2026-07-19 | CloudWatch pricing | https://aws.amazon.com/cloudwatch/pricing/ | 単一task MVPではContainer Insightsを無効にし、少数application metricとECS標準metricへ絞る |
 | 2026-07-16 | Cost Anomaly Detection | https://docs.aws.amazon.com/cost-management/latest/userguide/getting-started-ad.html | managed anomaly monitor |
+| 2026-07-29 | ECS task state change events | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_task_events.html | STOPPED event、stopCode/reason、EventBridge delivery |
+| 2026-07-29 | CloudWatch composite alarms | https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarm-combining.html | underlying alarmをcritical/warningへ集約し通知noiseを抑制 |
+| 2026-07-29 | SNS email subscription | https://docs.aws.amazon.com/sns/latest/dg/sns-email-notifications.html | deploy後のemail確認とPendingConfirmation運用 |
 | 2026-07-16 | Task definition | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | CPU/memory、stop timeout、awslogs |
 | 2026-07-16 | CDK | https://docs.aws.amazon.com/cdk/v2/guide/home.html | stack、synth/diff、logical ID |
 | 2026-07-16 | VPC pricing | https://aws.amazon.com/vpc/pricing/ | Public IPv4費用 |
