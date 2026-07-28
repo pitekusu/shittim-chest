@@ -20,7 +20,21 @@ from shittim_chest.adapters.dynamodb import (
     serialize_runtime_state,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item
-from shittim_chest.application import IngressRequest, RuntimeState, RuntimeStatus
+from shittim_chest.adapters.dynamodb.outbox import OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION
+from shittim_chest.adapters.dynamodb.repository import (
+    ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
+)
+from shittim_chest.adapters.dynamodb.runtime_state import (
+    RUNTIME_ACTIVITY_SCHEMA_RECORD_TYPE,
+    RUNTIME_ACTIVITY_SCHEMA_VERSION,
+)
+from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION
+from shittim_chest.application import (
+    IngressRequest,
+    IngressStatus,
+    RuntimeState,
+    RuntimeStatus,
+)
 from shittim_chest.application.ports import RepositoryConflict
 
 NOW = datetime(2026, 7, 26, 6, 0, tzinfo=UTC)
@@ -79,6 +93,57 @@ def wake_marker(client: DynamoDBClient, table_name: str, interaction_id: str) ->
         ConsistentRead=True,
     )
     return response.get("Item")
+
+
+def put_zero_non_ingress_activity_records(
+    client: DynamoDBClient,
+    table_name: str,
+    *,
+    at: datetime,
+) -> None:
+    """Seed deployment-owned zero records while ingress exercises its own counters."""
+
+    timestamp = at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    common = {"created_at": timestamp, "updated_at": timestamp}
+    records = (
+        {
+            "PK": "CONTROL#RUNTIME",
+            "SK": "ACTIVITY_SCHEMA",
+            "record_type": RUNTIME_ACTIVITY_SCHEMA_RECORD_TYPE,
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": RUNTIME_ACTIVITY_SCHEMA_VERSION,
+            **common,
+        },
+        {
+            "PK": "CONTROL#PANEL_REFRESH",
+            "SK": "PENDING_COUNT",
+            "record_type": "panel_refresh_pending_counter",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "count": 0,
+            **common,
+        },
+        {
+            "PK": "CONTROL#OUTBOX",
+            "SK": "ACTIVITY",
+            "record_type": "outbox_activity_counter",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION,
+            "pending_count": 0,
+            "claimed_count": 0,
+            **common,
+        },
+        {
+            "PK": "CONTROL#DEBATE",
+            "SK": "ACTIVE_ATTEMPT_COUNT",
+            "record_type": "active_attempt_counter",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "record_schema_version": ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
+            "count": 0,
+            **common,
+        },
+    )
+    for record in records:
+        client.put_item(TableName=table_name, Item=marshal_item(record))
 
 
 @pytest.mark.asyncio
@@ -431,11 +496,32 @@ async def test_new_wake_fences_stale_stop_completion(
     await runtime.replace(expected=started, updated=ready)
     idle = ready.begin_idle(at=NOW + timedelta(seconds=4))
     await runtime.replace(expected=ready, updated=idle)
-    stopping = idle.transition(
-        RuntimeStatus.STOPPING,
-        at=idle.stop_eligible_at or NOW,
+    terminal_request = await ingress.mark_terminal(
+        request=first_request,
+        at=NOW + timedelta(seconds=5),
+        status=IngressStatus.FAILED,
+        error_code="test_request_finished",
     )
-    await runtime.replace(expected=idle, updated=stopping)
+    status_work = await ingress.claim_status_publication(
+        interaction_id=terminal_request.interaction_id,
+        claim_owner="status-publisher",
+        at=NOW + timedelta(seconds=6),
+    )
+    assert status_work is not None
+    await ingress.mark_status_delivered(
+        work=status_work,
+        claim_owner="status-publisher",
+        message_id="status-message",
+        at=NOW + timedelta(seconds=7),
+    )
+    put_zero_non_ingress_activity_records(
+        dynamodb_client,
+        dynamodb_table,
+        at=NOW + timedelta(seconds=7),
+    )
+    stop_at = idle.stop_eligible_at
+    assert stop_at is not None
+    stopping = await runtime.begin_idle_stop(expected=idle, at=stop_at)
 
     await ingress.enqueue(second_request)
     rewoken = await runtime.request_wake(

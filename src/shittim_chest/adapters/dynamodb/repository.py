@@ -1852,7 +1852,6 @@ class DynamoDbDebateRepository:
         if delta not in {-1, 1}:
             raise ValueError("active attempt counter delta must be minus or plus one")
         values: DynamoItem = {
-            ":zero": 0,
             ":one": 1,
             ":limit": ACTIVE_ATTEMPT_COUNT_LIMIT,
             ":type": "active_attempt_counter",
@@ -1861,6 +1860,7 @@ class DynamoDbDebateRepository:
             ":at": _timestamp(at),
         }
         if delta > 0:
+            values[":zero"] = 0
             update_expression = (
                 "SET #count=if_not_exists(#count,:zero)+:one, "
                 "record_type=:type, schema_version=:schema, "
@@ -2619,11 +2619,22 @@ def _require_terminal_stage(
         raise RepositoryConflict("terminal delivery staging requires an incomplete plan")
     expected.state.transition_to(plan.target_phase, at=plan.staged_at)
     staged_state = replace(expected.state, updated_at=plan.staged_at)
-    baseline = replace(expected, state=staged_state, terminal_delivery=plan)
     if plan.target_phase is DebatePhase.COMPLETED:
-        baseline = replace(baseline, final_decision=staged.final_decision)
+        baseline = replace(
+            expected,
+            state=staged_state,
+            terminal_delivery=plan,
+            final_decision=staged.final_decision,
+        )
     elif plan.target_phase is DebatePhase.FAILED:
-        baseline = replace(baseline, error_code=staged.error_code)
+        baseline = replace(
+            expected,
+            state=staged_state,
+            terminal_delivery=plan,
+            error_code=staged.error_code,
+        )
+    else:
+        baseline = replace(expected, state=staged_state, terminal_delivery=plan)
     if staged != baseline:
         raise RepositoryConflict("terminal delivery staging changed unrelated debate state")
     if (

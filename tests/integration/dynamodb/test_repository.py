@@ -119,6 +119,69 @@ async def claimed_ingress(
     return claimed, fence
 
 
+async def finalize_terminal_delivery(
+    *,
+    debates: DynamoDbDebateRepository,
+    outbox: DynamoDbOutboxRepository,
+    expected: DebateSnapshot,
+    target_phase: DebatePhase,
+    staged_at: datetime,
+    terminal_at: datetime,
+    error_code: str | None = None,
+    operation_id: str | None = None,
+    ingress_claim: IngressClaimFence | None = None,
+) -> DebateSnapshot:
+    """Drive a bound attempt through the required durable terminal delivery path."""
+
+    operations = prepare_terminal_outbox_operations(
+        snapshot=expected,
+        target_phase=target_phase,
+        created_at=staged_at,
+        error_code=error_code,
+    )
+    plan = TerminalDeliveryPlan(
+        target_phase=target_phase,
+        operation_ids=tuple(operation.operation_id for operation in operations),
+        content_hashes=tuple(operation.content_hash for operation in operations),
+        staged_at=staged_at,
+    )
+    staged = replace(
+        expected,
+        state=replace(expected.state, updated_at=staged_at),
+        terminal_delivery=plan,
+        error_code=error_code,
+    )
+    persisted = await debates.stage_terminal_delivery(
+        expected=expected,
+        staged=staged,
+        operations=operations,
+        operation_id=operation_id,
+        ingress_claim=ingress_claim,
+    )
+    for index, operation in enumerate(operations):
+        claim_at = staged_at + timedelta(microseconds=(index * 2) + 1)
+        claimed = await outbox.claim(
+            expected=persisted,
+            operation_id=operation.operation_id,
+            claim_owner="terminal-publisher",
+            at=claim_at,
+        )
+        assert claimed is not None
+        await outbox.mark_sent(
+            expected=persisted,
+            operation_id=operation.operation_id,
+            claim_owner="terminal-publisher",
+            message_id=str(10_000 + index),
+            at=claim_at + timedelta(microseconds=1),
+        )
+    terminal = replace(
+        persisted,
+        state=persisted.state.transition_to(target_phase, at=terminal_at),
+        terminal_delivery=plan.complete(at=terminal_at),
+    )
+    return await debates.finalize_terminal(expected=persisted, updated=terminal)
+
+
 @pytest.mark.asyncio
 async def test_accept_replay_three_slots_and_terminal_release(
     dynamodb_client: DynamoDBClient,
@@ -611,6 +674,7 @@ async def test_terminal_transition_winning_after_recovery_read_blocks_stale_leas
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
     source = replace(
         new_snapshot(),
         starter_message_id="101",
@@ -645,11 +709,14 @@ async def test_terminal_transition_winning_after_recovery_read_blocks_stale_leas
     )
     try:
         assert await asyncio.to_thread(stale_snapshot_loaded.wait, 5)
-        terminal = replace(
-            accepted,
-            state=accepted.state.transition_to(DebatePhase.CANCELLED, at=terminal_at),
+        persisted_terminal = await finalize_terminal_delivery(
+            debates=debates,
+            outbox=outbox,
+            expected=accepted,
+            target_phase=DebatePhase.CANCELLED,
+            staged_at=terminal_at - timedelta(seconds=1),
+            terminal_at=terminal_at,
         )
-        persisted_terminal = await debates.replace(expected=accepted, updated=terminal)
     finally:
         allow_claim_transaction.set()
 
@@ -739,6 +806,7 @@ async def test_retry_pre_activation_failure_preserves_source_attempt_and_quota(
 ) -> None:
     ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
     accepted = await debates.create(
         replace(
             new_snapshot(),
@@ -749,15 +817,15 @@ async def test_retry_pre_activation_failure_preserves_source_attempt_and_quota(
         operation_id="retry-source",
         lease_owner="initial-runtime",
     )
-    source_failed = replace(
-        accepted,
-        state=accepted.state.transition_to(
-            DebatePhase.FAILED,
-            at=accepted.state.updated_at + timedelta(seconds=1),
-        ),
+    persisted_source = await finalize_terminal_delivery(
+        debates=debates,
+        outbox=outbox,
+        expected=accepted,
+        target_phase=DebatePhase.FAILED,
+        staged_at=NOW + timedelta(milliseconds=500),
+        terminal_at=NOW + timedelta(seconds=1),
         error_code="source_failure",
     )
-    persisted_source = await debates.replace(expected=accepted, updated=source_failed)
     assert await debates.pending_panel_refresh_count() == 1
     source_panel_claim = await debates.claim_panel_refresh(
         debate_id=persisted_source.state.debate_id,
@@ -789,6 +857,7 @@ async def test_retry_pre_activation_failure_preserves_source_attempt_and_quota(
         attempt_created_at=retry_state.updated_at,
         lease=None,
         error_code=None,
+        terminal_delivery=None,
     )
     persisted_retry = await debates.create_retry(
         expected_failed=persisted_source,
@@ -855,6 +924,7 @@ async def test_phase_write_cannot_restore_a_stale_panel_refresh_claim(
     dynamodb_table: str,
 ) -> None:
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
     accepted = await debates.create(
         replace(
             new_snapshot(),
@@ -865,16 +935,14 @@ async def test_phase_write_cannot_restore_a_stale_panel_refresh_claim(
         operation_id="panel-race-source",
         lease_owner="runtime-instance",
     )
-    failed = await debates.replace(
+    failed = await finalize_terminal_delivery(
+        debates=debates,
+        outbox=outbox,
         expected=accepted,
-        updated=replace(
-            accepted,
-            state=accepted.state.transition_to(
-                DebatePhase.FAILED,
-                at=NOW + timedelta(seconds=1),
-            ),
-            error_code="fixture_failure",
-        ),
+        target_phase=DebatePhase.FAILED,
+        staged_at=NOW + timedelta(milliseconds=500),
+        terminal_at=NOW + timedelta(seconds=1),
+        error_code="fixture_failure",
     )
     failed_claim = await debates.claim_panel_refresh(
         debate_id=failed.state.debate_id,
@@ -900,6 +968,7 @@ async def test_phase_write_cannot_restore_a_stale_panel_refresh_claim(
             attempt_created_at=retry_state.updated_at,
             lease=None,
             error_code=None,
+            terminal_delivery=None,
         ),
         operation_id="panel-race-retry",
         lease_owner="runtime-instance",
@@ -962,6 +1031,7 @@ async def test_claimed_panel_refresh_abandonment_is_atomic_and_fenced(
     dynamodb_table: str,
 ) -> None:
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
     accepted = await debates.create(
         replace(
             new_snapshot(),
@@ -973,13 +1043,14 @@ async def test_claimed_panel_refresh_abandonment_is_atomic_and_fenced(
         lease_owner="runtime-instance",
     )
     required_at = NOW + timedelta(seconds=1)
-    failed = await debates.replace(
+    failed = await finalize_terminal_delivery(
+        debates=debates,
+        outbox=outbox,
         expected=accepted,
-        updated=replace(
-            accepted,
-            state=accepted.state.transition_to(DebatePhase.FAILED, at=required_at),
-            error_code="fixture_failure",
-        ),
+        target_phase=DebatePhase.FAILED,
+        staged_at=NOW + timedelta(milliseconds=500),
+        terminal_at=required_at,
+        error_code="fixture_failure",
     )
     assert failed.panel_refresh_state is PanelRefreshState.PENDING
     assert await debates.pending_panel_refresh_count() == 1
@@ -1142,20 +1213,38 @@ async def test_retry_and_cancel_mutations_share_the_ingress_claim_transaction(
 ) -> None:
     ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
     accepted = await debates.create(
-        new_snapshot(),
+        replace(
+            new_snapshot(),
+            starter_message_id="401",
+            thread_id="402",
+            control_panel_message_id="403",
+        ),
         operation_id="initial-accept",
         lease_owner="worker-1",
     )
-    failed = replace(
-        accepted,
-        state=accepted.state.transition_to(
-            DebatePhase.FAILED,
-            at=accepted.state.updated_at + timedelta(seconds=1),
-        ),
+    persisted_failed = await finalize_terminal_delivery(
+        debates=debates,
+        outbox=outbox,
+        expected=accepted,
+        target_phase=DebatePhase.FAILED,
+        staged_at=NOW + timedelta(milliseconds=500),
+        terminal_at=NOW + timedelta(seconds=1),
         error_code="test_failure",
     )
-    persisted_failed = await debates.replace(expected=accepted, updated=failed)
+    failed_panel_claim = await debates.claim_panel_refresh(
+        debate_id=persisted_failed.state.debate_id,
+        attempt_id=persisted_failed.state.attempt_id,
+        claim_owner="panel-publisher",
+        at=NOW + timedelta(seconds=1, microseconds=1),
+    )
+    assert failed_panel_claim is not None
+    persisted_failed = await debates.complete_panel_refresh(
+        expected=failed_panel_claim,
+        claim_owner="panel-publisher",
+        at=NOW + timedelta(seconds=1, microseconds=2),
+    )
     _, retry_fence = await claimed_ingress(
         repository=ingress,
         operation_id="fenced-retry",
@@ -1173,6 +1262,7 @@ async def test_retry_and_cancel_mutations_share_the_ingress_claim_transaction(
         attempt_created_at=retry_state.updated_at,
         lease=None,
         error_code=None,
+        terminal_delivery=None,
     )
     persisted_retry = await debates.create_retry(
         expected_failed=persisted_failed,
@@ -1188,19 +1278,15 @@ async def test_retry_and_cancel_mutations_share_the_ingress_claim_transaction(
         target=persisted_retry,
         created_at=NOW + timedelta(seconds=4),
     )
-    cancelled = replace(
-        persisted_retry,
-        state=persisted_retry.state.transition_to(
-            DebatePhase.CANCELLED,
-            at=NOW + timedelta(seconds=5),
-        ),
-    )
-
-    persisted_cancel = await debates.replace(
+    persisted_cancel = await finalize_terminal_delivery(
+        debates=debates,
+        outbox=outbox,
         expected=persisted_retry,
-        updated=cancelled,
+        target_phase=DebatePhase.CANCELLED,
+        staged_at=NOW + timedelta(seconds=5),
+        terminal_at=NOW + timedelta(seconds=6),
         operation_id="fenced-cancel",
-        ingress_claim=cancel_fence.for_write_at(cancelled.state.updated_at),
+        ingress_claim=cancel_fence.for_write_at(NOW + timedelta(seconds=5)),
     )
 
     assert persisted_cancel.state.phase is DebatePhase.CANCELLED
@@ -1240,20 +1326,38 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
     dynamodb_table: str,
 ) -> None:
     repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
     accepted = await repository.create(
-        new_snapshot(),
+        replace(
+            new_snapshot(),
+            starter_message_id="501",
+            thread_id="502",
+            control_panel_message_id="503",
+        ),
         operation_id="accept",
         lease_owner="worker-1",
     )
-    failed = replace(
-        accepted,
-        state=accepted.state.transition_to(
-            DebatePhase.FAILED,
-            at=accepted.state.updated_at + timedelta(seconds=1),
-        ),
+    persisted_failed = await finalize_terminal_delivery(
+        debates=repository,
+        outbox=outbox,
+        expected=accepted,
+        target_phase=DebatePhase.FAILED,
+        staged_at=NOW + timedelta(milliseconds=500),
+        terminal_at=NOW + timedelta(seconds=1),
         error_code="test_failure",
     )
-    persisted_failed = await repository.replace(expected=accepted, updated=failed)
+    failed_panel_claim = await repository.claim_panel_refresh(
+        debate_id=persisted_failed.state.debate_id,
+        attempt_id=persisted_failed.state.attempt_id,
+        claim_owner="panel-publisher",
+        at=NOW + timedelta(seconds=1, microseconds=1),
+    )
+    assert failed_panel_claim is not None
+    persisted_failed = await repository.complete_panel_refresh(
+        expected=failed_panel_claim,
+        claim_owner="panel-publisher",
+        at=NOW + timedelta(seconds=1, microseconds=2),
+    )
     retry_state = persisted_failed.state.new_retry_attempt(
         AttemptId.new(),
         at=persisted_failed.state.updated_at + timedelta(seconds=1),
@@ -1264,6 +1368,7 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
         attempt_created_at=retry_state.updated_at,
         lease=None,
         error_code=None,
+        terminal_delivery=None,
     )
 
     persisted_retry = await repository.create_retry(

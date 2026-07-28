@@ -568,15 +568,14 @@ def outbox_activity_action(
     if pending_increment > OUTBOX_ACTIVITY_LIMIT:
         raise ValueError("outbox activity increment exceeds its limit")
     values: DynamoItem = {
-        ":zero": 0,
-        ":one": 1,
-        ":limit": OUTBOX_ACTIVITY_LIMIT,
         ":type": _OUTBOX_ACTIVITY_RECORD_TYPE,
         ":schema": CURRENT_SCHEMA_VERSION,
         ":record_schema": OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION,
         ":at": _timestamp(at),
     }
     if pending_increment:
+        values[":zero"] = 0
+        values[":limit"] = OUTBOX_ACTIVITY_LIMIT
         values[":increment"] = pending_increment
         values[":maximum_before"] = OUTBOX_ACTIVITY_LIMIT - pending_increment
         update = (
@@ -593,6 +592,9 @@ def outbox_activity_action(
             "AND pending_count <= :maximum_before AND claimed_count <= :limit)"
         )
     elif pending_delta == -1 and claimed_delta == 1:
+        values[":zero"] = 0
+        values[":one"] = 1
+        values[":limit"] = OUTBOX_ACTIVITY_LIMIT
         update = (
             "SET pending_count=pending_count-:one, claimed_count=claimed_count+:one, updated_at=:at"
         )
@@ -603,6 +605,9 @@ def outbox_activity_action(
             "AND pending_count <= :limit AND claimed_count < :limit"
         )
     elif pending_delta == 0 and claimed_delta == -1:
+        values[":zero"] = 0
+        values[":one"] = 1
+        values[":limit"] = OUTBOX_ACTIVITY_LIMIT
         update = "SET claimed_count=claimed_count-:one, updated_at=:at"
         condition = (
             "record_type=:type AND schema_version=:schema "
@@ -611,6 +616,9 @@ def outbox_activity_action(
             "AND pending_count <= :limit AND claimed_count <= :limit"
         )
     else:
+        values[":zero"] = 0
+        values[":one"] = 1
+        values[":limit"] = OUTBOX_ACTIVITY_LIMIT
         update = (
             "SET pending_count=pending_count+:one, claimed_count=claimed_count-:one, updated_at=:at"
         )
