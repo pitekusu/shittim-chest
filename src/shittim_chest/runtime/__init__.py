@@ -6,6 +6,12 @@ from shittim_chest.runtime.lifecycle import (
     RuntimeShutdownTimeout,
     UnixSignalHandlers,
 )
+from shittim_chest.runtime.operational_metrics import (
+    CloudWatchEmfMetrics,
+    OperationalMetric,
+    OperationalMetricService,
+    RuntimeMetricsReporter,
+)
 from shittim_chest.runtime.primitives import (
     ContentFreeTelemetry,
     SecureCandidateOrderer,
@@ -14,9 +20,13 @@ from shittim_chest.runtime.primitives import (
 )
 
 __all__ = (
+    "CloudWatchEmfMetrics",
     "ContentFreeTelemetry",
+    "OperationalMetric",
+    "OperationalMetricService",
     "RuntimeAdmissionGateway",
     "RuntimeLifecycle",
+    "RuntimeMetricsReporter",
     "RuntimeShutdownTimeout",
     "SecureCandidateOrderer",
     "SystemClock",

@@ -36,7 +36,7 @@ STEP-09Aの`StatefulStack`は次を実装する。
 - `Project`、`Environment`、`ManagedBy` tagをapp rootから付与する。
 - local/PRではdummy accountを使うassertionとcredentialなしのstrict synthだけを行い、bootstrap、deploy、AWS resource作成は行わない。
 
-旧STEP-09BのSpot・`desiredCount=1` RuntimeStackは、Draft PR `#85`のscale-to-zero sliceで置き換える。現行の`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glass task definition、HTTP API、3 Lambda、1分周期EventBridge rule、IAM role、SSM SecureString参照、CloudWatch Logsを実装する。image digestとruntime config versionはCloudFormation parameterとし、形式を`^sha256:[0-9a-f]{64}$`と`^v[0-9]{4}$`でfail closedに検証する。image digestにdefaultを設けず、releaseは平常とbreak-glassの検証済みdigestを必ず明示する。local/PRでは構成assertion、cdk-nag、credentialなしのstrict synthまでとし、AWS resourceはdeployしない。
+旧STEP-09BのSpot・`desiredCount=1` RuntimeStackは、PR `#85`のscale-to-zero sliceで置き換えた。現行の`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glass task definition、HTTP API、3 Lambda、1分周期EventBridge rule、IAM role、SSM SecureString参照、CloudWatch Logsを実装する。image digestとruntime config versionはCloudFormation parameterとし、形式を`^sha256:[0-9a-f]{64}$`と`^v[0-9]{4}$`でfail closedに検証する。image digestにdefaultを設けず、releaseは平常とbreak-glassの検証済みdigestを必ず明示する。local/PRでは構成assertion、cdk-nag、credentialなしのstrict synthまでとし、AWS resourceはdeployしない。
 
 Scale-to-ZeroのCDKとapplicationはfeature branch上でlocal実装されたが、AWS accountへのbootstrap、deploy、resource作成・更新は未実施である。Discord ApplicationとInteractions Endpoint URLも未変更である。
 
@@ -130,7 +130,7 @@ release planとEnvironment承認後のdeploy jobは同じdigestへ次を順番�
 4. `list-image-referrers --subject-id imageDigest=...`でsignature、SPDX SBOM、build provenance、vulnerability assessmentの4種が`ACTIVE`であることを確認し、artifact digestをmanifestと一致させる。
 5. GitHub artifact attestationはrepository identity、workflow、commit、subject digestを検証し、SBOM hashとscan gateを再確認する。
 
-STEP-09Bではtask definitionがdigest URI以外を拒否するassertionを追加する。STEP-09CではECS `PRE_SCALE_UP` Lambda lifecycle hookによるserver-side signing status/referrer admissionを追加し、timeoutや不一致を`FAILED`としてrollbackする。暗号学的Notation verificationはrelease workflowを正とし、hookは防御層として用いる。
+STEP-09Bではtask definitionがdigest URI以外を拒否するassertionを追加する。ECS `PRE_SCALE_UP` Lambda lifecycle hookによるserver-side signing status/referrer admissionはOperations監視から分離し、STEP-10-Aでrelease supply-chain gateと同時に実装する。timeoutや不一致は`FAILED`としてrollbackする。暗号学的Notation verificationはrelease workflowを正とし、hookは防御層として用いる。
 
 ## 7. IAM
 
@@ -170,7 +170,7 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 - ECR連携でのAWS Signer利用自体に追加Signer料金はない。ただしsignature、SBOM、provenance、vulnerability assessmentは各reference artifactとしてECR image quotaと保存容量を消費するため、repository容量とartifact数を月次確認する。
 - Fargate既定20 GiB ephemeral storageは追加料金なしとし、追加容量は設定しない。Container Insightsは無効とする。単一taskのMVPではECS標準CPU・メモリ、EventBridge通知、少数のapplication metricを使い、task/container単位のContainer Insights固定費を負担しない。
 - `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 20 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。Cost Anomaly Detectionは月額予算ではなく異常の総影響額を評価するため、notification thresholdは10 USDとする。
-- Budgetはactual 80%/100%とforecasted 100%を通知し、自動停止actionは設けない。Cost Anomaly Detectionは既存のservice monitorを再利用し、同一accountのAWS managed service monitorを重複作成しない。STEP-09Cでは新しいCDK管理Budget/CAD通知を作成して通知先の到達を確認した後、既存の手動10 USD BudgetとCAD subscriptionを撤去する。`Project` tagがBillingで`Active`になるまではtag budgetをdeployしない。
+- Budgetはactual 80%/100%とforecasted 100%を通知し、自動停止actionは設けない。Runtime alarm、AWS Budget、Cost Anomaly Detectionは同一のoperator emailをdeploy時parameterで受け取り、実addressをGit、Obsidian、CloudFormation outputへ保存しない。Cost Anomaly Detectionは既存のservice monitorを再利用し、同一accountのAWS managed service monitorを重複作成しない。STEP-09C-B/Cでは新しいCDK管理通知を作成してsubscription到達を確認した後、既存の手動10 USD BudgetとCAD subscriptionを撤去する。`Project` tagがBillingで`Active`になるまではtag budgetをdeployしない。
 - DynamoDB PITRは35日、stack削除でもtableをretainする。業務dataにTTLを設定しないが35日より古い状態の復旧は保証せず、AWS Backupは作成しない。
 - DynamoDB on-demand maximum throughputは負荷試験前に推測値を設定しない。初回本番計測後に必要性と値をADRで決定し、設定する場合はthrottle alarmと同時に導入する。
 

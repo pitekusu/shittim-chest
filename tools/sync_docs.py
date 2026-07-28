@@ -30,13 +30,18 @@ EXPECTED_FILES = (
     "20_実装・試験・検証記録.md",
     "21_GitHub・Discord通知運用設計.md",
 )
-SOURCE_ONLY_DIRECTORIES = {
+MIRRORED_DIRECTORIES = {
     "100_Ondemand Fargate": (
         "10_scale-to-zero-goal.md",
         "20_scale-to-zero-completion-checklist.md",
         "30_scale-to-zero-commit-plan.md",
     ),
 }
+EXPECTED_DOCUMENT_PATHS = EXPECTED_FILES + tuple(
+    f"{directory_name}/{filename}"
+    for directory_name, filenames in MIRRORED_DIRECTORIES.items()
+    for filename in filenames
+)
 ALLOWED_DESTINATION_EXTRAS = {"LICENSE.md", "README.md"}
 SECRET_PATTERNS = {
     "AWS access key": re.compile(rb"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
@@ -96,19 +101,25 @@ def read_safe_file(path: Path) -> bytes:
 
 
 def source_documents(source: Path) -> dict[str, bytes]:
-    expected = set(EXPECTED_FILES) | set(SOURCE_ONLY_DIRECTORIES)
+    expected = set(EXPECTED_FILES) | set(MIRRORED_DIRECTORIES)
     validate_directory(source, expected_names=expected)
-    for directory_name, expected_files in SOURCE_ONLY_DIRECTORIES.items():
-        source_only = source / directory_name
-        validate_directory(source_only, expected_names=set(expected_files))
+    documents = {name: read_safe_file(source / name) for name in EXPECTED_FILES}
+    for directory_name, expected_files in MIRRORED_DIRECTORIES.items():
+        source_directory = source / directory_name
+        validate_directory(source_directory, expected_names=set(expected_files))
         for name in expected_files:
-            read_safe_file(source_only / name)
-    return {name: read_safe_file(source / name) for name in EXPECTED_FILES}
+            relative_path = f"{directory_name}/{name}"
+            documents[relative_path] = read_safe_file(source_directory / name)
+    return documents
 
 
 def validate_destination(destination: Path) -> None:
-    allowed = set(EXPECTED_FILES) | ALLOWED_DESTINATION_EXTRAS
+    allowed = set(EXPECTED_FILES) | set(MIRRORED_DIRECTORIES) | ALLOWED_DESTINATION_EXTRAS
     validate_directory(destination, expected_names=allowed)
+    for directory_name, expected_files in MIRRORED_DIRECTORIES.items():
+        directory = destination / directory_name
+        if directory.exists() or directory.is_symlink():
+            validate_directory(directory, expected_names=set(expected_files))
     for name in ALLOWED_DESTINATION_EXTRAS:
         extra = destination / name
         if extra.exists() or extra.is_symlink():
@@ -119,6 +130,11 @@ def write_mirror(documents: dict[str, bytes], destination: Path) -> None:
     if destination.is_symlink():
         raise SyncError(f"symlink directory is not allowed: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
+    for directory_name in MIRRORED_DIRECTORIES:
+        directory = destination / directory_name
+        if directory.is_symlink():
+            raise SyncError(f"symlink directory is not allowed: {directory}")
+        directory.mkdir(exist_ok=True)
     validate_destination(destination)
     for name, data in documents.items():
         target = destination / name

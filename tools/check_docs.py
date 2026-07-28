@@ -9,7 +9,12 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from tools.sync_docs import ALLOWED_DESTINATION_EXTRAS, EXPECTED_FILES
+from tools.sync_docs import (
+    ALLOWED_DESTINATION_EXTRAS,
+    EXPECTED_DOCUMENT_PATHS,
+    EXPECTED_FILES,
+    MIRRORED_DIRECTORIES,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DOCS_DIRECTORY = REPOSITORY_ROOT / "docs"
@@ -75,7 +80,7 @@ def parse_frontmatter(text: str, filename: str) -> dict[str, str]:
         normalized_value = value.strip()
         index += 1
         if not normalized_value:
-            if key not in {"aliases", "tags"}:
+            if key not in {"aliases", "tags", "related"}:
                 raise DocumentationError(f"empty top-level frontmatter at {filename}:{line_number}")
             block_items = 0
             while index < len(frontmatter_lines):
@@ -257,7 +262,7 @@ def validate_docs_directory(directory: Path) -> int:
 
     if directory.is_symlink() or not directory.is_dir():
         raise DocumentationError(f"docs directory must be regular: {directory}")
-    expected_names = set(EXPECTED_FILES) | ALLOWED_DESTINATION_EXTRAS
+    expected_names = set(EXPECTED_FILES) | set(MIRRORED_DIRECTORIES) | ALLOWED_DESTINATION_EXTRAS
     actual_names = {entry.name for entry in directory.iterdir()}
     if actual_names != expected_names:
         missing = sorted(expected_names - actual_names)
@@ -269,10 +274,27 @@ def validate_docs_directory(directory: Path) -> int:
             details.append("unexpected: " + ", ".join(unexpected))
         raise DocumentationError("invalid docs file set; " + "; ".join(details))
 
+    for directory_name, expected_files in MIRRORED_DIRECTORIES.items():
+        nested = directory / directory_name
+        if nested.is_symlink() or not nested.is_dir():
+            raise DocumentationError(f"nested docs directory must be regular: {nested}")
+        nested_names = {entry.name for entry in nested.iterdir()}
+        if nested_names != set(expected_files):
+            missing = sorted(set(expected_files) - nested_names)
+            unexpected = sorted(nested_names - set(expected_files))
+            details = []
+            if missing:
+                details.append("missing: " + ", ".join(missing))
+            if unexpected:
+                details.append("unexpected: " + ", ".join(unexpected))
+            raise DocumentationError(
+                f"invalid nested docs file set in {directory_name}; " + "; ".join(details)
+            )
+
     findings: list[str] = []
     texts: dict[str, str] = {}
     headings: dict[str, frozenset[str]] = {}
-    for filename in EXPECTED_FILES:
+    for filename in EXPECTED_DOCUMENT_PATHS:
         try:
             text = read_markdown(directory / filename)
             texts[filename] = text
@@ -281,7 +303,7 @@ def validate_docs_directory(directory: Path) -> int:
             findings.append(str(error))
 
     available_targets = set(headings)
-    for filename in EXPECTED_FILES:
+    for filename in EXPECTED_DOCUMENT_PATHS:
         if filename not in texts:
             continue
         try:
@@ -309,7 +331,7 @@ def validate_docs_directory(directory: Path) -> int:
 
     if findings:
         raise DocumentationError("documentation validation failed:\n- " + "\n- ".join(findings))
-    return len(EXPECTED_FILES)
+    return len(EXPECTED_DOCUMENT_PATHS)
 
 
 def main() -> int:
