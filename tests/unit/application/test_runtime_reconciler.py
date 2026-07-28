@@ -274,6 +274,33 @@ class FakeEcs:
         return self.snapshot
 
 
+class FailOnceScaleDownEcs(FakeEcs):
+    """Lose one scale-down response either before or after ECS accepted it."""
+
+    def __init__(
+        self,
+        snapshot: EcsRuntimeSnapshot,
+        *,
+        apply_before_error: bool,
+    ) -> None:
+        super().__init__(snapshot)
+        self.apply_before_error = apply_before_error
+        self.failed_once = False
+
+    async def set_desired_count(self, desired_count: int) -> EcsRuntimeSnapshot:
+        if desired_count != 0 or self.failed_once:
+            return await super().set_desired_count(desired_count)
+        self.failed_once = True
+        self.update_calls.append(desired_count)
+        if self.apply_before_error:
+            self.snapshot = EcsRuntimeSnapshot(
+                desired_count=desired_count,
+                running_count=self.snapshot.running_count,
+                pending_count=self.snapshot.pending_count,
+            )
+        raise EcsRuntimeUnavailable
+
+
 class FakeStatusRepository:
     def __init__(self, due: tuple[IngressStatusPublication, ...] = ()) -> None:
         self.due = due
@@ -320,6 +347,13 @@ def ready_runtime(at: datetime) -> RuntimeState:
     starting = RuntimeState.stopped(at=CREATED_AT).request_wake(at=CREATED_AT)
     started = starting.mark_started(at=CREATED_AT, runtime_instance_id="runtime-1")
     return started.transition(RuntimeStatus.READY, at=at, runtime_instance_id="runtime-1")
+
+
+def stopping_runtime() -> RuntimeState:
+    idle_at = CREATED_AT + timedelta(minutes=1)
+    idle = ready_runtime(idle_at - timedelta(seconds=1)).begin_idle(at=idle_at)
+    assert idle.stop_eligible_at is not None
+    return idle.begin_idle_stop(at=idle.stop_eligible_at)
 
 
 def reconciler(
@@ -1168,3 +1202,422 @@ async def test_stopping_with_status_only_work_never_restarts_fargate() -> None:
     assert ecs.update_calls == [0]
     assert runtime.state is not None
     assert runtime.state.status is RuntimeStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_request_winning_the_idle_stop_fence_prevents_scale_down() -> None:
+    """A wake committed after the first activity read must win the stop CAS."""
+
+    idle_at = CREATED_AT + timedelta(minutes=1)
+    idle = ready_runtime(idle_at - timedelta(seconds=1)).begin_idle(at=idle_at)
+    assert idle.stop_eligible_at is not None
+    at = idle.stop_eligible_at
+    ingress = FakeIngress(())
+
+    class WakeDuringStopFenceRepository(FakeRuntimeRepository):
+        async def begin_idle_stop(
+            self,
+            *,
+            expected: RuntimeState,
+            at: datetime,
+        ) -> RuntimeState:
+            assert self.state == expected
+            self.state = expected.request_wake(at=at)
+            raise RepositoryConflict
+
+    runtime = WakeDuringStopFenceRepository(idle)
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 1, 0))
+    value, _, _, _, _ = reconciler(at=at, ingress=ingress, runtime=runtime, ecs=ecs)
+
+    report = await value.reconcile()
+
+    assert report.conditional_conflicts == 1
+    assert not report.ecs_scaled_down
+    assert ecs.update_calls == []
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == idle.generation + 1
+    assert runtime.state.desired_count == 1
+
+
+@pytest.mark.asyncio
+async def test_work_seen_after_stop_fence_resumes_before_scale_down() -> None:
+    """The activity recheck after STOPPING must restore desired one first."""
+
+    stopping = stopping_runtime()
+    at = stopping.updated_at + timedelta(seconds=1)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopping)
+    ecs = FakeEcs(EcsRuntimeSnapshot(0, 0, 0))
+    activity = FakeActivity(
+        ingress,
+        (RuntimeActivity(), RuntimeActivity(active_attempts=1)),
+    )
+    value, _, _, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=activity,
+    )
+
+    report = await value.reconcile()
+
+    assert not report.ecs_scaled_down
+    assert ecs.update_calls == [1]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == stopping.generation + 1
+    assert runtime.state.desired_count == 1
+
+
+@pytest.mark.asyncio
+async def test_work_seen_after_scale_down_is_immediately_scaled_back_up() -> None:
+    """A request appearing after UpdateService(0) must restore desired one."""
+
+    stopping = stopping_runtime()
+    at = stopping.updated_at + timedelta(seconds=1)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopping)
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 0, 0))
+    activity = FakeActivity(
+        ingress,
+        (
+            RuntimeActivity(),
+            RuntimeActivity(),
+            RuntimeActivity(pending_ingress=1),
+        ),
+    )
+    value, _, _, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=activity,
+    )
+
+    report = await value.reconcile()
+
+    assert report.ecs_scaled_down
+    assert not report.runtime_stopped
+    assert ecs.update_calls == [0, 1]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == stopping.generation + 1
+    assert runtime.state.desired_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("wake_on_inspection", "expected_updates"),
+    ((2, [1]), (3, [0, 1])),
+    ids=("before-update", "after-update"),
+)
+async def test_wake_state_fences_stale_activity_around_scale_down(
+    wake_on_inspection: int,
+    expected_updates: list[int],
+) -> None:
+    """A generation change is authoritative even when activity reads are stale."""
+
+    stopping = stopping_runtime()
+    at = stopping.updated_at + timedelta(seconds=1)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopping)
+
+    class WakeOnInspectionActivity(FakeActivity):
+        async def inspect(self, *, at: datetime) -> RuntimeActivity:
+            snapshot = await super().inspect(at=at)
+            if len(self.calls) == wake_on_inspection:
+                assert runtime.state is not None
+                runtime.state = runtime.state.request_wake(at=max(at, runtime.state.updated_at))
+            return snapshot
+
+    activity = WakeOnInspectionActivity(
+        ingress,
+        (RuntimeActivity(), RuntimeActivity(), RuntimeActivity()),
+    )
+    ecs = FakeEcs(EcsRuntimeSnapshot(1 if wake_on_inspection == 3 else 0, 0, 0))
+    value, _, _, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=activity,
+    )
+
+    report = await value.reconcile()
+
+    assert ecs.update_calls == expected_updates
+    assert report.conditional_conflicts == 1
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == stopping.generation + 1
+    assert runtime.state.desired_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("apply_before_error", "expected_updates"),
+    ((False, [0, 0]), (True, [0])),
+    ids=("request-failed", "response-lost"),
+)
+async def test_scale_down_failure_converges_on_the_next_pass(
+    apply_before_error: bool,
+    expected_updates: list[int],
+) -> None:
+    """STOPPING survives both a rejected update and a lost successful response."""
+
+    stopping = stopping_runtime()
+    at = stopping.updated_at + timedelta(seconds=1)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopping)
+    ecs = FailOnceScaleDownEcs(
+        EcsRuntimeSnapshot(1, 0, 0),
+        apply_before_error=apply_before_error,
+    )
+    first, _, _, _, _ = reconciler(at=at, ingress=ingress, runtime=runtime, ecs=ecs)
+
+    with pytest.raises(EcsRuntimeUnavailable):
+        await first.reconcile()
+
+    assert runtime.state == stopping
+
+    second, _, _, _, _ = reconciler(
+        at=at + timedelta(seconds=1),
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    second_report = await second.reconcile()
+
+    assert second_report.runtime_stopped
+    assert ecs.update_calls == expected_updates
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+
+    duplicate, _, _, _, _ = reconciler(
+        at=at + timedelta(seconds=2),
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    duplicate_report = await duplicate.reconcile()
+
+    assert duplicate_report.runtime_reconciled
+    assert ecs.update_calls == expected_updates
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_stopped_runtime_repairs_stale_ecs_desired_count() -> None:
+    """A prior DynamoDB stop may be safely replayed after ECS update failure."""
+
+    at = CREATED_AT + timedelta(seconds=1)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(RuntimeState.stopped(at=CREATED_AT))
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 0, 0))
+    value, _, _, _, _ = reconciler(at=at, ingress=ingress, runtime=runtime, ecs=ecs)
+
+    report = await value.reconcile()
+
+    assert report.ecs_scaled_down
+    assert ecs.update_calls == [0]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+    assert runtime.state.desired_count == 0
+
+
+@pytest.mark.asyncio
+async def test_stopped_runtime_rechecks_work_before_repairing_ecs_down() -> None:
+    """A request after the first activity read prevents stale desired-zero repair."""
+
+    at = CREATED_AT + timedelta(seconds=1)
+    stopped = RuntimeState.stopped(at=CREATED_AT)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopped)
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 0, 0))
+    activity = FakeActivity(
+        ingress,
+        (RuntimeActivity(), RuntimeActivity(pending_ingress=1)),
+    )
+    value, _, _, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=activity,
+    )
+
+    report = await value.reconcile()
+
+    assert not report.ecs_scaled_down
+    assert ecs.update_calls == [1]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == stopped.generation + 1
+
+
+@pytest.mark.asyncio
+async def test_stopped_transition_conflict_converges_on_the_next_pass() -> None:
+    """Concurrent STOPPED CAS loss remains STOPPING until a later pass wins."""
+
+    stopping = stopping_runtime()
+    at = stopping.updated_at + timedelta(seconds=1)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopping)
+    runtime.replace_conflicts = 1
+    ecs = FakeEcs(EcsRuntimeSnapshot(0, 0, 0))
+    first, _, _, _, _ = reconciler(at=at, ingress=ingress, runtime=runtime, ecs=ecs)
+
+    first_report = await first.reconcile()
+
+    assert first_report.conditional_conflicts == 1
+    assert not first_report.runtime_stopped
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPING
+
+    second, _, _, _, _ = reconciler(
+        at=at + timedelta(seconds=1),
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    second_report = await second.reconcile()
+
+    assert second_report.runtime_stopped
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STOPPED
+    assert ecs.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_resumer_wins_without_losing_scale_up() -> None:
+    """Two reconcilers may race to resume one STOPPED generation safely."""
+
+    at = CREATED_AT + timedelta(seconds=1)
+    stopped = RuntimeState.stopped(at=CREATED_AT)
+    ingress = FakeIngress(())
+
+    class ConcurrentResumeRepository(FakeRuntimeRepository):
+        async def replace(
+            self,
+            *,
+            expected: RuntimeState,
+            updated: RuntimeState,
+        ) -> RuntimeState:
+            if expected.status is RuntimeStatus.STOPPED:
+                self.state = updated
+                raise RepositoryConflict
+            return await super().replace(expected=expected, updated=updated)
+
+    runtime = ConcurrentResumeRepository(stopped)
+    ecs = FakeEcs(EcsRuntimeSnapshot(0, 0, 0))
+    activity = FakeActivity(ingress, (RuntimeActivity(active_attempts=1),))
+    value, _, _, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=activity,
+    )
+
+    report = await value.reconcile()
+
+    assert report.conditional_conflicts == 1
+    assert report.ecs_scaled_up
+    assert ecs.update_calls == [1]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == stopped.generation + 1
+
+
+@pytest.mark.asyncio
+async def test_stale_stopped_observation_yields_to_a_concurrent_wake() -> None:
+    """A stale reconciler must not scale down after another invocation wakes."""
+
+    at = CREATED_AT + timedelta(seconds=1)
+    stopped = RuntimeState.stopped(at=CREATED_AT)
+    ingress = FakeIngress(())
+
+    class WakeOnSecondReadRepository(FakeRuntimeRepository):
+        def __init__(self, state: RuntimeState) -> None:
+            super().__init__(state)
+            self.get_calls = 0
+
+        async def get(self) -> RuntimeState | None:
+            self.get_calls += 1
+            if self.get_calls == 2:
+                assert self.state is not None
+                self.state = self.state.request_wake(at=at)
+            return self.state
+
+    runtime = WakeOnSecondReadRepository(stopped)
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 0, 0))
+    value, _, _, _, _ = reconciler(at=at, ingress=ingress, runtime=runtime, ecs=ecs)
+
+    report = await value.reconcile()
+
+    assert report.conditional_conflicts == 1
+    assert not report.ecs_scaled_down
+    assert ecs.update_calls == []
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+    assert runtime.state.generation == stopped.generation + 1
+
+
+@pytest.mark.asyncio
+async def test_status_activity_and_idle_cas_conflict_converge_without_early_stop() -> None:
+    """External publication and one lost idle CAS both delay the idle deadline."""
+
+    first_at = CREATED_AT + timedelta(minutes=20)
+    runtime = FakeRuntimeRepository(ready_runtime(first_at - timedelta(seconds=1)))
+    ingress = FakeIngress(())
+    ecs = FakeEcs(EcsRuntimeSnapshot(1, 1, 0))
+    statuses_pending = FakeActivity(
+        ingress,
+        (RuntimeActivity(pending_status_updates=1),),
+    )
+    first, _, _, _, _ = reconciler(
+        at=first_at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+        activity=statuses_pending,
+    )
+
+    first_report = await first.reconcile()
+
+    assert not first_report.runtime_entered_idle
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.READY
+
+    runtime.replace_conflicts = 1
+    second_at = first_at + timedelta(seconds=1)
+    second, _, _, _, _ = reconciler(
+        at=second_at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    second_report = await second.reconcile()
+
+    assert second_report.conditional_conflicts == 1
+    assert not second_report.runtime_entered_idle
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.READY
+
+    third_at = second_at + timedelta(seconds=1)
+    third, _, _, _, _ = reconciler(
+        at=third_at,
+        ingress=ingress,
+        runtime=runtime,
+        ecs=ecs,
+    )
+    third_report = await third.reconcile()
+
+    assert third_report.runtime_entered_idle
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.IDLE
+    assert runtime.state.idle_since == third_at
+    assert ecs.update_calls == []
