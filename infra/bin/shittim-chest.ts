@@ -3,6 +3,7 @@ import { App, Environment, Tags, Validations } from "aws-cdk-lib";
 import { AwsSolutionsChecks } from "cdk-nag";
 
 import { RuntimeStack } from "../lib/runtime-stack";
+import { OperationsStack } from "../lib/operations-stack";
 import { StatefulStack } from "../lib/stateful-stack";
 
 const PRODUCTION_REGION = "ap-northeast-1";
@@ -30,5 +31,13 @@ const runtime = new RuntimeStack(app, "Runtime", {
   stackName: "ShittimChest-Prod-Runtime",
 });
 runtime.addDependency(stateful);
+const operations = new OperationsStack(app, "Operations", {
+  cluster: runtime.cluster,
+  debateTable: stateful.debateTable,
+  env: productionEnvironment(),
+  service: runtime.service,
+  stackName: "ShittimChest-Prod-Operations",
+});
+operations.addDependency(runtime);
 
 app.synth();

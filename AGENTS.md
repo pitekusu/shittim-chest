@@ -14,12 +14,13 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-09C-A feature branch, 2026-07-29)
+## Status (STEP-09C-B feature branch, 2026-07-29)
 
 The merged `main` baseline includes PR `#85` signed HTTP ingress and On-Demand
-scale-to-zero. The current branch adds STEP-09C-A's locally tested EMF contract
-and Runtime/Reconciler producers without AWS writes. STEP-02D notifications and
-STEP-06D requester name snapshots are also present. Evidence:
+scale-to-zero. The current branch adds STEP-09C-B's locally tested alarms,
+dashboard, EventBridge abnormal task-stop rule, and one operator SNS topic on
+top of STEP-09C-A's EMF producers, without AWS writes. STEP-02D notifications
+and STEP-06D requester name snapshots are also present. Evidence:
 `docs/20_実装・試験・検証記録.md` and the progress table in
 `docs/19_実装計画・トレーサビリティ.md`. AWS and Discord production state remain
 unchanged.
@@ -36,10 +37,11 @@ unchanged.
 | Infra (synth-only) | HTTP API, 3 Lambdas, On-Demand Fargate desired 0/max 1, public VPC |
 | Ops notifications | GitHub → Discord Forum (STEP-02D); friend server; no alert role |
 | Ops metrics | `ShittimChest/Prod`, fixed `Service` dimension, 10-metric allowlist |
+| Ops monitoring | 9 underlying alarms, 2 actionable composites, dashboard, abnormal ECS stops |
 
 **Not done**
 
-- STEP-09C-B/C: alarms/dashboard/EventBridge, Budgets, Cost Anomaly Detection
+- STEP-09C-C: Budgets and Cost Anomaly Detection notifications
 - STEP-10-A+: signing/referrer verification, image admission, release workflows, AWS bootstrap/deploy
 - Real Discord Application endpoint switch, live Bot tokens, paid OpenAI in CI
 - No AWS account bootstrap or stack deploy
@@ -74,6 +76,11 @@ and the plan/progress notes so this boundary does not go stale.
   operator email supplied at deploy time. Never commit the address. Image
   admission belongs to STEP-10-A with release signing/referrer verification,
   not STEP-09C Operations monitoring.
+- STEP-09C-B must keep underlying alarms actionless: only the critical and
+  warning composite alarms publish to SNS. Bot/heartbeat missing data is
+  breaching only behind the active-runtime gate. EventBridge notifies only
+  abnormal stop codes and sends a bounded, content-free payload; planned
+  user/scheduler stops must remain silent.
 - The ingress FIFO contains at most 20 PENDING/CLAIMED/RETRYING requests.
   Accepted debates leave the FIFO and continue to consume the existing three
   fenced global slots.
