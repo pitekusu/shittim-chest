@@ -70,6 +70,8 @@ class _RuntimeInstanceLifecycle(Protocol):
 
     async def mark_ready(self, *, active: bool) -> object: ...
 
+    async def mark_shutdown_complete(self) -> object: ...
+
 
 class _SignalHandlers(Protocol):
     def install(self, callback: Callable[[], None]) -> None: ...
@@ -210,8 +212,8 @@ class RuntimeLifecycle:
 
         if self._shutdown_requested.is_set():
             return
-        self._drain_gate.begin_shutdown()
         self._admission.close()
+        self._drain_gate.begin_shutdown()
         self._ingress_runtime.begin_shutdown()
         self._interactions.begin_shutdown()
         if self._drain_stop is not None:
@@ -470,6 +472,11 @@ class RuntimeLifecycle:
                     )[0]
                     if supervisor_was_running and isinstance(supervisor_result, Exception):
                         errors.append(supervisor_result)
+                if not errors:
+                    try:
+                        await self._runtime_instance.mark_shutdown_complete()
+                    except Exception as error:
+                        errors.append(error)
                 if shutdown_waiter is not None and not shutdown_waiter.done():
                     shutdown_waiter.cancel()
                 if shutdown_waiter is not None:

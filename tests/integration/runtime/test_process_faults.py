@@ -31,6 +31,8 @@ def test_real_sigterm_runs_checkpoint_and_owned_cleanup(tmp_path: Path) -> None:
     assert "checkpointed" in events
     assert "interactions_closed" in events
     assert "clients_stopped" in events
+    assert "runtime_state_updated" in events
+    assert events.index("clients_stopped") < events.index("runtime_state_updated")
 
 
 def test_real_sigkill_leaves_durable_state_for_replacement_process(tmp_path: Path) -> None:

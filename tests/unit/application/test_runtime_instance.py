@@ -30,9 +30,12 @@ class FakeRuntimeRepository:
     state: RuntimeState | None
     conflicts: int = 0
     conflict_state: RuntimeState | None = None
+    read_error: Exception | None = None
     replacements: list[tuple[RuntimeState, RuntimeState]] = field(default_factory=list)
 
     async def get(self) -> RuntimeState | None:
+        if self.read_error is not None:
+            raise self.read_error
         return self.state
 
     async def replace(
@@ -61,12 +64,46 @@ def starting() -> RuntimeState:
     )
 
 
-def session(repository: FakeRuntimeRepository, *, owner: str = "runtime-a") -> RuntimeInstanceState:
+def session(
+    repository: FakeRuntimeRepository,
+    *,
+    owner: str = "runtime-a",
+    cas_attempts: int = 5,
+) -> RuntimeInstanceState:
     return RuntimeInstanceState(
         clock=FakeClock(),
         repository=repository,
         runtime_instance_id=owner,
+        cas_attempts=cas_attempts,
     )
+
+
+def owned_runtime(status: RuntimeStatus, *, owner: str = "runtime-a") -> RuntimeState:
+    started = starting().mark_started(at=NOW, runtime_instance_id=owner)
+    if status is RuntimeStatus.STARTING:
+        return started
+    ready = started.transition(
+        RuntimeStatus.READY,
+        at=NOW + timedelta(seconds=1),
+        runtime_instance_id=owner,
+    )
+    if status is RuntimeStatus.READY:
+        return ready
+    busy = ready.transition(RuntimeStatus.BUSY, at=NOW + timedelta(seconds=2))
+    if status is RuntimeStatus.BUSY:
+        return busy
+    if status is RuntimeStatus.IDLE:
+        return ready.begin_idle(at=NOW + timedelta(seconds=2))
+    if status is RuntimeStatus.DEGRADED:
+        return busy.transition(
+            RuntimeStatus.DEGRADED,
+            at=NOW + timedelta(seconds=3),
+            error_code="runtime_not_ready",
+        )
+    idle = ready.begin_idle(at=NOW + timedelta(seconds=2))
+    if status is RuntimeStatus.STOPPING:
+        return idle.begin_idle_stop(at=idle.stop_eligible_at or NOW)
+    raise ValueError(f"unsupported owned runtime status: {status}")
 
 
 @pytest.mark.asyncio
@@ -282,6 +319,186 @@ async def test_nonready_state_cannot_be_reopened_silently() -> None:
 
     with pytest.raises(RuntimeNotReady, match="not starting"):
         await session(FakeRuntimeRepository(stopped)).mark_started()
+
+
+@pytest.mark.asyncio
+async def test_owned_stopping_generation_converges_to_stopped_at_shutdown() -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    stopping = owned_runtime(RuntimeStatus.STOPPING)
+    repository.state = stopping
+
+    stopped = await runtime.mark_shutdown_complete()
+    replay = await runtime.mark_shutdown_complete()
+
+    assert stopped.status is RuntimeStatus.STOPPED
+    assert stopped.generation == stopping.generation
+    assert stopped.version == stopping.version + 1
+    assert stopped.runtime_instance_id is None
+    assert stopped.desired_count == 0
+    assert replay == stopped
+    assert len(repository.replacements) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [RuntimeStatus.STARTING, RuntimeStatus.READY, RuntimeStatus.BUSY],
+)
+async def test_unexpected_live_shutdown_fences_a_fresh_unbound_generation(
+    status: RuntimeStatus,
+) -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    live = owned_runtime(status)
+    repository.state = live
+
+    replacement = await runtime.mark_shutdown_complete()
+
+    assert replacement == live.fence_stale_instance(at=replacement.updated_at)
+    assert replacement.status is RuntimeStatus.STARTING
+    assert replacement.generation == live.generation + 1
+    assert replacement.runtime_instance_id is None
+    assert replacement.desired_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [RuntimeStatus.IDLE, RuntimeStatus.DEGRADED])
+async def test_owned_idle_or_degraded_shutdown_requests_a_fresh_runtime(
+    status: RuntimeStatus,
+) -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    inactive = owned_runtime(status)
+    repository.state = inactive
+
+    replacement = await runtime.mark_shutdown_complete()
+
+    assert replacement == inactive.resume_for_work(at=replacement.updated_at)
+    assert replacement.status is RuntimeStatus.STARTING
+    assert replacement.generation == inactive.generation + 1
+    assert replacement.runtime_instance_id is None
+    assert replacement.desired_count == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_overwrite_a_newer_request_generation() -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    ready = owned_runtime(RuntimeStatus.READY)
+    newer = ready.request_wake(at=ready.updated_at + timedelta(seconds=1))
+    repository.state = newer
+
+    observed = await runtime.mark_shutdown_complete()
+
+    assert observed == newer
+    assert repository.state == newer
+    assert repository.replacements == []
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_overwrite_a_replacement_owner() -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    ready = owned_runtime(RuntimeStatus.READY)
+    replacement = ready.fence_stale_instance(
+        at=ready.updated_at + timedelta(seconds=1)
+    ).mark_started(
+        at=ready.updated_at + timedelta(seconds=2),
+        runtime_instance_id="runtime-b",
+    )
+    repository.state = replacement
+
+    observed = await runtime.mark_shutdown_complete()
+
+    assert observed == replacement
+    assert repository.state == replacement
+    assert repository.replacements == []
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cas_loss_to_a_new_request_is_a_safe_noop() -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    ready = owned_runtime(RuntimeStatus.READY)
+    newer = ready.request_wake(at=ready.updated_at + timedelta(seconds=1))
+    repository.state = ready
+    repository.conflicts = 1
+    repository.conflict_state = newer
+
+    observed = await runtime.mark_shutdown_complete()
+
+    assert observed == newer
+    assert repository.state == newer
+    assert len(repository.replacements) == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retries_same_generation_cas_conflicts() -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    ready = owned_runtime(RuntimeStatus.READY)
+    reconciled = ready.record_reconciled(at=ready.updated_at + timedelta(seconds=1))
+    repository.state = ready
+    repository.conflicts = 1
+    repository.conflict_state = reconciled
+
+    replacement = await runtime.mark_shutdown_complete()
+
+    assert replacement.status is RuntimeStatus.STARTING
+    assert replacement.generation == ready.generation + 1
+    assert replacement.runtime_instance_id is None
+    assert len(repository.replacements) == 2
+
+
+@pytest.mark.asyncio
+async def test_shutdown_fails_after_bounded_same_generation_cas_conflicts() -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository, cas_attempts=2)
+    await runtime.mark_started()
+    ready = owned_runtime(RuntimeStatus.READY)
+    repository.state = ready
+    repository.conflicts = 2
+    repository.conflict_state = ready.record_reconciled(at=ready.updated_at + timedelta(seconds=1))
+
+    with pytest.raises(RuntimeNotReady, match="repeated state races"):
+        await runtime.mark_shutdown_complete()
+
+    assert len(repository.replacements) == 2
+
+
+@pytest.mark.asyncio
+async def test_shutdown_missing_or_corrupt_state_fails_closed() -> None:
+    repository = FakeRuntimeRepository(owned_runtime(RuntimeStatus.STARTING))
+    runtime = session(repository)
+    await runtime.mark_started()
+    repository.state = None
+
+    with pytest.raises(RuntimeNotReady, match="missing"):
+        await runtime.mark_shutdown_complete()
+
+    repository.read_error = ValueError("corrupt runtime state")
+    with pytest.raises(ValueError, match="corrupt runtime state"):
+        await runtime.mark_shutdown_complete()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_same_owner_without_observed_generation_fails_closed() -> None:
+    ready = owned_runtime(RuntimeStatus.READY)
+    repository = FakeRuntimeRepository(ready)
+
+    with pytest.raises(RuntimeNotReady, match="no owned generation"):
+        await session(repository).mark_shutdown_complete()
+
+    assert repository.state == ready
+    assert repository.replacements == []
 
 
 def test_runtime_instance_rejects_empty_owner() -> None:

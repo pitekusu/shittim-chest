@@ -122,6 +122,9 @@ class _Drainer:
 
 
 class _RuntimeInstance:
+    def __init__(self, journal: Path) -> None:
+        self._journal = journal
+
     async def mark_started(self) -> None:
         return
 
@@ -130,6 +133,9 @@ class _RuntimeInstance:
 
     async def mark_ready(self, *, active: bool) -> None:
         del active
+
+    async def mark_shutdown_complete(self) -> None:
+        _append(self._journal, "runtime_state_updated")
 
 
 async def _run(journal: Path, state: Path, ready: Path) -> None:
@@ -142,7 +148,7 @@ async def _run(journal: Path, state: Path, ready: Path) -> None:
         ingress_runtime=ingress_runtime,
         drain_gate=_DrainGate(),
         drainer=_Drainer(),
-        runtime_instance=_RuntimeInstance(),
+        runtime_instance=_RuntimeInstance(journal),
         tokens={slot: f"placeholder-{slot.value}" for slot in DiscordBotSlot},
         previous_command_schema_hash=None,
         readiness_poll_seconds=0.01,

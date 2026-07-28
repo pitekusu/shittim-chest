@@ -142,6 +142,9 @@ class _RuntimeInstance:
     async def mark_ready(self, *, active: bool) -> None:
         del active
 
+    async def mark_shutdown_complete(self) -> None:
+        return
+
 
 def _prepare_forced_boundary(state: Path, scenario: str) -> None:
     if scenario not in FORCED_BOUNDARIES:

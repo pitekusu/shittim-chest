@@ -218,8 +218,10 @@ class FakeRuntimeInstance:
     ready_inputs: list[bool] = field(default_factory=list)
     woken_results: list[bool] = field(default_factory=list)
     woken_checks: int = 0
+    shutdown_calls: int = 0
     started_failure: Exception | None = None
     ready_failure: Exception | None = None
+    shutdown_failure: Exception | None = None
 
     async def mark_started(self) -> None:
         self.events.append("runtime_started")
@@ -239,6 +241,12 @@ class FakeRuntimeInstance:
         if claimed:
             self.events.append("runtime_wake_claimed")
         return claimed
+
+    async def mark_shutdown_complete(self) -> None:
+        self.events.append("runtime_shutdown_complete")
+        self.shutdown_calls += 1
+        if self.shutdown_failure is not None:
+            raise self.shutdown_failure
 
 
 @dataclass(slots=True)
@@ -599,19 +607,39 @@ async def test_shutdown_closes_gates_before_drain_checkpoint_and_components() ->
     shutdown_events = values.events[start:]
     assert_order(
         shutdown_events,
-        "gate_shutdown",
         "admission_closed",
+        "gate_shutdown",
         "ingress_runtime_shutdown",
+        "interactions_shutdown",
         "drainer_stopped",
         "ingress_checkpointed",
         "ingress_runtime_closed",
         "interactions_closed",
         "supervisor_stopped",
+        "runtime_shutdown_complete",
     )
     assert values.ingress_runtime.checkpoint_calls == 1
     assert values.ingress_runtime.close_calls == 1
     assert values.interactions.close_calls == 1
+    assert values.runtime_instance.shutdown_calls == 1
     assert values.signals.uninstall_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_shutdown_request_is_idempotent() -> None:
+    values = lifecycle(gateway=FakeDiscordGateway(ready=True))
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
+
+    values.runtime.request_shutdown()
+    values.runtime.request_shutdown()
+    await runtime_task
+
+    assert values.events.count("admission_closed") == 1
+    assert values.events.count("gate_shutdown") == 1
+    assert values.ingress_runtime.begin_shutdown_calls == 1
+    assert values.interactions.begin_shutdown_calls == 1
+    assert values.runtime_instance.shutdown_calls == 1
 
 
 @pytest.mark.asyncio
@@ -710,7 +738,7 @@ async def test_shutdown_timeout_fails_explicitly_before_fargate_deadline() -> No
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_failure_is_reported_after_clients_are_stopped() -> None:
+async def test_checkpoint_failure_stops_clients_without_recording_normal_shutdown() -> None:
     ingress_runtime = FakeIngressRuntime(
         [],
         checkpoint_failure=RuntimeError("checkpoint failed"),
@@ -729,7 +757,35 @@ async def test_checkpoint_failure_is_reported_after_clients_are_stopped() -> Non
     assert values.supervisor.stopped.is_set()
     assert values.ingress_runtime.close_calls == 1
     assert values.interactions.close_calls == 1
+    assert values.runtime_instance.shutdown_calls == 0
     assert values.signals.uninstall_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_state_shutdown_failure_is_reported_after_clients_close() -> None:
+    runtime_instance = FakeRuntimeInstance(
+        [],
+        shutdown_failure=RuntimeError("runtime state update failed"),
+    )
+    values = lifecycle(
+        gateway=FakeDiscordGateway(ready=True),
+        runtime_instance=runtime_instance,
+    )
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
+
+    values.runtime.request_shutdown()
+    with pytest.raises(ExceptionGroup, match="runtime shutdown failed") as captured:
+        await runtime_task
+
+    assert any(
+        isinstance(error, RuntimeError) and str(error) == "runtime state update failed"
+        for error in captured.value.exceptions
+    )
+    assert values.supervisor.stopped.is_set()
+    assert values.ingress_runtime.close_calls == 1
+    assert values.interactions.close_calls == 1
+    assert values.runtime_instance.shutdown_calls == 1
 
 
 @pytest.mark.asyncio

@@ -406,6 +406,8 @@ class DiscordIngressRuntime:
         current = self._tasks.get(debate_id)
         if current is not None and not current.done():
             return False
+        if self._shutting_down:
+            return False
         task = asyncio.create_task(
             self._run_and_refresh(debate_id),
             name=f"debate:{debate_id}",

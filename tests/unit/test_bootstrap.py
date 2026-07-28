@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import threading
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 import pytest
 
 import shittim_chest.bootstrap as bootstrap
-from shittim_chest.bootstrap import ProductionRuntime, build_production_runtime
+from shittim_chest.bootstrap import (
+    DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS,
+    ProductionRuntime,
+    RuntimeClientCloseTimeout,
+    build_production_runtime,
+)
 from shittim_chest.config import load_bootstrap_config
+from shittim_chest.runtime.lifecycle import DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
@@ -73,6 +82,173 @@ async def test_run_from_environment_keeps_third_party_root_logging_at_warning(
     assert basic_config == {"level": logging.WARNING, "format": "%(message)s"}
     assert application_levels == [logging.DEBUG]
     assert runtime_runs == ["run"]
+
+
+@dataclass(slots=True)
+class _BlockingCloser:
+    release: asyncio.Event
+    calls: int = 0
+
+    async def close(self) -> None:
+        self.calls += 1
+        await self.release.wait()
+
+
+@dataclass(slots=True)
+class _AsyncCloser:
+    calls: int = 0
+
+    async def close(self) -> None:
+        self.calls += 1
+
+
+@dataclass(slots=True)
+class _SyncCloser:
+    calls: int = 0
+
+    def close(self) -> None:
+        self.calls += 1
+
+
+@dataclass(slots=True)
+class _BlockingSyncCloser:
+    started: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+    finished: threading.Event = field(default_factory=threading.Event)
+    calls: int = 0
+
+    def close(self) -> None:
+        self.calls += 1
+        self.started.set()
+        self.release.wait()
+        self.finished.set()
+
+
+@dataclass(slots=True)
+class _CancelledCloser:
+    calls: int = 0
+
+    async def close(self) -> None:
+        self.calls += 1
+        raise asyncio.CancelledError
+
+
+@dataclass(slots=True)
+class _FailingCloser:
+    calls: int = 0
+
+    async def close(self) -> None:
+        self.calls += 1
+        raise RuntimeError("client close failed")
+
+
+@dataclass(slots=True)
+class _Telemetry:
+    events: list[str] = field(default_factory=list)
+
+    def runtime_event(self, event: str, **fields: str | int) -> None:
+        del fields
+        self.events.append(event)
+
+
+@pytest.mark.asyncio
+async def test_process_client_close_is_concurrent_bounded_and_idempotent() -> None:
+    supervisor = _BlockingCloser(asyncio.Event())
+    openai_client = _AsyncCloser()
+    dynamodb_client = _SyncCloser()
+    runtime = ProductionRuntime(
+        lifecycle=cast(Any, object()),
+        supervisor=cast(Any, supervisor),
+        openai_client=cast(Any, openai_client),
+        dynamodb_client=cast(Any, dynamodb_client),
+        telemetry=cast(Any, _Telemetry()),
+        client_close_timeout_seconds=0.01,
+    )
+
+    with pytest.raises(RuntimeClientCloseTimeout, match="safety deadline"):
+        await runtime.aclose()
+    await runtime.aclose()
+
+    assert supervisor.calls == 1
+    assert openai_client.calls == 1
+    assert dynamodb_client.calls == 1
+    assert [
+        task
+        for task in asyncio.all_tasks()
+        if task is not asyncio.current_task() and not task.done()
+    ] == []
+
+
+@pytest.mark.asyncio
+async def test_blocked_synchronous_client_close_cannot_extend_exit_budget() -> None:
+    dynamodb_client = _BlockingSyncCloser()
+    runtime = ProductionRuntime(
+        lifecycle=cast(Any, object()),
+        supervisor=cast(Any, _AsyncCloser()),
+        openai_client=cast(Any, _AsyncCloser()),
+        dynamodb_client=cast(Any, dynamodb_client),
+        telemetry=cast(Any, _Telemetry()),
+        client_close_timeout_seconds=0.02,
+    )
+
+    with pytest.raises(RuntimeClientCloseTimeout, match="safety deadline"):
+        await runtime.aclose()
+
+    assert dynamodb_client.started.wait(timeout=1)
+    assert dynamodb_client.calls == 1
+    dynamodb_client.release.set()
+    assert dynamodb_client.finished.wait(timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_process_client_close_does_not_swallow_cancellation() -> None:
+    cancelled = _CancelledCloser()
+    runtime = ProductionRuntime(
+        lifecycle=cast(Any, object()),
+        supervisor=cast(Any, cancelled),
+        openai_client=cast(Any, _AsyncCloser()),
+        dynamodb_client=cast(Any, _SyncCloser()),
+        telemetry=cast(Any, _Telemetry()),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.aclose()
+
+    assert cancelled.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_process_client_close_reports_non_cancellation_failures() -> None:
+    failing = _FailingCloser()
+    runtime = ProductionRuntime(
+        lifecycle=cast(Any, object()),
+        supervisor=cast(Any, failing),
+        openai_client=cast(Any, _AsyncCloser()),
+        dynamodb_client=cast(Any, _SyncCloser()),
+        telemetry=cast(Any, _Telemetry()),
+    )
+
+    with pytest.raises(ExceptionGroup, match="process client shutdown failed") as captured:
+        await runtime.aclose()
+
+    assert [str(error) for error in captured.value.exceptions] == ["client close failed"]
+
+
+def test_default_exit_budget_stays_below_fargate_stop_timeout() -> None:
+    assert DEFAULT_SHUTDOWN_TIMEOUT_SECONDS + DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS == 110
+    assert DEFAULT_SHUTDOWN_TIMEOUT_SECONDS + DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS < 120
+
+
+def test_process_client_close_rejects_non_positive_timeout() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        ProductionRuntime(
+            lifecycle=cast(Any, object()),
+            supervisor=cast(Any, object()),
+            openai_client=cast(Any, object()),
+            dynamodb_client=cast(Any, object()),
+            telemetry=cast(Any, object()),
+            client_close_timeout_seconds=0,
+        )
 
 
 def _environment() -> dict[str, str]:

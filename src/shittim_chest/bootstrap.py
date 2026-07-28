@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Mapping
+import threading
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from openai import AsyncOpenAI
 
@@ -54,6 +55,11 @@ from shittim_chest.runtime import (
 from shittim_chest.runtime.health import EventLoopHeartbeat
 
 _LOGGER = logging.getLogger("shittim_chest")
+DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS: Final = 20.0
+
+
+class RuntimeClientCloseTimeout(RuntimeError):
+    """Raised when process-scoped SDK clients exceed their exit budget."""
 
 
 @dataclass(slots=True)
@@ -65,8 +71,13 @@ class ProductionRuntime:
     openai_client: AsyncOpenAI
     dynamodb_client: DynamoDBClient
     telemetry: ContentFreeTelemetry
+    client_close_timeout_seconds: float = DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS
     heartbeat: EventLoopHeartbeat = field(default_factory=EventLoopHeartbeat)
     _closed: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        if self.client_close_timeout_seconds <= 0:
+            raise ValueError("client close timeout must be positive")
 
     async def run(self) -> None:
         """Run the lifecycle and always close every process-scoped client."""
@@ -85,9 +96,63 @@ class ProductionRuntime:
         if self._closed:
             return
         self._closed = True
-        await self.supervisor.close()
-        await self.openai_client.close()
-        await asyncio.to_thread(self.dynamodb_client.close)
+        try:
+            async with asyncio.timeout(self.client_close_timeout_seconds):
+                results = await asyncio.gather(
+                    self.supervisor.close(),
+                    self.openai_client.close(),
+                    _close_sync_client(self.dynamodb_client.close),
+                    return_exceptions=True,
+                )
+        except TimeoutError as error:
+            raise RuntimeClientCloseTimeout(
+                "process client shutdown exceeded its safety deadline"
+            ) from error
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+        errors = [result for result in results if isinstance(result, Exception)]
+        if errors:
+            raise ExceptionGroup("process client shutdown failed", errors)
+
+
+async def _close_sync_client(close: Callable[[], None]) -> None:
+    """Bound a synchronous local close without retaining a non-daemon executor thread."""
+
+    loop = asyncio.get_running_loop()
+    completed: asyncio.Future[None] = loop.create_future()
+
+    def run() -> None:
+        error: Exception | None = None
+        try:
+            close()
+        except Exception as caught:
+            error = caught
+        try:
+            loop.call_soon_threadsafe(_settle_sync_close, completed, error)
+        except RuntimeError:
+            # The process-level deadline may close the loop before a blocked
+            # local SDK cleanup returns. The daemon thread must not extend exit.
+            return
+
+    threading.Thread(
+        target=run,
+        name="dynamodb-client-close",
+        daemon=True,
+    ).start()
+    await completed
+
+
+def _settle_sync_close(
+    completed: asyncio.Future[None],
+    error: Exception | None,
+) -> None:
+    if completed.done():
+        return
+    if error is None:
+        completed.set_result(None)
+    else:
+        completed.set_exception(error)
 
 
 def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:

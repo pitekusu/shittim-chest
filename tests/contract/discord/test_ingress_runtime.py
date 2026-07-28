@@ -32,6 +32,7 @@ from shittim_chest.application.ingress_drain import (
 from shittim_chest.application.models import (
     BindDiscordContextCommand,
     DebateSnapshot,
+    LeaseGrant,
     MetricEvent,
 )
 from shittim_chest.application.scale_to_zero import IngressKind, IngressRequest, IngressStatus
@@ -191,6 +192,28 @@ class FakeApplication:
 
     async def abandoned_panel_refresh_count(self) -> int:
         return self.abandoned_panel_refreshes
+
+
+@dataclass(slots=True)
+class BlockingSnapshotApplication(FakeApplication):
+    snapshot_started: asyncio.Event = field(default_factory=asyncio.Event)
+    snapshot_release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def get_debate(self, debate_id: DebateId) -> DebateSnapshot:
+        self.snapshot_started.set()
+        await self.snapshot_release.wait()
+        return await super().get_debate(debate_id)
+
+
+@dataclass(slots=True)
+class BlockingRecoveryApplication(FakeApplication):
+    recovery_started: asyncio.Event = field(default_factory=asyncio.Event)
+    recovery_release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def claim_recoverable(self) -> tuple[DebateSnapshot, ...]:
+        self.recovery_started.set()
+        await self.recovery_release.wait()
+        return await super().claim_recoverable()
 
 
 @dataclass(slots=True)
@@ -494,6 +517,44 @@ async def test_recovery_registers_each_bound_debate_once_in_shared_task_registry
 
     await ingress_runtime.checkpoint_active()
     assert ingress_runtime.active_task_count == 0
+
+
+@pytest.mark.asyncio
+async def test_activate_does_not_start_after_shutdown_begins_during_snapshot_load() -> None:
+    current = snapshot(bound=True)
+    application = BlockingSnapshotApplication(current)
+    ingress_runtime = runtime(application)
+    activation = asyncio.create_task(
+        ingress_runtime.activate(claimed_request(current), application_result(current))
+    )
+
+    await asyncio.wait_for(application.snapshot_started.wait(), timeout=1)
+    ingress_runtime.begin_shutdown()
+    application.snapshot_release.set()
+
+    await asyncio.wait_for(activation, timeout=1)
+    assert ingress_runtime.active_task_count == 0
+    assert application.run_calls == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_keeps_claim_but_does_not_start_after_shutdown_begins() -> None:
+    current = replace(
+        snapshot(bound=True),
+        lease=LeaseGrant("runtime-1", 0, 1, NOW + timedelta(minutes=10)),
+    )
+    application = BlockingRecoveryApplication(current, recoverable=(current,))
+    ingress_runtime = runtime(application)
+    recovery = asyncio.create_task(ingress_runtime.recover_once())
+
+    await asyncio.wait_for(application.recovery_started.wait(), timeout=1)
+    ingress_runtime.begin_shutdown()
+    application.recovery_release.set()
+
+    assert await asyncio.wait_for(recovery, timeout=1) == 0
+    assert ingress_runtime.active_task_count == 0
+    assert application.run_calls == []
+    assert application.current.lease == current.lease
 
 
 @pytest.mark.asyncio
