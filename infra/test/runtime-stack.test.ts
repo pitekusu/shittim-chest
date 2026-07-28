@@ -470,6 +470,269 @@ describe("RuntimeStack", () => {
     }
   });
 
+  test("reserves deployment lock and audit writes for deployment tooling", () => {
+    const { template } = synthesize();
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const expectedPartitionsByRole = new Map([
+      [
+        "DiscordIngressFunctionRole",
+        [
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+        ],
+      ],
+      [
+        "DiscordStatusPublisherFunctionRole",
+        ["CONTROL#INGRESS", "INGRESS_OPERATION#*"],
+      ],
+      [
+        "RuntimeReconcilerFunctionRole",
+        [
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#RUNTIME",
+          "INGRESS_OPERATION#*",
+        ],
+      ],
+      [
+        "NormalTaskRole",
+        [
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "DEBATE#*",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+          "OPERATION#*",
+          "QUOTA#GUILD#*",
+        ],
+      ],
+      [
+        "BreakGlassTaskRole",
+        [
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "DEBATE#*",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+          "OPERATION#*",
+          "QUOTA#GUILD#*",
+        ],
+      ],
+    ]);
+    const expectedReadsByRole = new Map([
+      [
+        "DiscordIngressFunctionRole",
+        [
+          "CONTROL#INGRESS",
+          "CONTROL#RUNTIME",
+          "DEBATE#*",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+        ],
+      ],
+      [
+        "DiscordStatusPublisherFunctionRole",
+        ["CONTROL#INGRESS", "INGRESS_OPERATION#*"],
+      ],
+      [
+        "RuntimeReconcilerFunctionRole",
+        [
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "INGRESS_OPERATION#*",
+        ],
+      ],
+      [
+        "NormalTaskRole",
+        [
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "DEBATE#*",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+          "OPERATION#*",
+          "QUOTA#GUILD#*",
+        ],
+      ],
+      [
+        "BreakGlassTaskRole",
+        [
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "DEBATE#*",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+          "OPERATION#*",
+          "QUOTA#GUILD#*",
+        ],
+      ],
+    ]);
+    const expectedConditionChecksByRole = new Map([
+      [
+        "DiscordIngressFunctionRole",
+        ["CONTROL#DEPLOYMENT", "CONTROL#INGRESS"],
+      ],
+      [
+        "DiscordStatusPublisherFunctionRole",
+        ["CONTROL#DEPLOYMENT", "CONTROL#INGRESS"],
+      ],
+      [
+        "RuntimeReconcilerFunctionRole",
+        [
+          "CONTROL#DEPLOYMENT",
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "INGRESS_OPERATION#*",
+        ],
+      ],
+      [
+        "NormalTaskRole",
+        [
+          "CONTROL#DEPLOYMENT",
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "DEBATE#*",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+          "OPERATION#*",
+          "QUOTA#GUILD#*",
+        ],
+      ],
+      [
+        "BreakGlassTaskRole",
+        [
+          "CONTROL#DEPLOYMENT",
+          "CONTROL#DEBATE",
+          "CONTROL#GLOBAL",
+          "CONTROL#INGRESS",
+          "CONTROL#INGRESS#ACTIVE",
+          "CONTROL#OUTBOX",
+          "CONTROL#PANEL_REFRESH",
+          "CONTROL#RUNTIME",
+          "DEBATE#*",
+          "INGRESS_OPERATION#*",
+          "INGRESS_SEMANTIC_OPERATION#*",
+          "OPERATION#*",
+          "QUOTA#GUILD#*",
+        ],
+      ],
+    ]);
+    const writeActions = new Set([
+      "dynamodb:DeleteItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ]);
+    const queryRoleIds = new Set([
+      "RuntimeReconcilerFunctionRole",
+      "NormalTaskRole",
+      "BreakGlassTaskRole",
+    ]);
+    for (const [roleId, expectedPartitionPatterns] of expectedPartitionsByRole) {
+      const policy = policies.find((resource) =>
+        JSON.stringify(resource.Properties.Roles).includes(roleId),
+      );
+      expect(policy).toBeDefined();
+      const statements = policy?.Properties.PolicyDocument.Statement as Array<{
+        Action: string | string[];
+        Condition?: Record<string, unknown>;
+        Resource: unknown;
+      }>;
+      const actionList = (statement: { Action: string | string[] }) =>
+        Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+      const writeStatements = statements.filter((statement) =>
+        actionList(statement).some((action) => writeActions.has(action)),
+      );
+      expect(writeStatements).toHaveLength(1);
+      expect(writeStatements[0]?.Condition).toEqual({
+        "ForAllValues:StringLike": {
+          "dynamodb:LeadingKeys": expectedPartitionPatterns,
+        },
+        Null: { "dynamodb:LeadingKeys": "false" },
+      });
+      expect(actionList(writeStatements[0]!)).not.toContain("dynamodb:ConditionCheckItem");
+      const getItem = statements.find((statement) =>
+        actionList(statement).includes("dynamodb:GetItem"),
+      );
+      expect(getItem?.Condition).toEqual({
+        "ForAllValues:StringLike": {
+          "dynamodb:LeadingKeys": expectedReadsByRole.get(roleId),
+        },
+        Null: { "dynamodb:LeadingKeys": "false" },
+      });
+      const conditionCheck = statements.find((statement) =>
+        actionList(statement).includes("dynamodb:ConditionCheckItem"),
+      );
+      expect(conditionCheck?.Condition).toEqual({
+        "ForAllValues:StringLike": {
+          "dynamodb:LeadingKeys": expectedConditionChecksByRole.get(roleId),
+        },
+        Null: { "dynamodb:LeadingKeys": "false" },
+      });
+      const queryStatements = statements.filter((statement) =>
+        actionList(statement).includes("dynamodb:Query"),
+      );
+      if (queryRoleIds.has(roleId)) {
+        expect(queryStatements).toHaveLength(2);
+        const baseTableQuery = queryStatements.find(
+          (statement) => !JSON.stringify(statement.Resource).includes("/index/"),
+        );
+        const indexQuery = queryStatements.find((statement) =>
+          JSON.stringify(statement.Resource).includes("/index/"),
+        );
+        expect(baseTableQuery?.Condition).toEqual({
+          "ForAllValues:StringLike": {
+            "dynamodb:LeadingKeys": expectedReadsByRole.get(roleId),
+          },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        });
+        expect(JSON.stringify(baseTableQuery)).not.toContain("CONTROL#DEPLOYMENT");
+        expect(indexQuery?.Condition).toBeUndefined();
+        expect(JSON.stringify(indexQuery?.Resource)).toContain("/index/gsi1");
+        expect(JSON.stringify(indexQuery?.Resource)).toContain("/index/gsi2");
+      } else {
+        expect(queryStatements).toHaveLength(0);
+      }
+      expect(JSON.stringify(writeStatements)).not.toContain("CONTROL#DEPLOYMENT");
+    }
+  });
+
   test("retains protected application and break-glass log groups for 90 days", () => {
     const { template } = synthesize();
 

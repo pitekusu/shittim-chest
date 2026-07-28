@@ -41,6 +41,84 @@ const RUNTIME_UID = containerPolicy.runtime_identity.uid;
 const RUNTIME_GID = containerPolicy.runtime_identity.gid;
 const RUNTIME_USER = `${RUNTIME_UID}:${RUNTIME_GID}`;
 const HEARTBEAT_TMPFS = containerPolicy.heartbeat_tmpfs;
+const DEPLOYMENT_LOCK_PARTITION = "CONTROL#DEPLOYMENT";
+const INGRESS_READABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "CONTROL#RUNTIME",
+  "DEBATE#*",
+  "INGRESS_OPERATION#*",
+  "INGRESS_SEMANTIC_OPERATION#*",
+];
+const INGRESS_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "INGRESS_OPERATION#*",
+  "INGRESS_SEMANTIC_OPERATION#*",
+];
+const STATUS_PUBLISHER_READABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "INGRESS_OPERATION#*",
+];
+const STATUS_PUBLISHER_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "INGRESS_OPERATION#*",
+];
+const RECONCILER_READABLE_PARTITION_PATTERNS = [
+  "CONTROL#DEBATE",
+  "CONTROL#GLOBAL",
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#OUTBOX",
+  "CONTROL#PANEL_REFRESH",
+  "CONTROL#RUNTIME",
+  "INGRESS_OPERATION#*",
+];
+const RECONCILER_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#RUNTIME",
+  "INGRESS_OPERATION#*",
+];
+const APPLICATION_WRITABLE_PARTITION_PATTERNS = [
+  "CONTROL#DEBATE",
+  "CONTROL#GLOBAL",
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#OUTBOX",
+  "CONTROL#PANEL_REFRESH",
+  "CONTROL#RUNTIME",
+  "DEBATE#*",
+  "INGRESS_OPERATION#*",
+  "INGRESS_SEMANTIC_OPERATION#*",
+  "OPERATION#*",
+  "QUOTA#GUILD#*",
+];
+const APPLICATION_READABLE_PARTITION_PATTERNS = [
+  ...APPLICATION_WRITABLE_PARTITION_PATTERNS,
+];
+const INGRESS_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  "CONTROL#INGRESS",
+];
+const STATUS_PUBLISHER_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  "CONTROL#INGRESS",
+];
+const RECONCILER_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  "CONTROL#DEBATE",
+  "CONTROL#GLOBAL",
+  "CONTROL#INGRESS",
+  "CONTROL#INGRESS#ACTIVE",
+  "CONTROL#OUTBOX",
+  "CONTROL#PANEL_REFRESH",
+  "CONTROL#RUNTIME",
+  "INGRESS_OPERATION#*",
+];
+const APPLICATION_CONDITION_CHECK_PARTITION_PATTERNS = [
+  DEPLOYMENT_LOCK_PARTITION,
+  ...APPLICATION_WRITABLE_PARTITION_PATTERNS,
+];
 
 export interface RuntimeStackProps extends StackProps {
   readonly debateTable: dynamodb.ITable;
@@ -357,34 +435,36 @@ export class RuntimeStack extends Stack {
     table: dynamodb.ITable,
     runtimeConfigParameter: string,
   ): void {
-    this.addTableActions(this.discordIngressFunction, table, [
-      "dynamodb:ConditionCheckItem",
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-    ]);
-    this.addTableActions(this.discordStatusPublisherFunction, table, [
-      "dynamodb:ConditionCheckItem",
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-    ]);
-    this.addTableActions(this.runtimeReconcilerFunction, table, [
-      "dynamodb:ConditionCheckItem",
-      "dynamodb:DeleteItem",
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-    ]);
-    this.runtimeReconcilerFunction.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["dynamodb:Query"],
-        resources: [
-          table.tableArn,
-          `${table.tableArn}/index/gsi1`,
-          `${table.tableArn}/index/gsi2`,
-        ],
-      }),
+    this.addTableActions(this.discordIngressFunction, table, {
+      conditionCheckPartitionPatterns: INGRESS_CONDITION_CHECK_PARTITION_PATTERNS,
+      readActions: ["dynamodb:GetItem"],
+      readablePartitionPatterns: INGRESS_READABLE_PARTITION_PATTERNS,
+      writablePartitionPatterns: INGRESS_WRITABLE_PARTITION_PATTERNS,
+      writeActions: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
+    });
+    this.addTableActions(this.discordStatusPublisherFunction, table, {
+      conditionCheckPartitionPatterns:
+        STATUS_PUBLISHER_CONDITION_CHECK_PARTITION_PATTERNS,
+      readActions: ["dynamodb:GetItem"],
+      readablePartitionPatterns: STATUS_PUBLISHER_READABLE_PARTITION_PATTERNS,
+      writablePartitionPatterns: STATUS_PUBLISHER_WRITABLE_PARTITION_PATTERNS,
+      writeActions: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
+    });
+    this.addTableActions(this.runtimeReconcilerFunction, table, {
+      conditionCheckPartitionPatterns: RECONCILER_CONDITION_CHECK_PARTITION_PATTERNS,
+      readActions: ["dynamodb:GetItem"],
+      readablePartitionPatterns: RECONCILER_READABLE_PARTITION_PATTERNS,
+      writablePartitionPatterns: RECONCILER_WRITABLE_PARTITION_PATTERNS,
+      writeActions: [
+        "dynamodb:DeleteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+      ],
+    });
+    this.addTableQueryActions(
+      this.runtimeReconcilerFunction,
+      table,
+      RECONCILER_READABLE_PARTITION_PATTERNS,
     );
 
     this.grantParameterRead(
@@ -428,11 +508,41 @@ export class RuntimeStack extends Stack {
   private addTableActions(
     function_: lambda.Function,
     table: dynamodb.ITable,
-    actions: string[],
+    options: {
+      conditionCheckPartitionPatterns: string[];
+      readActions: string[];
+      readablePartitionPatterns: string[];
+      writablePartitionPatterns: string[];
+      writeActions: string[];
+    },
   ): void {
     function_.addToRolePolicy(
-      new iam.PolicyStatement({ actions, resources: [table.tableArn] }),
+      new iam.PolicyStatement({
+        actions: ["dynamodb:ConditionCheckItem"],
+        conditions: this.leadingKeyConditions(
+          options.conditionCheckPartitionPatterns,
+        ),
+        resources: [table.tableArn],
+      }),
     );
+    if (options.readActions.length > 0) {
+      function_.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: options.readActions,
+          conditions: this.leadingKeyConditions(options.readablePartitionPatterns),
+          resources: [table.tableArn],
+        }),
+      );
+    }
+    if (options.writeActions.length > 0) {
+      function_.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: options.writeActions,
+          conditions: this.leadingKeyConditions(options.writablePartitionPatterns),
+          resources: [table.tableArn],
+        }),
+      );
+    }
   }
 
   private grantParameterRead(function_: lambda.Function, parameterName: string): void {
@@ -641,26 +751,74 @@ export class RuntimeStack extends Stack {
   private grantApplicationData(role: iam.Role, table: dynamodb.ITable): void {
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
-        actions: [
-          "dynamodb:ConditionCheckItem",
-          "dynamodb:DeleteItem",
-          "dynamodb:GetItem",
-          "dynamodb:PutItem",
-          "dynamodb:UpdateItem",
-        ],
+        actions: ["dynamodb:GetItem"],
+        conditions: this.leadingKeyConditions(
+          APPLICATION_READABLE_PARTITION_PATTERNS,
+        ),
         resources: [table.tableArn],
       }),
     );
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
+        actions: ["dynamodb:ConditionCheckItem"],
+        conditions: this.leadingKeyConditions(
+          APPLICATION_CONDITION_CHECK_PARTITION_PATTERNS,
+        ),
+        resources: [table.tableArn],
+      }),
+    );
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "dynamodb:DeleteItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+        ],
+        conditions: this.leadingKeyConditions(
+          APPLICATION_WRITABLE_PARTITION_PATTERNS,
+        ),
+        resources: [table.tableArn],
+      }),
+    );
+    this.addTableQueryActions(
+      role,
+      table,
+      APPLICATION_READABLE_PARTITION_PATTERNS,
+    );
+  }
+
+  private addTableQueryActions(
+    grantee: iam.IGrantable,
+    table: dynamodb.ITable,
+    readablePartitionPatterns: string[],
+  ): void {
+    grantee.grantPrincipal.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:Query"],
+        conditions: this.leadingKeyConditions(readablePartitionPatterns),
+        resources: [table.tableArn],
+      }),
+    );
+    grantee.grantPrincipal.addToPrincipalPolicy(
+      new iam.PolicyStatement({
         actions: ["dynamodb:Query"],
         resources: [
-          table.tableArn,
           `${table.tableArn}/index/gsi1`,
           `${table.tableArn}/index/gsi2`,
         ],
       }),
     );
+  }
+
+  private leadingKeyConditions(
+    partitionPatterns: string[],
+  ): Record<string, Record<string, string | string[]>> {
+    return {
+      "ForAllValues:StringLike": {
+        "dynamodb:LeadingKeys": partitionPatterns,
+      },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    };
   }
 
   private grantBreakGlassAccess(role: iam.Role): void {

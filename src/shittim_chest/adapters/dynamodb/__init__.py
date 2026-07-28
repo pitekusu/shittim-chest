@@ -14,6 +14,13 @@ from shittim_chest.adapters.dynamodb.control_records import (
 from shittim_chest.adapters.dynamodb.debate_lookup import (
     DynamoDbDebateAuthorizationLookup,
 )
+from shittim_chest.adapters.dynamodb.deployment_guard import (
+    DeploymentGuardRejected,
+    DeploymentGuardUnavailable,
+    DeploymentLockAcquisition,
+    DynamoDbDeploymentGuard,
+    deployment_lock_open_check,
+)
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.adapters.dynamodb.outbox import DynamoDbOutboxRepository
 from shittim_chest.adapters.dynamodb.repository import (
@@ -28,6 +35,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     ItemTooLarge,
     PersistenceFormatError,
+    deserialize_deployment_lock,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
     deserialize_ingress_semantic_binding,
@@ -39,6 +47,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     deserialize_snapshot,
     ingress_request_sort_key,
     migrate_item,
+    serialize_deployment_lock,
     serialize_ingress_operation_result,
     serialize_ingress_request,
     serialize_ingress_semantic_binding,
@@ -66,9 +75,13 @@ __all__ = (
     "ControlRecordInitializationStatus",
     "ControlRecordManifest",
     "ControlRecordMigrationRequired",
+    "DeploymentGuardRejected",
+    "DeploymentGuardUnavailable",
+    "DeploymentLockAcquisition",
     "DynamoDbControlRecordInitializer",
     "DynamoDbDebateAuthorizationLookup",
     "DynamoDbDebateRepository",
+    "DynamoDbDeploymentGuard",
     "DynamoDbIngressRepository",
     "DynamoDbOutboxRepository",
     "DynamoDbRuntimeActivityInspector",
@@ -80,6 +93,8 @@ __all__ = (
     "PanelOperationKind",
     "PersistenceFormatError",
     "create_dynamodb_client",
+    "deployment_lock_open_check",
+    "deserialize_deployment_lock",
     "deserialize_ingress_operation_result",
     "deserialize_ingress_request",
     "deserialize_ingress_semantic_binding",
@@ -91,6 +106,7 @@ __all__ = (
     "deserialize_snapshot",
     "ingress_request_sort_key",
     "migrate_item",
+    "serialize_deployment_lock",
     "serialize_ingress_operation_result",
     "serialize_ingress_request",
     "serialize_ingress_semantic_binding",

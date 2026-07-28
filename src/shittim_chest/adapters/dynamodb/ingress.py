@@ -24,6 +24,7 @@ else:
     TransactWriteItemTypeDef = object
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.deployment_lock import deployment_lock_open_check
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
@@ -2419,11 +2420,15 @@ class DynamoDbIngressRepository:
         aggregate_write_floor: int | None = None,
     ) -> bool:
         action_list = list(actions)
-        if not 1 <= len(action_list) <= 100:
+        if not 1 <= len(action_list) <= 99:
             raise ValueError("DynamoDB transaction must contain between 1 and 100 actions")
-        write_floor = len(action_list) if aggregate_write_floor is None else aggregate_write_floor
-        if not 1 <= write_floor <= len(action_list):
+        original_action_count = len(action_list)
+        write_floor = (
+            original_action_count if aggregate_write_floor is None else aggregate_write_floor
+        )
+        if not 1 <= write_floor <= original_action_count:
             raise ValueError("aggregate write floor must cover one to all transaction actions")
+        action_list.insert(0, deployment_lock_open_check(table_name=self._table_name))
         try:
             response = self._client.transact_write_items(
                 TransactItems=action_list,

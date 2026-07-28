@@ -74,7 +74,11 @@ async def test_previous_idle_controls_migrate_then_enqueue_and_wake(
         **serialize_runtime_state(stopped),
         "schema_version": PREVIOUS_SCHEMA_VERSION,
     }
-    for item in (*previous_records, previous_runtime):
+    previous_lock = {
+        **CONTROL_RECORD_MANIFEST.initial_deployment_lock_item,
+        "schema_version": PREVIOUS_SCHEMA_VERSION,
+    }
+    for item in (*previous_records, previous_runtime, previous_lock):
         dynamodb_client.put_item(
             TableName=empty_dynamodb_table,
             Item=marshal_item(item),
@@ -91,7 +95,7 @@ async def test_previous_idle_controls_migrate_then_enqueue_and_wake(
         ConsistentRead=True,
     )
     items = [unmarshal_item(item) for item in response["Items"]]
-    assert len(items) == 10
+    assert len(items) == 11
     assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in items)
     migrated_counter = next(
         item for item in items if item.get("record_type") == "ingress_queue_counter"

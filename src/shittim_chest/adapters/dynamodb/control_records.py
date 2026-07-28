@@ -46,9 +46,12 @@ from shittim_chest.adapters.dynamodb.serializer import (
     DynamoItem,
     DynamoValue,
     PersistenceFormatError,
+    deserialize_deployment_lock,
     deserialize_runtime_state,
+    serialize_deployment_lock,
     serialize_runtime_state,
 )
+from shittim_chest.application.deployment_guard import DeploymentLock, DeploymentLockState
 from shittim_chest.application.discord import OutboxStatus, PanelOperationKind
 from shittim_chest.application.scale_to_zero import (
     INGRESS_QUEUE_LIMIT,
@@ -62,7 +65,7 @@ from shittim_chest.application.scale_to_zero import (
 )
 from shittim_chest.domain import DebatePhase, ParticipantSlot
 
-CONTROL_RECORD_MANIFEST_VERSION = 1
+CONTROL_RECORD_MANIFEST_VERSION = 2
 _INITIAL_RUNTIME_AT = datetime(1970, 1, 1, tzinfo=UTC)
 _CLIENT_REQUEST_ID_PREFIX = "cr-"
 _LEGACY_SCAN_PAGE_SIZE = 100
@@ -160,6 +163,10 @@ class ControlRecordManifest:
     def initial_runtime_item(self) -> DynamoItem:
         return serialize_runtime_state(RuntimeState.stopped(at=self.initial_runtime_at))
 
+    @property
+    def initial_deployment_lock_item(self) -> DynamoItem:
+        return serialize_deployment_lock(DeploymentLock.open(at=self.initial_runtime_at))
+
 
 _ACTIVITY_SPECS = (
     ControlRecordSpec(
@@ -222,6 +229,10 @@ def _initial_runtime_item() -> DynamoItem:
     return serialize_runtime_state(RuntimeState.stopped(at=_INITIAL_RUNTIME_AT))
 
 
+def _initial_deployment_lock_item() -> DynamoItem:
+    return serialize_deployment_lock(DeploymentLock.open(at=_INITIAL_RUNTIME_AT))
+
+
 def _manifest_payload() -> dict[str, object]:
     # The marker's hash field is intentionally absent from this canonical
     # payload; otherwise the digest would be self-referential.
@@ -230,6 +241,7 @@ def _manifest_payload() -> dict[str, object]:
         "records": [
             *(spec.base_item() for spec in _ACTIVITY_SPECS),
             _initial_runtime_item(),
+            _initial_deployment_lock_item(),
         ],
     }
 
@@ -292,6 +304,17 @@ class DynamoDbControlRecordInitializer:
         except BotoCoreError, ClientError, PersistenceFormatError, ValueError:
             raise ControlRecordInitializationError("control record initialization failed") from None
 
+    def validate(self) -> ControlRecordInitializationResult:
+        """Read and validate the complete manifest without ever repairing or writing it."""
+
+        try:
+            self._validate_complete(self._read_snapshot())
+            return self._result(ControlRecordInitializationStatus.ALREADY_INITIALIZED)
+        except ControlRecordInitializationError:
+            raise
+        except BotoCoreError, ClientError, PersistenceFormatError, ValueError:
+            raise ControlRecordInitializationError("control record validation failed") from None
+
     def _result(
         self,
         status: ControlRecordInitializationStatus,
@@ -303,7 +326,7 @@ class DynamoDbControlRecordInitializer:
         )
 
     def _read_snapshot(self) -> tuple[DynamoItem | None, ...]:
-        keys = (*_ACTIVITY_SPECS, _RuntimeStateSpec())
+        keys = (*_ACTIVITY_SPECS, _RuntimeStateSpec(), _DeploymentLockSpec())
         actions = [
             cast(
                 TransactGetItemTypeDef,
@@ -329,7 +352,7 @@ class DynamoDbControlRecordInitializer:
         )
 
     def _validate_complete(self, snapshot: tuple[DynamoItem | None, ...]) -> None:
-        if len(snapshot) != 10:
+        if len(snapshot) != 11:
             raise ControlRecordInitializationError("control record snapshot has an invalid shape")
         for spec, item in zip(_ACTIVITY_SPECS, snapshot[:9], strict=True):
             if item is None:
@@ -346,6 +369,14 @@ class DynamoDbControlRecordInitializer:
         _validate_runtime_item(
             state_item,
             require_stopped=False,
+            allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
+        )
+        lock_item = snapshot[10]
+        if lock_item is None:
+            raise ControlRecordInitializationError("installed deployment lock is missing")
+        _validate_deployment_lock_item(
+            lock_item,
+            require_open=False,
             allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
         )
 
@@ -372,14 +403,24 @@ class DynamoDbControlRecordInitializer:
                     {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
                 ),
             )
+        lock_item = snapshot[10]
+        if lock_item is not None:
+            _validate_deployment_lock_item(
+                lock_item,
+                require_open=True,
+                allowed_schema_versions=frozenset(
+                    {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+                ),
+            )
 
     def _first_install_actions(
         self,
         snapshot: tuple[DynamoItem | None, ...],
     ) -> tuple[TransactWriteItemTypeDef, ...]:
-        specs: tuple[ControlRecordSpec | _RuntimeStateSpec, ...] = (
+        specs: tuple[ControlRecordSpec | _RuntimeStateSpec | _DeploymentLockSpec, ...] = (
             *_ACTIVITY_SPECS,
             _RuntimeStateSpec(),
+            _DeploymentLockSpec(),
         )
         actions: list[TransactWriteItemTypeDef] = []
         for spec, existing in zip(specs, snapshot, strict=True):
@@ -484,6 +525,31 @@ class _RuntimeStateSpec:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _DeploymentLockSpec:
+    @property
+    def key(self) -> DynamoItem:
+        return {"PK": "CONTROL#DEPLOYMENT", "SK": "LOCK"}
+
+    @property
+    def install_item(self) -> DynamoItem:
+        return _initial_deployment_lock_item()
+
+    @property
+    def allowed_fields(self) -> frozenset[str]:
+        return frozenset(
+            {
+                *self.install_item,
+                "guard_id",
+                "lock_owner",
+                "locked_at",
+                "lock_expires_at",
+                "deployment_mode",
+                "break_glass_reason",
+            }
+        )
+
+
 def _validate_activity_item(
     spec: ControlRecordSpec,
     item: DynamoItem,
@@ -560,14 +626,41 @@ def _validate_runtime_item(
     return canonical
 
 
+def _validate_deployment_lock_item(
+    item: DynamoItem,
+    *,
+    require_open: bool,
+    allowed_schema_versions: frozenset[int],
+) -> DynamoItem:
+    raw_schema = _schema_version(item)
+    if raw_schema not in allowed_schema_versions:
+        raise ControlRecordInitializationError("deployment lock schema is unsupported")
+    lock = deserialize_deployment_lock(item)
+    canonical = serialize_deployment_lock(lock)
+    if raw_schema == PREVIOUS_SCHEMA_VERSION:
+        canonical["schema_version"] = raw_schema
+    if item != canonical:
+        raise ControlRecordInitializationError("deployment lock has unknown attributes")
+    if require_open and lock.state is not DeploymentLockState.OPEN:
+        raise ControlRecordInitializationError("legacy deployment lock is active")
+    canonical["schema_version"] = CURRENT_SCHEMA_VERSION
+    return canonical
+
+
 def _migrate_fixed_record(
-    spec: ControlRecordSpec | _RuntimeStateSpec,
+    spec: ControlRecordSpec | _RuntimeStateSpec | _DeploymentLockSpec,
     item: DynamoItem,
 ) -> DynamoItem:
     if isinstance(spec, _RuntimeStateSpec):
         return _validate_runtime_item(
             item,
             require_stopped=True,
+            allowed_schema_versions=frozenset({PREVIOUS_SCHEMA_VERSION}),
+        )
+    if isinstance(spec, _DeploymentLockSpec):
+        return _validate_deployment_lock_item(
+            item,
+            require_open=True,
             allowed_schema_versions=frozenset({PREVIOUS_SCHEMA_VERSION}),
         )
     _validate_activity_item(
@@ -739,6 +832,13 @@ _LEGACY_SCAN_FIELDS = (
     "version",
     "runtime_version",
     "recorded_at",
+    "lock_state",
+    "guard_id",
+    "lock_owner",
+    "locked_at",
+    "lock_expires_at",
+    "deployment_mode",
+    "break_glass_reason",
 )
 
 _INACTIVE_IMMUTABLE_RECORD_TYPES = frozenset(
@@ -784,6 +884,13 @@ def _legacy_item_is_active(item: DynamoItem) -> bool:
         return any(
             _required_non_negative_integer(item, field) != 0 for field in spec.counter_fields
         )
+    if record_type == "deployment_lock":
+        canonical = _validate_deployment_lock_item(
+            item,
+            require_open=False,
+            allowed_schema_versions=frozenset({PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}),
+        )
+        return canonical.get("lock_state") == DeploymentLockState.LOCKED.value
     if record_type in {"attempt_meta", "debate_meta"}:
         _validate_debate_activity_identity(item, record_type=record_type)
         phase_field = "phase" if record_type == "attempt_meta" else "current_phase"

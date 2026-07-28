@@ -54,6 +54,11 @@ WORKFLOW_TARGETS = {
         "セキュリティ",
         notify_success=False,
     ),
+    "Production Deploy Guard": WorkflowTarget(
+        ".github/workflows/production-deploy-guard.yml",
+        "DISCORD_THREAD_SECURITY",
+        "セキュリティ",
+    ),
 }
 
 
@@ -78,6 +83,14 @@ class NotificationResult:
     kind: str
     logical_thread: str
     target_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class PullRequestMetadata:
+    """Bounded PR metadata resolved from trusted GitHub REST responses."""
+
+    number: str | None
+    title: str
 
 
 def resolve_workflow_target(run: JsonObject) -> WorkflowTarget | None:
@@ -113,7 +126,14 @@ def run_notification(
     role_id = environment.get("DISCORD_ALERT_ROLE_ID", "").strip() or None
     presentation = conclusion_presentation(conclusion)
     failed_jobs = _failed_job_names(github, run) if conclusion != "success" else ()
-    embed = workflow_embed(run, failed_jobs=failed_jobs)
+    repository = _repository_name(event, run)
+    pull_request = _pull_request_for_run(github, run)
+    embed = workflow_embed(
+        run,
+        failed_jobs=failed_jobs,
+        repository=repository,
+        pull_request=pull_request,
+    )
     discord.send(
         webhook_url=webhook_url,
         thread_id=thread_id,
@@ -148,7 +168,13 @@ def run_notification(
     return tuple(results)
 
 
-def workflow_embed(run: JsonObject, *, failed_jobs: tuple[str, ...]) -> DiscordEmbed:
+def workflow_embed(
+    run: JsonObject,
+    *,
+    failed_jobs: tuple[str, ...],
+    repository: str = "unknown/unknown",
+    pull_request: PullRequestMetadata | None = None,
+) -> DiscordEmbed:
     """Build one bounded workflow completion embed."""
 
     conclusion = string_value(run.get("conclusion"), default="unknown")
@@ -162,6 +188,7 @@ def workflow_embed(run: JsonObject, *, failed_jobs: tuple[str, ...]) -> DiscordE
     fields = [
         DiscordField("結果", f"{presentation.icon} {conclusion}", True),
         DiscordField("イベント", string_value(run.get("event")), True),
+        DiscordField("Repository", repository, True),
         DiscordField("ブランチ", string_value(run.get("head_branch")), True),
         DiscordField("Commit", string_value(run.get("head_sha"))[:7], True),
         DiscordField("実行者", string_value(actor.get("login")), True),
@@ -169,6 +196,14 @@ def workflow_embed(run: JsonObject, *, failed_jobs: tuple[str, ...]) -> DiscordE
         DiscordField("開始日時", _jst_timestamp(started), True),
         DiscordField("実行時間", duration, True),
     ]
+    if pull_request is not None:
+        number = f"#{pull_request.number}" if pull_request.number is not None else "unavailable"
+        fields.extend(
+            (
+                DiscordField("Pull Request", number, True),
+                DiscordField("PR title", pull_request.title),
+            )
+        )
     if failed_jobs:
         fields.append(DiscordField("失敗・中断ジョブ", join_lines(failed_jobs)))
     fields.append(DiscordField("必要な処置", presentation.action))
@@ -266,6 +301,68 @@ def _merged_dependabot_pull(github: GitHubReader, run: JsonObject) -> JsonObject
         ):
             return pull
     return None
+
+
+def _repository_name(event: JsonObject, run: JsonObject) -> str:
+    for container in (event.get("repository"), run.get("repository")):
+        if not isinstance(container, dict):
+            continue
+        full_name = string_value(container.get("full_name"), default="").strip()
+        if full_name:
+            return full_name
+    return "repository metadata unavailable"
+
+
+def _pull_request_for_run(
+    github: GitHubReader,
+    run: JsonObject,
+) -> PullRequestMetadata | None:
+    event_name = string_value(run.get("event"), default="")
+    if event_name not in {"pull_request", "pull_request_target"}:
+        return None
+    candidates = _pull_request_numbers(run.get("pull_requests"))
+    if len(candidates) > 1:
+        return _unavailable_pull_request()
+    try:
+        if len(candidates) == 1:
+            return _pull_request_details(github, candidates[0])
+        sha = string_value(run.get("head_sha"), default="")
+        if not sha:
+            return _unavailable_pull_request()
+        related = github.get_array(f"commits/{sha}/pulls")
+        fallback_candidates = _pull_request_numbers(related)
+        if len(fallback_candidates) != 1:
+            return _unavailable_pull_request()
+        return _pull_request_details(github, fallback_candidates[0])
+    except GitHubApiError:
+        return _unavailable_pull_request()
+
+
+def _pull_request_numbers(value: JsonValue | None) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    numbers: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        number = string_value(item.get("number"), default="")
+        if number.isdecimal() and number not in numbers:
+            numbers.append(number)
+    return tuple(numbers)
+
+
+def _pull_request_details(github: GitHubReader, number: str) -> PullRequestMetadata:
+    pull_request = github.get_object(f"pulls/{number}")
+    if string_value(pull_request.get("number"), default="") != number:
+        raise GitHubApiError("GitHub pull request response did not match the workflow run")
+    title = string_value(pull_request.get("title"), default="").strip()
+    if not title:
+        raise GitHubApiError("GitHub pull request response did not contain a title")
+    return PullRequestMetadata(number=number, title=title)
+
+
+def _unavailable_pull_request() -> PullRequestMetadata:
+    return PullRequestMetadata(number=None, title="PR metadata unavailable")
 
 
 def _duration(start: str, end: str) -> str:

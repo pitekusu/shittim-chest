@@ -34,6 +34,7 @@ def _items() -> tuple[DynamoItem, ...]:
     return (
         *(spec.install_item for spec in CONTROL_RECORD_MANIFEST.activity_records),
         CONTROL_RECORD_MANIFEST.initial_runtime_item,
+        CONTROL_RECORD_MANIFEST.initial_deployment_lock_item,
     )
 
 
@@ -67,7 +68,7 @@ def _scan_request() -> dict[str, object]:
     }
 
 
-def test_installed_manifest_is_one_ten_item_transactional_snapshot() -> None:
+def test_installed_manifest_is_one_eleven_item_transactional_snapshot() -> None:
     sdk = _client()
     with Stubber(sdk) as stubber:
         stubber.add_response(
@@ -85,9 +86,9 @@ def test_installed_manifest_is_one_ten_item_transactional_snapshot() -> None:
         stubber.assert_no_pending_responses()
 
 
-def test_first_install_paginates_scan_and_uses_one_atomic_ten_action_write() -> None:
+def test_first_install_paginates_scan_and_uses_one_atomic_eleven_action_write() -> None:
     sdk = _client()
-    empty_snapshot: tuple[DynamoItem | None, ...] = (None,) * 10
+    empty_snapshot: tuple[DynamoItem | None, ...] = (None,) * 11
     last_key = marshal_item({"PK": "DEBATE#historical", "SK": "META"})
     historical = marshal_item(
         {
@@ -121,7 +122,7 @@ def test_first_install_paginates_scan_and_uses_one_atomic_ten_action_write() -> 
     with Stubber(sdk) as stubber:
         stubber.add_response(
             "transact_get_items",
-            {"Responses": [{} for _index in range(10)]},
+            {"Responses": [{} for _index in range(11)]},
             _get_request(),
         )
         stubber.add_response(

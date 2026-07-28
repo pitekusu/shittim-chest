@@ -47,7 +47,7 @@ def workflow_run(
     event: str = "pull_request",
     branch: str = "feature",
 ) -> JsonObject:
-    return {
+    run: JsonObject = {
         "id": 321,
         "name": name,
         "path": path,
@@ -63,10 +63,16 @@ def workflow_run(
         "updated_at": "2026-07-23T00:02:05Z",
         "html_url": "https://github.com/example/project/actions/runs/321",
     }
+    if event in {"pull_request", "pull_request_target"}:
+        run["pull_requests"] = [{"number": 86}]
+    return run
 
 
 def event_payload(**kwargs: str) -> JsonObject:
-    return {"workflow_run": workflow_run(**kwargs)}
+    return {
+        "workflow_run": workflow_run(**kwargs),
+        "repository": {"full_name": "example/project"},
+    }
 
 
 def environment() -> dict[str, str]:
@@ -83,10 +89,15 @@ def environment() -> dict[str, str]:
 class FakeGitHub:
     jobs: list[JsonObject] = field(default_factory=list)
     pulls: list[JsonObject] = field(default_factory=list)
+    pull_request: JsonObject = field(
+        default_factory=lambda: {"number": 86, "title": "Improve trusted notifications"}
+    )
     requests: list[str] = field(default_factory=list)
 
     def get_object(self, path: str, *, query: dict[str, str] | None = None) -> JsonObject:
         self.requests.append(path)
+        if path.startswith("pulls/"):
+            return self.pull_request
         return {"jobs": cast(list[JsonValue], self.jobs)}
 
     def get_array(self, path: str, *, query: dict[str, str] | None = None) -> list[JsonValue]:
@@ -183,6 +194,40 @@ def test_workflow_name_and_path_must_both_match() -> None:
     assert resolve_workflow_target(workflow_run(name="Unknown")) is None
 
 
+def test_deploy_guard_name_and_path_are_allowlisted() -> None:
+    guard = workflow_run(
+        name="Production Deploy Guard",
+        path=".github/workflows/production-deploy-guard.yml",
+        event="workflow_dispatch",
+        branch="main",
+    )
+    assert resolve_workflow_target(guard) is not None
+    assert resolve_workflow_target({**guard, "path": ".github/workflows/ci.yml"}) is None
+
+
+def test_pull_request_workflow_embed_contains_required_operational_metadata() -> None:
+    discord = FakeDiscord()
+    run_notification(
+        event=event_payload(conclusion="failure"),
+        environment=environment(),
+        github=FakeGitHub(jobs=[{"name": "security", "conclusion": "failure"}]),
+        discord=discord,
+    )
+    embed = cast(JsonObject, cast(list[JsonValue], discord.messages[0][1]["embeds"])[0])
+    fields = {
+        cast(str, cast(JsonObject, field)["name"]): cast(str, cast(JsonObject, field)["value"])
+        for field in cast(list[JsonValue], embed["fields"])
+    }
+    assert embed["title"] == "❌ CI: failure"
+    assert embed["url"] == "https://github.com/example/project/actions/runs/321"
+    assert fields["Repository"] == "example/project"
+    assert fields["Pull Request"] == "#86"
+    assert fields["PR title"] == "Improve trusted notifications"
+    assert fields["ブランチ"] == "feature"
+    assert fields["Commit"] == "abcdef0"
+    assert fields["結果"] == "❌ failure"
+
+
 def test_notification_workflow_success_is_suppressed_but_failure_is_reported() -> None:
     success = event_payload(
         name="Discord Security Digest",
@@ -211,17 +256,36 @@ def test_notification_workflow_success_is_suppressed_but_failure_is_reported() -
     assert [thread for thread, _ in discord.messages] == ["203"]
 
 
-def test_successful_workflow_sends_no_alert_mention() -> None:
+def test_successful_deploy_guard_is_reported_for_audit_visibility() -> None:
     discord = FakeDiscord()
     results = run_notification(
-        event=event_payload(),
+        event=event_payload(
+            name="Production Deploy Guard",
+            path=".github/workflows/production-deploy-guard.yml",
+            event="workflow_dispatch",
+            branch="main",
+        ),
         environment=environment(),
         github=FakeGitHub(),
         discord=discord,
     )
     assert [result.kind for result in results] == ["workflow-run"]
+    assert [thread for thread, _ in discord.messages] == ["203"]
+
+
+def test_successful_workflow_sends_no_alert_mention() -> None:
+    github = FakeGitHub()
+    discord = FakeDiscord()
+    results = run_notification(
+        event=event_payload(),
+        environment=environment(),
+        github=github,
+        discord=discord,
+    )
+    assert [result.kind for result in results] == ["workflow-run"]
     assert [thread for thread, _ in discord.messages] == ["201"]
     assert discord.messages[0][1]["allowed_mentions"] == {"parse": []}
+    assert github.requests == ["pulls/86"]
 
 
 def test_failure_lists_at_most_eight_failed_jobs_and_mentions_role() -> None:
@@ -245,7 +309,7 @@ def test_failure_lists_at_most_eight_failed_jobs_and_mentions_role() -> None:
     )
     assert failed.count("failed") == 8
     assert discord.messages[0][1]["allowed_mentions"] == {"parse": [], "roles": ["123"]}
-    assert github.requests == ["actions/runs/321/attempts/2/jobs"]
+    assert github.requests == ["actions/runs/321/attempts/2/jobs", "pulls/86"]
 
 
 def test_failure_without_configured_role_disables_all_mentions() -> None:
@@ -272,7 +336,7 @@ def test_non_success_conclusions_query_jobs(conclusion: str) -> None:
         github=github,
         discord=discord,
     )
-    assert github.requests == ["actions/runs/321/attempts/2/jobs"]
+    assert github.requests == ["actions/runs/321/attempts/2/jobs", "pulls/86"]
 
 
 def test_main_ci_dependabot_merge_sends_a_second_message() -> None:
@@ -299,6 +363,81 @@ def test_main_ci_dependabot_merge_sends_a_second_message() -> None:
     assert [result.kind for result in results] == ["workflow-run", "dependabot-merge"]
     assert [thread for thread, _ in discord.messages] == ["201", "202"]
     assert github.requests == ["commits/abcdef0123456789/pulls"]
+
+
+def test_empty_workflow_pull_requests_falls_back_to_commit_association() -> None:
+    event = event_payload()
+    run = cast(JsonObject, event["workflow_run"])
+    run["pull_requests"] = []
+    github = FakeGitHub(pulls=[{"number": 86}])
+    discord = FakeDiscord()
+    run_notification(
+        event=event,
+        environment=environment(),
+        github=github,
+        discord=discord,
+    )
+    assert github.requests == ["commits/abcdef0123456789/pulls", "pulls/86"]
+    embed = cast(JsonObject, cast(list[JsonValue], discord.messages[0][1]["embeds"])[0])
+    fields = cast(list[JsonValue], embed["fields"])
+    values = {
+        cast(str, cast(JsonObject, field)["name"]): cast(str, cast(JsonObject, field)["value"])
+        for field in fields
+    }
+    assert values["Pull Request"] == "#86"
+
+
+@pytest.mark.parametrize(
+    "pull_requests",
+    [
+        [{"number": "not-a-number"}],
+        [{"number": 86}, {"number": 87}],
+    ],
+)
+def test_ambiguous_or_malformed_pr_metadata_is_reported_without_failing(
+    pull_requests: list[JsonObject],
+) -> None:
+    event = event_payload()
+    run = cast(JsonObject, event["workflow_run"])
+    run["pull_requests"] = cast(list[JsonValue], pull_requests)
+    github = FakeGitHub(pulls=[])
+    discord = FakeDiscord()
+    run_notification(
+        event=event,
+        environment=environment(),
+        github=github,
+        discord=discord,
+    )
+    embed = cast(JsonObject, cast(list[JsonValue], discord.messages[0][1]["embeds"])[0])
+    fields = {
+        cast(str, cast(JsonObject, field)["name"]): cast(str, cast(JsonObject, field)["value"])
+        for field in cast(list[JsonValue], embed["fields"])
+    }
+    assert fields["Pull Request"] == "unavailable"
+    assert fields["PR title"] == "PR metadata unavailable"
+
+
+def test_pull_request_api_failure_is_reported_without_dropping_notification() -> None:
+    class FailingPullRequestGitHub(FakeGitHub):
+        def get_object(self, path: str, *, query: dict[str, str] | None = None) -> JsonObject:
+            if path.startswith("pulls/"):
+                raise GitHubApiError("sanitized API failure")
+            return super().get_object(path, query=query)
+
+    discord = FakeDiscord()
+    run_notification(
+        event=event_payload(),
+        environment=environment(),
+        github=FailingPullRequestGitHub(),
+        discord=discord,
+    )
+    embed = cast(JsonObject, cast(list[JsonValue], discord.messages[0][1]["embeds"])[0])
+    fields = {
+        cast(str, cast(JsonObject, field)["name"]): cast(str, cast(JsonObject, field)["value"])
+        for field in cast(list[JsonValue], embed["fields"])
+    }
+    assert fields["Pull Request"] == "unavailable"
+    assert fields["PR title"] == "PR metadata unavailable"
 
 
 def test_dependabot_merge_renderer_accepts_nullable_nested_fields() -> None:

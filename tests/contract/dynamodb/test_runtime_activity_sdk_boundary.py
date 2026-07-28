@@ -224,8 +224,11 @@ def test_stop_transaction_fences_marker_all_counters_and_three_slots(
         == stopping
     )
     actions = cast(list[dict[str, Any]], captured["TransactItems"])
-    assert actions[0]["Put"]["Item"] == marshal_item(serialize_runtime_state(stopping))
-    checks = actions[1:]
+    lock_check = actions[0]["ConditionCheck"]
+    assert lock_check["Key"] == marshal_item({"PK": "CONTROL#DEPLOYMENT", "SK": "LOCK"})
+    assert "lock_state=:open" in lock_check["ConditionExpression"]
+    assert actions[1]["Put"]["Item"] == marshal_item(serialize_runtime_state(stopping))
+    checks = actions[2:]
     assert len(checks) == 9
     assert [check["ConditionCheck"]["Key"] for check in checks] == [
         marshal_item(key) for key in _keys()

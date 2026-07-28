@@ -18,6 +18,7 @@ else:
     TransactWriteItemTypeDef = object
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.deployment_lock import deployment_lock_open_check
 from shittim_chest.adapters.dynamodb.ingress import INGRESS_RECORD_SCHEMA_VERSION
 from shittim_chest.adapters.dynamodb.outbox import (
     OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION,
@@ -326,6 +327,7 @@ class DynamoDbRuntimeStateRepository:
         expected.validate_replacement(updated)
         condition, names, values = _runtime_cas(expected)
         actions: list[TransactWriteItemTypeDef] = [
+            deployment_lock_open_check(table_name=self._table_name),
             cast(
                 TransactWriteItemTypeDef,
                 {
@@ -433,6 +435,7 @@ class DynamoDbRuntimeStateRepository:
             },
         )
         actions = [
+            deployment_lock_open_check(table_name=self._table_name),
             operation_check,
             request_check,
             pointer_check,
@@ -477,6 +480,7 @@ class DynamoDbRuntimeStateRepository:
             },
         )
         actions = [
+            deployment_lock_open_check(table_name=self._table_name),
             self._active_operation_check(operation),
             self._active_request_check(request, at=at),
             self._active_pointer_check(pointer),

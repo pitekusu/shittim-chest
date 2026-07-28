@@ -14,6 +14,7 @@ from mypy_boto3_dynamodb.type_defs import TransactWriteItemTypeDef
 
 from shittim_chest.adapters.dynamodb import (
     DynamoDbRuntimeStateRepository,
+    deployment_lock_open_check,
     ingress_request_sort_key,
     serialize_ingress_operation_result,
     serialize_ingress_request,
@@ -293,6 +294,7 @@ async def test_wake_transaction_updates_the_preseeded_runtime_state() -> None:
             {},
             {
                 "TransactItems": [
+                    deployment_lock_open_check(table_name="test-table"),
                     {
                         "ConditionCheck": {
                             "TableName": "test-table",

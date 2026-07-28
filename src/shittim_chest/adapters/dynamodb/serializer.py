@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
+from shittim_chest.application.deployment_guard import (
+    DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION,
+    BreakGlassReason,
+    DeploymentLock,
+    DeploymentLockState,
+    DeploymentMode,
+)
 from shittim_chest.application.discord import (
     DiscordBotSlot,
     OutboxOperation,
@@ -1095,6 +1102,64 @@ def deserialize_runtime_state(raw_item: Mapping[str, DynamoValue]) -> RuntimeSta
     if _text(item, "PK") != "CONTROL#RUNTIME" or _text(item, "SK") != "STATE":
         raise PersistenceFormatError("runtime state has an invalid key")
     return state
+
+
+def serialize_deployment_lock(lock: DeploymentLock) -> DynamoItem:
+    """Serialize the fixed deployment lock without workflow secrets or free text."""
+
+    item: DynamoItem = {
+        "PK": "CONTROL#DEPLOYMENT",
+        "SK": "LOCK",
+        "record_type": "deployment_lock",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION,
+        "lock_state": lock.state.value,
+        "fencing_token": lock.fencing_token,
+        "version": lock.version,
+        "updated_at": _timestamp(lock.updated_at),
+    }
+    for field, value in (
+        ("guard_id", lock.guard_id),
+        ("lock_owner", lock.owner),
+        ("locked_at", _optional_timestamp(lock.acquired_at)),
+        ("lock_expires_at", _optional_timestamp(lock.expires_at)),
+        ("deployment_mode", lock.mode.value if lock.mode is not None else None),
+        ("break_glass_reason", lock.reason.value if lock.reason is not None else None),
+    ):
+        _put_optional(item, field, value)
+    return _validated_item(item)
+
+
+def deserialize_deployment_lock(raw_item: Mapping[str, DynamoValue]) -> DeploymentLock:
+    """Validate and rebuild the fixed deployment lock control record."""
+
+    item = _validate_auxiliary_item(
+        raw_item,
+        expected_type="deployment_lock",
+        expected_record_schema_version=DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION,
+    )
+    raw_mode = _optional_text(item, "deployment_mode")
+    raw_reason = _optional_text(item, "break_glass_reason")
+    try:
+        lock = DeploymentLock(
+            state=DeploymentLockState(_text(item, "lock_state")),
+            fencing_token=_integer(item, "fencing_token"),
+            version=_integer(item, "version"),
+            updated_at=_datetime(item, "updated_at"),
+            guard_id=_optional_text(item, "guard_id"),
+            owner=_optional_text(item, "lock_owner"),
+            acquired_at=_optional_datetime(item, "locked_at"),
+            expires_at=_optional_datetime(item, "lock_expires_at"),
+            mode=DeploymentMode(raw_mode) if raw_mode is not None else None,
+            reason=BreakGlassReason(raw_reason) if raw_reason is not None else None,
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid deployment lock") from error
+    if _text(item, "PK") != "CONTROL#DEPLOYMENT" or _text(item, "SK") != "LOCK":
+        raise PersistenceFormatError("deployment lock has an invalid key")
+    if item != serialize_deployment_lock(lock):
+        raise PersistenceFormatError("deployment lock has unknown attributes")
+    return lock
 
 
 def serialize_runtime_wake_result(result: RuntimeWakeResult) -> DynamoItem:

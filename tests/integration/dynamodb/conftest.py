@@ -84,6 +84,7 @@ def dynamodb_table(
     control_items = (
         *(spec.install_item for spec in CONTROL_RECORD_MANIFEST.activity_records),
         CONTROL_RECORD_MANIFEST.initial_runtime_item,
+        CONTROL_RECORD_MANIFEST.initial_deployment_lock_item,
     )
     for item in control_items:
         dynamodb_client.put_item(TableName=empty_dynamodb_table, Item=marshal_item(item))

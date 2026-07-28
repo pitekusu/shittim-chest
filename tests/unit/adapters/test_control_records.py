@@ -83,7 +83,11 @@ def _snapshot(*, marker: bool = True) -> tuple[DynamoItem | None, ...]:
     ]
     if not marker:
         items[0] = None
-    return (*items, CONTROL_RECORD_MANIFEST.initial_runtime_item)
+    return (
+        *items,
+        CONTROL_RECORD_MANIFEST.initial_runtime_item,
+        CONTROL_RECORD_MANIFEST.initial_deployment_lock_item,
+    )
 
 
 def _initializer(client: FakeClient) -> DynamoDbControlRecordInitializer:
@@ -107,13 +111,13 @@ def _scan_page(
     return page
 
 
-def test_manifest_is_typed_deterministic_and_contains_ten_records() -> None:
-    assert CONTROL_RECORD_MANIFEST.version == CONTROL_RECORD_MANIFEST_VERSION == 1
+def test_manifest_is_typed_deterministic_and_contains_eleven_records() -> None:
+    assert CONTROL_RECORD_MANIFEST.version == CONTROL_RECORD_MANIFEST_VERSION == 2
     assert CONTROL_RECORD_MANIFEST.manifest_hash == CONTROL_RECORD_MANIFEST_HASH
     assert len(CONTROL_RECORD_MANIFEST.activity_records) == 9
     assert len(CONTROL_RECORD_MANIFEST_HASH) == 64
     assert CONTROL_RECORD_MANIFEST_HASH == (
-        "7c43ef2665d386482afb0655ccc5ac1e163d7f8fe14e7bc4fc3625be2daea320"
+        "f4679a4946a61faa79ef02e6bbc3305fe98cddcf803dafccf2e1a3ed41711de0"
     )
     assert control_records._manifest_hash() == CONTROL_RECORD_MANIFEST_HASH
     assert CONTROL_RECORD_MANIFEST.initial_runtime_item == {
@@ -129,10 +133,21 @@ def test_manifest_is_typed_deterministic_and_contains_ten_records() -> None:
         "updated_at": "1970-01-01T00:00:00.000000Z",
         "stopped_at": "1970-01-01T00:00:00.000000Z",
     }
+    assert CONTROL_RECORD_MANIFEST.initial_deployment_lock_item == {
+        "PK": "CONTROL#DEPLOYMENT",
+        "SK": "LOCK",
+        "record_type": "deployment_lock",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": 1,
+        "lock_state": "open",
+        "fencing_token": 0,
+        "version": 0,
+        "updated_at": "1970-01-01T00:00:00.000000Z",
+    }
 
 
 def test_client_request_identity_is_scoped_to_the_table_and_snapshot() -> None:
-    empty = (None,) * 10
+    empty = (None,) * 11
 
     assert control_records._client_token(TABLE_NAME, empty) == control_records._client_token(
         TABLE_NAME, empty
@@ -142,13 +157,13 @@ def test_client_request_identity_is_scoped_to_the_table_and_snapshot() -> None:
     )
 
 
-def test_first_install_scans_all_pages_then_atomically_puts_ten_records() -> None:
+def test_first_install_scans_all_pages_then_atomically_puts_eleven_records() -> None:
     historical = {
         **_legacy_record("debate_meta", current_phase="completed"),
         "schema_version": PREVIOUS_SCHEMA_VERSION,
     }
     client = FakeClient(
-        snapshots=[(None,) * 10],
+        snapshots=[(None,) * 11],
         pages=[_scan_page(historical), _scan_page()],
     )
 
@@ -157,7 +172,7 @@ def test_first_install_scans_all_pages_then_atomically_puts_ten_records() -> Non
     assert result.status is ControlRecordInitializationStatus.INITIALIZED
     assert len(client.transact_get_requests) == 1
     gets = cast(list[dict[str, Any]], client.transact_get_requests[0]["TransactItems"])
-    assert len(gets) == 10
+    assert len(gets) == 11
     assert client.scan_requests[0]["ConsistentRead"] is True
     assert client.scan_requests[0]["Limit"] == 100
     names = cast(dict[str, str], client.scan_requests[0]["ExpressionAttributeNames"])
@@ -172,7 +187,7 @@ def test_first_install_scans_all_pages_then_atomically_puts_ten_records() -> Non
     assert len(client.transact_write_requests) == 1
     write = client.transact_write_requests[0]
     actions = cast(list[dict[str, Any]], write["TransactItems"])
-    assert len(actions) == 10
+    assert len(actions) == 11
     assert all("Put" in action for action in actions)
     marker = unmarshal_item(actions[0]["Put"]["Item"])
     assert marker["manifest_hash"] == CONTROL_RECORD_MANIFEST_HASH
@@ -203,6 +218,7 @@ def test_first_install_condition_checks_existing_safe_records_without_rewriting(
     assert "Put" in actions[0]
     assert "ConditionCheck" in actions[1]
     assert "ConditionCheck" in actions[9]
+    assert "ConditionCheck" in actions[10]
     state_values = unmarshal_item(actions[9]["ConditionCheck"]["ExpressionAttributeValues"])
     assert "2026-07-28T04:05:06.000000Z" in state_values.values()
 
@@ -231,6 +247,8 @@ def test_first_install_migrates_previous_idle_records_without_resetting_state() 
         )
     )
     snapshot[9] = {**runtime, "schema_version": PREVIOUS_SCHEMA_VERSION}
+    lock = cast(DynamoItem, snapshot[10])
+    snapshot[10] = {**lock, "schema_version": PREVIOUS_SCHEMA_VERSION}
     legacy_items = tuple(item for item in snapshot[1:] if item is not None)
     client = FakeClient(
         snapshots=[tuple(snapshot)],
@@ -241,16 +259,17 @@ def test_first_install_migrates_previous_idle_records_without_resetting_state() 
 
     assert result.status is ControlRecordInitializationStatus.INITIALIZED
     actions = cast(list[dict[str, Any]], client.transact_write_requests[0]["TransactItems"])
-    assert len(actions) == 10
+    assert len(actions) == 11
     assert all("Put" in action for action in actions)
     migrated = [unmarshal_item(action["Put"]["Item"]) for action in actions[1:]]
     assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in migrated)
     assert migrated[0]["created_at"] == "2026-07-28T04:00:00.000000Z"
     assert migrated[0]["updated_at"] == "2026-07-28T04:01:00.000000Z"
     assert migrated[5]["fencing_token"] == 17
-    assert migrated[-1]["updated_at"] == "2026-07-28T04:05:06.000000Z"
-    assert migrated[-1]["generation"] == 4
-    assert migrated[-1]["version"] == 9
+    assert migrated[-2]["updated_at"] == "2026-07-28T04:05:06.000000Z"
+    assert migrated[-2]["generation"] == 4
+    assert migrated[-2]["version"] == 9
+    assert migrated[-1]["lock_state"] == "open"
     previous_values = unmarshal_item(actions[1]["Put"]["ExpressionAttributeValues"])
     assert PREVIOUS_SCHEMA_VERSION in previous_values.values()
 
@@ -266,6 +285,21 @@ def test_installed_marker_validates_dynamic_state_without_scan_or_write() -> Non
     assert result.status is ControlRecordInitializationStatus.ALREADY_INITIALIZED
     assert client.scan_requests == []
     assert client.transact_write_requests == []
+
+
+def test_validate_is_strictly_read_only_and_requires_the_complete_manifest() -> None:
+    client = FakeClient(snapshots=[_snapshot()])
+
+    result = _initializer(client).validate()
+
+    assert result.status is ControlRecordInitializationStatus.ALREADY_INITIALIZED
+    assert client.scan_requests == []
+    assert client.transact_write_requests == []
+
+    incomplete = list(_snapshot())
+    incomplete[10] = None
+    with pytest.raises(ControlRecordInitializationError, match="missing"):
+        _initializer(FakeClient(snapshots=[tuple(incomplete)])).validate()
 
 
 def test_installed_marker_rejects_previous_runtime_schema_without_repair() -> None:
@@ -294,7 +328,7 @@ def test_installed_marker_rejects_previous_fixed_record_without_repair() -> None
     assert client.transact_write_requests == []
 
 
-@pytest.mark.parametrize("index", [1, 8, 9])
+@pytest.mark.parametrize("index", [1, 8, 9, 10])
 def test_installed_marker_never_repairs_a_missing_record(index: int) -> None:
     snapshot = list(_snapshot())
     snapshot[index] = None
@@ -319,9 +353,27 @@ def test_installed_marker_never_repairs_corruption() -> None:
     assert client.transact_write_requests == []
 
 
+def test_installed_manifest_v1_is_not_silently_repaired_to_v2() -> None:
+    snapshot = list(_snapshot())
+    marker = cast(DynamoItem, snapshot[0])
+    snapshot[0] = {
+        **marker,
+        "manifest_version": 1,
+        "manifest_hash": "7c43ef2665d386482afb0655ccc5ac1e163d7f8fe14e7bc4fc3625be2daea320",
+    }
+    snapshot[10] = None
+    client = FakeClient(snapshots=[tuple(snapshot)])
+
+    with pytest.raises(ControlRecordInitializationError, match=r"schema|marker"):
+        _initializer(client).initialize()
+
+    assert client.scan_requests == []
+    assert client.transact_write_requests == []
+
+
 def test_first_install_rejects_active_work_on_a_later_scan_page() -> None:
     client = FakeClient(
-        snapshots=[(None,) * 10],
+        snapshots=[(None,) * 11],
         pages=[
             _scan_page(
                 {
@@ -348,7 +400,7 @@ def test_first_install_requires_offline_migration_after_four_scan_pages() -> Non
         )
         for page in range(4)
     ]
-    client = FakeClient(snapshots=[(None,) * 10], pages=pages)
+    client = FakeClient(snapshots=[(None,) * 11], pages=pages)
 
     with pytest.raises(ControlRecordMigrationRequired, match="bounded legacy scan"):
         _initializer(client).initialize()
@@ -361,7 +413,7 @@ def test_first_install_requires_offline_migration_after_four_scan_pages() -> Non
 
 
 def test_concurrent_identical_install_converges_by_revalidating_all_records() -> None:
-    client = FakeClient(snapshots=[(None,) * 10, _snapshot()])
+    client = FakeClient(snapshots=[(None,) * 11, _snapshot()])
     client.cancel_write = True
 
     result = _initializer(client).initialize()
@@ -371,7 +423,7 @@ def test_concurrent_identical_install_converges_by_revalidating_all_records() ->
 
 
 def test_transaction_cancellation_fails_when_the_marker_did_not_converge() -> None:
-    client = FakeClient(snapshots=[(None,) * 10, (None,) * 10])
+    client = FakeClient(snapshots=[(None,) * 11, (None,) * 11])
     client.cancel_write = True
 
     with pytest.raises(ControlRecordInitializationError, match="missing"):
