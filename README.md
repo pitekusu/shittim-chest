@@ -12,19 +12,24 @@ Japanese name: **シッテムの箱** (`shittim_chest`).
 
 ## Status
 
-Design is complete under [`docs/`](docs/). Implementation on `main` covers the
-application core through production composition, Discord interaction runtime,
-OpenAI + Web search, DynamoDB persistence (schema v6), ARM64 container gates,
-and **synth-only** CDK stacks (Stateful + Runtime).
+Design is complete under [`docs/`](docs/). The merged `main` baseline covers the
+application core through production composition, OpenAI + Web search, Discord
+Gateway/runtime publishing, DynamoDB persistence through schema v6, ARM64
+container gates, and synth-only Stateful/Runtime CDK. Draft PR `#85` adds the
+locally tested signed Discord HTTP Interaction ingress, DynamoDB **schema v7**,
+control-record **manifest v2**, and On-Demand scale-to-zero templates. Nothing
+in this repository has been deployed to AWS or connected to a real Discord
+Application endpoint.
 
-| Done | Not done |
+| Implemented on the current Draft PR branch | Not done |
 |---|---|
 | Domain, voting, Protocols, use cases | STEP-09C ops/budgets/alarms |
 | DynamoDB adapter, leases, outbox | STEP-10 release signing / deploy workflows |
 | OpenAI Responses API, router, Evidence | Real Discord Applications / live tokens |
-| Discord publisher + `/shittim` + panel | Paid OpenAI in CI |
+| Signed HTTP ingress + `/shittim` + panel | Paid OpenAI in CI |
 | Lifecycle, SIGTERM/SIGKILL recovery tests | AWS bootstrap or stack deploy |
 | Container + native ARM64 CI | |
+| Scale-to-zero control plane + 3 Lambda boundaries | |
 | GitHub → Discord Forum notifications (STEP-02D) | |
 
 Production generation is fixed to **Luna standard** (no runtime escalation).
@@ -34,10 +39,32 @@ Slice evidence and PR links: [`docs/20_実装・試験・検証記録.md`](docs/
 [`docs/19_実装計画・トレーサビリティ.md`](docs/19_実装計画・トレーサビリティ.md).
 Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
 
-## Stack (design)
+## Scale-to-zero runtime
+
+- Discord calls an API Gateway HTTP API. The ingress Lambda verifies the
+  Ed25519 signature and timestamp against the untouched raw body before JSON
+  parsing or durable acceptance.
+- Three application Lambdas have separate responsibilities: Interaction
+  ingress, public status publication, and one-minute runtime reconciliation.
+- The ECS service is ARM64 **On-Demand Fargate**, `512` CPU units / `1024` MiB,
+  with `desiredCount=0` while idle and at most one task while active. The former
+  Fargate Spot `desiredCount=1` baseline is superseded.
+- The durable ingress FIFO holds at most 20 waiting requests; accepted debates
+  continue to use the existing three fenced global slots and are not counted in
+  that waiting limit.
+- A request still waiting after 3 minutes gets a non-terminal public warning;
+  recovery continues until the 15-minute terminal deadline. Scale-down becomes
+  eligible 30 minutes after the last debate is *fully* complete, including
+  required outbox/status work.
+- The deployment guard is implemented as a fail-closed, read-only diagnostic
+  library, CLI, and manual workflow. No production deploy workflow consumes it
+  yet.
+
+## Stack (design and locally verified templates)
 
 - **Python 3.14.6** / **uv** (locked), discord.py, OpenAI Responses API, boto3
-- **DynamoDB** (on-demand, PITR), **ECS Fargate Spot** ARM64 singleton (Tokyo)
+- **DynamoDB** (on-demand, PITR), **ECS On-Demand Fargate** ARM64 zero-to-one
+  singleton (Tokyo)
 - **CDK** TypeScript (local synth; not deployed from this repo yet)
 - Digest-pinned **DHI** Community images; identity and tmpfs in `container-policy.json`
 

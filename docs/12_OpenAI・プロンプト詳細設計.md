@@ -4,19 +4,25 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-17
+updated: 2026-07-28
 ---
 
 # OpenAI・プロンプト詳細設計
 
 ## 1. Client・model
 
-- `openai>=2.46.0,<3`の`AsyncOpenAI`をprocess単位で1つ生成して再利用する。lock上の実versionは`2.46.0`とする。
+- `openai>=2.46.0,<3`の`AsyncOpenAI`をFargate runtime process単位で1つ生成して再利用する。lock上の実versionは`2.46.0`とする。
 - stable Responses APIと`responses.parse()`を使用し、`store=false`を明示する。
 - Responses API Multi-agent betaは使用しない。`client.beta.responses`、`multi_agent`、`OpenAI-Beta`ヘッダをrequestに含めず、Python application層が各personaの並列実行、checkpoint、投票、再開を管理する。
 - 既定modelは`gpt-5.6-luna`。deploy前に実projectで利用可能か再確認する。
 - request、response、structured schemaをadapter内で扱い、applicationへSDK型を返さない。
 - process全体のOpenAI同時実行は6、HTTP connection poolは6以上とする。
+
+### 1.1 Scale-to-Zero実行境界
+
+OpenAI clientとpersona promptはOn-Demand Fargate taskが稼働し、Ingress Drainerが耐久Requestを受け取った後の既存orchestratorだけが使う。`desiredCount=0`の間はOpenAI clientもOpenAI接続も存在しない。DiscordIngress、DiscordStatusPublisher、RuntimeReconcilerの各LambdaはOpenAI SDK/API key/persona promptを読まず、OpenAI request、Web search、討論、投票、最終回答生成を行わない。
+
+HTTP Interactionから受け取ったInteraction tokenはOpenAIへ送らず、DynamoDBにも永続化しない。質問本文は署名検証後の耐久Ingress Requestとして保存し、Runtimeが正当なclaimとglobal slotを得た後だけOpenAI入力へ変換する。Scale-to-Zeroはmodel、prompt、Structured Outputs、Python投票規則を変更しない。
 
 ## 2. Phase別設定
 
@@ -119,4 +125,4 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 
 ## 9. Implementation status
 
-STEP-05AはPR `#20`、STEP-05BはPR `#21`、STEP-05CはPR `#22`でmerge済みである。STEP-05CはPolicy request shape、shadow判定、content-free Policy telemetry、opt-in blind評価toolを実装した。STEP-05C.1AはPR `#24`、merge commit `1360411`で盲検artifact分離、failure capture、rubric validation、content-free集計を実装・検証済みである。STEP-05C.1Bは10件20回答の実API生成とpreference-only集計を完了し、Luna pro 4勝、Terra standard 2勝、同点4件となった。その後、本番はLuna standardだけへ固定し昇格しないと決定した。Terra/proは評価再現用に限定し、threshold、追加token/deadline、昇格用Discord表示を実装しない。回答差はprivate persona設定で作る。Discord結合とCloudWatch出力は未実装である。
+STEP-05AはPR `#20`、STEP-05BはPR `#21`、STEP-05CはPR `#22`でmerge済みである。STEP-05CはPolicy request shape、shadow判定、content-free Policy telemetry、opt-in blind評価toolを実装した。STEP-05C.1AはPR `#24`、merge commit `1360411`で盲検artifact分離、failure capture、rubric validation、content-free集計を実装・検証済みである。STEP-05C.1Bは10件20回答の実API生成とpreference-only集計を完了し、Luna pro 4勝、Terra standard 2勝、同点4件となった。その後、本番はLuna standardだけへ固定し昇格しないと決定した。Terra/proは評価再現用に限定し、threshold、追加token/deadline、昇格用Discord表示を実装しない。回答差はprivate persona設定で作る。Scale-to-ZeroのLambda/OpenAI分離はlocal/contract testで検証済みだが、AWSは未deployであり実Fargate起動後のOpenAI/Discord結合は未検証である。

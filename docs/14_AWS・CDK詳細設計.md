@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-22
+updated: 2026-07-28
 ---
 
 # AWS・CDK詳細設計
@@ -20,7 +20,7 @@ updated: 2026-07-22
 | Stack | Resource | Policy |
 |---|---|---|
 | `ShittimChest-Prod-Stateful` | DynamoDB、ECR、AWS Signer profile、ECR Managed Signing configuration | termination protection、DynamoDB/ECR/Signer profile `RETAIN` |
-| `ShittimChest-Prod-Runtime` | VPC、SG、ECS cluster/service/task、IAM、app/break-glass Exec log group | Statefulへ一方向依存 |
+| `ShittimChest-Prod-Runtime` | VPC、SG、ECS cluster/service/task、HTTP API、Ingress/Status Publisher/Reconciler Lambda、IAM、app/break-glass Exec log group | Statefulへ一方向依存 |
 | `ShittimChest-Prod-Operations` | dashboard、alarm、SNS、EventBridge、Budget、Cost Anomaly Detection | Runtime/Statefulを監視。Container Insightsは作成・有効化しない |
 
 L2 constructを優先し、L1/escape hatchはADRで理由を残す。construct IDとlogical IDは初回deploy後に変更しない。`cdk.context.json`をcommitし、`cdk-nag`の`AwsSolutionsChecks`と`cdk synth --strict`を必須とする。
@@ -36,7 +36,9 @@ STEP-09Aの`StatefulStack`は次を実装する。
 - `Project`、`Environment`、`ManagedBy` tagをapp rootから付与する。
 - local/PRではdummy accountを使うassertionとcredentialなしのstrict synthだけを行い、bootstrap、deploy、AWS resource作成は行わない。
 
-STEP-09Bの`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glass task definition、IAM role、SSM SecureString参照、CloudWatch Logsを実装する。image digestとruntime config versionはCloudFormation parameterとし、形式を`^sha256:[0-9a-f]{64}$`と`^v[0-9]{4}$`でfail closedに検証する。image digestにdefaultを設けず、releaseは平常とbreak-glassの検証済みdigestを必ず明示する。local/PRでは構成assertion、cdk-nag、credentialなしのstrict synthまでとし、AWS resourceはdeployしない。
+旧STEP-09BのSpot・`desiredCount=1` RuntimeStackは、Draft PR `#85`のscale-to-zero sliceで置き換える。現行の`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glass task definition、HTTP API、3 Lambda、1分周期EventBridge rule、IAM role、SSM SecureString参照、CloudWatch Logsを実装する。image digestとruntime config versionはCloudFormation parameterとし、形式を`^sha256:[0-9a-f]{64}$`と`^v[0-9]{4}$`でfail closedに検証する。image digestにdefaultを設けず、releaseは平常とbreak-glassの検証済みdigestを必ず明示する。local/PRでは構成assertion、cdk-nag、credentialなしのstrict synthまでとし、AWS resourceはdeployしない。
+
+Scale-to-ZeroのCDKとapplicationはfeature branch上でlocal実装されたが、AWS accountへのbootstrap、deploy、resource作成・更新は未実施である。Discord ApplicationとInteractions Endpoint URLも未変更である。
 
 ## 3. Network
 
@@ -44,6 +46,8 @@ STEP-09Bの`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glas
 - Fargateは`awsvpc`、`AssignPublicIp=ENABLED`、routeは`0.0.0.0/0 -> IGW`。
 - Security Groupはingress ruleなし。egressはTCP 443を許可する。
 - ALB、NAT instance、DNS64、NAT64、Service Connectは作成しない。
+- Discordからの公開ingressはAPI Gateway HTTP APIで受け、DiscordIngress Lambdaへ直接統合する。3 LambdaはVPC外に配置し、LambdaのためのNAT GatewayやVPC endpointを追加しない。
+- ECS taskのSecurity Groupはinboundを持たず、HTTP APIからECSへの直接routeも作成しない。Ingress Request、status更新要求、runtime control recordは既存DynamoDB tableを介して連携する。
 - VPC Flow Logsはno-ingress・TCP 443 outboundのみの単一task MVPでは費用対効果が低いため作成しない。セキュリティincidentの調査でnetwork visibility不足が実証された場合はADRで再評価する。
 - Discord/OpenAIがAAAAを公式supportし、24時間canaryを満たし、IPv6-only移行時にbreak-glass ECS Execを廃止する判断が完了するまでIPv6-onlyへ移行しない。
 
@@ -51,10 +55,11 @@ STEP-09Bの`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glas
 
 | 項目 | 値 |
 |---|---|
-| Capacity Provider | `FARGATE_SPOT`のみ |
-| desired count | 1 |
+| Capacity Provider | On-Demand `FARGATE`のみ。通常Serviceに`FARGATE_SPOT`を含めない |
+| desired count | 平常0、未処理request/recoverable workがあるときのみ1 |
+| maximum running task | 1 |
 | CPU / Memory | 512 CPU units / 1,024 MiB |
-| Architecture | ARM64既定、互換性または価格不利時だけx86_64 |
+| Architecture | ARM64固定。互換性変更は別ADRとimage/CDK再検証を必須とする |
 | Platform | Linux Fargate 1.4.0以上 |
 | Deployment | minimum healthy 0%、maximum 100%、stop-before-start |
 | AZ rebalancing | 無効。maximum 100%と両立させ、二重Bot接続を防ぐ |
@@ -62,9 +67,9 @@ STEP-09Bの`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glas
 | Circuit breaker | enable + rollback |
 | Container Insights | 無効。account defaultを変更せず、このclusterでも有効化しない |
 
-Spot singleton停止とcapacity不足中の全面停止を仕様として許容する。EventBridgeで`Your Spot Task was interrupted.`を記録・通知する。
+1分周期のRuntime ReconcilerがDynamoDBのruntime stateと未処理workを正本とし、必要時だけ`desiredCount=1`へ収束させる。未処理Ingress、recovery、lease、outbox、status/panel更新がなく、すべての討論が完全終了した後にIDLE開始時刻を固定する。その30分後に、generationと空状態を再検証して`desiredCount=0`へ収束させる。通常停止中はtask 0が正常状態である。
 
-application側のgraceful shutdown deadlineは90秒とし、`stopTimeout=120`の残り30秒をDiscord client close、log driver、container runtimeの終了余裕にする。AWSはSpot interruption時にSIGTERMを送り、configured `stopTimeout`後にSIGKILLするため、container実装時は値の省略を禁止する。
+application側のgraceful shutdown deadlineは90秒とし、`stopTimeout=120`の残り30秒をDiscord client close、log driver、container runtimeの終了余裕にする。Reconcilerによる通常scale-down、deploy、ホスト異常のいずれでもSIGTERMとconfigured `stopTimeout`後のSIGKILLが実行され得るため、container実装時は値の省略を禁止する。
 
 ## 5. Container definition
 
@@ -132,6 +137,9 @@ STEP-09Bではtask definitionがdigest URI以外を拒否するassertionを追�
 - Execution role: 対象ECR repositoryのpull、application CloudWatch Logs、task definitionが参照する各Parameterの`ssm:GetParameters`だけ。ECRの`GetAuthorizationToken`以外はresourceを限定し、AWS-managed encryptionのためKMS decryptは付与しない。
 - 平常Task role: 実装が使用する対象DynamoDB table/indexの`ConditionCheckItem`、`GetItem`、`PutItem`、`UpdateItem`、`Query`だけ。EMFはstdoutの`awslogs`経由であり`cloudwatch:PutMetricData`は付与しない。secret読取、`ssmmessages`、Exec log group書込権限を持たない。
 - Break-glass Task role: 平常権限に加え4つの`ssmmessages` actionと専用Exec log group書込だけを一時的に許可する。
+- DiscordIngress Lambda role: 既存tableのIngress Request、idempotency、queue counter、runtime wakeに必要な読取とtransactionだけを許可する。ECS更新、Discord Bot token、参加者Bot token、OpenAI API keyへの権限は持たない。
+- DiscordStatusPublisher Lambda role: status更新recordの読取・条件付き完了とmoderator Bot tokenの取得だけを許可する。参加者Bot token、OpenAI API key、ECS更新権限は持たない。
+- RuntimeReconciler Lambda role: runtime control recordの読取・条件付き更新と、対象ECS Serviceの`DescribeServices`、`UpdateService`だけを許可する。secret取得権限は持たない。
 - GitHub plan roleはimmutable main subject、deploy roleはimmutable `production` Environment subjectに限定する。planはchange set作成、ECR push、対象Signer profileの`signer:SignPayload`、署名状態・scan・referrer取得を許可し、deployはEnvironment承認済みchange set実行と検証用readだけ、drift roleはread-onlyとする。
 - `iam:PassRole`は対象execution/task role ARNと`iam:PassedToService=ecs-tasks.amazonaws.com`へ限定する。
 - ECS task trustは`ecs-tasks.amazonaws.com`。`aws:SourceAccount`を実accountへ一致させ、`aws:SourceArn=arn:<partition>:ecs:ap-northeast-1:<account>:*`の`ArnLike`を付ける。ECS公式の制約によりclusterまでは限定できない。
@@ -157,7 +165,8 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 
 ## 9. Cost・backup
 
-- Public IPv4は0.005 USD/時を基準に約3.65 USD/月を見込み、deploy時に再計算する。
+- Public IPv4とFargate vCPU/memoryは`desiredCount=1`でtaskが実際に稼働する時間だけ課金対象とし、平常の`desiredCount=0`では発生しない。Public IPv4単価は0.005 USD/時を基準にdeploy時に再計算する。
+- scale-to-zero待受ではAPI Gateway HTTP APIのrequest数、3 Lambdaのinvocation/compute、1分周期EventBridge rule、DynamoDB on-demand request/storage、CloudWatch Logs/metricsが少量の常時cost候補となる。NAT Gateway、ALB、常駐Gateway processは追加しない。
 - ECR連携でのAWS Signer利用自体に追加Signer料金はない。ただしsignature、SBOM、provenance、vulnerability assessmentは各reference artifactとしてECR image quotaと保存容量を消費するため、repository容量とartifact数を月次確認する。
 - Fargate既定20 GiB ephemeral storageは追加料金なしとし、追加容量は設定しない。Container Insightsは無効とする。単一taskのMVPではECS標準CPU・メモリ、EventBridge通知、少数のapplication metricを使い、task/container単位のContainer Insights固定費を負担しない。
 - `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 20 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。Cost Anomaly Detectionは月額予算ではなく異常の総影響額を評価するため、notification thresholdは10 USDとする。
@@ -170,7 +179,7 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 確認日 | 対象version/service | 公式資料 | 設計への反映 |
 |---|---|---|---|
 | 2026-07-16 | Fargate network | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html | awsvpc、Public IP、IPv6条件 |
-| 2026-07-16 | Fargate Spot | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | Spot専用、停止設計 |
+| 2026-07-28 | Fargate capacity provider | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | 旧Spot専用設計を廃止し、On-Demand `FARGATE`、平常desired 0、maximum 1へ変更 |
 | 2026-07-16 | ECS Exec | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-exec.html | root、writable root、logging |
 | 2026-07-19 | Fargate pricing | https://aws.amazon.com/fargate/pricing/ | 既定20 GiB ephemeral storageは追加料金なし、追加容量は設定しない |
 | 2026-07-19 | CloudWatch pricing | https://aws.amazon.com/cloudwatch/pricing/ | 単一task MVPではContainer Insightsを無効にし、少数application metricとECS標準metricへ絞る |
@@ -178,7 +187,7 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-16 | Task definition | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | CPU/memory、stop timeout、awslogs |
 | 2026-07-16 | CDK | https://docs.aws.amazon.com/cdk/v2/guide/home.html | stack、synth/diff、logical ID |
 | 2026-07-16 | VPC pricing | https://aws.amazon.com/vpc/pricing/ | Public IPv4費用 |
-| 2026-07-17 | Fargate Spot termination | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | SIGTERM後にconfigured stopTimeoutでSIGKILL、singletonはcapacity復帰まで停止する前提を再確認 |
+| 2026-07-28 | ECS service desired count | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/update-service-parameters.html | Reconcilerが条件付き状態に従いdesired 0/1を収束、同時taskは最大1 |
 | 2026-07-17 | ECS ContainerDefinition | https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_ContainerDefinition.html | Fargate `stopTimeout=120`を明示し、application内部deadlineを90秒へ設定 |
 | 2026-07-17 | ECS task definition parameters | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | ARM64、512 CPU/1024 MiB、health、read-only root、`stopTimeout=120`のtask境界を再確認 |
 | 2026-07-17 | Fargate task differences | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html | Fargateで`tmpfs`非対応のためtask bind volumeへ分離（2026-07-20に次行で訂正） |
@@ -197,7 +206,7 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-19 | ECR OCI v1.1 / Referrers API | https://docs.aws.amazon.com/AmazonECR/latest/userguide/images.html、https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ListImageReferrers.html | signature、SBOM、provenance、scan assessmentをimage digestへ関連付ける |
 | 2026-07-19 | ECS image URI / lifecycle hook | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/create-task-definition.html、https://docs.aws.amazon.com/AmazonECS/latest/developerguide/lambda-lifecycle-hooks.html | digest URI、`PRE_SCALE_UP` fail-closed admission |
 | 2026-07-19 | AWS Signer pricing / ECR artifact quota | https://docs.aws.amazon.com/signer/latest/developerguide/Welcome.html、https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-signing.html | ECR連携Signer追加料金なし、reference artifactのquota/storage影響を運用へ反映 |
-| 2026-07-19 | CDK VPC / FargateService 2.261.0 | https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ec2.Vpc.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ecs.FargateService.html | NAT 0、Public IP、Spot専用、minimum 0/maximum 100、AZ rebalancing無効をassert |
+| 2026-07-28 | CDK VPC / FargateService / HTTP API / Lambda | https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ec2.Vpc.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ecs.FargateService.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_apigatewayv2.HttpApi.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_lambda.Function.html | NAT 0、Public IP、On-Demand FARGATE、desired 0、3 Lambda VPC外、HTTP API最小routeをassert |
 | 2026-07-19 | ECS task IAM role | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html | `SourceAccount`とregion/account限定`SourceArn`でconfused deputyを防止 |
 | 2026-07-19 | ECS Parameter Store injection | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-ssm-paramstore.html | execution roleの各parameter限定`ssm:GetParameters`、更新時のnew deploymentを採用 |
 | 2026-07-19 | CloudWatch Logs data protection | https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/mask-sensitive-log-data.html | application/Exec log groupの非機密ログ原則に追加防御としてmask policyを適用 |
