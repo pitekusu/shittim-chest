@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 
 import pytest
 
 import shittim_chest.lambda_handlers.runtime_reconciler as handler_module
+from shittim_chest.application.ports import StatusTriggerUnavailable
 from shittim_chest.application.runtime_reconciler import RuntimeReconciliationReport
+from shittim_chest.application.scale_to_zero import RuntimeStatus
 from shittim_chest.lambda_handlers.runtime_reconciler import (
     RuntimeReconcilerInvocationError,
     RuntimeReconcilerLambda,
 )
+from shittim_chest.runtime.operational_metrics import CloudWatchEmfMetrics
 
 NOW = datetime(2026, 7, 26, 1, 2, 3, tzinfo=UTC)
 
@@ -34,6 +38,11 @@ class FakeReconciler:
             startup_recovered=4,
             status_publications_triggered=5,
             conditional_conflicts=6,
+            runtime_status=RuntimeStatus.BUSY,
+            runtime_desired_count=1,
+            ecs_running_count=1,
+            ingress_pending=7,
+            outbox_pending=8,
             ecs_observed=True,
             ecs_scaled_up=True,
             ecs_scaled_down=True,
@@ -45,6 +54,12 @@ class FakeReconciler:
 
 class Context:
     aws_request_id = "request-id"
+
+
+class _RaisingHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        del record
+        raise RuntimeError("private provider detail")
 
 
 @pytest.mark.parametrize(
@@ -65,12 +80,18 @@ def test_handler_accepts_only_content_free_scheduled_or_hint_events(
     assert reconciler.calls == 1
     assert result == {
         "conditional_conflicts": 6,
+        "ecs_pending_count": 0,
+        "ecs_running_count": 1,
         "ecs_observed": True,
         "ecs_scaled_down": True,
         "ecs_scaled_up": True,
         "observed_at": "2026-07-26T01:02:03Z",
+        "ingress_pending": 7,
+        "outbox_pending": 8,
+        "runtime_desired_count": 1,
         "runtime_reconciled": True,
         "runtime_entered_idle": True,
+        "runtime_status": "busy",
         "runtime_stopped": True,
         "startup_recovered": 4,
         "startup_timed_out": 3,
@@ -79,6 +100,68 @@ def test_handler_accepts_only_content_free_scheduled_or_hint_events(
         "wake_candidates": 2,
     }
     assert "123456789" not in str(result)
+
+
+def test_handler_emits_bounded_reconciler_metrics_without_input_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reconciler = FakeReconciler()
+    logger = logging.getLogger("test-runtime-reconciler-emf")
+    metrics = CloudWatchEmfMetrics(logger=logger, environment="production")
+    handler = RuntimeReconcilerLambda(reconciler=reconciler, metrics=metrics)
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        handler.handle({"schema_version": 1, "interaction_id": "123456789"})
+
+    payload = json.loads(caplog.records[-1].getMessage())
+    assert payload["Service"] == "reconciler"
+    assert payload["RuntimeStateCode"] == 4
+    assert payload["RuntimeDesiredCount"] == 1
+    assert payload["EcsRunningCount"] == 1
+    assert payload["IngressPending"] == 7
+    assert payload["OutboxPending"] == 8
+    assert payload["ReconcilerFailed"] == 0
+    assert payload["StatusPublishFailed"] == 0
+    assert "123456789" not in caplog.records[-1].getMessage()
+
+
+def test_handler_emits_status_failure_without_provider_detail(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reconciler = FakeReconciler()
+    reconciler.error = StatusTriggerUnavailable()
+    logger = logging.getLogger("test-runtime-reconciler-emf-failure")
+    metrics = CloudWatchEmfMetrics(logger=logger, environment="production")
+    handler = RuntimeReconcilerLambda(reconciler=reconciler, metrics=metrics)
+
+    with (
+        caplog.at_level(logging.INFO, logger=logger.name),
+        pytest.raises(StatusTriggerUnavailable),
+    ):
+        handler.handle({"schema_version": 1, "trigger": "scheduled"})
+
+    payload = json.loads(caplog.records[-1].getMessage())
+    assert payload["ReconcilerFailed"] == 1
+    assert payload["StatusPublishFailed"] == 1
+    assert "provider" not in caplog.records[-1].getMessage().lower()
+
+
+def test_handler_does_not_retry_reconciliation_when_metric_sink_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reconciler = FakeReconciler()
+    logger = logging.Logger("test-runtime-reconciler-emf-sink-failure", level=logging.INFO)
+    logger.addHandler(_RaisingHandler())
+    metrics = CloudWatchEmfMetrics(logger=logger, environment="production")
+    handler = RuntimeReconcilerLambda(reconciler=reconciler, metrics=metrics)
+
+    with caplog.at_level(logging.ERROR, logger=handler_module.LOGGER.name):
+        result = handler.handle({"schema_version": 1, "trigger": "scheduled"})
+
+    assert result["runtime_status"] == "busy"
+    assert reconciler.calls == 1
+    assert "runtime_reconciler_metric_emission_failed" in caplog.text
+    assert "private provider detail" not in caplog.text
 
 
 @pytest.mark.parametrize(

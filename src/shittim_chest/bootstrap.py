@@ -45,9 +45,11 @@ from shittim_chest.application.ingress_drain import IngressDrainer, RuntimeIngre
 from shittim_chest.application.runtime_instance import RuntimeInstanceState
 from shittim_chest.config import BootstrapConfig, load_bootstrap_config
 from shittim_chest.runtime import (
+    CloudWatchEmfMetrics,
     ContentFreeTelemetry,
     RuntimeAdmissionGateway,
     RuntimeLifecycle,
+    RuntimeMetricsReporter,
     SecureCandidateOrderer,
     SystemClock,
     Uuid7IdGenerator,
@@ -55,6 +57,8 @@ from shittim_chest.runtime import (
 from shittim_chest.runtime.health import EventLoopHeartbeat
 
 _LOGGER = logging.getLogger("shittim_chest")
+_EMF_LOGGER = logging.getLogger("shittim_chest.emf")
+_EMF_LOGGER.setLevel(logging.INFO)
 DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS: Final = 20.0
 
 
@@ -71,6 +75,7 @@ class ProductionRuntime:
     openai_client: AsyncOpenAI
     dynamodb_client: DynamoDBClient
     telemetry: ContentFreeTelemetry
+    operational_metrics: RuntimeMetricsReporter | None = None
     client_close_timeout_seconds: float = DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS
     heartbeat: EventLoopHeartbeat = field(default_factory=EventLoopHeartbeat)
     _closed: bool = field(default=False, init=False)
@@ -85,7 +90,11 @@ class ProductionRuntime:
         async with self.heartbeat:
             self.telemetry.runtime_event("application_started")
             try:
-                await self.lifecycle.run()
+                if self.operational_metrics is None:
+                    await self.lifecycle.run()
+                else:
+                    async with self.operational_metrics:
+                        await self.lifecycle.run()
             finally:
                 await self.aclose()
                 self.telemetry.runtime_event("application_stopped")
@@ -274,6 +283,13 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         openai_client=openai_client,
         dynamodb_client=dynamodb_client,
         telemetry=telemetry,
+        operational_metrics=RuntimeMetricsReporter(
+            metrics=CloudWatchEmfMetrics(
+                logger=_EMF_LOGGER,
+                environment=config.environment,
+            ),
+            readiness=admission.all_identities_ready,
+        ),
     )
 
 

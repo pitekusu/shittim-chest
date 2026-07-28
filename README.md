@@ -12,24 +12,24 @@ Japanese name: **シッテムの箱** (`shittim_chest`).
 
 ## Status
 
-Design is complete under [`docs/`](docs/). The merged `main` baseline covers the
-application core through production composition, OpenAI + Web search, Discord
-Gateway/runtime publishing, DynamoDB persistence through schema v6, ARM64
-container gates, and synth-only Stateful/Runtime CDK. Draft PR `#85` adds the
-locally tested signed Discord HTTP Interaction ingress, DynamoDB **schema v7**,
-control-record **manifest v2**, and On-Demand scale-to-zero templates. Nothing
-in this repository has been deployed to AWS or connected to a real Discord
-Application endpoint.
+Design is complete under [`docs/`](docs/). The merged `main` baseline includes
+the application core, OpenAI + Web search, signed Discord HTTP Interaction
+ingress, DynamoDB **schema v7** / control-record **manifest v2**, ARM64 container
+gates, and synth-only Stateful/Runtime CDK with On-Demand scale-to-zero. The
+current STEP-09C-A slice adds the locally tested, low-cardinality CloudWatch EMF
+contract and Runtime/Reconciler producers. Nothing in this repository has been
+deployed to AWS or connected to a real Discord Application endpoint.
 
-| Implemented on the current Draft PR branch | Not done |
+| Implemented locally / on merged main | Not done |
 |---|---|
-| Domain, voting, Protocols, use cases | STEP-09C ops/budgets/alarms |
+| Domain, voting, Protocols, use cases | STEP-09C-B alarms/dashboard/EventBridge |
 | DynamoDB adapter, leases, outbox | STEP-10 release signing / deploy workflows |
 | OpenAI Responses API, router, Evidence | Real Discord Applications / live tokens |
 | Signed HTTP ingress + `/shittim` + panel | Paid OpenAI in CI |
 | Lifecycle, SIGTERM/SIGKILL recovery tests | AWS bootstrap or stack deploy |
 | Container + native ARM64 CI | |
 | Scale-to-zero control plane + 3 Lambda boundaries | |
+| STEP-09C-A EMF metrics foundation | STEP-09C-C Budget/CAD notifications |
 | GitHub → Discord Forum notifications (STEP-02D) | |
 
 Production generation is fixed to **Luna standard** (no runtime escalation).
@@ -37,6 +37,8 @@ Responses API Multi-agent beta is intentionally unused; Python owns orchestratio
 
 Slice evidence and PR links: [`docs/20_実装・試験・検証記録.md`](docs/20_実装・試験・検証記録.md),
 [`docs/19_実装計画・トレーサビリティ.md`](docs/19_実装計画・トレーサビリティ.md).
+The scale-to-zero requirements, commit checkpoints, and completion criteria are
+published under [`docs/100_Ondemand Fargate/`](docs/100_Ondemand%20Fargate/).
 Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
 
 ## Scale-to-zero runtime

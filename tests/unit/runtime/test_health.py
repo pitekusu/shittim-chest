@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from shittim_chest.runtime.health import EventLoopHeartbeat, heartbeat_is_healthy, main
+from shittim_chest.runtime.health import (
+    EventLoopHeartbeat,
+    heartbeat_age_seconds,
+    heartbeat_is_healthy,
+    main,
+)
 
 
 @pytest.mark.asyncio
@@ -66,6 +71,16 @@ def test_health_rejects_missing_file_and_invalid_age(tmp_path: Path) -> None:
 
     assert not heartbeat_is_healthy(path=path)
     assert not heartbeat_is_healthy(path=path, max_age_seconds=0)
+
+
+def test_heartbeat_age_is_content_free_and_rejects_invalid_samples(tmp_path: Path) -> None:
+    path = tmp_path / "heartbeat"
+    path.write_text("42\n", encoding="ascii")
+    modified_at = path.stat().st_mtime
+
+    assert heartbeat_age_seconds(path=path, now=lambda: modified_at + 2.5) == 2.5
+    assert heartbeat_age_seconds(path=path, now=lambda: modified_at - 1) is None
+    assert heartbeat_age_seconds(path=tmp_path / "missing") is None
 
 
 def test_health_command_is_content_free(

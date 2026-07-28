@@ -14,16 +14,17 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (scale-to-zero feature branch, 2026-07-28)
+## Status (STEP-09C-A feature branch, 2026-07-29)
 
-The merged `main` baseline is implemented through STEP-09B. Draft PR `#85`
-adds the locally/offline-tested scale-to-zero integration slice. STEP-02D
-notifications and STEP-06D requester name snapshots are also present. Evidence:
+The merged `main` baseline includes PR `#85` signed HTTP ingress and On-Demand
+scale-to-zero. The current branch adds STEP-09C-A's locally tested EMF contract
+and Runtime/Reconciler producers without AWS writes. STEP-02D notifications and
+STEP-06D requester name snapshots are also present. Evidence:
 `docs/20_実装・試験・検証記録.md` and the progress table in
 `docs/19_実装計画・トレーサビリティ.md`. AWS and Discord production state remain
 unchanged.
 
-| Area | On the current feature branch |
+| Area | Current implementation |
 |---|---|
 | Domain / application | Phases, voting, Protocols, accept/run/cancel/retry/resume, deadlines |
 | Persistence | DynamoDB adapter, schema **v7**, control manifest **v2**, 3 fenced leases, outbox |
@@ -34,11 +35,12 @@ unchanged.
 | Scale-to-zero | Durable FIFO 20, 3/15/30-minute semantics, wake/drain/reconcile, race fences |
 | Infra (synth-only) | HTTP API, 3 Lambdas, On-Demand Fargate desired 0/max 1, public VPC |
 | Ops notifications | GitHub → Discord Forum (STEP-02D); friend server; no alert role |
+| Ops metrics | `ShittimChest/Prod`, fixed `Service` dimension, 10-metric allowlist |
 
 **Not done**
 
-- STEP-09C: Budgets, Cost Anomaly Detection, metrics/alarms, image admission
-- STEP-10: signing/referrer verification, release workflows, AWS bootstrap/deploy
+- STEP-09C-B/C: alarms/dashboard/EventBridge, Budgets, Cost Anomaly Detection
+- STEP-10-A+: signing/referrer verification, image admission, release workflows, AWS bootstrap/deploy
 - Real Discord Application endpoint switch, live Bot tokens, paid OpenAI in CI
 - No AWS account bootstrap or stack deploy
 - Deployment guard is diagnostic-only; no production workflow enforces it
@@ -46,7 +48,7 @@ unchanged.
 Slices ship as isolated PRs (squash merge). After each slice, update `docs/20_…`
 and the plan/progress notes so this boundary does not go stale.
 
-### Hard constraints on the current feature branch
+### Hard constraints
 
 - Discord clients: `max_ratelimit_timeout=30`; adapter Discord op timeout **45s**
   must stay under `OUTBOX_CLAIM_SECONDS=60`.
@@ -63,6 +65,15 @@ and the plan/progress notes so this boundary does not go stale.
   `1024` MiB): `desiredCount=0` when idle, converge to 1 only after durable
   ingress acceptance. Fargate Spot and the old always-on `desiredCount=1`
   baseline are superseded.
+- STEP-09C-A custom metrics use namespace `ShittimChest/Prod`, one fixed
+  `Service` dimension (`runtime` or `reconciler`), standard 60-second
+  resolution, and the 10-name allowlist in `runtime/operational_metrics.py`.
+  Never add IDs, user content, phase/model strings, or dynamic dimensions.
+  EMF goes through existing Logs; do not grant `cloudwatch:PutMetricData`.
+- Runtime alarms, AWS Budgets, and Cost Anomaly Detection share one private
+  operator email supplied at deploy time. Never commit the address. Image
+  admission belongs to STEP-10-A with release signing/referrer verification,
+  not STEP-09C Operations monitoring.
 - The ingress FIFO contains at most 20 PENDING/CLAIMED/RETRYING requests.
   Accepted debates leave the FIFO and continue to consume the existing three
   fenced global slots.
@@ -97,11 +108,12 @@ and the plan/progress notes so this boundary does not go stale.
 | Public mirror | `docs/` (read-only relative to Vault) |
 | Responsibilities | Index in `docs/00_…`: requirements / decisions / detailed design / tests / traceability |
 
-The source-only supplemental specification directory named exactly
+The supplemental specification directory named exactly
 `100_Ondemand Fargate/` contains the canonical goal, commit plan, and completion
-checklist for scale-to-zero. `tools/sync_docs.py` validates that directory at
-the configured source but intentionally does not copy it into public `docs/`.
-Do not publish its local filesystem location.
+checklist for scale-to-zero. `tools/sync_docs.py` validates and copies these
+three files to the same relative path under public `docs/`; together with the
+15 root notes, the mirror contains 18 canonical documents. Do not publish the
+source's local filesystem location.
 
 There is **no** silent precedence: on conflict, stop, ADR, update every affected
 note in the same change.

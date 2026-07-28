@@ -9,7 +9,12 @@ from tools.check_docs import (
     validate_license_scope,
     validate_official_sources,
 )
-from tools.sync_docs import ALLOWED_DESTINATION_EXTRAS, EXPECTED_FILES
+from tools.sync_docs import (
+    ALLOWED_DESTINATION_EXTRAS,
+    EXPECTED_DOCUMENT_PATHS,
+    EXPECTED_FILES,
+    MIRRORED_DIRECTORIES,
+)
 
 
 def _note(*, body: str = "本文\n") -> str:
@@ -35,6 +40,11 @@ def _docs_directory(tmp_path: Path) -> Path:
     docs.mkdir()
     for filename in EXPECTED_FILES:
         (docs / filename).write_text(_note(), encoding="utf-8")
+    for directory_name, filenames in MIRRORED_DIRECTORIES.items():
+        directory = docs / directory_name
+        directory.mkdir()
+        for filename in filenames:
+            (directory / filename).write_text(_note(), encoding="utf-8")
     for filename in ALLOWED_DESTINATION_EXTRAS:
         (docs / filename).write_text("# Repository documentation\n", encoding="utf-8")
     return docs
@@ -55,7 +65,7 @@ def _license_files(tmp_path: Path) -> None:
 def test_complete_document_set_is_accepted(tmp_path: Path) -> None:
     docs = _docs_directory(tmp_path)
 
-    assert validate_docs_directory(docs) == len(EXPECTED_FILES)
+    assert validate_docs_directory(docs) == len(EXPECTED_DOCUMENT_PATHS)
 
 
 def test_block_list_frontmatter_is_accepted(tmp_path: Path) -> None:
@@ -66,7 +76,18 @@ def test_block_list_frontmatter_is_accepted(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert validate_docs_directory(docs) == len(EXPECTED_FILES)
+    assert validate_docs_directory(docs) == len(EXPECTED_DOCUMENT_PATHS)
+
+
+def test_related_block_list_frontmatter_is_accepted(tmp_path: Path) -> None:
+    docs = _docs_directory(tmp_path)
+    target = docs / EXPECTED_FILES[0]
+    target.write_text(
+        _note().replace("status: decided\n", "status: decided\nrelated:\n  - Test\n"),
+        encoding="utf-8",
+    )
+
+    assert validate_docs_directory(docs) == len(EXPECTED_DOCUMENT_PATHS)
 
 
 def test_missing_frontmatter_key_is_rejected(tmp_path: Path) -> None:
@@ -104,7 +125,7 @@ def test_wiki_link_inside_code_is_ignored(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert validate_docs_directory(docs) == len(EXPECTED_FILES)
+    assert validate_docs_directory(docs) == len(EXPECTED_DOCUMENT_PATHS)
 
 
 def test_missing_wiki_heading_is_rejected(tmp_path: Path) -> None:
@@ -171,6 +192,41 @@ def test_unexpected_file_is_rejected(tmp_path: Path) -> None:
     (docs / "private.md").write_text("private\n", encoding="utf-8")
 
     with pytest.raises(DocumentationError, match=r"unexpected: private\.md"):
+        validate_docs_directory(docs)
+
+
+def test_missing_nested_document_is_rejected(tmp_path: Path) -> None:
+    docs = _docs_directory(tmp_path)
+    directory_name, filenames = next(iter(MIRRORED_DIRECTORIES.items()))
+    (docs / directory_name / filenames[0]).unlink()
+
+    with pytest.raises(DocumentationError, match="missing"):
+        validate_docs_directory(docs)
+
+
+def test_unexpected_nested_document_is_rejected(tmp_path: Path) -> None:
+    docs = _docs_directory(tmp_path)
+    directory_name = next(iter(MIRRORED_DIRECTORIES))
+    (docs / directory_name / "private.md").write_text("private\n", encoding="utf-8")
+
+    with pytest.raises(DocumentationError, match=r"unexpected: private\.md"):
+        validate_docs_directory(docs)
+
+
+def test_symlinked_nested_directory_is_rejected(tmp_path: Path) -> None:
+    docs = _docs_directory(tmp_path)
+    directory_name, filenames = next(iter(MIRRORED_DIRECTORIES.items()))
+    directory = docs / directory_name
+    for filename in filenames:
+        (directory / filename).unlink()
+    directory.rmdir()
+    source = tmp_path / "source-docs"
+    source.mkdir()
+    for filename in filenames:
+        (source / filename).write_text(_note(), encoding="utf-8")
+    directory.symlink_to(source, target_is_directory=True)
+
+    with pytest.raises(DocumentationError, match="must be regular"):
         validate_docs_directory(docs)
 
 

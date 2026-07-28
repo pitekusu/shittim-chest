@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 from collections.abc import Callable
@@ -93,6 +94,23 @@ def heartbeat_is_healthy(
     if not 0 <= age_seconds <= max_age_seconds:
         return False
     return (process_probe or _process_exists)(pid)
+
+
+def heartbeat_age_seconds(
+    *,
+    path: Path = HEARTBEAT_PATH,
+    now: Callable[[], float] = time.time,
+) -> float | None:
+    """Return a non-negative heartbeat age or ``None`` for an invalid sample."""
+
+    try:
+        modified_at = path.stat().st_mtime
+    except OSError:
+        return None
+    age_seconds = now() - modified_at
+    if not math.isfinite(age_seconds) or age_seconds < 0:
+        return None
+    return age_seconds
 
 
 def _process_exists(pid: int) -> bool:

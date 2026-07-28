@@ -1,4 +1,4 @@
-"""Source-only canonical specification handling for the documentation mirror."""
+"""Nested canonical specification handling for the documentation mirror."""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 from tools.sync_docs import (
+    EXPECTED_DOCUMENT_PATHS,
     EXPECTED_FILES,
-    SOURCE_ONLY_DIRECTORIES,
+    MIRRORED_DIRECTORIES,
     SyncError,
     check_mirror,
     source_documents,
@@ -21,7 +22,7 @@ def _canonical_source(tmp_path: Path) -> Path:
     source.mkdir()
     for name in EXPECTED_FILES:
         (source / name).write_text(f"# {name}\n", encoding="utf-8")
-    for directory_name, filenames in SOURCE_ONLY_DIRECTORIES.items():
+    for directory_name, filenames in MIRRORED_DIRECTORIES.items():
         directory = source / directory_name
         directory.mkdir()
         for name in filenames:
@@ -29,18 +30,18 @@ def _canonical_source(tmp_path: Path) -> Path:
     return source
 
 
-def test_exact_source_only_specification_directory_is_validated_but_not_mirrored(
+def test_exact_nested_specification_directory_is_validated_and_selected(
     tmp_path: Path,
 ) -> None:
     source = _canonical_source(tmp_path)
 
     documents = source_documents(source)
 
-    assert tuple(documents) == EXPECTED_FILES
-    assert all("100_Ondemand Fargate" not in name for name in documents)
+    assert tuple(documents) == EXPECTED_DOCUMENT_PATHS
+    assert "100_Ondemand Fargate/10_scale-to-zero-goal.md" in documents
 
 
-def test_source_only_specifications_never_reach_the_written_mirror(tmp_path: Path) -> None:
+def test_nested_specifications_reach_the_written_mirror(tmp_path: Path) -> None:
     source = _canonical_source(tmp_path)
     destination = tmp_path / "docs"
 
@@ -48,21 +49,29 @@ def test_source_only_specifications_never_reach_the_written_mirror(tmp_path: Pat
     write_mirror(documents, destination)
     check_mirror(documents, destination)
 
-    assert {entry.name for entry in destination.iterdir()} == set(EXPECTED_FILES)
-    assert not (destination / "100_Ondemand Fargate").exists()
+    assert {entry.name for entry in destination.iterdir()} == {
+        *EXPECTED_FILES,
+        *MIRRORED_DIRECTORIES,
+    }
+    nested = destination / "100_Ondemand Fargate"
+    assert {entry.name for entry in nested.iterdir()} == set(
+        MIRRORED_DIRECTORIES["100_Ondemand Fargate"]
+    )
 
 
-def test_preexisting_source_only_directory_in_mirror_is_rejected(tmp_path: Path) -> None:
+def test_unexpected_nested_destination_file_is_rejected(tmp_path: Path) -> None:
     source = _canonical_source(tmp_path)
     destination = tmp_path / "docs"
     destination.mkdir()
-    (destination / "100_Ondemand Fargate").mkdir()
+    nested = destination / "100_Ondemand Fargate"
+    nested.mkdir()
+    (nested / "unexpected.md").write_text("# unexpected\n", encoding="utf-8")
 
     with pytest.raises(SyncError, match="unexpected files"):
         write_mirror(source_documents(source), destination)
 
 
-def test_unexpected_source_only_file_is_rejected(tmp_path: Path) -> None:
+def test_unexpected_nested_source_file_is_rejected(tmp_path: Path) -> None:
     source = _canonical_source(tmp_path)
     directory = source / "100_Ondemand Fargate"
     (directory / "unexpected.md").write_text("# unexpected\n", encoding="utf-8")
@@ -71,7 +80,7 @@ def test_unexpected_source_only_file_is_rejected(tmp_path: Path) -> None:
         source_documents(source)
 
 
-def test_missing_source_only_file_is_rejected(tmp_path: Path) -> None:
+def test_missing_nested_source_file_is_rejected(tmp_path: Path) -> None:
     source = _canonical_source(tmp_path)
     directory = source / "100_Ondemand Fargate"
     (directory / "10_scale-to-zero-goal.md").unlink()
@@ -80,7 +89,7 @@ def test_missing_source_only_file_is_rejected(tmp_path: Path) -> None:
         source_documents(source)
 
 
-def test_source_only_directory_symlink_is_rejected(tmp_path: Path) -> None:
+def test_nested_source_directory_symlink_is_rejected(tmp_path: Path) -> None:
     source = _canonical_source(tmp_path)
     directory = source / "100_Ondemand Fargate"
     external = tmp_path / "external-specifications"
@@ -91,7 +100,7 @@ def test_source_only_directory_symlink_is_rejected(tmp_path: Path) -> None:
         source_documents(source)
 
 
-def test_source_only_file_symlink_is_rejected(tmp_path: Path) -> None:
+def test_nested_source_file_symlink_is_rejected(tmp_path: Path) -> None:
     source = _canonical_source(tmp_path)
     target = source / "100_Ondemand Fargate" / "10_scale-to-zero-goal.md"
     external = tmp_path / "external.md"
@@ -116,7 +125,7 @@ def test_source_only_file_symlink_is_rejected(tmp_path: Path) -> None:
         ("email address", "operator" + "@" + "example.com"),
     ),
 )
-def test_source_only_files_receive_the_same_secret_scan(
+def test_nested_files_receive_the_same_secret_scan(
     tmp_path: Path,
     label: str,
     payload: str,

@@ -41,6 +41,12 @@ class RuntimeReconciliationReport:
     startup_recovered: int = 0
     status_publications_triggered: int = 0
     conditional_conflicts: int = 0
+    runtime_status: RuntimeStatus | None = None
+    runtime_desired_count: int = 0
+    ecs_running_count: int = 0
+    ecs_pending_count: int = 0
+    ingress_pending: int = 0
+    outbox_pending: int = 0
     ecs_observed: bool = False
     ecs_scaled_up: bool = False
     ecs_scaled_down: bool = False
@@ -60,9 +66,27 @@ class RuntimeReconciliationReport:
             self.startup_recovered,
             self.status_publications_triggered,
             self.conditional_conflicts,
+            self.runtime_desired_count,
+            self.ecs_running_count,
+            self.ecs_pending_count,
+            self.ingress_pending,
+            self.outbox_pending,
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError("reconciliation counters must be non-negative integers")
+        for value in (
+            self.runtime_desired_count,
+            self.ecs_running_count,
+            self.ecs_pending_count,
+        ):
+            if value > 1:
+                raise ValueError("singleton runtime counts must be zero or one")
+        if self.runtime_status is not None and not isinstance(self.runtime_status, RuntimeStatus):
+            raise ValueError("runtime status must be a RuntimeStatus")
+        if self.runtime_status is None and self.runtime_desired_count != 0:
+            raise ValueError("missing runtime state cannot have desired capacity")
+        if not self.ecs_observed and (self.ecs_running_count or self.ecs_pending_count):
+            raise ValueError("unobserved ECS state cannot have task counts")
 
 
 class RuntimeReconciler:
@@ -178,6 +202,14 @@ class RuntimeReconciler:
             startup_timed_out=startup_timed_out,
             startup_recovered=startup_recovered,
             status_publications_triggered=status_triggered,
+            runtime_status=None if runtime is None else runtime.status,
+            runtime_desired_count=0 if runtime is None else runtime.desired_count,
+            ecs_running_count=0 if ecs_snapshot is None else ecs_snapshot.running_count,
+            ecs_pending_count=0 if ecs_snapshot is None else ecs_snapshot.pending_count,
+            ingress_pending=(
+                activity.pending_ingress + activity.claimed_ingress + activity.retrying_ingress
+            ),
+            outbox_pending=activity.pending_outbox + activity.claimed_outbox,
             conditional_conflicts=(
                 terminal_conflicts
                 + wake_conflicts

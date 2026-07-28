@@ -31,13 +31,21 @@ from shittim_chest.application.runtime_reconciler import (
     RuntimeReconciler,
     RuntimeReconciliationReport,
 )
+from shittim_chest.application.scale_to_zero import RuntimeStatus
 from shittim_chest.config.models import StartupConfigurationError
 from shittim_chest.config.runtime_reconciler import (
     load_runtime_reconciler_settings,
 )
+from shittim_chest.runtime.operational_metrics import (
+    CloudWatchEmfMetrics,
+    OperationalMetric,
+    OperationalMetricService,
+)
 from shittim_chest.runtime.primitives import SystemClock
 
 LOGGER = logging.getLogger(__name__)
+EMF_LOGGER = logging.getLogger(f"{__name__}.emf")
+EMF_LOGGER.setLevel(logging.INFO)
 
 _SNOWFLAKE = re.compile(r"[0-9]{1,20}\Z")
 
@@ -53,19 +61,82 @@ class RuntimeReconcilerInvocationError(RuntimeError):
         super().__init__("runtime_reconciler_invocation_failed")
 
 
+_RUNTIME_STATE_CODES = {
+    None: 0,
+    RuntimeStatus.STOPPED: 1,
+    RuntimeStatus.STARTING: 2,
+    RuntimeStatus.READY: 3,
+    RuntimeStatus.BUSY: 4,
+    RuntimeStatus.IDLE: 5,
+    RuntimeStatus.STOPPING: 6,
+    RuntimeStatus.DEGRADED: 7,
+}
+
+
 class RuntimeReconcilerLambda:
     """Validate content-free invocations before running one full convergence pass."""
 
-    __slots__ = ("_reconciler",)
+    __slots__ = ("_metrics", "_reconciler")
 
-    def __init__(self, *, reconciler: _Reconciler) -> None:
+    def __init__(
+        self,
+        *,
+        reconciler: _Reconciler,
+        metrics: CloudWatchEmfMetrics | None = None,
+    ) -> None:
         self._reconciler = reconciler
+        self._metrics = metrics
 
     def handle(self, event: object) -> dict[str, object]:
         """Return only content-free counters and timestamps."""
 
-        _parse_event(event)
-        return _report_event(asyncio.run(self._reconciler.reconcile()))
+        try:
+            _parse_event(event)
+            report = asyncio.run(self._reconciler.reconcile())
+        except Exception as error:
+            self._emit_failure(error)
+            raise
+        self._emit_report(report)
+        return _report_event(report)
+
+    def _emit_report(self, report: RuntimeReconciliationReport) -> None:
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.emit(
+                service=OperationalMetricService.RECONCILER,
+                values={
+                    OperationalMetric.RUNTIME_STATE_CODE: _RUNTIME_STATE_CODES[
+                        report.runtime_status
+                    ],
+                    OperationalMetric.RUNTIME_DESIRED_COUNT: report.runtime_desired_count,
+                    OperationalMetric.ECS_RUNNING_COUNT: report.ecs_running_count,
+                    OperationalMetric.ECS_PENDING_COUNT: report.ecs_pending_count,
+                    OperationalMetric.INGRESS_PENDING: report.ingress_pending,
+                    OperationalMetric.OUTBOX_PENDING: report.outbox_pending,
+                    OperationalMetric.RECONCILER_FAILED: 0,
+                    OperationalMetric.STATUS_PUBLISH_FAILED: 0,
+                },
+                at=report.observed_at,
+            )
+        except Exception:
+            LOGGER.error("runtime_reconciler_metric_emission_failed")
+
+    def _emit_failure(self, error: Exception) -> None:
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.emit(
+                service=OperationalMetricService.RECONCILER,
+                values={
+                    OperationalMetric.RECONCILER_FAILED: 1,
+                    OperationalMetric.STATUS_PUBLISH_FAILED: int(
+                        isinstance(error, StatusTriggerUnavailable)
+                    ),
+                },
+            )
+        except Exception:
+            LOGGER.error("runtime_reconciler_metric_emission_failed")
 
 
 _handler: RuntimeReconcilerLambda | None = None
@@ -96,6 +167,10 @@ def _get_handler() -> RuntimeReconcilerLambda:
             table_name=settings.table_name,
         )
         _handler = RuntimeReconcilerLambda(
+            metrics=CloudWatchEmfMetrics(
+                logger=EMF_LOGGER,
+                environment="production",
+            ),
             reconciler=RuntimeReconciler(
                 clock=SystemClock(),
                 ingress=ingress,
@@ -118,7 +193,7 @@ def _get_handler() -> RuntimeReconcilerLambda:
                     client=create_runtime_reconciler_lambda_client(region_name=settings.aws_region),
                     function_name=settings.status_publisher_function,
                 ),
-            )
+            ),
         )
     return _handler
 
@@ -149,12 +224,18 @@ def _parse_event(event: object) -> None:
 def _report_event(report: RuntimeReconciliationReport) -> dict[str, object]:
     return {
         "conditional_conflicts": report.conditional_conflicts,
+        "ecs_pending_count": report.ecs_pending_count,
+        "ecs_running_count": report.ecs_running_count,
         "ecs_observed": report.ecs_observed,
         "ecs_scaled_down": report.ecs_scaled_down,
         "ecs_scaled_up": report.ecs_scaled_up,
         "observed_at": report.observed_at.isoformat().replace("+00:00", "Z"),
+        "ingress_pending": report.ingress_pending,
+        "outbox_pending": report.outbox_pending,
+        "runtime_desired_count": report.runtime_desired_count,
         "runtime_reconciled": report.runtime_reconciled,
         "runtime_entered_idle": report.runtime_entered_idle,
+        "runtime_status": None if report.runtime_status is None else report.runtime_status.value,
         "runtime_stopped": report.runtime_stopped,
         "startup_recovered": report.startup_recovered,
         "startup_timed_out": report.startup_timed_out,
