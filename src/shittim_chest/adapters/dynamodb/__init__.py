@@ -1,5 +1,16 @@
 """DynamoDB persistence contracts and native-value serialization."""
 
+from shittim_chest.adapters.dynamodb.control_records import (
+    CONTROL_RECORD_MANIFEST,
+    CONTROL_RECORD_MANIFEST_HASH,
+    CONTROL_RECORD_MANIFEST_VERSION,
+    ControlRecordInitializationError,
+    ControlRecordInitializationResult,
+    ControlRecordInitializationStatus,
+    ControlRecordManifest,
+    ControlRecordMigrationRequired,
+    DynamoDbControlRecordInitializer,
+)
 from shittim_chest.adapters.dynamodb.debate_lookup import (
     DynamoDbDebateAuthorizationLookup,
 )
@@ -46,7 +57,16 @@ from shittim_chest.application.discord import (
 )
 
 __all__ = (
+    "CONTROL_RECORD_MANIFEST",
+    "CONTROL_RECORD_MANIFEST_HASH",
+    "CONTROL_RECORD_MANIFEST_VERSION",
     "CURRENT_SCHEMA_VERSION",
+    "ControlRecordInitializationError",
+    "ControlRecordInitializationResult",
+    "ControlRecordInitializationStatus",
+    "ControlRecordManifest",
+    "ControlRecordMigrationRequired",
+    "DynamoDbControlRecordInitializer",
     "DynamoDbDebateAuthorizationLookup",
     "DynamoDbDebateRepository",
     "DynamoDbIngressRepository",

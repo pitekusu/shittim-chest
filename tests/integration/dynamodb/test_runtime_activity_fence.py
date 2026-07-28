@@ -15,6 +15,7 @@ from shittim_chest.adapters.dynamodb.ingress import (
 from shittim_chest.adapters.dynamodb.outbox import OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION
 from shittim_chest.adapters.dynamodb.repository import (
     ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
+    GLOBAL_LEASE_SLOTS,
 )
 from shittim_chest.adapters.dynamodb.runtime_activity import (
     DynamoDbRuntimeActivityInspector,
@@ -95,6 +96,18 @@ def _activity_records() -> tuple[DynamoItem, ...]:
             "count": 0,
             **common,
         },
+        *(
+            {
+                "PK": "CONTROL#GLOBAL",
+                "SK": f"SLOT#{slot}",
+                "record_type": "lease_slot",
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "slot": slot,
+                "fencing_token": 0,
+                **common,
+            }
+            for slot in range(GLOBAL_LEASE_SLOTS)
+        ),
     )
 
 
@@ -168,18 +181,36 @@ async def test_activity_inspection_rejects_inexact_record_schemas(
         ),
     )
     corruptions = (
-        {**records[0], "record_schema_version": RUNTIME_ACTIVITY_SCHEMA_VERSION + 1},
-        {**records[1], "record_schema_version": INGRESS_RECORD_SCHEMA_VERSION + 1},
-        {**records[2], "record_type": "wrong_status_counter"},
-        {**records[3], "record_schema_version": 1},
-        {**records[4], "record_schema_version": OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION + 1},
-        {
-            **records[5],
-            "record_schema_version": ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION + 1,
-        },
+        (0, {**records[0], "record_schema_version": RUNTIME_ACTIVITY_SCHEMA_VERSION + 1}),
+        (1, {**records[1], "record_schema_version": INGRESS_RECORD_SCHEMA_VERSION + 1}),
+        (2, {**records[2], "record_type": "wrong_status_counter"}),
+        (3, {**records[3], "record_schema_version": 1}),
+        (
+            4,
+            {
+                **records[4],
+                "record_schema_version": OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION + 1,
+            },
+        ),
+        (
+            5,
+            {
+                **records[5],
+                "record_schema_version": ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION + 1,
+            },
+        ),
+        (6, {**records[6], "fencing_token": -1}),
+        (
+            6,
+            {
+                **records[6],
+                "lease_owner": "worker-alpha",
+                "lease_expiry": "2026-07-28T12:00:00.000000+09:00",
+            },
+        ),
     )
 
-    for index, corrupted in enumerate(corruptions):
+    for index, corrupted in corruptions:
         current = tuple(
             corrupted if position == index else item for position, item in enumerate(records)
         )
@@ -253,9 +284,9 @@ async def test_idle_stop_requires_marker_all_zero_counters_and_free_slots(
     with pytest.raises(RepositoryConflict, match="activity fence rejected"):
         await repository.begin_idle_stop(expected=idle, at=stop_at)
     assert await repository.get() == idle
-    dynamodb_client.delete_item(
+    dynamodb_client.put_item(
         TableName=dynamodb_table,
-        Key=marshal_item({"PK": "CONTROL#GLOBAL", "SK": "SLOT#0"}),
+        Item=marshal_item(records[6]),
     )
 
     stopping = await repository.begin_idle_stop(expected=idle, at=stop_at)

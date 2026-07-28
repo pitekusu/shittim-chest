@@ -165,9 +165,11 @@ class DynamoDbRuntimeStateRepository:
         except PersistenceFormatError:
             raise RepositoryConflict("runtime state record is invalid") from None
 
-    def _get(self) -> RuntimeState | None:
+    def _get(self) -> RuntimeState:
         item = self._get_item(_runtime_key())
-        return None if item is None else deserialize_runtime_state(item)
+        if item is None:
+            raise RepositoryConflict("runtime state record is missing")
+        return deserialize_runtime_state(item)
 
     def _request_wake(self, interaction_id: str, at: datetime) -> RuntimeState:
         if not interaction_id.strip():
@@ -183,9 +185,8 @@ class DynamoDbRuntimeStateRepository:
 
         for _attempt in range(RUNTIME_CAS_ATTEMPTS):
             previous = self._get()
-            effective_at = at if previous is None else max(at, previous.updated_at)
-            baseline = previous or RuntimeState.stopped(at=effective_at)
-            updated = baseline.request_wake(at=effective_at)
+            effective_at = max(at, previous.updated_at)
+            updated = previous.request_wake(at=effective_at)
             _require_wakeable_request(operation, request, effective_at)
             result = RuntimeWakeResult(
                 interaction_id=interaction_id,
@@ -401,7 +402,7 @@ class DynamoDbRuntimeStateRepository:
         operation: IngressOperationResult,
         request: IngressRequest,
         pointer: IngressActivePointer,
-        previous: RuntimeState | None,
+        previous: RuntimeState,
         updated: RuntimeState,
         result: RuntimeWakeResult,
     ) -> None:
@@ -418,34 +419,19 @@ class DynamoDbRuntimeStateRepository:
                 }
             },
         )
-        runtime_put: TransactWriteItemTypeDef
-        if previous is None:
-            runtime_put = cast(
-                TransactWriteItemTypeDef,
-                {
-                    "Put": {
-                        "TableName": self._table_name,
-                        "Item": marshal_item(serialize_runtime_state(updated)),
-                        "ConditionExpression": (
-                            "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-                        ),
-                    }
-                },
-            )
-        else:
-            condition, names, values = _runtime_cas(previous)
-            runtime_put = cast(
-                TransactWriteItemTypeDef,
-                {
-                    "Put": {
-                        "TableName": self._table_name,
-                        "Item": marshal_item(serialize_runtime_state(updated)),
-                        "ConditionExpression": condition,
-                        "ExpressionAttributeNames": names,
-                        "ExpressionAttributeValues": marshal_item(values),
-                    }
-                },
-            )
+        condition, names, values = _runtime_cas(previous)
+        runtime_put = cast(
+            TransactWriteItemTypeDef,
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(serialize_runtime_state(updated)),
+                    "ConditionExpression": condition,
+                    "ExpressionAttributeNames": names,
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
+        )
         actions = [
             operation_check,
             request_check,
@@ -806,17 +792,17 @@ def _free_slot_check(*, table_name: str, slot: int) -> TransactWriteItemTypeDef:
                 "TableName": table_name,
                 "Key": marshal_item({"PK": "CONTROL#GLOBAL", "SK": f"SLOT#{slot}"}),
                 "ConditionExpression": (
-                    "attribute_not_exists(PK) OR "
-                    "(record_type=:type AND schema_version=:schema AND slot=:slot "
-                    "AND attribute_exists(fencing_token) "
+                    "record_type=:type AND schema_version=:schema AND slot=:slot "
+                    "AND fencing_token >= :zero "
                     "AND attribute_not_exists(lease_owner) "
-                    "AND attribute_not_exists(lease_expiry))"
+                    "AND attribute_not_exists(lease_expiry)"
                 ),
                 "ExpressionAttributeValues": marshal_item(
                     {
                         ":type": "lease_slot",
                         ":schema": CURRENT_SCHEMA_VERSION,
                         ":slot": slot,
+                        ":zero": 0,
                     }
                 ),
             }

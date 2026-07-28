@@ -1,6 +1,10 @@
 """Bounded AWS SDK adapters used by the HTTP interaction ingress."""
 
 from shittim_chest.adapters.aws.clients import (
+    IngressSdkCancellationGate,
+    activate_ingress_sdk_cancellation_gate,
+    control_records_sdk_config,
+    create_control_records_dynamodb_client,
     create_ingress_dynamodb_client,
     create_lambda_client,
     create_runtime_reconciler_dynamodb_client,
@@ -27,9 +31,13 @@ from shittim_chest.adapters.aws.task_metadata import (
 __all__ = (
     "EcsServiceRuntimeControl",
     "EcsTaskMetadataUnavailable",
+    "IngressSdkCancellationGate",
     "LambdaRuntimeReconciliationTrigger",
     "LambdaStatusPublicationTrigger",
     "SsmParameterReader",
+    "activate_ingress_sdk_cancellation_gate",
+    "control_records_sdk_config",
+    "create_control_records_dynamodb_client",
     "create_ingress_dynamodb_client",
     "create_lambda_client",
     "create_runtime_reconciler_dynamodb_client",

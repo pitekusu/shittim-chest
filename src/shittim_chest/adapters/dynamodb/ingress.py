@@ -1798,7 +1798,7 @@ class DynamoDbIngressRepository:
     def _pending_status_count(self) -> int:
         item = self._get_item(_status_counter_key())
         if item is None:
-            return 0
+            raise RepositoryConflict("status publication counter is missing")
         if _text(item, "record_type") != "ingress_status_pending_counter":
             raise RepositoryConflict("status publication counter record type is invalid")
         if _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION:
@@ -2245,17 +2245,11 @@ class DynamoDbIngressRepository:
                 "Update": {
                     "TableName": self._table_name,
                     "Key": marshal_item(_counter_key()),
-                    "UpdateExpression": (
-                        "SET #count=if_not_exists(#count,:zero)+:one, "
-                        "record_type=:type, schema_version=:schema, "
-                        "record_schema_version=:record_schema, "
-                        "created_at=if_not_exists(created_at,:at), updated_at=:at"
-                    ),
+                    "UpdateExpression": "SET #count=#count+:one, updated_at=:at",
                     "ConditionExpression": (
-                        "attribute_not_exists(PK) OR "
-                        "(#count >= :zero AND #count < :limit AND record_type=:type "
+                        "#count >= :zero AND #count < :limit AND record_type=:type "
                         "AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema)"
+                        "AND record_schema_version=:record_schema"
                     ),
                     "ExpressionAttributeNames": {"#count": "count"},
                     "ExpressionAttributeValues": marshal_item(
@@ -2280,17 +2274,11 @@ class DynamoDbIngressRepository:
                 "Update": {
                     "TableName": self._table_name,
                     "Key": marshal_item(_status_counter_key()),
-                    "UpdateExpression": (
-                        "SET #count=if_not_exists(#count,:zero)+:one, "
-                        "record_type=:type, schema_version=:schema, "
-                        "record_schema_version=:record_schema, "
-                        "created_at=if_not_exists(created_at,:at), updated_at=:at"
-                    ),
+                    "UpdateExpression": "SET #count=#count+:one, updated_at=:at",
                     "ConditionExpression": (
-                        "attribute_not_exists(PK) OR "
-                        "(#count >= :zero AND record_type=:type "
+                        "#count >= :zero AND record_type=:type "
                         "AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema)"
+                        "AND record_schema_version=:record_schema"
                     ),
                     "ExpressionAttributeNames": {"#count": "count"},
                     "ExpressionAttributeValues": marshal_item(
@@ -2641,7 +2629,7 @@ def _status_counter_key() -> DynamoItem:
 
 def _active_count_from_item(item: DynamoItem | None) -> int:
     if item is None:
-        return 0
+        raise RepositoryConflict("ingress counter is missing")
     if _text(item, "record_type") != "ingress_queue_counter":
         raise RepositoryConflict("ingress counter record type is invalid")
     if _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION:

@@ -20,6 +20,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_runtime_state,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item
+from shittim_chest.adapters.dynamodb.control_records import CONTROL_RECORD_MANIFEST
 from shittim_chest.adapters.dynamodb.outbox import OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION
 from shittim_chest.adapters.dynamodb.repository import (
     ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
@@ -38,6 +39,7 @@ from shittim_chest.application import (
 from shittim_chest.application.ports import RepositoryConflict
 
 NOW = datetime(2026, 7, 26, 6, 0, tzinfo=UTC)
+INITIAL_RUNTIME = RuntimeState.stopped(at=CONTROL_RECORD_MANIFEST.initial_runtime_at)
 
 
 def new_request(index: int, *, created_at: datetime | None = None) -> IngressRequest:
@@ -147,7 +149,7 @@ def put_zero_non_ingress_activity_records(
 
 
 @pytest.mark.asyncio
-async def test_ensure_wake_creates_the_single_initial_marker_when_missing(
+async def test_ensure_wake_creates_one_marker_from_the_preseeded_runtime_state(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,
 ) -> None:
@@ -548,7 +550,17 @@ async def test_missing_or_malformed_runtime_state_fails_closed(
     runtime = DynamoDbRuntimeStateRepository(client=dynamodb_client, table_name=dynamodb_table)
     request = new_request(1)
     await ingress.enqueue(request)
-    assert await runtime.get() is None
+    assert await runtime.get() == INITIAL_RUNTIME
+    dynamodb_client.delete_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": "CONTROL#RUNTIME", "SK": "STATE"}),
+    )
+    with pytest.raises(RepositoryConflict, match="runtime state record is missing"):
+        await runtime.get()
+    dynamodb_client.put_item(
+        TableName=dynamodb_table,
+        Item=marshal_item(serialize_runtime_state(INITIAL_RUNTIME)),
+    )
     state = await runtime.request_wake(
         interaction_id=request.interaction_id,
         at=NOW + timedelta(seconds=1),
@@ -581,7 +593,7 @@ async def test_wake_marker_without_runtime_state_is_corruption(
         Key=marshal_item({"PK": "CONTROL#RUNTIME", "SK": "STATE"}),
     )
 
-    with pytest.raises(RepositoryConflict, match="missing runtime state"):
+    with pytest.raises(RepositoryConflict, match="runtime state record is missing"):
         await runtime.request_wake(
             interaction_id=request.interaction_id,
             at=NOW + timedelta(seconds=2),
@@ -638,7 +650,7 @@ async def test_terminal_transition_winning_before_transaction_blocks_wake(
             at=NOW + timedelta(seconds=1),
         )
     assert raced
-    assert await runtime.get() is None
+    assert await runtime.get() == INITIAL_RUNTIME
     marker = dynamodb_client.get_item(
         TableName=dynamodb_table,
         Key=marshal_item(
@@ -713,7 +725,7 @@ async def test_request_and_operation_identity_mismatch_fails_closed(
             interaction_id=request.interaction_id,
             at=NOW + timedelta(seconds=1),
         )
-    assert await runtime.get() is None
+    assert await runtime.get() == INITIAL_RUNTIME
 
 
 @pytest.mark.asyncio

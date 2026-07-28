@@ -1719,8 +1719,25 @@ class DynamoDbDebateRepository:
         candidates: list[_SlotCandidate] = []
         for slot in range(GLOBAL_LEASE_SLOTS):
             item = self._get_item(_slot_key(slot))
-            previous_token = 0 if item is None else _integer(item, "fencing_token")
-            expiry = None if item is None else _optional_timestamp(item, "lease_expiry")
+            if item is None:
+                raise RepositoryConflict(f"global lease slot {slot} is missing")
+            if (
+                _text(item, "record_type") != "lease_slot"
+                or _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION
+                or _integer(item, "slot") != slot
+            ):
+                raise RepositoryConflict(f"global lease slot {slot} is invalid")
+            previous_token = _integer(item, "fencing_token")
+            if previous_token < 0:
+                raise RepositoryConflict(f"global lease slot {slot} fencing token is invalid")
+            has_owner = "lease_owner" in item
+            has_expiry = "lease_expiry" in item
+            if has_owner != has_expiry:
+                raise RepositoryConflict(f"global lease slot {slot} ownership is incomplete")
+            owner = item.get("lease_owner")
+            if has_owner and (not isinstance(owner, str) or not owner.strip()):
+                raise RepositoryConflict(f"global lease slot {slot} owner is invalid")
+            expiry = _optional_timestamp(item, "lease_expiry") if has_expiry else None
             if expiry is not None and expiry >= at:
                 continue
             grant = LeaseGrant(
@@ -1729,46 +1746,43 @@ class DynamoDbDebateRepository:
                 fencing_token=previous_token + 1,
                 expires_at=at + timedelta(seconds=LEASE_SECONDS),
             )
-            if item is None:
-                control: DynamoItem = {
-                    **_slot_key(slot),
-                    "record_type": "lease_slot",
-                    "schema_version": CURRENT_SCHEMA_VERSION,
-                    "slot": slot,
-                    "lease_owner": lease_owner,
-                    "lease_expiry": _timestamp(grant.expires_at),
-                    "fencing_token": grant.fencing_token,
-                    "created_at": _timestamp(at),
-                    "updated_at": _timestamp(at),
-                }
-                action = self._put_new(control)
-            else:
-                action = cast(
-                    TransactWriteItemTypeDef,
-                    {
-                        "Update": {
-                            "TableName": self._table_name,
-                            "Key": marshal_item(_slot_key(slot)),
-                            "UpdateExpression": (
-                                "SET lease_owner=:owner, lease_expiry=:expiry, "
-                                "fencing_token=:next, updated_at=:now"
-                            ),
-                            "ConditionExpression": (
-                                "fencing_token=:previous AND "
-                                "(attribute_not_exists(lease_expiry) OR lease_expiry < :now)"
-                            ),
-                            "ExpressionAttributeValues": marshal_item(
-                                {
-                                    ":owner": lease_owner,
-                                    ":expiry": _timestamp(grant.expires_at),
-                                    ":next": grant.fencing_token,
-                                    ":previous": previous_token,
-                                    ":now": _timestamp(at),
-                                }
-                            ),
-                        }
-                    },
-                )
+            availability = (
+                "attribute_not_exists(lease_owner) AND attribute_not_exists(lease_expiry)"
+                if expiry is None
+                else "lease_owner=:previous_owner AND lease_expiry=:previous_expiry "
+                "AND lease_expiry < :now"
+            )
+            expression_values: DynamoItem = {
+                ":type": "lease_slot",
+                ":schema": CURRENT_SCHEMA_VERSION,
+                ":slot": slot,
+                ":owner": lease_owner,
+                ":expiry": _timestamp(grant.expires_at),
+                ":next": grant.fencing_token,
+                ":previous": previous_token,
+                ":now": _timestamp(at),
+            }
+            if expiry is not None:
+                expression_values[":previous_owner"] = owner
+                expression_values[":previous_expiry"] = _timestamp(expiry)
+            action = cast(
+                TransactWriteItemTypeDef,
+                {
+                    "Update": {
+                        "TableName": self._table_name,
+                        "Key": marshal_item(_slot_key(slot)),
+                        "UpdateExpression": (
+                            "SET lease_owner=:owner, lease_expiry=:expiry, "
+                            "fencing_token=:next, updated_at=:now"
+                        ),
+                        "ConditionExpression": (
+                            "record_type=:type AND schema_version=:schema AND slot=:slot "
+                            "AND fencing_token=:previous AND " + availability
+                        ),
+                        "ExpressionAttributeValues": marshal_item(expression_values),
+                    }
+                },
+            )
             candidates.append(_SlotCandidate(grant, action))
         return tuple(candidates)
 
@@ -1817,15 +1831,10 @@ class DynamoDbDebateRepository:
         if delta > 0:
             values[":zero"] = 0
             values[":limit"] = PANEL_REFRESH_COUNT_LIMIT
-            update_expression = (
-                "SET #count=if_not_exists(#count,:zero)+:one, "
-                "record_type=if_not_exists(record_type,:type), "
-                "schema_version=:schema, updated_at=:at"
-            )
+            update_expression = "SET #count=#count+:one, updated_at=:at"
             condition = (
-                "(attribute_not_exists(#count) OR #count < :limit) AND "
-                "(attribute_not_exists(record_type) OR record_type=:type) AND "
-                "(attribute_not_exists(schema_version) OR schema_version=:schema)"
+                "#count >= :zero AND #count < :limit AND "
+                "record_type=:type AND schema_version=:schema"
             )
         else:
             update_expression = "SET #count=#count-:one, updated_at=:at"
@@ -1861,16 +1870,10 @@ class DynamoDbDebateRepository:
         }
         if delta > 0:
             values[":zero"] = 0
-            update_expression = (
-                "SET #count=if_not_exists(#count,:zero)+:one, "
-                "record_type=:type, schema_version=:schema, "
-                "record_schema_version=:record_schema, "
-                "created_at=if_not_exists(created_at,:at), updated_at=:at"
-            )
+            update_expression = "SET #count=#count+:one, updated_at=:at"
             condition = (
-                "attribute_not_exists(PK) OR "
-                "(#count >= :zero AND #count < :limit AND record_type=:type "
-                "AND schema_version=:schema AND record_schema_version=:record_schema)"
+                "#count >= :zero AND #count < :limit AND record_type=:type "
+                "AND schema_version=:schema AND record_schema_version=:record_schema"
             )
         else:
             update_expression = "SET #count=#count-:one, updated_at=:at"
@@ -1928,7 +1931,7 @@ class DynamoDbDebateRepository:
     def _pending_panel_refresh_count(self) -> int:
         item = self._get_item({"PK": "CONTROL#PANEL_REFRESH", "SK": "PENDING_COUNT"})
         if item is None:
-            return 0
+            raise RepositoryConflict("panel refresh counter is missing")
         if (
             _text(item, "record_type") != "panel_refresh_pending_counter"
             or _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION
@@ -1942,7 +1945,7 @@ class DynamoDbDebateRepository:
     def _active_attempt_count(self) -> int:
         item = self._get_item(_active_attempt_count_key())
         if item is None:
-            return 0
+            raise RepositoryConflict("active attempt counter is missing")
         if (
             _text(item, "record_type") != "active_attempt_counter"
             or _integer(item, "schema_version") != CURRENT_SCHEMA_VERSION
@@ -2831,8 +2834,11 @@ def _optional_timestamp(item: Mapping[str, DynamoValue], field: str) -> datetime
         return None
     if not isinstance(value, str):
         raise RepositoryConflict(f"{field} is not a timestamp")
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    _require_utc(parsed)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        _require_utc(parsed)
+    except ValueError:
+        raise RepositoryConflict(f"{field} is not a valid UTC timestamp") from None
     return parsed
 
 

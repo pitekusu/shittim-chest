@@ -578,18 +578,12 @@ def outbox_activity_action(
         values[":limit"] = OUTBOX_ACTIVITY_LIMIT
         values[":increment"] = pending_increment
         values[":maximum_before"] = OUTBOX_ACTIVITY_LIMIT - pending_increment
-        update = (
-            "SET pending_count=if_not_exists(pending_count,:zero)+:increment, "
-            "claimed_count=if_not_exists(claimed_count,:zero), "
-            "record_type=:type, schema_version=:schema, record_schema_version=:record_schema, "
-            "created_at=if_not_exists(created_at,:at), updated_at=:at"
-        )
+        update = "SET pending_count=pending_count+:increment, updated_at=:at"
         condition = (
-            "attribute_not_exists(PK) OR "
-            "(record_type=:type AND schema_version=:schema "
+            "record_type=:type AND schema_version=:schema "
             "AND record_schema_version=:record_schema "
             "AND pending_count >= :zero AND claimed_count >= :zero "
-            "AND pending_count <= :maximum_before AND claimed_count <= :limit)"
+            "AND pending_count <= :maximum_before AND claimed_count <= :limit"
         )
     elif pending_delta == -1 and claimed_delta == 1:
         values[":zero"] = 0

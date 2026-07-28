@@ -25,6 +25,10 @@ from shittim_chest.application.ingress import IngressOutcome
 from shittim_chest.application.scale_to_zero import IngressKind
 
 DISCORD_SIGNATURE_REPLAY_TOLERANCE = timedelta(minutes=5)
+# Discord interactions are small JSON documents. Bound attacker-controlled input
+# before Ed25519 work or JSON parsing, while preserving the exact signed bytes.
+DISCORD_HTTP_MAX_RAW_BODY_BYTES = 64 * 1024
+DISCORD_HTTP_MAX_BASE64_BODY_CHARACTERS = ((DISCORD_HTTP_MAX_RAW_BODY_BYTES + 2) // 3) * 4
 
 _APPLICATION_COMMAND = 2
 _MESSAGE_COMPONENT = 3
@@ -58,6 +62,13 @@ class DiscordHttpAuthenticationError(DiscordHttpBoundaryError):
 
 class DiscordHttpPayloadError(DiscordHttpBoundaryError):
     """A signed request that does not match the supported payload contract."""
+
+
+class DiscordHttpPayloadTooLargeError(DiscordHttpPayloadError):
+    """An interaction body rejected before signature verification or parsing."""
+
+    code = "discord_http_payload_too_large"
+    status_code = 413
 
 
 class DiscordPublicKeyError(ValueError):
@@ -207,15 +218,24 @@ def extract_api_gateway_v2_request(
     if not isinstance(encoded, bool):
         raise DiscordHttpPayloadError
     if encoded:
+        # Reject an impossible-to-fit encoded body before allocating decoded bytes.
+        if len(body) > DISCORD_HTTP_MAX_BASE64_BODY_CHARACTERS:
+            raise DiscordHttpPayloadTooLargeError
         try:
             raw_body = base64.b64decode(body.encode("ascii"), validate=True)
         except UnicodeEncodeError, binascii.Error, ValueError:
             raise DiscordHttpPayloadError from None
     else:
+        # UTF-8 uses at least one byte per Python code point, so an oversized
+        # character count cannot fit and must not allocate another bytes object.
+        if len(body) > DISCORD_HTTP_MAX_RAW_BODY_BYTES:
+            raise DiscordHttpPayloadTooLargeError
         try:
             raw_body = body.encode("utf-8")
         except UnicodeEncodeError:
             raise DiscordHttpPayloadError from None
+    if len(raw_body) > DISCORD_HTTP_MAX_RAW_BODY_BYTES:
+        raise DiscordHttpPayloadTooLargeError
     return DiscordSignedHttpRequest(
         raw_body=raw_body,
         signature_hex=signature,
@@ -300,11 +320,12 @@ def pong_response() -> ApiGatewayV2Response:
 def error_response(error: DiscordHttpBoundaryError) -> ApiGatewayV2Response:
     """Map a content-free boundary error to its stable public status code."""
 
-    public_code = (
-        "invalid_request_signature"
-        if isinstance(error, DiscordHttpAuthenticationError)
-        else "invalid_request"
-    )
+    if isinstance(error, DiscordHttpAuthenticationError):
+        public_code = "invalid_request_signature"
+    elif isinstance(error, DiscordHttpPayloadTooLargeError):
+        public_code = "request_too_large"
+    else:
+        public_code = "invalid_request"
     return _json_response(error.status_code, {"error": public_code})
 
 
@@ -568,12 +589,15 @@ def _json_response(status_code: int, payload: Mapping[str, object]) -> ApiGatewa
 
 
 __all__ = (
+    "DISCORD_HTTP_MAX_BASE64_BODY_CHARACTERS",
+    "DISCORD_HTTP_MAX_RAW_BODY_BYTES",
     "DISCORD_SIGNATURE_REPLAY_TOLERANCE",
     "ApiGatewayV2Response",
     "DiscordHttpAuthenticationError",
     "DiscordHttpBoundary",
     "DiscordHttpBoundaryError",
     "DiscordHttpPayloadError",
+    "DiscordHttpPayloadTooLargeError",
     "DiscordHttpReception",
     "DiscordPublicKeyError",
     "DiscordRequestVerifier",

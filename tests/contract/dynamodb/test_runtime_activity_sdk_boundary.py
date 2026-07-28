@@ -102,6 +102,16 @@ def _zero_items() -> tuple[DynamoItem, ...]:
             "record_schema_version": ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION,
             "count": 0,
         },
+        *(
+            {
+                **_keys()[6 + slot],
+                "record_type": "lease_slot",
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "slot": slot,
+                "fencing_token": 0,
+            }
+            for slot in range(GLOBAL_LEASE_SLOTS)
+        ),
     )
 
 
@@ -146,7 +156,6 @@ def test_durable_activity_reads_marker_counters_and_slots_in_one_transaction() -
     sdk = _client()
     responses = [
         *({"Item": marshal_item(item)} for item in _zero_items()),
-        *({} for _slot in range(GLOBAL_LEASE_SLOTS)),
     ]
 
     with Stubber(sdk) as stubber:
@@ -175,7 +184,6 @@ def test_durable_activity_fails_closed_when_marker_is_missing() -> None:
     responses = [
         {},
         *({"Item": marshal_item(item)} for item in items[1:]),
-        *({} for _slot in range(GLOBAL_LEASE_SLOTS)),
     ]
 
     with Stubber(sdk) as stubber:
@@ -232,6 +240,10 @@ def test_stop_transaction_fences_marker_all_counters_and_three_slots(
         in checks[3]["ConditionCheck"]["ConditionExpression"]
     )
     assert all(
-        "attribute_not_exists(PK)" in check["ConditionCheck"]["ConditionExpression"]
+        "attribute_not_exists(PK)" not in check["ConditionCheck"]["ConditionExpression"]
+        for check in checks[6:]
+    )
+    assert all(
+        "fencing_token >= :zero" in check["ConditionCheck"]["ConditionExpression"]
         for check in checks[6:]
     )

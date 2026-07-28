@@ -283,24 +283,31 @@ def _lease_activity(
     at: datetime,
 ) -> tuple[int, int]:
     if item is None:
-        return 0, 0
+        raise RepositoryConflict(f"runtime lease slot {slot} is missing")
     if (
         item.get("record_type") != "lease_slot"
         or item.get("schema_version") != CURRENT_SCHEMA_VERSION
         or item.get("slot") != slot
     ):
         raise RepositoryConflict("runtime lease slot is invalid")
+    fencing_token = item.get("fencing_token")
+    if isinstance(fencing_token, bool) or not isinstance(fencing_token, int) or fencing_token < 0:
+        raise RepositoryConflict("runtime lease slot fencing token is invalid")
+    has_owner = "lease_owner" in item
+    has_expiry = "lease_expiry" in item
+    if not has_owner and not has_expiry:
+        return 0, 0
+    if has_owner != has_expiry:
+        raise RepositoryConflict("runtime lease ownership is incomplete")
     owner = item.get("lease_owner")
     raw_expiry = item.get("lease_expiry")
-    if owner is None and raw_expiry is None:
-        return 0, 0
     if not isinstance(owner, str) or not owner.strip() or not isinstance(raw_expiry, str):
         raise RepositoryConflict("runtime lease ownership is invalid")
     try:
         expiry = datetime.fromisoformat(raw_expiry.replace("Z", "+00:00"))
+        _require_utc(expiry)
     except ValueError:
         raise RepositoryConflict("runtime lease expiry is invalid") from None
-    _require_utc(expiry)
     return (1, 0) if expiry >= at else (0, 1)
 
 

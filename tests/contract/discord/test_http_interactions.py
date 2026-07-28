@@ -13,7 +13,10 @@ from hypothesis import given
 from hypothesis import strategies as st
 from nacl.signing import SigningKey
 
+from shittim_chest.adapters import discord_http as discord_http_module
 from shittim_chest.adapters.discord_http import (
+    DISCORD_HTTP_MAX_BASE64_BODY_CHARACTERS,
+    DISCORD_HTTP_MAX_RAW_BODY_BYTES,
     DiscordHttpBoundary,
     DiscordHttpReception,
     DiscordPublicKeyError,
@@ -144,6 +147,106 @@ def test_plain_and_base64_api_gateway_bodies_verify_exactly(
     reception = receive(signing_key, command_payload(), base64_encoded=base64_encoded)
 
     assert isinstance(reception.interaction, DiscordHttpOperation)
+
+
+@pytest.mark.parametrize("base64_encoded", [False, True])
+@pytest.mark.parametrize(
+    ("body_size", "expected_status"),
+    [
+        (DISCORD_HTTP_MAX_RAW_BODY_BYTES, 400),
+        (DISCORD_HTTP_MAX_RAW_BODY_BYTES + 1, 413),
+    ],
+)
+def test_raw_body_limit_has_an_exact_plain_and_base64_boundary(
+    signing_key: SigningKey,
+    base64_encoded: bool,
+    body_size: int,
+    expected_status: int,
+) -> None:
+    raw_body = b" " * body_size
+    event = signed_event(signing_key, raw_body, base64_encoded=base64_encoded)
+
+    reception = boundary(signing_key).receive(event, now=NOW)
+
+    assert reception.response is not None
+    assert reception.response.status_code == expected_status
+    if expected_status == 413:
+        assert reception.response.body == '{"error":"request_too_large"}'
+
+
+def test_plain_body_limit_counts_encoded_utf8_bytes(signing_key: SigningKey) -> None:
+    exact_text = "é" * (DISCORD_HTTP_MAX_RAW_BODY_BYTES // 2)
+    oversized_text = f"{exact_text}é"
+    exact_raw = exact_text.encode("utf-8")
+    oversized_raw = oversized_text.encode("utf-8")
+
+    exact = boundary(signing_key).receive(signed_event(signing_key, exact_raw), now=NOW)
+    oversized = boundary(signing_key).receive(
+        signed_event(signing_key, oversized_raw),
+        now=NOW,
+    )
+
+    assert exact.response is not None
+    assert exact.response.status_code == 400
+    assert oversized.response is not None
+    assert oversized.response.status_code == 413
+
+
+def test_oversized_base64_text_is_rejected_before_decode(
+    signing_key: SigningKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = signed_event(signing_key, b"{}", base64_encoded=True)
+    event["body"] = "A" * (DISCORD_HTTP_MAX_BASE64_BODY_CHARACTERS + 4)
+
+    def forbidden_decode(*args: object, **kwargs: object) -> bytes:
+        del args, kwargs
+        raise AssertionError("oversized base64 must be rejected before decode")
+
+    monkeypatch.setattr(discord_http_module.base64, "b64decode", forbidden_decode)
+
+    reception = boundary(signing_key).receive(event, now=NOW)
+
+    assert reception.response is not None
+    assert reception.response.status_code == 413
+    assert reception.response.body == '{"error":"request_too_large"}'
+
+
+def test_oversized_plain_text_is_rejected_before_encoding_or_signature(
+    signing_key: SigningKey,
+) -> None:
+    class EncodingForbidden(str):
+        def encode(self, *args: object, **kwargs: object) -> bytes:
+            del args, kwargs
+            raise AssertionError("oversized plain text must be rejected before encoding")
+
+    event = signed_event(signing_key, b"{}")
+    event["body"] = EncodingForbidden("A" * (DISCORD_HTTP_MAX_RAW_BODY_BYTES + 1))
+    headers = cast(dict[str, str], event["headers"])
+    headers["x-signature-ed25519"] = "0" * 128
+
+    reception = boundary(signing_key).receive(event, now=NOW)
+
+    assert reception.response is not None
+    assert reception.response.status_code == 413
+    assert reception.response.body == '{"error":"request_too_large"}'
+
+
+@pytest.mark.parametrize("base64_encoded", [False, True])
+def test_huge_body_is_413_before_signature_verification(
+    signing_key: SigningKey,
+    base64_encoded: bool,
+) -> None:
+    event = signed_event(signing_key, b"{}", base64_encoded=base64_encoded)
+    event["body"] = "A" * 1_000_000
+    headers = cast(dict[str, str], event["headers"])
+    headers["x-signature-ed25519"] = "0" * 128
+
+    reception = boundary(signing_key).receive(event, now=NOW)
+
+    assert reception.response is not None
+    assert reception.response.status_code == 413
+    assert reception.response.body == '{"error":"request_too_large"}'
 
 
 def test_security_headers_are_case_insensitive(signing_key: SigningKey) -> None:

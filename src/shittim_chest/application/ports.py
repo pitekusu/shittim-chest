@@ -80,6 +80,13 @@ class RepositoryUnavailable(RuntimeError):
         super().__init__("repository_unavailable")
 
 
+class IngressExecutionDeadlineExceeded(RuntimeError):
+    """Raised when HTTP ingress must stop starting external SDK operations."""
+
+    def __init__(self) -> None:
+        super().__init__("ingress_execution_deadline_exceeded")
+
+
 class StatusTriggerUnavailable(RuntimeError):
     """Raised when the durable status publisher cannot be kicked asynchronously."""
 

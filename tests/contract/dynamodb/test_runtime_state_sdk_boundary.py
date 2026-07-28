@@ -122,7 +122,8 @@ def test_runtime_wake_maps_idempotent_parameter_mismatch_without_provider_detail
     ingress_request = request()
     ingress_operation = operation(ingress_request)
     pointer = deserialize_ingress_active_pointer(serialize_ingress_active_pointer(ingress_request))
-    updated = RuntimeState.stopped(at=NOW).request_wake(at=NOW)
+    previous = RuntimeState.stopped(at=NOW)
+    updated = previous.request_wake(at=NOW)
     wake = RuntimeWakeResult(
         interaction_id=ingress_request.interaction_id,
         generation=updated.generation,
@@ -148,7 +149,7 @@ def test_runtime_wake_maps_idempotent_parameter_mismatch_without_provider_detail
                 operation=ingress_operation,
                 request=ingress_request,
                 pointer=pointer,
-                previous=None,
+                previous=previous,
                 updated=updated,
                 result=wake,
             )
@@ -210,12 +211,13 @@ async def test_runtime_replace_sdk_failure_is_content_free() -> None:
 
 
 @pytest.mark.asyncio
-async def test_initial_wake_transaction_targets_five_distinct_items() -> None:
+async def test_wake_transaction_updates_the_preseeded_runtime_state() -> None:
     sdk = client()
     repository = DynamoDbRuntimeStateRepository(client=sdk, table_name="test-table")
     ingress_request = request()
     ingress_operation = operation(ingress_request)
-    updated = RuntimeState.stopped(at=NOW).request_wake(at=NOW)
+    previous = RuntimeState.stopped(at=NOW)
+    updated = previous.request_wake(at=NOW)
     wake = RuntimeWakeResult(
         interaction_id=ingress_operation.interaction_id,
         generation=updated.generation,
@@ -279,7 +281,7 @@ async def test_initial_wake_transaction_targets_five_distinct_items() -> None:
         )
         stubber.add_response(
             "get_item",
-            {},
+            {"Item": marshal_item(serialize_runtime_state(previous))},
             {
                 "TableName": "test-table",
                 "Key": marshal_item(runtime_key),
@@ -353,9 +355,9 @@ async def test_initial_wake_transaction_targets_five_distinct_items() -> None:
                         "Put": {
                             "TableName": "test-table",
                             "Item": marshal_item(serialize_runtime_state(updated)),
-                            "ConditionExpression": (
-                                "attribute_not_exists(PK) AND attribute_not_exists(SK)"
-                            ),
+                            "ConditionExpression": ANY,
+                            "ExpressionAttributeNames": ANY,
+                            "ExpressionAttributeValues": ANY,
                         }
                     },
                 ],
@@ -385,3 +387,82 @@ async def test_initial_wake_transaction_targets_five_distinct_items() -> None:
         )
         == 5
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_wake_rejects_a_missing_deployment_owned_state() -> None:
+    sdk = client()
+    repository = DynamoDbRuntimeStateRepository(client=sdk, table_name="test-table")
+    ingress_request = request()
+    ingress_operation = operation(ingress_request)
+    operation_key = {
+        "PK": "INGRESS_OPERATION#interaction-alpha",
+        "SK": "RESULT",
+    }
+    request_key = {
+        "PK": "CONTROL#INGRESS",
+        "SK": ingress_request_sort_key(ingress_request),
+    }
+    wake_key = {
+        "PK": "INGRESS_OPERATION#interaction-alpha",
+        "SK": "RUNTIME_WAKE",
+    }
+    pointer_key = {
+        "PK": "CONTROL#INGRESS#ACTIVE",
+        "SK": ingress_request_sort_key(ingress_request),
+    }
+    runtime_key = {"PK": "CONTROL#RUNTIME", "SK": "STATE"}
+
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_item",
+            {"Item": marshal_item(serialize_ingress_operation_result(ingress_operation))},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(operation_key),
+                "ConsistentRead": True,
+            },
+        )
+        stubber.add_response(
+            "get_item",
+            {"Item": marshal_item(serialize_ingress_request(ingress_request))},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(request_key),
+                "ConsistentRead": True,
+            },
+        )
+        stubber.add_response(
+            "get_item",
+            {},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(wake_key),
+                "ConsistentRead": True,
+            },
+        )
+        stubber.add_response(
+            "get_item",
+            {"Item": marshal_item(serialize_ingress_active_pointer(ingress_request))},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(pointer_key),
+                "ConsistentRead": True,
+            },
+        )
+        stubber.add_response(
+            "get_item",
+            {},
+            {
+                "TableName": "test-table",
+                "Key": marshal_item(runtime_key),
+                "ConsistentRead": True,
+            },
+        )
+
+        with pytest.raises(RepositoryConflict, match="runtime state record is missing"):
+            await repository.request_wake(
+                interaction_id=ingress_request.interaction_id,
+                at=NOW,
+            )
+        stubber.assert_no_pending_responses()
