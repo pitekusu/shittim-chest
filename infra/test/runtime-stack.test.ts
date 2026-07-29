@@ -21,6 +21,7 @@ function synthesize(): {
     debateTable: stateful.debateTable,
     env: { account: "000000000000", region: "ap-northeast-1" },
     imageRepository: stateful.imageRepository,
+    signingProfileArn: stateful.signingProfile.attrArn,
     stackName: "ShittimChest-Prod-Runtime",
   });
   runtime.addDependency(stateful);
@@ -102,11 +103,11 @@ describe("RuntimeStack", () => {
     template.hasResourceProperties("AWS::ECS::Service", {
       AvailabilityZoneRebalancing: "DISABLED",
       CapacityProviderStrategy: Match.absent(),
-      DeploymentConfiguration: {
+      DeploymentConfiguration: Match.objectLike({
         DeploymentCircuitBreaker: { Enable: true, Rollback: true },
         MaximumPercent: 100,
         MinimumHealthyPercent: 0,
-      },
+      }),
       DesiredCount: 0,
       EnableExecuteCommand: false,
       LaunchType: "FARGATE",
@@ -119,7 +120,7 @@ describe("RuntimeStack", () => {
     expect(JSON.stringify(template.toJSON())).not.toContain("FARGATE_SPOT");
   });
 
-  test("creates exactly three shared-bundle Python application Lambdas outside the VPC", () => {
+  test("creates three control-plane Lambdas plus one image admission Lambda", () => {
     const { template } = synthesize();
     const functions = Object.values(template.findResources("AWS::Lambda::Function"));
     const applicationFunctions = functions.filter((resource) =>
@@ -129,12 +130,12 @@ describe("RuntimeStack", () => {
       (resource) => resource.Properties.Handler === "__entrypoint__.handler",
     );
 
-    expect(applicationFunctions).toHaveLength(3);
+    expect(applicationFunctions).toHaveLength(4);
     // CDK's existing VPC default-security-group restriction remains as one
     // deploy-only provider. It is not an application Lambda and removing it
     // would weaken the VPC baseline solely to change a resource count.
     expect(deploymentProviders).toHaveLength(1);
-    expect(functions).toHaveLength(4);
+    expect(functions).toHaveLength(5);
     const expected = new Map([
       [
         "shittim_chest.lambda_handlers.discord_ingress.lambda_handler",
@@ -147,6 +148,10 @@ describe("RuntimeStack", () => {
       [
         "shittim_chest.lambda_handlers.runtime_reconciler.lambda_handler",
         { memory: 256, concurrency: 1, timeout: 55 },
+      ],
+      [
+        "shittim_chest.lambda_handlers.image_admission.lambda_handler",
+        { memory: 256, concurrency: 1, timeout: 30 },
       ],
     ]);
     for (const resource of applicationFunctions) {
@@ -167,6 +172,51 @@ describe("RuntimeStack", () => {
       });
       expect(properties.VpcConfig).toBeUndefined();
     }
+  });
+
+  test("fails closed before scale-up unless the release image is admitted", () => {
+    const { template } = synthesize();
+
+    template.hasResourceProperties("AWS::ECS::Service", {
+      DeploymentConfiguration: Match.objectLike({
+        LifecycleHooks: [
+          Match.objectLike({
+            HookDetails: { schemaVersion: 1 },
+            LifecycleStages: ["PRE_SCALE_UP"],
+            TargetType: "AWS_LAMBDA",
+            TimeoutConfiguration: {
+              Action: "ROLLBACK",
+              TimeoutInMinutes: 5,
+            },
+          }),
+        ],
+      }),
+    });
+    const functions = Object.values(template.findResources("AWS::Lambda::Function"));
+    const admission = functions.find(
+      (resource) =>
+        resource.Properties.Handler ===
+        "shittim_chest.lambda_handlers.image_admission.lambda_handler",
+    );
+    expect(admission?.Properties.Environment.Variables).toMatchObject({
+      SHITTIM_ECR_REPOSITORY_NAME: expect.anything(),
+      SHITTIM_ECR_REPOSITORY_URI: expect.anything(),
+      SHITTIM_ECS_SERVICE_ARN: expect.anything(),
+      SHITTIM_EXPECTED_CONTAINER_NAME: "application",
+      SHITTIM_SIGNING_PROFILE_ARN: expect.anything(),
+    });
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const imagePolicy = JSON.stringify(
+      policies.find((policy) =>
+        JSON.stringify(policy.Properties.Roles).includes("ImageAdmissionFunctionRole"),
+      ),
+    );
+    expect(imagePolicy).toContain("ecs:DescribeServiceRevisions");
+    expect(imagePolicy).toContain("ecr:DescribeImageSigningStatus");
+    expect(imagePolicy).toContain("ecr:ListImageReferrers");
+    expect(imagePolicy).not.toContain("ecr:BatchGetImage");
+    expect(imagePolicy).not.toContain("ecr:PutImage");
+    expect(JSON.stringify(policies)).toContain("lambda:InvokeFunction");
   });
 
   test("wires only versioned parameter names and content-free function references", () => {
@@ -736,7 +786,7 @@ describe("RuntimeStack", () => {
   test("retains protected application and break-glass log groups for 90 days", () => {
     const { template } = synthesize();
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 6);
+    template.resourceCountIs("AWS::Logs::LogGroup", 7);
     for (const suffix of ["application", "break-glass-exec"]) {
       template.hasResource("AWS::Logs::LogGroup", {
         DeletionPolicy: "Retain",

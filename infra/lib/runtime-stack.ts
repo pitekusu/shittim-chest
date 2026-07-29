@@ -30,6 +30,8 @@ const LAMBDA_BUNDLE_KEY_PATTERN =
 const PARAMETER_ROOT = "/shittim-chest/production";
 const DISCORD_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/public-key`;
 const MODERATOR_TOKEN_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/token`;
+const RUNTIME_CLUSTER_NAME = "shittim-chest-production";
+const RUNTIME_SERVICE_NAME = "shittim-chest-production";
 const RECONCILER_SCHEDULE_NAME = "shittim-chest-production-runtime-reconciler";
 const DISCORD_INGRESS_HANDLER =
   "shittim_chest.lambda_handlers.discord_ingress.lambda_handler";
@@ -37,6 +39,8 @@ const DISCORD_STATUS_HANDLER =
   "shittim_chest.lambda_handlers.discord_status_publisher.lambda_handler";
 const RUNTIME_RECONCILER_HANDLER =
   "shittim_chest.lambda_handlers.runtime_reconciler.lambda_handler";
+const IMAGE_ADMISSION_HANDLER =
+  "shittim_chest.lambda_handlers.image_admission.lambda_handler";
 const RUNTIME_UID = containerPolicy.runtime_identity.uid;
 const RUNTIME_GID = containerPolicy.runtime_identity.gid;
 const RUNTIME_USER = `${RUNTIME_UID}:${RUNTIME_GID}`;
@@ -123,6 +127,7 @@ const APPLICATION_CONDITION_CHECK_PARTITION_PATTERNS = [
 export interface RuntimeStackProps extends StackProps {
   readonly debateTable: dynamodb.ITable;
   readonly imageRepository: ecr.IRepository;
+  readonly signingProfileArn: string;
 }
 
 interface RuntimeParameters {
@@ -137,6 +142,7 @@ export class RuntimeStack extends Stack {
   public readonly discordIngressFunction: lambda.Function;
   public readonly discordStatusPublisherFunction: lambda.Function;
   public readonly interactionsApi: apigatewayv2.HttpApi;
+  public readonly imageAdmissionFunction: lambda.Function;
   public readonly normalTaskDefinition: ecs.FargateTaskDefinition;
   public readonly runtimeReconcilerFunction: lambda.Function;
   public readonly runtimeReconcilerSchedule: scheduler.CfnSchedule;
@@ -220,7 +226,7 @@ export class RuntimeStack extends Stack {
     );
 
     this.cluster = new ecs.Cluster(this, "Cluster", {
-      clusterName: "shittim-chest-production",
+      clusterName: RUNTIME_CLUSTER_NAME,
       containerInsightsV2: ecs.ContainerInsights.DISABLED,
       executeCommandConfiguration: {
         logConfiguration: {
@@ -292,12 +298,34 @@ export class RuntimeStack extends Stack {
       platformVersion: ecs.FargatePlatformVersion.LATEST,
       propagateTags: ecs.PropagatedTagSource.SERVICE,
       securityGroups: [this.taskSecurityGroup],
-      serviceName: "shittim-chest-production",
+      serviceName: RUNTIME_SERVICE_NAME,
       taskDefinition: this.normalTaskDefinition,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
     const sharedLambdaCode = this.applicationLambdaCode();
+    const runtimeServiceArn = this.formatArn({
+      resource: "service",
+      resourceName: `${RUNTIME_CLUSTER_NAME}/${RUNTIME_SERVICE_NAME}`,
+      service: "ecs",
+    });
+    this.imageAdmissionFunction = this.createApplicationFunction({
+      code: sharedLambdaCode,
+      environment: {
+        SHITTIM_ECR_REPOSITORY_NAME: props.imageRepository.repositoryName,
+        SHITTIM_ECR_REPOSITORY_URI: props.imageRepository.repositoryUri,
+        SHITTIM_ECS_SERVICE_ARN: runtimeServiceArn,
+        SHITTIM_EXPECTED_CONTAINER_NAME: "application",
+        SHITTIM_SIGNING_PROFILE_ARN: props.signingProfileArn,
+      },
+      functionName: "shittim-chest-production-image-admission",
+      handler: IMAGE_ADMISSION_HANDLER,
+      id: "ImageAdmissionFunction",
+      memorySize: 256,
+      reservedConcurrency: 1,
+      timeout: Duration.seconds(30),
+    });
+    this.configureImageAdmission(props.imageRepository, runtimeServiceArn);
     const runtimeConfigParameter = `${PARAMETER_ROOT}/runtime/${configVersion.valueAsString}`;
     this.discordStatusPublisherFunction = this.createApplicationFunction({
       code: sharedLambdaCode,
@@ -702,6 +730,71 @@ export class RuntimeStack extends Stack {
         "CloudWatch Logs creates unpredictable stream names; access remains confined to this function's dedicated retained log group.",
     });
     return role;
+  }
+
+  private configureImageAdmission(
+    repository: ecr.IRepository,
+    serviceArn: string,
+  ): void {
+    const serviceRevisionArn =
+      `arn:aws:ecs:${this.region}:*:service-revision/` +
+      `${RUNTIME_CLUSTER_NAME}/${RUNTIME_SERVICE_NAME}/*`;
+    this.imageAdmissionFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ecs:DescribeServiceRevisions"],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+        },
+        resources: [serviceArn, serviceRevisionArn],
+      }),
+    );
+    this.imageAdmissionFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ecr:DescribeImageSigningStatus", "ecr:ListImageReferrers"],
+        resources: [repository.repositoryArn],
+      }),
+    );
+
+    const hookRole = new iam.Role(this, "ImageAdmissionHookRole", {
+      assumedBy: new iam.ServicePrincipal("ecs.amazonaws.com"),
+      description: "Allow ECS deployment lifecycle hooks to invoke image admission only",
+      roleName: "ShittimChest-Prod-ImageAdmissionHook",
+    });
+    const invokePolicy = new iam.Policy(this, "ImageAdmissionHookInvokePolicy", {
+      statements: [
+        new iam.PolicyStatement({
+          actions: ["lambda:InvokeFunction"],
+          resources: [this.imageAdmissionFunction.functionArn],
+        }),
+      ],
+    });
+    invokePolicy.attachToRole(hookRole);
+    Validations.of(this.imageAdmissionFunction.role!).acknowledge({
+      id:
+        "AwsSolutions-IAM5[Resource::arn:aws:ecs:" +
+        `${this.region}:*:service-revision/` +
+        `${RUNTIME_CLUSTER_NAME}/${RUNTIME_SERVICE_NAME}/*]`,
+      reason:
+        "DescribeServiceRevisions requires deployment-generated revision and account segments; aws:ResourceAccount and the named production service confine both wildcards.",
+    });
+
+    // FargateService has no L2 lifecycle-hook API in aws-cdk-lib 2.261.0.
+    // Keep the escape hatch confined to the generated lifecycleHooks field.
+    const cfnService = this.service.node.defaultChild as ecs.CfnService;
+    cfnService.addPropertyOverride("DeploymentConfiguration.LifecycleHooks", [
+      {
+        HookDetails: { schemaVersion: 1 },
+        HookTargetArn: this.imageAdmissionFunction.functionArn,
+        LifecycleStages: ["PRE_SCALE_UP"],
+        RoleArn: hookRole.roleArn,
+        TargetType: "AWS_LAMBDA",
+        TimeoutConfiguration: {
+          Action: "ROLLBACK",
+          TimeoutInMinutes: 5,
+        },
+      },
+    ]);
+    cfnService.node.addDependency(invokePolicy);
   }
 
   private imageDigestParameter(

@@ -4,6 +4,7 @@ import { AwsSolutionsChecks } from "cdk-nag";
 
 import { CostGovernanceStack } from "../lib/cost-governance-stack";
 import { OperationsStack } from "../lib/operations-stack";
+import { ReleaseIdentityStack } from "../lib/release-identity-stack";
 import { RuntimeStack } from "../lib/runtime-stack";
 import { StatefulStack } from "../lib/stateful-stack";
 
@@ -11,11 +12,11 @@ const COST_MANAGEMENT_REGION = "us-east-1";
 const PRODUCTION_REGION = "ap-northeast-1";
 
 function productionEnvironment(): Environment {
-  return { region: PRODUCTION_REGION };
+  return { account: process.env.CDK_DEFAULT_ACCOUNT, region: PRODUCTION_REGION };
 }
 
 function costManagementEnvironment(): Environment {
-  return { region: COST_MANAGEMENT_REGION };
+  return { account: process.env.CDK_DEFAULT_ACCOUNT, region: COST_MANAGEMENT_REGION };
 }
 
 const app = new App();
@@ -30,10 +31,20 @@ const stateful = new StatefulStack(app, "Stateful", {
   stackName: "ShittimChest-Prod-Stateful",
   terminationProtection: true,
 });
+const releaseIdentity = new ReleaseIdentityStack(app, "ReleaseIdentity", {
+  debateTable: stateful.debateTable,
+  env: productionEnvironment(),
+  imageRepository: stateful.imageRepository,
+  signingProfileArn: stateful.signingProfile.attrArn,
+  stackName: "ShittimChest-Prod-ReleaseIdentity",
+  terminationProtection: true,
+});
+releaseIdentity.addDependency(stateful);
 const runtime = new RuntimeStack(app, "Runtime", {
   debateTable: stateful.debateTable,
   env: productionEnvironment(),
   imageRepository: stateful.imageRepository,
+  signingProfileArn: stateful.signingProfile.attrArn,
   stackName: "ShittimChest-Prod-Runtime",
 });
 runtime.addDependency(stateful);

@@ -59,6 +59,16 @@ WORKFLOW_TARGETS = {
         "DISCORD_THREAD_SECURITY",
         "セキュリティ",
     ),
+    "Production Release": WorkflowTarget(
+        ".github/workflows/release.yml",
+        "DISCORD_THREAD_SECURITY",
+        "セキュリティ",
+    ),
+    "Infrastructure Drift": WorkflowTarget(
+        ".github/workflows/drift.yml",
+        "DISCORD_THREAD_SECURITY",
+        "セキュリティ",
+    ),
 }
 
 

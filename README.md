@@ -16,14 +16,16 @@ Design is complete under [`docs/`](docs/). The merged `main` baseline includes
 the application core, OpenAI + Web search, signed Discord HTTP Interaction
 ingress, DynamoDB **schema v7** / control-record **manifest v2**, ARM64 container
 gates, and synth-only Stateful/Runtime CDK with On-Demand scale-to-zero. The
-current STEP-09C-C slice adds a locally tested, `us-east-1` cost-governance
-stack with two AWS Budgets and a Cost Anomaly Detection subscription. It builds
-on STEP-09C-A/B metrics and monitoring. Nothing in this repository has been
-deployed to AWS or connected to a real Discord Application endpoint.
+current STEP-10-A slice adds locally tested immutable GitHub OIDC roles, a
+plan/Environment-deploy release workflow, signed normal and break-glass images,
+OCI attestations, a canonical release manifest, fenced change-set execution,
+read-only drift detection, and ECS `PRE_SCALE_UP` image admission. Nothing in
+this repository has been deployed to AWS or connected to a real Discord
+Application endpoint.
 
 | Implemented locally / on merged main | Not done |
 |---|---|
-| Domain, voting, Protocols, use cases | STEP-10 release signing / deploy workflows |
+| Domain, voting, Protocols, use cases | GitHub/AWS production configuration and first release |
 | DynamoDB adapter, leases, outbox | Real Discord Applications / live tokens |
 | OpenAI Responses API, router, Evidence | Paid OpenAI in CI |
 | Signed HTTP ingress + `/shittim` + panel | AWS bootstrap or stack deploy |
@@ -33,6 +35,7 @@ deployed to AWS or connected to a real Discord Application endpoint.
 | STEP-09C-A EMF metrics foundation | |
 | STEP-09C-B alarms/dashboard/EventBridge | |
 | STEP-09C-C Budget/CAD templates | |
+| STEP-10-A release supply chain + image admission | |
 | GitHub → Discord Forum notifications (STEP-02D) | |
 
 Production generation is fixed to **Luna standard** (no runtime escalation).
@@ -61,9 +64,10 @@ Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
   recovery continues until the 15-minute terminal deadline. Scale-down becomes
   eligible 30 minutes after the last debate is *fully* complete, including
   required outbox/status work.
-- The deployment guard is implemented as a fail-closed, read-only diagnostic
-  library, CLI, and manual workflow. No production deploy workflow consumes it
-  yet.
+- The deployment guard retains its read-only diagnostic workflow. STEP-10-A's
+  production deploy job additionally acquires and releases the exact fenced
+  DynamoDB lock around attested CloudFormation change-set execution and smoke
+  checks.
 
 ## Stack (design and locally verified templates)
 
@@ -76,6 +80,8 @@ Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
 - `us-east-1` **CostGovernance** CDK stack with Project/account Budgets and an
   existing-monitor **Cost Anomaly Detection** subscription
 - Digest-pinned **DHI** Community images; identity and tmpfs in `container-policy.json`
+- **AWS Signer / Notation**, ECR OCI referrers, GitHub artifact attestations,
+  immutable OIDC plan/deploy/drift roles, and fail-closed ECS image admission
 
 ## Local validation
 

@@ -41,6 +41,13 @@
       "repository": "anchore/grype",
       "tag_prefix": "v",
       "version": "0.116.0"
+    },
+    "grype-arm64": {
+      "archive_name": "grype_0.116.0_linux_arm64.tar.gz",
+      "archive_sha256": "7af3eed24f469b0cf3ab5ec4508d9c12f4bb9c2c6be714f32973c7b5d63cb6a5",
+      "repository": "anchore/grype",
+      "tag_prefix": "v",
+      "version": "0.116.0"
     }
   }
 }
