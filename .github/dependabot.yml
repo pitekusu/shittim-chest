@@ -51,6 +51,12 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # uv-build follows uv's versioning policy, where minor releases can be
+    # breaking. Keep the build backend on 0.11 until a dedicated 0.12 upgrade.
+    ignore:
+      - dependency-name: "uv-build"
+        versions:
+          - ">=0.12"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "docker"
