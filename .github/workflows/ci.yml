@@ -154,7 +154,8 @@ jobs:
 
       - name: Scan complete Git history with Betterleaks
         run: |
-          "${RUNNER_TEMP}/betterleaks" git --redact --no-banner --verbose .
+          "${RUNNER_TEMP}/betterleaks" git --config .betterleaks.toml \
+            --redact --no-banner --verbose .
       - name: Exercise secret-scanner positive and negative contracts
         run: |
           uv run --frozen python tools/check_secret_scanners.py \

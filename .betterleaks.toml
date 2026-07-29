@@ -1,0 +1,14 @@
+title = "Shittim Chest secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "AWS Signer Notation public PGP key checksum"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*AWS_SIGNER_NOTATION_KEY_SHA256:\s+[0-9a-f]{64}\s*$''']
+paths = ['''^\.github/workflows/release\.yml$''']
