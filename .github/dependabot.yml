@@ -66,6 +66,12 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
+    # uv minor releases can contain breaking changes. Keep the Docker stage
+    # aligned with [tool.uv].required-version until a dedicated 0.12 upgrade.
+    ignore:
+      - dependency-name: "astral-sh/uv"
+        versions:
+          - ">=0.12"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "npm"
