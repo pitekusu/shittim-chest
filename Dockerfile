@@ -2,7 +2,7 @@
 
 FROM ghcr.io/astral-sh/uv:0.11.33@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:1df3badfd28c3fd54fb8371d55a4a050c4051b8a808f8367f7241442a334928b AS builder
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:6ed0e92633c8dba6e48cf0b44153ea027a221d73b882e489164a1569ec495658 AS builder
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
@@ -24,7 +24,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-editable
 
-FROM dhi.io/python:3.14.6-debian13@sha256:c43e37b1d2c740bf924149f7ce015a79636a084a3fd755ac8c5ffc2f4a850b3e AS runtime-base
+FROM dhi.io/python:3.14.6-debian13@sha256:ccbd15914b9221ffc506c66792c37e714cb59687f48aab3a69b27cd74df718a2 AS runtime-base
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -53,7 +53,7 @@ COPY --chown=65532:65532 tests/fixtures/container_process.py \
 
 ENV PYTHONPATH=/fault-tests
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:1df3badfd28c3fd54fb8371d55a4a050c4051b8a808f8367f7241442a334928b AS break-glass
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:6ed0e92633c8dba6e48cf0b44153ea027a221d73b882e489164a1569ec495658 AS break-glass
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
