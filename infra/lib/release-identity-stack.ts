@@ -11,8 +11,9 @@ import {
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
-const GITHUB_OIDC_URL = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "sts.amazonaws.com";
+const GITHUB_OIDC_PROVIDER_ARN =
+  `arn:${Aws.PARTITION}:iam::${Aws.ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com`;
 const MAIN_SUBJECT =
   "repo:pitekusu@12059348/shittim-chest@1302516701:ref:refs/heads/main";
 const DEPLOY_SUBJECT =
@@ -39,16 +40,17 @@ export interface ReleaseIdentityStackProps extends StackProps {
 export class ReleaseIdentityStack extends Stack {
   public readonly deployRole: iam.Role;
   public readonly driftRole: iam.Role;
-  public readonly oidcProvider: iam.CfnOIDCProvider;
+  public readonly oidcProvider: iam.IOpenIdConnectProvider;
   public readonly planRole: iam.Role;
 
   public constructor(scope: Construct, id: string, props: ReleaseIdentityStackProps) {
     super(scope, id, props);
 
-    this.oidcProvider = new iam.CfnOIDCProvider(this, "GitHubOidcProvider", {
-      clientIdList: [OIDC_AUDIENCE],
-      url: GITHUB_OIDC_URL,
-    });
+    this.oidcProvider = iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(
+      this,
+      "GitHubOidcProvider",
+      GITHUB_OIDC_PROVIDER_ARN,
+    );
     this.planRole = this.githubRole(
       "ReleasePlanRole",
       "ShittimChest-Prod-GitHub-ReleasePlan",
@@ -84,7 +86,7 @@ export class ReleaseIdentityStack extends Stack {
     description: string,
   ): iam.Role {
     const principal = new iam.FederatedPrincipal(
-      this.oidcProvider.attrArn,
+      this.oidcProvider.openIdConnectProviderArn,
       {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": OIDC_AUDIENCE,
@@ -114,7 +116,6 @@ export class ReleaseIdentityStack extends Stack {
           "ecr:DescribeRepositories",
           "ecr:GetDownloadUrlForLayer",
           "ecr:InitiateLayerUpload",
-          "ecr:ListImageReferrers",
           "ecr:PutImage",
           "ecr:UploadLayerPart",
         ],
@@ -229,9 +230,11 @@ export class ReleaseIdentityStack extends Stack {
     this.deployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: [
+          "dynamodb:ConditionCheckItem",
+          "dynamodb:DeleteItem",
           "dynamodb:GetItem",
-          "dynamodb:TransactGetItems",
-          "dynamodb:TransactWriteItems",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
         ],
         resources: [props.debateTable.tableArn],
       }),
@@ -244,7 +247,6 @@ export class ReleaseIdentityStack extends Stack {
           "ecr:DescribeImageSigningStatus",
           "ecr:DescribeImages",
           "ecr:GetDownloadUrlForLayer",
-          "ecr:ListImageReferrers",
         ],
         resources: [props.imageRepository.repositoryArn],
       }),

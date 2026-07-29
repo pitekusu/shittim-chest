@@ -81,7 +81,7 @@ export class StatefulStack extends Stack {
             repositoryFilters: [
               {
                 filter: "shittim-chest",
-                filterType: "WILDCARD_MATCH",
+                filterType: "WILDCARD",
               },
             ],
           },

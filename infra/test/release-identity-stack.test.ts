@@ -38,11 +38,14 @@ function synthesize(): {
 }
 
 describe("ReleaseIdentityStack", () => {
-  test("uses one GitHub provider and three responsibility-separated roles", () => {
+  test("reuses the account GitHub provider for three responsibility-separated roles", () => {
     const { template } = synthesize();
 
-    template.resourceCountIs("AWS::IAM::OIDCProvider", 1);
+    template.resourceCountIs("AWS::IAM::OIDCProvider", 0);
     template.resourceCountIs("AWS::IAM::Role", 3);
+    expect(JSON.stringify(template.toJSON())).toContain(
+      "oidc-provider/token.actions.githubusercontent.com",
+    );
     for (const roleName of [
       "ShittimChest-Prod-GitHub-ReleasePlan",
       "ShittimChest-Prod-GitHub-ReleaseDeploy",
@@ -88,14 +91,20 @@ describe("ReleaseIdentityStack", () => {
     const drift = policyFor("ReleaseDriftRole");
 
     expect(plan).toContain("ecr:PutImage");
-    expect(plan).toContain("ecr:ListImageReferrers");
+    expect(plan).toContain("ecr:BatchGetImage");
     expect(plan).toContain("cloudformation:CreateChangeSet");
     expect(plan).toContain("s3:PutObject");
     expect(plan).not.toContain("cloudformation:ExecuteChangeSet");
     expect(plan).not.toContain("dynamodb:TransactWriteItems");
     expect(deploy).toContain("cloudformation:ExecuteChangeSet");
-    expect(deploy).toContain("ecr:ListImageReferrers");
-    expect(deploy).toContain("dynamodb:TransactWriteItems");
+    expect(deploy).toContain("ecr:BatchGetImage");
+    expect(deploy).toContain("dynamodb:ConditionCheckItem");
+    expect(deploy).toContain("dynamodb:DeleteItem");
+    expect(deploy).toContain("dynamodb:GetItem");
+    expect(deploy).toContain("dynamodb:PutItem");
+    expect(deploy).toContain("dynamodb:UpdateItem");
+    expect(deploy).not.toContain("dynamodb:TransactGetItems");
+    expect(deploy).not.toContain("dynamodb:TransactWriteItems");
     expect(deploy).not.toContain("cloudformation:CreateChangeSet");
     expect(deploy).not.toContain("ecr:PutImage");
     expect(drift).toContain("cloudformation:DetectStackDrift");

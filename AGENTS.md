@@ -21,9 +21,12 @@ scale-to-zero plus the locally implemented STEP-09C-A/B/C monitoring and cost
 governance slices. The current branch adds STEP-10-A's immutable OIDC release
 identities, plan/Environment-deploy workflow, dual signed image/referrer gates,
 canonical manifest, fenced change-set execution, drift detection, and ECS
-`PRE_SCALE_UP` image admission. All validation is local; AWS and Discord
-production state remain unchanged. The authoritative Obsidian progress and
-evidence notes still need their same-change update before merge.
+`PRE_SCALE_UP` image admission. The operator account is now bootstrapped in
+`ap-northeast-1` and `us-east-1`; Stateful and ReleaseIdentity are deployed with
+termination protection, immutable repository OIDC is enabled, and the non-secret
+release variables are configured. Runtime, Operations, CostGovernance, Discord,
+and the first production release remain unchanged. The authoritative Obsidian
+progress and evidence notes still need their same-change update before merge.
 
 | Area | Current implementation |
 |---|---|
@@ -34,7 +37,7 @@ evidence notes still need their same-change update before merge.
 | Runtime | Admission gate, signals, outbox drain before phase work, `python -m shittim_chest` |
 | Container | Digest-pinned multi-stage image, ARM64 CI, SIGTERM/SIGKILL fault gates |
 | Scale-to-zero | Durable FIFO 20, 3/15/30-minute semantics, wake/drain/reconcile, race fences |
-| Infra (synth-only) | HTTP API, 3 control Lambdas + image admission, On-Demand Fargate 0/max 1 |
+| Infra | Stateful + ReleaseIdentity deployed; Runtime/Operations/CostGovernance synth-only |
 | Ops notifications | GitHub → Discord Forum (STEP-02D); friend server; no alert role |
 | Ops metrics | `ShittimChest/Prod`, fixed `Service` dimension, 10-metric allowlist |
 | Ops monitoring | 9 underlying alarms, 2 actionable composites, dashboard, abnormal ECS stops |
@@ -44,10 +47,9 @@ evidence notes still need their same-change update before merge.
 **Not done**
 
 - Authoritative Obsidian STEP-10-A progress/evidence update and public mirror sync
-- GitHub immutable OIDC opt-in, production Environment/variables/secrets, and drift label
-- AWS bootstrap, foundational Stateful/ReleaseIdentity deploy, and first release execution
+- Private operator email secret, versioned SSM runtime values, and first release execution
+- `Project` cost-allocation tag activation after Billing discovers the deployed tag
 - Real Discord Application endpoint switch, live Bot tokens, paid OpenAI in CI
-- No AWS account bootstrap or stack deploy
 - Live Notation/referrer/change-set/admission/rollback/drift acceptance remains unexecuted
 
 Slices ship as isolated PRs (squash merge). After each slice, update `docs/20_…`

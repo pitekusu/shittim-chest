@@ -16,19 +16,21 @@ Design is complete under [`docs/`](docs/). The merged `main` baseline includes
 the application core, OpenAI + Web search, signed Discord HTTP Interaction
 ingress, DynamoDB **schema v7** / control-record **manifest v2**, ARM64 container
 gates, and synth-only Stateful/Runtime CDK with On-Demand scale-to-zero. The
-current STEP-10-A slice adds locally tested immutable GitHub OIDC roles, a
+current STEP-10-A slice adds immutable GitHub OIDC roles, a
 plan/Environment-deploy release workflow, signed normal and break-glass images,
 OCI attestations, a canonical release manifest, fenced change-set execution,
 read-only drift detection, and ECS `PRE_SCALE_UP` image admission. Nothing in
-this repository has been deployed to AWS or connected to a real Discord
-Application endpoint.
+this repository is connected to a real Discord Application endpoint. AWS is
+bootstrapped in both target Regions, and the protected Stateful and
+ReleaseIdentity foundations are deployed; Runtime, Operations, CostGovernance,
+and the first release remain pending.
 
 | Implemented locally / on merged main | Not done |
 |---|---|
-| Domain, voting, Protocols, use cases | GitHub/AWS production configuration and first release |
+| Domain, voting, Protocols, use cases | Private runtime/notification values and first release |
 | DynamoDB adapter, leases, outbox | Real Discord Applications / live tokens |
 | OpenAI Responses API, router, Evidence | Paid OpenAI in CI |
-| Signed HTTP ingress + `/shittim` + panel | AWS bootstrap or stack deploy |
+| Signed HTTP ingress + `/shittim` + panel | Runtime/Operations/CostGovernance deploy |
 | Lifecycle, SIGTERM/SIGKILL recovery tests | |
 | Container + native ARM64 CI | |
 | Scale-to-zero control plane + 3 Lambda boundaries | |
@@ -74,7 +76,7 @@ Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
 - **Python 3.14.6** / **uv** (locked), discord.py, OpenAI Responses API, boto3
 - **DynamoDB** (on-demand, PITR), **ECS On-Demand Fargate** ARM64 zero-to-one
   singleton (Tokyo)
-- **CDK** TypeScript (local synth; not deployed from this repo yet)
+- **CDK** TypeScript (Stateful + ReleaseIdentity deployed; remaining stacks synth-only)
 - **CloudWatch** metric/composite alarms and dashboard, **EventBridge** abnormal
   ECS task-stop notifications, and one TLS-only **SNS** operator topic
 - `us-east-1` **CostGovernance** CDK stack with Project/account Budgets and an

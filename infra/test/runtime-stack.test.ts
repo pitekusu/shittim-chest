@@ -212,9 +212,9 @@ describe("RuntimeStack", () => {
       ),
     );
     expect(imagePolicy).toContain("ecs:DescribeServiceRevisions");
+    expect(imagePolicy).toContain("ecr:BatchGetImage");
     expect(imagePolicy).toContain("ecr:DescribeImageSigningStatus");
-    expect(imagePolicy).toContain("ecr:ListImageReferrers");
-    expect(imagePolicy).not.toContain("ecr:BatchGetImage");
+    expect(imagePolicy).not.toContain("ecr:ListImageReferrers");
     expect(imagePolicy).not.toContain("ecr:PutImage");
     expect(JSON.stringify(policies)).toContain("lambda:InvokeFunction");
   });

@@ -750,7 +750,7 @@ export class RuntimeStack extends Stack {
     );
     this.imageAdmissionFunction.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ecr:DescribeImageSigningStatus", "ecr:ListImageReferrers"],
+        actions: ["ecr:BatchGetImage", "ecr:DescribeImageSigningStatus"],
         resources: [repository.repositoryArn],
       }),
     );
