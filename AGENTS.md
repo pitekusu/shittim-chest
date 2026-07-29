@@ -14,7 +14,7 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-10-A feature branch, 2026-07-29)
+## Status (STEP-10-A feature branch, 2026-07-30)
 
 The merged `main` baseline includes PR `#85` signed HTTP ingress and On-Demand
 scale-to-zero plus the locally implemented STEP-09C-A/B/C monitoring and cost
@@ -26,7 +26,7 @@ canonical manifest, fenced change-set execution, drift detection, and ECS
 termination protection, immutable repository OIDC is enabled, and the non-secret
 release variables are configured. Runtime, Operations, CostGovernance, Discord,
 and the first production release remain unchanged. The authoritative Obsidian
-progress and evidence notes still need their same-change update before merge.
+progress/evidence notes and the public mirror include this STEP-10-A state.
 
 | Area | Current implementation |
 |---|---|
@@ -46,7 +46,6 @@ progress and evidence notes still need their same-change update before merge.
 
 **Not done**
 
-- Authoritative Obsidian STEP-10-A progress/evidence update and public mirror sync
 - Private operator email secret, versioned SSM runtime values, and first release execution
 - `Project` cost-allocation tag activation after Billing discovers the deployed tag
 - Real Discord Application endpoint switch, live Bot tokens, paid OpenAI in CI

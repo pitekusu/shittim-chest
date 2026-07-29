@@ -15,7 +15,7 @@ Japanese name: **シッテムの箱** (`shittim_chest`).
 Design is complete under [`docs/`](docs/). The merged `main` baseline includes
 the application core, OpenAI + Web search, signed Discord HTTP Interaction
 ingress, DynamoDB **schema v7** / control-record **manifest v2**, ARM64 container
-gates, and synth-only Stateful/Runtime CDK with On-Demand scale-to-zero. The
+gates, and Stateful/Runtime CDK with On-Demand scale-to-zero. The
 current STEP-10-A slice adds immutable GitHub OIDC roles, a
 plan/Environment-deploy release workflow, signed normal and break-glass images,
 OCI attestations, a canonical release manifest, fenced change-set execution,
