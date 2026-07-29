@@ -49,6 +49,23 @@ The scale-to-zero requirements, commit checkpoints, and completion criteria are
 published under [`docs/100_Ondemand Fargate/`](docs/100_Ondemand%20Fargate/).
 Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
 
+## Private production setup
+
+The operator runs one guided command. It asks only for missing private values,
+hides all input, validates the complete configuration, and writes directly to
+GitHub Actions secrets and SSM Parameter Store after confirmation:
+
+```sh
+uv run --frozen python tools/configure_production_inputs.py
+```
+
+It does not read, decrypt, overwrite, print, or save existing secret values.
+Readiness can be checked without entering values:
+
+```sh
+uv run --frozen python tools/configure_production_inputs.py --check
+```
+
 ## Scale-to-zero runtime
 
 - Discord calls an API Gateway HTTP API. The ingress Lambda verifies the

@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-29
+updated: 2026-07-30
 ---
 
 # AWS・CDK詳細設計
@@ -159,6 +159,7 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 
 ```text
 /shittim-chest/production/openai/api-key
+/shittim-chest/production/discord/moderator/public-key
 /shittim-chest/production/discord/moderator/token
 /shittim-chest/production/discord/participant-a/token
 /shittim-chest/production/discord/participant-b/token
@@ -169,6 +170,14 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 /shittim-chest/production/personas/v0001/participant-b
 /shittim-chest/production/personas/v0001/participant-c
 ```
+
+operatorはAWS Consoleで11件を個別作成せず、repository rootから次の1 commandを実行する。
+
+```sh
+uv run --frozen python tools/configure_production_inputs.py
+```
+
+toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示せず照合し、不足値だけを順に非表示入力する。全値をlocalへ保存せず検証してから、確認後にGitHub Actionsの`OPERATOR_NOTIFICATION_EMAIL`とSSM Standard `SecureString`を作成する。既存parameter valueは取得・復号・上書きせず、`--check`はGitHub secret名とSSM metadataの設定数だけを返す。GitHub secretは標準入力、SSM値はboto3 API request bodyで渡し、process argumentへ秘密値を含めない。
 
 `RuntimeConfig`は`schema_version`、`config_version`、Guild ID、非空channel allowlist、4 Application IDを保持する。`PersonaConfig`は同version、slot、display name、system promptを保持し、1 parameterをUTF-8 3,500 bytes以下に制限する。既存pathを上書きせず新version pathを作り、task definition更新後にstop-before-start deployを行う。token/API keyをCDK context、GitHub secret、CloudFormation output、Obsidianへ保存しない。
 
@@ -225,4 +234,6 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-28 | CDK VPC / FargateService / HTTP API / Lambda | https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ec2.Vpc.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ecs.FargateService.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_apigatewayv2.HttpApi.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_lambda.Function.html | NAT 0、Public IP、On-Demand FARGATE、desired 0、3 Lambda VPC外、HTTP API最小routeをassert |
 | 2026-07-19 | ECS task IAM role | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html | `SourceAccount`とregion/account限定`SourceArn`でconfused deputyを防止 |
 | 2026-07-19 | ECS Parameter Store injection | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-ssm-paramstore.html | execution roleの各parameter限定`ssm:GetParameters`、更新時のnew deploymentを採用 |
+| 2026-07-30 | SSM DescribeParameters / PutParameter | https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DescribeParameters.html、https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html | metadata-only不足確認、Standard SecureString、既存値非取得・非上書きの対話setupを採用 |
+| 2026-07-30 | GitHub CLI secret set | https://cli.github.com/manual/gh_secret_set | private operator emailをprocess argumentでなく標準入力からrepository Actions secretへ登録 |
 | 2026-07-19 | CloudWatch Logs data protection | https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/mask-sensitive-log-data.html | application/Exec log groupの非機密ログ原則に追加防御としてmask policyを適用 |
