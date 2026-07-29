@@ -59,6 +59,11 @@ GitHub Actions secrets and SSM Parameter Store after confirmation:
 uv run --frozen python tools/configure_production_inputs.py
 ```
 
+When the local-only `SHITTIM_PRIVATE_CONFIG_SOURCE` pointer is configured, the
+command validates and reuses its saved `PersonaConfig v0002`; those four persona
+values are not requested again. The pointer and source stay ignored and are never
+copied into the repository.
+
 It does not read, decrypt, overwrite, print, or save existing secret values.
 Readiness can be checked without entering values:
 

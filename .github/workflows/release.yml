@@ -6,7 +6,7 @@ on:
       runtime_config_version:
         description: "事前登録済みのversioned runtime config"
         required: true
-        default: v0001
+        default: v0002
         type: string
 
 permissions: {}

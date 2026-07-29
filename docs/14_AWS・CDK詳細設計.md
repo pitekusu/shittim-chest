@@ -164,11 +164,11 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 /shittim-chest/production/discord/participant-a/token
 /shittim-chest/production/discord/participant-b/token
 /shittim-chest/production/discord/participant-c/token
-/shittim-chest/production/runtime/v0001
-/shittim-chest/production/personas/v0001/moderator
-/shittim-chest/production/personas/v0001/participant-a
-/shittim-chest/production/personas/v0001/participant-b
-/shittim-chest/production/personas/v0001/participant-c
+/shittim-chest/production/runtime/v0002
+/shittim-chest/production/personas/v0002/moderator
+/shittim-chest/production/personas/v0002/participant-a
+/shittim-chest/production/personas/v0002/participant-b
+/shittim-chest/production/personas/v0002/participant-c
 ```
 
 operatorはAWS Consoleで11件を個別作成せず、repository rootから次の1 commandを実行する。
@@ -177,7 +177,7 @@ operatorはAWS Consoleで11件を個別作成せず、repository rootから次�
 uv run --frozen python tools/configure_production_inputs.py
 ```
 
-toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示せず照合し、不足値だけを順に非表示入力する。全値をlocalへ保存せず検証してから、確認後にGitHub Actionsの`OPERATOR_NOTIFICATION_EMAIL`とSSM Standard `SecureString`を作成する。既存parameter valueは取得・復号・上書きせず、`--check`はGitHub secret名とSSM metadataの設定数だけを返す。GitHub secretは標準入力、SSM値はboto3 API request bodyで渡し、process argumentへ秘密値を含めない。
+toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示せず照合し、不足値だけを順に非表示入力する。local-onlyの`SHITTIM_PRIVATE_CONFIG_SOURCE` pointerが設定済みなら、保存済み`PersonaConfig v0002`の4 slot、display name、prompt、SSM pathをlocalでfail closedに検証して再利用し、persona本文を再入力させない。pointerとsourceはGit管理外とし、source pathや値を出力・公開mirrorへ複製しない。全値を別fileへ保存せず検証してから、確認後にGitHub Actionsの`OPERATOR_NOTIFICATION_EMAIL`とSSM Standard `SecureString`を作成する。既存parameter valueは取得・復号・上書きせず、`--check`はGitHub secret名とSSM metadataの設定数だけを返す。GitHub secretは標準入力、SSM値はboto3 API request bodyで渡し、process argumentへ秘密値を含めない。
 
 `RuntimeConfig`は`schema_version`、`config_version`、Guild ID、非空channel allowlist、4 Application IDを保持する。`PersonaConfig`は同version、slot、display name、system promptを保持し、1 parameterをUTF-8 3,500 bytes以下に制限する。既存pathを上書きせず新version pathを作り、task definition更新後にstop-before-start deployを行う。token/API keyをCDK context、GitHub secret、CloudFormation output、Obsidianへ保存しない。
 

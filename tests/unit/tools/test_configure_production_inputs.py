@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 
 import boto3
 import pytest
@@ -17,6 +18,39 @@ from tools import configure_production_inputs as setup
 from shittim_chest.application import DiscordBotSlot
 
 VALID_EMAIL = "operator" + "@" + "example.invalid"
+SAVED_PERSONAS = """\
+# Private operator configuration
+
+## PersonaConfig v0002
+
+| slot | display name | role | SSM path |
+|---|---|---|---|
+| `moderator` | Moderator | Coordinate without voting | `$ROOT/moderator` |
+| `participant-a` | Alpha | Practical view | `$ROOT/participant-a` |
+| `participant-b` | Bravo | Verification view | `$ROOT/participant-b` |
+| `participant-c` | Charlie | Alternative view | `$ROOT/participant-c` |
+
+### participant-a: Alpha
+
+```text
+Alpha prompt line 1.
+Alpha prompt line 2.
+```
+
+### participant-b: Bravo
+
+```text
+Bravo prompt.
+```
+
+### participant-c: Charlie
+
+```text
+Charlie prompt.
+```
+
+## Next section
+""".replace("$ROOT", f"{setup.PARAMETER_ROOT}/personas/v0002")
 
 
 def client() -> SSMClient:
@@ -119,6 +153,75 @@ def test_collects_only_missing_values_and_does_not_require_existing_secrets() ->
 
     assert pending.github_email is None
     assert pending.parameters == {"/shittim-chest/production/openai/api-key": "openai-key"}
+
+
+def test_loads_saved_v0002_personas_without_exposing_source_values(tmp_path: Path) -> None:
+    source = tmp_path / "private.md"
+    source.write_text(SAVED_PERSONAS, encoding="utf-8")
+
+    personas = setup.load_saved_personas(source, "v0002")
+
+    assert set(personas) == set(DiscordBotSlot)
+    moderator = json.loads(personas[DiscordBotSlot.MODERATOR])
+    assert moderator == {
+        "schema_version": "1",
+        "config_version": "v0002",
+        "slot": "moderator",
+        "display_name": "Moderator",
+        "system_prompt": "Coordinate without voting",
+    }
+    participant = json.loads(personas[DiscordBotSlot.PARTICIPANT_A])
+    assert participant["display_name"] == "Alpha"
+    assert participant["system_prompt"] == "Alpha prompt line 1.\nAlpha prompt line 2."
+
+
+def test_saved_personas_replace_all_persona_prompts() -> None:
+    saved = setup._personas_from_operator_markdown(SAVED_PERSONAS, "v0002")
+    missing = frozenset(
+        f"{setup.PARAMETER_ROOT}/personas/v0002/{slot.value}" for slot in DiscordBotSlot
+    )
+
+    def unexpected_prompt(_prompt: str) -> str:
+        raise AssertionError("saved personas must not be prompted again")
+
+    pending = setup.collect_pending_setup(
+        config_version="v0002",
+        missing_parameters=missing,
+        github_email_missing=False,
+        secret_reader=unexpected_prompt,
+        saved_personas=saved,
+    )
+
+    assert set(pending.parameters) == set(missing)
+
+
+def test_private_source_pointer_is_local_only_and_absolute(tmp_path: Path) -> None:
+    source = tmp_path / "private.md"
+    source.write_text(SAVED_PERSONAS, encoding="utf-8")
+    pointer = tmp_path / ".env.private-config"
+    pointer.write_text(
+        f"{setup.PRIVATE_SOURCE_ENV}={source}\n",
+        encoding="utf-8",
+    )
+
+    assert setup.private_config_source({}, pointer) == source
+
+
+def test_invalid_saved_persona_source_fails_with_content_free_code(tmp_path: Path) -> None:
+    source = tmp_path / "private.md"
+    source.write_text(
+        SAVED_PERSONAS.replace("PersonaConfig v0002", "PersonaConfig v0003"), encoding="utf-8"
+    )
+
+    with pytest.raises(setup.SetupError) as caught:
+        setup.load_saved_personas(source, "v0002")
+
+    assert caught.value.code == "saved_persona_version_missing"
+    assert "Alpha prompt" not in str(caught.value)
+
+
+def test_parser_defaults_to_saved_persona_version() -> None:
+    assert setup._parser().parse_args([]).config_version == "v0002"
 
 
 @pytest.mark.parametrize(
