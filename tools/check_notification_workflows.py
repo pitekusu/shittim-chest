@@ -37,6 +37,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     """Validate every target trigger and the one approved workflow."""
 
     _validate_permission_syntax(directory)
+    _validate_consistent_action_pins(directory)
     target_files: list[Path] = []
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
         text = path.read_text(encoding="utf-8")
@@ -299,6 +300,19 @@ def _require_full_action_pins(text: str, label: str) -> None:
         _, separator, revision = action.rpartition("@")
         if not separator or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
             raise WorkflowPolicyError(f"{label} action is not pinned to a full commit SHA")
+
+
+def _validate_consistent_action_pins(directory: Path) -> None:
+    """Require one commit for every repeated action version across workflows."""
+
+    pins: dict[tuple[str, str], str] = {}
+    pattern = re.compile(r"(?m)^\s*uses:\s*([^@\s#]+)@([0-9a-f]{40})\s+#\s*([^\s#]+)\s*$")
+    for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
+        for action, revision, version in pattern.findall(path.read_text(encoding="utf-8")):
+            key = (action, version)
+            previous = pins.setdefault(key, revision)
+            if previous != revision:
+                raise WorkflowPolicyError(f"inconsistent action pin for {action} {version}")
 
 
 def _validate_canonical_deploy_guard_permissions(text: str) -> None:

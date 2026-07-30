@@ -46,6 +46,22 @@ def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
     assert validate_notification_workflows(_workflow_directory(tmp_path)) == 1
 
 
+def test_repeated_action_version_requires_one_commit_pin(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+            "actions/setup-node@0000000000000000000000000000000000000000 # v7.0.0",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="inconsistent action pin"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(
