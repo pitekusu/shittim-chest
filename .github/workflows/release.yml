@@ -611,12 +611,24 @@ jobs:
               ShittimChest-Prod-CostGovernance) artifact=CostGovernance ;;
               *) exit 1 ;;
             esac
-            local type=CREATE
-            if aws cloudformation describe-stacks --region "${region}" \
-              --stack-name "${stack}" >/dev/null 2>&1
+            local type stack_status
+            if ! stack_status=$(aws cloudformation describe-stacks --region "${region}" \
+              --stack-name "${stack}" --query 'Stacks[0].StackStatus' --output text \
+              2>"${RUNNER_TEMP}/describe-stack.error")
             then
-              type=UPDATE
+              grep --fixed-strings '(ValidationError)' \
+                "${RUNNER_TEMP}/describe-stack.error" >/dev/null
+              grep --fixed-strings 'does not exist' \
+                "${RUNNER_TEMP}/describe-stack.error" >/dev/null
+              stack_status=""
             fi
+            case "${stack_status}" in
+              ""|REVIEW_IN_PROGRESS) type=CREATE ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE)
+                type=UPDATE
+                ;;
+              *) exit 1 ;;
+            esac
             local arn
             local template_argument template_value
             if [ "${artifact}" = "Runtime" ]; then
@@ -1063,7 +1075,7 @@ jobs:
           MANIFEST: ${{ runner.temp }}/release/release-manifest.json
         run: |
           deploy_stack() {
-            local stack="$1" region="$2" arn status type
+            local stack="$1" region="$2" arn status stack_status create_stack=false
             arn=$(jq --raw-output --arg stack "${stack}" '.change_sets[$stack]' "${MANIFEST}")
             status=$(aws cloudformation describe-change-set --region "${region}" \
               --change-set-name "${arn}" --query Status --output text)
@@ -1071,11 +1083,16 @@ jobs:
               return 0
             fi
             test "${status}" = "CREATE_COMPLETE"
-            type=$(aws cloudformation describe-change-set --region "${region}" \
-              --change-set-name "${arn}" --query ChangeSetType --output text)
+            stack_status=$(aws cloudformation describe-stacks --region "${region}" \
+              --stack-name "${stack}" --query 'Stacks[0].StackStatus' --output text)
+            case "${stack_status}" in
+              REVIEW_IN_PROGRESS) create_stack=true ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;
+              *) exit 1 ;;
+            esac
             aws cloudformation execute-change-set --region "${region}" \
               --change-set-name "${arn}"
-            if [ "${type}" = "CREATE" ]; then
+            if [ "${create_stack}" = true ]; then
               aws cloudformation wait stack-create-complete --region "${region}" \
                 --stack-name "${stack}"
             else

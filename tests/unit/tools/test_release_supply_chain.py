@@ -398,7 +398,6 @@ def test_change_set_binds_identity_status_and_exact_parameters() -> None:
     )
     value = {
         "ChangeSetId": arn,
-        "ChangeSetType": "UPDATE",
         "ExecutionStatus": "AVAILABLE",
         "Parameters": [
             {"ParameterKey": "RuntimeImageDigest", "ParameterValue": DIGEST},
