@@ -96,7 +96,7 @@ deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別�
 - `production` Environmentを参照し、reviewer `pitekusu`の承認後だけ開始する。単独運用のためself-reviewは許可するが、独立した四眼承認ではないことを明記する。
 - Environmentのdeployment branchは`main`だけ、administrator bypassは禁止、wait timerは0とする。
 - plan jobと同一runのmanifestを取得し、GitHub artifact attestationのsubject digest、repository identity、workflow、commit、image digest、SBOM hash、scan result、Signer profile、OCI referrer artifact digest、change set ARNを再検証する。
-- `notation verify`、GitHub attestation verify、ECR signing status、`list-image-referrers`をEnvironment承認後にも再実行する。4種のreferrer不足、revoked/invalid signature、subject違い、artifact digest違いはfail closedとする。
+- `notation verify`、GitHub attestation verify、ECR signing status、`list-image-referrers`をEnvironment承認後にも再実行する。ECR signing statusの`signingProfileArn`とNotation trust policyの`trustedIdentities`は、どちらもバージョンなしのSigner signing profile ARNへ完全一致させる。4種のreferrer不足、revoked/invalid signature、subject違い、artifact digest違いはfail closedとする。
 - task definition template内の全application image URIが`repository@sha256:<digest>`でmanifestと一致し、tag形式が0件であることを確認する。
 - live mutation前にdeployment lockをacquireし、change setを再生成せず実行する。READY/Discord/OpenAI/AWS connectivity smoke testと、失敗時のrollbackを含む全間でlockをholdし、完了成否にかかわらず正確なmetadataでreleaseを試みる。release失敗は成功扱いにしない。
 - result、digest、guard metadata、acquire/release audit IDを本文なしでdeployment summaryへ記録する。

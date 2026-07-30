@@ -18,9 +18,7 @@ from tools.release_supply_chain import (
 
 DIGEST = "sha256:" + "a" * 64
 BREAK_GLASS_DIGEST = "sha256:" + "e" * 64
-PROFILE = (
-    "arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/shittim_chest_ecr/ABCDEFGHIJ"
-)
+PROFILE = "arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/shittim_chest_ecr"
 REPOSITORY = "000000000000.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest"
 IMAGE_DETAILS = {
     "imageDetails": [
@@ -110,6 +108,20 @@ def test_verifies_exact_managed_signature_referrers_and_scan() -> None:
             "undefined": 0,
         },
     }
+
+
+def test_rejects_versioned_signing_profile_arn() -> None:
+    signing, referrers, scan = evidence()
+
+    with pytest.raises(ValueError, match="signing profile ARN is invalid"):
+        verify_image_evidence(
+            digest=DIGEST,
+            image_details=IMAGE_DETAILS,
+            profile_arn=f"{PROFILE}/ABCDEFGHIJ",
+            signing_status=signing,
+            referrers=referrers,
+            scan=scan,
+        )
 
 
 @pytest.mark.parametrize("missing_index", range(4))

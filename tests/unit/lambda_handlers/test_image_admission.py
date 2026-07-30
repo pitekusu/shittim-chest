@@ -24,9 +24,7 @@ REVISION_ARN = (
     "arn:aws:ecs:ap-northeast-1:000000000000:service-revision/"
     "shittim-chest-production/shittim-chest-production/1"
 )
-PROFILE_ARN = (
-    "arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/shittim_chest_ecr/EXAMPLE"
-)
+PROFILE_ARN = "arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/shittim_chest_ecr"
 REPOSITORY_URI = "000000000000.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest"
 GITHUB_BUNDLE = "application/vnd.dev.sigstore.bundle.v0.3+json"
 PREDICATE_KEY = "dev.sigstore.bundle.predicateType"
@@ -266,7 +264,22 @@ def test_rejects_provider_failure_without_leaking_exception(
     assert "private-provider-detail" not in caplog.text
 
 
-def test_settings_fail_closed_on_missing_or_digest_qualified_repository() -> None:
+def test_settings_accept_the_bound_repository_and_unversioned_profile() -> None:
+    assert (
+        ImageAdmissionSettings.from_environment(
+            {
+                "SHITTIM_EXPECTED_CONTAINER_NAME": "application",
+                "SHITTIM_ECR_REPOSITORY_NAME": "shittim-chest",
+                "SHITTIM_ECR_REPOSITORY_URI": REPOSITORY_URI,
+                "SHITTIM_ECS_SERVICE_ARN": SERVICE_ARN,
+                "SHITTIM_SIGNING_PROFILE_ARN": PROFILE_ARN,
+            }
+        )
+        == settings()
+    )
+
+
+def test_settings_fail_closed_on_missing_or_mismatched_identifiers() -> None:
     with pytest.raises(ValueError, match="incomplete"):
         ImageAdmissionSettings.from_environment({})
     with pytest.raises(ValueError, match="repository URI"):
@@ -277,5 +290,27 @@ def test_settings_fail_closed_on_missing_or_digest_qualified_repository() -> Non
                 "SHITTIM_ECR_REPOSITORY_URI": f"{REPOSITORY_URI}@{DIGEST}",
                 "SHITTIM_ECS_SERVICE_ARN": SERVICE_ARN,
                 "SHITTIM_SIGNING_PROFILE_ARN": PROFILE_ARN,
+            }
+        )
+
+    with pytest.raises(ValueError, match="signing profile ARN"):
+        ImageAdmissionSettings.from_environment(
+            {
+                "SHITTIM_EXPECTED_CONTAINER_NAME": "application",
+                "SHITTIM_ECR_REPOSITORY_NAME": "shittim-chest",
+                "SHITTIM_ECR_REPOSITORY_URI": REPOSITORY_URI,
+                "SHITTIM_ECS_SERVICE_ARN": SERVICE_ARN,
+                "SHITTIM_SIGNING_PROFILE_ARN": f"{PROFILE_ARN}/ABCDEFGHIJ",
+            }
+        )
+
+    with pytest.raises(ValueError, match="AWS accounts"):
+        ImageAdmissionSettings.from_environment(
+            {
+                "SHITTIM_EXPECTED_CONTAINER_NAME": "application",
+                "SHITTIM_ECR_REPOSITORY_NAME": "shittim-chest",
+                "SHITTIM_ECR_REPOSITORY_URI": REPOSITORY_URI,
+                "SHITTIM_ECS_SERVICE_ARN": SERVICE_ARN,
+                "SHITTIM_SIGNING_PROFILE_ARN": PROFILE_ARN.replace("000000000000", "0" * 11 + "1"),
             }
         )

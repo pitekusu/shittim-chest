@@ -94,6 +94,22 @@ def test_release_normalizes_cost_tag_metadata_before_comparison(tmp_path: Path) 
         validate_notification_workflows(directory)
 
 
+def test_release_requires_the_unversioned_signing_profile_arn(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "signing-profiles/shittim_chest_ecr$",
+            "signing-profiles/shittim_chest_ecr/[A-Za-z0-9]{10}$",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(

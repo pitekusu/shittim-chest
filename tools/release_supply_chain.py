@@ -17,7 +17,7 @@ _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 _PROFILE_ARN = re.compile(
     r"arn:aws:signer:ap-northeast-1:[0-9]{12}:/signing-profiles/"
-    r"shittim_chest_ecr/[A-Za-z0-9]{10}\Z"
+    r"shittim_chest_ecr\Z"
 )
 _REPOSITORY_URI = re.compile(
     r"([0-9]{12})\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/shittim-chest\Z"

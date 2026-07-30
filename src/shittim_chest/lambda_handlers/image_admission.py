@@ -16,6 +16,13 @@ from botocore.config import Config
 LOGGER = logging.getLogger(__name__)
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_REPOSITORY_URI = re.compile(
+    r"([0-9]{12})\.dkr\.ecr\.ap-northeast-1\.amazonaws\.com/shittim-chest\Z"
+)
+_SIGNING_PROFILE_ARN = re.compile(
+    r"arn:aws:signer:ap-northeast-1:([0-9]{12}):/signing-profiles/"
+    r"shittim_chest_ecr\Z"
+)
 _NOTATION_SIGNATURE = "application/vnd.cncf.notary.signature"
 _GITHUB_BUNDLE = "application/vnd.dev.sigstore.bundle.v0.3+json"
 _PREDICATE_ANNOTATION = "dev.sigstore.bundle.predicateType"
@@ -75,8 +82,14 @@ class ImageAdmissionSettings:
         }
         if any(not value or value.strip() != value for value in values.values()):
             raise ValueError("image admission configuration is incomplete")
-        if "@" in values["repository_uri"] or ":" not in values["repository_uri"]:
+        repository = _REPOSITORY_URI.fullmatch(values["repository_uri"])
+        if repository is None:
             raise ValueError("image admission repository URI is invalid")
+        signing_profile = _SIGNING_PROFILE_ARN.fullmatch(values["signing_profile_arn"])
+        if signing_profile is None:
+            raise ValueError("image admission signing profile ARN is invalid")
+        if repository.group(1) != signing_profile.group(1):
+            raise ValueError("image admission AWS accounts do not match")
         return cls(**values)
 
 
