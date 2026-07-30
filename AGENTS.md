@@ -39,7 +39,10 @@ all four release change-set inventories are empty, the fence was released, and
 the failed Runtime stack metadata was deleted. This branch serializes that field,
 authorizes bounded failure diagnostics against both change-set and stack ARNs,
 and treats terminal `EXECUTE_FAILED` sets as consumed while still blocking active
-execution. Discord and the first successful production deployment remain
+execution. PR CI then detected newly classified unfixable `libexpat` findings in
+the pinned DHI layers; this branch refreshes both runtime and dev pins to the
+current DHI images containing `libexpat` 2.8.2 instead of adding a risk exception.
+Discord and the first successful production deployment remain
 unchanged. The authoritative Obsidian progress/evidence notes and public mirror
 track this state.
 
