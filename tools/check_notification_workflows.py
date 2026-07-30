@@ -254,8 +254,14 @@ def _validate_release(directory: Path) -> None:
         "execute-change-set",
         "describe-task-definition",
         "if: always() && steps.acquire.outputs.acquired == 'true'",
+        "evidence_name: ${{ steps.evidence.outputs.artifact_name }}",
+        "name: ${{ steps.evidence.outputs.artifact_name }}",
+        "name: ${{ needs.plan.outputs.evidence_name }}",
+        "guard_id=$(uv run --frozen python -c 'import uuid; print(uuid.uuid7())')",
         "retention-days: 90",
     )
+    if 'guard_id="release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in text:
+        raise WorkflowPolicyError("Release deployment lock must use a canonical UUIDv7 guard ID")
     for marker in required:
         if marker not in text:
             raise WorkflowPolicyError(f"Release lacks required policy marker: {marker}")
