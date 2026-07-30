@@ -759,6 +759,69 @@ def test_change_set_binds_identity_status_and_exact_parameters() -> None:
         )
 
 
+@pytest.mark.parametrize("parameters", [None, pytest.param("missing", id="missing")])
+def test_change_set_accepts_no_parameter_collection_only_when_none_are_expected(
+    parameters: object,
+) -> None:
+    arn = (
+        "arn:aws:cloudformation:ap-northeast-1:000000000000:"
+        "changeSet/release-example/00000000-0000-0000-0000-000000000000"
+    )
+    value: dict[str, object] = {
+        "ChangeSetId": arn,
+        "ExecutionStatus": "AVAILABLE",
+        "StackName": "ShittimChest-Prod-Stateful",
+        "Status": "CREATE_COMPLETE",
+    }
+    if parameters != "missing":
+        value["Parameters"] = parameters
+
+    validate_change_set(
+        value,
+        expected_arn=arn,
+        expected_parameters={},
+        expected_stack="ShittimChest-Prod-Stateful",
+    )
+
+    with pytest.raises(ValueError, match="RuntimeImageDigest"):
+        validate_change_set(
+            value,
+            expected_arn=arn,
+            expected_parameters={"RuntimeImageDigest": DIGEST},
+            expected_stack="ShittimChest-Prod-Stateful",
+        )
+    with pytest.raises(ValueError, match="NoEcho"):
+        validate_change_set(
+            value,
+            expected_arn=arn,
+            expected_noecho_parameters=("OperatorNotificationEmail",),
+            expected_parameters={},
+            expected_stack="ShittimChest-Prod-Stateful",
+        )
+
+
+@pytest.mark.parametrize("parameters", [{}, "not-an-array"])
+def test_change_set_rejects_a_non_array_parameter_collection(parameters: object) -> None:
+    arn = (
+        "arn:aws:cloudformation:ap-northeast-1:000000000000:"
+        "changeSet/release-example/00000000-0000-0000-0000-000000000000"
+    )
+
+    with pytest.raises(ValueError, match="parameters must be an array"):
+        validate_change_set(
+            {
+                "ChangeSetId": arn,
+                "ExecutionStatus": "AVAILABLE",
+                "Parameters": parameters,
+                "StackName": "ShittimChest-Prod-Stateful",
+                "Status": "CREATE_COMPLETE",
+            },
+            expected_arn=arn,
+            expected_parameters={},
+            expected_stack="ShittimChest-Prod-Stateful",
+        )
+
+
 def task(name: str, image: str) -> dict[str, object]:
     return {
         "Type": "AWS::ECS::TaskDefinition",
