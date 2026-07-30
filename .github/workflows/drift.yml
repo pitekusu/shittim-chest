@@ -1,0 +1,124 @@
+name: Infrastructure Drift
+
+on:
+  schedule:
+    - cron: "17 3 * * 2"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: infrastructure-drift
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  COST_REGION: us-east-1
+
+jobs:
+  drift:
+    name: drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    steps:
+      - name: Require the immutable main branch
+        env:
+          EXPECTED_REF: refs/heads/main
+          EXPECTED_REPOSITORY: pitekusu/shittim-chest
+          EXPECTED_REPOSITORY_ID: "1302516701"
+        run: |
+          test "${GITHUB_REF}" = "${EXPECTED_REF}"
+          test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_REPOSITORY_ID}" = "${EXPECTED_REPOSITORY_ID}"
+      - name: Check out the inspected main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate the read-only role handle
+        env:
+          DRIFT_ROLE_ARN: ${{ vars.AWS_RELEASE_DRIFT_ROLE_ARN }}
+        run: test -n "${DRIFT_ROLE_ARN}"
+      - name: Acquire read-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_DRIFT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: drift-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 1800
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Detect stack drift without remediation
+        run: |
+          result="${RUNNER_TEMP}/drift-results.tsv"
+          : > "${result}"
+          detect() {
+            local stack="$1" region="$2" detection status
+            detection=$(aws cloudformation detect-stack-drift \
+              --region "${region}" --stack-name "${stack}" \
+              --query StackDriftDetectionId --output text)
+            for attempt in $(seq 1 60)
+            do
+              status=$(aws cloudformation describe-stack-drift-detection-status \
+                --region "${region}" --stack-drift-detection-id "${detection}" \
+                --query DetectionStatus --output text)
+              case "${status}" in
+                DETECTION_COMPLETE) break ;;
+                DETECTION_FAILED) exit 1 ;;
+              esac
+              test "${attempt}" -lt 60
+              sleep 10
+            done
+            drift=$(aws cloudformation describe-stack-drift-detection-status \
+              --region "${region}" --stack-drift-detection-id "${detection}" \
+              --query StackDriftStatus --output text)
+            printf '%s\t%s\t%s\n' "${stack}" "${region}" "${drift}" >> "${result}"
+          }
+          detect ShittimChest-Prod-Stateful "${AWS_REGION}"
+          detect ShittimChest-Prod-ReleaseIdentity "${AWS_REGION}"
+          detect ShittimChest-Prod-Runtime "${AWS_REGION}"
+          detect ShittimChest-Prod-Operations "${AWS_REGION}"
+          detect ShittimChest-Prod-CostGovernance "${COST_REGION}"
+      - name: Update the single drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          result="${RUNNER_TEMP}/drift-results.tsv"
+          body="${RUNNER_TEMP}/drift-issue.md"
+          {
+            echo "Automated read-only CloudFormation drift result for commit ${GITHUB_SHA}."
+            echo
+            echo "| Stack | Region | Status |"
+            echo "|---|---|---|"
+            while IFS=$'\t' read -r stack region status
+            do
+              printf '| %s | %s | %s |\n' "${stack}" "${region}" "${status}"
+            done < "${result}"
+            echo
+            echo "This workflow never remediates drift."
+          } > "${body}"
+          issue=$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label infrastructure-drift --state open --limit 1 \
+            --json number --jq '.[0].number // empty')
+          if grep --quiet $'\tDRIFTED$' "${result}"
+          then
+            if [ -n "${issue}" ]; then
+              gh issue edit "${issue}" --repo "${GITHUB_REPOSITORY}" \
+                --title "Infrastructure drift detected" --body-file "${body}"
+            else
+              gh issue create --repo "${GITHUB_REPOSITORY}" \
+                --title "Infrastructure drift detected" \
+                --label infrastructure-drift --body-file "${body}"
+            fi
+          elif [ -n "${issue}" ]; then
+            gh issue comment "${issue}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file "${body}"
+            gh issue close "${issue}" --repo "${GITHUB_REPOSITORY}" \
+              --reason completed
+          fi

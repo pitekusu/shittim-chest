@@ -8,6 +8,8 @@ import pytest
 from tools.check_notification_workflows import (
     ALLOWED_TARGET_WORKFLOW,
     DEPLOY_GUARD_WORKFLOW,
+    DRIFT_WORKFLOW,
+    RELEASE_WORKFLOW,
     WORKFLOW_DIRECTORY,
     WORKFLOW_RUN_NOTIFICATION,
     WorkflowPolicyError,
@@ -24,6 +26,10 @@ def _workflow_directory(tmp_path: Path) -> Path:
     (directory / digest.name).write_bytes(digest.read_bytes())
     guard = WORKFLOW_DIRECTORY / DEPLOY_GUARD_WORKFLOW
     (directory / guard.name).write_bytes(guard.read_bytes())
+    release = WORKFLOW_DIRECTORY / RELEASE_WORKFLOW
+    (directory / release.name).write_bytes(release.read_bytes())
+    drift = WORKFLOW_DIRECTORY / DRIFT_WORKFLOW
+    (directory / drift.name).write_bytes(drift.read_bytes())
     workflow_run = WORKFLOW_DIRECTORY / WORKFLOW_RUN_NOTIFICATION
     (directory / workflow_run.name).write_bytes(workflow_run.read_bytes())
     ci = WORKFLOW_DIRECTORY / "ci.yml"

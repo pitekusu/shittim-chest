@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-29
+updated: 2026-07-30
 ---
 
 # AWS・CDK詳細設計
@@ -159,16 +159,25 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 
 ```text
 /shittim-chest/production/openai/api-key
+/shittim-chest/production/discord/moderator/public-key
 /shittim-chest/production/discord/moderator/token
 /shittim-chest/production/discord/participant-a/token
 /shittim-chest/production/discord/participant-b/token
 /shittim-chest/production/discord/participant-c/token
-/shittim-chest/production/runtime/v0001
-/shittim-chest/production/personas/v0001/moderator
-/shittim-chest/production/personas/v0001/participant-a
-/shittim-chest/production/personas/v0001/participant-b
-/shittim-chest/production/personas/v0001/participant-c
+/shittim-chest/production/runtime/v0002
+/shittim-chest/production/personas/v0002/moderator
+/shittim-chest/production/personas/v0002/participant-a
+/shittim-chest/production/personas/v0002/participant-b
+/shittim-chest/production/personas/v0002/participant-c
 ```
+
+operatorはAWS Consoleで11件を個別作成せず、repository rootから次の1 commandを実行する。
+
+```sh
+uv run --frozen python tools/configure_production_inputs.py
+```
+
+toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示せず照合し、不足値だけを順に非表示入力する。local-onlyの`SHITTIM_PRIVATE_CONFIG_SOURCE` pointerが設定済みなら、保存済み`PersonaConfig v0002`の4 slot、display name、prompt、SSM pathをlocalでfail closedに検証して再利用し、persona本文を再入力させない。pointerとsourceはGit管理外とし、source pathや値を出力・公開mirrorへ複製しない。全値を別fileへ保存せず検証してから、確認後にGitHub Actionsの`OPERATOR_NOTIFICATION_EMAIL`とSSM Standard `SecureString`を作成する。既存parameter valueは取得・復号・上書きせず、`--check`はGitHub secret名とSSM metadataの設定数だけを返す。GitHub secretは標準入力、SSM値はboto3 API request bodyで渡し、process argumentへ秘密値を含めない。
 
 `RuntimeConfig`は`schema_version`、`config_version`、Guild ID、非空channel allowlist、4 Application IDを保持する。`PersonaConfig`は同version、slot、display name、system promptを保持し、1 parameterをUTF-8 3,500 bytes以下に制限する。既存pathを上書きせず新version pathを作り、task definition更新後にstop-before-start deployを行う。token/API keyをCDK context、GitHub secret、CloudFormation output、Obsidianへ保存しない。
 
@@ -178,7 +187,7 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 - scale-to-zero待受ではAPI Gateway HTTP APIのrequest数、3 Lambdaのinvocation/compute、1分周期EventBridge rule、DynamoDB on-demand request/storage、CloudWatch Logs/metricsが少量の常時cost候補となる。NAT Gateway、ALB、常駐Gateway processは追加しない。
 - ECR連携でのAWS Signer利用自体に追加Signer料金はない。ただしsignature、SBOM、provenance、vulnerability assessmentは各reference artifactとしてECR image quotaと保存容量を消費するため、repository容量とartifact数を月次確認する。
 - Fargate既定20 GiB ephemeral storageは追加料金なしとし、追加容量は設定しない。Container Insightsは無効とする。単一taskのMVPではECS標準CPU・メモリ、EventBridge通知、少数のapplication metricを使い、task/container単位のContainer Insights固定費を負担しない。
-- `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 20 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。Cost Anomaly Detectionは月額予算ではなく異常の総影響額を評価するため、notification thresholdは10 USDとする。AWS側2 BudgetとCADは`us-east-1`の独立stackで管理する。
+- `Project` user-defined cost allocation tagをBillingで有効化し、反映後にProject tag budget 20 USD、account全体budget 30 USD、OpenAI project budget 50 USDを設定する。2026-07-30にBillingへの出現をmetadataで確認し、`Inactive`から`Active`へ更新して再取得で確認済み。Cost Anomaly Detectionは月額予算ではなく異常の総影響額を評価するため、notification thresholdは10 USDとする。AWS側2 BudgetとCADは`us-east-1`の独立stackで管理する。
 - Budgetはactual 80%/100%とforecasted 100%を通知し、自動停止actionは設けない。Runtime alarm、AWS Budget、Cost Anomaly Detectionは同一のoperator emailをdeploy時parameterで受け取り、実addressをGit、Obsidian、CloudFormation outputへ保存しない。Cost Anomaly Detectionは既存のAWS managed service monitorをARN parameterで再利用し、quota 1の同種monitorを重複作成しない。新しいCDK管理通知の作成・到達確認後に、既存の手動10 USD Budget/CAD subscriptionをoperatorが撤去する。`Project` tagがBillingで`Active`になるまではtag budgetをdeployしない。
 - DynamoDB PITRは35日、stack削除でもtableをretainする。業務dataにTTLを設定しないが35日より古い状態の復旧は保証せず、AWS Backupは作成しない。
 - DynamoDB on-demand maximum throughputは負荷試験前に推測値を設定しない。初回本番計測後に必要性と値をADRで決定し、設定する場合はthrottle alarmと同時に導入する。
@@ -225,4 +234,7 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 | 2026-07-28 | CDK VPC / FargateService / HTTP API / Lambda | https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ec2.Vpc.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ecs.FargateService.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_apigatewayv2.HttpApi.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_lambda.Function.html | NAT 0、Public IP、On-Demand FARGATE、desired 0、3 Lambda VPC外、HTTP API最小routeをassert |
 | 2026-07-19 | ECS task IAM role | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html | `SourceAccount`とregion/account限定`SourceArn`でconfused deputyを防止 |
 | 2026-07-19 | ECS Parameter Store injection | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-ssm-paramstore.html | execution roleの各parameter限定`ssm:GetParameters`、更新時のnew deploymentを採用 |
+| 2026-07-30 | SSM DescribeParameters / PutParameter | https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DescribeParameters.html、https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html | metadata-only不足確認、Standard SecureString、既存値非取得・非上書きの対話setupを採用 |
+| 2026-07-30 | GitHub CLI secret set | https://cli.github.com/manual/gh_secret_set | private operator emailをprocess argumentでなく標準入力からrepository Actions secretへ登録 |
+| 2026-07-30 | Cost allocation tags | https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_ListCostAllocationTags.html、https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_UpdateCostAllocationTagsStatus.html | `Project` user-defined tagのBilling出現を確認後に`Active`へ更新し、CostGovernance deploy gateを解除 |
 | 2026-07-19 | CloudWatch Logs data protection | https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/mask-sensitive-log-data.html | application/Exec log groupの非機密ログ原則に追加防御としてmask policyを適用 |

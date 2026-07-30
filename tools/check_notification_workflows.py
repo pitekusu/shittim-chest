@@ -11,6 +11,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIRECTORY = REPOSITORY_ROOT / ".github" / "workflows"
 ALLOWED_TARGET_WORKFLOW = "discord-repository-events.yml"
 DEPLOY_GUARD_WORKFLOW = "production-deploy-guard.yml"
+RELEASE_WORKFLOW = "release.yml"
+DRIFT_WORKFLOW = "drift.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
@@ -88,6 +90,8 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     if secret_references != {"DISCORD_WEBHOOK_URL"}:
         raise WorkflowPolicyError("target workflow may use only DISCORD_WEBHOOK_URL")
     _validate_deploy_guard(directory)
+    _validate_release(directory)
+    _validate_drift(directory)
     _validate_aws_capability_boundary(directory)
     _validate_workflow_run_allowlist(directory)
     _validate_vulnerability_alerts_permission(directory)
@@ -177,14 +181,124 @@ def _validate_deploy_guard(directory: Path) -> None:
 
 
 def _validate_aws_capability_boundary(directory: Path) -> None:
+    approved = {DEPLOY_GUARD_WORKFLOW, RELEASE_WORKFLOW, DRIFT_WORKFLOW}
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
-        if path.name == DEPLOY_GUARD_WORKFLOW:
+        if path.name in approved:
             continue
         text = path.read_text(encoding="utf-8")
         if _contains_forbidden_non_guard_permissions(text) or AWS_OR_DEPLOY_CAPABILITY.search(text):
             raise WorkflowPolicyError(
                 f"workflow {path.name} contains AWS or deployment capability outside Deploy Guard"
             )
+
+
+def _validate_release(directory: Path) -> None:
+    path = directory / RELEASE_WORKFLOW
+    if not path.is_file():
+        raise WorkflowPolicyError("the production Release workflow is required")
+    text = path.read_text(encoding="utf-8")
+    if _top_level_triggers(text) != ("workflow_dispatch",):
+        raise WorkflowPolicyError("Release must use exactly workflow_dispatch")
+    if _permission_blocks(text) != (
+        (),
+        (
+            ("actions", "read"),
+            ("attestations", "write"),
+            ("checks", "read"),
+            ("contents", "read"),
+            ("id-token", "write"),
+        ),
+        (("attestations", "read"), ("contents", "read"), ("id-token", "write")),
+    ):
+        raise WorkflowPolicyError("Release permissions are not the canonical plan/deploy split")
+    required = (
+        "name: Production Release",
+        "cancel-in-progress: false",
+        "runs-on: ubuntu-24.04-arm",
+        'EXPECTED_REPOSITORY_ID: "1302516701"',
+        ".use_immutable_subject == true",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "repository_owner_id",
+        "'Analyze (python)'",
+        "vars.AWS_RELEASE_PLAN_ROLE_ARN",
+        "vars.AWS_RELEASE_DEPLOY_ROLE_ARN",
+        "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+        "create-storage-record: false",
+        "target: production",
+        "target: break-glass",
+        "tools/install_aws_signer_notation.sh",
+        "notation verify",
+        "describe-images",
+        "list-image-referrers",
+        "--bundle-from-oci",
+        "--deny-self-hosted-runners",
+        "--signer-digest",
+        "tools/check_container_risk_acceptance.py",
+        "validate-change-set",
+        "tools/release_supply_chain.py create-manifest",
+        "--if-none-match '*'",
+        "head-object",
+        "environment: production",
+        "tools.control_records acquire",
+        "tools.control_records release",
+        "execute-change-set",
+        "describe-task-definition",
+        "if: always() && steps.acquire.outputs.acquired == 'true'",
+        "retention-days: 90",
+    )
+    for marker in required:
+        if marker not in text:
+            raise WorkflowPolicyError(f"Release lacks required policy marker: {marker}")
+    if text.count("environment: production") != 1:
+        raise WorkflowPolicyError("Release must use production Environment only for deploy")
+    if re.search(r"secrets\.AWS[A-Z0-9_]*|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY", text):
+        raise WorkflowPolicyError("Release must not use static AWS credentials")
+    if re.search(r"runs-on:\s*self-hosted|\b(?:git\s+push|gh\s+pr\s+merge)\b", text):
+        raise WorkflowPolicyError("Release contains a forbidden runner or repository mutation")
+    secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
+    if secrets != {"DHI_TOKEN", "DHI_USERNAME", "OPERATOR_NOTIFICATION_EMAIL"}:
+        raise WorkflowPolicyError("Release secret allowlist changed")
+    _require_full_action_pins(text, "Release")
+
+
+def _validate_drift(directory: Path) -> None:
+    path = directory / DRIFT_WORKFLOW
+    if not path.is_file():
+        raise WorkflowPolicyError("the infrastructure Drift workflow is required")
+    text = path.read_text(encoding="utf-8")
+    if _top_level_triggers(text) != ("schedule", "workflow_dispatch"):
+        raise WorkflowPolicyError("Drift must use only schedule and workflow_dispatch")
+    if _permission_blocks(text) != (
+        (),
+        (("contents", "read"), ("id-token", "write"), ("issues", "write")),
+    ):
+        raise WorkflowPolicyError("Drift permissions are not canonical")
+    required = (
+        "name: Infrastructure Drift",
+        "cancel-in-progress: false",
+        "vars.AWS_RELEASE_DRIFT_ROLE_ARN",
+        "detect-stack-drift",
+        "describe-stack-drift-detection-status",
+        "--label infrastructure-drift",
+        "This workflow never remediates drift.",
+    )
+    for marker in required:
+        if marker not in text:
+            raise WorkflowPolicyError(f"Drift lacks required policy marker: {marker}")
+    if re.search(
+        r"secrets\.|environment:\s*production|execute-change-set|create-change-set|"
+        r"\b(?:update|delete)-stack\b|\bcdk\s+deploy\b|runs-on:\s*self-hosted",
+        text,
+    ):
+        raise WorkflowPolicyError("Drift contains mutation beyond its single Issue")
+    _require_full_action_pins(text, "Drift")
+
+
+def _require_full_action_pins(text: str, label: str) -> None:
+    for action in re.findall(r"(?m)^\s*uses:\s*([^\s#]+)", text):
+        _, separator, revision = action.rpartition("@")
+        if not separator or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise WorkflowPolicyError(f"{label} action is not pinned to a full commit SHA")
 
 
 def _validate_canonical_deploy_guard_permissions(text: str) -> None:
@@ -332,9 +446,14 @@ def _validate_workflow_run_allowlist(directory: Path) -> None:
     if not path.is_file():
         raise WorkflowPolicyError("the workflow-run Discord notification is required")
     text = path.read_text(encoding="utf-8")
-    marker = "      - Production Deploy Guard"
-    if text.count(marker) != 1:
-        raise WorkflowPolicyError("Production Deploy Guard must be in the notification allowlist")
+    for workflow in (
+        "Production Deploy Guard",
+        "Production Release",
+        "Infrastructure Drift",
+    ):
+        marker = f"      - {workflow}"
+        if text.count(marker) != 1:
+            raise WorkflowPolicyError(f"{workflow} must be in the notification allowlist")
     if "pull-requests: read" not in text:
         raise WorkflowPolicyError("workflow-run PR metadata lookup requires pull-requests: read")
 

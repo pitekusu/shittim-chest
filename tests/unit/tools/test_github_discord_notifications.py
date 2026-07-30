@@ -194,15 +194,18 @@ def test_workflow_name_and_path_must_both_match() -> None:
     assert resolve_workflow_target(workflow_run(name="Unknown")) is None
 
 
-def test_deploy_guard_name_and_path_are_allowlisted() -> None:
-    guard = workflow_run(
-        name="Production Deploy Guard",
-        path=".github/workflows/production-deploy-guard.yml",
-        event="workflow_dispatch",
-        branch="main",
-    )
-    assert resolve_workflow_target(guard) is not None
-    assert resolve_workflow_target({**guard, "path": ".github/workflows/ci.yml"}) is None
+@pytest.mark.parametrize(
+    ("name", "path"),
+    [
+        ("Production Deploy Guard", ".github/workflows/production-deploy-guard.yml"),
+        ("Production Release", ".github/workflows/release.yml"),
+        ("Infrastructure Drift", ".github/workflows/drift.yml"),
+    ],
+)
+def test_production_workflow_name_and_path_are_allowlisted(name: str, path: str) -> None:
+    run = workflow_run(name=name, path=path, event="workflow_dispatch", branch="main")
+    assert resolve_workflow_target(run) is not None
+    assert resolve_workflow_target({**run, "path": ".github/workflows/ci.yml"}) is None
 
 
 def test_pull_request_workflow_embed_contains_required_operational_metadata() -> None:

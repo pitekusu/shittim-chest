@@ -9,6 +9,8 @@ on:
       - Discord Repository Events
       - Discord Security Digest
       - Production Deploy Guard
+      - Production Release
+      - Infrastructure Drift
     types:
       - completed
 

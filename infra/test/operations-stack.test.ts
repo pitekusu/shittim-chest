@@ -23,6 +23,7 @@ function synthesize(): {
     debateTable: stateful.debateTable,
     env,
     imageRepository: stateful.imageRepository,
+    signingProfileArn: stateful.signingProfile.attrArn,
     stackName: "ShittimChest-Prod-Runtime",
   });
   runtime.addDependency(stateful);

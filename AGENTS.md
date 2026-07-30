@@ -14,16 +14,21 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-09C-C feature branch, 2026-07-29)
+## Status (STEP-10-A feature branch, 2026-07-30)
 
 The merged `main` baseline includes PR `#85` signed HTTP ingress and On-Demand
-scale-to-zero. The current branch adds STEP-09C-C's locally tested `us-east-1`
-CostGovernance stack, two Budgets, and existing-monitor Cost Anomaly Detection
-subscription on top of STEP-09C-A/B monitoring, without AWS writes. STEP-02D
-notifications and STEP-06D requester name snapshots are also present. Evidence:
-`docs/20_実装・試験・検証記録.md` and the progress table in
-`docs/19_実装計画・トレーサビリティ.md`. AWS and Discord production state remain
-unchanged.
+scale-to-zero plus the locally implemented STEP-09C-A/B/C monitoring and cost
+governance slices. The current branch adds STEP-10-A's immutable OIDC release
+identities, plan/Environment-deploy workflow, dual signed image/referrer gates,
+canonical manifest, fenced change-set execution, drift detection, and ECS
+`PRE_SCALE_UP` image admission. The operator account is now bootstrapped in
+`ap-northeast-1` and `us-east-1`; Stateful and ReleaseIdentity are deployed with
+termination protection, immutable repository OIDC is enabled, and the non-secret
+release variables are configured. The private notification secret and all 11
+versioned SSM inputs are configured without retrieving their values, and the
+`Project` cost-allocation tag is Active. Runtime, Operations, CostGovernance,
+Discord, and the first production release remain unchanged. The authoritative Obsidian
+progress/evidence notes and the public mirror include this STEP-10-A state.
 
 | Area | Current implementation |
 |---|---|
@@ -34,18 +39,19 @@ unchanged.
 | Runtime | Admission gate, signals, outbox drain before phase work, `python -m shittim_chest` |
 | Container | Digest-pinned multi-stage image, ARM64 CI, SIGTERM/SIGKILL fault gates |
 | Scale-to-zero | Durable FIFO 20, 3/15/30-minute semantics, wake/drain/reconcile, race fences |
-| Infra (synth-only) | HTTP API, 3 Lambdas, On-Demand Fargate desired 0/max 1, public VPC |
+| Infra | Stateful + ReleaseIdentity deployed; Runtime/Operations/CostGovernance synth-only |
 | Ops notifications | GitHub → Discord Forum (STEP-02D); friend server; no alert role |
 | Ops metrics | `ShittimChest/Prod`, fixed `Service` dimension, 10-metric allowlist |
 | Ops monitoring | 9 underlying alarms, 2 actionable composites, dashboard, abnormal ECS stops |
 | Cost governance | Project $20/account $30 Budget, existing-monitor CAD total-impact $10 |
+| Release | immutable OIDC roles, signed normal/break-glass images, OCI attestations, manifest, fenced change sets, drift |
 
 **Not done**
 
-- STEP-10-A+: signing/referrer verification, image admission, release workflows, AWS bootstrap/deploy
-- Real Discord Application endpoint switch, live Bot tokens, paid OpenAI in CI
-- No AWS account bootstrap or stack deploy
-- Deployment guard is diagnostic-only; no production workflow enforces it
+- First release execution and Runtime/Operations/CostGovernance deployment
+- Real Discord Application endpoint switch and live Discord/OpenAI acceptance
+- Paid OpenAI in CI
+- Live Notation/referrer/change-set/admission/rollback/drift acceptance remains unexecuted
 
 Slices ship as isolated PRs (squash merge). After each slice, update `docs/20_…`
 and the plan/progress notes so this boundary does not go stale.

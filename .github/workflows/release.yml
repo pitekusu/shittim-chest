@@ -1,0 +1,1079 @@
+name: Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_config_version:
+        description: "事前登録済みのversioned runtime config"
+        required: true
+        default: v0002
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  COST_REGION: us-east-1
+  PYTHON_VERSION: 3.14.6
+  UV_VERSION: 0.11.29
+  AWS_SIGNER_NOTATION_VERSION: 2.2.0-1
+  AWS_SIGNER_NOTATION_ARCHIVE_SHA256: ae6251ebe0d1aee019e6427a34e7c1c5f1e1f579acf7e8f9fb7dd777eb9117c8
+  AWS_SIGNER_NOTATION_SIGNATURE_SHA256: ef9bb5125579e1ca24f9508ac0903b7db4afcc20a31333c9203c784e8c34cf6b
+  AWS_SIGNER_NOTATION_KEY_SHA256: e215d69bf0bd59d7a2efe165d7fb777201364f76328702248f8b82b30ec41991
+  AWS_SIGNER_NOTATION_FINGERPRINT: E84AF8A2A9B52F1F4435AE71A3B52DA65461CF90
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      attestations: write
+      checks: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Require the immutable main branch
+        env:
+          EXPECTED_REF: refs/heads/main
+          EXPECTED_REPOSITORY: pitekusu/shittim-chest
+          EXPECTED_REPOSITORY_ID: "1302516701"
+        run: |
+          test "${GITHUB_REF}" = "${EXPECTED_REF}"
+          test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_REPOSITORY_ID}" = "${EXPECTED_REPOSITORY_ID}"
+          test "${GITHUB_SHA}" = "${GITHUB_WORKFLOW_SHA}"
+      - name: Check out the trusted main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require immutable OIDC identity and successful main gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          oidc=$(gh api repos/pitekusu/shittim-chest/actions/oidc/customization/sub \
+            -H 'X-GitHub-Api-Version: 2026-03-10')
+          jq --exit-status \
+            '.use_default == true and .use_immutable_subject == true and
+             .sub_claim_prefix == "repo:pitekusu@12059348/shittim-chest@1302516701"' \
+            <<< "${oidc}" >/dev/null
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            > "${RUNNER_TEMP}/check-runs.json"
+          for check in \
+            quality tests security package docs-public-safety container-arm64 grype \
+            'Analyze (python)' 'Analyze (javascript-typescript)' 'Analyze (actions)'
+          do
+            jq --exit-status --arg check "${check}" \
+              '.check_runs | map(select(.name == $check)) | sort_by(.id) | last |
+               .conclusion == "success"' \
+              "${RUNNER_TEMP}/check-runs.json" >/dev/null
+          done
+          token_response=$(curl --fail --show-error --silent \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          jwt=$(jq --exit-status --raw-output .value <<< "${token_response}")
+          payload="${jwt#*.}"
+          payload="${payload%%.*}"
+          case $((${#payload} % 4)) in
+            2) payload="${payload}==" ;;
+            3) payload="${payload}=" ;;
+            0) ;;
+            *) exit 1 ;;
+          esac
+          printf '%s' "${payload}" | tr '_-' '/+' | base64 --decode \
+            > "${RUNNER_TEMP}/oidc-claims.json"
+          jq --exit-status \
+            '.aud == "sts.amazonaws.com" and
+             .sub == "repo:pitekusu@12059348/shittim-chest@1302516701:ref:refs/heads/main" and
+             .repository_id == "1302516701" and
+             .repository_owner_id == "12059348" and
+             .ref == "refs/heads/main"' \
+            "${RUNNER_TEMP}/oidc-claims.json" >/dev/null
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Set up Node.js
+        uses: actions/setup-node@8207620113f9f29c80fdd882e0b3bca527a31d01 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install locked test environments
+        run: |
+          uv sync --frozen --all-groups
+          npm ci --ignore-scripts
+      - name: Re-run release-critical local gates
+        run: |
+          uv run --frozen pytest
+          npm run check:infra
+      - name: Validate required private configuration handles
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          COST_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_US_EAST_1 }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
+          OPERATOR_EMAIL: ${{ secrets.OPERATOR_NOTIFICATION_EMAIL }}
+          PLAN_ROLE_ARN: ${{ vars.AWS_RELEASE_PLAN_ROLE_ARN }}
+          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+          TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
+        run: |
+          for value in \
+            "${ASSET_BUCKET}" \
+            "${COST_EXECUTION_ROLE}" \
+            "${ECR_REPOSITORY_URI}" \
+            "${MONITOR_ARN}" \
+            "${OPERATOR_EMAIL}" \
+            "${PLAN_ROLE_ARN}" \
+            "${SIGNING_PROFILE_ARN}" \
+            "${TOKYO_EXECUTION_ROLE}"
+          do
+            test -n "${value}"
+          done
+          case "${ECR_REPOSITORY_URI}" in
+            *.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest) ;;
+            *) exit 1 ;;
+          esac
+      - name: Acquire plan-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: release-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Bind all public AWS handles to the assumed production account
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          COST_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_US_EAST_1 }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          PLAN_ROLE_ARN: ${{ vars.AWS_RELEASE_PLAN_ROLE_ARN }}
+          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+          TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          [[ "${account}" =~ ^[0-9]{12}$ ]]
+          test "${ASSET_BUCKET}" = "cdk-hnb659fds-assets-${account}-${AWS_REGION}"
+          test "${ECR_REPOSITORY_URI}" = \
+            "${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/shittim-chest"
+          test "${PLAN_ROLE_ARN}" = \
+            "arn:aws:iam::${account}:role/ShittimChest-Prod-GitHub-ReleasePlan"
+          test "${TOKYO_EXECUTION_ROLE}" = \
+            "arn:aws:iam::${account}:role/cdk-hnb659fds-cfn-exec-role-${account}-${AWS_REGION}"
+          test "${COST_EXECUTION_ROLE}" = \
+            "arn:aws:iam::${account}:role/cdk-hnb659fds-cfn-exec-role-${account}-${COST_REGION}"
+          [[ "${SIGNING_PROFILE_ARN}" =~ ^arn:aws:signer:${AWS_REGION}:${account}:/signing-profiles/shittim_chest_ecr/[A-Za-z0-9]{10}$ ]]
+          echo "CDK_DEFAULT_ACCOUNT=${account}" >> "${GITHUB_ENV}"
+          echo "CDK_DEFAULT_REGION=${AWS_REGION}" >> "${GITHUB_ENV}"
+      - name: Require the active Project cost-allocation tag
+        run: |
+          aws ce list-cost-allocation-tags \
+            --region "${COST_REGION}" \
+            --status Active \
+            --tag-keys Project \
+            --output json > "${RUNNER_TEMP}/cost-allocation-tags.json"
+          jq --exit-status \
+            '.CostAllocationTags == [{"Status":"Active","TagKey":"Project","Type":"UserDefined"}]' \
+            "${RUNNER_TEMP}/cost-allocation-tags.json" >/dev/null
+      - name: Authenticate to immutable source and destination registries
+        env:
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+        run: |
+          test -n "${DHI_USERNAME}"
+          test -n "${DHI_TOKEN}"
+          printf '%s' "${DHI_TOKEN}" | docker login dhi.io \
+            --username "${DHI_USERNAME}" --password-stdin
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login \
+            --username AWS --password-stdin "${registry}"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3b023d7e9e8878f4d719152277456605661 # v4.2.0
+      - name: Build and push the production image once
+        id: build-normal
+        uses: docker/build-push-action@53b7df3b0d80c751846d59eb61334064e02f4f9d # v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          target: production
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ vars.ECR_REPOSITORY_URI }}:release-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=release-production-arm64
+          cache-to: type=gha,mode=max,scope=release-production-arm64,ignore-error=true
+      - name: Build and push the isolated break-glass image once
+        id: build-break-glass
+        uses: docker/build-push-action@53b7df3b0d80c751846d59eb61334064e02f4f9d # v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          target: break-glass
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ vars.ECR_REPOSITORY_URI }}:break-glass-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=release-break-glass-arm64
+          cache-to: type=gha,mode=max,scope=release-break-glass-arm64,ignore-error=true
+      - name: Record immutable image references
+        env:
+          BREAK_GLASS_DIGEST: ${{ steps.build-break-glass.outputs.digest }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          NORMAL_DIGEST: ${{ steps.build-normal.outputs.digest }}
+        run: |
+          digest_pattern='^sha256:[0-9a-f]{64}$'
+          [[ "${NORMAL_DIGEST}" =~ ${digest_pattern} ]]
+          [[ "${BREAK_GLASS_DIGEST}" =~ ${digest_pattern} ]]
+          test "${NORMAL_DIGEST}" != "${BREAK_GLASS_DIGEST}"
+          {
+            echo "NORMAL_DIGEST=${NORMAL_DIGEST}"
+            echo "BREAK_GLASS_DIGEST=${BREAK_GLASS_DIGEST}"
+            echo "NORMAL_REFERENCE=${ECR_REPOSITORY_URI}@${NORMAL_DIGEST}"
+            echo "BREAK_GLASS_REFERENCE=${ECR_REPOSITORY_URI}@${BREAK_GLASS_DIGEST}"
+          } >> "${GITHUB_ENV}"
+      - name: Install pinned Syft, Grype, and Docker Scout
+        run: |
+          install_tool() {
+            local name="$1" key="$2" binary="$3"
+            local version archive_name archive_sha archive
+            version=$(jq --raw-output --arg key "${key}" '.tools[$key].version' \
+              .github/tool-versions.json)
+            archive_name=$(jq --raw-output --arg key "${key}" '.tools[$key].archive_name' \
+              .github/tool-versions.json)
+            archive_sha=$(jq --raw-output --arg key "${key}" '.tools[$key].archive_sha256' \
+              .github/tool-versions.json)
+            archive="${RUNNER_TEMP}/${archive_name}"
+            curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
+              --output "${archive}" \
+              "https://github.com/${name}/releases/download/v${version}/${archive_name}"
+            printf '%s  %s\n' "${archive_sha}" "${archive}" | sha256sum --check --strict
+            tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" "${binary}"
+          }
+          install_tool anchore/syft syft syft
+          install_tool anchore/grype grype-arm64 grype
+          install_tool docker/scout-cli docker-scout docker-scout
+      - name: Generate pushed-digest SPDX SBOMs
+        run: |
+          "${RUNNER_TEMP}/syft" "registry:${NORMAL_REFERENCE}" \
+            --output "spdx-json=${RUNNER_TEMP}/normal.spdx.json"
+          "${RUNNER_TEMP}/syft" "registry:${BREAK_GLASS_REFERENCE}" \
+            --output "spdx-json=${RUNNER_TEMP}/break-glass.spdx.json"
+          uv run --frozen python tools/check_image_sbom.py \
+            "${RUNNER_TEMP}/normal.spdx.json"
+          uv run --frozen python tools/check_image_sbom.py \
+            "${RUNNER_TEMP}/break-glass.spdx.json"
+      - name: Apply signed vendor VEX and the time-bounded risk policy
+        env:
+          DOCKER_SCOUT_HUB_USER: ${{ secrets.DHI_USERNAME }}
+          DOCKER_SCOUT_HUB_PASSWORD: ${{ secrets.DHI_TOKEN }}
+          GRYPE_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          "${RUNNER_TEMP}/grype" db update
+          normal_base=$(uv run --frozen python tools/check_container_policy.py \
+            --print-reference runtime)
+          break_glass_base=$(uv run --frozen python tools/check_container_policy.py \
+            --print-reference builder)
+          "${RUNNER_TEMP}/docker-scout" vex get --verify --skip-tlog \
+            --platform linux/arm64 --output "${RUNNER_TEMP}/normal.openvex.json" \
+            "registry://${normal_base}"
+          "${RUNNER_TEMP}/docker-scout" vex get --verify --skip-tlog \
+            --platform linux/arm64 --output "${RUNNER_TEMP}/break-glass.openvex.json" \
+            "registry://${break_glass_base}"
+          for mode in normal break-glass
+          do
+            "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
+              --output "json=${RUNNER_TEMP}/${mode}.raw-grype.json"
+            "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
+              --vex "${RUNNER_TEMP}/${mode}.openvex.json" \
+              --output "json=${RUNNER_TEMP}/${mode}.vex-grype.json"
+          done
+          printf '%s\n' "${NORMAL_DIGEST}" > "${RUNNER_TEMP}/normal.digest"
+          printf '%s\n' "${BREAK_GLASS_DIGEST}" > "${RUNNER_TEMP}/break-glass.digest"
+          for mode in normal break-glass
+          do
+            uv run --frozen python tools/check_container_risk_acceptance.py \
+              --policy security/container-risk-acceptance.json \
+              --raw-report "${RUNNER_TEMP}/${mode}.raw-grype.json" \
+              --vex-report "${RUNNER_TEMP}/${mode}.vex-grype.json" \
+              --image-digest-file "${RUNNER_TEMP}/${mode}.digest"
+          done
+      - name: Wait for managed signing and enhanced ECR scans
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+        run: |
+          repository="${ECR_REPOSITORY_URI##*/}"
+          wait_for_evidence() {
+            local mode="$1" digest="$2" image_file signing_file scan_file
+            image_file="${RUNNER_TEMP}/${mode}.image.json"
+            signing_file="${RUNNER_TEMP}/${mode}.signing.json"
+            scan_file="${RUNNER_TEMP}/${mode}.scan.json"
+            aws ecr describe-images \
+              --repository-name "${repository}" \
+              --image-ids "imageDigest=${digest}" \
+              --output json > "${image_file}"
+            for attempt in $(seq 1 30)
+            do
+              if aws ecr describe-image-signing-status \
+                --repository-name "${repository}" \
+                --image-id "imageDigest=${digest}" \
+                --output json > "${signing_file}" 2>/dev/null && \
+                jq --exit-status --arg profile "${SIGNING_PROFILE_ARN}" \
+                  '.signingStatuses | any(.signingProfileArn == $profile and .status == "COMPLETE")' \
+                  "${signing_file}" >/dev/null
+              then
+                break
+              fi
+              test "${attempt}" -lt 30
+              sleep 10
+            done
+            for attempt in $(seq 1 30)
+            do
+              if aws ecr describe-image-scan-findings \
+                --repository-name "${repository}" \
+                --image-id "imageDigest=${digest}" \
+                --output json > "${scan_file}" 2>/dev/null && \
+                jq --exit-status \
+                  '.imageScanStatus.status == "ACTIVE" or .imageScanStatus.status == "COMPLETE"' \
+                  "${scan_file}" >/dev/null
+              then
+                break
+              fi
+              test "${attempt}" -lt 30
+              sleep 10
+            done
+            uv run --frozen python tools/release_supply_chain.py \
+              create-vulnerability-predicate \
+              --digest "${digest}" \
+              --scan "${scan_file}" \
+              --risk-gate-passed \
+              --output "${RUNNER_TEMP}/${mode}.vulnerability.json"
+          }
+          wait_for_evidence normal "${NORMAL_DIGEST}"
+          wait_for_evidence break-glass "${BREAK_GLASS_DIGEST}"
+      - name: Attest normal image provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
+          subject-digest: ${{ steps.build-normal.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest normal image SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
+          subject-digest: ${{ steps.build-normal.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/normal.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest normal image vulnerability assessment
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
+          subject-digest: ${{ steps.build-normal.outputs.digest }}
+          predicate-type: https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
+          predicate-path: ${{ runner.temp }}/normal.vulnerability.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest break-glass image provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
+          subject-digest: ${{ steps.build-break-glass.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest break-glass image SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
+          subject-digest: ${{ steps.build-break-glass.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/break-glass.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest break-glass vulnerability assessment
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
+          subject-digest: ${{ steps.build-break-glass.outputs.digest }}
+          predicate-type: https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
+          predicate-path: ${{ runner.temp }}/break-glass.vulnerability.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Install and cryptographically verify AWS Signer Notation
+        run: bash tools/install_aws_signer_notation.sh
+      - name: Strictly verify both Signer identities and four referrers
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+        run: |
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          repository="${ECR_REPOSITORY_URI##*/}"
+          aws ecr get-login-password --region "${AWS_REGION}" | notation login \
+            --username AWS --password-stdin "${registry}"
+          jq --null-input \
+            --arg repository "${ECR_REPOSITORY_URI}" \
+            --arg profile "${SIGNING_PROFILE_ARN}" \
+            '{version:"1.0",trustPolicies:[{name:"shittim-chest-release",registryScopes:[$repository],signatureVerification:{level:"strict"},trustStores:["signingAuthority:aws-signer-ts"],trustedIdentities:[$profile]}]}' \
+            > "${RUNNER_TEMP}/notation-trust-policy.json"
+          notation policy import --force "${RUNNER_TEMP}/notation-trust-policy.json"
+          notation verify "${NORMAL_REFERENCE}"
+          notation verify "${BREAK_GLASS_REFERENCE}"
+          for mode in normal break-glass
+          do
+            digest_variable="${mode^^}_DIGEST"
+            digest_variable="${digest_variable//-/_}"
+            digest="${!digest_variable}"
+            aws ecr list-image-referrers \
+              --repository-name "${repository}" \
+              --subject-id "imageDigest=${digest}" \
+              --output json > "${RUNNER_TEMP}/${mode}.referrers.json"
+            uv run --frozen python tools/release_supply_chain.py verify-image \
+              --digest "${digest}" \
+              --image-details "${RUNNER_TEMP}/${mode}.image.json" \
+              --profile-arn "${SIGNING_PROFILE_ARN}" \
+              --signing-status "${RUNNER_TEMP}/${mode}.signing.json" \
+              --referrers "${RUNNER_TEMP}/${mode}.referrers.json" \
+              --scan "${RUNNER_TEMP}/${mode}.scan.json" \
+              --risk-gate-passed \
+              --output "${RUNNER_TEMP}/${mode}.verification.json"
+            for predicate in \
+              https://slsa.dev/provenance/v1 \
+              https://spdx.dev/Document/v2.3 \
+              https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
+            do
+              gh attestation verify "oci://${ECR_REPOSITORY_URI}@${digest}" \
+                --bundle-from-oci \
+                --deny-self-hosted-runners \
+                --repo pitekusu/shittim-chest \
+                --signer-digest "${GITHUB_SHA}" \
+                --signer-workflow pitekusu/shittim-chest/.github/workflows/release.yml \
+                --source-digest "${GITHUB_SHA}" \
+                --source-ref refs/heads/main \
+                --predicate-type "${predicate}" >/dev/null
+            done
+          done
+      - name: Create and publish the content-addressed Lambda bundle
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+        run: |
+          docker pull "${NORMAL_REFERENCE}"
+          container=$(docker create "${NORMAL_REFERENCE}")
+          trap 'docker rm -f "${container}" >/dev/null 2>&1 || true' EXIT
+          mkdir "${RUNNER_TEMP}/lambda-bundle"
+          docker cp \
+            "${container}:/app/.venv/lib/python3.14/site-packages/." \
+            "${RUNNER_TEMP}/lambda-bundle/"
+          find "${RUNNER_TEMP}/lambda-bundle" -exec touch -d '1980-01-01T00:00:00Z' {} +
+          (
+            cd "${RUNNER_TEMP}/lambda-bundle"
+            find . -type f -print0 | sort -z | xargs -0 zip -X -q \
+              "${RUNNER_TEMP}/shittim-chest-lambda-arm64.zip"
+          )
+          bundle_sha=$(sha256sum "${RUNNER_TEMP}/shittim-chest-lambda-arm64.zip" | \
+            cut -d ' ' -f 1)
+          bundle_key="lambda/shittim-chest/${bundle_sha}/shittim-chest-lambda-arm64.zip"
+          expected_checksum=$(printf '%s' "${bundle_sha}" | xxd -r -p | base64 -w 0)
+          if aws s3api head-object --bucket "${ASSET_BUCKET}" --key "${bundle_key}" \
+            --checksum-mode ENABLED > "${RUNNER_TEMP}/lambda-head.json" 2>/dev/null
+          then
+            test "$(jq --raw-output .ChecksumSHA256 "${RUNNER_TEMP}/lambda-head.json")" = \
+              "${expected_checksum}"
+          else
+            aws s3api put-object \
+              --bucket "${ASSET_BUCKET}" \
+              --key "${bundle_key}" \
+              --body "${RUNNER_TEMP}/shittim-chest-lambda-arm64.zip" \
+              --checksum-algorithm SHA256 \
+              --if-none-match '*' >/dev/null
+          fi
+          jq --null-input \
+            --arg bucket "${ASSET_BUCKET}" \
+            --arg key "${bundle_key}" \
+            --arg sha256 "${bundle_sha}" \
+            '{bucket:$bucket,key:$key,sha256:$sha256}' \
+            > "${RUNNER_TEMP}/lambda-bundle.json"
+      - name: Synthesize immutable deployment templates
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+        run: |
+          npm ci
+          npm run synth -- --output "${RUNNER_TEMP}/cdk.out"
+          jq --null-input '{}' > "${RUNNER_TEMP}/template-hashes.json"
+          for mapping in \
+            'ShittimChest-Prod-Stateful=Stateful' \
+            'ShittimChest-Prod-Runtime=Runtime' \
+            'ShittimChest-Prod-Operations=Operations' \
+            'ShittimChest-Prod-CostGovernance=CostGovernance'
+          do
+            stack="${mapping%%=*}"
+            artifact="${mapping#*=}"
+            template="${RUNNER_TEMP}/cdk.out/${artifact}.template.json"
+            test -f "${template}"
+            template_sha=$(sha256sum "${template}" | cut -d ' ' -f 1)
+            jq --arg stack "${stack}" --arg sha "${template_sha}" \
+              '. + {($stack):$sha}' "${RUNNER_TEMP}/template-hashes.json" \
+              > "${RUNNER_TEMP}/template-hashes.next.json"
+            mv "${RUNNER_TEMP}/template-hashes.next.json" \
+              "${RUNNER_TEMP}/template-hashes.json"
+            if [ "${artifact}" = "Runtime" ]; then
+              template_key="templates/shittim-chest/${template_sha}/Runtime.template.json"
+              expected_checksum=$(printf '%s' "${template_sha}" | xxd -r -p | base64 -w 0)
+              if aws s3api head-object --bucket "${ASSET_BUCKET}" --key "${template_key}" \
+                --checksum-mode ENABLED > "${RUNNER_TEMP}/runtime-template-head.json" \
+                2>/dev/null
+              then
+                test "$(jq --raw-output .ChecksumSHA256 \
+                  "${RUNNER_TEMP}/runtime-template-head.json")" = "${expected_checksum}"
+              else
+                aws s3api put-object --bucket "${ASSET_BUCKET}" --key "${template_key}" \
+                  --body "${template}" --content-type application/json \
+                  --checksum-algorithm SHA256 --if-none-match '*' >/dev/null
+              fi
+              echo "RUNTIME_TEMPLATE_KEY=${template_key}" >> "${GITHUB_ENV}"
+            fi
+          done
+      - name: Prepare immutable CloudFormation change sets
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          COST_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_US_EAST_1 }}
+          MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
+          OPERATOR_EMAIL: ${{ secrets.OPERATOR_NOTIFICATION_EMAIL }}
+          RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
+          RUNTIME_TEMPLATE_KEY: ${{ env.RUNTIME_TEMPLATE_KEY }}
+          TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
+        run: |
+          [[ "${RUNTIME_CONFIG_VERSION}" =~ ^v[0-9]{4}$ ]]
+          bundle_key=$(jq --raw-output .key "${RUNNER_TEMP}/lambda-bundle.json")
+          change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          jq --null-input '{}' > "${RUNNER_TEMP}/change-sets.json"
+          prepare_change_set() {
+            local stack="$1" region="$2" execution_role="$3" artifact
+            shift 3
+            case "${stack}" in
+              ShittimChest-Prod-Stateful) artifact=Stateful ;;
+              ShittimChest-Prod-Runtime) artifact=Runtime ;;
+              ShittimChest-Prod-Operations) artifact=Operations ;;
+              ShittimChest-Prod-CostGovernance) artifact=CostGovernance ;;
+              *) exit 1 ;;
+            esac
+            local type=CREATE
+            if aws cloudformation describe-stacks --region "${region}" \
+              --stack-name "${stack}" >/dev/null 2>&1
+            then
+              type=UPDATE
+            fi
+            local arn
+            local template_argument template_value
+            if [ "${artifact}" = "Runtime" ]; then
+              template_argument=--template-url
+              template_value="https://${ASSET_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${RUNTIME_TEMPLATE_KEY}"
+            else
+              template_argument=--template-body
+              template_value="file://${RUNNER_TEMP}/cdk.out/${artifact}.template.json"
+            fi
+            arn=$(aws cloudformation create-change-set \
+              --region "${region}" \
+              --stack-name "${stack}" \
+              --change-set-name "${change_set_name}" \
+              --change-set-type "${type}" \
+              --description "STEP-10 release ${GITHUB_SHA}" \
+              "${template_argument}" "${template_value}" \
+              --role-arn "${execution_role}" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --client-token "${stack}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              "$@" \
+              --query Id --output text)
+            for attempt in $(seq 1 60)
+            do
+              status=$(aws cloudformation describe-change-set \
+                --region "${region}" --change-set-name "${arn}" \
+                --query Status --output text)
+              if [ "${status}" = "CREATE_COMPLETE" ]; then
+                break
+              fi
+              if [ "${status}" = "FAILED" ]; then
+                reason=$(aws cloudformation describe-change-set \
+                  --region "${region}" --change-set-name "${arn}" \
+                  --query StatusReason --output text)
+                case "${reason}" in
+                  *"didn't contain changes"*) break ;;
+                  *) exit 1 ;;
+                esac
+              fi
+              test "${attempt}" -lt 60
+              sleep 5
+            done
+            jq --arg stack "${stack}" --arg arn "${arn}" '. + {($stack):$arn}' \
+              "${RUNNER_TEMP}/change-sets.json" > "${RUNNER_TEMP}/change-sets.next.json"
+            mv "${RUNNER_TEMP}/change-sets.next.json" "${RUNNER_TEMP}/change-sets.json"
+            aws cloudformation describe-change-set \
+              --region "${region}" --change-set-name "${arn}" --output json \
+              > "${RUNNER_TEMP}/${artifact}.change-set.json"
+          }
+          prepare_change_set ShittimChest-Prod-Stateful "${AWS_REGION}" \
+            "${TOKYO_EXECUTION_ROLE}"
+          prepare_change_set ShittimChest-Prod-Runtime "${AWS_REGION}" \
+            "${TOKYO_EXECUTION_ROLE}" \
+            --parameters \
+              "ParameterKey=RuntimeImageDigest,ParameterValue=${NORMAL_DIGEST}" \
+              "ParameterKey=BreakGlassImageDigest,ParameterValue=${BREAK_GLASS_DIGEST}" \
+              "ParameterKey=RuntimeConfigVersion,ParameterValue=${RUNTIME_CONFIG_VERSION}" \
+              "ParameterKey=LambdaBundleBucketName,ParameterValue=${ASSET_BUCKET}" \
+              "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}"
+          prepare_change_set ShittimChest-Prod-Operations "${AWS_REGION}" \
+            "${TOKYO_EXECUTION_ROLE}" \
+            --parameters \
+              "ParameterKey=OperatorNotificationEmail,ParameterValue=${OPERATOR_EMAIL}"
+          prepare_change_set ShittimChest-Prod-CostGovernance "${COST_REGION}" \
+            "${COST_EXECUTION_ROLE}" \
+            --parameters \
+              "ParameterKey=OperatorNotificationEmail,ParameterValue=${OPERATOR_EMAIL}" \
+              "ParameterKey=ExistingServiceAnomalyMonitorArn,ParameterValue=${MONITOR_ARN}"
+          validate_change_set() {
+            local stack="$1" artifact="$2" arn
+            shift 2
+            arn=$(jq --raw-output --arg stack "${stack}" '.[$stack]' \
+              "${RUNNER_TEMP}/change-sets.json")
+            uv run --frozen python tools/release_supply_chain.py validate-change-set \
+              "${RUNNER_TEMP}/${artifact}.change-set.json" \
+              --expected-arn "${arn}" --expected-stack "${stack}" "$@"
+          }
+          validate_change_set ShittimChest-Prod-Stateful Stateful
+          validate_change_set ShittimChest-Prod-Runtime Runtime \
+            --expected-parameter "RuntimeImageDigest=${NORMAL_DIGEST}" \
+            --expected-parameter "BreakGlassImageDigest=${BREAK_GLASS_DIGEST}" \
+            --expected-parameter "RuntimeConfigVersion=${RUNTIME_CONFIG_VERSION}" \
+            --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
+            --expected-parameter "LambdaBundleObjectKey=${bundle_key}"
+          validate_change_set ShittimChest-Prod-Operations Operations \
+            --expected-noecho-parameter OperatorNotificationEmail
+          validate_change_set ShittimChest-Prod-CostGovernance CostGovernance \
+            --expected-noecho-parameter OperatorNotificationEmail \
+            --expected-parameter "ExistingServiceAnomalyMonitorArn=${MONITOR_ARN}"
+      - name: Create the canonical release manifest
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
+        run: |
+          uv run --frozen python tools/release_supply_chain.py create-manifest \
+            --break-glass-raw-grype "${RUNNER_TEMP}/break-glass.raw-grype.json" \
+            --break-glass-sbom "${RUNNER_TEMP}/break-glass.spdx.json" \
+            --break-glass-vendor-vex "${RUNNER_TEMP}/break-glass.openvex.json" \
+            --break-glass-verification "${RUNNER_TEMP}/break-glass.verification.json" \
+            --break-glass-vex-grype "${RUNNER_TEMP}/break-glass.vex-grype.json" \
+            --change-sets "${RUNNER_TEMP}/change-sets.json" \
+            --commit-sha "${GITHUB_SHA}" \
+            --lambda-bundle "${RUNNER_TEMP}/lambda-bundle.json" \
+            --normal-sbom "${RUNNER_TEMP}/normal.spdx.json" \
+            --normal-raw-grype "${RUNNER_TEMP}/normal.raw-grype.json" \
+            --normal-vendor-vex "${RUNNER_TEMP}/normal.openvex.json" \
+            --normal-verification "${RUNNER_TEMP}/normal.verification.json" \
+            --normal-vex-grype "${RUNNER_TEMP}/normal.vex-grype.json" \
+            --repository-uri "${ECR_REPOSITORY_URI}" \
+            --runtime-config-parameter "/shittim-chest/production/runtime/${RUNTIME_CONFIG_VERSION}" \
+            --templates "${RUNNER_TEMP}/template-hashes.json" \
+            --output "${RUNNER_TEMP}/release-manifest.json"
+      - name: Attest the release manifest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/release-manifest.json
+      - name: Retain immutable release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/release-manifest.json
+            ${{ runner.temp }}/normal.spdx.json
+            ${{ runner.temp }}/break-glass.spdx.json
+            ${{ runner.temp }}/normal.*.json
+            ${{ runner.temp }}/break-glass.*.json
+            ${{ runner.temp }}/normal.digest
+            ${{ runner.temp }}/break-glass.digest
+            ${{ runner.temp }}/cdk.out/Stateful.template.json
+            ${{ runner.temp }}/cdk.out/Runtime.template.json
+            ${{ runner.temp }}/cdk.out/Operations.template.json
+            ${{ runner.temp }}/cdk.out/CostGovernance.template.json
+            ${{ runner.temp }}/change-sets.json
+            ${{ runner.temp }}/template-hashes.json
+            ${{ runner.temp }}/lambda-bundle.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: deploy
+    needs: plan
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      attestations: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact planned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install the locked verification environment
+        run: uv sync --frozen --all-groups
+      - name: Require the immutable production Environment OIDC identity
+        run: |
+          token_response=$(curl --fail --show-error --silent \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+          jwt=$(jq --exit-status --raw-output .value <<< "${token_response}")
+          payload="${jwt#*.}"
+          payload="${payload%%.*}"
+          case $((${#payload} % 4)) in
+            2) payload="${payload}==" ;;
+            3) payload="${payload}=" ;;
+            0) ;;
+            *) exit 1 ;;
+          esac
+          printf '%s' "${payload}" | tr '_-' '/+' | base64 --decode \
+            > "${RUNNER_TEMP}/oidc-claims.json"
+          jq --exit-status \
+            '.aud == "sts.amazonaws.com" and
+             .sub == "repo:pitekusu@12059348/shittim-chest@1302516701:environment:production" and
+             .repository_id == "1302516701" and
+             .repository_owner_id == "12059348" and
+             .environment == "production" and
+             .ref == "refs/heads/main"' \
+            "${RUNNER_TEMP}/oidc-claims.json" >/dev/null
+      - name: Download only this run's release evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: production-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release
+      - name: Revalidate the manifest and its GitHub attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          manifest="${RUNNER_TEMP}/release/release-manifest.json"
+          uv run --frozen python tools/release_supply_chain.py validate-manifest "${manifest}"
+          gh attestation verify "${manifest}" \
+            --deny-self-hosted-runners \
+            --repo pitekusu/shittim-chest \
+            --signer-digest "${GITHUB_SHA}" \
+            --signer-workflow pitekusu/shittim-chest/.github/workflows/release.yml \
+            --source-digest "${GITHUB_SHA}" \
+            --source-ref refs/heads/main >/dev/null
+          test "$(jq --raw-output .commit_sha "${manifest}")" = "${GITHUB_SHA}"
+          check_hash() {
+            local path="$1" expected="$2"
+            test "$(sha256sum "${path}" | cut -d ' ' -f 1)" = "${expected}"
+          }
+          for mapping in \
+            'normal=normal' \
+            'break_glass=break-glass'
+          do
+            key="${mapping%%=*}"
+            file="${mapping#*=}"
+            check_hash "${RUNNER_TEMP}/release/${file}.spdx.json" \
+              "$(jq --raw-output --arg key "${key}" '.images[$key].sbom.sha256' "${manifest}")"
+            check_hash "${RUNNER_TEMP}/release/${file}.raw-grype.json" \
+              "$(jq --raw-output --arg key "${key}" '.images[$key].risk_evidence.grype_raw' "${manifest}")"
+            check_hash "${RUNNER_TEMP}/release/${file}.vex-grype.json" \
+              "$(jq --raw-output --arg key "${key}" '.images[$key].risk_evidence.grype_vex' "${manifest}")"
+            check_hash "${RUNNER_TEMP}/release/${file}.openvex.json" \
+              "$(jq --raw-output --arg key "${key}" '.images[$key].risk_evidence.vendor_vex' "${manifest}")"
+            uv run --frozen python tools/check_container_risk_acceptance.py \
+              --policy security/container-risk-acceptance.json \
+              --raw-report "${RUNNER_TEMP}/release/${file}.raw-grype.json" \
+              --vex-report "${RUNNER_TEMP}/release/${file}.vex-grype.json" \
+              --image-digest-file "${RUNNER_TEMP}/release/${file}.digest"
+          done
+          for mapping in \
+            'ShittimChest-Prod-Stateful=Stateful' \
+            'ShittimChest-Prod-Runtime=Runtime' \
+            'ShittimChest-Prod-Operations=Operations' \
+            'ShittimChest-Prod-CostGovernance=CostGovernance'
+          do
+            stack="${mapping%%=*}"
+            artifact="${mapping#*=}"
+            check_hash "${RUNNER_TEMP}/release/${artifact}.template.json" \
+              "$(jq --raw-output --arg stack "${stack}" '.templates[$stack]' "${manifest}")"
+          done
+          jq --exit-status --slurpfile actual "${RUNNER_TEMP}/release/change-sets.json" \
+            '.change_sets == $actual[0]' "${manifest}" >/dev/null
+          jq --exit-status --slurpfile actual "${RUNNER_TEMP}/release/lambda-bundle.json" \
+            '.lambda_bundle == $actual[0]' "${manifest}" >/dev/null
+      - name: Acquire deploy-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: release-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Bind deploy handles to the approved production account
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          DEPLOY_ROLE_ARN: ${{ vars.AWS_RELEASE_DEPLOY_ROLE_ARN }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          TABLE_NAME: ${{ vars.DYNAMODB_TABLE_NAME }}
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          [[ "${account}" =~ ^[0-9]{12}$ ]]
+          test "${DEPLOY_ROLE_ARN}" = \
+            "arn:aws:iam::${account}:role/ShittimChest-Prod-GitHub-ReleaseDeploy"
+          test "${ASSET_BUCKET}" = "cdk-hnb659fds-assets-${account}-${AWS_REGION}"
+          test "${ECR_REPOSITORY_URI}" = \
+            "${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/shittim-chest"
+          test "${TABLE_NAME}" = "shittim-chest-production"
+          manifest="${RUNNER_TEMP}/release/release-manifest.json"
+          bundle_bucket=$(jq --raw-output .lambda_bundle.bucket "${manifest}")
+          bundle_key=$(jq --raw-output .lambda_bundle.key "${manifest}")
+          bundle_hash=$(jq --raw-output .lambda_bundle.sha256 "${manifest}")
+          test "${bundle_bucket}" = "${ASSET_BUCKET}"
+          aws s3api head-object --bucket "${bundle_bucket}" --key "${bundle_key}" \
+            --checksum-mode ENABLED > "${RUNNER_TEMP}/bundle-head.json"
+          expected_checksum=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
+          test "$(jq --raw-output .ChecksumSHA256 "${RUNNER_TEMP}/bundle-head.json")" = \
+            "${expected_checksum}"
+      - name: Reinstall the pinned Notation verifier
+        run: bash tools/install_aws_signer_notation.sh
+      - name: Cryptographically reverify both image identities
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          GH_TOKEN: ${{ github.token }}
+          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+        run: |
+          manifest="${RUNNER_TEMP}/release/release-manifest.json"
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login \
+            --username AWS --password-stdin "${registry}"
+          aws ecr get-login-password --region "${AWS_REGION}" | notation login \
+            --username AWS --password-stdin "${registry}"
+          jq --null-input \
+            --arg repository "${ECR_REPOSITORY_URI}" \
+            --arg profile "${SIGNING_PROFILE_ARN}" \
+            '{version:"1.0",trustPolicies:[{name:"shittim-chest-release",registryScopes:[$repository],signatureVerification:{level:"strict"},trustStores:["signingAuthority:aws-signer-ts"],trustedIdentities:[$profile]}]}' \
+            > "${RUNNER_TEMP}/notation-trust-policy.json"
+          notation policy import --force "${RUNNER_TEMP}/notation-trust-policy.json"
+          for key in normal break_glass
+          do
+            reference=$(jq --raw-output --arg key "${key}" '.images[$key].reference' \
+              "${manifest}")
+            notation verify "${reference}"
+            for predicate in \
+              https://slsa.dev/provenance/v1 \
+              https://spdx.dev/Document/v2.3 \
+              https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
+            do
+              gh attestation verify "oci://${reference}" \
+                --bundle-from-oci \
+                --deny-self-hosted-runners \
+                --repo pitekusu/shittim-chest \
+                --signer-digest "${GITHUB_SHA}" \
+                --signer-workflow pitekusu/shittim-chest/.github/workflows/release.yml \
+                --source-digest "${GITHUB_SHA}" \
+                --source-ref refs/heads/main \
+                --predicate-type "${predicate}" >/dev/null
+            done
+          done
+      - name: Reverify AWS evidence and immutable change sets
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+          MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
+          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+        run: |
+          manifest="${RUNNER_TEMP}/release/release-manifest.json"
+          repository="${ECR_REPOSITORY_URI##*/}"
+          for mode in normal break-glass
+          do
+            key="${mode//-/_}"
+            digest=$(jq --raw-output --arg key "${key}" '.images[$key].digest' "${manifest}")
+            aws ecr describe-images \
+              --repository-name "${repository}" --image-ids "imageDigest=${digest}" \
+              --output json > "${RUNNER_TEMP}/${mode}.image.json"
+            aws ecr describe-image-signing-status \
+              --repository-name "${repository}" --image-id "imageDigest=${digest}" \
+              --output json > "${RUNNER_TEMP}/${mode}.signing.json"
+            aws ecr describe-image-scan-findings \
+              --repository-name "${repository}" --image-id "imageDigest=${digest}" \
+              --output json > "${RUNNER_TEMP}/${mode}.scan.json"
+            aws ecr list-image-referrers \
+              --repository-name "${repository}" --subject-id "imageDigest=${digest}" \
+              --output json > "${RUNNER_TEMP}/${mode}.referrers.json"
+            uv run --frozen python tools/release_supply_chain.py verify-image \
+              --digest "${digest}" --profile-arn "${SIGNING_PROFILE_ARN}" \
+              --image-details "${RUNNER_TEMP}/${mode}.image.json" \
+              --signing-status "${RUNNER_TEMP}/${mode}.signing.json" \
+              --referrers "${RUNNER_TEMP}/${mode}.referrers.json" \
+              --scan "${RUNNER_TEMP}/${mode}.scan.json" --risk-gate-passed \
+              --output "${RUNNER_TEMP}/${mode}.verification.json"
+            jq --exit-status --arg key "${key}" --slurpfile actual \
+              '.images[$key].digest == $actual[0].image_digest and
+               .images[$key].media_type == $actual[0].media_type and
+               .images[$key].referrers == $actual[0].referrers and
+               .images[$key].scan == $actual[0].scan and
+               .images[$key].signing_profile_arn == $actual[0].signing_profile_arn' \
+              "${manifest}" >/dev/null
+          done
+          runtime_config=$(jq --raw-output .runtime_config_parameter "${manifest}")
+          runtime_config="${runtime_config##*/}"
+          normal_digest=$(jq --raw-output .images.normal.digest "${manifest}")
+          break_glass_digest=$(jq --raw-output .images.break_glass.digest "${manifest}")
+          bundle_key=$(jq --raw-output .lambda_bundle.key "${manifest}")
+          validate_change_set() {
+            local stack="$1" region="$2" artifact="$3" arn
+            shift 3
+            arn=$(jq --raw-output --arg stack "${stack}" '.change_sets[$stack]' "${manifest}")
+            aws cloudformation describe-change-set --region "${region}" \
+              --change-set-name "${arn}" --output json \
+              > "${RUNNER_TEMP}/${artifact}.change-set.json"
+            uv run --frozen python tools/release_supply_chain.py validate-change-set \
+              "${RUNNER_TEMP}/${artifact}.change-set.json" \
+              --expected-arn "${arn}" --expected-stack "${stack}" "$@"
+          }
+          validate_change_set ShittimChest-Prod-Stateful "${AWS_REGION}" Stateful
+          validate_change_set ShittimChest-Prod-Runtime "${AWS_REGION}" Runtime \
+            --expected-parameter "RuntimeImageDigest=${normal_digest}" \
+            --expected-parameter "BreakGlassImageDigest=${break_glass_digest}" \
+            --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
+            --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
+            --expected-parameter "LambdaBundleObjectKey=${bundle_key}"
+          validate_change_set ShittimChest-Prod-Operations "${AWS_REGION}" Operations \
+            --expected-noecho-parameter OperatorNotificationEmail
+          validate_change_set ShittimChest-Prod-CostGovernance "${COST_REGION}" \
+            CostGovernance \
+            --expected-noecho-parameter OperatorNotificationEmail \
+            --expected-parameter "ExistingServiceAnomalyMonitorArn=${MONITOR_ARN}"
+          for mapping in \
+            'ShittimChest-Prod-Stateful=Stateful' \
+            'ShittimChest-Prod-Runtime=Runtime' \
+            'ShittimChest-Prod-Operations=Operations' \
+            'ShittimChest-Prod-CostGovernance=CostGovernance'
+          do
+            stack="${mapping%%=*}"
+            artifact="${mapping#*=}"
+            template_hash=$(sha256sum \
+              "${RUNNER_TEMP}/release/${artifact}.template.json" | cut -d ' ' -f 1)
+            test "${template_hash}" = \
+              "$(jq --raw-output --arg stack "${stack}" '.templates[$stack]' "${manifest}")"
+          done
+      - name: Acquire the fenced production deployment lock
+        id: acquire
+        env:
+          TABLE_NAME: ${{ vars.DYNAMODB_TABLE_NAME }}
+        run: |
+          guard_id="release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          uv run --frozen python -m tools.control_records acquire \
+            --table-name "${TABLE_NAME}" \
+            --region "${AWS_REGION}" \
+            --commit-sha "${GITHUB_SHA}" \
+            --actor "${GITHUB_TRIGGERING_ACTOR}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --environment production \
+            --guard-id "${guard_id}" \
+            --lock-seconds 1800 \
+            --acknowledge-write acquire-deployment-lock \
+            --audit-output "${RUNNER_TEMP}/release/deploy-lock-audit.json"
+          fencing_token=$(jq --raw-output .lock_fencing_token \
+            "${RUNNER_TEMP}/release/deploy-lock-audit.json")
+          {
+            echo "acquired=true"
+            echo "guard_id=${guard_id}"
+            echo "fencing_token=${fencing_token}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Execute only the attested change sets
+        env:
+          MANIFEST: ${{ runner.temp }}/release/release-manifest.json
+        run: |
+          deploy_stack() {
+            local stack="$1" region="$2" arn status type
+            arn=$(jq --raw-output --arg stack "${stack}" '.change_sets[$stack]' "${MANIFEST}")
+            status=$(aws cloudformation describe-change-set --region "${region}" \
+              --change-set-name "${arn}" --query Status --output text)
+            if [ "${status}" = "FAILED" ]; then
+              return 0
+            fi
+            test "${status}" = "CREATE_COMPLETE"
+            type=$(aws cloudformation describe-change-set --region "${region}" \
+              --change-set-name "${arn}" --query ChangeSetType --output text)
+            aws cloudformation execute-change-set --region "${region}" \
+              --change-set-name "${arn}"
+            if [ "${type}" = "CREATE" ]; then
+              aws cloudformation wait stack-create-complete --region "${region}" \
+                --stack-name "${stack}"
+            else
+              aws cloudformation wait stack-update-complete --region "${region}" \
+                --stack-name "${stack}"
+            fi
+          }
+          deploy_stack ShittimChest-Prod-Stateful "${AWS_REGION}"
+          deploy_stack ShittimChest-Prod-Runtime "${AWS_REGION}"
+          deploy_stack ShittimChest-Prod-Operations "${AWS_REGION}"
+          deploy_stack ShittimChest-Prod-CostGovernance "${COST_REGION}"
+      - name: Run content-free post-deploy structural smoke checks
+        run: |
+          service=$(aws ecs describe-services \
+            --cluster shittim-chest-production \
+            --services shittim-chest-production --output json)
+          jq --exit-status \
+            '(.failures == []) and (.services | length == 1) and
+             (.services[0].desiredCount <= 1) and (.services[0].runningCount <= 1)' \
+            <<< "${service}" >/dev/null
+          task_definition=$(jq --raw-output '.services[0].taskDefinition' <<< "${service}")
+          aws ecs describe-task-definition --task-definition "${task_definition}" \
+            --output json > "${RUNNER_TEMP}/deployed-task-definition.json"
+          expected_image=$(jq --raw-output .images.normal.reference \
+            "${RUNNER_TEMP}/release/release-manifest.json")
+          jq --exit-status --arg expected "${expected_image}" \
+            '[.taskDefinition.containerDefinitions[] |
+              select(.name == "application") | .image] == [$expected]' \
+            "${RUNNER_TEMP}/deployed-task-definition.json" >/dev/null
+          aws lambda get-function-configuration \
+            --function-name shittim-chest-production-image-admission \
+            --query '[State,LastUpdateStatus]' --output text | \
+            grep --fixed-strings $'Active\tSuccessful'
+      - name: Release the exact deployment fence
+        if: always() && steps.acquire.outputs.acquired == 'true'
+        env:
+          FENCING_TOKEN: ${{ steps.acquire.outputs.fencing_token }}
+          GUARD_ID: ${{ steps.acquire.outputs.guard_id }}
+          TABLE_NAME: ${{ vars.DYNAMODB_TABLE_NAME }}
+        run: |
+          uv run --frozen python -m tools.control_records release \
+            --table-name "${TABLE_NAME}" \
+            --region "${AWS_REGION}" \
+            --guard-id "${GUARD_ID}" \
+            --fencing-token "${FENCING_TOKEN}" \
+            --actor "${GITHUB_TRIGGERING_ACTOR}" \
+            --acknowledge-write release-deployment-lock
+      - name: Retain deployment lock evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-release-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release/deploy-lock-audit.json
+          if-no-files-found: warn
+          retention-days: 90

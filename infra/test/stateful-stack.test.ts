@@ -142,7 +142,7 @@ describe("StatefulStack", () => {
           RepositoryFilters: [
             {
               Filter: "shittim-chest",
-              FilterType: "WILDCARD_MATCH",
+              FilterType: "WILDCARD",
             },
           ],
         },

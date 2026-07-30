@@ -15,24 +15,29 @@ Japanese name: **シッテムの箱** (`shittim_chest`).
 Design is complete under [`docs/`](docs/). The merged `main` baseline includes
 the application core, OpenAI + Web search, signed Discord HTTP Interaction
 ingress, DynamoDB **schema v7** / control-record **manifest v2**, ARM64 container
-gates, and synth-only Stateful/Runtime CDK with On-Demand scale-to-zero. The
-current STEP-09C-C slice adds a locally tested, `us-east-1` cost-governance
-stack with two AWS Budgets and a Cost Anomaly Detection subscription. It builds
-on STEP-09C-A/B metrics and monitoring. Nothing in this repository has been
-deployed to AWS or connected to a real Discord Application endpoint.
+gates, and Stateful/Runtime CDK with On-Demand scale-to-zero. The
+current STEP-10-A slice adds immutable GitHub OIDC roles, a
+plan/Environment-deploy release workflow, signed normal and break-glass images,
+OCI attestations, a canonical release manifest, fenced change-set execution,
+read-only drift detection, and ECS `PRE_SCALE_UP` image admission. Nothing in
+this repository is connected to a real Discord Application endpoint. AWS is
+bootstrapped in both target Regions, and the protected Stateful and
+ReleaseIdentity foundations are deployed; Runtime, Operations, CostGovernance,
+and the first release remain pending.
 
 | Implemented locally / on merged main | Not done |
 |---|---|
-| Domain, voting, Protocols, use cases | STEP-10 release signing / deploy workflows |
+| Domain, voting, Protocols, use cases | Private runtime/notification values and first release |
 | DynamoDB adapter, leases, outbox | Real Discord Applications / live tokens |
 | OpenAI Responses API, router, Evidence | Paid OpenAI in CI |
-| Signed HTTP ingress + `/shittim` + panel | AWS bootstrap or stack deploy |
+| Signed HTTP ingress + `/shittim` + panel | Runtime/Operations/CostGovernance deploy |
 | Lifecycle, SIGTERM/SIGKILL recovery tests | |
 | Container + native ARM64 CI | |
 | Scale-to-zero control plane + 3 Lambda boundaries | |
 | STEP-09C-A EMF metrics foundation | |
 | STEP-09C-B alarms/dashboard/EventBridge | |
 | STEP-09C-C Budget/CAD templates | |
+| STEP-10-A release supply chain + image admission | |
 | GitHub → Discord Forum notifications (STEP-02D) | |
 
 Production generation is fixed to **Luna standard** (no runtime escalation).
@@ -43,6 +48,28 @@ Slice evidence and PR links: [`docs/20_実装・試験・検証記録.md`](docs/
 The scale-to-zero requirements, commit checkpoints, and completion criteria are
 published under [`docs/100_Ondemand Fargate/`](docs/100_Ondemand%20Fargate/).
 Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
+
+## Private production setup
+
+The operator runs one guided command. It asks only for missing private values,
+hides all input, validates the complete configuration, and writes directly to
+GitHub Actions secrets and SSM Parameter Store after confirmation:
+
+```sh
+uv run --frozen python tools/configure_production_inputs.py
+```
+
+When the local-only `SHITTIM_PRIVATE_CONFIG_SOURCE` pointer is configured, the
+command validates and reuses its saved `PersonaConfig v0002`; those four persona
+values are not requested again. The pointer and source stay ignored and are never
+copied into the repository.
+
+It does not read, decrypt, overwrite, print, or save existing secret values.
+Readiness can be checked without entering values:
+
+```sh
+uv run --frozen python tools/configure_production_inputs.py --check
+```
 
 ## Scale-to-zero runtime
 
@@ -61,21 +88,24 @@ Contributor/agent rules: [`AGENTS.md`](AGENTS.md).
   recovery continues until the 15-minute terminal deadline. Scale-down becomes
   eligible 30 minutes after the last debate is *fully* complete, including
   required outbox/status work.
-- The deployment guard is implemented as a fail-closed, read-only diagnostic
-  library, CLI, and manual workflow. No production deploy workflow consumes it
-  yet.
+- The deployment guard retains its read-only diagnostic workflow. STEP-10-A's
+  production deploy job additionally acquires and releases the exact fenced
+  DynamoDB lock around attested CloudFormation change-set execution and smoke
+  checks.
 
 ## Stack (design and locally verified templates)
 
 - **Python 3.14.6** / **uv** (locked), discord.py, OpenAI Responses API, boto3
 - **DynamoDB** (on-demand, PITR), **ECS On-Demand Fargate** ARM64 zero-to-one
   singleton (Tokyo)
-- **CDK** TypeScript (local synth; not deployed from this repo yet)
+- **CDK** TypeScript (Stateful + ReleaseIdentity deployed; remaining stacks synth-only)
 - **CloudWatch** metric/composite alarms and dashboard, **EventBridge** abnormal
   ECS task-stop notifications, and one TLS-only **SNS** operator topic
 - `us-east-1` **CostGovernance** CDK stack with Project/account Budgets and an
   existing-monitor **Cost Anomaly Detection** subscription
 - Digest-pinned **DHI** Community images; identity and tmpfs in `container-policy.json`
+- **AWS Signer / Notation**, ECR OCI referrers, GitHub artifact attestations,
+  immutable OIDC plan/deploy/drift roles, and fail-closed ECS image admission
 
 ## Local validation
 
