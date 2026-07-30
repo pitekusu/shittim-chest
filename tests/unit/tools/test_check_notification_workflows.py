@@ -196,6 +196,22 @@ def test_release_revalidates_preserved_cdk_artifact_paths(tmp_path: Path) -> Non
         validate_notification_workflows(directory)
 
 
+def test_release_loads_regenerated_image_verification_for_comparison(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '--slurpfile actual "${RUNNER_TEMP}/${mode}.verification.json"',
+            "--slurpfile actual",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="image verification document"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(
