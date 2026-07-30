@@ -866,7 +866,7 @@ jobs:
           do
             stack="${mapping%%=*}"
             artifact="${mapping#*=}"
-            check_hash "${RUNNER_TEMP}/release/${artifact}.template.json" \
+            check_hash "${RUNNER_TEMP}/release/cdk.out/${artifact}.template.json" \
               "$(jq --raw-output --arg stack "${stack}" '.templates[$stack]' "${manifest}")"
           done
           jq --exit-status --slurpfile actual "${RUNNER_TEMP}/release/change-sets.json" \
@@ -1042,7 +1042,7 @@ jobs:
             stack="${mapping%%=*}"
             artifact="${mapping#*=}"
             template_hash=$(sha256sum \
-              "${RUNNER_TEMP}/release/${artifact}.template.json" | cut -d ' ' -f 1)
+              "${RUNNER_TEMP}/release/cdk.out/${artifact}.template.json" | cut -d ' ' -f 1)
             test "${template_hash}" = \
               "$(jq --raw-output --arg stack "${stack}" '.templates[$stack]' "${manifest}")"
           done
