@@ -20,6 +20,11 @@ const DEPLOY_SUBJECT =
   "repo:pitekusu@12059348/shittim-chest@1302516701:environment:production";
 const TOKYO_REGION = "ap-northeast-1";
 const COST_REGION = "us-east-1";
+const ENHANCED_SCAN_READ_ACTIONS = [
+  "inspector2:ListAccountPermissions",
+  "inspector2:ListCoverage",
+  "inspector2:ListFindings",
+] as const;
 const RELEASE_STACK_NAMES = [
   "ShittimChest-Prod-Stateful",
   "ShittimChest-Prod-Runtime",
@@ -130,7 +135,7 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.planRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["inspector2:ListFindings"],
+        actions: [...ENHANCED_SCAN_READ_ACTIONS],
         resources: ["*"],
       }),
     );
@@ -265,7 +270,7 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.deployRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["inspector2:ListFindings"],
+        actions: [...ENHANCED_SCAN_READ_ACTIONS],
         resources: ["*"],
       }),
     );
