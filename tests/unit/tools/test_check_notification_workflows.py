@@ -180,6 +180,22 @@ def test_release_uses_stack_status_for_change_set_execution(
         validate_notification_workflows(directory)
 
 
+def test_release_revalidates_preserved_cdk_artifact_paths(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "${RUNNER_TEMP}/release/cdk.out/${artifact}.template.json",
+            "${RUNNER_TEMP}/release/${artifact}.template.json",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="preserved artifact paths"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(

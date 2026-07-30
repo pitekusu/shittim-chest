@@ -271,6 +271,10 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must authenticate exactly two OCI client contexts to ECR"
         )
+    if text.count("${RUNNER_TEMP}/release/cdk.out/${artifact}.template.json") != 2:
+        raise WorkflowPolicyError(
+            "Release must revalidate downloaded CDK templates at their preserved artifact paths"
+        )
     secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
     if secrets != {"DHI_TOKEN", "DHI_USERNAME", "OPERATOR_NOTIFICATION_EMAIL"}:
         raise WorkflowPolicyError("Release secret allowlist changed")
