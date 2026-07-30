@@ -3,7 +3,9 @@
 set -euo pipefail
 
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
-: "${AWS_SIGNER_NOTATION_VERSION:?AWS_SIGNER_NOTATION_VERSION is required}"
+: "${AWS_SIGNER_NOTATION_INSTALLER_VERSION:?installer version is required}"
+: "${NOTATION_CLI_VERSION:?Notation CLI version is required}"
+: "${AWS_SIGNER_NOTATION_PLUGIN_VERSION:?AWS Signer plugin version is required}"
 : "${AWS_SIGNER_NOTATION_ARCHIVE_SHA256:?archive SHA-256 is required}"
 : "${AWS_SIGNER_NOTATION_SIGNATURE_SHA256:?signature SHA-256 is required}"
 : "${AWS_SIGNER_NOTATION_KEY_SHA256:?public-key SHA-256 is required}"
@@ -38,5 +40,9 @@ fingerprint=$(gpg --batch --with-colons --fingerprint | \
 test "${fingerprint}" = "${AWS_SIGNER_NOTATION_FINGERPRINT}"
 gpg --batch --verify "${signature}" "${package}"
 sudo dpkg -i -E "${package}"
-notation version | grep --fixed-strings "${AWS_SIGNER_NOTATION_VERSION%-1}"
-notation plugin ls | grep --fixed-strings com.amazonaws.signer.notation.plugin
+installed_package_version=$(dpkg-query --show --showformat='${Version}' aws-signer-notation-cli)
+test "${installed_package_version}" = "${AWS_SIGNER_NOTATION_INSTALLER_VERSION}"
+notation version | grep --fixed-strings "${NOTATION_CLI_VERSION}"
+plugin_listing=$(notation plugin ls)
+printf '%s\n' "${plugin_listing}" | grep --fixed-strings com.amazonaws.signer.notation.plugin
+printf '%s\n' "${plugin_listing}" | grep --fixed-strings "${AWS_SIGNER_NOTATION_PLUGIN_VERSION}"

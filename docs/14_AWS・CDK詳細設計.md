@@ -135,7 +135,7 @@ release planとEnvironment承認後のdeploy jobは同じdigestへ次を順番�
 
 1. `describe-images`でtagではなくmanifest digestの存在とmedia typeを確認する。
 2. `describe-image-signing-status --image-id imageDigest=...`をbounded pollingし、期待するSigner profileが`COMPLETE`であることを確認する。
-3. AWS公式Notation installerをversion/digest固定で導入し、AWS Signer trust store、strict policy、期待profile ARNを使って`notation verify <repository>@sha256:<digest>`を実行する。これを署名の暗号学的検証・revocation確認とし、signing statusだけで代替しない。
+3. AWS公式Notation installerをinstaller `2.2.0-1`、同梱Notation CLI `1.3.2`、AWS Signer plugin `1.0.2292`として個別にversion固定し、installer・signature・公開鍵のdigestとPGP fingerprintも検証して導入する。AWS Signer trust store、strict policy、期待profile ARNを使って`notation verify <repository>@sha256:<digest>`を実行し、署名の暗号学的検証・revocation確認とする。signing statusだけで代替しない。
 4. `list-image-referrers --subject-id imageDigest=...`でsignature、SPDX SBOM、build provenance、vulnerability assessmentの4種が`ACTIVE`であることを確認し、artifact digestをmanifestと一致させる。
 5. GitHub artifact attestationはrepository identity、workflow、commit、subject digestを検証し、SBOM hashとscan gateを再確認する。
 
@@ -237,4 +237,5 @@ toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示�
 | 2026-07-30 | SSM DescribeParameters / PutParameter | https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DescribeParameters.html、https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_PutParameter.html | metadata-only不足確認、Standard SecureString、既存値非取得・非上書きの対話setupを採用 |
 | 2026-07-30 | GitHub CLI secret set | https://cli.github.com/manual/gh_secret_set | private operator emailをprocess argumentでなく標準入力からrepository Actions secretへ登録 |
 | 2026-07-30 | Cost allocation tags | https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_ListCostAllocationTags.html、https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_UpdateCostAllocationTagsStatus.html | `Project` user-defined tagのBilling出現を確認後に`Active`へ更新し、CostGovernance deploy gateを解除 |
+| 2026-07-30 | AWS Signer Notation prerequisites / installer CHANGELOG | https://docs.aws.amazon.com/signer/latest/developerguide/image-signing-prerequisites.html、https://d2hvyiie56hcat.cloudfront.net/CHANGELOG | installer `2.2.0-1`と同梱CLI `1.3.2`・plugin `1.0.2292`は別versionとして固定・検証する |
 | 2026-07-19 | CloudWatch Logs data protection | https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/mask-sensitive-log-data.html | application/Exec log groupの非機密ログ原則に追加防御としてmask policyを適用 |
