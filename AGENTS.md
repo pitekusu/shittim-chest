@@ -14,9 +14,9 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-10-A change-set response hardening branch, 2026-07-31)
+## Status (STEP-10-A ECS hook contract hardening branch, 2026-07-31)
 
-The merged `main` baseline includes PR `#120` release hardening on top of signed
+The merged `main` baseline includes PR `#121` change-set response hardening on top of signed
 HTTP ingress, On-Demand scale-to-zero, and STEP-09C-A/B/C monitoring and cost
 governance. STEP-10-A now has immutable OIDC release identities, complete CDK
 file-asset publication/checksum evidence, dual signed image/referrer gates,
@@ -30,11 +30,18 @@ successfully completed asset publication, both image builds, signing, scans,
 attestations, referrer verification, and Lambda bundle publication, then stopped
 before deploy because AWS CLI represented Stateful's empty change-set parameter
 list as JSON `null`. Cleanup removed every unexecuted set; Runtime, Operations,
-and CostGovernance are resource-free `REVIEW_IN_PROGRESS` placeholders. This
-branch accepts only missing/`null` as an empty parameter collection while still
-requiring every expected exact or NoEcho parameter and rejecting other shapes.
-Discord and the first successful production deployment remain unchanged. The
-authoritative Obsidian progress/evidence notes and public mirror track this state.
+and CostGovernance were resource-free `REVIEW_IN_PROGRESS` placeholders. The
+next release passed the complete plan and acquired the production fence, but
+Runtime creation rolled back before task launch because CloudFormation requires
+ECS lifecycle `HookDetails` to be a serialized JSON object rather than the object
+emitted by the escape hatch. All 47 Runtime resources reached `DELETE_COMPLETE`,
+all four release change-set inventories are empty, the fence was released, and
+the failed Runtime stack metadata was deleted. This branch serializes that field,
+authorizes bounded failure diagnostics against both change-set and stack ARNs,
+and treats terminal `EXECUTE_FAILED` sets as consumed while still blocking active
+execution. Discord and the first successful production deployment remain
+unchanged. The authoritative Obsidian progress/evidence notes and public mirror
+track this state.
 
 | Area | Current implementation |
 |---|---|

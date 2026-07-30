@@ -181,7 +181,7 @@ describe("RuntimeStack", () => {
       DeploymentConfiguration: Match.objectLike({
         LifecycleHooks: [
           Match.objectLike({
-            HookDetails: { schemaVersion: 1 },
+            HookDetails: JSON.stringify({ schemaVersion: 1 }),
             LifecycleStages: ["PRE_SCALE_UP"],
             TargetType: "AWS_LAMBDA",
             TimeoutConfiguration: {

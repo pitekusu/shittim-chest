@@ -780,10 +780,12 @@ export class RuntimeStack extends Stack {
 
     // FargateService has no L2 lifecycle-hook API in aws-cdk-lib 2.261.0.
     // Keep the escape hatch confined to the generated lifecycleHooks field.
+    // CloudFormation declares HookDetails as Json but the ECS resource provider
+    // requires a JSON object serialized as a string.
     const cfnService = this.service.node.defaultChild as ecs.CfnService;
     cfnService.addPropertyOverride("DeploymentConfiguration.LifecycleHooks", [
       {
-        HookDetails: { schemaVersion: 1 },
+        HookDetails: JSON.stringify({ schemaVersion: 1 }),
         HookTargetArn: this.imageAdmissionFunction.functionArn,
         LifecycleStages: ["PRE_SCALE_UP"],
         RoleArn: hookRole.roleArn,

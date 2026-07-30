@@ -265,7 +265,12 @@ export class ReleaseIdentityStack extends Stack {
         conditions: {
           StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
         },
-        resources: this.changeSetArns(),
+        // Executed change sets can be authorized as either the change set or
+        // its owning stack when CloudFormation resolves operation events.
+        resources: [
+          ...this.stackArns(RELEASE_STACK_NAMES),
+          ...this.changeSetArns(),
+        ],
       }),
     );
     this.deployRole.addToPolicy(

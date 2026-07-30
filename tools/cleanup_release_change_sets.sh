@@ -15,7 +15,7 @@ mode=""
 change_set_name=""
 current_change_set_name=""
 manifest=""
-unsafe_manifest_state="false"
+active_manifest_state="false"
 case "$1" in
   --change-set-name)
     mode="name"
@@ -116,15 +116,15 @@ cleanup_change_set() {
       fi
 
       case "${execution_status}" in
-        EXECUTE_COMPLETE|OBSOLETE)
+        EXECUTE_COMPLETE|EXECUTE_FAILED|OBSOLETE)
           if [[ "${mode}" == "manifest" || "${mode}" == "attempt" ]]; then
             return 0
           fi
           error "unexpected executed change set for ${stack}"
           ;;
-        EXECUTE_IN_PROGRESS|EXECUTE_FAILED)
+        EXECUTE_IN_PROGRESS)
           if [[ "${mode}" == "manifest" ]]; then
-            unsafe_manifest_state="true"
+            active_manifest_state="true"
             return 0
           fi
           error "unsafe executed change-set state for ${stack}"
@@ -328,6 +328,6 @@ do
   cleanup_change_set "${stack}" "${region}" "${locator}"
 done
 
-if [[ "${unsafe_manifest_state}" == "true" ]]; then
-  error "one or more manifest change sets are executing or failed execution"
+if [[ "${active_manifest_state}" == "true" ]]; then
+  error "one or more manifest change sets are still executing"
 fi
