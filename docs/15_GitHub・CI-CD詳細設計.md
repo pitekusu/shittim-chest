@@ -86,7 +86,7 @@ deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別�
 - push済みの最終image digestからOS packageとPython runtime dependencyを含むSPDX JSON SBOMを生成する。
 - ECR Managed Signingのstatusをimage digest指定でbounded pollingし、期待profileが`COMPLETE`にならなければ停止する。AWS公式NotationとSigner pluginを固定・検証して導入し、strict trust policyと期待profile ARNでdigest URIを暗号学的にverifyする。
 - imageにはbuild provenanceとSBOMを別々のattestationとして、full SHAへpinした`actions/attest`で生成し、`push-to-registry`でECR OCI referrerへ保存する。deprecatedな`actions/attest-sbom`は新規利用しない。
-- ECR scan完了後にfindingをseverity別に正規化したcontent-free vulnerability assessmentをOCI referrerへattachする。拡張スキャンのfinding取得では、repository限定の`ecr:DescribeImageScanFindings`に加えて、AWS公式要件どおりresource-level permissionを持たない`inspector2:ListFindings`だけをplan/deploy roleへ許可し、Inspectorのenable/disable権限は与えない。認可失敗はpollingせず即時にcontent-freeな分類で停止する。critical/high findingは期限・owner付きrisk acceptanceがない限り停止する。
+- ECR scan完了後にfindingをseverity別に正規化したcontent-free vulnerability assessmentをOCI referrerへattachする。拡張スキャンのfinding取得では、repository限定の`ecr:DescribeImageScanFindings`に加えて、AWS公式の読み取り要件である`inspector2:ListFindings`、`inspector2:ListAccountPermissions`、`inspector2:ListCoverage`をresource `*`でplan/deploy roleへ許可し、Inspectorのenable/disable権限は与えない。認可失敗はpollingせず即時にcontent-freeな分類で停止する。critical/high findingは期限・owner付きrisk acceptanceがない限り停止する。
 - ECR `list-image-referrers`でAWS Signer signature、SPDX SBOM、build provenance、vulnerability assessmentが全て同じimage digestへ`ACTIVE`で紐付くことを確認する。
 - release manifestにもprovenance attestationを生成する。頻繁なtest buildやsource file単体にはattestationを生成しない。
 - 初回は`ap-northeast-1/us-east-1 CDK bootstrap → Stateful/ECR/Signer change set実行 → image push/verify → Runtime → Operations → CostGovernance`とする。CostGovernanceはworkloadへ依存しないが、同一releaseでOperationsと同じoperator email、既存AWS managed service monitor ARN、BillingでActiveな`Project` cost allocation tagをfail closedに確認してから実行する。通常releaseは既存ECRへのpush・署名・referrer検証後に全stackのchange setをprepareする。
@@ -162,7 +162,7 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-16 | Environments | https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments | reviewer、branch制限、self-review |
 | 2026-07-16 | AWS OIDC | https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws | `sub`、`aud`、Environment subject |
 | 2026-07-16 | OIDC reference | https://docs.github.com/en/actions/reference/security/oidc | immutable owner/repository ID subject |
-| 2026-07-30 | ECR enhanced scanning IAM | https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning-enhanced-iam.html | finding取得に必要な`inspector2:ListFindings`をplan/deploy roleへ追加し、enable/disableは拒否 |
+| 2026-07-30 | ECR enhanced scanning IAM | https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-scanning-enhanced-iam.html | finding取得に必要なInspector read API 3種をplan/deploy roleへ追加し、enable/disableは拒否 |
 | 2026-07-16 | Secret scanning | https://docs.github.com/en/code-security/concepts/secret-security/secret-scanning | public repositoryのautomatic scan |
 | 2026-07-16 | CodeQL | https://docs.github.com/en/code-security/concepts/code-scanning/codeql/codeql-code-scanning | Python default setup |
 | 2026-07-16 | Artifact attestations | https://docs.github.com/en/actions/concepts/security/artifact-attestations | release provenance、verify必須 |
