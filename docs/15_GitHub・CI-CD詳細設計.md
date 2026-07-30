@@ -104,6 +104,7 @@ deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別�
 - task definition template内の全application image URIが`repository@sha256:<digest>`でmanifestと一致し、tag形式が0件であることを確認する。
 - live mutation前にdeployment lockをacquireし、change setを再生成せず実行する。READY/Discord/OpenAI/AWS connectivity smoke testと、失敗時のrollbackを含む全間でlockをholdし、完了成否にかかわらず正確なmetadataでreleaseを試みる。release失敗は成功扱いにしない。
 - plan開始時のstale sweep、plan失敗、deploy finally、独立cleanup jobは同じchange set cleanup helperを使う。作成/削除中を有限pollし、未実行setを削除後`ChangeSetNotFound`と全page再列挙の両方で消失を確認する。partial createの一時的な未検出は3回連続確認し、AccessDeniedやprovider errorを不存在として扱わない。独立cleanupのartifact取得失敗は`steps.<id>.outcome`で判定し、plan成功時は`needs.plan.outputs.plan_attempt`を正規表現検証して旧attemptのexact nameだけを回収する。このattempt modeは部分deploy済みstackの`EXECUTE_COMPLETE`/`OBSOLETE`をskipして後続の未実行setを回収し、`EXECUTE_IN_PROGRESS`/`EXECUTE_FAILED`は削除せず停止する。manifest modeで途中stackが実行中/実行失敗なら当該setを削除せず記録し、後続の未実行setをすべて回収してからcleanup全体を失敗させる。plan出力不正やdownload成功後のmanifest不正はfallbackで隠さず停止する。failed-jobs-only rerunでは旧attempt artifactのdeployを禁止し、cleanup後に全job rerunを要求する。
+- `DescribeChangeSet.Parameters`はparameterなしのchange setでAWS CLIがJSON `null`を返す。validatorはfield欠落または`null`だけを空collectionとして扱い、object/string等は拒否する。空collectionでも期待するexact parameterまたはNoEcho parameterが1件でもあれば従来どおりfail closedとし、parameter不要のStatefulだけを通す。
 - result、digest、guard metadata、acquire/release audit IDを本文なしでdeployment summaryへ記録する。
 - production専用`concurrency`は`cancel-in-progress=false`、job timeoutを設定する。
 

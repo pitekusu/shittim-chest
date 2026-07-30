@@ -857,8 +857,12 @@ def validate_change_set(
             raise ValueError("change set failed for a reason other than no changes")
     else:
         raise ValueError("change set creation is incomplete")
+    raw_parameters = record.get("Parameters")
+    parameter_items: Sequence[object] = (
+        () if raw_parameters is None else _array(raw_parameters, "change set parameters")
+    )
     parameters: dict[str, str] = {}
-    for item in _array(record.get("Parameters", []), "change set parameters"):
+    for item in parameter_items:
         parameter = _object(item, "change set parameter")
         key = parameter.get("ParameterKey")
         if not isinstance(key, str) or not key or key in parameters:
