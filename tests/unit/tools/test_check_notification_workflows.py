@@ -160,6 +160,26 @@ def test_release_requires_two_ephemeral_ecr_logins(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "              grep --fixed-strings '(ValidationError)' \\\n",
+        '              ""|REVIEW_IN_PROGRESS) type=CREATE ;;\n',
+        "              REVIEW_IN_PROGRESS) create_stack=true ;;\n",
+    ],
+)
+def test_release_uses_stack_status_for_change_set_execution(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(path.read_text(encoding="utf-8").replace(marker, ""), encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(

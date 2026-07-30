@@ -487,13 +487,15 @@ def validate_change_set(
     expected_parameters: Mapping[str, str],
     expected_stack: str,
 ) -> None:
-    """Bind a described immutable change set to its manifest ARN and inputs."""
+    """Bind a described immutable change set to its manifest ARN and inputs.
+
+    DescribeChangeSet does not return the ChangeSetType supplied to CreateChangeSet. The trusted
+    workflow determines create versus update from the stack status before creation and execution.
+    """
 
     record = _object(value, "change set")
     if record.get("ChangeSetId") != expected_arn or record.get("StackName") != expected_stack:
         raise ValueError("change set identity is invalid")
-    if record.get("ChangeSetType") not in {"CREATE", "UPDATE"}:
-        raise ValueError("change set type is invalid")
     status = record.get("Status")
     execution = record.get("ExecutionStatus")
     if status == "CREATE_COMPLETE":
