@@ -191,21 +191,19 @@ jobs:
           jq --exit-status \
             '.CostAllocationTags | map({Status, TagKey, Type}) == [{"Status":"Active","TagKey":"Project","Type":"UserDefined"}]' \
             "${RUNNER_TEMP}/cost-allocation-tags.json" >/dev/null
-      - name: Install and configure the pinned ECR credential helper
-        env:
-          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
-        run: |
-          registry="${ECR_REPOSITORY_URI%%/*}"
-          bash tools/install_ecr_credential_helper.sh "${registry}"
-      - name: Authenticate to the immutable source registry
+      - name: Authenticate to immutable source and destination registries
         env:
           DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
           DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
         run: |
           test -n "${DHI_USERNAME}"
           test -n "${DHI_TOKEN}"
           printf '%s' "${DHI_TOKEN}" | docker login dhi.io \
             --username "${DHI_USERNAME}" --password-stdin
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login \
+            --username AWS --password-stdin "${registry}"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build and push the production image once
@@ -453,6 +451,12 @@ jobs:
           create-storage-record: false
       - name: Install and cryptographically verify AWS Signer Notation
         run: bash tools/install_aws_signer_notation.sh
+      - name: Install and configure the pinned ECR credential helper
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+        run: |
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          bash tools/install_ecr_credential_helper.sh "${registry}"
       - name: Strictly verify both Signer identities and four referrers
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
@@ -895,6 +899,13 @@ jobs:
             "${expected_checksum}"
       - name: Reinstall the pinned Notation verifier
         run: bash tools/install_aws_signer_notation.sh
+      - name: Authenticate the OCI clients to ECR
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+        run: |
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login \
+            --username AWS --password-stdin "${registry}"
       - name: Reinstall and configure the pinned ECR credential helper
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
