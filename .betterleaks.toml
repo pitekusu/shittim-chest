@@ -12,3 +12,10 @@ condition = "AND"
 regexTarget = "line"
 regexes = ['''^\s*AWS_SIGNER_NOTATION_KEY_SHA256:\s+[0-9a-f]{64}\s*$''']
 paths = ['''^\.github/workflows/release\.yml$''']
+
+[[rules.allowlists]]
+description = "Amazon ECR Credential Helper v0.12.0 public ARM64 checksum"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*ECR_CREDENTIAL_HELPER_SHA256:\s+5bdd30fb6c7a92462f5b454cce1aa906ca7926a6c2e39efad9613a7bf7661fac\s*$''']
+paths = ['''^\.github/workflows/release\.yml$''']
