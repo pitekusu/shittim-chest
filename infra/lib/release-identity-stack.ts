@@ -153,7 +153,13 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.planRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["ce:ListCostAllocationTags"],
+        actions: ["ce:GetAnomalyMonitors", "ce:ListCostAllocationTags"],
+        resources: ["*"],
+      }),
+    );
+    this.planRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:DescribeParameters"],
         resources: ["*"],
       }),
     );
@@ -163,13 +169,13 @@ export class ReleaseIdentityStack extends Stack {
         resources: ["*"],
       }),
     );
-    const bucketName = `cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`;
     this.planRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["s3:GetBucketLocation", "s3:ListBucket"],
-        resources: [`arn:aws:s3:::${bucketName}`],
+        actions: ["s3:GetBucketLocation"],
+        resources: this.cdkAssetBucketArns(),
       }),
     );
+    const bucketName = `cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`;
     this.planRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["s3:GetObject", "s3:PutObject"],
@@ -185,8 +191,9 @@ export class ReleaseIdentityStack extends Stack {
           "cloudformation:CreateChangeSet",
           "cloudformation:DeleteChangeSet",
           "cloudformation:DescribeChangeSet",
+          "cloudformation:DescribeStackResources",
           "cloudformation:DescribeStacks",
-          "cloudformation:GetTemplate",
+          "cloudformation:ListChangeSets",
         ],
         conditions: {
           StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
@@ -204,6 +211,12 @@ export class ReleaseIdentityStack extends Stack {
         resources: this.cloudFormationExecutionRoleArns(),
       }),
     );
+    this.planRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:PutObject"],
+        resources: this.cdkAssetObjectArns(),
+      }),
+    );
     this.acknowledgeRoleWildcards(this.planRole, [
       "AwsSolutions-IAM5[Resource::*]",
       ...this.stackWildcardAcknowledgments(RELEASE_STACK_NAMES),
@@ -218,6 +231,14 @@ export class ReleaseIdentityStack extends Stack {
           "The plan role can write only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
         [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/templates/shittim-chest/*]`]:
           "The plan role can write only content-addressed oversized CloudFormation templates in the account's fixed CDK asset bucket.",
+        ...Object.fromEntries(
+          [TOKYO_REGION, COST_REGION].flatMap((region) =>
+            this.cdkAssetObjectKeys().map((key) => [
+              `AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${region}/${key}]`,
+              "The plan role can read or upload only an exact 64-character content-addressed single-part CDK JSON or ZIP asset; it cannot delete any bootstrap asset.",
+            ]),
+          ),
+        ),
       },
     );
   }
@@ -228,14 +249,23 @@ export class ReleaseIdentityStack extends Stack {
         actions: [
           "cloudformation:DescribeChangeSet",
           "cloudformation:DescribeStacks",
+          "cloudformation:DeleteChangeSet",
           "cloudformation:ExecuteChangeSet",
-          "cloudformation:GetTemplate",
         ],
         conditions: {
           StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
           StringLikeIfExists: { "cloudformation:ChangeSetName": "release-*" },
         },
         resources: this.stackArns(RELEASE_STACK_NAMES),
+      }),
+    );
+    this.deployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["cloudformation:DescribeEvents"],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+        },
+        resources: this.changeSetArns(),
       }),
     );
     this.deployRole.addToPolicy(
@@ -278,7 +308,10 @@ export class ReleaseIdentityStack extends Stack {
     this.deployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["s3:GetObject"],
-        resources: [`arn:aws:s3:::${bucketName}/lambda/shittim-chest/*`],
+        resources: [
+          `arn:aws:s3:::${bucketName}/lambda/shittim-chest/*`,
+          ...this.cdkAssetObjectArns(),
+        ],
       }),
     );
     this.deployRole.addToPolicy(
@@ -311,6 +344,7 @@ export class ReleaseIdentityStack extends Stack {
     this.acknowledgeRoleWildcards(this.deployRole, [
       "AwsSolutions-IAM5[Resource::*]",
       `AwsSolutions-IAM5[Resource::arn:aws:ecs:${TOKYO_REGION}:*:service/shittim-chest-production/shittim-chest-production]`,
+      ...this.changeSetWildcardAcknowledgments(),
       ...this.stackWildcardAcknowledgments(RELEASE_STACK_NAMES),
     ]);
     this.deployRole.node.addMetadata(
@@ -360,11 +394,42 @@ export class ReleaseIdentityStack extends Stack {
     });
   }
 
+  private changeSetArns(): string[] {
+    return [TOKYO_REGION, COST_REGION].map(
+      (region) => `arn:aws:cloudformation:${region}:*:changeSet/release-*/*`,
+    );
+  }
+
+  private changeSetWildcardAcknowledgments(): string[] {
+    return [TOKYO_REGION, COST_REGION].map(
+      (region) =>
+        `AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:*:changeSet/release-*/*]`,
+    );
+  }
+
   private cloudFormationExecutionRoleArns(): string[] {
     return [TOKYO_REGION, COST_REGION].map(
       (region) =>
         `arn:aws:iam::${Aws.ACCOUNT_ID}:role/cdk-hnb659fds-cfn-exec-role-${Aws.ACCOUNT_ID}-${region}`,
     );
+  }
+
+  private cdkAssetBucketArns(): string[] {
+    return [TOKYO_REGION, COST_REGION].map(
+      (region) => `arn:aws:s3:::cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${region}`,
+    );
+  }
+
+  private cdkAssetObjectKeys(): string[] {
+    const contentHash = "?".repeat(64);
+    return [`${contentHash}.json`, `${contentHash}.zip`];
+  }
+
+  private cdkAssetObjectArns(): string[] {
+    return [TOKYO_REGION, COST_REGION].flatMap((region) => {
+      const bucketName = `cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${region}`;
+      return this.cdkAssetObjectKeys().map((key) => `arn:aws:s3:::${bucketName}/${key}`);
+    });
   }
 
   private acknowledgeRoleWildcards(role: iam.Role, ids: string[]): void {

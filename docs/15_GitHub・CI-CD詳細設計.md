@@ -68,11 +68,13 @@ Security Digestの`GITHUB_TOKEN` は`vulnerability-alerts: read`をDependabot Al
 
 Private Free向けの二つのrelease workflowは使用せず、`release.yml`へ統合する。
 
+`release.yml`はproduction runを未知の統合試験にしない。image pushより前に、required checks、private handle、OIDC claimとaccount/role bindingを確認し、固定concurrency内で前runの未実行`release-*` change setを回収してから、stable stack、stale change set、SSM 11件のmetadata、Signer/ECR/Inspector、cost allocation tag/CAD monitor、CDK assemblyの全file asset、固定tool/VEX取得を順にfail closedで検証する。回収は4固定stack/Region、正規のSHA/run/attempt名、CLI全page、Stack/ChangeSet ARNの同一account/Region、non-nested、未実行stateだけへ限定し、describeで再確認して削除後に全件再列挙する。`release-*` change set名はこのworkflow専用とし、手動AWS操作や別workflowは作成・実行しない。GitHub concurrency外のoperator mutationは直列化されないため、必要時は本releaseを停止して別runbookとして扱う。各provider境界は実行可能helperとprovider response fixtureで回帰し、文字列markerだけを根拠にしない。
+
 ### Deployment guard・lock lifecycle
 
 現在の`.github/workflows/production-deploy-guard.yml`は手動診断専用である。read-onlyのguard roleで9個のruntime activity record、1個のruntime state、1個のdeployment lockからなる固定11 record snapshotを取得し、STOPPED/IDLEであるか、lockがopenであるか、malformed/missing recordがないかをfail closedで報告する。このworkflowはlock取得、change set実行、deploy、rollback、lock解放を行わない。診断成功はdeploy許可やTOCTOU対策を意味しない。
 
-将来の実production releaseはEnvironment承認後、最初のlive mutation前にDynamoDB transactionでdeployment lockを`guard_id`、owner/actor、run ID、commit SHA、fencing tokenとともに原子的にacquireする。lockはchange set検証・実行、ECS deploy、smoke test、必要なrollbackの全間保持し、workflowの`finally`相当で取得時と完全一致する`guard_id`、owner/actor、fencing tokenだけを条件付きでreleaseする。並行run、stale owner、別fencing tokenによるreleaseは拒否する。
+実production releaseはEnvironment承認後、最初のlive mutation前にDynamoDB transactionでdeployment lockをUUIDv7 `guard_id`、owner/actor、run ID、commit SHA、fencing tokenとともに原子的にacquireする。lockはchange set検証・実行、ECS deploy、smoke test、必要なrollbackの全間保持し、workflowの`finally`相当で取得時と完全一致する`guard_id`、owner/actor、fencing tokenだけを条件付きでreleaseする。並行run、stale owner、別fencing tokenによるreleaseは拒否する。
 
 lockはexpiry時刻を超えても自動reclaim・自動unlockせず`LOCKED`のままfail closedとする。workflow中断時は運用runbookでGitHub runとCloudFormation/ECSの完了を確認し、取得時の正確なmetadataを使ってidempotent releaseし、immutable release auditを残す。force unlockは設けない。metadataを復元できない場合は変更を禁止しincident扱いとする。
 
@@ -81,10 +83,12 @@ deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別�
 ### Plan job
 
 - `workflow_dispatch`かつmain上のcommit SHAだけを受け付ける。ref、immutable repository ID、対象commitのCI成功をfail closedで検証する。
+- image mutationより前に4 stackのstable/clean状態、versioned runtime/personaを含むSSM SecureString 11件のmetadata、Signer/ECR/Inspector/Cost Explorer API、固定tool archive、Grype DB、署名済みvendor VEXを検証する。secret valueは取得しない。
+- `Stateful.assets.json`、`Runtime.assets.json`、`Operations.assets.json`、`CostGovernance.assets.json`の全file asset closureを列挙し、Docker asset 0件、期待4 template、Runtime provider ZIPを必須とする。`CliCredentialsStackSynthesizer`で短命plan roleからbootstrap bucketの64桁content-addressed root keyへ直接`publish-assets --force`し、広いbootstrap file-publishing roleをassumeしない。S3 checksumとassembly/source hashをrelease manifestへ固定し、CloudFormationより前とEnvironment承認後に再検証する。
 - release imageを1回だけbuild・試験・ECR pushし、一意なcommit SHA tagとmanifest digestを確定する。ECRは除外なしの完全immutableであり、deploy jobではtag再解決も再buildもしない。
 - commit SHA、image digest、4種のOCI referrer artifact digest、SBOM hash、scan result、Signer profile ARN、CDK template hash、CloudFormation change set ARN、version付きSSM parameter名をrelease manifestへ保存する。
 - push済みの最終image digestからOS packageとPython runtime dependencyを含むSPDX JSON SBOMを生成する。
-- ECR Managed Signingのstatusをimage digest指定でbounded pollingし、期待profileが`COMPLETE`にならなければ停止する。AWS公式NotationとSigner pluginを固定・検証して導入し、strict trust policyと期待profile ARNでdigest URIを暗号学的にverifyする。
+- ECR Managed Signingのstatusをimage digest指定でbounded pollingし、期待profileが`COMPLETE`にならなければ停止する。`FAILED`、profile不一致、terminal scan、Inspector terminal/重複、AccessDenied/Validationはpollingせずcontent-freeに即時停止し、明示したthrottling/service transientと`ScanNotFound`だけを有限retryする。AWS公式NotationとSigner pluginを固定・検証して導入し、strict trust policyと期待profile ARNでdigest URIを暗号学的にverifyする。
 - imageにはbuild provenanceとSBOMを別々のattestationとして、full SHAへpinした`actions/attest`で生成し、`push-to-registry`でECR OCI referrerへ保存する。deprecatedな`actions/attest-sbom`は新規利用しない。
 - ECR scan完了後にfindingをseverity別に正規化したcontent-free vulnerability assessmentをOCI referrerへattachする。拡張スキャンのfinding取得では、repository限定の`ecr:DescribeImageScanFindings`に加えて、AWS公式の読み取り要件である`inspector2:ListFindings`、`inspector2:ListAccountPermissions`、`inspector2:ListCoverage`をresource `*`でplan/deploy roleへ許可し、Inspectorのenable/disable権限は与えない。認可失敗はpollingせず即時にcontent-freeな分類で停止する。critical/high findingは期限・owner付きrisk acceptanceがない限り停止する。
 - ECR `list-image-referrers`でAWS Signer signature、SPDX SBOM、build provenance、vulnerability assessmentが全て同じimage digestへ`ACTIVE`で紐付くことを確認する。
@@ -99,6 +103,7 @@ deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別�
 - `notation verify`、GitHub attestation verify、ECR signing status、`list-image-referrers`をEnvironment承認後にも再実行する。ECR signing statusの`signingProfileArn`とNotation trust policyの`trustedIdentities`は、どちらもバージョンなしのSigner signing profile ARNへ完全一致させる。4種のreferrer不足、revoked/invalid signature、subject違い、artifact digest違いはfail closedとする。
 - task definition template内の全application image URIが`repository@sha256:<digest>`でmanifestと一致し、tag形式が0件であることを確認する。
 - live mutation前にdeployment lockをacquireし、change setを再生成せず実行する。READY/Discord/OpenAI/AWS connectivity smoke testと、失敗時のrollbackを含む全間でlockをholdし、完了成否にかかわらず正確なmetadataでreleaseを試みる。release失敗は成功扱いにしない。
+- plan開始時のstale sweep、plan失敗、deploy finally、独立cleanup jobは同じchange set cleanup helperを使う。作成/削除中を有限pollし、未実行setを削除後`ChangeSetNotFound`と全page再列挙の両方で消失を確認する。partial createの一時的な未検出は3回連続確認し、AccessDeniedやprovider errorを不存在として扱わない。独立cleanupのartifact取得失敗は`steps.<id>.outcome`で判定し、plan成功時は`needs.plan.outputs.plan_attempt`を正規表現検証して旧attemptのexact nameだけを回収する。このattempt modeは部分deploy済みstackの`EXECUTE_COMPLETE`/`OBSOLETE`をskipして後続の未実行setを回収し、`EXECUTE_IN_PROGRESS`/`EXECUTE_FAILED`は削除せず停止する。manifest modeで途中stackが実行中/実行失敗なら当該setを削除せず記録し、後続の未実行setをすべて回収してからcleanup全体を失敗させる。plan出力不正やdownload成功後のmanifest不正はfallbackで隠さず停止する。failed-jobs-only rerunでは旧attempt artifactのdeployを禁止し、cleanup後に全job rerunを要求する。
 - result、digest、guard metadata、acquire/release audit IDを本文なしでdeployment summaryへ記録する。
 - production専用`concurrency`は`cancel-in-progress=false`、job timeoutを設定する。
 
@@ -149,10 +154,12 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 - Deployment lockがexpiredまたはrelease失敗: 自動reclaimせず新規deployを停止し、[[17_運用保守・監視・障害対応設計]]の復旧手順を実施する。
 - Stateful replacementが表示: deployを停止し、ADR、PITR、backup境界を確認する。
 - Environment、ruleset、Secret scanningを設定できない: Actionsを無効化し、解消までimplementation/deployを開始しない。
+- partial create、workflow interruption、deploy failure: canonical cleanup helperでmanifest ARNまたは当該runのexact nameだけを対象とし、実行済みsetは削除せず、未実行setの消失を確認する。stackが`ROLLBACK_COMPLETE`なら原因resourceを確認し、stack削除以外で再利用しない。
+- 初回Runtime create rollback: 明示LogGroupは`RetainExceptOnCreate`により削除し、通常のstack delete/update replacementではretainする。旧template由来の空LogGroupが残った場合はstream 0、stored bytes 0、Runtime absentを再確認してからexact 7件だけを削除する。
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security settingは公開化時に構成済みである。Dependabot、read-only CI、managed SBOM照合、CodeQL、Betterleaksは運用済みである。Scale-to-Zeroのapplication/CDKと`Production Deploy Guard`はbranch上で実装され、local testとcredentialなしのsynthの対象である。ただしguard workflowは上記のdiagnostic-onlyであり、実release workflowのacquire/hold/release、AWS OIDC role、AWS bootstrap/deploy/resource更新、Discord Application/Interactions Endpoint更新は未実施である。
+Repository visibility、community metadata、ruleset、Environment、managed security setting、immutable OIDC subject、両RegionのCDK bootstrap、Stateful、ReleaseIdentity、versioned SSM metadataは構成済みである。Scale-to-Zero application/CDK、diagnostic-only `Production Deploy Guard`、実release workflowのplan/Environment deploy、deployment lock、asset/manifest/change set/admission/drift boundaryは実装済みである。初回Runtime attemptは未publish provider ZIPによりrollbackし、原因と再発防止を実装した。hardening IAMのReleaseIdentity先行更新、失敗Runtime/空LogGroup cleanup、Runtime/Operations/CostGovernanceの成功deploy、Discord Application endpoint切替と実受入は未実施であり、local/CI合格と同義にしない。
 
 ## 10. 公式資料確認記録
 
@@ -193,3 +200,8 @@ Repository visibility、community metadata、ruleset、Environment、managed sec
 | 2026-07-22 | DHI scan・OpenVEX | https://docs.docker.com/dhi/how-to/scan/、https://docs.docker.com/dhi/core-concepts/vex/ | Scout署名検証済みVEXをGrype `--vex`へ適用し、`not_affected`だけをvendor suppressionに使用 |
 | 2026-07-22 | DHI attestation verification | https://docs.docker.com/dhi/how-to/verify/ | `--verify --skip-tlog`でRekor非登録を許容しつつDocker公開鍵signature検証を維持 |
 | 2026-07-22 | Dependabot private registries | https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/remove-access-to-public-registries | `dhi.io`のDocker registry認証とDependabot secretsを構成 |
+| 2026-07-31 | CDK assets / `publish-assets` / `CliCredentialsStackSynthesizer` | https://docs.aws.amazon.com/cdk/v2/guide/assets.html、https://docs.aws.amazon.com/cdk/v2/guide/ref-cli-cmd-publish-assets.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.CliCredentialsStackSynthesizer.html | 全file assetをCloudFormation前に直接publishし、assemblyとS3 checksumへ固定 |
+| 2026-07-31 | CloudFormation change set / operation events | https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-changesets.html、https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeEvents.html、https://docs.aws.amazon.com/cli/latest/reference/cloudformation/list-change-sets.html、https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DeleteChangeSet.html | exact ARN cleanup、全page列挙、nested拒否、operation-scoped失敗診断、provider error fail closed |
+| 2026-07-31 | GitHub concurrency / steps context | https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency、https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#steps-context | 同一release workflowを直列化し、artifact downloadは`outcome`でfallback判定 |
+| 2026-07-31 | ECR image signing / scan、Inspector ScanStatus | https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ImageSigningStatus.html、https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ImageScanStatus.html、https://docs.aws.amazon.com/inspector/v2/APIReference/API_ScanStatus.html | pending/terminalを列挙してAccessDeniedやFAILEDを再試行しない |
+| 2026-07-31 | CloudFormation `RetainExceptOnCreate` | https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-deletionpolicy.html | 初回create rollbackの孤児LogGroupを防ぎ、通常delete/updateでは保持 |

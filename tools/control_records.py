@@ -335,7 +335,7 @@ def _parser() -> argparse.ArgumentParser:
     _add_table_options(acquire)
     _add_guard_context(acquire)
     acquire.add_argument("--guard-id", required=True)
-    acquire.add_argument("--lock-seconds", type=int, choices=range(60, 1801), default=900)
+    acquire.add_argument("--lock-seconds", type=int, choices=range(60, 3601), default=900)
     acquire.add_argument("--acknowledge-write", required=True)
     acquire.add_argument("--audit-output", type=Path, required=True)
     release = commands.add_parser("release", help="release the exact deployment fence")

@@ -39,7 +39,11 @@ STEP-09Aの`StatefulStack`は次を実装する。
 
 旧STEP-09BのSpot・`desiredCount=1` RuntimeStackは、PR `#85`のscale-to-zero sliceで置き換えた。現行の`RuntimeStack`はVPC、SG、ECS cluster/service、平常・break-glass task definition、HTTP API、3 Lambda、1分周期EventBridge rule、IAM role、SSM SecureString参照、CloudWatch Logsを実装する。image digestとruntime config versionはCloudFormation parameterとし、形式を`^sha256:[0-9a-f]{64}$`と`^v[0-9]{4}$`でfail closedに検証する。image digestにdefaultを設けず、releaseは平常とbreak-glassの検証済みdigestを必ず明示する。local/PRでは構成assertion、cdk-nag、credentialなしのstrict synthまでとし、AWS resourceはdeployしない。
 
-Scale-to-ZeroのCDKとapplicationはfeature branch上でlocal実装されたが、AWS accountへのbootstrap、deploy、resource作成・更新は未実施である。Discord ApplicationとInteractions Endpoint URLも未変更である。
+Runtimeの明示CloudWatch LogGroup 7件は`DeletionPolicy=RetainExceptOnCreate`、`UpdateReplacePolicy=Retain`とする。初回stack createがrollbackしたときだけ削除して同名resourceを孤児化させず、成功後の通常stack deleteまたはreplacementでは90日logを保持する。旧`Retain` templateの初回rollbackで残った空LogGroupは、対象stack不在、log stream 0、stored bytes 0を再確認してからexact nameだけを運用cleanupする。
+
+Scale-to-ZeroのCDK/application、両Regionのbootstrap、Stateful、ReleaseIdentityは実環境へ導入済みである。初回RuntimeはCDK生成provider ZIPのasset publish漏れでrollbackし、Operations/CostGovernanceはresourceを作成していない。再実行前に失敗Runtimeと旧template由来の空LogGroupをcleanupし、全CDK file assetを先行publishする。Discord ApplicationとInteractions Endpoint URLは未変更である。
+
+release対象のStateful、Runtime、Operations、CostGovernanceは`CliCredentialsStackSynthesizer`を使い、assemblyの4 templateとRuntime provider ZIPを短命plan roleの現在credentialからbootstrap S3へ直接publishする。destinationは各Regionの固定asset bucketと64桁content hash root keyの`.json`/`.zip`だけに限定し、`GetBucketLocation`とexact objectの`GetObject`/`PutObject`だけを許可する。fileは5 MiB未満、ZIP sourceは1 MiB・1,000 files・path合計512 KiB以下にfail closedで制限し、S3 `ChecksumSHA256`がsingle-part全体hashである境界を維持する。標準bootstrap file-publishing roleはasset削除を含む広い権限を持つためrelease planからassumeしない。ReleaseIdentity自身のoperator更新は標準CDK synthesizerを維持する。
 
 STEP-09C-Bでは`OperationsStack`を追加し、Runtime/Statefulの後に一方向依存させる。deploy時必須・defaultなし・`NoEcho`の`OperatorNotificationEmail` parameter、TLS必須の単一SNS topic、email subscription、9 metric alarm、critical/warningの2 composite alarm、1 dashboard、異常ECS task stop用EventBridge ruleだけを作成する。Container Insights、helper Lambda、CloudWatch Logs event capture、KMS customer keyは追加しない。SNSは本文やuser contentではなくalarmと絞り込んだlifecycle metadataだけを扱うため、費用とkey-policy運用を増やすcustomer managed KMS keyを使用しない。subscriptionはdeploy後にoperatorが受信emailから確認するまで`PendingConfirmation`であり、未確認状態を運用開始扱いにしない。
 
@@ -138,6 +142,8 @@ release planとEnvironment承認後のdeploy jobは同じdigestへ次を順番�
 3. AWS公式Notation installerをinstaller `2.2.0-1`、同梱Notation CLI `1.3.2`、AWS Signer plugin `1.0.2292`として個別にversion固定し、installer・signature・公開鍵のdigestとPGP fingerprintも検証して導入する。AWS Signer trust store、strict policy、期待profile ARNを使って`notation verify <repository>@sha256:<digest>`を実行し、署名の暗号学的検証・revocation確認とする。signing statusだけで代替しない。
 4. `list-image-referrers --subject-id imageDigest=...`でsignature、SPDX SBOM、build provenance、vulnerability assessmentの4種が`ACTIVE`であることを確認し、artifact digestをmanifestと一致させる。
 5. GitHub artifact attestationはrepository identity、workflow、commit、subject digestを検証し、SBOM hashとscan gateを再確認する。
+
+Signer `FAILED`/profile不一致、ECR `FAILED`/`UNSUPPORTED_IMAGE`/`SCAN_ELIGIBILITY_EXPIRED`/`FINDINGS_UNAVAILABLE`/`LIMIT_EXCEEDED`/`IMAGE_ARCHIVED`、Inspector terminal/ambiguous coverage、AccessDenied/Validationは即時停止する。`IN_PROGRESS`/`PENDING`、Inspector `PENDING_INITIAL_SCAN`/`SCAN_IN_PROGRESS`/`INTERNAL_ERROR`/`PENDING_REVIVAL_SCAN`、`ScanNotFound`、明示的なthrottling/service transientだけを有限retryする。provider stderr、failure reason、private resource metadataはworkflow logへ転送しない。
 
 STEP-09Bではtask definitionがdigest URI以外を拒否するassertionを追加する。ECS `PRE_SCALE_UP` Lambda lifecycle hookによるserver-side signing status/referrer admissionはOperations監視から分離し、STEP-10-Aでrelease supply-chain gateと同時に実装する。timeoutや不一致は`FAILED`としてrollbackする。暗号学的Notation verificationはrelease workflowを正とし、hookは防御層として用いる。
 
@@ -239,3 +245,7 @@ toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示�
 | 2026-07-30 | Cost allocation tags | https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_ListCostAllocationTags.html、https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_UpdateCostAllocationTagsStatus.html | `Project` user-defined tagのBilling出現を確認後に`Active`へ更新し、CostGovernance deploy gateを解除 |
 | 2026-07-30 | AWS Signer Notation prerequisites / installer CHANGELOG | https://docs.aws.amazon.com/signer/latest/developerguide/image-signing-prerequisites.html、https://d2hvyiie56hcat.cloudfront.net/CHANGELOG | installer `2.2.0-1`と同梱CLI `1.3.2`・plugin `1.0.2292`は別versionとして固定・検証する |
 | 2026-07-19 | CloudWatch Logs data protection | https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/mask-sensitive-log-data.html | application/Exec log groupの非機密ログ原則に追加防御としてmask policyを適用 |
+| 2026-07-31 | CDK assets / CLI credential synthesizer | https://docs.aws.amazon.com/cdk/v2/guide/assets.html、https://docs.aws.amazon.com/cdk/v2/guide/ref-cli-cmd-publish-assets.html、https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.CliCredentialsStackSynthesizer.html | 全file assetを短命plan credentialでCloudFormation前に直接publish |
+| 2026-07-31 | S3 multipart upload/checksum boundary | https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html | composite checksumへ移行しないsize上限を事前検証し、plan roleをsingle-part Putへ限定 |
+| 2026-07-31 | CloudFormation DeletionPolicy | https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-attribute-deletionpolicy.html | `RetainExceptOnCreate`で初回rollback孤児化を防止 |
+| 2026-07-31 | ECR/Inspector scan status | https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ImageSigningStatus.html、https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_ImageScanStatus.html、https://docs.aws.amazon.com/inspector/v2/APIReference/API_ScanStatus.html | pendingとterminalを列挙して認可・終端失敗を即時停止 |

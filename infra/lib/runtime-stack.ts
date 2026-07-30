@@ -183,13 +183,13 @@ export class RuntimeStack extends Stack {
     this.applicationLogGroup = new logs.LogGroup(this, "ApplicationLogGroup", {
       dataProtectionPolicy,
       logGroupName: "/ecs/shittim-chest/production/application",
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
       retention: logs.RetentionDays.THREE_MONTHS,
     });
     this.breakGlassLogGroup = new logs.LogGroup(this, "BreakGlassExecLogGroup", {
       dataProtectionPolicy,
       logGroupName: "/ecs/shittim-chest/production/break-glass-exec",
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
       retention: logs.RetentionDays.THREE_MONTHS,
     });
 
@@ -428,7 +428,7 @@ export class RuntimeStack extends Stack {
         `${options.functionName}-log-protection`,
       ),
       logGroupName: `/aws/lambda/${options.functionName}`,
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
       retention: logs.RetentionDays.THREE_MONTHS,
     });
     const role = this.lambdaRole(
@@ -598,7 +598,7 @@ export class RuntimeStack extends Stack {
         "shittim-chest-discord-interactions-access-log-protection",
       ),
       logGroupName: "/aws/apigateway/shittim-chest/production/discord-interactions",
-      removalPolicy: RemovalPolicy.RETAIN,
+      removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
       retention: logs.RetentionDays.THREE_MONTHS,
     });
     const api = new apigatewayv2.HttpApi(this, "DiscordInteractionsApi", {

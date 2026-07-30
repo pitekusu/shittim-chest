@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import re
 import sys
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import cast
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -51,6 +52,52 @@ _STACKS = (
     "ShittimChest-Prod-Operations",
     "ShittimChest-Prod-CostGovernance",
 )
+_CDK_ASSET_STACKS = (
+    ("ShittimChest-Prod-Stateful", "Stateful", "ap-northeast-1"),
+    ("ShittimChest-Prod-Runtime", "Runtime", "ap-northeast-1"),
+    ("ShittimChest-Prod-Operations", "Operations", "ap-northeast-1"),
+    ("ShittimChest-Prod-CostGovernance", "CostGovernance", "us-east-1"),
+)
+_ACCOUNT_ID = re.compile(r"[0-9]{12}\Z")
+_CONTENT_HASH = re.compile(r"[0-9a-f]{64}\Z")
+_CDK_ASSET_MANIFEST_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
+_S3_SHA256_CHECKSUM = re.compile(r"[A-Za-z0-9+/]{43}=\Z")
+_S3_SINGLE_PART_MAX_BYTES = 5 * 1024 * 1024 - 1
+_ZIP_SOURCE_MAX_BYTES = 1024 * 1024
+_ZIP_SOURCE_MAX_FILES = 1000
+_ZIP_SOURCE_MAX_PATH_BYTES = 512 * 1024
+
+
+def _validate_single_part_asset_source(source: Path, *, packaging: str) -> None:
+    """Keep HeadObject SHA-256 evidence unambiguously single-part."""
+
+    if packaging == "file":
+        if not source.is_file() or source.is_symlink():
+            raise ValueError("CDK file asset source does not exist safely")
+        if source.stat().st_size > _S3_SINGLE_PART_MAX_BYTES:
+            raise ValueError("CDK file asset exceeds the single-part checksum boundary")
+        return
+    if not source.is_dir() or source.is_symlink():
+        raise ValueError("CDK zip asset source does not exist safely")
+    file_count = 0
+    path_bytes = 0
+    total_bytes = 0
+    for entry in source.rglob("*"):
+        if entry.is_symlink():
+            raise ValueError("CDK zip asset source contains a symlink")
+        if entry.is_dir():
+            continue
+        if not entry.is_file():
+            raise ValueError("CDK zip asset source contains a special file")
+        file_count += 1
+        path_bytes += len(entry.relative_to(source).as_posix().encode("utf-8"))
+        total_bytes += entry.stat().st_size
+        if (
+            file_count > _ZIP_SOURCE_MAX_FILES
+            or path_bytes > _ZIP_SOURCE_MAX_PATH_BYTES
+            or total_bytes > _ZIP_SOURCE_MAX_BYTES
+        ):
+            raise ValueError("CDK zip asset exceeds the single-part checksum boundary")
 
 
 def verify_image_evidence(
@@ -198,11 +245,304 @@ def create_vulnerability_predicate(
     }
 
 
+def create_cdk_asset_evidence(
+    *,
+    account: str,
+    assembly_dir: Path,
+    require_sources: bool = True,
+) -> dict[str, object]:
+    """Create a complete, canonical inventory from the four CDK asset manifests."""
+
+    if _ACCOUNT_ID.fullmatch(account) is None:
+        raise ValueError("CDK asset account is invalid")
+    if not assembly_dir.is_dir():
+        raise ValueError("CDK cloud assembly does not exist")
+    manifests: dict[str, object] = {}
+    files: list[dict[str, object]] = []
+    for stack, artifact, expected_region in _CDK_ASSET_STACKS:
+        manifest_path = assembly_dir / f"{artifact}.assets.json"
+        if not manifest_path.is_file():
+            raise ValueError(f"CDK asset manifest is missing: {artifact}")
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = _object(json.loads(manifest_bytes), f"CDK asset manifest {artifact}")
+        if set(manifest) != {"dockerImages", "files", "version"}:
+            raise ValueError("CDK asset manifest fields are invalid")
+        version = manifest.get("version")
+        if not isinstance(version, str) or _CDK_ASSET_MANIFEST_VERSION.fullmatch(version) is None:
+            raise ValueError("CDK asset manifest version is invalid")
+        docker_images = _object(manifest.get("dockerImages"), "CDK Docker assets")
+        if docker_images:
+            raise ValueError("CDK Docker assets must use the signed release image path")
+        raw_files = _object(manifest.get("files"), "CDK file assets")
+        if not raw_files:
+            raise ValueError("CDK file asset manifest is empty")
+        manifests[stack] = {
+            "artifact": artifact,
+            "region": expected_region,
+            "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        }
+        for asset_id in sorted(raw_files):
+            if _CONTENT_HASH.fullmatch(asset_id) is None:
+                raise ValueError("CDK file asset ID is invalid")
+            asset = _object(raw_files[asset_id], "CDK file asset")
+            if set(asset) != {"destinations", "displayName", "source"}:
+                raise ValueError("CDK file asset fields are invalid")
+            _string(asset, "displayName", "CDK file asset")
+            source = _object(asset.get("source"), "CDK file asset source")
+            if set(source) != {"packaging", "path"}:
+                raise ValueError("CDK file asset source fields are invalid")
+            source_path = _string(source, "path", "CDK file asset source")
+            packaging = _string(source, "packaging", "CDK file asset source")
+            if packaging not in {"file", "zip"}:
+                raise ValueError("CDK file asset packaging is invalid")
+            relative_path = PurePosixPath(source_path)
+            if (
+                relative_path.is_absolute()
+                or relative_path.as_posix() != source_path
+                or any(part in {"", ".", ".."} for part in relative_path.parts)
+            ):
+                raise ValueError("CDK file asset source path is unsafe")
+            if require_sources:
+                source_on_disk = assembly_dir.joinpath(*relative_path.parts)
+                assembly_root = assembly_dir.resolve()
+                try:
+                    source_on_disk.resolve().relative_to(assembly_root)
+                except ValueError:
+                    raise ValueError("CDK file asset source escapes the assembly") from None
+                _validate_single_part_asset_source(source_on_disk, packaging=packaging)
+            destinations = _object(asset.get("destinations"), "CDK file asset destinations")
+            if len(destinations) != 1:
+                raise ValueError("CDK file asset must have exactly one destination")
+            destination = _object(
+                next(iter(destinations.values())),
+                "CDK file asset destination",
+            )
+            if set(destination) != {"bucketName", "objectKey", "region"}:
+                raise ValueError("CDK file asset destination fields are invalid")
+            bucket = _string(destination, "bucketName", "CDK file asset destination")
+            object_key = _string(destination, "objectKey", "CDK file asset destination")
+            region = _string(destination, "region", "CDK file asset destination")
+            expected_bucket = f"cdk-hnb659fds-assets-{account}-{expected_region}"
+            if bucket != expected_bucket or region != expected_region:
+                raise ValueError("CDK file asset destination is outside the expected environment")
+            if re.fullmatch(rf"{asset_id}\.(?:json|zip)", object_key) is None:
+                raise ValueError("CDK file asset object key is not content-addressed")
+            if packaging == "zip" and object_key != f"{asset_id}.zip":
+                raise ValueError("zipped CDK file asset must use a zip object key")
+            files.append(
+                {
+                    "stack": stack,
+                    "asset_id": asset_id,
+                    "source_path": source_path,
+                    "packaging": packaging,
+                    "region": region,
+                    "bucket": bucket,
+                    "object_key": object_key,
+                    "publisher": "current_credentials",
+                    "s3_checksum_sha256": None,
+                }
+            )
+    evidence = {
+        "schema_version": 1,
+        "manifests": manifests,
+        "files": files,
+    }
+    validate_cdk_asset_evidence(evidence, account=account, require_checksums=False)
+    return evidence
+
+
+def validate_cdk_asset_evidence(
+    value: object,
+    *,
+    account: str,
+    require_checksums: bool = True,
+) -> None:
+    """Reject incomplete or widened CDK asset inventories."""
+
+    if _ACCOUNT_ID.fullmatch(account) is None:
+        raise ValueError("CDK asset account is invalid")
+    root = _object(value, "CDK asset evidence")
+    if set(root) != {"files", "manifests", "schema_version"} or root.get("schema_version") != 1:
+        raise ValueError("CDK asset evidence schema is invalid")
+    manifests = _object(root.get("manifests"), "CDK asset evidence manifests")
+    if tuple(manifests) != _STACKS:
+        raise ValueError("CDK asset evidence manifests are incomplete")
+    expected_by_stack = {stack: (artifact, region) for stack, artifact, region in _CDK_ASSET_STACKS}
+    for stack, raw_manifest in manifests.items():
+        manifest = _object(raw_manifest, "CDK asset evidence manifest")
+        if set(manifest) != {"artifact", "region", "sha256"}:
+            raise ValueError("CDK asset evidence manifest fields are invalid")
+        artifact, region = expected_by_stack[stack]
+        if manifest.get("artifact") != artifact or manifest.get("region") != region:
+            raise ValueError("CDK asset evidence manifest identity is invalid")
+        if (
+            not isinstance(value_hash := manifest.get("sha256"), str)
+            or _CONTENT_HASH.fullmatch(value_hash) is None
+        ):
+            raise ValueError("CDK asset evidence manifest hash is invalid")
+    files = _array(root.get("files"), "CDK asset evidence files")
+    seen: set[tuple[str, str, str, str]] = set()
+    stacks_with_template: set[str] = set()
+    runtime_zip_found = False
+    expected_fields = {
+        "asset_id",
+        "bucket",
+        "object_key",
+        "packaging",
+        "publisher",
+        "region",
+        "s3_checksum_sha256",
+        "source_path",
+        "stack",
+    }
+    for raw_file in files:
+        record = _object(raw_file, "CDK asset evidence file")
+        if set(record) != expected_fields:
+            raise ValueError("CDK asset evidence file fields are invalid")
+        stack = _string(record, "stack", "CDK asset evidence file")
+        if stack not in expected_by_stack:
+            raise ValueError("CDK asset evidence stack is invalid")
+        artifact, expected_region = expected_by_stack[stack]
+        asset_id = _string(record, "asset_id", "CDK asset evidence file")
+        if _CONTENT_HASH.fullmatch(asset_id) is None:
+            raise ValueError("CDK asset evidence file ID is invalid")
+        source_path = _string(record, "source_path", "CDK asset evidence file")
+        relative_path = PurePosixPath(source_path)
+        if (
+            relative_path.is_absolute()
+            or relative_path.as_posix() != source_path
+            or any(part in {"", ".", ".."} for part in relative_path.parts)
+        ):
+            raise ValueError("CDK asset evidence source path is unsafe")
+        packaging = _string(record, "packaging", "CDK asset evidence file")
+        if packaging not in {"file", "zip"}:
+            raise ValueError("CDK asset evidence packaging is invalid")
+        region = _string(record, "region", "CDK asset evidence file")
+        bucket = _string(record, "bucket", "CDK asset evidence file")
+        object_key = _string(record, "object_key", "CDK asset evidence file")
+        if region != expected_region or bucket != (
+            f"cdk-hnb659fds-assets-{account}-{expected_region}"
+        ):
+            raise ValueError("CDK asset evidence destination is invalid")
+        if record.get("publisher") != "current_credentials":
+            raise ValueError("CDK asset evidence publisher is invalid")
+        if re.fullmatch(rf"{asset_id}\.(?:json|zip)", object_key) is None:
+            raise ValueError("CDK asset evidence object key is invalid")
+        if packaging == "zip" and object_key != f"{asset_id}.zip":
+            raise ValueError("CDK asset evidence zip object key is invalid")
+        checksum = record.get("s3_checksum_sha256")
+        if require_checksums:
+            if not isinstance(checksum, str) or _S3_SHA256_CHECKSUM.fullmatch(checksum) is None:
+                raise ValueError("CDK asset evidence S3 checksum is invalid")
+        elif checksum is not None:
+            raise ValueError("unpublished CDK asset evidence must not contain a checksum")
+        identity = (stack, asset_id, bucket, object_key)
+        if identity in seen:
+            raise ValueError("CDK asset evidence file is duplicated")
+        seen.add(identity)
+        if source_path == f"{artifact}.template.json" and packaging == "file":
+            if object_key != f"{asset_id}.json":
+                raise ValueError("CDK template asset object key is invalid")
+            stacks_with_template.add(stack)
+        if (
+            stack == "ShittimChest-Prod-Runtime"
+            and packaging == "zip"
+            and source_path == f"asset.{asset_id}"
+        ):
+            runtime_zip_found = True
+    if stacks_with_template != set(_STACKS):
+        raise ValueError("CDK template asset evidence is incomplete")
+    if not runtime_zip_found:
+        raise ValueError("Runtime CDK provider asset is missing")
+    if len(files) != 5:
+        raise ValueError("CDK asset evidence must contain exactly five files")
+
+
+def bind_cdk_asset_checksums(
+    value: object,
+    *,
+    account: str,
+    assembly_dir: Path,
+    checksums: object,
+) -> dict[str, object]:
+    """Bind S3 full-object checksums to the exact unpublished asset inventory."""
+
+    validate_cdk_asset_evidence(value, account=account, require_checksums=False)
+    root = _object(value, "CDK asset evidence")
+    files = _array(root.get("files"), "CDK asset evidence files")
+    checksum_records = _array(checksums, "CDK asset S3 checksums")
+    if len(files) != len(checksum_records):
+        raise ValueError("CDK asset S3 checksum inventory is incomplete")
+    bound_files: list[dict[str, object]] = []
+    for raw_file, raw_checksum in zip(files, checksum_records, strict=True):
+        record = dict(_object(raw_file, "CDK asset evidence file"))
+        checksum_record = _object(raw_checksum, "CDK asset S3 checksum")
+        if set(checksum_record) != {
+            "asset_id",
+            "bucket",
+            "checksum_sha256",
+            "object_key",
+            "region",
+        }:
+            raise ValueError("CDK asset S3 checksum fields are invalid")
+        for key in ("asset_id", "bucket", "object_key", "region"):
+            if checksum_record.get(key) != record.get(key):
+                raise ValueError("CDK asset S3 checksum identity is invalid")
+        checksum = _string(checksum_record, "checksum_sha256", "CDK asset S3 checksum")
+        if _S3_SHA256_CHECKSUM.fullmatch(checksum) is None:
+            raise ValueError("CDK asset S3 checksum is invalid")
+        if record.get("packaging") == "file":
+            source_path = PurePosixPath(_string(record, "source_path", "CDK asset evidence file"))
+            source_on_disk = assembly_dir.joinpath(*source_path.parts)
+            if not source_on_disk.is_file() or source_on_disk.is_symlink():
+                raise ValueError("CDK file asset source does not exist safely")
+            expected_checksum = base64.b64encode(
+                hashlib.sha256(source_on_disk.read_bytes()).digest()
+            ).decode("ascii")
+            if checksum != expected_checksum:
+                raise ValueError("CDK file asset S3 checksum does not match its source")
+        record["s3_checksum_sha256"] = checksum
+        bound_files.append(record)
+    bound = {
+        "schema_version": root["schema_version"],
+        "manifests": dict(_object(root.get("manifests"), "CDK asset evidence manifests")),
+        "files": bound_files,
+    }
+    validate_cdk_asset_evidence(bound, account=account)
+    return bound
+
+
+def validate_cdk_asset_evidence_against_assembly(
+    value: object,
+    *,
+    account: str,
+    assembly_dir: Path,
+) -> None:
+    """Bind downloaded evidence back to the exact asset manifests."""
+
+    validate_cdk_asset_evidence(value, account=account)
+    expected = create_cdk_asset_evidence(
+        account=account,
+        assembly_dir=assembly_dir,
+        require_sources=False,
+    )
+    actual = dict(_object(value, "CDK asset evidence"))
+    actual_files = []
+    for raw_file in _array(actual.get("files"), "CDK asset evidence files"):
+        record = dict(_object(raw_file, "CDK asset evidence file"))
+        record["s3_checksum_sha256"] = None
+        actual_files.append(record)
+    actual["files"] = actual_files
+    if actual != expected:
+        raise ValueError("CDK asset evidence does not match the cloud assembly")
+
+
 def create_manifest(
     *,
     break_glass_risk_evidence: Mapping[str, Path],
     break_glass_sbom_path: Path,
     break_glass_verification: object,
+    cdk_assets: object,
     change_sets: object,
     commit_sha: str,
     lambda_bundle: object,
@@ -221,6 +561,7 @@ def create_manifest(
     if repository_match is None:
         raise ValueError("repository URI is invalid")
     account = repository_match.group(1)
+    validate_cdk_asset_evidence(cdk_assets, account=account)
     images = {
         "normal": _manifest_image(
             repository_uri=repository_uri,
@@ -268,12 +609,13 @@ def create_manifest(
     if not runtime_config_parameter.startswith("/shittim-chest/production/runtime/v"):
         raise ValueError("runtime config parameter is not versioned")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "repository": "pitekusu/shittim-chest",
         "workflow": ".github/workflows/release.yml",
         "commit_sha": commit_sha,
         "images": images,
         "templates": dict(template_hashes),
+        "cdk_assets": cdk_assets,
         "change_sets": dict(changes),
         "lambda_bundle": dict(bundle),
         "runtime_config_parameter": runtime_config_parameter,
@@ -293,11 +635,12 @@ def validate_manifest(value: object) -> None:
         "commit_sha",
         "images",
         "templates",
+        "cdk_assets",
         "change_sets",
         "lambda_bundle",
         "runtime_config_parameter",
     }
-    if set(root) != expected or root.get("schema_version") != 1:
+    if set(root) != expected or root.get("schema_version") != 2:
         raise ValueError("release manifest schema is invalid")
     if root.get("repository") != "pitekusu/shittim-chest":
         raise ValueError("release manifest repository is invalid")
@@ -388,6 +731,9 @@ def validate_manifest(value: object) -> None:
             or re.fullmatch(r"[0-9a-f]{64}", template_hash) is None
         ):
             raise ValueError("release template hash is invalid")
+    if release_account is None:
+        raise ValueError("release account is missing")
+    validate_cdk_asset_evidence(root.get("cdk_assets"), account=release_account)
     bundle = _object(root.get("lambda_bundle"), "release Lambda bundle")
     if set(bundle) != {"bucket", "key", "sha256"}:
         raise ValueError("release Lambda bundle is invalid")
@@ -638,6 +984,20 @@ def _parser() -> argparse.ArgumentParser:
     predicate.add_argument("--scan", type=Path, required=True)
     predicate.add_argument("--risk-gate-passed", action="store_true")
     predicate.add_argument("--output", type=Path, required=True)
+    create_assets = commands.add_parser("create-cdk-assets")
+    create_assets.add_argument("--account", required=True)
+    create_assets.add_argument("--assembly", type=Path, required=True)
+    create_assets.add_argument("--output", type=Path, required=True)
+    bind_assets = commands.add_parser("bind-cdk-asset-checksums")
+    bind_assets.add_argument("evidence", type=Path)
+    bind_assets.add_argument("--account", required=True)
+    bind_assets.add_argument("--assembly", type=Path, required=True)
+    bind_assets.add_argument("--checksums", type=Path, required=True)
+    bind_assets.add_argument("--output", type=Path, required=True)
+    validate_assets = commands.add_parser("validate-cdk-assets")
+    validate_assets.add_argument("evidence", type=Path)
+    validate_assets.add_argument("--account", required=True)
+    validate_assets.add_argument("--assembly", type=Path, required=True)
     create = commands.add_parser("create-manifest")
     create.add_argument("--break-glass-raw-grype", type=Path, required=True)
     create.add_argument("--break-glass-vendor-vex", type=Path, required=True)
@@ -645,6 +1005,7 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--break-glass-sbom", type=Path, required=True)
     create.add_argument("--break-glass-verification", type=Path, required=True)
     create.add_argument("--change-sets", type=Path, required=True)
+    create.add_argument("--cdk-assets", type=Path, required=True)
     create.add_argument("--commit-sha", required=True)
     create.add_argument("--lambda-bundle", type=Path, required=True)
     create.add_argument("--repository-uri", required=True)
@@ -697,6 +1058,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                     scan=_read(args.scan),
                 ),
             )
+        elif args.command == "create-cdk-assets":
+            _write(
+                args.output,
+                create_cdk_asset_evidence(
+                    account=args.account,
+                    assembly_dir=args.assembly,
+                ),
+            )
+        elif args.command == "bind-cdk-asset-checksums":
+            _write(
+                args.output,
+                bind_cdk_asset_checksums(
+                    _read(args.evidence),
+                    account=args.account,
+                    assembly_dir=args.assembly,
+                    checksums=_read(args.checksums),
+                ),
+            )
+        elif args.command == "validate-cdk-assets":
+            validate_cdk_asset_evidence_against_assembly(
+                _read(args.evidence),
+                account=args.account,
+                assembly_dir=args.assembly,
+            )
         elif args.command == "create-manifest":
             result = create_manifest(
                 break_glass_risk_evidence={
@@ -706,6 +1091,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 },
                 break_glass_sbom_path=args.break_glass_sbom,
                 break_glass_verification=_read(args.break_glass_verification),
+                cdk_assets=_read(args.cdk_assets),
                 change_sets=_read(args.change_sets),
                 commit_sha=args.commit_sha,
                 lambda_bundle=_read(args.lambda_bundle),

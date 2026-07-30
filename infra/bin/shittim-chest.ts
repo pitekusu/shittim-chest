@@ -1,5 +1,11 @@
 #!/usr/bin/env node
-import { App, Environment, Tags, Validations } from "aws-cdk-lib";
+import {
+  App,
+  CliCredentialsStackSynthesizer,
+  Environment,
+  Tags,
+  Validations,
+} from "aws-cdk-lib";
 import { AwsSolutionsChecks } from "cdk-nag";
 
 import { CostGovernanceStack } from "../lib/cost-governance-stack";
@@ -19,6 +25,10 @@ function costManagementEnvironment(): Environment {
   return { account: process.env.CDK_DEFAULT_ACCOUNT, region: COST_MANAGEMENT_REGION };
 }
 
+function directAssetSynthesizer(): CliCredentialsStackSynthesizer {
+  return new CliCredentialsStackSynthesizer();
+}
+
 const app = new App();
 
 Tags.of(app).add("Project", "shittim-chest");
@@ -29,6 +39,7 @@ Validations.of(app).addPlugins(new AwsSolutionsChecks(app, { verbose: true }));
 const stateful = new StatefulStack(app, "Stateful", {
   env: productionEnvironment(),
   stackName: "ShittimChest-Prod-Stateful",
+  synthesizer: directAssetSynthesizer(),
   terminationProtection: true,
 });
 const releaseIdentity = new ReleaseIdentityStack(app, "ReleaseIdentity", {
@@ -46,6 +57,7 @@ const runtime = new RuntimeStack(app, "Runtime", {
   imageRepository: stateful.imageRepository,
   signingProfileArn: stateful.signingProfile.attrArn,
   stackName: "ShittimChest-Prod-Runtime",
+  synthesizer: directAssetSynthesizer(),
 });
 runtime.addDependency(stateful);
 const operations = new OperationsStack(app, "Operations", {
@@ -54,11 +66,13 @@ const operations = new OperationsStack(app, "Operations", {
   env: productionEnvironment(),
   service: runtime.service,
   stackName: "ShittimChest-Prod-Operations",
+  synthesizer: directAssetSynthesizer(),
 });
 operations.addDependency(runtime);
 new CostGovernanceStack(app, "CostGovernance", {
   env: costManagementEnvironment(),
   stackName: "ShittimChest-Prod-CostGovernance",
+  synthesizer: directAssetSynthesizer(),
 });
 
 app.synth();
