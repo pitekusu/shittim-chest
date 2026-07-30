@@ -222,6 +222,7 @@ def _validate_release(directory: Path) -> None:
         "ACTIONS_ID_TOKEN_REQUEST_URL",
         "repository_owner_id",
         "'Analyze (python)'",
+        "map({Status, TagKey, Type})",
         "vars.AWS_RELEASE_PLAN_ROLE_ARN",
         "vars.AWS_RELEASE_DEPLOY_ROLE_ARN",
         "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",

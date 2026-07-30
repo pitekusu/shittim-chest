@@ -78,6 +78,22 @@ def test_release_requires_the_locked_node_version(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_release_normalizes_cost_tag_metadata_before_comparison(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            ".CostAllocationTags | map({Status, TagKey, Type}) ==",
+            ".CostAllocationTags ==",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(
