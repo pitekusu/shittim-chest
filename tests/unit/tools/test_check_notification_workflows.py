@@ -62,6 +62,22 @@ def test_repeated_action_version_requires_one_commit_pin(tmp_path: Path) -> None
         validate_notification_workflows(directory)
 
 
+def test_release_requires_the_locked_node_version(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '          node-version: "24.18.0"',
+            "          node-version-file: .node-version",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(

@@ -216,6 +216,7 @@ def _validate_release(directory: Path) -> None:
         "name: Production Release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-24.04-arm",
+        'node-version: "24.18.0"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
