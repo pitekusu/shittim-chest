@@ -89,6 +89,14 @@ describe("ReleaseIdentityStack", () => {
     const plan = policyFor("ReleasePlanRole");
     const deploy = policyFor("ReleaseDeployRole");
     const drift = policyFor("ReleaseDriftRole");
+    const deployPolicy = policies.find((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes("ReleaseDeployRole"),
+    );
+    const describeEventsStatement = deployPolicy?.Properties.PolicyDocument.Statement.find(
+      (statement: { Action?: string | string[] }) =>
+        [statement.Action].flat().includes("cloudformation:DescribeEvents"),
+    );
+    const describeEventsResources = JSON.stringify(describeEventsStatement?.Resource);
 
     expect(plan).toContain("ecr:PutImage");
     expect(plan).toContain("ecr:BatchGetImage");
@@ -115,6 +123,8 @@ describe("ReleaseIdentityStack", () => {
     expect(deploy).toContain("cloudformation:DescribeEvents");
     expect(deploy).not.toContain("cloudformation:DescribeStackEvents");
     expect(deploy).toContain("changeSet/release-*");
+    expect(describeEventsResources).toContain("stack/ShittimChest-Prod-Runtime/*");
+    expect(describeEventsResources).toContain("changeSet/release-*/*");
     expect(deploy).toContain("ecr:BatchGetImage");
     expect(deploy).toContain("inspector2:ListFindings");
     expect(deploy).toContain("inspector2:ListAccountPermissions");

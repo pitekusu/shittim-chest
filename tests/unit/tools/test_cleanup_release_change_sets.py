@@ -407,8 +407,8 @@ def test_partial_name_does_not_accept_two_eventual_consistency_misses(tmp_path: 
     assert _operations(environment).count("cloudformation/describe-change-set") == 4 * len(STACKS)
 
 
-@pytest.mark.parametrize("scenario", ["executed", "obsolete"])
-def test_manifest_safely_skips_executed_or_superseded_sets(
+@pytest.mark.parametrize("scenario", ["executed", "execute-failed", "obsolete"])
+def test_manifest_safely_skips_consumed_or_superseded_sets(
     tmp_path: Path,
     scenario: str,
 ) -> None:
@@ -434,37 +434,53 @@ def test_attempt_fallback_skips_completed_stack_and_cleans_later_stacks(
     )
 
 
-@pytest.mark.parametrize(
-    "scenario",
-    ["partial-unsafe-manifest-failed", "partial-unsafe-manifest-in-progress"],
-)
-def test_manifest_reports_unsafe_execution_after_cleaning_later_stacks(
+def test_manifest_skips_failed_execution_and_cleans_later_stacks(
     tmp_path: Path,
-    scenario: str,
 ) -> None:
-    environment = _environment(tmp_path, scenario)
+    environment = _environment(tmp_path, "partial-unsafe-manifest-failed")
 
     result = _run(environment, "--manifest", str(_manifest(tmp_path)))
 
-    assert result.returncode != 0
-    assert "one or more manifest change sets are executing or failed execution" in result.stderr
+    assert result.returncode == 0, result.stderr
     assert _operations(environment).count("cloudformation/delete-change-set") == len(STACKS) - 2
     assert _operations(environment).count("cloudformation/describe-change-set") == (
         2 + 2 * (len(STACKS) - 2)
     )
 
 
-@pytest.mark.parametrize("scenario", ["execute-in-progress", "execute-failed"])
-def test_attempt_fallback_refuses_active_or_failed_execution(
+def test_manifest_reports_active_execution_after_cleaning_later_stacks(
     tmp_path: Path,
-    scenario: str,
 ) -> None:
-    environment = _environment(tmp_path, scenario)
+    environment = _environment(tmp_path, "partial-unsafe-manifest-in-progress")
+
+    result = _run(environment, "--manifest", str(_manifest(tmp_path)))
+
+    assert result.returncode != 0
+    assert "one or more manifest change sets are still executing" in result.stderr
+    assert _operations(environment).count("cloudformation/delete-change-set") == len(STACKS) - 2
+    assert _operations(environment).count("cloudformation/describe-change-set") == (
+        2 + 2 * (len(STACKS) - 2)
+    )
+
+
+def test_attempt_fallback_refuses_active_execution(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path, "execute-in-progress")
 
     result = _run(environment, "--attempt-name", CHANGE_SET_NAME)
 
     assert result.returncode != 0
     assert _operations(environment) == ["cloudformation/describe-change-set"]
+
+
+def test_attempt_fallback_safely_skips_failed_execution(tmp_path: Path) -> None:
+    environment = _environment(tmp_path, "execute-failed")
+
+    result = _run(environment, "--attempt-name", CHANGE_SET_NAME)
+
+    assert result.returncode == 0, result.stderr
+    assert _operations(environment) == ["cloudformation/describe-change-set"] * len(STACKS)
 
 
 def test_partial_plan_name_mode_does_not_skip_an_executed_target(tmp_path: Path) -> None:

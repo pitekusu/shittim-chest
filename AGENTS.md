@@ -14,9 +14,9 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-10-A change-set response hardening branch, 2026-07-31)
+## Status (STEP-10-A ECS hook contract hardening branch, 2026-07-31)
 
-The merged `main` baseline includes PR `#120` release hardening on top of signed
+The merged `main` baseline includes PR `#121` change-set response hardening on top of signed
 HTTP ingress, On-Demand scale-to-zero, and STEP-09C-A/B/C monitoring and cost
 governance. STEP-10-A now has immutable OIDC release identities, complete CDK
 file-asset publication/checksum evidence, dual signed image/referrer gates,
@@ -30,11 +30,24 @@ successfully completed asset publication, both image builds, signing, scans,
 attestations, referrer verification, and Lambda bundle publication, then stopped
 before deploy because AWS CLI represented Stateful's empty change-set parameter
 list as JSON `null`. Cleanup removed every unexecuted set; Runtime, Operations,
-and CostGovernance are resource-free `REVIEW_IN_PROGRESS` placeholders. This
-branch accepts only missing/`null` as an empty parameter collection while still
-requiring every expected exact or NoEcho parameter and rejecting other shapes.
-Discord and the first successful production deployment remain unchanged. The
-authoritative Obsidian progress/evidence notes and public mirror track this state.
+and CostGovernance were resource-free `REVIEW_IN_PROGRESS` placeholders. The
+next release passed the complete plan and acquired the production fence, but
+Runtime creation rolled back before task launch because CloudFormation requires
+ECS lifecycle `HookDetails` to be a serialized JSON object rather than the object
+emitted by the escape hatch. All 47 Runtime resources reached `DELETE_COMPLETE`,
+all four release change-set inventories are empty, the fence was released, and
+the failed Runtime stack metadata was deleted. This branch serializes that field,
+authorizes bounded failure diagnostics against both change-set and stack ARNs,
+and treats terminal `EXECUTE_FAILED` sets as consumed while still blocking active
+execution. PR CI then detected newly classified `libexpat` findings in the pinned
+DHI layers. This branch refreshes both runtime and dev pins to the current DHI
+images containing Debian's 2.8.2 security update. Grype 0.116.0 still maps four
+fixed CVEs to the older trixie record and DHI VEX has not caught up, so the eight
+package/CVE pairs have an exact-image-digest `under_investigation` acceptance
+through 2026-08-29; digest drift, a fixable finding, or vendor VEX invalidates it.
+Discord and the first successful production deployment remain
+unchanged. The authoritative Obsidian progress/evidence notes and public mirror
+track this state.
 
 | Area | Current implementation |
 |---|---|
@@ -116,6 +129,8 @@ and the plan/progress notes so this boundary does not go stale.
   `docs-public-safety`, `container-arm64`, `grype`, plus CodeQL high+ blocking.
   Grype: actionable `--only-fixed` SARIF; fixable High/Critical fail the job;
   unfixable need DHI `not_affected` VEX or digest-bound acceptance ≤90 days.
+  Acceptance dates are UTC; preflight with the validator's default clock against
+  the exact CI report/VEX/digest artifacts, never an operator-local `--today`.
   Do not bulk-dismiss base-image findings.
 - Production image: digest-pinned DHI Community Python **3.14.6** Debian 13,
   `nonroot` **65532:65532**, policy in `container-policy.json` (Dockerfile, CI,
