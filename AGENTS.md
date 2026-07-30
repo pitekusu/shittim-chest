@@ -44,7 +44,7 @@ DHI layers. This branch refreshes both runtime and dev pins to the current DHI
 images containing Debian's 2.8.2 security update. Grype 0.116.0 still maps four
 fixed CVEs to the older trixie record and DHI VEX has not caught up, so the eight
 package/CVE pairs have an exact-image-digest `under_investigation` acceptance
-through 2026-08-30; digest drift, a fixable finding, or vendor VEX invalidates it.
+through 2026-08-29; digest drift, a fixable finding, or vendor VEX invalidates it.
 Discord and the first successful production deployment remain
 unchanged. The authoritative Obsidian progress/evidence notes and public mirror
 track this state.
@@ -129,6 +129,8 @@ and the plan/progress notes so this boundary does not go stale.
   `docs-public-safety`, `container-arm64`, `grype`, plus CodeQL high+ blocking.
   Grype: actionable `--only-fixed` SARIF; fixable High/Critical fail the job;
   unfixable need DHI `not_affected` VEX or digest-bound acceptance ≤90 days.
+  Acceptance dates are UTC; preflight with the validator's default clock against
+  the exact CI report/VEX/digest artifacts, never an operator-local `--today`.
   Do not bulk-dismiss base-image findings.
 - Production image: digest-pinned DHI Community Python **3.14.6** Debian 13,
   `nonroot` **65532:65532**, policy in `container-policy.json` (Dockerfile, CI,
