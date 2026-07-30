@@ -1,11 +1,14 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "maximum_validity_days": 90,
   "acceptances": [
     {
       "vulnerability_id": "CVE-2025-59375",
       "package": "libexpat1",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, crafted XML could exhaust memory in the isolated non-root application process.",
@@ -19,7 +22,10 @@
     {
       "vulnerability_id": "CVE-2025-59375",
       "package": "libexpat1-dev",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, crafted XML could exhaust memory in the isolated non-root application process.",
@@ -33,7 +39,10 @@
     {
       "vulnerability_id": "CVE-2026-25210",
       "package": "libexpat1",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, an integer overflow during crafted XML parsing could compromise the isolated application process.",
@@ -47,7 +56,10 @@
     {
       "vulnerability_id": "CVE-2026-25210",
       "package": "libexpat1-dev",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, an integer overflow during crafted XML parsing could compromise the isolated application process.",
@@ -61,7 +73,10 @@
     {
       "vulnerability_id": "CVE-2026-41080",
       "package": "libexpat1",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, a crafted XML document could cause hash flooding and availability loss in the isolated process.",
@@ -75,7 +90,10 @@
     {
       "vulnerability_id": "CVE-2026-41080",
       "package": "libexpat1-dev",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, a crafted XML document could cause hash flooding and availability loss in the isolated process.",
@@ -89,7 +107,10 @@
     {
       "vulnerability_id": "CVE-2026-45186",
       "package": "libexpat1",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, crafted XML attribute collisions could cause availability loss in the isolated application process.",
@@ -103,7 +124,10 @@
     {
       "vulnerability_id": "CVE-2026-45186",
       "package": "libexpat1-dev",
-      "image_digest": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+      "image_config_digests": {
+        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
+        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+      },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
       "impact": "If the scanner mapping were correct, crafted XML attribute collisions could cause availability loss in the isolated application process.",

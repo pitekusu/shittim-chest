@@ -78,6 +78,38 @@ def test_release_requires_the_locked_node_version(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_release_requires_reproducible_registry_images(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '          SOURCE_DATE_EPOCH: "0"',
+            '          SOURCE_DATE_EPOCH: "1"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="reproducible"):
+        validate_notification_workflows(directory)
+
+
+def test_ci_requires_reproducible_production_and_break_glass_images(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / "ci.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '          SOURCE_DATE_EPOCH: "0"',
+            '          SOURCE_DATE_EPOCH: "1"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="reproducible"):
+        validate_notification_workflows(directory)
+
+
 def test_release_normalizes_cost_tag_metadata_before_comparison(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

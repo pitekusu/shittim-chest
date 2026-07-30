@@ -291,6 +291,10 @@ case "${FAKE_AWS_SCENARIO}" in
     echo "An error occurred (ValidationError): change set does not exist" >&2
     exit 254
     ;;
+  missing-stack)
+    echo "An error occurred (ValidationError): stack does not exist" >&2
+    exit 254
+    ;;
   *)
     exit 92
     ;;
@@ -478,6 +482,24 @@ def test_attempt_fallback_safely_skips_failed_execution(tmp_path: Path) -> None:
     environment = _environment(tmp_path, "execute-failed")
 
     result = _run(environment, "--attempt-name", CHANGE_SET_NAME)
+
+    assert result.returncode == 0, result.stderr
+    assert _operations(environment) == ["cloudformation/describe-change-set"] * len(STACKS)
+
+
+@pytest.mark.parametrize("selector", ["name", "attempt", "manifest"])
+def test_cleanup_accepts_a_stack_removed_with_its_change_set(
+    tmp_path: Path,
+    selector: str,
+) -> None:
+    environment = _environment(tmp_path, "missing-stack")
+    arguments = {
+        "name": ("--change-set-name", CHANGE_SET_NAME),
+        "attempt": ("--attempt-name", CHANGE_SET_NAME),
+        "manifest": ("--manifest", str(_manifest(tmp_path))),
+    }[selector]
+
+    result = _run(environment, *arguments)
 
     assert result.returncode == 0, result.stderr
     assert _operations(environment) == ["cloudformation/describe-change-set"] * len(STACKS)

@@ -425,6 +425,8 @@ jobs:
       - name: Build and push the production image once
         id: build-normal
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: "0"
         with:
           context: .
           file: Dockerfile
@@ -439,6 +441,8 @@ jobs:
       - name: Build and push the isolated break-glass image once
         id: build-break-glass
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: "0"
         with:
           context: .
           file: Dockerfile
@@ -460,11 +464,27 @@ jobs:
           [[ "${NORMAL_DIGEST}" =~ ${digest_pattern} ]]
           [[ "${BREAK_GLASS_DIGEST}" =~ ${digest_pattern} ]]
           test "${NORMAL_DIGEST}" != "${BREAK_GLASS_DIGEST}"
+          normal_reference="${ECR_REPOSITORY_URI}@${NORMAL_DIGEST}"
+          break_glass_reference="${ECR_REPOSITORY_URI}@${BREAK_GLASS_DIGEST}"
+          docker buildx imagetools inspect --raw "${normal_reference}" \
+            > "${RUNNER_TEMP}/normal.manifest.json"
+          docker buildx imagetools inspect --raw "${break_glass_reference}" \
+            > "${RUNNER_TEMP}/break-glass.manifest.json"
+          normal_config_digest=$(jq --exit-status --raw-output \
+            '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))' \
+            "${RUNNER_TEMP}/normal.manifest.json")
+          break_glass_config_digest=$(jq --exit-status --raw-output \
+            '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))' \
+            "${RUNNER_TEMP}/break-glass.manifest.json")
+          test "${normal_config_digest}" != "${break_glass_config_digest}"
+          printf '%s\n' "${normal_config_digest}" > "${RUNNER_TEMP}/normal.config-digest"
+          printf '%s\n' "${break_glass_config_digest}" \
+            > "${RUNNER_TEMP}/break-glass.config-digest"
           {
             echo "NORMAL_DIGEST=${NORMAL_DIGEST}"
             echo "BREAK_GLASS_DIGEST=${BREAK_GLASS_DIGEST}"
-            echo "NORMAL_REFERENCE=${ECR_REPOSITORY_URI}@${NORMAL_DIGEST}"
-            echo "BREAK_GLASS_REFERENCE=${ECR_REPOSITORY_URI}@${BREAK_GLASS_DIGEST}"
+            echo "NORMAL_REFERENCE=${normal_reference}"
+            echo "BREAK_GLASS_REFERENCE=${break_glass_reference}"
           } >> "${GITHUB_ENV}"
       - name: Generate pushed-digest SPDX SBOMs
         run: |
@@ -492,11 +512,16 @@ jobs:
           printf '%s\n' "${BREAK_GLASS_DIGEST}" > "${RUNNER_TEMP}/break-glass.digest"
           for mode in normal break-glass
           do
+            case "${mode}" in
+              normal) image_kind=production ;;
+              break-glass) image_kind=break-glass ;;
+            esac
             uv run --frozen python tools/check_container_risk_acceptance.py \
               --policy security/container-risk-acceptance.json \
               --raw-report "${RUNNER_TEMP}/${mode}.raw-grype.json" \
               --vex-report "${RUNNER_TEMP}/${mode}.vex-grype.json" \
-              --image-digest-file "${RUNNER_TEMP}/${mode}.digest"
+              --image-kind "${image_kind}" \
+              --image-config-digest-file "${RUNNER_TEMP}/${mode}.config-digest"
           done
       - name: Wait for managed signing and enhanced ECR scans
         env:
@@ -797,6 +822,7 @@ jobs:
           RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
         run: |
           uv run --frozen python tools/release_supply_chain.py create-manifest \
+            --break-glass-config-digest-file "${RUNNER_TEMP}/break-glass.config-digest" \
             --break-glass-raw-grype "${RUNNER_TEMP}/break-glass.raw-grype.json" \
             --break-glass-sbom "${RUNNER_TEMP}/break-glass.spdx.json" \
             --break-glass-vendor-vex "${RUNNER_TEMP}/break-glass.openvex.json" \
@@ -807,6 +833,7 @@ jobs:
             --commit-sha "${GITHUB_SHA}" \
             --lambda-bundle "${RUNNER_TEMP}/lambda-bundle.json" \
             --normal-sbom "${RUNNER_TEMP}/normal.spdx.json" \
+            --normal-config-digest-file "${RUNNER_TEMP}/normal.config-digest" \
             --normal-raw-grype "${RUNNER_TEMP}/normal.raw-grype.json" \
             --normal-vendor-vex "${RUNNER_TEMP}/normal.openvex.json" \
             --normal-verification "${RUNNER_TEMP}/normal.verification.json" \
@@ -837,6 +864,8 @@ jobs:
             ${{ runner.temp }}/break-glass.*.json
             ${{ runner.temp }}/normal.digest
             ${{ runner.temp }}/break-glass.digest
+            ${{ runner.temp }}/normal.config-digest
+            ${{ runner.temp }}/break-glass.config-digest
             ${{ runner.temp }}/cdk.out/Stateful.template.json
             ${{ runner.temp }}/cdk.out/Stateful.assets.json
             ${{ runner.temp }}/cdk.out/Runtime.template.json
@@ -937,6 +966,10 @@ jobs:
           do
             key="${mapping%%=*}"
             file="${mapping#*=}"
+            case "${file}" in
+              normal) image_kind=production ;;
+              break-glass) image_kind=break-glass ;;
+            esac
             check_hash "${RUNNER_TEMP}/release/${file}.spdx.json" \
               "$(jq --raw-output --arg key "${key}" '.images[$key].sbom.sha256' "${manifest}")"
             check_hash "${RUNNER_TEMP}/release/${file}.raw-grype.json" \
@@ -949,7 +982,11 @@ jobs:
               --policy security/container-risk-acceptance.json \
               --raw-report "${RUNNER_TEMP}/release/${file}.raw-grype.json" \
               --vex-report "${RUNNER_TEMP}/release/${file}.vex-grype.json" \
-              --image-digest-file "${RUNNER_TEMP}/release/${file}.digest"
+              --image-kind "${image_kind}" \
+              --image-config-digest-file "${RUNNER_TEMP}/release/${file}.config-digest"
+            test "$(cat "${RUNNER_TEMP}/release/${file}.config-digest")" = \
+              "$(jq --raw-output --arg key "${key}" '.images[$key].config_digest' \
+                "${manifest}")"
           done
           for mapping in \
             'ShittimChest-Prod-Stateful=Stateful' \

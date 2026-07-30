@@ -245,7 +245,7 @@ jobs:
   container-arm64:
     name: container-arm64
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -300,6 +300,8 @@ jobs:
       - name: Build and load the production image
         id: build-production
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: "0"
         with:
           context: .
           target: production
@@ -309,15 +311,22 @@ jobs:
           cache-to: type=gha,scope=container-arm64-production,mode=max,ignore-error=true
       - name: Record the tested image digest and size
         env:
+          IMAGE_CONFIG_DIGEST: ${{ steps.build-production.outputs.imageid }}
           IMAGE_DIGEST: ${{ steps.build-production.outputs.digest }}
         run: |
+          test "$(printf '%s' "${IMAGE_CONFIG_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \
+            "${IMAGE_CONFIG_DIGEST}"
           test "$(printf '%s' "${IMAGE_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \
             "${IMAGE_DIGEST}"
+          printf '%s\n' "${IMAGE_CONFIG_DIGEST}" \
+            > "${RUNNER_TEMP}/production-image-config-digest.txt"
           printf '%s\n' "${IMAGE_DIGEST}" > "${RUNNER_TEMP}/image-manifest-digest.txt"
           docker image inspect shittim-chest:step-08b-arm64 --format '{{.Size}}' \
             > "${RUNNER_TEMP}/image-size-bytes.txt"
       - name: Build and load the CI-only fault image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: "0"
         with:
           context: .
           target: fault-test
@@ -329,6 +338,26 @@ jobs:
             --production-image shittim-chest:step-08b-arm64 \
             --fault-image shittim-chest:step-08b-fault-arm64 \
             --expected-architecture arm64
+      - name: Build and load the break-glass image for risk validation
+        id: build-break-glass
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: "0"
+        with:
+          context: .
+          target: break-glass
+          tags: shittim-chest:step-10-break-glass-arm64
+          load: true
+          cache-from: type=gha,scope=container-arm64-break-glass
+          cache-to: type=gha,scope=container-arm64-break-glass,mode=max,ignore-error=true
+      - name: Record the tested break-glass config digest
+        env:
+          IMAGE_CONFIG_DIGEST: ${{ steps.build-break-glass.outputs.imageid }}
+        run: |
+          test "$(printf '%s' "${IMAGE_CONFIG_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \
+            "${IMAGE_CONFIG_DIGEST}"
+          printf '%s\n' "${IMAGE_CONFIG_DIGEST}" \
+            > "${RUNNER_TEMP}/break-glass-image-config-digest.txt"
       - name: Install pinned Syft
         run: |
           syft_version=$(jq --raw-output '.tools.syft.version' .github/tool-versions.json)
@@ -360,30 +389,49 @@ jobs:
         run: |
           runtime_reference=$(python3 tools/check_container_policy.py \
             --print-reference runtime)
+          builder_reference=$(python3 tools/check_container_policy.py \
+            --print-reference builder)
           "${RUNNER_TEMP}/docker-scout" vex get \
             --verify \
             --skip-tlog \
             --platform linux/arm64 \
             --output "${RUNNER_TEMP}/dhi-python-runtime.openvex.json" \
             "registry://${runtime_reference}"
+          "${RUNNER_TEMP}/docker-scout" vex get \
+            --verify \
+            --skip-tlog \
+            --platform linux/arm64 \
+            --output "${RUNNER_TEMP}/dhi-python-builder.openvex.json" \
+            "registry://${builder_reference}"
           test -s "${RUNNER_TEMP}/dhi-python-runtime.openvex.json"
+          test -s "${RUNNER_TEMP}/dhi-python-builder.openvex.json"
           jq --exit-status '.statements | type == "array" and length > 0' \
             "${RUNNER_TEMP}/dhi-python-runtime.openvex.json"
+          jq --exit-status '.statements | type == "array" and length > 0' \
+            "${RUNNER_TEMP}/dhi-python-builder.openvex.json"
       - name: Generate and validate the final image SPDX SBOM
         run: |
           "${RUNNER_TEMP}/syft" docker:shittim-chest:step-08b-arm64 \
             --output "spdx-json=${RUNNER_TEMP}/image-sbom-arm64.spdx.json"
           python tools/check_image_sbom.py \
             "${RUNNER_TEMP}/image-sbom-arm64.spdx.json"
+          "${RUNNER_TEMP}/syft" docker:shittim-chest:step-10-break-glass-arm64 \
+            --output "spdx-json=${RUNNER_TEMP}/break-glass-image-sbom-arm64.spdx.json"
+          python tools/check_image_sbom.py \
+            "${RUNNER_TEMP}/break-glass-image-sbom-arm64.spdx.json"
       - name: Retain the final image SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-sbom-arm64-${{ github.sha }}
           path: |
             ${{ runner.temp }}/image-sbom-arm64.spdx.json
+            ${{ runner.temp }}/break-glass-image-sbom-arm64.spdx.json
             ${{ runner.temp }}/image-manifest-digest.txt
+            ${{ runner.temp }}/production-image-config-digest.txt
+            ${{ runner.temp }}/break-glass-image-config-digest.txt
             ${{ runner.temp }}/image-size-bytes.txt
             ${{ runner.temp }}/dhi-python-runtime.openvex.json
+            ${{ runner.temp }}/dhi-python-builder.openvex.json
           if-no-files-found: error
           retention-days: 30
 
@@ -453,6 +501,10 @@ jobs:
             "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
             --name "image-sbom-arm64" \
             --output "json=${RUNNER_TEMP}/grype-image-arm64.full.json"
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/break-glass-image-sbom-arm64.spdx.json" \
+            --name "break-glass-image-sbom-arm64" \
+            --output "json=${RUNNER_TEMP}/grype-break-glass-image-arm64.full.json"
       - name: Apply verified DHI VEX for residual-risk classification
         env:
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
@@ -463,6 +515,11 @@ jobs:
             --name "image-sbom-arm64-vex" \
             --vex "${RUNNER_TEMP}/grype-input/image/dhi-python-runtime.openvex.json" \
             --output "json=${RUNNER_TEMP}/grype-image-arm64.vex.json"
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/break-glass-image-sbom-arm64.spdx.json" \
+            --name "break-glass-image-sbom-arm64-vex" \
+            --vex "${RUNNER_TEMP}/grype-input/image/dhi-python-builder.openvex.json" \
+            --output "json=${RUNNER_TEMP}/grype-break-glass-image-arm64.vex.json"
       - name: Generate actionable-only SARIF
         env:
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
@@ -481,6 +538,11 @@ jobs:
             --only-fixed \
             --output "json=${RUNNER_TEMP}/grype-image-arm64.actionable.json" \
             --output "sarif=${RUNNER_TEMP}/grype-sarif/grype-image-arm64.sarif"
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/break-glass-image-sbom-arm64.spdx.json" \
+            --name "break-glass-image-sbom-arm64" \
+            --only-fixed \
+            --output "json=${RUNNER_TEMP}/grype-break-glass-image-arm64.actionable.json"
       - name: Validate full and actionable report separation
         run: |
           python tools/report_grype.py \
@@ -514,6 +576,9 @@ jobs:
             ${{ runner.temp }}/grype-image-arm64.full.json
             ${{ runner.temp }}/grype-image-arm64.actionable.json
             ${{ runner.temp }}/grype-image-arm64.vex.json
+            ${{ runner.temp }}/grype-break-glass-image-arm64.full.json
+            ${{ runner.temp }}/grype-break-glass-image-arm64.actionable.json
+            ${{ runner.temp }}/grype-break-glass-image-arm64.vex.json
             ${{ runner.temp }}/grype-summary.json
           if-no-files-found: error
           retention-days: 30
@@ -540,8 +605,16 @@ jobs:
             --policy security/container-risk-acceptance.json \
             --raw-report "${RUNNER_TEMP}/grype-image-arm64.full.json" \
             --vex-report "${RUNNER_TEMP}/grype-image-arm64.vex.json" \
-            --image-digest-file \
-              "${RUNNER_TEMP}/grype-input/image/image-manifest-digest.txt" || status=$?
+            --image-kind production \
+            --image-config-digest-file \
+              "${RUNNER_TEMP}/grype-input/image/production-image-config-digest.txt" || status=$?
+          python tools/check_container_risk_acceptance.py \
+            --policy security/container-risk-acceptance.json \
+            --raw-report "${RUNNER_TEMP}/grype-break-glass-image-arm64.full.json" \
+            --vex-report "${RUNNER_TEMP}/grype-break-glass-image-arm64.vex.json" \
+            --image-kind break-glass \
+            --image-config-digest-file \
+              "${RUNNER_TEMP}/grype-input/image/break-glass-image-config-digest.txt" || status=$?
           "${RUNNER_TEMP}/grype" \
             "sbom:${RUNNER_TEMP}/grype-input/source/source-sbom.cdx.json" \
             --name "source-sbom-actionable" \
@@ -550,6 +623,11 @@ jobs:
           "${RUNNER_TEMP}/grype" \
             "sbom:${RUNNER_TEMP}/grype-input/image/image-sbom-arm64.spdx.json" \
             --name "image-sbom-arm64-actionable" \
+            --only-fixed \
+            --fail-on high || status=$?
+          "${RUNNER_TEMP}/grype" \
+            "sbom:${RUNNER_TEMP}/grype-input/image/break-glass-image-sbom-arm64.spdx.json" \
+            --name "break-glass-image-sbom-arm64-actionable" \
             --only-fixed \
             --fail-on high || status=$?
           if [ "${status}" -ne 0 ]; then

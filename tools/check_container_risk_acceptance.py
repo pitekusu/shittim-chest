@@ -25,7 +25,7 @@ REQUIRED_ACCEPTANCE_FIELDS: Final = frozenset(
     {
         "vulnerability_id",
         "package",
-        "image_digest",
+        "image_config_digests",
         "status",
         "justification",
         "impact",
@@ -37,6 +37,7 @@ REQUIRED_ACCEPTANCE_FIELDS: Final = frozenset(
         "owner",
     }
 )
+IMAGE_KINDS: Final = frozenset({"production", "break-glass"})
 TEXT_FIELDS: Final = (
     "justification",
     "impact",
@@ -159,17 +160,20 @@ def validate_acceptances(
     *,
     findings: tuple[Finding, ...],
     vendor_suppressions: frozenset[FindingKey],
-    image_digest: str,
+    image_kind: str,
+    image_config_digest: str,
     today: dt.date,
 ) -> tuple[int, int]:
     """Validate records and require coverage for every unfixable High/Critical."""
 
-    if DIGEST_PATTERN.fullmatch(image_digest) is None:
-        raise ValueError("image digest must be sha256:<64 lowercase hex>")
+    if image_kind not in IMAGE_KINDS:
+        raise ValueError("image kind is unsupported")
+    if DIGEST_PATTERN.fullmatch(image_config_digest) is None:
+        raise ValueError("image config digest must be sha256:<64 lowercase hex>")
     root = _object(_read_json(policy_path, "risk acceptance policy"), "risk policy")
     if set(root) != {"schema_version", "maximum_validity_days", "acceptances"}:
         raise ValueError("risk acceptance policy has unexpected root fields")
-    if root["schema_version"] != 1 or root["maximum_validity_days"] != 90:
+    if root["schema_version"] != 2 or root["maximum_validity_days"] != 90:
         raise ValueError("risk acceptance policy version or maximum validity is unsupported")
     raw_acceptances = root["acceptances"]
     if not isinstance(raw_acceptances, list):
@@ -181,6 +185,7 @@ def validate_acceptances(
         if finding.severity in TRACKED_SEVERITIES and finding.fix_state in UNFIXED_STATES
     }
     active: set[FindingKey] = set()
+    seen: set[tuple[str, FindingKey]] = set()
     for index, value in enumerate(raw_acceptances):
         label = f"acceptances[{index}]"
         record = _object(value, label)
@@ -192,8 +197,20 @@ def validate_acceptances(
         package = _string(record, "package", label)
         if VULNERABILITY_PATTERN.fullmatch(vulnerability_id) is None:
             raise ValueError(f"{label}.vulnerability_id is invalid")
-        if _string(record, "image_digest", label) != image_digest:
-            raise ValueError(f"{label} image digest does not match the tested image")
+        config_digests = _object(
+            record.get("image_config_digests"), f"{label}.image_config_digests"
+        )
+        if not config_digests or not set(config_digests) <= IMAGE_KINDS:
+            raise ValueError(f"{label}.image_config_digests has unsupported image kinds")
+        for scoped_kind, scoped_digest in config_digests.items():
+            if (
+                not isinstance(scoped_digest, str)
+                or DIGEST_PATTERN.fullmatch(scoped_digest) is None
+            ):
+                raise ValueError(f"{label}.image_config_digests.{scoped_kind} is invalid")
+        record_config_digest = config_digests.get(image_kind)
+        if record_config_digest is not None and record_config_digest != image_config_digest:
+            raise ValueError(f"{label} config digest does not match the tested image")
         if _string(record, "status", label) not in {"affected", "under_investigation"}:
             raise ValueError(f"{label}.status must not claim not_affected")
         for field in TEXT_FIELDS:
@@ -209,8 +226,15 @@ def validate_acceptances(
         if expires <= approved or (expires - approved).days > 90:
             raise ValueError(f"{label} must expire within 90 days after approval")
         key = FindingKey(vulnerability_id, package)
-        if key in active:
-            raise ValueError(f"duplicate risk acceptance: {vulnerability_id}/{package}")
+        for scoped_kind in config_digests:
+            scoped_key = (scoped_kind, key)
+            if scoped_key in seen:
+                raise ValueError(
+                    f"duplicate risk acceptance: {scoped_kind}/{vulnerability_id}/{package}"
+                )
+            seen.add(scoped_key)
+        if record_config_digest is None:
+            continue
         if key not in tracked:
             raise ValueError(f"{label} does not reference a current unfixable High/Critical")
         active.add(key)
@@ -232,7 +256,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--raw-report", type=Path, required=True)
     parser.add_argument("--vex-report", type=Path, required=True)
-    parser.add_argument("--image-digest-file", type=Path, required=True)
+    parser.add_argument("--image-kind", choices=tuple(sorted(IMAGE_KINDS)), required=True)
+    parser.add_argument("--image-config-digest-file", type=Path, required=True)
     parser.add_argument(
         "--today", type=dt.date.fromisoformat, default=dt.datetime.now(dt.UTC).date()
     )
@@ -242,12 +267,13 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        image_digest = args.image_digest_file.read_text(encoding="ascii").strip()
+        image_config_digest = args.image_config_digest_file.read_text(encoding="ascii").strip()
         vendor_count, accepted_count = validate_acceptances(
             args.policy,
             findings=load_findings(args.raw_report),
             vendor_suppressions=load_vendor_vex_suppressions(args.vex_report),
-            image_digest=image_digest,
+            image_kind=args.image_kind,
+            image_config_digest=image_config_digest,
             today=args.today,
         )
     except (OSError, UnicodeError, ValueError) as error:
