@@ -184,7 +184,7 @@ jobs:
             --tag-keys Project \
             --output json > "${RUNNER_TEMP}/cost-allocation-tags.json"
           jq --exit-status \
-            '.CostAllocationTags == [{"Status":"Active","TagKey":"Project","Type":"UserDefined"}]' \
+            '.CostAllocationTags | map({Status, TagKey, Type}) == [{"Status":"Active","TagKey":"Project","Type":"UserDefined"}]' \
             "${RUNNER_TEMP}/cost-allocation-tags.json" >/dev/null
       - name: Authenticate to immutable source and destination registries
         env:
