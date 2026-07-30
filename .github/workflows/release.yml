@@ -318,10 +318,11 @@ jobs:
         run: |
           repository="${ECR_REPOSITORY_URI##*/}"
           wait_for_evidence() {
-            local mode="$1" digest="$2" image_file signing_file scan_file
+            local mode="$1" digest="$2" image_file signing_file scan_file scan_error_file
             image_file="${RUNNER_TEMP}/${mode}.image.json"
             signing_file="${RUNNER_TEMP}/${mode}.signing.json"
             scan_file="${RUNNER_TEMP}/${mode}.scan.json"
+            scan_error_file="${RUNNER_TEMP}/${mode}.scan-error.txt"
             aws ecr describe-images \
               --repository-name "${repository}" \
               --image-ids "imageDigest=${digest}" \
@@ -346,12 +347,18 @@ jobs:
               if aws ecr describe-image-scan-findings \
                 --repository-name "${repository}" \
                 --image-id "imageDigest=${digest}" \
-                --output json > "${scan_file}" 2>/dev/null && \
+                --output json > "${scan_file}" 2>"${scan_error_file}" && \
                 jq --exit-status \
                   '.imageScanStatus.status == "ACTIVE" or .imageScanStatus.status == "COMPLETE"' \
                   "${scan_file}" >/dev/null
               then
                 break
+              fi
+              if test -s "${scan_error_file}" && \
+                ! grep --quiet 'ScanNotFoundException' "${scan_error_file}"
+              then
+                echo "::error::enhanced ECR scan query failed" >&2
+                return 1
               fi
               test "${attempt}" -lt 30
               sleep 10

@@ -130,6 +130,12 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.planRole.addToPolicy(
       new iam.PolicyStatement({
+        actions: ["inspector2:ListFindings"],
+        resources: ["*"],
+      }),
+    );
+    this.planRole.addToPolicy(
+      new iam.PolicyStatement({
         actions: ["signer:GetSigningProfile", "signer:SignPayload"],
         resources: [props.signingProfileArn],
       }),
@@ -254,6 +260,12 @@ export class ReleaseIdentityStack extends Stack {
     this.deployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["ecr:GetAuthorizationToken", "signer:GetRevocationStatus"],
+        resources: ["*"],
+      }),
+    );
+    this.deployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["inspector2:ListFindings"],
         resources: ["*"],
       }),
     );

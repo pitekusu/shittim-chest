@@ -92,12 +92,18 @@ describe("ReleaseIdentityStack", () => {
 
     expect(plan).toContain("ecr:PutImage");
     expect(plan).toContain("ecr:BatchGetImage");
+    expect(plan).toContain("inspector2:ListFindings");
+    expect(plan).not.toContain("inspector2:Enable");
+    expect(plan).not.toContain("inspector2:Disable");
     expect(plan).toContain("cloudformation:CreateChangeSet");
     expect(plan).toContain("s3:PutObject");
     expect(plan).not.toContain("cloudformation:ExecuteChangeSet");
     expect(plan).not.toContain("dynamodb:TransactWriteItems");
     expect(deploy).toContain("cloudformation:ExecuteChangeSet");
     expect(deploy).toContain("ecr:BatchGetImage");
+    expect(deploy).toContain("inspector2:ListFindings");
+    expect(deploy).not.toContain("inspector2:Enable");
+    expect(deploy).not.toContain("inspector2:Disable");
     expect(deploy).toContain("dynamodb:ConditionCheckItem");
     expect(deploy).toContain("dynamodb:DeleteItem");
     expect(deploy).toContain("dynamodb:GetItem");
