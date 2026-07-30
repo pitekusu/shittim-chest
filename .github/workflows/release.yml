@@ -27,6 +27,9 @@ env:
   AWS_SIGNER_NOTATION_SIGNATURE_SHA256: ef9bb5125579e1ca24f9508ac0903b7db4afcc20a31333c9203c784e8c34cf6b
   AWS_SIGNER_NOTATION_KEY_SHA256: e215d69bf0bd59d7a2efe165d7fb777201364f76328702248f8b82b30ec41991
   AWS_SIGNER_NOTATION_FINGERPRINT: E84AF8A2A9B52F1F4435AE71A3B52DA65461CF90
+  ECR_CREDENTIAL_HELPER_VERSION: 0.12.0
+  ECR_CREDENTIAL_HELPER_SHA256: 5bdd30fb6c7a92462f5b454cce1aa906ca7926a6c2e39efad9613a7bf7661fac
+  AWS_ECR_DISABLE_CACHE: "true"
 
 jobs:
   plan:
@@ -188,19 +191,21 @@ jobs:
           jq --exit-status \
             '.CostAllocationTags | map({Status, TagKey, Type}) == [{"Status":"Active","TagKey":"Project","Type":"UserDefined"}]' \
             "${RUNNER_TEMP}/cost-allocation-tags.json" >/dev/null
-      - name: Authenticate to immutable source and destination registries
+      - name: Install and configure the pinned ECR credential helper
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+        run: |
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          bash tools/install_ecr_credential_helper.sh "${registry}"
+      - name: Authenticate to the immutable source registry
         env:
           DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
           DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
-          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
         run: |
           test -n "${DHI_USERNAME}"
           test -n "${DHI_TOKEN}"
           printf '%s' "${DHI_TOKEN}" | docker login dhi.io \
             --username "${DHI_USERNAME}" --password-stdin
-          registry="${ECR_REPOSITORY_URI%%/*}"
-          aws ecr get-login-password --region "${AWS_REGION}" | docker login \
-            --username AWS --password-stdin "${registry}"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build and push the production image once
@@ -454,10 +459,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
         run: |
-          registry="${ECR_REPOSITORY_URI%%/*}"
           repository="${ECR_REPOSITORY_URI##*/}"
-          aws ecr get-login-password --region "${AWS_REGION}" | notation login \
-            --username AWS --password-stdin "${registry}"
           jq --null-input \
             --arg repository "${ECR_REPOSITORY_URI}" \
             --arg profile "${SIGNING_PROFILE_ARN}" \
@@ -893,6 +895,12 @@ jobs:
             "${expected_checksum}"
       - name: Reinstall the pinned Notation verifier
         run: bash tools/install_aws_signer_notation.sh
+      - name: Reinstall and configure the pinned ECR credential helper
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+        run: |
+          registry="${ECR_REPOSITORY_URI%%/*}"
+          bash tools/install_ecr_credential_helper.sh "${registry}"
       - name: Cryptographically reverify both image identities
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
@@ -900,11 +908,6 @@ jobs:
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
         run: |
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
-          registry="${ECR_REPOSITORY_URI%%/*}"
-          aws ecr get-login-password --region "${AWS_REGION}" | docker login \
-            --username AWS --password-stdin "${registry}"
-          aws ecr get-login-password --region "${AWS_REGION}" | notation login \
-            --username AWS --password-stdin "${registry}"
           jq --null-input \
             --arg repository "${ECR_REPOSITORY_URI}" \
             --arg profile "${SIGNING_PROFILE_ARN}" \

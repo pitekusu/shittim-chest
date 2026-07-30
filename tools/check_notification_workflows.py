@@ -232,6 +232,8 @@ def _validate_release(directory: Path) -> None:
         "target: production",
         "target: break-glass",
         "tools/install_aws_signer_notation.sh",
+        "tools/install_ecr_credential_helper.sh",
+        'AWS_ECR_DISABLE_CACHE: "true"',
         "notation verify",
         "describe-images",
         "list-image-referrers",
@@ -260,6 +262,8 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError("Release must not use static AWS credentials")
     if re.search(r"runs-on:\s*self-hosted|\b(?:git\s+push|gh\s+pr\s+merge)\b", text):
         raise WorkflowPolicyError("Release contains a forbidden runner or repository mutation")
+    if re.search(r"\bnotation\s+login\b|\baws\s+ecr\s+get-login-password\b", text):
+        raise WorkflowPolicyError("Release must use the ECR credential helper without login tokens")
     secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
     if secrets != {"DHI_TOKEN", "DHI_USERNAME", "OPERATOR_NOTIFICATION_EMAIL"}:
         raise WorkflowPolicyError("Release secret allowlist changed")
