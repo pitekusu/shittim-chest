@@ -39,9 +39,12 @@ all four release change-set inventories are empty, the fence was released, and
 the failed Runtime stack metadata was deleted. This branch serializes that field,
 authorizes bounded failure diagnostics against both change-set and stack ARNs,
 and treats terminal `EXECUTE_FAILED` sets as consumed while still blocking active
-execution. PR CI then detected newly classified unfixable `libexpat` findings in
-the pinned DHI layers; this branch refreshes both runtime and dev pins to the
-current DHI images containing `libexpat` 2.8.2 instead of adding a risk exception.
+execution. PR CI then detected newly classified `libexpat` findings in the pinned
+DHI layers. This branch refreshes both runtime and dev pins to the current DHI
+images containing Debian's 2.8.2 security update. Grype 0.116.0 still maps four
+fixed CVEs to the older trixie record and DHI VEX has not caught up, so the eight
+package/CVE pairs have an exact-image-digest `under_investigation` acceptance
+through 2026-08-30; digest drift, a fixable finding, or vendor VEX invalidates it.
 Discord and the first successful production deployment remain
 unchanged. The authoritative Obsidian progress/evidence notes and public mirror
 track this state.
