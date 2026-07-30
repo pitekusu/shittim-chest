@@ -98,10 +98,23 @@ describe("ReleaseIdentityStack", () => {
     expect(plan).not.toContain("inspector2:Enable");
     expect(plan).not.toContain("inspector2:Disable");
     expect(plan).toContain("cloudformation:CreateChangeSet");
+    expect(plan).toContain("cloudformation:DescribeStackResources");
+    expect(plan).toContain("ssm:DescribeParameters");
+    expect(plan).not.toContain('"ssm:GetParameter"');
+    expect(plan).not.toContain('"ssm:GetParameters"');
     expect(plan).toContain("s3:PutObject");
+    expect(plan).toContain("ap-northeast-1");
+    expect(plan).toContain("us-east-1");
+    expect(plan).not.toContain("sts:AssumeRole");
+    expect(plan).not.toContain("s3:ListBucket");
+    expect(plan).not.toContain("cloudformation:GetTemplate");
     expect(plan).not.toContain("cloudformation:ExecuteChangeSet");
     expect(plan).not.toContain("dynamodb:TransactWriteItems");
     expect(deploy).toContain("cloudformation:ExecuteChangeSet");
+    expect(deploy).toContain("cloudformation:DeleteChangeSet");
+    expect(deploy).toContain("cloudformation:DescribeEvents");
+    expect(deploy).not.toContain("cloudformation:DescribeStackEvents");
+    expect(deploy).toContain("changeSet/release-*");
     expect(deploy).toContain("ecr:BatchGetImage");
     expect(deploy).toContain("inspector2:ListFindings");
     expect(deploy).toContain("inspector2:ListAccountPermissions");
@@ -117,12 +130,56 @@ describe("ReleaseIdentityStack", () => {
     expect(deploy).not.toContain("dynamodb:TransactWriteItems");
     expect(deploy).not.toContain("cloudformation:CreateChangeSet");
     expect(deploy).not.toContain("ecr:PutImage");
+    expect(deploy).not.toContain("sts:AssumeRole");
+    expect(deploy).not.toContain("cloudformation:GetTemplate");
     expect(drift).toContain("cloudformation:DetectStackDrift");
     expect(drift).toContain("ShittimChest-Prod-ReleaseIdentity");
     expect(drift).not.toContain("cloudformation:ExecuteChangeSet");
     expect(drift).not.toContain("dynamodb:");
+    expect(drift).not.toContain("sts:AssumeRole");
     expect(JSON.stringify(template.toJSON())).not.toContain("AdministratorAccess");
     expect(JSON.stringify(template.toJSON())).not.toContain("PowerUserAccess");
+  });
+
+  test("publishes CDK assets directly to exact content-addressed keys", () => {
+    const { template } = synthesize();
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const policyFor = (role: string) =>
+      JSON.stringify(
+        policies.find((policy) =>
+          JSON.stringify(policy.Properties.Roles).includes(role),
+        ),
+      );
+    const plan = policyFor("ReleasePlanRole");
+    const deploy = policyFor("ReleaseDeployRole");
+    const contentHashPattern = "?".repeat(64);
+    const planPolicy = JSON.parse(plan);
+    const statements = planPolicy.Properties.PolicyDocument.Statement as Array<{
+      Action: string | string[];
+      Condition?: object;
+      Resource: string | string[];
+    }>;
+    const rootAssetStatement = statements.find(
+      (statement) =>
+        Array.isArray(statement.Action) &&
+        statement.Action.includes("s3:PutObject") &&
+        JSON.stringify(statement.Resource).includes(contentHashPattern),
+    );
+    expect(rootAssetStatement).toBeDefined();
+    expect(rootAssetStatement?.Action).toEqual(["s3:GetObject", "s3:PutObject"]);
+    expect(rootAssetStatement?.Resource).toHaveLength(4);
+
+    for (const region of ["ap-northeast-1", "us-east-1"]) {
+      expect(JSON.stringify(rootAssetStatement?.Resource)).toContain(`-${region}`);
+      for (const extension of ["json", "zip"]) {
+        const objectPattern = `${region}/${contentHashPattern}.${extension}`;
+        expect(plan).toContain(objectPattern);
+        expect(deploy).toContain(objectPattern);
+      }
+    }
+    expect(plan).not.toContain("s3:DeleteObject");
+    expect(plan).not.toContain("cdk-hnb659fds-file-publishing-role");
+    expect(plan).not.toContain("cdk-hnb659fds-assets-<AWS::AccountId>-ap-northeast-1/*");
   });
 
   test("constrains pass-role and production wildcard resources", () => {

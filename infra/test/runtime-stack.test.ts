@@ -783,13 +783,13 @@ describe("RuntimeStack", () => {
     }
   });
 
-  test("retains protected application and break-glass log groups for 90 days", () => {
+  test("retains logs after normal deletion but removes them after a failed first create", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::Logs::LogGroup", 7);
     for (const suffix of ["application", "break-glass-exec"]) {
       template.hasResource("AWS::Logs::LogGroup", {
-        DeletionPolicy: "Retain",
+        DeletionPolicy: "RetainExceptOnCreate",
         UpdateReplacePolicy: "Retain",
         Properties: {
           DataProtectionPolicy: Match.anyValue(),
@@ -801,7 +801,7 @@ describe("RuntimeStack", () => {
     for (const resource of Object.values(
       template.findResources("AWS::Logs::LogGroup"),
     )) {
-      expect(resource.DeletionPolicy).toBe("Retain");
+      expect(resource.DeletionPolicy).toBe("RetainExceptOnCreate");
       expect(resource.UpdateReplacePolicy).toBe("Retain");
       expect(resource.Properties.DataProtectionPolicy).toBeDefined();
       expect(resource.Properties.RetentionInDays).toBe(90);

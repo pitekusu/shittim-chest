@@ -110,12 +110,12 @@ def test_release_requires_the_unversioned_signing_profile_arn(tmp_path: Path) ->
         validate_notification_workflows(directory)
 
 
-def test_release_fails_fast_when_the_enhanced_scan_query_is_denied(tmp_path: Path) -> None:
+def test_release_requires_the_fail_fast_image_evidence_waiter(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            '                echo "::error::enhanced ECR scan query failed" >&2\n',
+            "tools/wait_release_image_evidence.sh",
             "",
             1,
         ),
@@ -224,7 +224,7 @@ def test_release_passes_the_planned_artifact_name_to_deploy(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+    with pytest.raises(WorkflowPolicyError, match="exact planned artifact"):
         validate_notification_workflows(directory)
 
 
@@ -241,6 +241,249 @@ def test_release_uses_uuidv7_for_the_deployment_guard(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkflowPolicyError, match="UUIDv7 guard ID"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "tools/release_supply_chain.py create-cdk-assets",
+        "tools/release_supply_chain.py bind-cdk-asset-checksums",
+        "Stateful Runtime Operations CostGovernance",
+        '--app "${RUNNER_TEMP}/cdk.out"',
+        "--exclusively",
+        "--unstable=publish-assets",
+        "--force",
+    ],
+)
+def test_release_requires_the_complete_cdk_asset_publisher(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"CDK asset|policy marker"):
+        validate_notification_workflows(directory)
+
+
+def test_release_publishes_cdk_assets_before_building_images(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    text = (
+        text.replace(
+            "name: Synthesize and publish the complete CDK asset closure",
+            "name: temporary-step-name",
+            1,
+        )
+        .replace(
+            "name: Build and push the production image once",
+            "name: Synthesize and publish the complete CDK asset closure",
+            1,
+        )
+        .replace(
+            "name: temporary-step-name",
+            "name: Build and push the production image once",
+            1,
+        )
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="before image build"):
+        validate_notification_workflows(directory)
+
+
+def test_release_cdk_asset_publisher_must_force_republish(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "            --force \\\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="incomplete"):
+        validate_notification_workflows(directory)
+
+
+def test_release_records_a_change_set_before_it_starts_polling(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '            jq --arg stack "${stack}" --arg arn "${arn}"',
+            '            jq --arg recorded_stack "${stack}" --arg arn "${arn}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="change set recording"):
+        validate_notification_workflows(directory)
+
+
+def test_release_cleanup_uses_only_the_current_change_set_name(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+            'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-stale"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact name"):
+        validate_notification_workflows(directory)
+
+
+def test_release_deploy_cleanup_uses_the_attested_change_set_arn(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("--manifest", "--change-set-name", 2),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="attested change set ARN"):
+        validate_notification_workflows(directory)
+
+
+def test_release_independent_cleanup_requires_its_trusted_checkout(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    checkout = """      - name: Check out the exact release cleanup implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+"""
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(checkout, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="independent cleanup"):
+        validate_notification_workflows(directory)
+
+
+def test_release_independent_cleanup_also_runs_after_a_failed_plan(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    cleanup_start = text.index("\n  cleanup:\n")
+    cleanup = text[cleanup_start:].replace(
+        "    if: ${{ always() }}",
+        "    if: ${{ always() && needs.plan.result == 'success' }}",
+        1,
+    )
+    path.write_text(text[:cleanup_start] + cleanup, encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="independent cleanup"):
+        validate_notification_workflows(directory)
+
+
+def test_release_partial_plan_cleanup_requires_the_always_guard(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "always() && steps.plan_aws.outcome == 'success' && ",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="partial-plan cleanup"):
+        validate_notification_workflows(directory)
+
+
+def test_release_partial_plan_cleanup_must_invoke_the_helper(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    call = """          bash tools/cleanup_release_change_sets.sh \\
+            --change-set-name "${change_set_name}"
+"""
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(call, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="partial-plan cleanup"):
+        validate_notification_workflows(directory)
+
+
+def test_release_independent_cleanup_runs_before_rerun_rejection(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    cleanup_start = text.index("\n  cleanup:\n")
+    prefix = text[:cleanup_start]
+    cleanup = text[cleanup_start:]
+    cleanup = cleanup.replace(
+        '            bash tools/cleanup_release_change_sets.sh --manifest "${manifest}"\n',
+        "            true\n",
+        1,
+    ).replace(
+        """            bash tools/cleanup_release_change_sets.sh \\
+              --change-set-name "${change_set_name}"
+""",
+        "            true\n",
+        1,
+    )
+    cleanup += """
+          bash tools/cleanup_release_change_sets.sh --manifest "${manifest}"
+          bash tools/cleanup_release_change_sets.sh --change-set-name "${change_set_name}"
+"""
+    path.write_text(prefix + cleanup, encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="precede failed-rerun"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "aws ssm describe-parameters",
+        "aws cloudformation describe-events --generate-cli-skeleton input",
+        "Recover stale unexecuted release change sets before planning",
+        "--stale-before-plan",
+        "needs: [plan, deploy]",
+        "Acquire plan-role cleanup credentials",
+        "continue-on-error: true",
+        "EVIDENCE_RESULT: ${{ steps.cleanup_evidence.outcome }}",
+        '[[ ! "${PLAN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]',
+        'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${PLAN_ATTEMPT}"',
+        "--attempt-name",
+        "group: production-release",
+        "if: ${{ needs.plan.result == 'success' && "
+        "fromJSON(needs.plan.outputs.plan_attempt) == github.run_attempt }}",
+        "A failed-jobs-only rerun cannot reuse an earlier release plan",
+        'contains(fromJSON(\'["success","failure","cancelled"]\'), steps.prepare_changes.outcome)',
+    ],
+)
+def test_release_requires_preflight_and_independent_cleanup(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"policy marker|cleanup"):
         validate_notification_workflows(directory)
 
 

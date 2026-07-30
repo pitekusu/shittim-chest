@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from collections.abc import Callable
 from copy import deepcopy
@@ -8,12 +10,19 @@ from typing import cast
 
 import pytest
 from tools.release_supply_chain import (
+    bind_cdk_asset_checksums,
+    create_cdk_asset_evidence,
     create_manifest,
     create_vulnerability_predicate,
+    validate_cdk_asset_evidence,
+    validate_cdk_asset_evidence_against_assembly,
     validate_change_set,
     validate_manifest,
     validate_runtime_template,
     verify_image_evidence,
+)
+from tools.release_supply_chain import (
+    main as release_supply_chain_main,
 )
 
 DIGEST = "sha256:" + "a" * 64
@@ -28,6 +37,314 @@ IMAGE_DETAILS = {
         }
     ]
 }
+
+CDK_STACKS = (
+    ("ShittimChest-Prod-Stateful", "Stateful", "ap-northeast-1"),
+    ("ShittimChest-Prod-Runtime", "Runtime", "ap-northeast-1"),
+    ("ShittimChest-Prod-Operations", "Operations", "ap-northeast-1"),
+    ("ShittimChest-Prod-CostGovernance", "CostGovernance", "us-east-1"),
+)
+
+
+def cdk_assets() -> dict[str, object]:
+    manifests: dict[str, object] = {}
+    files: list[dict[str, object]] = []
+    for index, (stack, artifact_name, region) in enumerate(CDK_STACKS, start=1):
+        asset_id = f"{index:x}" * 64
+        bucket = f"cdk-hnb659fds-assets-000000000000-{region}"
+        manifests[stack] = {
+            "artifact": artifact_name,
+            "region": region,
+            "sha256": f"{index + 4:x}" * 64,
+        }
+        files.append(
+            {
+                "stack": stack,
+                "asset_id": asset_id,
+                "source_path": f"{artifact_name}.template.json",
+                "packaging": "file",
+                "region": region,
+                "bucket": bucket,
+                "object_key": f"{asset_id}.json",
+                "publisher": "current_credentials",
+                "s3_checksum_sha256": "A" * 43 + "=",
+            }
+        )
+        if artifact_name == "Runtime":
+            provider_id = "a" * 64
+            files.append(
+                {
+                    "stack": stack,
+                    "asset_id": provider_id,
+                    "source_path": f"asset.{provider_id}",
+                    "packaging": "zip",
+                    "region": region,
+                    "bucket": bucket,
+                    "object_key": f"{provider_id}.zip",
+                    "publisher": "current_credentials",
+                    "s3_checksum_sha256": "B" * 43 + "=",
+                }
+            )
+    return {"schema_version": 1, "manifests": manifests, "files": files}
+
+
+def write_cdk_assembly(path: Path, *, include_runtime_provider: bool = True) -> None:
+    path.mkdir()
+    for index, (_, artifact_name, region) in enumerate(CDK_STACKS, start=1):
+        template_id = f"{index:x}" * 64
+        template_name = f"{artifact_name}.template.json"
+        (path / template_name).write_text("{}\n", encoding="utf-8")
+        files: dict[str, object] = {
+            template_id: {
+                "displayName": f"{artifact_name} Template",
+                "source": {"path": template_name, "packaging": "file"},
+                "destinations": {
+                    f"destination-{index}": {
+                        "bucketName": f"cdk-hnb659fds-assets-000000000000-{region}",
+                        "objectKey": f"{template_id}.json",
+                        "region": region,
+                    }
+                },
+            }
+        }
+        if artifact_name == "Runtime" and include_runtime_provider:
+            provider_id = "a" * 64
+            (path / f"asset.{provider_id}").mkdir()
+            files[provider_id] = {
+                "displayName": "Runtime Provider",
+                "source": {"path": f"asset.{provider_id}", "packaging": "zip"},
+                "destinations": {
+                    "provider-destination": {
+                        "bucketName": f"cdk-hnb659fds-assets-000000000000-{region}",
+                        "objectKey": f"{provider_id}.zip",
+                        "region": region,
+                    }
+                },
+            }
+        (path / f"{artifact_name}.assets.json").write_text(
+            json.dumps({"version": "54.0.0", "files": files, "dockerImages": {}}),
+            encoding="utf-8",
+        )
+
+
+def asset_checksums(evidence: dict[str, object], assembly: Path) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for raw_file in cast(list[dict[str, object]], evidence["files"]):
+        if raw_file["packaging"] == "file":
+            checksum = base64.b64encode(
+                hashlib.sha256(
+                    (assembly / cast(str, raw_file["source_path"])).read_bytes()
+                ).digest()
+            ).decode("ascii")
+        else:
+            checksum = "B" * 43 + "="
+        records.append(
+            {
+                "asset_id": cast(str, raw_file["asset_id"]),
+                "bucket": cast(str, raw_file["bucket"]),
+                "checksum_sha256": checksum,
+                "object_key": cast(str, raw_file["object_key"]),
+                "region": cast(str, raw_file["region"]),
+            }
+        )
+    return records
+
+
+def test_inventory_covers_every_cdk_file_asset_and_binds_the_assembly(tmp_path: Path) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+
+    unpublished = create_cdk_asset_evidence(
+        account="000000000000",
+        assembly_dir=assembly,
+    )
+    result = bind_cdk_asset_checksums(
+        unpublished,
+        account="000000000000",
+        assembly_dir=assembly,
+        checksums=asset_checksums(unpublished, assembly),
+    )
+
+    validate_cdk_asset_evidence(result, account="000000000000")
+    validate_cdk_asset_evidence_against_assembly(
+        result,
+        account="000000000000",
+        assembly_dir=assembly,
+    )
+    assert len(cast(list[object], result["files"])) == 5
+    assert {
+        cast(dict[str, object], item)["object_key"] for item in cast(list[object], result["files"])
+    } == {
+        "1" * 64 + ".json",
+        "2" * 64 + ".json",
+        "3" * 64 + ".json",
+        "4" * 64 + ".json",
+        "a" * 64 + ".zip",
+    }
+
+
+def test_rejects_docker_assets_and_a_missing_runtime_provider(tmp_path: Path) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly, include_runtime_provider=False)
+
+    with pytest.raises(ValueError, match="provider asset is missing"):
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+
+    runtime_manifest = assembly / "Runtime.assets.json"
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    payload["dockerImages"] = {"unexpected": {}}
+    runtime_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="Docker assets"):
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+
+
+def test_rejects_a_cdk_asset_destination_that_assumes_a_publisher_role(
+    tmp_path: Path,
+) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+    manifest = assembly / "Runtime.assets.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    destination = next(iter(next(iter(payload["files"].values()))["destinations"].values()))
+    destination["assumeRoleArn"] = (
+        "arn:aws:iam::000000000000:role/cdk-hnb659fds-file-publishing-role-"
+        "000000000000-ap-northeast-1"
+    )
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="destination fields"):
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+
+
+def test_rejects_an_asset_closure_beyond_the_reviewed_five_files(tmp_path: Path) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+    extra_id = "b" * 64
+    (assembly / "Extra.template.json").write_text("{}\n", encoding="utf-8")
+    manifest = assembly / "Stateful.assets.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["files"][extra_id] = {
+        "displayName": "Unexpected Asset",
+        "source": {"path": "Extra.template.json", "packaging": "file"},
+        "destinations": {
+            "unexpected": {
+                "bucketName": "cdk-hnb659fds-assets-000000000000-ap-northeast-1",
+                "objectKey": f"{extra_id}.json",
+                "region": "ap-northeast-1",
+            }
+        },
+    }
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exactly five"):
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+
+
+def test_rejects_a_zip_source_that_could_require_a_multipart_checksum(
+    tmp_path: Path,
+) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+    provider = assembly / f"asset.{'a' * 64}" / "provider.js"
+    provider.write_bytes(b"x" * (1024 * 1024 + 1))
+
+    with pytest.raises(ValueError, match="single-part checksum boundary"):
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+
+
+def test_rejects_tampered_cdk_asset_evidence(tmp_path: Path) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+    unpublished = create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+    result = bind_cdk_asset_checksums(
+        unpublished,
+        account="000000000000",
+        assembly_dir=assembly,
+        checksums=asset_checksums(unpublished, assembly),
+    )
+    tampered = deepcopy(result)
+    cast(list[dict[str, object]], tampered["files"])[0]["object_key"] = "f" * 64 + ".json"
+
+    with pytest.raises(ValueError, match=r"object key|does not match"):
+        validate_cdk_asset_evidence_against_assembly(
+            tampered,
+            account="000000000000",
+            assembly_dir=assembly,
+        )
+
+
+def test_rejects_a_remote_checksum_that_does_not_match_a_file_asset(tmp_path: Path) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+    unpublished = create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+    checksums = asset_checksums(unpublished, assembly)
+    checksums[0]["checksum_sha256"] = "C" * 43 + "="
+
+    with pytest.raises(ValueError, match="does not match its source"):
+        bind_cdk_asset_checksums(
+            unpublished,
+            account="000000000000",
+            assembly_dir=assembly,
+            checksums=checksums,
+        )
+
+
+def test_cdk_asset_cli_round_trip_matches_the_artifact_layout(tmp_path: Path) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+    unpublished_path = tmp_path / "cdk-assets.unpublished.json"
+    checksums_path = tmp_path / "cdk-asset-checksums.json"
+    evidence_path = tmp_path / "cdk-assets.json"
+
+    assert (
+        release_supply_chain_main(
+            (
+                "create-cdk-assets",
+                "--account",
+                "000000000000",
+                "--assembly",
+                str(assembly),
+                "--output",
+                str(unpublished_path),
+            )
+        )
+        == 0
+    )
+    unpublished = json.loads(unpublished_path.read_text(encoding="utf-8"))
+    checksums_path.write_text(
+        json.dumps(asset_checksums(unpublished, assembly)),
+        encoding="utf-8",
+    )
+    assert (
+        release_supply_chain_main(
+            (
+                "bind-cdk-asset-checksums",
+                str(unpublished_path),
+                "--account",
+                "000000000000",
+                "--assembly",
+                str(assembly),
+                "--checksums",
+                str(checksums_path),
+                "--output",
+                str(evidence_path),
+            )
+        )
+        == 0
+    )
+    assert (
+        release_supply_chain_main(
+            (
+                "validate-cdk-assets",
+                str(evidence_path),
+                "--account",
+                "000000000000",
+                "--assembly",
+                str(assembly),
+            )
+        )
+        == 0
+    )
 
 
 def evidence() -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
@@ -302,6 +619,7 @@ def manifest(tmp_path: Path) -> dict[str, object]:
         break_glass_risk_evidence=risk_paths["break-glass"],
         break_glass_sbom_path=break_glass_sbom,
         break_glass_verification=break_glass_verification,
+        cdk_assets=cdk_assets(),
         change_sets=changes,
         commit_sha="b" * 40,
         lambda_bundle={
@@ -343,6 +661,8 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
     }
     assert images["break_glass"]["digest"] == BREAK_GLASS_DIGEST
     assert value["commit_sha"] == "b" * 40
+    assert value["schema_version"] == 2
+    assert value["cdk_assets"] == cdk_assets()
 
 
 @pytest.mark.parametrize(
@@ -354,6 +674,7 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
         ),
         lambda value: value["images"]["normal"]["referrers"].pop("sbom"),  # type: ignore[index]
         lambda value: value["change_sets"].update({"ShittimChest-Prod-Runtime": "not-an-arn"}),
+        lambda value: value["cdk_assets"]["files"].pop(),  # type: ignore[index]
     ],
 )
 def test_manifest_validation_rejects_tampering(

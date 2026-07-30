@@ -210,10 +210,14 @@ def _validate_release(directory: Path) -> None:
             ("id-token", "write"),
         ),
         (("attestations", "read"), ("contents", "read"), ("id-token", "write")),
+        (("actions", "read"), ("contents", "read"), ("id-token", "write")),
     ):
-        raise WorkflowPolicyError("Release permissions are not the canonical plan/deploy split")
+        raise WorkflowPolicyError(
+            "Release permissions are not the canonical plan/deploy/cleanup split"
+        )
     required = (
         "name: Production Release",
+        "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-24.04-arm",
         'node-version: "24.18.0"',
@@ -224,7 +228,7 @@ def _validate_release(directory: Path) -> None:
         "'Analyze (python)'",
         "map({Status, TagKey, Type})",
         "signing-profiles/shittim_chest_ecr$",
-        "enhanced ECR scan query failed",
+        "tools/wait_release_image_evidence.sh",
         "vars.AWS_RELEASE_PLAN_ROLE_ARN",
         "vars.AWS_RELEASE_DEPLOY_ROLE_ARN",
         "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
@@ -241,6 +245,33 @@ def _validate_release(directory: Path) -> None:
         "--deny-self-hosted-runners",
         "--signer-digest",
         "tools/check_container_risk_acceptance.py",
+        "Prepare pinned vulnerability data before image push",
+        "create-cdk-assets",
+        "bind-cdk-asset-checksums",
+        "validate-cdk-assets",
+        "publish-assets",
+        "--unstable=publish-assets",
+        "--exclusively",
+        "--force",
+        "jq --compact-output '.files[]'",
+        ".s3_checksum_sha256",
+        "--checksum-mode ENABLED",
+        "Fail fast on unstable stacks, stale plans, and unavailable AWS APIs",
+        "Recover stale unexecuted release change sets before planning",
+        "--stale-before-plan",
+        "aws ssm describe-parameters",
+        "/discord/moderator/public-key",
+        "aws cloudformation describe-events --generate-cli-skeleton input",
+        "Remove this failed plan's unexecuted change sets",
+        "Remove this release's unexecuted change sets",
+        "tools/cleanup_release_change_sets.sh",
+        "Capture bounded CloudFormation failure diagnostics",
+        "aws cloudformation describe-events",
+        "--filters FailedEvents=true",
+        "--max-items 100",
+        "tools.control_records validate",
+        "tools.control_records guard",
+        "--lock-seconds 3600",
         "validate-change-set",
         "grep --fixed-strings '(ValidationError)'",
         "REVIEW_IN_PROGRESS) type=CREATE",
@@ -255,8 +286,21 @@ def _validate_release(directory: Path) -> None:
         "describe-task-definition",
         "if: always() && steps.acquire.outputs.acquired == 'true'",
         "evidence_name: ${{ steps.evidence.outputs.artifact_name }}",
+        "plan_attempt: ${{ steps.evidence.outputs.run_attempt }}",
         "name: ${{ steps.evidence.outputs.artifact_name }}",
         "name: ${{ needs.plan.outputs.evidence_name }}",
+        "if: ${{ needs.plan.result == 'success' && "
+        "fromJSON(needs.plan.outputs.plan_attempt) == github.run_attempt }}",
+        "needs: [plan, deploy]",
+        "Acquire plan-role cleanup credentials",
+        "Confirm this release has no unexecuted change sets",
+        "EVIDENCE_RESULT: ${{ steps.cleanup_evidence.outcome }}",
+        "continue-on-error: true",
+        '[[ ! "${PLAN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]',
+        'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${PLAN_ATTEMPT}"',
+        "--attempt-name",
+        "A failed-jobs-only rerun cannot reuse an earlier release plan",
+        'contains(fromJSON(\'["success","failure","cancelled"]\'), steps.prepare_changes.outcome)',
         "guard_id=$(uv run --frozen python -c 'import uuid; print(uuid.uuid7())')",
         "retention-days: 90",
     )
@@ -265,6 +309,10 @@ def _validate_release(directory: Path) -> None:
     for marker in required:
         if marker not in text:
             raise WorkflowPolicyError(f"Release lacks required policy marker: {marker}")
+    if text.count("name: ${{ needs.plan.outputs.evidence_name }}") != 2:
+        raise WorkflowPolicyError(
+            "Release deploy and cleanup must consume the exact planned artifact"
+        )
     if text.count("environment: production") != 1:
         raise WorkflowPolicyError("Release must use production Environment only for deploy")
     if re.search(r"secrets\.AWS[A-Z0-9_]*|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY", text):
@@ -285,6 +333,166 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must load the regenerated image verification document before comparison"
         )
+    try:
+        synth_index = text.index("name: Synthesize and publish the complete CDK asset closure")
+        publish_index = text.index("npm run cdk -- publish-assets")
+        tool_install_index = text.index("name: Install pinned Syft, Grype, and Docker Scout")
+        notation_install_index = text.index(
+            "name: Install and cryptographically verify AWS Signer Notation"
+        )
+        helper_install_index = text.index(
+            "name: Install and configure the pinned ECR credential helper"
+        )
+        vulnerability_data_index = text.index(
+            "name: Prepare pinned vulnerability data before image push"
+        )
+        build_index = text.index("name: Build and push the production image once")
+        change_set_index = text.index("name: Prepare immutable CloudFormation change sets")
+    except ValueError as error:
+        raise WorkflowPolicyError("Release CDK asset publication steps are incomplete") from error
+    if not (
+        synth_index
+        < publish_index
+        < tool_install_index
+        < notation_install_index
+        < helper_install_index
+        < vulnerability_data_index
+        < build_index
+        < change_set_index
+    ):
+        raise WorkflowPolicyError(
+            "Release must finish asset and verifier preflights before image build and change sets"
+        )
+    publish_end = text.find("\n      - name:", publish_index)
+    publish_block = text[publish_index : None if publish_end == -1 else publish_end]
+    required_publish_markers = (
+        "Stateful Runtime Operations CostGovernance",
+        '--app "${RUNNER_TEMP}/cdk.out"',
+        "--exclusively",
+        "--unstable=publish-assets",
+        "--force",
+        "--ci",
+    )
+    if any(marker not in publish_block for marker in required_publish_markers):
+        raise WorkflowPolicyError("Release CDK asset publisher is incomplete")
+    if text.count("tools/release_supply_chain.py validate-cdk-assets") != 2:
+        raise WorkflowPolicyError(
+            "Release must revalidate CDK assets before and after AWS approval"
+        )
+    try:
+        create_change_set_index = text.index("arn=$(aws cloudformation create-change-set")
+        record_change_set_index = text.index(
+            'jq --arg stack "${stack}" --arg arn "${arn}"',
+            create_change_set_index,
+        )
+        poll_change_set_index = text.index("for attempt in $(seq 1 60)", create_change_set_index)
+    except ValueError as error:
+        raise WorkflowPolicyError("Release change set recording is incomplete") from error
+    if not create_change_set_index < record_change_set_index < poll_change_set_index:
+        raise WorkflowPolicyError("Release must record each change set before polling it")
+    if (
+        text.count('change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"')
+        != 4
+    ):
+        raise WorkflowPolicyError(
+            "Release recovery, plan, and both partial-plan cleanup paths must use "
+            "only this run's exact name"
+        )
+    cleanup_call = "bash tools/cleanup_release_change_sets.sh"
+    plan_job_start = text.index("\n  plan:\n")
+    deploy_job_start = text.index("\n  deploy:\n")
+    plan_job = text[plan_job_start:deploy_job_start]
+    stale_cleanup_start = plan_job.index(
+        "name: Recover stale unexecuted release change sets before planning"
+    )
+    fail_fast_start = plan_job.index(
+        "name: Fail fast on unstable stacks, stale plans, and unavailable AWS APIs"
+    )
+    stale_cleanup = plan_job[stale_cleanup_start:fail_fast_start]
+    if (
+        cleanup_call not in stale_cleanup
+        or "--stale-before-plan" not in stale_cleanup
+        or 'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"'
+        not in stale_cleanup
+    ):
+        raise WorkflowPolicyError("Release stale-plan recovery is not bound to this run")
+    plan_cleanup_start = plan_job.index("name: Remove this failed plan's unexecuted change sets")
+    plan_cleanup = plan_job[plan_cleanup_start:]
+    required_plan_cleanup = (
+        "always()",
+        "steps.plan_aws.outcome == 'success'",
+        "steps.prepare_changes.outcome",
+        "job.status != 'success'",
+        cleanup_call,
+        "--change-set-name",
+    )
+    if any(marker not in plan_cleanup for marker in required_plan_cleanup):
+        raise WorkflowPolicyError("Release partial-plan cleanup is not fail-safe")
+    deploy_cleanup_start = text.index("name: Remove this release's unexecuted change sets")
+    deploy_cleanup_end = text.index("name: Release the exact deployment fence")
+    deploy_cleanup = text[deploy_cleanup_start:deploy_cleanup_end]
+    cleanup_job_start = text.index("\n  cleanup:\n")
+    cleanup_job = text[cleanup_job_start:]
+    if (
+        cleanup_call not in deploy_cleanup
+        or cleanup_call not in cleanup_job
+        or "--manifest" not in deploy_cleanup
+        or "--manifest" not in cleanup_job
+    ):
+        raise WorkflowPolicyError(
+            "Release cleanup must use the attested change set ARN across failed-job reruns"
+        )
+    if "GITHUB_RUN_ATTEMPT" in deploy_cleanup or "change_set_name=" in deploy_cleanup:
+        raise WorkflowPolicyError("Deploy cleanup must not reconstruct a rerun change set name")
+    cleanup_checkout_end = cleanup_job.index(
+        "name: Download the exact planned release evidence for cleanup"
+    )
+    cleanup_checkout = cleanup_job[:cleanup_checkout_end]
+    required_cleanup_checkout = (
+        "if: ${{ always() }}",
+        "actions/checkout@",
+        "ref: ${{ github.sha }}",
+        "persist-credentials: false",
+    )
+    if any(marker not in cleanup_checkout for marker in required_cleanup_checkout):
+        raise WorkflowPolicyError("Release independent cleanup is not always available")
+    required_independent_cleanup = (
+        "if: ${{ needs.plan.result == 'success' }}",
+        "id: cleanup_evidence",
+        "continue-on-error: true",
+        "PLAN_RESULT: ${{ needs.plan.result }}",
+        "EVIDENCE_RESULT: ${{ steps.cleanup_evidence.outcome }}",
+        'if [ "${PLAN_RESULT}" = success ] && [ "${EVIDENCE_RESULT}" = success ]',
+        '[[ ! "${PLAN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]',
+        'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${PLAN_ATTEMPT}"',
+        "--manifest",
+        "--attempt-name",
+        "--change-set-name",
+        "Release evidence download failed",
+        "Release planning did not succeed",
+    )
+    if any(marker not in cleanup_job for marker in required_independent_cleanup):
+        raise WorkflowPolicyError("Release independent cleanup cannot recover a failed plan")
+    try:
+        planned_name = cleanup_job.index(
+            'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${PLAN_ATTEMPT}"'
+        )
+        attempt_cleanup = cleanup_job.index("--attempt-name", planned_name)
+        current_name = cleanup_job.index(
+            'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+            attempt_cleanup,
+        )
+        partial_cleanup = cleanup_job.index("--change-set-name", current_name)
+    except ValueError as error:
+        raise WorkflowPolicyError("Release cleanup fallback identity is incomplete") from error
+    if not planned_name < attempt_cleanup < current_name < partial_cleanup:
+        raise WorkflowPolicyError("Release cleanup fallback is not bound to the planned attempt")
+    rerun_rejection = cleanup_job.index('if [ "${PLAN_ATTEMPT}" != "${GITHUB_RUN_ATTEMPT}" ]')
+    if (
+        cleanup_job[:rerun_rejection].count(cleanup_call) != 3
+        or cleanup_job.count(cleanup_call) != 3
+    ):
+        raise WorkflowPolicyError("Release cleanup must precede failed-rerun rejection")
     secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
     if secrets != {"DHI_TOKEN", "DHI_USERNAME", "OPERATOR_NOTIFICATION_EMAIL"}:
         raise WorkflowPolicyError("Release secret allowlist changed")

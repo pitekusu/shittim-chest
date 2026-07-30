@@ -14,21 +14,27 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-10-A feature branch, 2026-07-30)
+## Status (STEP-10-A release hardening branch, 2026-07-31)
 
 The merged `main` baseline includes PR `#85` signed HTTP ingress and On-Demand
 scale-to-zero plus the locally implemented STEP-09C-A/B/C monitoring and cost
 governance slices. The current branch adds STEP-10-A's immutable OIDC release
 identities, plan/Environment-deploy workflow, dual signed image/referrer gates,
 canonical manifest, fenced change-set execution, drift detection, and ECS
-`PRE_SCALE_UP` image admission. The operator account is now bootstrapped in
+`PRE_SCALE_UP` image admission. The release-hardening branch adds complete CDK
+file-asset publication/checksum evidence, fail-fast Signer/ECR/Inspector waits,
+convergent change-set cleanup and rerun fencing, operation-scoped diagnostics,
+and first-create-only LogGroup cleanup. The operator account is bootstrapped in
 `ap-northeast-1` and `us-east-1`; Stateful and ReleaseIdentity are deployed with
 termination protection, immutable repository OIDC is enabled, and the non-secret
 release variables are configured. The private notification secret and all 11
 versioned SSM inputs are configured without retrieving their values, and the
-`Project` cost-allocation tag is Active. Runtime, Operations, CostGovernance,
-Discord, and the first production release remain unchanged. The authoritative Obsidian
-progress/evidence notes and the public mirror include this STEP-10-A state.
+`Project` cost-allocation tag is Active. The first Runtime attempt rolled back
+because its generated CDK provider ZIP had not been published; Runtime is
+`ROLLBACK_COMPLETE`, twelve stale unexecuted release change sets and seven empty
+retained LogGroups require verified cleanup. Operations and CostGovernance have no resources. Discord and the first successful
+production release remain unchanged. The authoritative Obsidian progress/evidence
+notes and the public mirror include this STEP-10-A state.
 
 | Area | Current implementation |
 |---|---|
@@ -44,11 +50,11 @@ progress/evidence notes and the public mirror include this STEP-10-A state.
 | Ops metrics | `ShittimChest/Prod`, fixed `Service` dimension, 10-metric allowlist |
 | Ops monitoring | 9 underlying alarms, 2 actionable composites, dashboard, abnormal ECS stops |
 | Cost governance | Project $20/account $30 Budget, existing-monitor CAD total-impact $10 |
-| Release | immutable OIDC roles, signed normal/break-glass images, OCI attestations, manifest, fenced change sets, drift |
+| Release | immutable OIDC roles, complete CDK asset closure, signed normal/break-glass images, OCI attestations, manifest, fenced change sets, convergent cleanup, drift |
 
 **Not done**
 
-- First release execution and Runtime/Operations/CostGovernance deployment
+- ReleaseIdentity hardening update, failed Runtime/empty LogGroup cleanup, and first successful Runtime/Operations/CostGovernance deployment
 - Real Discord Application endpoint switch and live Discord/OpenAI acceptance
 - Paid OpenAI in CI
 - Live Notation/referrer/change-set/admission/rollback/drift acceptance remains unexecuted
