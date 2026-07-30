@@ -63,6 +63,20 @@ def evidence() -> tuple[dict[str, object], dict[str, object], dict[str, object]]
     return signing, referrers, scan
 
 
+def inspector_coverage(*, digest: str = DIGEST, reason: str = "SUCCESSFUL") -> dict[str, object]:
+    return {
+        "coveredResources": [
+            {
+                "lastScannedAt": "2026-07-30T00:00:00Z",
+                "resourceId": f"arn:aws:ecr:ap-northeast-1:000000000000:image/{digest}",
+                "resourceType": "AWS_ECR_CONTAINER_IMAGE",
+                "scanStatus": {"reason": reason, "statusCode": "ACTIVE"},
+                "scanType": "PACKAGE",
+            }
+        ]
+    }
+
+
 def artifact(kind: str, suffix: str, predicate: str | None = None) -> dict[str, object]:
     value: dict[str, object] = {
         "artifactStatus": "ACTIVE",
@@ -189,6 +203,47 @@ def test_vulnerability_predicate_is_content_free() -> None:
         scan=scan,
     )
     assert cast(dict[str, int], accepted["severity_counts"])["high"] == 1
+
+
+def test_uses_successful_inspector_coverage_timestamp_for_zero_findings() -> None:
+    _, _, scan = evidence()
+    findings = cast(dict[str, object], scan["imageScanFindings"])
+    findings.pop("imageScanCompletedAt")
+    findings.pop("findingSeverityCounts")
+
+    result = create_vulnerability_predicate(coverage=inspector_coverage(), digest=DIGEST, scan=scan)
+
+    assert result["scanned_at"] == "2026-07-30T00:00:00Z"
+    assert set(cast(dict[str, int], result["severity_counts"]).values()) == {0}
+
+
+@pytest.mark.parametrize(
+    ("coverage", "message"),
+    [
+        (inspector_coverage(digest=BREAK_GLASS_DIGEST), "does not resolve"),
+        (inspector_coverage(reason="PENDING_INITIAL_SCAN"), "is not successful"),
+        ({"coveredResources": []}, "does not resolve"),
+    ],
+)
+def test_rejects_unbound_or_incomplete_inspector_coverage(
+    coverage: dict[str, object], message: str
+) -> None:
+    _, _, scan = evidence()
+    cast(dict[str, object], scan["imageScanFindings"]).pop("imageScanCompletedAt")
+
+    with pytest.raises(ValueError, match=message):
+        create_vulnerability_predicate(coverage=coverage, digest=DIGEST, scan=scan)
+
+
+def test_rejects_unsuccessful_coverage_even_when_ecr_has_a_timestamp() -> None:
+    _, _, scan = evidence()
+
+    with pytest.raises(ValueError, match="is not successful"):
+        create_vulnerability_predicate(
+            coverage=inspector_coverage(reason="PENDING_INITIAL_SCAN"),
+            digest=DIGEST,
+            scan=scan,
+        )
 
 
 def manifest(tmp_path: Path) -> dict[str, object]:

@@ -319,10 +319,15 @@ jobs:
           repository="${ECR_REPOSITORY_URI##*/}"
           wait_for_evidence() {
             local mode="$1" digest="$2" image_file signing_file scan_file scan_error_file
+            local coverage_file coverage_error_file coverage_filter
             image_file="${RUNNER_TEMP}/${mode}.image.json"
             signing_file="${RUNNER_TEMP}/${mode}.signing.json"
             scan_file="${RUNNER_TEMP}/${mode}.scan.json"
             scan_error_file="${RUNNER_TEMP}/${mode}.scan-error.txt"
+            coverage_file="${RUNNER_TEMP}/${mode}.coverage.json"
+            coverage_error_file="${RUNNER_TEMP}/${mode}.coverage-error.txt"
+            coverage_filter=$(jq --compact-output --null-input --arg repository "${repository}" \
+              '{ecrRepositoryName:[{comparison:"EQUALS",value:$repository}]}')
             aws ecr describe-images \
               --repository-name "${repository}" \
               --image-ids "imageDigest=${digest}" \
@@ -350,7 +355,20 @@ jobs:
                 --output json > "${scan_file}" 2>"${scan_error_file}" && \
                 jq --exit-status \
                   '.imageScanStatus.status == "ACTIVE" or .imageScanStatus.status == "COMPLETE"' \
-                  "${scan_file}" >/dev/null
+                  "${scan_file}" >/dev/null && \
+                aws inspector2 list-coverage \
+                  --filter-criteria "${coverage_filter}" \
+                  --output json > "${coverage_file}" 2>"${coverage_error_file}" && \
+                jq --exit-status --arg digest "${digest}" \
+                  '[.coveredResources[] | select(
+                    .resourceType == "AWS_ECR_CONTAINER_IMAGE" and
+                    .scanType == "PACKAGE" and
+                    (.resourceId | endswith($digest)) and
+                    .scanStatus.statusCode == "ACTIVE" and
+                    .scanStatus.reason == "SUCCESSFUL" and
+                    (.lastScannedAt | type == "string") and
+                    (.lastScannedAt | length > 0)
+                  )] | length == 1' "${coverage_file}" >/dev/null
               then
                 break
               fi
@@ -360,12 +378,18 @@ jobs:
                 echo "::error::enhanced ECR scan query failed" >&2
                 return 1
               fi
+              if test -s "${coverage_error_file}"
+              then
+                echo "::error::Inspector coverage query failed" >&2
+                return 1
+              fi
               test "${attempt}" -lt 30
               sleep 10
             done
             uv run --frozen python tools/release_supply_chain.py \
               create-vulnerability-predicate \
               --digest "${digest}" \
+              --coverage "${coverage_file}" \
               --scan "${scan_file}" \
               --risk-gate-passed \
               --output "${RUNNER_TEMP}/${mode}.vulnerability.json"
@@ -451,6 +475,7 @@ jobs:
               --output json > "${RUNNER_TEMP}/${mode}.referrers.json"
             uv run --frozen python tools/release_supply_chain.py verify-image \
               --digest "${digest}" \
+              --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
               --image-details "${RUNNER_TEMP}/${mode}.image.json" \
               --profile-arn "${SIGNING_PROFILE_ARN}" \
               --signing-status "${RUNNER_TEMP}/${mode}.signing.json" \
@@ -914,6 +939,8 @@ jobs:
         run: |
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
           repository="${ECR_REPOSITORY_URI##*/}"
+          coverage_filter=$(jq --compact-output --null-input --arg repository "${repository}" \
+            '{ecrRepositoryName:[{comparison:"EQUALS",value:$repository}]}')
           for mode in normal break-glass
           do
             key="${mode//-/_}"
@@ -927,11 +954,15 @@ jobs:
             aws ecr describe-image-scan-findings \
               --repository-name "${repository}" --image-id "imageDigest=${digest}" \
               --output json > "${RUNNER_TEMP}/${mode}.scan.json"
+            aws inspector2 list-coverage \
+              --filter-criteria "${coverage_filter}" \
+              --output json > "${RUNNER_TEMP}/${mode}.coverage.json"
             aws ecr list-image-referrers \
               --repository-name "${repository}" --subject-id "imageDigest=${digest}" \
               --output json > "${RUNNER_TEMP}/${mode}.referrers.json"
             uv run --frozen python tools/release_supply_chain.py verify-image \
-              --digest "${digest}" --profile-arn "${SIGNING_PROFILE_ARN}" \
+              --digest "${digest}" --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
+              --profile-arn "${SIGNING_PROFILE_ARN}" \
               --image-details "${RUNNER_TEMP}/${mode}.image.json" \
               --signing-status "${RUNNER_TEMP}/${mode}.signing.json" \
               --referrers "${RUNNER_TEMP}/${mode}.referrers.json" \

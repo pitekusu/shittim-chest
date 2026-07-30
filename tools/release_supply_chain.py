@@ -55,6 +55,7 @@ _STACKS = (
 
 def verify_image_evidence(
     *,
+    coverage: object | None = None,
     digest: str,
     image_details: object,
     profile_arn: str,
@@ -111,6 +112,7 @@ def verify_image_evidence(
         artifacts[name] = _one_artifact_digest(matches, name)
 
     scan_result = create_vulnerability_predicate(
+        coverage=coverage,
         digest=digest,
         risk_gate_passed=risk_gate_passed,
         scan=scan,
@@ -125,8 +127,36 @@ def verify_image_evidence(
     }
 
 
+def _inspector_scan_timestamp(*, coverage: object, digest: str) -> str:
+    payload = _object(coverage, "Inspector coverage")
+    if payload.get("nextToken") not in (None, ""):
+        raise ValueError("Inspector coverage input is not fully paginated")
+    matches = [
+        _object(item, "covered resource")
+        for item in _array(payload.get("coveredResources"), "covered resources")
+        if isinstance(item, Mapping)
+        and item.get("resourceType") == "AWS_ECR_CONTAINER_IMAGE"
+        and item.get("scanType") == "PACKAGE"
+        and isinstance(resource_id := item.get("resourceId"), str)
+        and resource_id.endswith(digest)
+    ]
+    if len(matches) != 1:
+        raise ValueError("image digest does not resolve to exactly one Inspector coverage record")
+    status = _object(matches[0].get("scanStatus"), "Inspector scan status")
+    if status.get("statusCode") != "ACTIVE" or status.get("reason") != "SUCCESSFUL":
+        raise ValueError("Inspector package scan is not successful")
+    scanned_at = matches[0].get("lastScannedAt")
+    if not isinstance(scanned_at, str) or not scanned_at:
+        raise ValueError("Inspector scan timestamp is missing")
+    return scanned_at
+
+
 def create_vulnerability_predicate(
-    *, digest: str, risk_gate_passed: bool = False, scan: object
+    *,
+    coverage: object | None = None,
+    digest: str,
+    risk_gate_passed: bool = False,
+    scan: object,
 ) -> dict[str, object]:
     """Normalize enhanced ECR counts without publishing vulnerability identifiers."""
 
@@ -145,8 +175,15 @@ def create_vulnerability_predicate(
         counts[severity.lower()] = value
     if (counts["critical"] or counts["high"]) and not risk_gate_passed:
         raise ValueError("release image has unaccepted high or critical findings")
-    scanned_at = findings.get("imageScanCompletedAt") or findings.get(
-        "vulnerabilitySourceUpdatedAt"
+    coverage_scanned_at = (
+        _inspector_scan_timestamp(coverage=coverage, digest=digest)
+        if coverage is not None
+        else None
+    )
+    scanned_at = (
+        findings.get("imageScanCompletedAt")
+        or findings.get("vulnerabilitySourceUpdatedAt")
+        or coverage_scanned_at
     )
     if not isinstance(scanned_at, str) or not scanned_at:
         raise ValueError("image scan timestamp is missing")
@@ -585,6 +622,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     verify = commands.add_parser("verify-image")
     verify.add_argument("--digest", required=True)
+    verify.add_argument("--coverage", type=Path, required=True)
     verify.add_argument("--image-details", type=Path, required=True)
     verify.add_argument("--profile-arn", required=True)
     verify.add_argument("--signing-status", type=Path, required=True)
@@ -594,6 +632,7 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--output", type=Path, required=True)
     predicate = commands.add_parser("create-vulnerability-predicate")
     predicate.add_argument("--digest", required=True)
+    predicate.add_argument("--coverage", type=Path, required=True)
     predicate.add_argument("--scan", type=Path, required=True)
     predicate.add_argument("--risk-gate-passed", action="store_true")
     predicate.add_argument("--output", type=Path, required=True)
@@ -636,6 +675,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "verify-image":
             result = verify_image_evidence(
+                coverage=_read(args.coverage),
                 digest=args.digest,
                 image_details=_read(args.image_details),
                 profile_arn=args.profile_arn,
@@ -649,6 +689,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _write(
                 args.output,
                 create_vulnerability_predicate(
+                    coverage=_read(args.coverage),
                     digest=args.digest,
                     risk_gate_passed=args.risk_gate_passed,
                     scan=_read(args.scan),
