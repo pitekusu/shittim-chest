@@ -996,7 +996,8 @@ jobs:
               --referrers "${RUNNER_TEMP}/${mode}.referrers.json" \
               --scan "${RUNNER_TEMP}/${mode}.scan.json" --risk-gate-passed \
               --output "${RUNNER_TEMP}/${mode}.verification.json"
-            jq --exit-status --arg key "${key}" --slurpfile actual \
+            jq --exit-status --arg key "${key}" \
+              --slurpfile actual "${RUNNER_TEMP}/${mode}.verification.json" \
               '.images[$key].digest == $actual[0].image_digest and
                .images[$key].media_type == $actual[0].media_type and
                .images[$key].referrers == $actual[0].referrers and

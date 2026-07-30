@@ -275,6 +275,10 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must revalidate downloaded CDK templates at their preserved artifact paths"
         )
+    if text.count('--slurpfile actual "${RUNNER_TEMP}/${mode}.verification.json"') != 1:
+        raise WorkflowPolicyError(
+            "Release must load the regenerated image verification document before comparison"
+        )
     secrets = set(re.findall(r"secrets\.([A-Z0-9_]+)", text))
     if secrets != {"DHI_TOKEN", "DHI_USERNAME", "OPERATOR_NOTIFICATION_EMAIL"}:
         raise WorkflowPolicyError("Release secret allowlist changed")
