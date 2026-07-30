@@ -126,6 +126,29 @@ def test_release_fails_fast_when_the_enhanced_scan_query_is_denied(tmp_path: Pat
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "login_command",
+    [
+        "notation login --username AWS registry.example",
+        "aws ecr get-login-password --region ap-northeast-1",
+    ],
+)
+def test_release_rejects_registry_login_tokens(tmp_path: Path, login_command: str) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '          notation verify "${NORMAL_REFERENCE}"',
+            f'          {login_command}\n          notation verify "${{NORMAL_REFERENCE}}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="without login tokens"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(
