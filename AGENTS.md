@@ -24,8 +24,10 @@ canonical manifest, fenced change-set execution, drift detection, and ECS
 `PRE_SCALE_UP` image admission. The operator account is now bootstrapped in
 `ap-northeast-1` and `us-east-1`; Stateful and ReleaseIdentity are deployed with
 termination protection, immutable repository OIDC is enabled, and the non-secret
-release variables are configured. Runtime, Operations, CostGovernance, Discord,
-and the first production release remain unchanged. The authoritative Obsidian
+release variables are configured. The private notification secret and all 11
+versioned SSM inputs are configured without retrieving their values, and the
+`Project` cost-allocation tag is Active. Runtime, Operations, CostGovernance,
+Discord, and the first production release remain unchanged. The authoritative Obsidian
 progress/evidence notes and the public mirror include this STEP-10-A state.
 
 | Area | Current implementation |
@@ -46,9 +48,9 @@ progress/evidence notes and the public mirror include this STEP-10-A state.
 
 **Not done**
 
-- Private operator email secret, versioned SSM runtime values, and first release execution
-- `Project` cost-allocation tag activation after Billing discovers the deployed tag
-- Real Discord Application endpoint switch, live Bot tokens, paid OpenAI in CI
+- First release execution and Runtime/Operations/CostGovernance deployment
+- Real Discord Application endpoint switch and live Discord/OpenAI acceptance
+- Paid OpenAI in CI
 - Live Notation/referrer/change-set/admission/rollback/drift acceptance remains unexecuted
 
 Slices ship as isolated PRs (squash merge). After each slice, update `docs/20_…`
