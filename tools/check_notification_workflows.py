@@ -224,6 +224,7 @@ def _validate_release(directory: Path) -> None:
         "'Analyze (python)'",
         "map({Status, TagKey, Type})",
         "signing-profiles/shittim_chest_ecr$",
+        "enhanced ECR scan query failed",
         "vars.AWS_RELEASE_PLAN_ROLE_ARN",
         "vars.AWS_RELEASE_DEPLOY_ROLE_ARN",
         "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
