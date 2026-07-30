@@ -126,7 +126,7 @@ sha256:<image-digest>
 - Managed Signingが生成するsignatureはimage digestへ自動で関連付けられる。
 - Syftでpush済みdigestから生成・検証したSPDX 2.3 JSONを、`actions/attest`のSBOM predicateとOCI registry referrerとして保存する。
 - build provenanceはGitHub-hosted runner、workflow path、immutable repository ID、commit SHA、image digestを含むSLSA predicateとし、`push-to-registry`でECR referrerへ保存する。
-- vulnerability assessmentはECR scan完了後のfindingをseverity別に正規化し、scan timestamp、scanner、image digest、finding countを含むJSONとしてOCI artifactへattachする。critical/highの未承認findingがある場合はattach後もreleaseを不合格とする。質問、secret、private runtime値を含めない。
+- vulnerability assessmentはECR enhanced scanのfindingをseverity別に正規化し、Amazon Inspector coverageの同一image digestに対する`ACTIVE` / `SUCCESSFUL`と`lastScannedAt`で初回scan完了を確認する。ECRがscan timestampを返す場合はそれを優先し、ゼロfindingで返さない場合だけcoverage timestampを使う。scan timestamp、scanner、image digest、finding countを含むJSONとしてOCI artifactへattachする。critical/highの未承認findingがある場合はattach後もreleaseを不合格とする。質問、secret、private runtime値を含めない。
 - subject imageを削除するとECRがreference artifactを24時間以内にcleanupする。署名やSBOMだけをrollback証跡として扱わず、使用中・直前正常image digest自体を保持する。
 
 ### 6.2 自動検証
