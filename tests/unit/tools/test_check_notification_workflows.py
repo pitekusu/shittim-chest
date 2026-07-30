@@ -212,6 +212,38 @@ def test_release_loads_regenerated_image_verification_for_comparison(tmp_path: P
         validate_notification_workflows(directory)
 
 
+def test_release_passes_the_planned_artifact_name_to_deploy(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "name: ${{ needs.plan.outputs.evidence_name }}",
+            "name: production-release-${{ github.run_id }}-${{ github.run_attempt }}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
+def test_release_uses_uuidv7_for_the_deployment_guard(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "guard_id=$(uv run --frozen python -c 'import uuid; print(uuid.uuid7())')",
+            'guard_id="release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="UUIDv7 guard ID"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(
