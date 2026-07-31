@@ -25,9 +25,11 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 COPY README.md LICENSE ./
 COPY src ./src
+COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py
 
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv sync --frozen --no-dev --no-editable
+    uv sync --frozen --no-dev --no-editable \
+    && python /tmp/canonicalize_wheel_records.py /app/.venv
 
 FROM dhi.io/python:3.14.6-debian13@sha256:9db32cc9009c5674edf024d212c2217f6ccbe700c7cd513cda7acb21c767e653 AS runtime-base
 

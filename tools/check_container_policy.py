@@ -274,6 +274,12 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     builder_text = text[builder_start:runtime_start]
     if 'ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"' not in builder_text:
         raise ValueError("Dockerfile builder must expose SOURCE_DATE_EPOCH to bytecode compilation")
+    if (
+        "COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py"
+        not in builder_text
+        or "python /tmp/canonicalize_wheel_records.py /app/.venv" not in builder_text
+    ):
+        raise ValueError("Dockerfile builder must canonicalize installed wheel RECORD ordering")
     if stages[3] != ("production", "runtime-base"):
         raise ValueError("production stage must derive from runtime-base")
     if stages[4] != ("fault-test", "production"):

@@ -139,6 +139,10 @@ and the plan/progress notes so this boundary does not go stale.
   image exporter must set `rewrite-timestamp=true`. Release must derive both config
   digests again from the pushed manifests. A digest update requires exact
   report/VEX/config-digest evidence for both targets before merge.
+- After the final frozen uv sync, canonicalize every installed `.dist-info/RECORD`
+  as valid three-column CSV sorted by row. Cold and cache-reused uv installs may
+  otherwise contain the same files but emit a differently ordered application
+  RECORD, changing the final image config digest.
 - Production image: digest-pinned DHI Community Python **3.14.6** Debian 13,
   `nonroot` **65532:65532**, policy in `container-policy.json` (Dockerfile, CI,
   ECS user, `/tmp/shittim-chest` tmpfs). No shell/package manager in production;
@@ -366,8 +370,9 @@ SDK imports stay in adapters. Do not add empty placeholder packages.
   --no-editable`) **before** copying app source; then final frozen project sync.
 - BuildKit cache on `/root/.cache/uv` (`sharing=locked`); no `UV_NO_CACHE=1` for
   image builds; `UV_PYTHON_DOWNLOADS=0`.
-- PR CI: one Buildx builder, digest-pinned `build-push-action`, `load: true`, no
-  image push, `contents: read`, no deploy secrets/OIDC. Production cache export
+- PR CI: one Buildx builder, digest-pinned `build-push-action`,
+  `outputs: type=docker,rewrite-timestamp=true`, no image push, `contents: read`,
+  no deploy secrets/OIDC. Production cache export
   may fail without failing the gate.
 
 ## AWS (implemented templates; synth/local tests only)

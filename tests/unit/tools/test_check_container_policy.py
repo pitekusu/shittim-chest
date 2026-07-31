@@ -129,6 +129,22 @@ def test_dockerfile_requires_reproducible_bytecode_environment(
         validate_dockerfile(policy, dockerfile)
 
 
+def test_dockerfile_requires_canonical_wheel_records(tmp_path: Path) -> None:
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(
+            "python /tmp/canonicalize_wheel_records.py /app/.venv",
+            "true",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="canonicalize installed wheel RECORD"):
+        validate_dockerfile(policy, dockerfile)
+
+
 def test_dependabot_uv_digest_bump_does_not_require_python_constant(tmp_path: Path) -> None:
     """Dockerfile remains the sole exact pin for the uv image digest."""
 

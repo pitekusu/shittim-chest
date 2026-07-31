@@ -45,14 +45,7 @@ def test_http_input_has_no_interaction_token_field_or_private_repr() -> None:
 
     assert "token" not in field_names
     assert "interaction_token" not in field_names
-    assert "101" not in representation
-    assert "102" not in representation
-    assert "103" not in representation
-    assert "104" not in representation
-    assert "105" not in representation
-    assert "甘い朝ごはん" not in representation
-    assert "private-user" not in representation
-    assert "Private Display" not in representation
+    assert representation == object.__repr__(value)
 
 
 def test_ping_requires_utc_timestamp() -> None:
