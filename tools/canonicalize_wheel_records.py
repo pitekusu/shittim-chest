@@ -17,7 +17,7 @@ def _record_paths(venv: Path) -> list[Path]:
     )
 
 
-def _canonical_record(record: Path) -> str:
+def _canonical_record(record: Path) -> tuple[str, Path | None]:
     with record.open(encoding="utf-8", newline="") as handle:
         rows = list(csv.reader(handle))
     if not rows:
@@ -28,10 +28,21 @@ def _canonical_record(record: Path) -> str:
     if len(paths) != len(set(paths)):
         raise ValueError(f"wheel RECORD contains duplicate paths: {record}")
 
+    uv_cache_row = f"{record.parent.name}/uv_cache.json"
+    unexpected_uv_cache_rows = [
+        path for path in paths if path.endswith("/uv_cache.json") and path != uv_cache_row
+    ]
+    if unexpected_uv_cache_rows:
+        raise ValueError(f"wheel RECORD contains an unexpected uv cache path: {record}")
+    rows = [row for row in rows if row[0] != uv_cache_row]
+    uv_cache = record.parent / "uv_cache.json"
+    if uv_cache.is_symlink() or (uv_cache.exists() and not uv_cache.is_file()):
+        raise ValueError(f"wheel uv cache metadata must be a regular file: {uv_cache}")
+
     output = io.StringIO(newline="")
     writer = csv.writer(output, lineterminator="\n")
     writer.writerows(sorted(rows, key=lambda row: tuple(row)))
-    return output.getvalue()
+    return output.getvalue(), uv_cache if uv_cache.exists() else None
 
 
 def canonicalize_wheel_records(venv: Path, *, check: bool = False) -> int:
@@ -42,13 +53,15 @@ def canonicalize_wheel_records(venv: Path, *, check: bool = False) -> int:
         raise ValueError(f"virtual environment contains no wheel RECORD files: {venv}")
     changed: list[Path] = []
     for record in records:
-        canonical = _canonical_record(record)
+        canonical, uv_cache = _canonical_record(record)
         with record.open(encoding="utf-8", newline="") as handle:
             current = handle.read()
-        if current == canonical:
+        if current == canonical and uv_cache is None:
             continue
         changed.append(record)
         if not check:
+            if uv_cache is not None:
+                uv_cache.unlink()
             with record.open("w", encoding="utf-8", newline="") as handle:
                 handle.write(canonical)
     if check and changed:

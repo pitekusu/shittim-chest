@@ -419,7 +419,7 @@ jobs:
             --output "spdx-json=${RUNNER_TEMP}/break-glass-image-sbom-arm64.spdx.json"
           python tools/check_image_sbom.py \
             "${RUNNER_TEMP}/break-glass-image-sbom-arm64.spdx.json"
-      - name: Retain the installed application RECORD
+      - name: Validate and retain the installed application RECORD
         run: |
           record_container=$(docker create shittim-chest:step-08b-arm64)
           cleanup_record_container() {
@@ -430,6 +430,11 @@ jobs:
             "${record_container}:/app/.venv/lib/python3.14/site-packages/shittim_chest-0.1.0.dist-info/RECORD" \
             "${RUNNER_TEMP}/application-record.csv"
           test -s "${RUNNER_TEMP}/application-record.csv"
+          if grep --fixed-strings --quiet "/uv_cache.json," \
+            "${RUNNER_TEMP}/application-record.csv"; then
+            echo "uv cache metadata must not affect the installed RECORD" >&2
+            exit 1
+          fi
       - name: Retain the final image SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

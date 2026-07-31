@@ -60,6 +60,52 @@ def test_check_rejects_noncanonical_record(tmp_path: Path) -> None:
         canonicalize_wheel_records(tmp_path, check=True)
 
 
+def test_canonicalize_removes_uv_cache_metadata_and_record_row(tmp_path: Path) -> None:
+    record = _record(
+        tmp_path,
+        "example-1.0",
+        [
+            ["example.py", "sha256=aaa", "1"],
+            ["example-1.0.dist-info/uv_cache.json", "sha256=unstable", "140"],
+            ["example-1.0.dist-info/RECORD", "", ""],
+        ],
+    )
+    uv_cache = record.parent / "uv_cache.json"
+    uv_cache.write_text('{"timestamp":"checkout-specific"}\n', encoding="utf-8")
+
+    assert canonicalize_wheel_records(tmp_path) == 1
+    assert not uv_cache.exists()
+    assert b"uv_cache.json" not in record.read_bytes()
+    assert canonicalize_wheel_records(tmp_path, check=True) == 1
+
+
+def test_check_rejects_uv_cache_metadata_even_when_record_is_sorted(tmp_path: Path) -> None:
+    record = _record(
+        tmp_path,
+        "example-1.0",
+        [
+            ["example-1.0.dist-info/RECORD", "", ""],
+            ["example-1.0.dist-info/uv_cache.json", "sha256=unstable", "140"],
+            ["example.py", "sha256=aaa", "1"],
+        ],
+    )
+    (record.parent / "uv_cache.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-canonical"):
+        canonicalize_wheel_records(tmp_path, check=True)
+
+
+def test_canonicalize_rejects_unexpected_uv_cache_record_path(tmp_path: Path) -> None:
+    _record(
+        tmp_path,
+        "example-1.0",
+        [["other-1.0.dist-info/uv_cache.json", "sha256=unstable", "140"]],
+    )
+
+    with pytest.raises(ValueError, match="unexpected uv cache path"):
+        canonicalize_wheel_records(tmp_path)
+
+
 @pytest.mark.parametrize(
     "rows",
     [

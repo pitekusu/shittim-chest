@@ -140,9 +140,10 @@ and the plan/progress notes so this boundary does not go stale.
   digests again from the pushed manifests. A digest update requires exact
   report/VEX/config-digest evidence for both targets before merge.
 - After the final frozen uv sync, canonicalize every installed `.dist-info/RECORD`
-  as valid three-column CSV sorted by row. Cold and cache-reused uv installs may
-  otherwise contain the same files but emit a differently ordered application
-  RECORD, changing the final image config digest.
+  as valid three-column CSV sorted by row. Remove uv's checkout-time-dependent
+  `uv_cache.json` file and its same-dist-info RECORD row; reject another path,
+  symlink, or non-regular file. Cold and cache-reused uv installs may otherwise
+  contain the same application but change the final image config digest.
 - Production image: digest-pinned DHI Community Python **3.14.6** Debian 13,
   `nonroot` **65532:65532**, policy in `container-policy.json` (Dockerfile, CI,
   ECS user, `/tmp/shittim-chest` tmpfs). No shell/package manager in production;
