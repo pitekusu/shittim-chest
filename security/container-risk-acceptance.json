@@ -6,8 +6,8 @@
       "vulnerability_id": "CVE-2025-59375",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -16,15 +16,15 @@
       "evidence": "The CI SBOM contains libexpat1 2.8.2-1~deb13u1; Debian marks that exact trixie security version fixed at https://security-tracker.debian.org/tracker/CVE-2025-59375.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     },
     {
       "vulnerability_id": "CVE-2025-59375",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -33,15 +33,15 @@
       "evidence": "The CI SBOM contains libexpat1-dev 2.8.2-1~deb13u1; Debian marks the corresponding expat trixie security version fixed at https://security-tracker.debian.org/tracker/CVE-2025-59375.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     },
     {
       "vulnerability_id": "CVE-2026-25210",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -50,15 +50,15 @@
       "evidence": "The CI SBOM contains libexpat1 2.8.2-1~deb13u1; Debian records 2.7.4-1 as fixed at https://security-tracker.debian.org/tracker/CVE-2026-25210.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     },
     {
       "vulnerability_id": "CVE-2026-25210",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -67,15 +67,15 @@
       "evidence": "The CI SBOM contains libexpat1-dev 2.8.2-1~deb13u1; Debian records 2.7.4-1 as fixed at https://security-tracker.debian.org/tracker/CVE-2026-25210.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     },
     {
       "vulnerability_id": "CVE-2026-41080",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -84,15 +84,15 @@
       "evidence": "The CI SBOM contains libexpat1 2.8.2-1~deb13u1; Debian records 2.8.0-1 as fixed at https://security-tracker.debian.org/tracker/CVE-2026-41080.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     },
     {
       "vulnerability_id": "CVE-2026-41080",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -101,15 +101,15 @@
       "evidence": "The CI SBOM contains libexpat1-dev 2.8.2-1~deb13u1; Debian records 2.8.0-1 as fixed at https://security-tracker.debian.org/tracker/CVE-2026-41080.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     },
     {
       "vulnerability_id": "CVE-2026-45186",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -118,15 +118,15 @@
       "evidence": "The CI SBOM contains libexpat1 2.8.2-1~deb13u1; Debian describes versions before 2.8.1 as affected at https://security-tracker.debian.org/tracker/CVE-2026-45186.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     },
     {
       "vulnerability_id": "CVE-2026-45186",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3",
-        "break-glass": "sha256:e32817c8ab852229980971334f7b53c1c32f15aa25a284a60d919581556475a3"
+        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
+        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -135,7 +135,7 @@
       "evidence": "The CI SBOM contains libexpat1-dev 2.8.2-1~deb13u1; Debian describes versions before 2.8.1 as affected at https://security-tracker.debian.org/tracker/CVE-2026-45186.",
       "approved_on": "2026-07-30",
       "expires_on": "2026-08-29",
-      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if the image digest changes, XML parsing is introduced, or a fixable finding appears.",
+      "reevaluation_conditions": "Remove on a Grype DB or DHI VEX correction; block if either image config digest changes, XML parsing is introduced, or a fixable finding appears.",
       "owner": "project-maintainer"
     }
   ]
