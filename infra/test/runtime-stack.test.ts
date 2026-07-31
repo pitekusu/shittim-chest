@@ -212,6 +212,9 @@ describe("RuntimeStack", () => {
       ),
     );
     expect(imagePolicy).toContain("ecs:DescribeServiceRevisions");
+    expect(imagePolicy).toContain("ecs:DescribeTaskDefinition");
+    expect(imagePolicy).toContain("NormalTaskDefinition");
+    expect(imagePolicy).not.toContain("BreakGlassTaskDefinition");
     expect(imagePolicy).toContain("ecr:BatchGetImage");
     expect(imagePolicy).toContain("ecr:DescribeImageSigningStatus");
     expect(imagePolicy).not.toContain("ecr:ListImageReferrers");

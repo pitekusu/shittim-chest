@@ -1306,11 +1306,8 @@ jobs:
           do
             stack="${mapping%%=*}"
             region="${mapping#*=}"
-            arn=$(jq --exit-status --raw-output --arg stack "${stack}" \
-              '.change_sets[$stack] | select(type == "string" and startswith("arn:"))' \
-              "${RUNNER_TEMP}/release/release-manifest.json")
             aws cloudformation describe-events --region "${region}" \
-              --change-set-name "${arn}" --filters FailedEvents=true \
+              --stack-name "${stack}" --filters FailedEvents=true \
               --max-items 100 \
               --query 'OperationEvents[].{EventType:EventType,LogicalResourceId:LogicalResourceId,OperationId:OperationId,OperationStatus:OperationStatus,OperationType:OperationType,ResourceStatus:ResourceStatus,ResourceStatusReason:ResourceStatusReason,ResourceType:ResourceType}' \
               --output json > "${RUNNER_TEMP}/failed-events.json"

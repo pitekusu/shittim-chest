@@ -24,6 +24,9 @@ REVISION_ARN = (
     "arn:aws:ecs:ap-northeast-1:000000000000:service-revision/"
     "shittim-chest-production/shittim-chest-production/1"
 )
+TASK_DEFINITION_ARN = (
+    "arn:aws:ecs:ap-northeast-1:000000000000:task-definition/shittim-chest-production-normal:1"
+)
 PROFILE_ARN = "arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/shittim_chest_ecr"
 REPOSITORY_URI = "000000000000.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest"
 GITHUB_BUNDLE = "application/vnd.dev.sigstore.bundle.v0.3+json"
@@ -40,20 +43,30 @@ class FakeEcs:
                 {
                     "serviceArn": SERVICE_ARN,
                     "serviceRevisionArn": REVISION_ARN,
-                    "containerImages": [
-                        {
-                            "containerName": "application",
-                            "image": f"{REPOSITORY_URI}@{DIGEST}",
-                            "imageDigest": DIGEST,
-                        }
-                    ],
+                    # desiredCount=0 revisions do not expose containerImages.
+                    "taskDefinition": TASK_DEFINITION_ARN,
                 }
             ],
+        }
+        self.task_definition_response: dict[str, object] = {
+            "taskDefinition": {
+                "containerDefinitions": [
+                    {
+                        "image": f"{REPOSITORY_URI}@{DIGEST}",
+                        "name": "application",
+                    }
+                ],
+                "taskDefinitionArn": TASK_DEFINITION_ARN,
+            }
         }
 
     def describe_service_revisions(self, *, serviceRevisionArns: list[str]) -> Mapping[str, object]:
         assert serviceRevisionArns == [REVISION_ARN]
         return self.response
+
+    def describe_task_definition(self, *, taskDefinition: str) -> Mapping[str, object]:
+        assert taskDefinition == TASK_DEFINITION_ARN
+        return self.task_definition_response
 
 
 class FakeEcr:
@@ -154,6 +167,14 @@ def test_accepts_digest_with_complete_signature_and_all_active_referrers(
     assert caplog.messages == ['{"event":"image_admission_succeeded"}']
 
 
+def test_accepts_zero_count_revision_without_container_images() -> None:
+    ecs = FakeEcs()
+    revisions = cast(list[dict[str, object]], ecs.response["serviceRevisions"])
+    assert "containerImages" not in revisions[0]
+
+    assert handler(ecs=ecs).handle(event()) == {"hookStatus": "SUCCEEDED"}
+
+
 def test_paginates_all_referrers_without_sending_a_null_token() -> None:
     class PaginatedEcr(FakeEcr):
         calls = 0
@@ -219,13 +240,41 @@ def test_rejects_malformed_or_misdirected_hook_event(
     assert DIGEST not in caplog.text
 
 
-def test_rejects_tag_uri_even_when_service_reports_a_digest() -> None:
+def test_rejects_tag_uri_in_the_service_revision_task_definition() -> None:
     ecs = FakeEcs()
-    revisions = cast(list[dict[str, object]], ecs.response["serviceRevisions"])
-    containers = cast(list[dict[str, object]], revisions[0]["containerImages"])
+    task_definition = cast(dict[str, object], ecs.task_definition_response["taskDefinition"])
+    containers = cast(list[dict[str, object]], task_definition["containerDefinitions"])
     containers[0]["image"] = f"{REPOSITORY_URI}:latest"
 
     assert handler(ecs=ecs).handle(event()) == {"hookStatus": "FAILED"}
+
+
+def test_rejects_missing_task_definition_from_service_revision(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ecs = FakeEcs()
+    revisions = cast(list[dict[str, object]], ecs.response["serviceRevisions"])
+    revisions[0].pop("taskDefinition")
+
+    with caplog.at_level(logging.ERROR):
+        result = handler(ecs=ecs).handle(event())
+
+    assert result == {"hookStatus": "FAILED"}
+    assert "task_definition_unavailable" in caplog.text
+
+
+def test_rejects_task_definition_response_for_another_revision(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ecs = FakeEcs()
+    task_definition = cast(dict[str, object], ecs.task_definition_response["taskDefinition"])
+    task_definition["taskDefinitionArn"] = f"{TASK_DEFINITION_ARN.rpartition(':')[0]}:2"
+
+    with caplog.at_level(logging.ERROR):
+        result = handler(ecs=ecs).handle(event())
+
+    assert result == {"hookStatus": "FAILED"}
+    assert "task_definition_mismatch" in caplog.text
 
 
 def test_rejects_incomplete_managed_signature() -> None:
