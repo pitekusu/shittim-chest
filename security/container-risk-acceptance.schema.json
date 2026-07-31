@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "maximum_validity_days", "acceptances"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "maximum_validity_days": { "const": 90 },
     "acceptances": {
       "type": "array",
@@ -16,7 +16,7 @@
         "required": [
           "vulnerability_id",
           "package",
-          "image_digest",
+          "image_config_digests",
           "status",
           "justification",
           "impact",
@@ -33,7 +33,15 @@
             "pattern": "^(CVE-[0-9]{4}-[0-9]{4,}|GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4})$"
           },
           "package": { "type": "string", "minLength": 1 },
-          "image_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "image_config_digests": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "production": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+              "break-glass": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            }
+          },
           "status": { "enum": ["affected", "under_investigation"] },
           "justification": { "type": "string", "minLength": 10 },
           "impact": { "type": "string", "minLength": 10 },

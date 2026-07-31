@@ -92,6 +92,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
         raise WorkflowPolicyError("target workflow may use only DISCORD_WEBHOOK_URL")
     _validate_deploy_guard(directory)
     _validate_release(directory)
+    _validate_ci_container_risk(directory)
     _validate_drift(directory)
     _validate_aws_capability_boundary(directory)
     _validate_workflow_run_allowlist(directory)
@@ -235,6 +236,7 @@ def _validate_release(directory: Path) -> None:
         "create-storage-record: false",
         "target: production",
         "target: break-glass",
+        'SOURCE_DATE_EPOCH: "0"',
         "tools/install_aws_signer_notation.sh",
         "tools/install_ecr_credential_helper.sh",
         'AWS_ECR_DISABLE_CACHE: "true"',
@@ -245,6 +247,9 @@ def _validate_release(directory: Path) -> None:
         "--deny-self-hosted-runners",
         "--signer-digest",
         "tools/check_container_risk_acceptance.py",
+        "--image-config-digest-file",
+        "--normal-config-digest-file",
+        "--break-glass-config-digest-file",
         "Prepare pinned vulnerability data before image push",
         "create-cdk-assets",
         "bind-cdk-asset-checksums",
@@ -312,6 +317,14 @@ def _validate_release(directory: Path) -> None:
     if text.count("name: ${{ needs.plan.outputs.evidence_name }}") != 2:
         raise WorkflowPolicyError(
             "Release deploy and cleanup must consume the exact planned artifact"
+        )
+    if text.count('SOURCE_DATE_EPOCH: "0"') != 2:
+        raise WorkflowPolicyError(
+            "Release must make both image builds reproducible with the Unix epoch"
+        )
+    if text.count("outputs: type=registry,rewrite-timestamp=true") != 2:
+        raise WorkflowPolicyError(
+            "Release must rewrite file timestamps for both registry image exports"
         )
     if text.count("environment: production") != 1:
         raise WorkflowPolicyError("Release must use production Environment only for deploy")
@@ -497,6 +510,35 @@ def _validate_release(directory: Path) -> None:
     if secrets != {"DHI_TOKEN", "DHI_USERNAME", "OPERATOR_NOTIFICATION_EMAIL"}:
         raise WorkflowPolicyError("Release secret allowlist changed")
     _require_full_action_pins(text, "Release")
+
+
+def _validate_ci_container_risk(directory: Path) -> None:
+    path = directory / "ci.yml"
+    if not path.is_file():
+        raise WorkflowPolicyError("CI workflow is required")
+    text = path.read_text(encoding="utf-8")
+    required = (
+        "name: Build and load the production image",
+        "name: Build and load the break-glass image for risk validation",
+        "steps.build-production.outputs.imageid",
+        "steps.build-break-glass.outputs.imageid",
+        "break-glass-image-sbom-arm64.spdx.json",
+        "dhi-python-builder.openvex.json",
+        "--image-kind production",
+        "--image-kind break-glass",
+        "--image-config-digest-file",
+    )
+    for marker in required:
+        if marker not in text:
+            raise WorkflowPolicyError(f"CI container risk gate lacks required marker: {marker}")
+    if text.count('SOURCE_DATE_EPOCH: "0"') != 3:
+        raise WorkflowPolicyError(
+            "CI must make production, fault, and break-glass image builds reproducible"
+        )
+    if text.count("outputs: type=docker,rewrite-timestamp=true") != 3:
+        raise WorkflowPolicyError(
+            "CI must rewrite file timestamps for all three loaded image exports"
+        )
 
 
 def _validate_drift(directory: Path) -> None:

@@ -15,6 +15,7 @@ from typing import Final, cast
 REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY_PATH: Final = REPOSITORY_ROOT / "container-policy.json"
 DEFAULT_DOCKERFILE_PATH: Final = REPOSITORY_ROOT / "Dockerfile"
+DEFAULT_DOCKERIGNORE_PATH: Final = REPOSITORY_ROOT / ".dockerignore"
 MAX_POLICY_BYTES: Final = 64 * 1024
 DIGEST_PATTERN: Final = re.compile(r"^sha256:[0-9a-f]{64}$")
 FROM_PATTERN: Final = re.compile(
@@ -261,22 +262,74 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     validate_uv_reference(uv_reference)
     validate_dhi_reference(builder_reference, expected_tag=policy.builder_tag, dev=True)
     validate_dhi_reference(runtime_reference, expected_tag=policy.runtime_tag, dev=False)
+    source_date_args = re.findall(r"^ARG SOURCE_DATE_EPOCH(?:=0)?$", text, re.MULTILINE)
+    if source_date_args != ["ARG SOURCE_DATE_EPOCH=0", "ARG SOURCE_DATE_EPOCH"]:
+        raise ValueError(
+            "Dockerfile must default SOURCE_DATE_EPOCH globally and consume it in the builder"
+        )
+    first_from = text.index("FROM ")
+    if text.index("ARG SOURCE_DATE_EPOCH=0") > first_from:
+        raise ValueError("Dockerfile SOURCE_DATE_EPOCH default must precede every stage")
+    builder_start = text.index(f"FROM {builder_reference} AS builder")
+    runtime_start = text.index(f"FROM {runtime_reference} AS runtime-base")
+    builder_text = text[builder_start:runtime_start]
+    if 'ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"' not in builder_text:
+        raise ValueError("Dockerfile builder must expose SOURCE_DATE_EPOCH to bytecode compilation")
+    if (
+        "COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py"
+        not in builder_text
+        or "python /tmp/canonicalize_wheel_records.py /app/.venv" not in builder_text
+    ):
+        raise ValueError("Dockerfile builder must canonicalize installed wheel RECORD ordering")
     if stages[3] != ("production", "runtime-base"):
         raise ValueError("production stage must derive from runtime-base")
     if stages[4] != ("fault-test", "production"):
         raise ValueError("fault-test stage must derive from production")
     if stages[5] != ("break-glass", builder_reference):
         raise ValueError("break-glass stage must reuse the builder image pin")
+    break_glass_start = text.index(f"FROM {builder_reference} AS break-glass")
+    break_glass_text = text[break_glass_start:]
+    volatile_apt_cleanup = (
+        "apt-get clean",
+        "rm -rf /var/lib/apt/lists/* /var/log/apt/*",
+        "rm -f /var/log/dpkg.log",
+    )
+    if any(marker not in break_glass_text for marker in volatile_apt_cleanup):
+        raise ValueError("break-glass stage must remove volatile apt and dpkg state")
     if f"USER {policy.identity.user_spec}" not in text:
         raise ValueError("Dockerfile USER does not match the DHI runtime identity")
     if "10001" in text:
         raise ValueError("legacy UID/GID 10001 is forbidden")
 
 
+def validate_dockerignore(dockerignore: Path) -> None:
+    """Require the Docker build context to include the RECORD canonicalizer."""
+
+    rules = dockerignore.read_text(encoding="utf-8").splitlines()
+    required_rules = [
+        "!tools/",
+        "tools/*",
+        "!tools/canonicalize_wheel_records.py",
+    ]
+    positions: list[int] = []
+    for rule in required_rules:
+        try:
+            positions.append(rules.index(rule))
+        except ValueError as error:
+            raise ValueError(
+                ".dockerignore must include only the wheel RECORD canonicalizer from tools/"
+            ) from error
+    if positions != sorted(positions):
+        raise ValueError(
+            ".dockerignore wheel RECORD canonicalizer rules must be in effective order"
+        )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
     parser.add_argument("--dockerfile", type=Path, default=DEFAULT_DOCKERFILE_PATH)
+    parser.add_argument("--dockerignore", type=Path, default=DEFAULT_DOCKERIGNORE_PATH)
     parser.add_argument(
         "--print-reference",
         choices=sorted(STAGE_ALIASES),
@@ -293,6 +346,7 @@ def main() -> int:
             return 0
         policy = load_container_policy(args.policy)
         validate_dockerfile(policy, args.dockerfile)
+        validate_dockerignore(args.dockerignore)
     except (OSError, ValueError) as error:
         print(f"container policy check failed: {error}", file=sys.stderr)
         return 1

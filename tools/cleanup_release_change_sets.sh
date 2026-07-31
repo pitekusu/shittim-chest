@@ -73,7 +73,8 @@ is_change_set_not_found() {
 is_stack_not_found() {
   local error_file="$1"
   grep --fixed-strings --quiet '(ValidationError)' "${error_file}" &&
-    grep --fixed-strings --quiet 'does not exist' "${error_file}"
+    grep --fixed-strings --quiet 'does not exist' "${error_file}" &&
+    grep --extended-regexp --quiet '(^|[^A-Za-z])[Ss]tack([^A-Za-z]|$)' "${error_file}"
 }
 
 sleep_before_next_poll() {
@@ -157,6 +158,11 @@ cleanup_change_set() {
           error "unexpected change-set state for ${stack}"
           ;;
       esac
+    elif is_stack_not_found "${error_file}"; then
+      # A change set cannot survive deletion of its parent stack. This is an
+      # expected cleanup state when a CREATE rollback removes an optional
+      # release stack, or planning fails before that stack is created.
+      return 0
     elif is_change_set_not_found "${error_file}"; then
       if [[ "${mode}" != "name" || "${seen}" == "true" || "${delete_requested}" == "true" ]]; then
         return 0

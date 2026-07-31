@@ -539,6 +539,7 @@ def validate_cdk_asset_evidence_against_assembly(
 
 def create_manifest(
     *,
+    break_glass_config_digest: str,
     break_glass_risk_evidence: Mapping[str, Path],
     break_glass_sbom_path: Path,
     break_glass_verification: object,
@@ -546,6 +547,7 @@ def create_manifest(
     change_sets: object,
     commit_sha: str,
     lambda_bundle: object,
+    normal_config_digest: str,
     normal_sbom_path: Path,
     normal_risk_evidence: Mapping[str, Path],
     normal_verification: object,
@@ -564,12 +566,14 @@ def create_manifest(
     validate_cdk_asset_evidence(cdk_assets, account=account)
     images = {
         "normal": _manifest_image(
+            config_digest=normal_config_digest,
             repository_uri=repository_uri,
             risk_evidence=normal_risk_evidence,
             sbom_path=normal_sbom_path,
             verification=normal_verification,
         ),
         "break_glass": _manifest_image(
+            config_digest=break_glass_config_digest,
             repository_uri=repository_uri,
             risk_evidence=break_glass_risk_evidence,
             sbom_path=break_glass_sbom_path,
@@ -578,6 +582,8 @@ def create_manifest(
     }
     if images["normal"]["digest"] == images["break_glass"]["digest"]:
         raise ValueError("normal and break-glass images must use different digests")
+    if images["normal"]["config_digest"] == images["break_glass"]["config_digest"]:
+        raise ValueError("normal and break-glass images must use different config digests")
     changes = _object(change_sets, "change sets")
     if tuple(changes) != _STACKS:
         raise ValueError("change set order is invalid")
@@ -609,7 +615,7 @@ def create_manifest(
     if not runtime_config_parameter.startswith("/shittim-chest/production/runtime/v"):
         raise ValueError("runtime config parameter is not versioned")
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "repository": "pitekusu/shittim-chest",
         "workflow": ".github/workflows/release.yml",
         "commit_sha": commit_sha,
@@ -640,7 +646,7 @@ def validate_manifest(value: object) -> None:
         "lambda_bundle",
         "runtime_config_parameter",
     }
-    if set(root) != expected or root.get("schema_version") != 2:
+    if set(root) != expected or root.get("schema_version") != 3:
         raise ValueError("release manifest schema is invalid")
     if root.get("repository") != "pitekusu/shittim-chest":
         raise ValueError("release manifest repository is invalid")
@@ -657,6 +663,7 @@ def validate_manifest(value: object) -> None:
     for name, raw_image in images.items():
         image = _object(raw_image, f"release image {name}")
         expected_image_fields = {
+            "config_digest",
             "digest",
             "media_type",
             "reference",
@@ -671,6 +678,8 @@ def validate_manifest(value: object) -> None:
             raise ValueError("release image fields are invalid")
         digest = _string(image, "digest", "release image")
         _require_digest(digest)
+        config_digest = _string(image, "config_digest", "release image")
+        _require_digest(config_digest)
         validated_digests.append(digest)
         repository_uri = _string(image, "repository_uri", "release image")
         repository_match = _REPOSITORY_URI.fullmatch(repository_uri)
@@ -790,11 +799,13 @@ def validate_runtime_template(
 
 def _manifest_image(
     *,
+    config_digest: str,
     repository_uri: str,
     risk_evidence: Mapping[str, Path],
     sbom_path: Path,
     verification: object,
 ) -> dict[str, object]:
+    _require_digest(config_digest)
     record = _object(verification, "verification")
     digest = _string(record, "image_digest", "verification")
     _require_digest(digest)
@@ -810,6 +821,7 @@ def _manifest_image(
     if not sbom_path.is_file():
         raise ValueError("SBOM does not exist")
     return {
+        "config_digest": config_digest,
         "digest": digest,
         "media_type": _string(record, "media_type", "verification"),
         "reference": f"{repository_uri}@{digest}",
@@ -1003,6 +1015,7 @@ def _parser() -> argparse.ArgumentParser:
     validate_assets.add_argument("--account", required=True)
     validate_assets.add_argument("--assembly", type=Path, required=True)
     create = commands.add_parser("create-manifest")
+    create.add_argument("--break-glass-config-digest-file", type=Path, required=True)
     create.add_argument("--break-glass-raw-grype", type=Path, required=True)
     create.add_argument("--break-glass-vendor-vex", type=Path, required=True)
     create.add_argument("--break-glass-vex-grype", type=Path, required=True)
@@ -1015,6 +1028,7 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--repository-uri", required=True)
     create.add_argument("--runtime-config-parameter", required=True)
     create.add_argument("--normal-sbom", type=Path, required=True)
+    create.add_argument("--normal-config-digest-file", type=Path, required=True)
     create.add_argument("--normal-raw-grype", type=Path, required=True)
     create.add_argument("--normal-vendor-vex", type=Path, required=True)
     create.add_argument("--normal-vex-grype", type=Path, required=True)
@@ -1088,6 +1102,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "create-manifest":
             result = create_manifest(
+                break_glass_config_digest=args.break_glass_config_digest_file.read_text(
+                    encoding="ascii"
+                ).strip(),
                 break_glass_risk_evidence={
                     "grype_raw": args.break_glass_raw_grype,
                     "grype_vex": args.break_glass_vex_grype,
@@ -1099,6 +1116,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 change_sets=_read(args.change_sets),
                 commit_sha=args.commit_sha,
                 lambda_bundle=_read(args.lambda_bundle),
+                normal_config_digest=args.normal_config_digest_file.read_text(
+                    encoding="ascii"
+                ).strip(),
                 normal_sbom_path=args.normal_sbom,
                 normal_risk_evidence={
                     "grype_raw": args.normal_raw_grype,

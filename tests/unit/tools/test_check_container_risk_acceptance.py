@@ -15,6 +15,7 @@ from tools.check_container_risk_acceptance import (
 )
 
 DIGEST = "sha256:" + "a" * 64
+OTHER_DIGEST = "sha256:" + "b" * 64
 TODAY = dt.date(2026, 7, 22)
 FINDING = Finding(FindingKey("CVE-2026-12345", "libexample"), "High", "not-fixed")
 
@@ -23,7 +24,7 @@ def _write_policy(path: Path, acceptances: list[dict[str, object]]) -> Path:
     path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "maximum_validity_days": 90,
                 "acceptances": acceptances,
             }
@@ -37,7 +38,7 @@ def _acceptance(**overrides: object) -> dict[str, object]:
     value: dict[str, object] = {
         "vulnerability_id": "CVE-2026-12345",
         "package": "libexample",
-        "image_digest": DIGEST,
+        "image_config_digests": {"production": DIGEST},
         "status": "under_investigation",
         "justification": "No upstream fix is available; deployment remains monitored.",
         "impact": "A successful exploit could affect the isolated application process.",
@@ -61,7 +62,8 @@ def test_current_digest_bound_acceptance_covers_residual_finding(tmp_path: Path)
         policy,
         findings=(FINDING,),
         vendor_suppressions=frozenset(),
-        image_digest=DIGEST,
+        image_kind="production",
+        image_config_digest=DIGEST,
         today=TODAY,
     ) == (0, 1)
 
@@ -69,7 +71,8 @@ def test_current_digest_bound_acceptance_covers_residual_finding(tmp_path: Path)
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"image_digest": "sha256:" + "b" * 64}, "does not match"),
+        ({"image_config_digests": {"production": OTHER_DIGEST}}, "does not match"),
+        ({"image_config_digests": {"unknown": DIGEST}}, "unsupported"),
         ({"expires_on": "2026-07-21"}, "expired"),
         ({"expires_on": "2026-12-31"}, "within 90 days"),
         ({"status": "not_affected"}, "must not claim"),
@@ -88,7 +91,8 @@ def test_invalid_acceptance_fails_closed(
             policy,
             findings=(FINDING,),
             vendor_suppressions=frozenset(),
-            image_digest=DIGEST,
+            image_kind="production",
+            image_config_digest=DIGEST,
             today=TODAY,
         )
 
@@ -101,7 +105,8 @@ def test_unrecorded_residual_finding_fails(tmp_path: Path) -> None:
             policy,
             findings=(FINDING,),
             vendor_suppressions=frozenset(),
-            image_digest=DIGEST,
+            image_kind="production",
+            image_config_digest=DIGEST,
             today=TODAY,
         )
 
@@ -113,9 +118,41 @@ def test_verified_vendor_vex_suppression_needs_no_local_acceptance(tmp_path: Pat
         policy,
         findings=(FINDING,),
         vendor_suppressions=frozenset({FINDING.key}),
-        image_digest=DIGEST,
+        image_kind="production",
+        image_config_digest=DIGEST,
         today=TODAY,
     ) == (1, 0)
+
+
+def test_acceptances_are_scoped_to_one_image_kind(tmp_path: Path) -> None:
+    policy = _write_policy(
+        tmp_path / "policy.json",
+        [
+            _acceptance(
+                image_config_digests={
+                    "production": DIGEST,
+                    "break-glass": OTHER_DIGEST,
+                }
+            ),
+        ],
+    )
+
+    assert validate_acceptances(
+        policy,
+        findings=(FINDING,),
+        vendor_suppressions=frozenset(),
+        image_kind="production",
+        image_config_digest=DIGEST,
+        today=TODAY,
+    ) == (0, 1)
+    assert validate_acceptances(
+        policy,
+        findings=(FINDING,),
+        vendor_suppressions=frozenset(),
+        image_kind="break-glass",
+        image_config_digest=OTHER_DIGEST,
+        today=TODAY,
+    ) == (0, 1)
 
 
 def test_only_explicit_vex_rules_are_recognized(tmp_path: Path) -> None:

@@ -27,6 +27,8 @@ from tools.release_supply_chain import (
 
 DIGEST = "sha256:" + "a" * 64
 BREAK_GLASS_DIGEST = "sha256:" + "e" * 64
+CONFIG_DIGEST = "sha256:" + "1" * 64
+BREAK_GLASS_CONFIG_DIGEST = "sha256:" + "2" * 64
 PROFILE = "arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/shittim_chest_ecr"
 REPOSITORY = "000000000000.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest"
 IMAGE_DETAILS = {
@@ -616,6 +618,7 @@ def manifest(tmp_path: Path) -> dict[str, object]:
             f"changeSet/release-{stack}/00000000-0000-0000-0000-000000000000"
         )
     return create_manifest(
+        break_glass_config_digest=BREAK_GLASS_CONFIG_DIGEST,
         break_glass_risk_evidence=risk_paths["break-glass"],
         break_glass_sbom_path=break_glass_sbom,
         break_glass_verification=break_glass_verification,
@@ -627,6 +630,7 @@ def manifest(tmp_path: Path) -> dict[str, object]:
             "key": f"lambda/shittim-chest/{'c' * 64}/shittim-chest-lambda-arm64.zip",
             "sha256": "c" * 64,
         },
+        normal_config_digest=CONFIG_DIGEST,
         normal_sbom_path=normal_sbom,
         normal_risk_evidence=risk_paths["normal"],
         normal_verification=verification,
@@ -649,6 +653,7 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
         "scan": None,
         "signing_profile_arn": None,
     } == {
+        "config_digest": CONFIG_DIGEST,
         "digest": DIGEST,
         "media_type": "application/vnd.oci.image.index.v1+json",
         "reference": f"{REPOSITORY}@{DIGEST}",
@@ -660,8 +665,9 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
         "signing_profile_arn": None,
     }
     assert images["break_glass"]["digest"] == BREAK_GLASS_DIGEST
+    assert images["break_glass"]["config_digest"] == BREAK_GLASS_CONFIG_DIGEST
     assert value["commit_sha"] == "b" * 40
-    assert value["schema_version"] == 2
+    assert value["schema_version"] == 3
     assert value["cdk_assets"] == cdk_assets()
 
 
@@ -672,6 +678,7 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
         lambda value: value["images"]["normal"].update(  # type: ignore[index]
             reference=f"{REPOSITORY}:latest"
         ),
+        lambda value: value["images"]["normal"].update(config_digest="not-a-digest"),  # type: ignore[index]
         lambda value: value["images"]["normal"]["referrers"].pop("sbom"),  # type: ignore[index]
         lambda value: value["change_sets"].update({"ShittimChest-Prod-Runtime": "not-an-arn"}),
         lambda value: value["cdk_assets"]["files"].pop(),  # type: ignore[index]
