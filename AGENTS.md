@@ -14,10 +14,11 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-10-A zero-count image admission fix branch, 2026-07-31)
+## Status (STEP-10-A reproducible image-layer fix branch, 2026-07-31)
 
-The merged `main` baseline includes PR `#123` reproducible dual-image release
-hardening on top of signed HTTP ingress, On-Demand scale-to-zero, and
+The merged `main` baseline includes PR `#124` zero-count image admission repair
+on top of reproducible dual-image release hardening, signed HTTP ingress,
+On-Demand scale-to-zero, and
 STEP-09C-A/B/C monitoring and cost governance. Production Release run
 `30599324993` completed every plan gate, built and pushed both images once,
 verified signing/scanning and four OCI referrers per image, attested the canonical
@@ -25,13 +26,16 @@ manifest, reverified it after Environment approval, and acquired the deployment
 fence. Stateful remained stable, but initial Runtime creation rolled back before
 task launch because a `desiredCount=0` ECS service revision omits
 `containerImages`; the admission Lambda incorrectly required that optional
-field. A task-free live reproduction confirmed one valid service revision with
-an immutable `taskDefinition` and zero `containerImages`. This branch verifies
-the exact normal task definition referenced by the revision instead, grants only
-that task definition's `DescribeTaskDefinition`, and makes failure diagnostics
-query the surviving stack rather than an executed change set. The deployment
-fence and unexecuted change sets were cleaned. Runtime is `ROLLBACK_COMPLETE`;
-Operations and CostGovernance remain resource-free `REVIEW_IN_PROGRESS`.
+field. PR `#124` now verifies the exact normal task definition referenced by the
+revision, grants only that task definition's `DescribeTaskDefinition`, and makes
+failure diagnostics query the surviving stack rather than an executed change
+set. Its PR gates passed, but the identical merged tree produced different
+production and break-glass config digests on main because the final venv COPY
+layer varied across BuildKit cache paths despite byte-identical files. This
+branch makes that transfer an independent `COPY --link` layer and guards it in
+the container policy. The deployment fence and unexecuted change sets were
+cleaned. Runtime is `ROLLBACK_COMPLETE`; Operations and CostGovernance remain
+resource-free `REVIEW_IN_PROGRESS`.
 Discord and the first successful production deployment remain unchanged. The
 authoritative Obsidian progress/evidence notes and public mirror track this state.
 

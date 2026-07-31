@@ -287,6 +287,11 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("fault-test stage must derive from production")
     if stages[5] != ("break-glass", builder_reference):
         raise ValueError("break-glass stage must reuse the builder image pin")
+    linked_venv_copy = "COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv"
+    if text.count(linked_venv_copy) != 2:
+        raise ValueError(
+            "production and break-glass stages must use independent linked venv layers"
+        )
     break_glass_start = text.index(f"FROM {builder_reference} AS break-glass")
     break_glass_text = text[break_glass_start:]
     volatile_apt_cleanup = (
