@@ -322,6 +322,10 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must make both image builds reproducible with the Unix epoch"
         )
+    if text.count("outputs: type=registry,rewrite-timestamp=true") != 2:
+        raise WorkflowPolicyError(
+            "Release must rewrite file timestamps for both registry image exports"
+        )
     if text.count("environment: production") != 1:
         raise WorkflowPolicyError("Release must use production Environment only for deploy")
     if re.search(r"secrets\.AWS[A-Z0-9_]*|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY", text):
@@ -530,6 +534,10 @@ def _validate_ci_container_risk(directory: Path) -> None:
     if text.count('SOURCE_DATE_EPOCH: "0"') != 3:
         raise WorkflowPolicyError(
             "CI must make production, fault, and break-glass image builds reproducible"
+        )
+    if text.count("outputs: type=docker,rewrite-timestamp=true") != 3:
+        raise WorkflowPolicyError(
+            "CI must rewrite file timestamps for all three loaded image exports"
         )
 
 

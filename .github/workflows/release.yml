@@ -432,7 +432,7 @@ jobs:
           file: Dockerfile
           target: production
           platforms: linux/arm64
-          push: true
+          outputs: type=registry,rewrite-timestamp=true
           provenance: false
           sbom: false
           tags: ${{ vars.ECR_REPOSITORY_URI }}:release-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -448,7 +448,7 @@ jobs:
           file: Dockerfile
           target: break-glass
           platforms: linux/arm64
-          push: true
+          outputs: type=registry,rewrite-timestamp=true
           provenance: false
           sbom: false
           tags: ${{ vars.ECR_REPOSITORY_URI }}:break-glass-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

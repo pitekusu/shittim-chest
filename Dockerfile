@@ -1,12 +1,17 @@
 # syntax=docker/dockerfile:1
 
+ARG SOURCE_DATE_EPOCH=0
+
 FROM ghcr.io/astral-sh/uv:0.11.33@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
 
 FROM dhi.io/python:3.14.6-debian13-dev@sha256:3c9a295d653c9147f6732a0578cb5d2f19a764cc398d4291a0ab32152e751dfa AS builder
 
+ARG SOURCE_DATE_EPOCH
+
 COPY --from=uv /uv /uvx /usr/local/bin/
 
-ENV UV_COMPILE_BYTECODE=1 \
+ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+    UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_NO_DEV=1 \
     UV_PYTHON_DOWNLOADS=0

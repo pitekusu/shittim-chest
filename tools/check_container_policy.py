@@ -261,6 +261,19 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     validate_uv_reference(uv_reference)
     validate_dhi_reference(builder_reference, expected_tag=policy.builder_tag, dev=True)
     validate_dhi_reference(runtime_reference, expected_tag=policy.runtime_tag, dev=False)
+    source_date_args = re.findall(r"^ARG SOURCE_DATE_EPOCH(?:=0)?$", text, re.MULTILINE)
+    if source_date_args != ["ARG SOURCE_DATE_EPOCH=0", "ARG SOURCE_DATE_EPOCH"]:
+        raise ValueError(
+            "Dockerfile must default SOURCE_DATE_EPOCH globally and consume it in the builder"
+        )
+    first_from = text.index("FROM ")
+    if text.index("ARG SOURCE_DATE_EPOCH=0") > first_from:
+        raise ValueError("Dockerfile SOURCE_DATE_EPOCH default must precede every stage")
+    builder_start = text.index(f"FROM {builder_reference} AS builder")
+    runtime_start = text.index(f"FROM {runtime_reference} AS runtime-base")
+    builder_text = text[builder_start:runtime_start]
+    if 'ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"' not in builder_text:
+        raise ValueError("Dockerfile builder must expose SOURCE_DATE_EPOCH to bytecode compilation")
     if stages[3] != ("production", "runtime-base"):
         raise ValueError("production stage must derive from runtime-base")
     if stages[4] != ("fault-test", "production"):

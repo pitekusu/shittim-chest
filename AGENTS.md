@@ -134,9 +134,11 @@ and the plan/progress notes so this boundary does not go stale.
   Do not bulk-dismiss base-image findings.
 - Container risk acceptances bind separately to the production and break-glass
   **image config digests**, not exporter-specific manifest digests. CI must build,
-  SBOM, VEX, and gate both targets with `SOURCE_DATE_EPOCH=0`; release must derive
-  both config digests again from the pushed manifests. A digest update requires
-  exact report/VEX/config-digest evidence for both targets before merge.
+  SBOM, VEX, and gate both targets with `SOURCE_DATE_EPOCH=0`; the Dockerfile must
+  expose that value in the builder so uv/Python emit hash-based bytecode, and every
+  image exporter must set `rewrite-timestamp=true`. Release must derive both config
+  digests again from the pushed manifests. A digest update requires exact
+  report/VEX/config-digest evidence for both targets before merge.
 - Production image: digest-pinned DHI Community Python **3.14.6** Debian 13,
   `nonroot` **65532:65532**, policy in `container-policy.json` (Dockerfile, CI,
   ECS user, `/tmp/shittim-chest` tmpfs). No shell/package manager in production;

@@ -306,7 +306,7 @@ jobs:
           context: .
           target: production
           tags: shittim-chest:step-08b-arm64
-          load: true
+          outputs: type=docker,rewrite-timestamp=true
           cache-from: type=gha,scope=container-arm64-production
           cache-to: type=gha,scope=container-arm64-production,mode=max,ignore-error=true
       - name: Record the tested image digest and size
@@ -331,7 +331,7 @@ jobs:
           context: .
           target: fault-test
           tags: shittim-chest:step-08b-fault-arm64
-          load: true
+          outputs: type=docker,rewrite-timestamp=true
       - name: Validate image security and inject termination faults
         run: |
           python -m tools.run_container_gate \
@@ -347,7 +347,7 @@ jobs:
           context: .
           target: break-glass
           tags: shittim-chest:step-10-break-glass-arm64
-          load: true
+          outputs: type=docker,rewrite-timestamp=true
           cache-from: type=gha,scope=container-arm64-break-glass
           cache-to: type=gha,scope=container-arm64-break-glass,mode=max,ignore-error=true
       - name: Record the tested break-glass config digest

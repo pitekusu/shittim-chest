@@ -100,6 +100,35 @@ def test_dockerfile_rejects_wrong_stage_graph(tmp_path: Path) -> None:
         validate_dockerfile(policy, dockerfile)
 
 
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ("ARG SOURCE_DATE_EPOCH=0", "ARG BUILD_EPOCH=0", "default SOURCE_DATE_EPOCH"),
+        ("ARG SOURCE_DATE_EPOCH\n", "ARG BUILD_EPOCH\n", "consume it in the builder"),
+        (
+            'ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"',
+            'ENV SOURCE_DATE_EPOCH="1"',
+            "bytecode compilation",
+        ),
+    ],
+)
+def test_dockerfile_requires_reproducible_bytecode_environment(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    message: str,
+) -> None:
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(old, new, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        validate_dockerfile(policy, dockerfile)
+
+
 def test_dependabot_uv_digest_bump_does_not_require_python_constant(tmp_path: Path) -> None:
     """Dockerfile remains the sole exact pin for the uv image digest."""
 
