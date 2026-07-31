@@ -419,6 +419,17 @@ jobs:
             --output "spdx-json=${RUNNER_TEMP}/break-glass-image-sbom-arm64.spdx.json"
           python tools/check_image_sbom.py \
             "${RUNNER_TEMP}/break-glass-image-sbom-arm64.spdx.json"
+      - name: Retain the installed application RECORD
+        run: |
+          record_container=$(docker create shittim-chest:step-08b-arm64)
+          cleanup_record_container() {
+            docker rm --force "${record_container}" >/dev/null
+          }
+          trap cleanup_record_container EXIT
+          docker cp \
+            "${record_container}:/app/.venv/lib/python3.14/site-packages/shittim_chest-0.1.0.dist-info/RECORD" \
+            "${RUNNER_TEMP}/application-record.csv"
+          test -s "${RUNNER_TEMP}/application-record.csv"
       - name: Retain the final image SBOM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -432,6 +443,7 @@ jobs:
             ${{ runner.temp }}/image-size-bytes.txt
             ${{ runner.temp }}/dhi-python-runtime.openvex.json
             ${{ runner.temp }}/dhi-python-builder.openvex.json
+            ${{ runner.temp }}/application-record.csv
           if-no-files-found: error
           retention-days: 30
 
