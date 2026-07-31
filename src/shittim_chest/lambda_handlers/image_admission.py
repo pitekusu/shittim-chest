@@ -45,6 +45,8 @@ class _EcsClient(Protocol):
         self, *, serviceRevisionArns: list[str]
     ) -> Mapping[str, object]: ...
 
+    def describe_task_definition(self, *, taskDefinition: str) -> Mapping[str, object]: ...
+
 
 class _EcrClient(Protocol):
     def describe_image_signing_status(
@@ -180,22 +182,33 @@ class ImageAdmissionLambda:
             or revision.get("serviceArn") != self._settings.service_arn
         ):
             raise ImageAdmissionRejected("revision_mismatch")
-        images = _sequence(revision.get("containerImages"))
+        task_definition_arn = revision.get("taskDefinition")
+        if not isinstance(task_definition_arn, str) or not task_definition_arn:
+            raise ImageAdmissionRejected("task_definition_unavailable")
+        task_definition_response = self._ecs.describe_task_definition(
+            taskDefinition=task_definition_arn
+        )
+        task_definition = _string_mapping(
+            task_definition_response.get("taskDefinition"), "task_definition"
+        )
+        if task_definition.get("taskDefinitionArn") != task_definition_arn:
+            raise ImageAdmissionRejected("task_definition_mismatch")
+        images = _sequence(task_definition.get("containerDefinitions"))
         matching = [
             _string_mapping(image, "container_image")
             for image in images
-            if isinstance(image, Mapping)
-            and image.get("containerName") == self._settings.container_name
+            if isinstance(image, Mapping) and image.get("name") == self._settings.container_name
         ]
         if len(matching) != 1:
             raise ImageAdmissionRejected("container_mismatch")
         image = matching[0]
-        digest = image.get("imageDigest")
         uri = image.get("image")
-        if not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
-            raise ImageAdmissionRejected("digest_invalid")
-        if uri != f"{self._settings.repository_uri}@{digest}":
+        prefix = f"{self._settings.repository_uri}@"
+        if not isinstance(uri, str) or not uri.startswith(prefix):
             raise ImageAdmissionRejected("image_uri_mismatch")
+        digest = uri.removeprefix(prefix)
+        if _DIGEST.fullmatch(digest) is None:
+            raise ImageAdmissionRejected("digest_invalid")
         return _Target(digest=digest, revision_arn=revision_arn)
 
     def _service_deployment_prefix(self) -> str:

@@ -32,6 +32,8 @@ const DISCORD_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/public
 const MODERATOR_TOKEN_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/token`;
 const RUNTIME_CLUSTER_NAME = "shittim-chest-production";
 const RUNTIME_SERVICE_NAME = "shittim-chest-production";
+const NORMAL_TASK_DEFINITION_FAMILY = "shittim-chest-production-normal";
+const BREAK_GLASS_TASK_DEFINITION_FAMILY = "shittim-chest-production-break-glass";
 const RECONCILER_SCHEDULE_NAME = "shittim-chest-production-runtime-reconciler";
 const DISCORD_INGRESS_HANDLER =
   "shittim_chest.lambda_handlers.discord_ingress.lambda_handler";
@@ -325,7 +327,11 @@ export class RuntimeStack extends Stack {
       reservedConcurrency: 1,
       timeout: Duration.seconds(30),
     });
-    this.configureImageAdmission(props.imageRepository, runtimeServiceArn);
+    this.configureImageAdmission(
+      props.imageRepository,
+      runtimeServiceArn,
+      this.normalTaskDefinition,
+    );
     const runtimeConfigParameter = `${PARAMETER_ROOT}/runtime/${configVersion.valueAsString}`;
     this.discordStatusPublisherFunction = this.createApplicationFunction({
       code: sharedLambdaCode,
@@ -735,6 +741,7 @@ export class RuntimeStack extends Stack {
   private configureImageAdmission(
     repository: ecr.IRepository,
     serviceArn: string,
+    taskDefinition: ecs.ITaskDefinition,
   ): void {
     const serviceRevisionArn =
       `arn:aws:ecs:${this.region}:*:service-revision/` +
@@ -746,6 +753,12 @@ export class RuntimeStack extends Stack {
           StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
         },
         resources: [serviceArn, serviceRevisionArn],
+      }),
+    );
+    this.imageAdmissionFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ecs:DescribeTaskDefinition"],
+        resources: [taskDefinition.taskDefinitionArn],
       }),
     );
     this.imageAdmissionFunction.addToRolePolicy(
@@ -777,7 +790,6 @@ export class RuntimeStack extends Stack {
       reason:
         "DescribeServiceRevisions requires deployment-generated revision and account segments; aws:ResourceAccount and the named production service confine both wildcards.",
     });
-
     // FargateService has no L2 lifecycle-hook API in aws-cdk-lib 2.261.0.
     // Keep the escape hatch confined to the generated lifecycleHooks field.
     // CloudFormation declares HookDetails as Json but the ECS resource provider
@@ -1026,7 +1038,9 @@ export class RuntimeStack extends Stack {
     const definition = new ecs.FargateTaskDefinition(this, options.taskId, {
       cpu: 512,
       executionRole: options.executionRole,
-      family: `shittim-chest-production-${options.readonlyRootFilesystem ? "normal" : "break-glass"}`,
+      family: options.readonlyRootFilesystem
+        ? NORMAL_TASK_DEFINITION_FAMILY
+        : BREAK_GLASS_TASK_DEFINITION_FAMILY,
       memoryLimitMiB: 1_024,
       runtimePlatform: {
         cpuArchitecture: ecs.CpuArchitecture.ARM64,

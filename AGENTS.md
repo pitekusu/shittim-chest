@@ -14,40 +14,26 @@ Public surface only: generic slots, schemas, and design mirrors. Production
 Guild/channel/Application IDs, display names, persona prompts, tokens, and API
 keys stay in private operator notes and versioned SSM—not in Git.
 
-## Status (STEP-10-A ECS hook contract hardening branch, 2026-07-31)
+## Status (STEP-10-A zero-count image admission fix branch, 2026-07-31)
 
-The merged `main` baseline includes PR `#121` change-set response hardening on top of signed
-HTTP ingress, On-Demand scale-to-zero, and STEP-09C-A/B/C monitoring and cost
-governance. STEP-10-A now has immutable OIDC release identities, complete CDK
-file-asset publication/checksum evidence, dual signed image/referrer gates,
-canonical manifest, fenced change-set execution, convergent cleanup, drift
-detection, and ECS `PRE_SCALE_UP` image admission. The operator account is
-bootstrapped in `ap-northeast-1` and `us-east-1`; Stateful and the hardened
-ReleaseIdentity are deployed with termination protection, and ReleaseIdentity
-is `IN_SYNC`. The failed Runtime stack, twelve stale unexecuted change sets, and
-seven verified-empty retained LogGroups were deleted. A later production plan
-successfully completed asset publication, both image builds, signing, scans,
-attestations, referrer verification, and Lambda bundle publication, then stopped
-before deploy because AWS CLI represented Stateful's empty change-set parameter
-list as JSON `null`. Cleanup removed every unexecuted set; Runtime, Operations,
-and CostGovernance were resource-free `REVIEW_IN_PROGRESS` placeholders. The
-next release passed the complete plan and acquired the production fence, but
-Runtime creation rolled back before task launch because CloudFormation requires
-ECS lifecycle `HookDetails` to be a serialized JSON object rather than the object
-emitted by the escape hatch. All 47 Runtime resources reached `DELETE_COMPLETE`,
-all four release change-set inventories are empty, the fence was released, and
-the failed Runtime stack metadata was deleted. This branch serializes that field,
-authorizes bounded failure diagnostics against both change-set and stack ARNs,
-and treats terminal `EXECUTE_FAILED` sets as consumed while still blocking active
-execution. PR CI then detected newly classified `libexpat` findings in the pinned
-DHI layers. This branch refreshes both runtime and dev pins to the current DHI
-images containing Debian's 2.8.2 security update. Grype 0.116.0 still maps four
-fixed CVEs to the older trixie record and DHI VEX has not caught up, so the eight
-package/CVE pairs have an exact-image-digest `under_investigation` acceptance
-through 2026-08-29; digest drift, a fixable finding, or vendor VEX invalidates it.
-Discord and the first successful production deployment remain
-unchanged. The authoritative Obsidian progress/evidence notes and public mirror
-track this state.
+The merged `main` baseline includes PR `#123` reproducible dual-image release
+hardening on top of signed HTTP ingress, On-Demand scale-to-zero, and
+STEP-09C-A/B/C monitoring and cost governance. Production Release run
+`30599324993` completed every plan gate, built and pushed both images once,
+verified signing/scanning and four OCI referrers per image, attested the canonical
+manifest, reverified it after Environment approval, and acquired the deployment
+fence. Stateful remained stable, but initial Runtime creation rolled back before
+task launch because a `desiredCount=0` ECS service revision omits
+`containerImages`; the admission Lambda incorrectly required that optional
+field. A task-free live reproduction confirmed one valid service revision with
+an immutable `taskDefinition` and zero `containerImages`. This branch verifies
+the exact normal task definition referenced by the revision instead, grants only
+that task definition's `DescribeTaskDefinition`, and makes failure diagnostics
+query the surviving stack rather than an executed change set. The deployment
+fence and unexecuted change sets were cleaned. Runtime is `ROLLBACK_COMPLETE`;
+Operations and CostGovernance remain resource-free `REVIEW_IN_PROGRESS`.
+Discord and the first successful production deployment remain unchanged. The
+authoritative Obsidian progress/evidence notes and public mirror track this state.
 
 | Area | Current implementation |
 |---|---|
@@ -70,7 +56,7 @@ track this state.
 - First successful Runtime/Operations/CostGovernance deployment
 - Real Discord Application endpoint switch and live Discord/OpenAI acceptance
 - Paid OpenAI in CI
-- Live change-set execution/admission/rollback and workload-stack drift acceptance remain unexecuted
+- Successful ECS admission and workload-stack drift acceptance remain unexecuted
 
 Slices ship as isolated PRs (squash merge). After each slice, update `docs/20_…`
 and the plan/progress notes so this boundary does not go stale.

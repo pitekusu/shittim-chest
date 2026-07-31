@@ -551,6 +551,24 @@ def test_release_requires_preflight_and_independent_cleanup(
         validate_notification_workflows(directory)
 
 
+def test_release_failure_diagnostics_use_the_surviving_stack(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    diagnostics_start = text.index("name: Capture bounded CloudFormation failure diagnostics")
+    diagnostics_end = text.index("name: Remove this release's unexecuted change sets")
+    diagnostics = text[diagnostics_start:diagnostics_end].replace(
+        '--stack-name "${stack}"', '--change-set-name "${arn}"', 1
+    )
+    path.write_text(
+        text[:diagnostics_start] + diagnostics + text[diagnostics_end:],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="surviving stack"):
+        validate_notification_workflows(directory)
+
+
 def test_unapproved_target_workflow_is_rejected(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     (directory / "unsafe.yml").write_text(

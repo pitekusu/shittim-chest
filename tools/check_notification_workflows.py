@@ -272,6 +272,7 @@ def _validate_release(directory: Path) -> None:
         "tools/cleanup_release_change_sets.sh",
         "Capture bounded CloudFormation failure diagnostics",
         "aws cloudformation describe-events",
+        '--stack-name "${stack}"',
         "--filters FailedEvents=true",
         "--max-items 100",
         "tools.control_records validate",
@@ -457,6 +458,13 @@ def _validate_release(directory: Path) -> None:
         )
     if "GITHUB_RUN_ATTEMPT" in deploy_cleanup or "change_set_name=" in deploy_cleanup:
         raise WorkflowPolicyError("Deploy cleanup must not reconstruct a rerun change set name")
+    diagnostics_start = text.index("name: Capture bounded CloudFormation failure diagnostics")
+    diagnostics_end = text.index("name: Remove this release's unexecuted change sets")
+    diagnostics = text[diagnostics_start:diagnostics_end]
+    if '--stack-name "${stack}"' not in diagnostics or "--change-set-name" in diagnostics:
+        raise WorkflowPolicyError(
+            "Release failure diagnostics must query the surviving stack, not an executed change set"
+        )
     cleanup_checkout_end = cleanup_job.index(
         "name: Download the exact planned release evidence for cleanup"
     )
