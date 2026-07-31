@@ -287,6 +287,15 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("fault-test stage must derive from production")
     if stages[5] != ("break-glass", builder_reference):
         raise ValueError("break-glass stage must reuse the builder image pin")
+    break_glass_start = text.index(f"FROM {builder_reference} AS break-glass")
+    break_glass_text = text[break_glass_start:]
+    volatile_apt_cleanup = (
+        "apt-get clean",
+        "rm -rf /var/lib/apt/lists/* /var/log/apt/*",
+        "rm -f /var/log/dpkg.log",
+    )
+    if any(marker not in break_glass_text for marker in volatile_apt_cleanup):
+        raise ValueError("break-glass stage must remove volatile apt and dpkg state")
     if f"USER {policy.identity.user_spec}" not in text:
         raise ValueError("Dockerfile USER does not match the DHI runtime identity")
     if "10001" in text:

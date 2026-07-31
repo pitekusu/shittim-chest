@@ -72,7 +72,9 @@ COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bsdutils procps \
-    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/log/apt/* \
+    && rm -f /var/log/dpkg.log \
     && command -v /bin/sh \
     && command -v cat \
     && command -v ps \

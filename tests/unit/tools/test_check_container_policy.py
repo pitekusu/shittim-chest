@@ -149,6 +149,29 @@ def test_dockerfile_requires_canonical_wheel_records(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "cleanup",
+    [
+        "apt-get clean",
+        "rm -rf /var/lib/apt/lists/* /var/log/apt/*",
+        "rm -f /var/log/dpkg.log",
+    ],
+)
+def test_dockerfile_requires_volatile_apt_state_cleanup(
+    tmp_path: Path,
+    cleanup: str,
+) -> None:
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(cleanup, "true", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="remove volatile apt and dpkg state"):
+        validate_dockerfile(policy, dockerfile)
+
+
+@pytest.mark.parametrize(
     "missing_rule",
     [
         "!tools/",

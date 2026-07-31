@@ -147,9 +147,10 @@ and the plan/progress notes so this boundary does not go stale.
 - Production image: digest-pinned DHI Community Python **3.14.6** Debian 13,
   `nonroot` **65532:65532**, policy in `container-policy.json` (Dockerfile, CI,
   ECS user, `/tmp/shittim-chest` tmpfs). No shell/package manager in production;
-  break-glass from matching DHI `-dev`. CI-only `fault-test` target: never push
-  or deploy. DHI needs `DHI_USERNAME` / `DHI_TOKEN` in Actions **and** Dependabot
-  secrets (never log/commit/Obsidian).
+  break-glass from matching DHI `-dev`; its apt layer must remove apt/dpkg logs
+  before export so config digests remain reproducible. CI-only `fault-test`
+  target: never push or deploy. DHI needs `DHI_USERNAME` / `DHI_TOKEN` in
+  Actions **and** Dependabot secrets (never log/commit/Obsidian).
 
 ## Authoritative documents
 
