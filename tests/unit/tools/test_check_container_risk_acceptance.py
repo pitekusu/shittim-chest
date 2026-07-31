@@ -12,6 +12,7 @@ from tools.check_container_risk_acceptance import (
     FindingKey,
     load_vendor_vex_suppressions,
     validate_acceptances,
+    validate_config_digest_bindings,
 )
 
 DIGEST = "sha256:" + "a" * 64
@@ -66,6 +67,47 @@ def test_current_digest_bound_acceptance_covers_residual_finding(tmp_path: Path)
         image_config_digest=DIGEST,
         today=TODAY,
     ) == (0, 1)
+
+
+def test_config_digest_preflight_accepts_the_exact_loaded_image(tmp_path: Path) -> None:
+    policy = _write_policy(tmp_path / "policy.json", [_acceptance()])
+
+    assert (
+        validate_config_digest_bindings(
+            policy,
+            image_kind="production",
+            image_config_digest=DIGEST,
+            today=TODAY,
+        )
+        == 1
+    )
+
+
+def test_config_digest_preflight_blocks_before_push_on_exporter_drift(tmp_path: Path) -> None:
+    policy = _write_policy(tmp_path / "policy.json", [_acceptance()])
+
+    with pytest.raises(ValueError, match="does not match"):
+        validate_config_digest_bindings(
+            policy,
+            image_kind="production",
+            image_config_digest=OTHER_DIGEST,
+            today=TODAY,
+        )
+
+
+def test_config_digest_preflight_rejects_expired_policy_before_push(tmp_path: Path) -> None:
+    policy = _write_policy(
+        tmp_path / "policy.json",
+        [_acceptance(expires_on="2026-07-21")],
+    )
+
+    with pytest.raises(ValueError, match="expired"):
+        validate_config_digest_bindings(
+            policy,
+            image_kind="production",
+            image_config_digest=DIGEST,
+            today=TODAY,
+        )
 
 
 @pytest.mark.parametrize(

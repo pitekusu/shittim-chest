@@ -248,6 +248,15 @@ def _validate_release(directory: Path) -> None:
         "--signer-digest",
         "tools/check_container_risk_acceptance.py",
         "--image-config-digest-file",
+        "--config-digest-only",
+        "Require CI-identical image configs before push",
+        "Push the prevalidated images once",
+        "docker image inspect",
+        "docker image push --quiet",
+        "aws ecr batch-get-image",
+        'test "${actual_config}" = "${expected_config}"',
+        "steps.push-images.outputs.normal_digest",
+        "steps.push-images.outputs.break_glass_digest",
         "--normal-config-digest-file",
         "--break-glass-config-digest-file",
         "Prepare pinned vulnerability data before image push",
@@ -323,9 +332,34 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must make both image builds reproducible with the Unix epoch"
         )
-    if text.count("outputs: type=registry,rewrite-timestamp=true") != 2:
+    if text.count("outputs: type=docker,rewrite-timestamp=true") != 2:
         raise WorkflowPolicyError(
-            "Release must rewrite file timestamps for both registry image exports"
+            "Release must use the CI-identical Docker exporter for both loaded images"
+        )
+    if "outputs: type=registry" in text:
+        raise WorkflowPolicyError(
+            "Release must not rebuild risk-bound images with another exporter"
+        )
+    required_cache_scopes = (
+        "cache-from: type=gha,scope=container-arm64-production",
+        "cache-to: type=gha,mode=max,scope=container-arm64-production,ignore-error=true",
+        "cache-from: type=gha,scope=container-arm64-break-glass",
+        "cache-to: type=gha,mode=max,scope=container-arm64-break-glass,ignore-error=true",
+    )
+    if any(text.count(marker) != 1 for marker in required_cache_scopes):
+        raise WorkflowPolicyError("Release must reuse the exact main CI image cache scopes")
+    if text.count("--config-digest-only") != 2:
+        raise WorkflowPolicyError("Release must validate both local configs before either push")
+    if text.count("docker image push --quiet") != 2:
+        raise WorkflowPolicyError("Release must push each prevalidated loaded image exactly once")
+    if re.search(r"steps\.build-(?:normal|break-glass)\.outputs\.digest", text):
+        raise WorkflowPolicyError("Release must use only registry-confirmed manifest digests")
+    if (
+        text.count("steps.push-images.outputs.normal_digest") != 4
+        or text.count("steps.push-images.outputs.break_glass_digest") != 4
+    ):
+        raise WorkflowPolicyError(
+            "Release manifest, evidence, and attestations must share registry-confirmed digests"
         )
     if text.count("environment: production") != 1:
         raise WorkflowPolicyError("Release must use production Environment only for deploy")
@@ -360,7 +394,9 @@ def _validate_release(directory: Path) -> None:
         vulnerability_data_index = text.index(
             "name: Prepare pinned vulnerability data before image push"
         )
-        build_index = text.index("name: Build and push the production image once")
+        build_index = text.index("name: Build and load the production image once")
+        config_preflight_index = text.index("name: Require CI-identical image configs before push")
+        push_index = text.index("name: Push the prevalidated images once")
         change_set_index = text.index("name: Prepare immutable CloudFormation change sets")
     except ValueError as error:
         raise WorkflowPolicyError("Release CDK asset publication steps are incomplete") from error
@@ -372,6 +408,8 @@ def _validate_release(directory: Path) -> None:
         < helper_install_index
         < vulnerability_data_index
         < build_index
+        < config_preflight_index
+        < push_index
         < change_set_index
     ):
         raise WorkflowPolicyError(
