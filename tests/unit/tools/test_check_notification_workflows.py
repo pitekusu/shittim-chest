@@ -94,19 +94,63 @@ def test_release_requires_reproducible_registry_images(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
-def test_release_requires_registry_file_timestamp_rewrite(tmp_path: Path) -> None:
+def test_release_requires_ci_identical_docker_exporters(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
+            "outputs: type=docker,rewrite-timestamp=true",
             "outputs: type=registry,rewrite-timestamp=true",
-            "push: true",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="rewrite file timestamps"):
+    with pytest.raises(WorkflowPolicyError, match=r"CI-identical|another exporter"):
+        validate_notification_workflows(directory)
+
+
+def test_release_reuses_the_exact_main_ci_image_cache_scopes(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "cache-from: type=gha,scope=container-arm64-production",
+            "cache-from: type=gha,scope=release-production-arm64",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact main CI image cache"):
+        validate_notification_workflows(directory)
+
+
+def test_release_checks_both_config_digests_before_push(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("--config-digest-only", "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="both local configs"):
+        validate_notification_workflows(directory)
+
+
+def test_release_attests_only_registry_confirmed_manifest_digests(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "steps.push-images.outputs.normal_digest",
+            "steps.build-normal.outputs.digest",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="registry-confirmed"):
         validate_notification_workflows(directory)
 
 
@@ -346,13 +390,13 @@ def test_release_publishes_cdk_assets_before_building_images(tmp_path: Path) -> 
             1,
         )
         .replace(
-            "name: Build and push the production image once",
+            "name: Build and load the production image once",
             "name: Synthesize and publish the complete CDK asset closure",
             1,
         )
         .replace(
             "name: temporary-step-name",
-            "name: Build and push the production image once",
+            "name: Build and load the production image once",
             1,
         )
     )

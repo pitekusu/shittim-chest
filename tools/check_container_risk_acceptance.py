@@ -155,6 +155,103 @@ def _parse_date(value: str, field: str) -> dt.date:
         raise ValueError(f"{field} must be an ISO 8601 date") from error
 
 
+def _validate_image_scope(image_kind: str, image_config_digest: str) -> None:
+    if image_kind not in IMAGE_KINDS:
+        raise ValueError("image kind is unsupported")
+    if DIGEST_PATTERN.fullmatch(image_config_digest) is None:
+        raise ValueError("image config digest must be sha256:<64 lowercase hex>")
+
+
+def _load_acceptances(policy_path: Path) -> list[object]:
+    root = _object(_read_json(policy_path, "risk acceptance policy"), "risk policy")
+    if set(root) != {"schema_version", "maximum_validity_days", "acceptances"}:
+        raise ValueError("risk acceptance policy has unexpected root fields")
+    if root["schema_version"] != 2 or root["maximum_validity_days"] != 90:
+        raise ValueError("risk acceptance policy version or maximum validity is unsupported")
+    raw_acceptances = root["acceptances"]
+    if not isinstance(raw_acceptances, list):
+        raise ValueError("acceptances must be an array")
+    return cast(list[object], raw_acceptances)
+
+
+def _acceptance_record(value: object, label: str) -> dict[str, object]:
+    record = _object(value, label)
+    if set(record) != REQUIRED_ACCEPTANCE_FIELDS:
+        missing = sorted(REQUIRED_ACCEPTANCE_FIELDS - set(record))
+        extra = sorted(set(record) - REQUIRED_ACCEPTANCE_FIELDS)
+        raise ValueError(f"{label} fields invalid: missing={missing}, extra={extra}")
+    return record
+
+
+def _config_digests(record: dict[str, object], label: str) -> dict[str, object]:
+    config_digests = _object(record.get("image_config_digests"), f"{label}.image_config_digests")
+    if not config_digests or not set(config_digests) <= IMAGE_KINDS:
+        raise ValueError(f"{label}.image_config_digests has unsupported image kinds")
+    for scoped_kind, scoped_digest in config_digests.items():
+        if not isinstance(scoped_digest, str) or DIGEST_PATTERN.fullmatch(scoped_digest) is None:
+            raise ValueError(f"{label}.image_config_digests.{scoped_kind} is invalid")
+    return config_digests
+
+
+def _validated_acceptance(
+    value: object, label: str, today: dt.date
+) -> tuple[FindingKey, dict[str, object]]:
+    record = _acceptance_record(value, label)
+    vulnerability_id = _string(record, "vulnerability_id", label)
+    package = _string(record, "package", label)
+    if VULNERABILITY_PATTERN.fullmatch(vulnerability_id) is None:
+        raise ValueError(f"{label}.vulnerability_id is invalid")
+    config_digests = _config_digests(record, label)
+    if _string(record, "status", label) not in {"affected", "under_investigation"}:
+        raise ValueError(f"{label}.status must not claim not_affected")
+    for field in TEXT_FIELDS:
+        if len(_string(record, field, label).strip()) < 10:
+            raise ValueError(f"{label}.{field} requires concrete evidence")
+    _string(record, "owner", label)
+    approved = _parse_date(_string(record, "approved_on", label), f"{label}.approved_on")
+    expires = _parse_date(_string(record, "expires_on", label), f"{label}.expires_on")
+    if approved > today:
+        raise ValueError(f"{label} approval date is in the future")
+    if expires < today:
+        raise ValueError(f"{label} is expired")
+    if expires <= approved or (expires - approved).days > 90:
+        raise ValueError(f"{label} must expire within 90 days after approval")
+    return FindingKey(vulnerability_id, package), config_digests
+
+
+def _register_acceptance_scopes(
+    seen: set[tuple[str, FindingKey]], key: FindingKey, config_digests: dict[str, object]
+) -> None:
+    for scoped_kind in config_digests:
+        scoped_key = (scoped_kind, key)
+        if scoped_key in seen:
+            raise ValueError(
+                f"duplicate risk acceptance: {scoped_kind}/{key.vulnerability_id}/{key.package}"
+            )
+        seen.add(scoped_key)
+
+
+def validate_config_digest_bindings(
+    policy_path: Path, *, image_kind: str, image_config_digest: str, today: dt.date
+) -> int:
+    """Fail before push on stale policy metadata or a changed local image config."""
+
+    _validate_image_scope(image_kind, image_config_digest)
+    bound = 0
+    seen: set[tuple[str, FindingKey]] = set()
+    for index, value in enumerate(_load_acceptances(policy_path)):
+        label = f"acceptances[{index}]"
+        key, config_digests = _validated_acceptance(value, label, today)
+        _register_acceptance_scopes(seen, key, config_digests)
+        record_config_digest = config_digests.get(image_kind)
+        if record_config_digest is None:
+            continue
+        if record_config_digest != image_config_digest:
+            raise ValueError(f"{label} config digest does not match the tested image")
+        bound += 1
+    return bound
+
+
 def validate_acceptances(
     policy_path: Path,
     *,
@@ -166,18 +263,8 @@ def validate_acceptances(
 ) -> tuple[int, int]:
     """Validate records and require coverage for every unfixable High/Critical."""
 
-    if image_kind not in IMAGE_KINDS:
-        raise ValueError("image kind is unsupported")
-    if DIGEST_PATTERN.fullmatch(image_config_digest) is None:
-        raise ValueError("image config digest must be sha256:<64 lowercase hex>")
-    root = _object(_read_json(policy_path, "risk acceptance policy"), "risk policy")
-    if set(root) != {"schema_version", "maximum_validity_days", "acceptances"}:
-        raise ValueError("risk acceptance policy has unexpected root fields")
-    if root["schema_version"] != 2 or root["maximum_validity_days"] != 90:
-        raise ValueError("risk acceptance policy version or maximum validity is unsupported")
-    raw_acceptances = root["acceptances"]
-    if not isinstance(raw_acceptances, list):
-        raise ValueError("acceptances must be an array")
+    _validate_image_scope(image_kind, image_config_digest)
+    raw_acceptances = _load_acceptances(policy_path)
 
     tracked = {
         finding.key
@@ -188,51 +275,11 @@ def validate_acceptances(
     seen: set[tuple[str, FindingKey]] = set()
     for index, value in enumerate(raw_acceptances):
         label = f"acceptances[{index}]"
-        record = _object(value, label)
-        if set(record) != REQUIRED_ACCEPTANCE_FIELDS:
-            missing = sorted(REQUIRED_ACCEPTANCE_FIELDS - set(record))
-            extra = sorted(set(record) - REQUIRED_ACCEPTANCE_FIELDS)
-            raise ValueError(f"{label} fields invalid: missing={missing}, extra={extra}")
-        vulnerability_id = _string(record, "vulnerability_id", label)
-        package = _string(record, "package", label)
-        if VULNERABILITY_PATTERN.fullmatch(vulnerability_id) is None:
-            raise ValueError(f"{label}.vulnerability_id is invalid")
-        config_digests = _object(
-            record.get("image_config_digests"), f"{label}.image_config_digests"
-        )
-        if not config_digests or not set(config_digests) <= IMAGE_KINDS:
-            raise ValueError(f"{label}.image_config_digests has unsupported image kinds")
-        for scoped_kind, scoped_digest in config_digests.items():
-            if (
-                not isinstance(scoped_digest, str)
-                or DIGEST_PATTERN.fullmatch(scoped_digest) is None
-            ):
-                raise ValueError(f"{label}.image_config_digests.{scoped_kind} is invalid")
+        key, config_digests = _validated_acceptance(value, label, today)
+        _register_acceptance_scopes(seen, key, config_digests)
         record_config_digest = config_digests.get(image_kind)
         if record_config_digest is not None and record_config_digest != image_config_digest:
             raise ValueError(f"{label} config digest does not match the tested image")
-        if _string(record, "status", label) not in {"affected", "under_investigation"}:
-            raise ValueError(f"{label}.status must not claim not_affected")
-        for field in TEXT_FIELDS:
-            if len(_string(record, field, label).strip()) < 10:
-                raise ValueError(f"{label}.{field} requires concrete evidence")
-        _string(record, "owner", label)
-        approved = _parse_date(_string(record, "approved_on", label), f"{label}.approved_on")
-        expires = _parse_date(_string(record, "expires_on", label), f"{label}.expires_on")
-        if approved > today:
-            raise ValueError(f"{label} approval date is in the future")
-        if expires < today:
-            raise ValueError(f"{label} is expired")
-        if expires <= approved or (expires - approved).days > 90:
-            raise ValueError(f"{label} must expire within 90 days after approval")
-        key = FindingKey(vulnerability_id, package)
-        for scoped_kind in config_digests:
-            scoped_key = (scoped_kind, key)
-            if scoped_key in seen:
-                raise ValueError(
-                    f"duplicate risk acceptance: {scoped_kind}/{vulnerability_id}/{package}"
-                )
-            seen.add(scoped_key)
         if record_config_digest is None:
             continue
         if key not in tracked:
@@ -254,10 +301,11 @@ def validate_acceptances(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, required=True)
-    parser.add_argument("--raw-report", type=Path, required=True)
-    parser.add_argument("--vex-report", type=Path, required=True)
+    parser.add_argument("--raw-report", type=Path)
+    parser.add_argument("--vex-report", type=Path)
     parser.add_argument("--image-kind", choices=tuple(sorted(IMAGE_KINDS)), required=True)
     parser.add_argument("--image-config-digest-file", type=Path, required=True)
+    parser.add_argument("--config-digest-only", action="store_true")
     parser.add_argument(
         "--today", type=dt.date.fromisoformat, default=dt.datetime.now(dt.UTC).date()
     )
@@ -268,6 +316,17 @@ def main() -> int:
     args = _parser().parse_args()
     try:
         image_config_digest = args.image_config_digest_file.read_text(encoding="ascii").strip()
+        if args.config_digest_only:
+            bound_count = validate_config_digest_bindings(
+                args.policy,
+                image_kind=args.image_kind,
+                image_config_digest=image_config_digest,
+                today=args.today,
+            )
+            print(f"container config digest preflight passed: time_limited_bindings={bound_count}")
+            return 0
+        if args.raw_report is None or args.vex_report is None:
+            raise ValueError("raw and VEX reports are required unless config-digest-only is set")
         vendor_count, accepted_count = validate_acceptances(
             args.policy,
             findings=load_findings(args.raw_report),

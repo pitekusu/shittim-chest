@@ -26,16 +26,19 @@ manifest, reverified it after Environment approval, and acquired the deployment
 fence. Stateful remained stable, but initial Runtime creation rolled back before
 task launch because a `desiredCount=0` ECS service revision omits
 `containerImages`; the admission Lambda incorrectly required that optional
-field. PR `#124` now verifies the exact normal task definition referenced by the
+field. PR `#124` verifies the exact normal task definition referenced by the
 revision, grants only that task definition's `DescribeTaskDefinition`, and makes
 failure diagnostics query the surviving stack rather than an executed change
-set. Its PR gates passed, but the identical merged tree produced different
-production and break-glass config digests on main because the final venv COPY
-layer varied across BuildKit cache paths despite byte-identical files. This
-branch makes that transfer an independent `COPY --link` layer and guards it in
-the container policy. The deployment fence and unexecuted change sets were
-cleaned. Runtime is `ROLLBACK_COMPLETE`; Operations and CostGovernance remain
-resource-free `REVIEW_IN_PROGRESS`.
+set. PR `#125` made the final venv transfer an independent `COPY --link` layer;
+its PR, main, and diagnostic Docker-exporter config digests are byte-identical.
+Production Release run `30604445128` then proved that BuildKit's registry/image
+exporter can still encode the linked layer differently from the Docker exporter
+despite identical files. This branch makes release build/load with the same
+Docker exporter and main-CI cache scopes, verifies both config digests before any
+ECR push, pushes only those loaded images, and rechecks the registry configs and
+manifest digests before evidence or attestation. No workload change set was
+created; the deployment fence is open, Runtime is absent, and Operations and
+CostGovernance remain resource-free `REVIEW_IN_PROGRESS`.
 Discord and the first successful production deployment remain unchanged. The
 authoritative Obsidian progress/evidence notes and public mirror track this state.
 
@@ -125,10 +128,13 @@ and the plan/progress notes so this boundary does not go stale.
 - Container risk acceptances bind separately to the production and break-glass
   **image config digests**, not exporter-specific manifest digests. CI must build,
   SBOM, VEX, and gate both targets with `SOURCE_DATE_EPOCH=0`; the Dockerfile must
-  expose that value in the builder so uv/Python emit hash-based bytecode, and every
-  image exporter must set `rewrite-timestamp=true`. Release must derive both config
-  digests again from the pushed manifests. A digest update requires exact
-  report/VEX/config-digest evidence for both targets before merge.
+  expose that value in the builder so uv/Python emit hash-based bytecode. Release
+  must use the same Docker exporter and target-specific main-CI cache scopes,
+  validate both loaded config digests before either push, push those exact images,
+  and require the ECR manifests to retain the prevalidated configs. Attestations
+  use only ECR-confirmed manifest digests. A digest update requires exact
+  report/VEX/config-digest evidence for both targets before merge; never infer
+  Docker-exporter identity from a separate registry/image exporter build.
 - After the final frozen uv sync, canonicalize every installed `.dist-info/RECORD`
   as valid three-column CSV sorted by row. Remove uv's checkout-time-dependent
   `uv_cache.json` file and its same-dist-info RECORD row; reject another path,
