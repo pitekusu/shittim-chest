@@ -3,6 +3,9 @@
 !README.md
 !pyproject.toml
 !uv.lock
+!tools/
+tools/*
+!tools/canonicalize_wheel_records.py
 !src/
 !src/**
 !tests/

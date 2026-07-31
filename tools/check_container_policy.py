@@ -15,6 +15,7 @@ from typing import Final, cast
 REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY_PATH: Final = REPOSITORY_ROOT / "container-policy.json"
 DEFAULT_DOCKERFILE_PATH: Final = REPOSITORY_ROOT / "Dockerfile"
+DEFAULT_DOCKERIGNORE_PATH: Final = REPOSITORY_ROOT / ".dockerignore"
 MAX_POLICY_BYTES: Final = 64 * 1024
 DIGEST_PATTERN: Final = re.compile(r"^sha256:[0-9a-f]{64}$")
 FROM_PATTERN: Final = re.compile(
@@ -292,10 +293,34 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("legacy UID/GID 10001 is forbidden")
 
 
+def validate_dockerignore(dockerignore: Path) -> None:
+    """Require the Docker build context to include the RECORD canonicalizer."""
+
+    rules = dockerignore.read_text(encoding="utf-8").splitlines()
+    required_rules = [
+        "!tools/",
+        "tools/*",
+        "!tools/canonicalize_wheel_records.py",
+    ]
+    positions: list[int] = []
+    for rule in required_rules:
+        try:
+            positions.append(rules.index(rule))
+        except ValueError as error:
+            raise ValueError(
+                ".dockerignore must include only the wheel RECORD canonicalizer from tools/"
+            ) from error
+    if positions != sorted(positions):
+        raise ValueError(
+            ".dockerignore wheel RECORD canonicalizer rules must be in effective order"
+        )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY_PATH)
     parser.add_argument("--dockerfile", type=Path, default=DEFAULT_DOCKERFILE_PATH)
+    parser.add_argument("--dockerignore", type=Path, default=DEFAULT_DOCKERIGNORE_PATH)
     parser.add_argument(
         "--print-reference",
         choices=sorted(STAGE_ALIASES),
@@ -312,6 +337,7 @@ def main() -> int:
             return 0
         policy = load_container_policy(args.policy)
         validate_dockerfile(policy, args.dockerfile)
+        validate_dockerignore(args.dockerignore)
     except (OSError, ValueError) as error:
         print(f"container policy check failed: {error}", file=sys.stderr)
         return 1

@@ -9,11 +9,13 @@ from pathlib import Path
 import pytest
 from tools.check_container_policy import (
     DEFAULT_DOCKERFILE_PATH,
+    DEFAULT_DOCKERIGNORE_PATH,
     DEFAULT_POLICY_PATH,
     dockerfile_stage_reference,
     load_container_policy,
     validate_dhi_reference,
     validate_dockerfile,
+    validate_dockerignore,
     validate_uv_reference,
 )
 
@@ -37,6 +39,7 @@ def test_repository_container_policy_matches_dockerfile() -> None:
     assert policy.builder_tag == "3.14.6-debian13-dev"
     assert policy.runtime_tag == "3.14.6-debian13"
     validate_dockerfile(policy, DEFAULT_DOCKERFILE_PATH)
+    validate_dockerignore(DEFAULT_DOCKERIGNORE_PATH)
     assert dockerfile_stage_reference("runtime").startswith("dhi.io/python:3.14.6-debian13@")
 
 
@@ -143,6 +146,42 @@ def test_dockerfile_requires_canonical_wheel_records(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="canonicalize installed wheel RECORD"):
         validate_dockerfile(policy, dockerfile)
+
+
+@pytest.mark.parametrize(
+    "missing_rule",
+    [
+        "!tools/",
+        "tools/*",
+        "!tools/canonicalize_wheel_records.py",
+    ],
+)
+def test_dockerignore_requires_canonicalizer_in_build_context(
+    tmp_path: Path,
+    missing_rule: str,
+) -> None:
+    dockerignore = tmp_path / ".dockerignore"
+    rules = DEFAULT_DOCKERIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+    rules.remove(missing_rule)
+    dockerignore.write_text("\n".join(rules) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must include only the wheel RECORD canonicalizer"):
+        validate_dockerignore(dockerignore)
+
+
+def test_dockerignore_requires_canonicalizer_rules_in_effective_order(tmp_path: Path) -> None:
+    dockerignore = tmp_path / ".dockerignore"
+    rules = DEFAULT_DOCKERIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+    tools_index = rules.index("!tools/")
+    rules[tools_index : tools_index + 3] = [
+        "!tools/canonicalize_wheel_records.py",
+        "tools/*",
+        "!tools/",
+    ]
+    dockerignore.write_text("\n".join(rules) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="effective order"):
+        validate_dockerignore(dockerignore)
 
 
 def test_dependabot_uv_digest_bump_does_not_require_python_constant(tmp_path: Path) -> None:
