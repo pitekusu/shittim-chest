@@ -6,8 +6,8 @@
       "vulnerability_id": "CVE-2025-59375",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -23,8 +23,8 @@
       "vulnerability_id": "CVE-2025-59375",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -40,8 +40,8 @@
       "vulnerability_id": "CVE-2026-25210",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -57,8 +57,8 @@
       "vulnerability_id": "CVE-2026-25210",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -74,8 +74,8 @@
       "vulnerability_id": "CVE-2026-41080",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -91,8 +91,8 @@
       "vulnerability_id": "CVE-2026-41080",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -108,8 +108,8 @@
       "vulnerability_id": "CVE-2026-45186",
       "package": "libexpat1",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
@@ -125,8 +125,8 @@
       "vulnerability_id": "CVE-2026-45186",
       "package": "libexpat1-dev",
       "image_config_digests": {
-        "production": "sha256:5b35331cdb1fff71fdac96270951008e4a9acbf130893d83e36a8d6cdf094795",
-        "break-glass": "sha256:39c0281cbcf5d86ecfb24e379fa15787bcd77dfa3591f079aba5fab4e70e272c"
+        "production": "sha256:784e0aeda63660bf665a40e78f47b61b374dad588aa6d07a8066c661c5e3daa5",
+        "break-glass": "sha256:406c02bbc7a4f69022c2bc8b80dec8dabb8f35fd77b991f629a3b7842eb18337"
       },
       "status": "under_investigation",
       "justification": "Grype 0.116.0 maps the installed DHI Debian 13 security update to the older vulnerable trixie record, while DHI VEX does not yet classify this CVE.",
