@@ -110,6 +110,86 @@ def test_release_requires_ci_identical_docker_exporters(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_release_image_builds_reject_the_mutated_workspace_context(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "context: ${{ env.RELEASE_IMAGE_CONTEXT }}",
+            "context: .",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="share the immutable image context"):
+        validate_notification_workflows(directory)
+
+
+def test_release_image_checkout_is_pinned_to_github_sha(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    start = text.index("      - name: Check out the immutable image build context")
+    end = text.index("\n      - name:", start + 1)
+    checkout = text[start:end].replace("ref: ${{ github.sha }}", "ref: main", 1)
+    path.write_text(text[:start] + checkout + text[end:], encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match=r"pin github\.sha"):
+        validate_notification_workflows(directory)
+
+
+def test_release_images_share_one_dedicated_context(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    start = text.index("      - name: Build and load the isolated break-glass image once")
+    end = text.index("\n      - name:", start + 1)
+    build = text[start:end].replace(
+        "context: ${{ env.RELEASE_IMAGE_CONTEXT }}",
+        "context: ${{ github.workspace }}/another-context",
+        1,
+    )
+    path.write_text(text[:start] + build + text[end:], encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="share the immutable image context"):
+        validate_notification_workflows(directory)
+
+
+def test_release_pytest_disables_checkout_bytecode_writes(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '  PYTHONDONTWRITEBYTECODE: "1"\n',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="PYTHONDONTWRITEBYTECODE"):
+        validate_notification_workflows(directory)
+
+
+def test_release_runs_no_gates_after_the_image_checkout(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "      - name: Set up Buildx\n",
+            "      - name: Re-run an unsafe test in the image checkout\n"
+            "        run: uv run --frozen pytest\n"
+            "      - name: Set up Buildx\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="must not run test"):
+        validate_notification_workflows(directory)
+
+
 def test_release_reuses_the_exact_main_ci_image_cache_scopes(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
@@ -183,6 +263,22 @@ def test_ci_requires_loaded_image_file_timestamp_rewrite(tmp_path: Path) -> None
     )
 
     with pytest.raises(WorkflowPolicyError, match="rewrite file timestamps"):
+        validate_notification_workflows(directory)
+
+
+def test_ci_requires_actual_docker_context_bytecode_proof(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / "ci.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "python3 -m py_compile src/shittim_chest/__init__.py",
+            "true",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"actual \.dockerignore output"):
         validate_notification_workflows(directory)
 
 

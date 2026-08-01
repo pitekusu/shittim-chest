@@ -19,6 +19,7 @@ env:
   AWS_REGION: ap-northeast-1
   COST_REGION: us-east-1
   PYTHON_VERSION: 3.14.6
+  PYTHONDONTWRITEBYTECODE: "1"
   UV_VERSION: 0.11.29
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
   NOTATION_CLI_VERSION: 1.3.2
@@ -30,6 +31,7 @@ env:
   ECR_CREDENTIAL_HELPER_VERSION: 0.12.0
   ECR_CREDENTIAL_HELPER_SHA256: 5bdd30fb6c7a92462f5b454cce1aa906ca7926a6c2e39efad9613a7bf7661fac
   AWS_ECR_DISABLE_CACHE: "true"
+  RELEASE_IMAGE_CONTEXT: ${{ github.workspace }}/release-image-context
 
 jobs:
   plan:
@@ -420,6 +422,19 @@ jobs:
           "${RUNNER_TEMP}/docker-scout" vex get --verify --skip-tlog \
             --platform linux/arm64 --output "${RUNNER_TEMP}/break-glass.openvex.json" \
             "registry://${break_glass_base}"
+      - name: Check out the immutable image build context
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: release-image-context
+          persist-credentials: false
+      - name: Require the immutable clean image build context
+        run: |
+          test "$(git -C "${RELEASE_IMAGE_CONTEXT}" rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git -C "${RELEASE_IMAGE_CONTEXT}" rev-parse --show-toplevel)" = \
+            "${RELEASE_IMAGE_CONTEXT}"
+          test -z "$(git -C "${RELEASE_IMAGE_CONTEXT}" status \
+            --porcelain=v1 --untracked-files=all)"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build and load the production image once
@@ -428,8 +443,8 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: "0"
         with:
-          context: .
-          file: Dockerfile
+          context: ${{ env.RELEASE_IMAGE_CONTEXT }}
+          file: ${{ env.RELEASE_IMAGE_CONTEXT }}/Dockerfile
           target: production
           outputs: type=docker,rewrite-timestamp=true
           tags: ${{ vars.ECR_REPOSITORY_URI }}:release-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -441,8 +456,8 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: "0"
         with:
-          context: .
-          file: Dockerfile
+          context: ${{ env.RELEASE_IMAGE_CONTEXT }}
+          file: ${{ env.RELEASE_IMAGE_CONTEXT }}/Dockerfile
           target: break-glass
           outputs: type=docker,rewrite-timestamp=true
           tags: ${{ vars.ECR_REPOSITORY_URI }}:break-glass-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

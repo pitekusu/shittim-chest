@@ -14,3 +14,5 @@ tests/*
 !tests/fixtures/
 tests/fixtures/*
 !tests/fixtures/container_process.py
+**/__pycache__/
+**/*.py[cod]
