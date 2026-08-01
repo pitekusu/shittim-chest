@@ -297,6 +297,23 @@ jobs:
           }
           verify_manifest builder
           verify_manifest runtime
+      - name: Prove Docker ignores generated source bytecode
+        run: |
+          proof_root="${RUNNER_TEMP}/docker-context-bytecode-proof"
+          mkdir -p "${proof_root}/clean" "${proof_root}/actual"
+          git archive --format=tar "${GITHUB_SHA}" src | \
+            tar --extract --file=- --directory="${proof_root}/clean"
+          python3 -m py_compile src/shittim_chest/__init__.py
+          test -n "$(find src -type f -path '*/__pycache__/*.pyc' -print -quit)"
+          printf '%s\n' 'FROM scratch' 'COPY src /src' > "${proof_root}/Dockerfile"
+          docker buildx build \
+            --no-cache \
+            --file "${proof_root}/Dockerfile" \
+            --output "type=local,dest=${proof_root}/actual" \
+            .
+          diff --recursive --brief "${proof_root}/clean/src" "${proof_root}/actual/src"
+          test -z "$(find "${proof_root}/actual/src" \
+            \( -type d -name __pycache__ -o -type f -name '*.py[cod]' \) -print -quit)"
       - name: Build and load the production image
         id: build-production
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0

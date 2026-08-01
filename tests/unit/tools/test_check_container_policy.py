@@ -223,6 +223,35 @@ def test_dockerignore_requires_canonicalizer_rules_in_effective_order(tmp_path: 
         validate_dockerignore(dockerignore)
 
 
+@pytest.mark.parametrize("missing_rule", ["**/__pycache__/", "**/*.py[cod]"])
+def test_dockerignore_requires_python_bytecode_exclusions(
+    tmp_path: Path,
+    missing_rule: str,
+) -> None:
+    dockerignore = tmp_path / ".dockerignore"
+    rules = DEFAULT_DOCKERIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+    rules.remove(missing_rule)
+    dockerignore.write_text("\n".join(rules) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="exclude Python bytecode"):
+        validate_dockerignore(dockerignore)
+
+
+@pytest.mark.parametrize("rule", ["**/__pycache__/", "**/*.py[cod]"])
+def test_dockerignore_requires_bytecode_exclusions_after_source_include(
+    tmp_path: Path,
+    rule: str,
+) -> None:
+    dockerignore = tmp_path / ".dockerignore"
+    rules = DEFAULT_DOCKERIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+    rules.remove(rule)
+    rules.insert(rules.index("!src/**"), rule)
+    dockerignore.write_text("\n".join(rules) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"follow !src/\*\*"):
+        validate_dockerignore(dockerignore)
+
+
 def test_dependabot_uv_digest_bump_does_not_require_python_constant(tmp_path: Path) -> None:
     """Dockerfile remains the sole exact pin for the uv image digest."""
 

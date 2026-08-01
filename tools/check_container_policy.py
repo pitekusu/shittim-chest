@@ -308,7 +308,7 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
 
 
 def validate_dockerignore(dockerignore: Path) -> None:
-    """Require the Docker build context to include the RECORD canonicalizer."""
+    """Require the RECORD canonicalizer and exclude generated source bytecode."""
 
     rules = dockerignore.read_text(encoding="utf-8").splitlines()
     required_rules = [
@@ -327,6 +327,24 @@ def validate_dockerignore(dockerignore: Path) -> None:
     if positions != sorted(positions):
         raise ValueError(
             ".dockerignore wheel RECORD canonicalizer rules must be in effective order"
+        )
+    try:
+        source_include_position = rules.index("!src/**")
+        bytecode_positions = [
+            rules.index("**/__pycache__/"),
+            rules.index("**/*.py[cod]"),
+        ]
+    except ValueError as error:
+        raise ValueError(
+            ".dockerignore must exclude Python bytecode after the !src/** inclusion"
+        ) from error
+    if (
+        any(rules.count(rule) != 1 for rule in ("**/__pycache__/", "**/*.py[cod]"))
+        or bytecode_positions != sorted(bytecode_positions)
+        or any(position <= source_include_position for position in bytecode_positions)
+    ):
+        raise ValueError(
+            ".dockerignore Python bytecode exclusions must follow !src/** in effective order"
         )
 
 

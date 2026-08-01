@@ -332,6 +332,13 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must make both image builds reproducible with the Unix epoch"
         )
+    if (
+        text.count("PYTHONDONTWRITEBYTECODE") != 1
+        or '  PYTHONDONTWRITEBYTECODE: "1"' not in text[: text.index("\njobs:")]
+    ):
+        raise WorkflowPolicyError(
+            "Release pytest must inherit PYTHONDONTWRITEBYTECODE=1 from workflow env"
+        )
     if text.count("outputs: type=docker,rewrite-timestamp=true") != 2:
         raise WorkflowPolicyError(
             "Release must use the CI-identical Docker exporter for both loaded images"
@@ -414,6 +421,85 @@ def _validate_release(directory: Path) -> None:
     ):
         raise WorkflowPolicyError(
             "Release must finish asset and verifier preflights before image build and change sets"
+        )
+    try:
+        image_checkout_index = text.index("name: Check out the immutable image build context")
+        image_context_check_index = text.index(
+            "name: Require the immutable clean image build context"
+        )
+        buildx_index = text.index("name: Set up Buildx", vulnerability_data_index)
+        break_glass_build_index = text.index(
+            "name: Build and load the isolated break-glass image once"
+        )
+    except ValueError as error:
+        raise WorkflowPolicyError("Release immutable image build context is incomplete") from error
+    if not (
+        vulnerability_data_index
+        < image_checkout_index
+        < image_context_check_index
+        < buildx_index
+        < build_index
+        < break_glass_build_index
+        < config_preflight_index
+    ):
+        raise WorkflowPolicyError(
+            "Release must create and verify the immutable image context after all pre-build gates"
+        )
+    image_checkout_block = _workflow_step_block(text, "Check out the immutable image build context")
+    required_checkout_markers = (
+        "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+        "ref: ${{ github.sha }}",
+        "path: release-image-context",
+        "persist-credentials: false",
+    )
+    if any(marker not in image_checkout_block for marker in required_checkout_markers):
+        raise WorkflowPolicyError(
+            "Release immutable image checkout must pin github.sha without persisted credentials"
+        )
+    image_context_check_block = _workflow_step_block(
+        text, "Require the immutable clean image build context"
+    )
+    required_context_check_markers = (
+        'git -C "${RELEASE_IMAGE_CONTEXT}" rev-parse HEAD',
+        '"${GITHUB_SHA}"',
+        'git -C "${RELEASE_IMAGE_CONTEXT}" rev-parse --show-toplevel',
+        'git -C "${RELEASE_IMAGE_CONTEXT}" status',
+        "--porcelain=v1 --untracked-files=all",
+    )
+    if any(marker not in image_context_check_block for marker in required_context_check_markers):
+        raise WorkflowPolicyError(
+            "Release must verify the dedicated image checkout SHA and clean worktree"
+        )
+    context_env = "${{ env.RELEASE_IMAGE_CONTEXT }}"
+    if (
+        text.count("  RELEASE_IMAGE_CONTEXT: ${{ github.workspace }}/release-image-context") != 1
+        or f"working-directory: {context_env}" in text
+    ):
+        raise WorkflowPolicyError(
+            "Release must reserve one dedicated image context exclusively for Docker builds"
+        )
+    production_build_block = _workflow_step_block(text, "Build and load the production image once")
+    break_glass_build_block = _workflow_step_block(
+        text, "Build and load the isolated break-glass image once"
+    )
+    expected_context = f"context: {context_env}"
+    expected_dockerfile = f"file: {context_env}/Dockerfile"
+    for block in (production_build_block, break_glass_build_block):
+        if (
+            block.count(expected_context) != 1
+            or block.count(expected_dockerfile) != 1
+            or re.search(r"(?m)^\s+context:\s*\.\s*$", block)
+        ):
+            raise WorkflowPolicyError(
+                "Release production and break-glass builds must share the immutable image context"
+            )
+    immutable_context_region = text[image_checkout_index:build_index]
+    forbidden_context_gate = re.compile(
+        r"\b(?:pytest|uv\s+build|npm\s+run\s+check:infra|cdk\s+synth)\b"
+    )
+    if forbidden_context_gate.search(immutable_context_region):
+        raise WorkflowPolicyError(
+            "Release must not run test, synth, or package gates after the image checkout"
         )
     publish_end = text.find("\n      - name:", publish_index)
     publish_block = text[publish_index : None if publish_end == -1 else publish_end]
@@ -585,6 +671,42 @@ def _validate_ci_container_risk(directory: Path) -> None:
         raise WorkflowPolicyError(
             "CI must rewrite file timestamps for all three loaded image exports"
         )
+    try:
+        buildx_index = text.index("name: Set up Docker Buildx")
+        proof_index = text.index("name: Prove Docker ignores generated source bytecode")
+        production_index = text.index("name: Build and load the production image")
+    except ValueError as error:
+        raise WorkflowPolicyError("CI Docker context bytecode proof is required") from error
+    if not buildx_index < proof_index < production_index:
+        raise WorkflowPolicyError(
+            "CI Docker context bytecode proof must precede the production image build"
+        )
+    proof_block = _workflow_step_block(text, "Prove Docker ignores generated source bytecode")
+    proof_markers = (
+        'git archive --format=tar "${GITHUB_SHA}" src',
+        "python3 -m py_compile src/shittim_chest/__init__.py",
+        "'FROM scratch' 'COPY src /src'",
+        "docker buildx build",
+        '--file "${proof_root}/Dockerfile"',
+        '--output "type=local,dest=${proof_root}/actual"',
+        'diff --recursive --brief "${proof_root}/clean/src" "${proof_root}/actual/src"',
+        "__pycache__",
+        "*.py[cod]",
+        "\n            .\n",
+    )
+    if any(marker not in proof_block for marker in proof_markers) or "--ignorefile" in proof_block:
+        raise WorkflowPolicyError(
+            "CI Docker context proof must compare clean src with actual .dockerignore output"
+        )
+
+
+def _workflow_step_block(text: str, name: str) -> str:
+    """Return one literal top-level workflow step for strict policy checks."""
+
+    marker = f"      - name: {name}"
+    start = text.index(marker)
+    end = text.find("\n      - name:", start + len(marker))
+    return text[start : len(text) if end == -1 else end]
 
 
 def _validate_drift(directory: Path) -> None:
