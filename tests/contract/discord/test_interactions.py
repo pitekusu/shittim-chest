@@ -288,7 +288,7 @@ def bind_context(current: DebateSnapshot) -> DebateSnapshot:
 
 
 @pytest.mark.asyncio
-async def test_command_schema_is_guild_scoped_bounded_and_synced_only_when_changed() -> None:
+async def test_command_schema_is_guild_scoped_bounded_and_never_synced_by_runtime() -> None:
     client_set = clients()
     application = FakeApplication(snapshot())
     controller = DiscordInteractionController(
@@ -298,8 +298,6 @@ async def test_command_schema_is_guild_scoped_bounded_and_synced_only_when_chang
     )
     guild = discord.Object(id=int(GUILD_ID))
     command = controller.command_tree.get_command("shittim", guild=guild)
-    sync = AsyncMock(return_value=[])
-    cast(Any, controller.command_tree).sync = sync
 
     assert command is not None
     payload = command.to_dict(controller.command_tree)
@@ -307,11 +305,7 @@ async def test_command_schema_is_guild_scoped_bounded_and_synced_only_when_chang
     assert payload["options"][0]["min_length"] == 1
     assert payload["options"][0]["max_length"] == 1000
     assert cast(Any, command).callback.__name__ == "_http_only_callback"
-    assert not await controller.sync_command_if_changed(
-        previous_schema_hash=controller.command_schema_hash
-    )
-    assert await controller.sync_command_if_changed(previous_schema_hash=None)
-    sync.assert_awaited_once_with(guild=guild)
+    assert not hasattr(controller, "sync_command_if_changed")
     await controller.close()
 
 

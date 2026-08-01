@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 
@@ -14,7 +12,6 @@ from discord import app_commands
 from shittim_chest.adapters.discord.errors import DiscordAdapterError
 from shittim_chest.adapters.discord.gateway import DiscordModeratorClient
 from shittim_chest.application import (
-    SHITTIM_COMMAND_NAME,
     AcceptDebateRequest,
     AcceptedDebate,
     BindDiscordContextCommand,
@@ -36,9 +33,8 @@ from shittim_chest.application.ports import (
 )
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
-COMMAND_NAME = SHITTIM_COMMAND_NAME
-COMMAND_DESCRIPTION = "3つの視点で質問を合議します"
-QUESTION_DESCRIPTION = "合議したい質問"
+from .command_schema import COMMAND_DESCRIPTION, COMMAND_NAME, QUESTION_DESCRIPTION
+
 HISTORY_LIMIT = 100
 HTTP_ONLY_GATEWAY_MESSAGE = "このコマンドはHTTP受付専用です。時間をおいて再度お試しください。"
 
@@ -73,26 +69,6 @@ class DiscordInteractionController:
         """Expose the registered tree for deploy-time schema inspection only."""
 
         return self._tree
-
-    @property
-    def command_schema_hash(self) -> str:
-        """Return a stable hash used to avoid unconditional command synchronization."""
-
-        encoded = json.dumps(
-            _command_schema(),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
-
-    async def sync_command_if_changed(self, *, previous_schema_hash: str | None) -> bool:
-        """Explicitly sync the Guild command only when a deploy-provided hash differs."""
-
-        if previous_schema_hash == self.command_schema_hash:
-            return False
-        await self._tree.sync(guild=self._guild)
-        return True
 
     def begin_shutdown(self) -> None:
         """Reject new interaction work before asynchronous shutdown begins."""
@@ -512,24 +488,6 @@ class DiscordInteractionController:
             content=content,
             allowed_mentions=discord.AllowedMentions.none(),
         )
-
-
-def _command_schema() -> dict[str, object]:
-    return {
-        "name": COMMAND_NAME,
-        "description": COMMAND_DESCRIPTION,
-        "type": 1,
-        "options": [
-            {
-                "name": "question",
-                "description": QUESTION_DESCRIPTION,
-                "type": 3,
-                "required": True,
-                "min_length": 1,
-                "max_length": 1000,
-            }
-        ],
-    }
 
 
 def _component_custom_id(interaction: discord.Interaction[discord.Client]) -> str | None:

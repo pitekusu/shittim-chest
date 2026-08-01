@@ -378,7 +378,7 @@ def ready_runtime(
 def open_gate(admission: FakeAdmission | None = None) -> RuntimeIngressDrainGate:
     gate = RuntimeIngressDrainGate(admission or FakeAdmission())
     gate.mark_supervisor_started()
-    gate.mark_command_schema_checked()
+    gate.mark_local_command_schema_checked()
     gate.mark_recovery_complete()
     return gate
 
@@ -415,7 +415,7 @@ async def test_drain_remains_closed_until_supervisor_schema_recovery_and_admissi
     assert (await worker.drain_once()).stop is IngressDrainStop.GATE_CLOSED
     gate.mark_supervisor_started()
     assert (await worker.drain_once()).stop is IngressDrainStop.GATE_CLOSED
-    gate.mark_command_schema_checked()
+    gate.mark_local_command_schema_checked()
     assert (await worker.drain_once()).stop is IngressDrainStop.GATE_CLOSED
     gate.mark_recovery_complete()
     admission.is_accepting = False

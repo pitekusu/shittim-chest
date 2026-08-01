@@ -66,20 +66,9 @@ class FakeSupervisor:
 @dataclass(slots=True)
 class FakeInteractions:
     events: list[str]
-    schema_hash: str = "current-schema"
     begin_shutdown_calls: int = 0
     close_calls: int = 0
-    sync_inputs: list[str | None] = field(default_factory=list)
     close_failure: Exception | None = None
-
-    @property
-    def command_schema_hash(self) -> str:
-        return self.schema_hash
-
-    async def sync_command_if_changed(self, *, previous_schema_hash: str | None) -> bool:
-        self.events.append("command_schema_synced")
-        self.sync_inputs.append(previous_schema_hash)
-        return previous_schema_hash != self.schema_hash
 
     def begin_shutdown(self) -> None:
         self.events.append("interactions_shutdown")
@@ -166,7 +155,7 @@ class FakeIngressRuntime:
 class FakeDrainGate:
     events: list[str]
     supervisor_started: bool = False
-    command_schema_checked: bool = False
+    local_command_schema_checked: bool = False
     recovery_complete: bool = False
     shutting_down: bool = False
 
@@ -174,9 +163,9 @@ class FakeDrainGate:
         self.events.append("gate_supervisor_started")
         self.supervisor_started = True
 
-    def mark_command_schema_checked(self) -> None:
-        self.events.append("gate_schema_checked")
-        self.command_schema_checked = True
+    def mark_local_command_schema_checked(self) -> None:
+        self.events.append("gate_local_schema_checked")
+        self.local_command_schema_checked = True
 
     def begin_recovery(self) -> None:
         self.events.append("gate_recovery_closed")
@@ -354,7 +343,6 @@ def lifecycle(
         drainer=current_drainer,
         runtime_instance=current_runtime_instance,
         tokens=tokens(),
-        previous_command_schema_hash="previous-schema",
         signal_handlers=current_signals,
         readiness_poll_seconds=0.005,
         disconnect_grace_seconds=disconnect_grace_seconds,
@@ -438,7 +426,6 @@ async def test_startup_orders_recovery_before_runtime_ready_admission_and_drain(
     await values.supervisor.started.wait()
     await wait_until(lambda: values.admission.is_accepting and values.drainer.run_calls == 1)
 
-    assert values.interactions.sync_inputs == ["previous-schema"]
     assert values.supervisor.tokens == tokens()
     assert values.runtime_instance.ready_inputs == [True]
     assert values.ingress_runtime.debate_task is not None
@@ -448,8 +435,7 @@ async def test_startup_orders_recovery_before_runtime_ready_admission_and_drain(
         "runtime_started",
         "supervisor_started",
         "gate_supervisor_started",
-        "command_schema_synced",
-        "gate_schema_checked",
+        "gate_local_schema_checked",
         "recovery_started",
         "recovery_registered",
         "gate_recovery_complete",
@@ -585,7 +571,6 @@ async def test_disconnect_stops_claims_then_checkpoints_and_recovers_before_reop
         "runtime_ready:False",
         "drainer_started",
     )
-    assert values.interactions.sync_inputs == ["previous-schema"]
 
     values.runtime.request_shutdown()
     await runtime_task
@@ -826,7 +811,6 @@ def test_runtime_rejects_non_positive_timeouts() -> None:
             drainer=FakeDrainer(events),
             runtime_instance=FakeRuntimeInstance(events),
             tokens=tokens(),
-            previous_command_schema_hash=None,
             signal_handlers=FakeSignalHandlers(),
             readiness_poll_seconds=0,
         )

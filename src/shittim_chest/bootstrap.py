@@ -24,6 +24,7 @@ from shittim_chest.adapters.discord import (
     DiscordPyPublisher,
     build_discord_clients,
 )
+from shittim_chest.adapters.discord.command_schema import command_schema_hash
 from shittim_chest.adapters.discord.ingress_runtime import DiscordIngressRuntime
 from shittim_chest.adapters.dynamodb import (
     DynamoDbDebateRepository,
@@ -43,7 +44,7 @@ from shittim_chest.adapters.openai import (
 from shittim_chest.application import DebateApplication, IngressCommandAdapter
 from shittim_chest.application.ingress_drain import IngressDrainer, RuntimeIngressDrainGate
 from shittim_chest.application.runtime_instance import RuntimeInstanceState
-from shittim_chest.config import BootstrapConfig, load_bootstrap_config
+from shittim_chest.config import BootstrapConfig, StartupConfigurationError, load_bootstrap_config
 from shittim_chest.runtime import (
     CloudWatchEmfMetrics,
     ContentFreeTelemetry,
@@ -275,7 +276,6 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         drainer=drainer,
         runtime_instance=runtime_instance,
         tokens=config.discord_tokens,
-        previous_command_schema_hash=config.previous_command_schema_hash,
     )
     return ProductionRuntime(
         lifecycle=lifecycle,
@@ -297,6 +297,8 @@ async def run_from_environment(environ: Mapping[str, str] | None = None) -> None
     """Validate injected environment values before creating any external SDK client."""
 
     config = load_bootstrap_config(os.environ if environ is None else environ)
+    if config.expected_command_schema_hash != command_schema_hash():
+        raise StartupConfigurationError
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     _LOGGER.setLevel(getattr(logging, config.log_level))
     runtime = build_production_runtime(config)

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from shittim_chest.adapters.discord.command_schema import command_schema_hash
 from shittim_chest.application import DiscordBotSlot
 from shittim_chest.config import StartupConfigurationError, load_bootstrap_config
 from shittim_chest.domain import ParticipantSlot
@@ -37,7 +38,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
         {"SHITTIM_DYNAMODB_TABLE": "invalid/table"},
         {"OPENAI_API_KEY": ""},
         {"DISCORD_TOKEN_PARTICIPANT_C": "token-moderator-placeholder"},
-        {"SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH": "not-a-hash"},
+        {"SHITTIM_EXPECTED_COMMAND_SCHEMA_HASH": "not-a-hash"},
     ),
 )
 def test_load_bootstrap_config_fails_closed_for_invalid_process_inputs(
@@ -94,7 +95,7 @@ def _valid_environment() -> dict[str, str]:
         "DISCORD_TOKEN_PARTICIPANT_A": "token-participant-a-placeholder",
         "DISCORD_TOKEN_PARTICIPANT_B": "token-participant-b-placeholder",
         "DISCORD_TOKEN_PARTICIPANT_C": "token-participant-c-placeholder",
-        "SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH": "a" * 64,
+        "SHITTIM_EXPECTED_COMMAND_SCHEMA_HASH": command_schema_hash(),
         "SHITTIM_RUNTIME_CONFIG_JSON": json.dumps(
             {
                 "schema_version": "1",

@@ -13,6 +13,7 @@ from shittim_chest.adapters.aws.ssm import SsmParameterReader
 from shittim_chest.application.ports import ParameterReadUnavailable
 
 PARAMETER_NAME = "/shittim-chest/production/runtime/v0001"
+MODERATOR_CREDENTIAL_PARAMETER_NAME = "/shittim-chest/production/discord/moderator/token"
 
 
 def client() -> SSMClient:
@@ -97,3 +98,50 @@ async def test_reader_rejects_an_empty_or_padded_name_before_the_sdk_call() -> N
 
     with pytest.raises(ValueError, match="parameter name"):
         await reader.get_parameter(f" {PARAMETER_NAME}")
+
+
+@pytest.mark.asyncio
+async def test_reader_gets_one_exact_parameter_batch() -> None:
+    sdk = client()
+    reader = SsmParameterReader(client=sdk)
+    names = (MODERATOR_CREDENTIAL_PARAMETER_NAME, PARAMETER_NAME)
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_parameters",
+            {
+                "Parameters": [
+                    {"Name": PARAMETER_NAME, "Type": "SecureString", "Value": "runtime"},
+                    {
+                        "Name": MODERATOR_CREDENTIAL_PARAMETER_NAME,
+                        "Type": "SecureString",
+                        "Value": "token",
+                    },
+                ],
+            },
+            {"Names": list(names), "WithDecryption": True},
+        )
+
+        assert await reader.get_parameters(names) == {
+            PARAMETER_NAME: "runtime",
+            MODERATOR_CREDENTIAL_PARAMETER_NAME: "token",
+        }
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_reader_batch_fails_closed_for_missing_parameter() -> None:
+    sdk = client()
+    reader = SsmParameterReader(client=sdk)
+    names = (MODERATOR_CREDENTIAL_PARAMETER_NAME, PARAMETER_NAME)
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_parameters",
+            {
+                "Parameters": [],
+                "InvalidParameters": [PARAMETER_NAME],
+            },
+            {"Names": list(names), "WithDecryption": True},
+        )
+
+        with pytest.raises(ParameterReadUnavailable):
+            await reader.get_parameters(names)

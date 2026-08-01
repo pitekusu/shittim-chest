@@ -24,11 +24,6 @@ class _DiscordClientSupervisor(Protocol):
 
 
 class _DiscordInteractionLifecycle(Protocol):
-    @property
-    def command_schema_hash(self) -> str: ...
-
-    async def sync_command_if_changed(self, *, previous_schema_hash: str | None) -> bool: ...
-
     def begin_shutdown(self) -> None: ...
 
     async def close(self) -> None: ...
@@ -50,7 +45,7 @@ class _DiscordIngressRuntime(Protocol):
 class _IngressDrainGate(Protocol):
     def mark_supervisor_started(self) -> None: ...
 
-    def mark_command_schema_checked(self) -> None: ...
+    def mark_local_command_schema_checked(self) -> None: ...
 
     def begin_recovery(self) -> None: ...
 
@@ -171,7 +166,6 @@ class RuntimeLifecycle:
         drainer: _IngressDrainer,
         runtime_instance: _RuntimeInstanceLifecycle,
         tokens: Mapping[DiscordBotSlot, str],
-        previous_command_schema_hash: str | None,
         signal_handlers: _SignalHandlers | None = None,
         readiness_poll_seconds: float = DEFAULT_READINESS_POLL_SECONDS,
         disconnect_grace_seconds: float = DEFAULT_DISCONNECT_GRACE_SECONDS,
@@ -191,7 +185,6 @@ class RuntimeLifecycle:
         self._drainer = drainer
         self._runtime_instance = runtime_instance
         self._tokens = dict(tokens)
-        self._previous_command_schema_hash = previous_command_schema_hash
         self._signal_handlers = signal_handlers or UnixSignalHandlers()
         self._readiness_poll_seconds = readiness_poll_seconds
         self._disconnect_grace_seconds = disconnect_grace_seconds
@@ -249,6 +242,7 @@ class RuntimeLifecycle:
                 await supervisor_task
                 raise RuntimeError("Discord client supervisor stopped unexpectedly")
             self._drain_gate.mark_supervisor_started()
+            self._drain_gate.mark_local_command_schema_checked()
             readiness_task = asyncio.create_task(
                 self._monitor_readiness(),
                 name="runtime:discord-readiness",
@@ -283,7 +277,6 @@ class RuntimeLifecycle:
     async def _monitor_readiness(self) -> None:
         loop = asyncio.get_running_loop()
         ever_ready = False
-        command_synced = False
         recovery_required = True
         outage_started_at: float | None = None
         outage_checkpointed = False
@@ -292,12 +285,6 @@ class RuntimeLifecycle:
             self._raise_drain_failure()
             physically_ready = await self._admission.physical_identities_ready()
             if physically_ready:
-                if not command_synced:
-                    await self._interactions.sync_command_if_changed(
-                        previous_schema_hash=self._previous_command_schema_hash
-                    )
-                    command_synced = True
-                    self._drain_gate.mark_command_schema_checked()
                 if recovery_required:
                     self._drain_gate.begin_recovery()
                     await self._ingress_runtime.recover_once()

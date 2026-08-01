@@ -40,14 +40,6 @@ class _Interactions:
     def __init__(self, state: Path) -> None:
         self._state = state
 
-    @property
-    def command_schema_hash(self) -> str:
-        return "b" * 64
-
-    async def sync_command_if_changed(self, *, previous_schema_hash: str | None) -> bool:
-        del previous_schema_hash
-        return True
-
     def begin_shutdown(self) -> None:
         return
 
@@ -114,7 +106,7 @@ class _DrainGate:
     def mark_supervisor_started(self) -> None:
         return
 
-    def mark_command_schema_checked(self) -> None:
+    def mark_local_command_schema_checked(self) -> None:
         return
 
     def begin_recovery(self) -> None:
@@ -211,7 +203,6 @@ async def _run(state: Path, scenario: str) -> None:
         drainer=_Drainer(),
         runtime_instance=_RuntimeInstance(),
         tokens={slot: f"placeholder-{slot.value}" for slot in DiscordBotSlot},
-        previous_command_schema_hash=None,
         readiness_poll_seconds=0.01,
         disconnect_grace_seconds=0.05,
         shutdown_timeout_seconds=2.0,

@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 
 import shittim_chest.bootstrap as bootstrap
+from shittim_chest.adapters.discord.command_schema import command_schema_hash
 from shittim_chest.bootstrap import (
     DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS,
     ProductionRuntime,
@@ -82,6 +83,21 @@ async def test_run_from_environment_keeps_third_party_root_logging_at_warning(
     assert basic_config == {"level": logging.WARNING, "format": "%(message)s"}
     assert application_levels == [logging.DEBUG]
     assert runtime_runs == ["run"]
+
+
+@pytest.mark.asyncio
+async def test_run_from_environment_rejects_schema_mismatch_before_sdk_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    builds: list[object] = []
+    environment = _environment()
+    environment["SHITTIM_EXPECTED_COMMAND_SCHEMA_HASH"] = "0" * 64
+    monkeypatch.setattr(bootstrap, "build_production_runtime", builds.append)
+
+    with pytest.raises(bootstrap.StartupConfigurationError):
+        await bootstrap.run_from_environment(environment)
+
+    assert builds == []
 
 
 @dataclass(slots=True)
@@ -261,6 +277,7 @@ def _environment() -> dict[str, str]:
         "DISCORD_TOKEN_PARTICIPANT_A": "token-a-placeholder",
         "DISCORD_TOKEN_PARTICIPANT_B": "token-b-placeholder",
         "DISCORD_TOKEN_PARTICIPANT_C": "token-c-placeholder",
+        "SHITTIM_EXPECTED_COMMAND_SCHEMA_HASH": command_schema_hash(),
         "SHITTIM_RUNTIME_CONFIG_JSON": json.dumps(
             {
                 "schema_version": "1",

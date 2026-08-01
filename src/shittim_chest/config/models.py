@@ -109,7 +109,7 @@ class BootstrapConfig:
     personas: Mapping[DiscordBotSlot, PersonaConfig] = field(repr=False)
     discord_tokens: Mapping[DiscordBotSlot, str] = field(repr=False)
     openai_api_key: str = field(repr=False)
-    previous_command_schema_hash: str | None = None
+    expected_command_schema_hash: str
 
     def participant_prompts(self) -> Mapping[ParticipantSlot, str]:
         """Map private participant slots to their validated prompt text."""
@@ -174,14 +174,11 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         tokens = {slot: _required(environ, env_name) for slot, env_name in _TOKEN_ENV.items()}
         if len(set(tokens.values())) != len(DISCORD_BOT_SLOTS):
             raise ValueError("Discord Bot tokens must be distinct")
-        previous_hash = environ.get("SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH")
-        if previous_hash is not None:
-            previous_hash = previous_hash.strip() or None
-            if previous_hash is not None and (
-                len(previous_hash) != 64
-                or any(character not in "0123456789abcdef" for character in previous_hash)
-            ):
-                raise ValueError("invalid command schema hash")
+        expected_hash = _required(environ, "SHITTIM_EXPECTED_COMMAND_SCHEMA_HASH")
+        if len(expected_hash) != 64 or any(
+            character not in "0123456789abcdef" for character in expected_hash
+        ):
+            raise ValueError("invalid command schema hash")
 
         return BootstrapConfig(
             environment=environment,
@@ -193,7 +190,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             personas=MappingProxyType(personas),
             discord_tokens=MappingProxyType(tokens),
             openai_api_key=_required(environ, "OPENAI_API_KEY"),
-            previous_command_schema_hash=previous_hash,
+            expected_command_schema_hash=expected_hash,
         )
     except KeyError, TypeError, ValueError, ValidationError:
         raise StartupConfigurationError from None

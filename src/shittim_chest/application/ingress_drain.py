@@ -175,11 +175,11 @@ class IngressDrainReport:
 
 
 class RuntimeIngressDrainGate:
-    """Fail-closed gate for schema sync, recovery, admission, and shutdown."""
+    """Fail-closed gate for local schema validation, recovery, and admission."""
 
     __slots__ = (
         "_admission",
-        "_command_schema_checked",
+        "_local_command_schema_checked",
         "_recovery_complete",
         "_shutdown",
         "_supervisor_started",
@@ -188,7 +188,7 @@ class RuntimeIngressDrainGate:
     def __init__(self, admission: _RuntimeAdmission) -> None:
         self._admission = admission
         self._supervisor_started = False
-        self._command_schema_checked = False
+        self._local_command_schema_checked = False
         self._recovery_complete = False
         self._shutdown = False
 
@@ -204,11 +204,11 @@ class RuntimeIngressDrainGate:
         if not self._shutdown:
             self._supervisor_started = True
 
-    def mark_command_schema_checked(self) -> None:
-        """Record that command schema reconciliation completed successfully."""
+    def mark_local_command_schema_checked(self) -> None:
+        """Record that the immutable local command schema was validated."""
 
         if not self._shutdown:
-            self._command_schema_checked = True
+            self._local_command_schema_checked = True
 
     def begin_recovery(self) -> None:
         """Close the recovery barrier during startup or reconnect recovery."""
@@ -234,7 +234,7 @@ class RuntimeIngressDrainGate:
         return (
             not self._shutdown
             and self._supervisor_started
-            and self._command_schema_checked
+            and self._local_command_schema_checked
             and self._recovery_complete
             and self._admission.is_accepting
             and await self._admission.all_identities_ready()

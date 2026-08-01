@@ -377,7 +377,7 @@ async def test_signed_http_ingress_wakes_recovers_and_drains_from_dynamodb_local
     await runtime_instance.mark_ready(active=False)
     gate = RuntimeIngressDrainGate(OpenAdmission())
     gate.mark_supervisor_started()
-    gate.mark_command_schema_checked()
+    gate.mark_local_command_schema_checked()
     gate.begin_recovery()
     assert not await gate.ready_to_drain()
     gate.mark_recovery_complete()
