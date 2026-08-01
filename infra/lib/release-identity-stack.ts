@@ -333,9 +333,7 @@ export class ReleaseIdentityStack extends Stack {
     this.deployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["ecs:DescribeTaskDefinition"],
-        resources: [
-          `arn:aws:ecs:${TOKYO_REGION}:${Aws.ACCOUNT_ID}:task-definition/shittim-chest-production:*`,
-        ],
+        resources: ["*"],
       }),
     );
     this.deployRole.addToPolicy(
@@ -357,8 +355,6 @@ export class ReleaseIdentityStack extends Stack {
       {
         [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
           "The deploy role can read only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
-        [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:ecs:${TOKYO_REGION}:<AWS::AccountId>:task-definition/shittim-chest-production:*]`]:
-          "DescribeTaskDefinition is restricted to immutable revisions of the one production family.",
       },
     );
   }

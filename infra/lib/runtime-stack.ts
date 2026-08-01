@@ -330,7 +330,6 @@ export class RuntimeStack extends Stack {
     this.configureImageAdmission(
       props.imageRepository,
       runtimeServiceArn,
-      this.normalTaskDefinition,
     );
     const runtimeConfigParameter = `${PARAMETER_ROOT}/runtime/${configVersion.valueAsString}`;
     this.discordStatusPublisherFunction = this.createApplicationFunction({
@@ -741,7 +740,6 @@ export class RuntimeStack extends Stack {
   private configureImageAdmission(
     repository: ecr.IRepository,
     serviceArn: string,
-    taskDefinition: ecs.ITaskDefinition,
   ): void {
     const serviceRevisionArn =
       `arn:aws:ecs:${this.region}:*:service-revision/` +
@@ -758,7 +756,7 @@ export class RuntimeStack extends Stack {
     this.imageAdmissionFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ecs:DescribeTaskDefinition"],
-        resources: [taskDefinition.taskDefinitionArn],
+        resources: ["*"],
       }),
     );
     this.imageAdmissionFunction.addToRolePolicy(
@@ -782,6 +780,11 @@ export class RuntimeStack extends Stack {
       ],
     });
     invokePolicy.attachToRole(hookRole);
+    Validations.of(this.imageAdmissionFunction.role!).acknowledge({
+      id: "AwsSolutions-IAM5[Resource::*]",
+      reason:
+        "ECS DescribeTaskDefinition does not support resource-level permissions; the handler validates the exact revision ARN, task definition ARN, container name, repository, and image digest.",
+    });
     Validations.of(this.imageAdmissionFunction.role!).acknowledge({
       id:
         "AwsSolutions-IAM5[Resource::arn:aws:ecs:" +
