@@ -46,6 +46,54 @@ def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
     assert validate_notification_workflows(_workflow_directory(tmp_path)) == 1
 
 
+def test_release_requires_pre_attestation_referrer_baselines(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "Capture ACTIVE referrer baselines before attestations",
+            "Capture referrers after attestations",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="referrer"):
+        validate_notification_workflows(directory)
+
+
+def test_release_requires_current_run_referrer_selection(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "select-release-referrers",
+            "verify-image",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="selected current-run referrers"):
+        validate_notification_workflows(directory)
+
+
+def test_release_referrer_snapshots_must_keep_aws_pagination(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "aws ecr list-image-referrers \\",
+            "aws ecr list-image-referrers --no-paginate \\",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="complete AWS pagination"):
+        validate_notification_workflows(directory)
+
+
 def test_repeated_action_version_requires_one_commit_pin(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

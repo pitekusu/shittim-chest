@@ -621,6 +621,21 @@ jobs:
           }
           wait_for_evidence normal "${NORMAL_DIGEST}"
           wait_for_evidence break-glass "${BREAK_GLASS_DIGEST}"
+      - name: Capture ACTIVE referrer baselines before attestations
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+        run: |
+          repository="${ECR_REPOSITORY_URI##*/}"
+          for mode in normal break-glass
+          do
+            digest_variable="${mode^^}_DIGEST"
+            digest_variable="${digest_variable//-/_}"
+            digest="${!digest_variable}"
+            aws ecr list-image-referrers \
+              --repository-name "${repository}" \
+              --subject-id "imageDigest=${digest}" \
+              --output json > "${RUNNER_TEMP}/${mode}.referrers-before.json"
+          done
       - name: Attest normal image provenance
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
@@ -692,7 +707,12 @@ jobs:
             aws ecr list-image-referrers \
               --repository-name "${repository}" \
               --subject-id "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.referrers.json"
+              --output json > "${RUNNER_TEMP}/${mode}.referrers-after.json"
+            uv run --frozen python tools/release_supply_chain.py \
+              select-release-referrers \
+              --before-referrers "${RUNNER_TEMP}/${mode}.referrers-before.json" \
+              --after-referrers "${RUNNER_TEMP}/${mode}.referrers-after.json" \
+              --output "${RUNNER_TEMP}/${mode}.referrers.json"
             uv run --frozen python tools/release_supply_chain.py verify-image \
               --digest "${digest}" \
               --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
@@ -1228,7 +1248,13 @@ jobs:
               --output json > "${RUNNER_TEMP}/${mode}.coverage.json"
             aws ecr list-image-referrers \
               --repository-name "${repository}" --subject-id "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.referrers.json"
+              --output json > "${RUNNER_TEMP}/${mode}.referrers-current.json"
+            uv run --frozen python tools/release_supply_chain.py \
+              select-release-referrers \
+              --before-referrers \
+                "${RUNNER_TEMP}/release/${mode}.referrers-before.json" \
+              --after-referrers "${RUNNER_TEMP}/${mode}.referrers-current.json" \
+              --output "${RUNNER_TEMP}/${mode}.referrers.json"
             uv run --frozen python tools/release_supply_chain.py verify-image \
               --digest "${digest}" --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
               --profile-arn "${SIGNING_PROFILE_ARN}" \

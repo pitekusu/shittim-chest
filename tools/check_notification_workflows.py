@@ -376,6 +376,7 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must authenticate exactly two OCI client contexts to ECR"
         )
+    _validate_release_referrer_delta(text)
     if text.count("${RUNNER_TEMP}/release/cdk.out/${artifact}.template.json") != 2:
         raise WorkflowPolicyError(
             "Release must revalidate downloaded CDK templates at their preserved artifact paths"
@@ -663,6 +664,82 @@ def _validate_release(directory: Path) -> None:
     if secrets != {"DHI_TOKEN", "DHI_USERNAME", "OPERATOR_NOTIFICATION_EMAIL"}:
         raise WorkflowPolicyError("Release secret allowlist changed")
     _require_full_action_pins(text, "Release")
+
+
+def _validate_release_referrer_delta(text: str) -> None:
+    if text.count("aws ecr list-image-referrers") != 3:
+        raise WorkflowPolicyError(
+            "Release must capture pre-attestation, post-attestation, and deploy referrers"
+        )
+    if "--no-paginate" in text or "--max-results" in text:
+        raise WorkflowPolicyError("Release referrer snapshots must use complete AWS pagination")
+    if (
+        text.count("select-release-referrers") != 2
+        or text.count("--before-referrers") != 2
+        or text.count("--after-referrers") != 2
+        or text.count('--referrers "${RUNNER_TEMP}/${mode}.referrers.json"') != 2
+    ):
+        raise WorkflowPolicyError(
+            "Release must pass only the selected current-run referrers to verify-image"
+        )
+
+    try:
+        baseline = _workflow_step_block(
+            text, "Capture ACTIVE referrer baselines before attestations"
+        )
+        plan_verify = _workflow_step_block(
+            text, "Strictly verify both Signer identities and four referrers"
+        )
+        deploy_verify = _workflow_step_block(
+            text, "Reverify AWS evidence and immutable change sets"
+        )
+    except ValueError as error:
+        raise WorkflowPolicyError("Release referrer delta steps are incomplete") from error
+    required_baseline = (
+        "aws ecr list-image-referrers",
+        '"${RUNNER_TEMP}/${mode}.referrers-before.json"',
+    )
+    required_plan = (
+        '"${RUNNER_TEMP}/${mode}.referrers-after.json"',
+        "select-release-referrers",
+        '--before-referrers "${RUNNER_TEMP}/${mode}.referrers-before.json"',
+        '--after-referrers "${RUNNER_TEMP}/${mode}.referrers-after.json"',
+        '--output "${RUNNER_TEMP}/${mode}.referrers.json"',
+        '--referrers "${RUNNER_TEMP}/${mode}.referrers.json"',
+    )
+    required_deploy = (
+        '"${RUNNER_TEMP}/${mode}.referrers-current.json"',
+        "select-release-referrers",
+        '"${RUNNER_TEMP}/release/${mode}.referrers-before.json"',
+        '--after-referrers "${RUNNER_TEMP}/${mode}.referrers-current.json"',
+        '--output "${RUNNER_TEMP}/${mode}.referrers.json"',
+        '--referrers "${RUNNER_TEMP}/${mode}.referrers.json"',
+    )
+    if any(marker not in baseline for marker in required_baseline):
+        raise WorkflowPolicyError("Release pre-attestation referrer baseline is incomplete")
+    if any(marker not in plan_verify for marker in required_plan):
+        raise WorkflowPolicyError("Release plan referrer delta verification is incomplete")
+    if any(marker not in deploy_verify for marker in required_deploy):
+        raise WorkflowPolicyError("Release deploy referrer delta verification is incomplete")
+
+    try:
+        wait_index = text.index("name: Wait for managed signing and enhanced ECR scans")
+        baseline_index = text.index("name: Capture ACTIVE referrer baselines before attestations")
+        first_attestation_index = text.index("name: Attest normal image provenance")
+        last_attestation_index = text.index("name: Attest break-glass vulnerability assessment")
+        verify_index = text.index("name: Strictly verify both Signer identities and four referrers")
+    except ValueError as error:
+        raise WorkflowPolicyError("Release referrer delta step order is incomplete") from error
+    if not (
+        wait_index
+        < baseline_index
+        < first_attestation_index
+        < last_attestation_index
+        < verify_index
+    ):
+        raise WorkflowPolicyError(
+            "Release must capture referrers before creating and verifying attestations"
+        )
 
 
 def _validate_ci_container_risk(directory: Path) -> None:
