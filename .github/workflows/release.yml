@@ -1369,7 +1369,9 @@ jobs:
             --query '[State,LastUpdateStatus]' --output text | \
             grep --fixed-strings $'Active\tSuccessful'
       - name: Capture bounded CloudFormation failure diagnostics
+        id: failure_diagnostics
         if: failure() && steps.acquire.outputs.acquired == 'true'
+        continue-on-error: true
         run: |
           jq --null-input '{}' > "${RUNNER_TEMP}/release/deployment-failure-events.json"
           for mapping in \

@@ -155,6 +155,7 @@ STEP-09Bではtask definitionがdigest URI以外を拒否するassertionを追�
 - DiscordIngress Lambda role: 既存tableのIngress Request、idempotency、queue counter、runtime wakeに必要な読取とtransactionだけを許可する。ECS更新、Discord Bot token、参加者Bot token、OpenAI API keyへの権限は持たない。
 - DiscordStatusPublisher Lambda role: status更新recordの読取・条件付き完了とmoderator Bot tokenの取得だけを許可する。参加者Bot token、OpenAI API key、ECS更新権限は持たない。
 - RuntimeReconciler Lambda role: runtime control recordの読取・条件付き更新と、対象ECS Serviceの`DescribeServices`、`UpdateService`だけを許可する。secret取得権限は持たない。
+- Image Admission Lambda role: `DescribeServiceRevisions`は固定service/revision ARNへ限定する。`ecs:DescribeTaskDefinition`はAWS公式Service Authorization Referenceでresource-level permissionをsupportしないため独立statementの`Resource: "*"`とし、取得対象はrevisionが返したexact task definition ARN、応答は同ARN・`application` container・固定repository・release image digestへapplication側で限定する。
 - GitHub plan roleはimmutable main subject、deploy roleはimmutable `production` Environment subjectに限定する。planはchange set作成、ECR push、対象Signer profileの`signer:SignPayload`、署名状態・scan・referrer取得を許可し、deployはEnvironment承認済みchange set実行と検証用readだけ、drift roleはread-onlyとする。
 - `iam:PassRole`は対象execution/task role ARNと`iam:PassedToService=ecs-tasks.amazonaws.com`へ限定する。
 - ECS task trustは`ecs-tasks.amazonaws.com`。`aws:SourceAccount`を実accountへ一致させ、`aws:SourceArn=arn:<partition>:ecs:ap-northeast-1:<account>:*`の`ArnLike`を付ける。ECS公式の制約によりclusterまでは限定できない。
@@ -216,6 +217,7 @@ toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示�
 | 2026-07-29 | Cost Anomaly Detection quotas | https://docs.aws.amazon.com/cost-management/latest/userguide/management-limits.html | AWS managed service monitorはaccountあたり1件のため既存ARNを再利用 |
 | 2026-07-29 | AnomalySubscription | https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ce-anomalysubscription.html | DAILY email、absolute impact 10 USDのThresholdExpression |
 | 2026-07-16 | Task definition | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definition_parameters.html | CPU/memory、stop timeout、awslogs |
+| 2026-08-02 | ECS Service Authorization Reference | https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html | `DescribeTaskDefinition`はresource typeを持たず、identity policyでは`Resource: "*"`が必要。対象task definitionの限定はapplication側のexact ARN検証で維持 |
 | 2026-07-16 | CDK | https://docs.aws.amazon.com/cdk/v2/guide/home.html | stack、synth/diff、logical ID |
 | 2026-07-16 | VPC pricing | https://aws.amazon.com/vpc/pricing/ | Public IPv4費用 |
 | 2026-07-28 | ECS service desired count | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/update-service-parameters.html | Reconcilerが条件付き状態に従いdesired 0/1を収束、同時taskは最大1 |

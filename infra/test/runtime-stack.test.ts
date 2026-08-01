@@ -206,19 +206,27 @@ describe("RuntimeStack", () => {
       SHITTIM_SIGNING_PROFILE_ARN: expect.anything(),
     });
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
-    const imagePolicy = JSON.stringify(
-      policies.find((policy) =>
-        JSON.stringify(policy.Properties.Roles).includes("ImageAdmissionFunctionRole"),
-      ),
+    const imagePolicy = policies.find((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes("ImageAdmissionFunctionRole"),
     );
-    expect(imagePolicy).toContain("ecs:DescribeServiceRevisions");
-    expect(imagePolicy).toContain("ecs:DescribeTaskDefinition");
-    expect(imagePolicy).toContain("NormalTaskDefinition");
-    expect(imagePolicy).not.toContain("BreakGlassTaskDefinition");
-    expect(imagePolicy).toContain("ecr:BatchGetImage");
-    expect(imagePolicy).toContain("ecr:DescribeImageSigningStatus");
-    expect(imagePolicy).not.toContain("ecr:ListImageReferrers");
-    expect(imagePolicy).not.toContain("ecr:PutImage");
+    const imagePolicyText = JSON.stringify(imagePolicy);
+    const describeTaskDefinitionStatements =
+      imagePolicy?.Properties.PolicyDocument.Statement.filter(
+        (statement: { Action?: string | string[] }) =>
+          [statement.Action].flat().includes("ecs:DescribeTaskDefinition"),
+      );
+    expect(describeTaskDefinitionStatements).toEqual([
+      {
+        Action: "ecs:DescribeTaskDefinition",
+        Effect: "Allow",
+        Resource: "*",
+      },
+    ]);
+    expect(imagePolicyText).toContain("ecs:DescribeServiceRevisions");
+    expect(imagePolicyText).toContain("ecr:BatchGetImage");
+    expect(imagePolicyText).toContain("ecr:DescribeImageSigningStatus");
+    expect(imagePolicyText).not.toContain("ecr:ListImageReferrers");
+    expect(imagePolicyText).not.toContain("ecr:PutImage");
     expect(JSON.stringify(policies)).toContain("lambda:InvokeFunction");
   });
 

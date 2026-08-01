@@ -280,10 +280,6 @@ def _validate_release(directory: Path) -> None:
         "Remove this release's unexecuted change sets",
         "tools/cleanup_release_change_sets.sh",
         "Capture bounded CloudFormation failure diagnostics",
-        "aws cloudformation describe-events",
-        '--stack-name "${stack}"',
-        "--filters FailedEvents=true",
-        "--max-items 100",
         "tools.control_records validate",
         "tools.control_records guard",
         "--lock-seconds 3600",
@@ -585,9 +581,29 @@ def _validate_release(directory: Path) -> None:
     diagnostics_start = text.index("name: Capture bounded CloudFormation failure diagnostics")
     diagnostics_end = text.index("name: Remove this release's unexecuted change sets")
     diagnostics = text[diagnostics_start:diagnostics_end]
-    if '--stack-name "${stack}"' not in diagnostics or "--change-set-name" in diagnostics:
+    if "--change-set-name" in diagnostics:
         raise WorkflowPolicyError(
             "Release failure diagnostics must query the surviving stack, not an executed change set"
+        )
+    required_diagnostic_call = (
+        "aws cloudformation describe-events",
+        '--stack-name "${stack}"',
+        "--filters FailedEvents=true",
+        "--max-items 100",
+    )
+    if any(marker not in diagnostics for marker in required_diagnostic_call):
+        raise WorkflowPolicyError(
+            "Release failure diagnostics must preserve the DescribeEvents call shape "
+            "for the surviving stack"
+        )
+    required_diagnostic_isolation = (
+        "id: failure_diagnostics",
+        "if: failure() && steps.acquire.outputs.acquired == 'true'",
+        "continue-on-error: true",
+    )
+    if any(marker not in diagnostics for marker in required_diagnostic_isolation):
+        raise WorkflowPolicyError(
+            "Release diagnostic failure must remain distinct from the original deploy failure"
         )
     cleanup_checkout_end = cleanup_job.index(
         "name: Download the exact planned release evidence for cleanup"
@@ -615,9 +631,14 @@ def _validate_release(directory: Path) -> None:
         "--change-set-name",
         "Release evidence download failed",
         "Release planning did not succeed",
+        "DEPLOY_RESULT: ${{ needs.deploy.result }}",
+        'if [ "${DEPLOY_RESULT}" != success ]',
+        "Deployment did not succeed. Change sets were cleaned",
     )
     if any(marker not in cleanup_job for marker in required_independent_cleanup):
-        raise WorkflowPolicyError("Release independent cleanup cannot recover a failed plan")
+        raise WorkflowPolicyError(
+            "Release cleanup must preserve the original plan or deploy failure"
+        )
     try:
         planned_name = cleanup_job.index(
             'change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${PLAN_ATTEMPT}"'

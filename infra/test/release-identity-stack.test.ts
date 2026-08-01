@@ -93,10 +93,15 @@ describe("ReleaseIdentityStack", () => {
       JSON.stringify(policy.Properties.Roles).includes("ReleaseDeployRole"),
     );
     const describeEventsStatement = deployPolicy?.Properties.PolicyDocument.Statement.find(
-      (statement: { Action?: string | string[] }) =>
+      (statement: { Action?: string | string[]; Resource?: string | string[] }) =>
         [statement.Action].flat().includes("cloudformation:DescribeEvents"),
     );
     const describeEventsResources = JSON.stringify(describeEventsStatement?.Resource);
+    const describeTaskDefinitionStatements =
+      deployPolicy?.Properties.PolicyDocument.Statement.filter(
+        (statement: { Action?: string | string[] }) =>
+          [statement.Action].flat().includes("ecs:DescribeTaskDefinition"),
+      );
 
     expect(plan).toContain("ecr:PutImage");
     expect(plan).toContain("ecr:BatchGetImage");
@@ -124,7 +129,17 @@ describe("ReleaseIdentityStack", () => {
     expect(deploy).not.toContain("cloudformation:DescribeStackEvents");
     expect(deploy).toContain("changeSet/release-*");
     expect(describeEventsResources).toContain("stack/ShittimChest-Prod-Runtime/*");
+    expect(describeEventsResources).toContain("stack/ShittimChest-Prod-Stateful/*");
+    expect(describeEventsResources).toContain("stack/ShittimChest-Prod-Operations/*");
+    expect(describeEventsResources).toContain("stack/ShittimChest-Prod-CostGovernance/*");
     expect(describeEventsResources).toContain("changeSet/release-*/*");
+    expect(describeTaskDefinitionStatements).toEqual([
+      {
+        Action: "ecs:DescribeTaskDefinition",
+        Effect: "Allow",
+        Resource: "*",
+      },
+    ]);
     expect(deploy).toContain("ecr:BatchGetImage");
     expect(deploy).toContain("inspector2:ListFindings");
     expect(deploy).toContain("inspector2:ListAccountPermissions");
