@@ -89,7 +89,7 @@ describe("StatefulStack", () => {
     );
   });
 
-  test("creates a retained immutable repository that keeps only the newest 5 images", () => {
+  test("creates a retained immutable repository that keeps only the newest 3 images", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::ECR::Repository", 1);
@@ -107,7 +107,7 @@ describe("StatefulStack", () => {
                 Match.objectLike({
                   action: { type: "expire" },
                   selection: Match.objectLike({
-                    countNumber: 5,
+                    countNumber: 3,
                     countType: "imageCountMoreThan",
                     tagStatus: "untagged",
                   }),
@@ -115,7 +115,7 @@ describe("StatefulStack", () => {
                 Match.objectLike({
                   action: { type: "expire" },
                   selection: Match.objectLike({
-                    countNumber: 5,
+                    countNumber: 3,
                     countType: "imageCountMoreThan",
                     tagPatternList: ["*"],
                     tagStatus: "tagged",

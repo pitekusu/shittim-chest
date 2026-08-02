@@ -53,14 +53,14 @@ export class StatefulStack extends Stack {
       imageTagMutability: ecr.TagMutability.IMMUTABLE,
       lifecycleRules: [
         {
-          description: "Keep only the newest 5 untagged images",
-          maxImageCount: 5,
+          description: "Keep only the newest 3 untagged images",
+          maxImageCount: 3,
           rulePriority: 1,
           tagStatus: ecr.TagStatus.UNTAGGED,
         },
         {
-          description: "Keep only the newest 5 tagged images",
-          maxImageCount: 5,
+          description: "Keep only the newest 3 tagged images",
+          maxImageCount: 3,
           rulePriority: 2,
           tagPatternList: ["*"],
           tagStatus: ecr.TagStatus.TAGGED,
