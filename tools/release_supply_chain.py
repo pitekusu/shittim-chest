@@ -174,6 +174,73 @@ def verify_image_evidence(
     }
 
 
+def select_release_referrers(*, before: object, after: object) -> dict[str, object]:
+    """Select one existing Notation signature and this run's three new attestations."""
+
+    before_by_digest = _active_referrers_by_digest(before, "pre-attestation referrers")
+    after_by_digest = _active_referrers_by_digest(after, "post-attestation referrers")
+    if not before_by_digest.keys() <= after_by_digest.keys():
+        raise ValueError("an existing active referrer disappeared during attestation")
+
+    added_digests = after_by_digest.keys() - before_by_digest.keys()
+    if len(added_digests) != len(_PREDICATES):
+        raise ValueError("expected exactly three new active Sigstore referrers")
+
+    predicate_names = {value: name for name, value in _PREDICATES.items()}
+    added_by_name: dict[str, Mapping[str, object]] = {}
+    for digest in sorted(added_digests):
+        item = after_by_digest[digest]
+        if item.get("artifactType") != _GITHUB_BUNDLE:
+            raise ValueError("a newly added referrer is not a Sigstore bundle")
+        annotations = _object(item.get("annotations"), "new Sigstore referrer annotations")
+        predicate = annotations.get(_PREDICATE_KEY)
+        if not isinstance(predicate, str) or predicate not in predicate_names:
+            raise ValueError("a newly added Sigstore referrer has an unknown predicate")
+        name = predicate_names[predicate]
+        if name in added_by_name:
+            raise ValueError(f"new Sigstore referrer predicate is duplicated: {name}")
+        added_by_name[name] = item
+    if set(added_by_name) != set(_PREDICATES):
+        raise ValueError("new Sigstore referrers do not cover every required predicate")
+
+    signatures = [
+        item for item in after_by_digest.values() if item.get("artifactType") == _NOTATION_SIGNATURE
+    ]
+    signature_digest = _one_artifact_digest(signatures, "Notation signature")
+    if signature_digest not in before_by_digest:
+        raise ValueError("the Notation signature was not present before attestations")
+
+    return {
+        "referrers": [
+            after_by_digest[signature_digest],
+            *(added_by_name[name] for name in _PREDICATES),
+        ]
+    }
+
+
+def _active_referrers_by_digest(
+    value: object,
+    name: str,
+) -> dict[str, Mapping[str, object]]:
+    payload = _object(value, name)
+    if payload.get("nextToken") not in (None, ""):
+        raise ValueError(f"{name} input is not fully paginated")
+    result: dict[str, Mapping[str, object]] = {}
+    for value_item in _array(payload.get("referrers"), name):
+        item = _object(value_item, "image referrer")
+        if item.get("artifactStatus") != "ACTIVE":
+            raise ValueError(f"{name} contains a non-active referrer")
+        digest = item.get("digest")
+        _require_digest(digest)
+        artifact_type = item.get("artifactType")
+        if not isinstance(artifact_type, str) or not artifact_type:
+            raise ValueError(f"{name} contains an invalid artifact type")
+        if digest in result:
+            raise ValueError(f"{name} contains a duplicate referrer digest")
+        result[cast(str, digest)] = item
+    return result
+
+
 def _inspector_scan_timestamp(*, coverage: object, digest: str) -> str:
     payload = _object(coverage, "Inspector coverage")
     if payload.get("nextToken") not in (None, ""):
@@ -994,6 +1061,10 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--scan", type=Path, required=True)
     verify.add_argument("--risk-gate-passed", action="store_true")
     verify.add_argument("--output", type=Path, required=True)
+    select_referrers = commands.add_parser("select-release-referrers")
+    select_referrers.add_argument("--before-referrers", type=Path, required=True)
+    select_referrers.add_argument("--after-referrers", type=Path, required=True)
+    select_referrers.add_argument("--output", type=Path, required=True)
     predicate = commands.add_parser("create-vulnerability-predicate")
     predicate.add_argument("--digest", required=True)
     predicate.add_argument("--coverage", type=Path, required=True)
@@ -1066,6 +1137,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scan=_read(args.scan),
             )
             _write(args.output, result)
+        elif args.command == "select-release-referrers":
+            _write(
+                args.output,
+                select_release_referrers(
+                    before=_read(args.before_referrers),
+                    after=_read(args.after_referrers),
+                ),
+            )
         elif args.command == "create-vulnerability-predicate":
             _write(
                 args.output,

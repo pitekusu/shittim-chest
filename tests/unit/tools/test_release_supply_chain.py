@@ -14,6 +14,7 @@ from tools.release_supply_chain import (
     create_cdk_asset_evidence,
     create_manifest,
     create_vulnerability_predicate,
+    select_release_referrers,
     validate_cdk_asset_evidence,
     validate_cdk_asset_evidence_against_assembly,
     validate_change_set,
@@ -405,6 +406,184 @@ def artifact(kind: str, suffix: str, predicate: str | None = None) -> dict[str, 
     if predicate is not None:
         value["annotations"] = {"dev.sigstore.bundle.predicateType": predicate}
     return value
+
+
+def referrer_snapshots() -> tuple[dict[str, object], dict[str, object]]:
+    before = {
+        "referrers": [
+            artifact("application/vnd.cncf.notary.signature", "1"),
+            artifact(
+                "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "2",
+                "https://slsa.dev/provenance/v1",
+            ),
+            artifact(
+                "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "3",
+                "https://spdx.dev/Document/v2.3",
+            ),
+            artifact(
+                "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "4",
+                "https://github.com/pitekusu/shittim-chest/attestations/"
+                "vulnerability-assessment/v1",
+            ),
+        ]
+    }
+    after = deepcopy(before)
+    cast(list[dict[str, object]], after["referrers"]).extend(
+        (
+            artifact(
+                "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "5",
+                "https://slsa.dev/provenance/v1",
+            ),
+            artifact(
+                "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "6",
+                "https://spdx.dev/Document/v2.3",
+            ),
+            artifact(
+                "application/vnd.dev.sigstore.bundle.v0.3+json",
+                "7",
+                "https://github.com/pitekusu/shittim-chest/attestations/"
+                "vulnerability-assessment/v1",
+            ),
+        )
+    )
+    return before, after
+
+
+def test_selects_only_this_runs_three_sigstore_referrers() -> None:
+    before, after = referrer_snapshots()
+
+    selected = select_release_referrers(before=before, after=after)
+
+    selected_digests = [
+        cast(dict[str, object], item)["digest"]
+        for item in cast(list[object], selected["referrers"])
+    ]
+    assert selected_digests == [
+        "sha256:" + "1" * 64,
+        "sha256:" + "5" * 64,
+        "sha256:" + "6" * 64,
+        "sha256:" + "7" * 64,
+    ]
+    signing, _, scan = evidence()
+    result = verify_image_evidence(
+        digest=DIGEST,
+        image_details=IMAGE_DETAILS,
+        profile_arn=PROFILE,
+        signing_status=signing,
+        referrers=selected,
+        scan=scan,
+    )
+    assert result["referrers"] == {
+        "signature": "sha256:" + "1" * 64,
+        "provenance": "sha256:" + "5" * 64,
+        "sbom": "sha256:" + "6" * 64,
+        "vulnerability": "sha256:" + "7" * 64,
+    }
+
+
+def test_referrer_delta_cli_writes_the_selected_snapshot(tmp_path: Path) -> None:
+    before, after = referrer_snapshots()
+    before_path = tmp_path / "before.json"
+    after_path = tmp_path / "after.json"
+    output_path = tmp_path / "selected.json"
+    before_path.write_text(json.dumps(before), encoding="utf-8")
+    after_path.write_text(json.dumps(after), encoding="utf-8")
+
+    assert (
+        release_supply_chain_main(
+            (
+                "select-release-referrers",
+                "--before-referrers",
+                str(before_path),
+                "--after-referrers",
+                str(after_path),
+                "--output",
+                str(output_path),
+            )
+        )
+        == 0
+    )
+    selected = json.loads(output_path.read_text(encoding="utf-8"))
+    assert len(selected["referrers"]) == 4
+
+
+@pytest.mark.parametrize("snapshot_name", ("before", "after"))
+def test_referrer_delta_rejects_incomplete_pagination(snapshot_name: str) -> None:
+    before, after = referrer_snapshots()
+    snapshot = before if snapshot_name == "before" else after
+    snapshot["nextToken"] = "more"
+
+    with pytest.raises(ValueError, match="not fully paginated"):
+        select_release_referrers(before=before, after=after)
+
+
+def test_referrer_delta_rejects_a_missing_new_predicate() -> None:
+    before, after = referrer_snapshots()
+    cast(list[dict[str, object]], after["referrers"]).pop()
+
+    with pytest.raises(ValueError, match="exactly three new"):
+        select_release_referrers(before=before, after=after)
+
+
+def test_referrer_delta_rejects_an_extra_new_referrer() -> None:
+    before, after = referrer_snapshots()
+    cast(list[dict[str, object]], after["referrers"]).append(
+        artifact("application/vnd.dev.sigstore.bundle.v0.3+json", "8", "unknown")
+    )
+
+    with pytest.raises(ValueError, match="exactly three new"):
+        select_release_referrers(before=before, after=after)
+
+
+def test_referrer_delta_rejects_a_duplicated_new_predicate() -> None:
+    before, after = referrer_snapshots()
+    added = cast(list[dict[str, object]], after["referrers"])[-3:]
+    added[1]["annotations"] = {
+        "dev.sigstore.bundle.predicateType": "https://slsa.dev/provenance/v1"
+    }
+
+    with pytest.raises(ValueError, match="predicate is duplicated"):
+        select_release_referrers(before=before, after=after)
+
+
+def test_referrer_delta_rejects_an_unknown_new_predicate() -> None:
+    before, after = referrer_snapshots()
+    added = cast(list[dict[str, object]], after["referrers"])[-3:]
+    added[1]["annotations"] = {"dev.sigstore.bundle.predicateType": "unknown"}
+
+    with pytest.raises(ValueError, match="unknown predicate"):
+        select_release_referrers(before=before, after=after)
+
+
+def test_referrer_delta_rejects_a_new_non_sigstore_referrer() -> None:
+    before, after = referrer_snapshots()
+    cast(list[dict[str, object]], after["referrers"])[-1]["artifactType"] = "unknown"
+
+    with pytest.raises(ValueError, match="not a Sigstore bundle"):
+        select_release_referrers(before=before, after=after)
+
+
+def test_referrer_delta_rejects_duplicate_digests() -> None:
+    before, after = referrer_snapshots()
+    cast(list[dict[str, object]], after["referrers"]).append(
+        deepcopy(cast(list[dict[str, object]], after["referrers"])[-1])
+    )
+
+    with pytest.raises(ValueError, match="duplicate referrer digest"):
+        select_release_referrers(before=before, after=after)
+
+
+def test_referrer_delta_rejects_a_disappearing_existing_referrer() -> None:
+    before, after = referrer_snapshots()
+    cast(list[dict[str, object]], after["referrers"]).pop(1)
+
+    with pytest.raises(ValueError, match="existing active referrer disappeared"):
+        select_release_referrers(before=before, after=after)
 
 
 def test_verifies_exact_managed_signature_referrers_and_scan() -> None:
