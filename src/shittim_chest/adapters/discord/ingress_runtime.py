@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -64,6 +66,7 @@ DEFAULT_PANEL_REFRESH_DELIVERY_TIMEOUT_SECONDS = 30.0
 MAX_PANEL_REFRESH_RETRY_SECONDS = 300.0
 PANEL_REFRESH_COMPLETION_MARGIN_SECONDS = 15.0
 PANEL_REFRESH_RECOVERY_LIMIT = 20
+_LOGGER = logging.getLogger("shittim_chest")
 
 
 class _DebateRuntimeApplication(Protocol):
@@ -542,7 +545,20 @@ class DiscordIngressRuntime:
         if self._tasks.get(debate_id) is task:
             self._tasks.pop(debate_id, None)
         if not task.cancelled():
-            task.exception()
+            error = task.exception()
+            if error is not None:
+                _LOGGER.error(
+                    json.dumps(
+                        {
+                            "severity": "ERROR",
+                            "event": "debate_task_failed",
+                            "debate_id": str(debate_id),
+                            "error_type": type(error).__name__,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
 
     def _ensure_running(self) -> None:
         if self._shutting_down:

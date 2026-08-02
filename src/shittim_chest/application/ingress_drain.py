@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
@@ -34,6 +36,7 @@ from shittim_chest.application.scale_to_zero import (
 
 DEFAULT_DRAIN_POLL_SECONDS = 1.0
 DEFAULT_INGRESS_RETRY_SECONDS = 5.0
+_LOGGER = logging.getLogger("shittim_chest")
 
 
 class _IngressCommandExecutor(Protocol):
@@ -432,6 +435,7 @@ class IngressDrainer:
                     next_attempt_at=at + self._retry_delay,
                     error_code=disposition.error_code,
                 )
+                _log_ingress_retry(request, disposition.error_code)
                 stop = (
                     IngressDrainStop.SLOT_BUSY
                     if isinstance(error, RepositoryBusy)
@@ -456,6 +460,17 @@ class IngressDrainer:
         if disposition.status is IngressStatus.REJECTED:
             return replace(report, rejected=report.rejected + 1), False
         return replace(report, failed=report.failed + 1), False
+
+
+def _log_ingress_retry(request: IngressRequest, error_code: str) -> None:
+    payload = {
+        "severity": "INFO",
+        "event": "ingress_retry_scheduled",
+        "ingress_kind": request.kind.value,
+        "delivery_attempt": request.delivery_attempt,
+        "error_code": error_code,
+    }
+    _LOGGER.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
 @dataclass(frozen=True, slots=True)

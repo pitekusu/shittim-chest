@@ -91,6 +91,7 @@ def make_application(
     lease_renewal: float = 20.0,
     outbox_recovery: FakeOutboxRecovery | None = None,
     lease_owner: str = "worker-1",
+    terminal_delivery_conflict_retry_seconds: float = 0.0,
 ) -> DebateApplication:
     clock, ids, metrics, discord, evidence, openai, repository, orderer = dependencies
     return DebateApplication(
@@ -107,6 +108,7 @@ def make_application(
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
         lease_renewal_seconds=lease_renewal,
+        terminal_delivery_conflict_retry_seconds=terminal_delivery_conflict_retry_seconds,
     )
 
 
@@ -1111,6 +1113,83 @@ async def test_nonretryable_outbox_recovery_failure_preserves_required_delivery_
 
 
 @pytest.mark.asyncio
+async def test_owned_terminal_delivery_conflict_retries_without_waiting_for_recovery(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    class ConflictOnceTerminalOutbox(FakeOutboxRecovery):
+        conflicted = False
+
+        async def drain(self, *, expected: DebateSnapshot) -> None:
+            self.calls.append(expected)
+            if expected.terminal_delivery is not None and not self.conflicted:
+                self.conflicted = True
+                raise RepositoryConflict("simulated terminal delivery race")
+
+    outbox_recovery = ConflictOnceTerminalOutbox()
+    app = make_application(dependencies, outbox_recovery=outbox_recovery)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = dependencies[6].current[accepted.debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert completed.terminal_delivery_complete
+    assert len(outbox_recovery.calls) == 3
+    assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY in {
+        event for event, _ in dependencies[2].events
+    }
+
+
+@pytest.mark.asyncio
+async def test_terminal_delivery_conflict_exhaustion_remains_durable_and_is_not_hidden(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    class ConflictingTerminalOutbox(FakeOutboxRecovery):
+        async def drain(self, *, expected: DebateSnapshot) -> None:
+            self.calls.append(expected)
+            if expected.terminal_delivery is not None:
+                raise RepositoryConflict("simulated persistent terminal delivery race")
+
+    outbox_recovery = ConflictingTerminalOutbox()
+    app = make_application(dependencies, outbox_recovery=outbox_recovery)
+    accepted = await accept_bound_debate(app)
+
+    with pytest.raises(RuntimeError, match="bounded retry limit"):
+        await app.run_debate(accepted.debate_id)
+
+    pending = dependencies[6].current[accepted.debate_id]
+    assert not pending.state.phase.is_terminal
+    assert pending.terminal_delivery is not None
+    assert pending.terminal_delivery.completed_at is None
+    assert len(outbox_recovery.calls) == 5
+    assert (
+        sum(
+            event is MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY
+            for event, _ in dependencies[2].events
+        )
+        == 3
+    )
+
+
+@pytest.mark.asyncio
 async def test_outbox_recovery_wait_is_outside_session_deadline_and_renews_lease(
     dependencies: tuple[
         FakeClock,
@@ -1164,6 +1243,9 @@ async def test_outbox_fencing_conflict_does_not_terminalize_the_attempt(
     current = repository.current[accepted.debate_id]
     assert current.state.phase is DebatePhase.ACCEPTED
     assert current.error_code is None
+    assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY not in {
+        event for event, _ in dependencies[2].events
+    }
 
 
 @pytest.mark.asyncio

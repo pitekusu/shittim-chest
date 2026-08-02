@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -545,7 +547,9 @@ async def test_slot_shortage_reschedules_head_and_never_overtakes_it() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_starter_status_reschedules_before_slot_or_context_work() -> None:
+async def test_missing_starter_status_reschedules_before_slot_or_context_work(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     first = replace(
         request("first", offset=1),
         status_message_id=None,
@@ -555,7 +559,8 @@ async def test_missing_starter_status_reschedules_before_slot_or_context_work() 
     commands = FakeCommands()
     context = FakeContext()
 
-    report = await drainer(ingress=ingress, commands=commands, context=context).drain_once()
+    with caplog.at_level(logging.INFO, logger="shittim_chest"):
+        report = await drainer(ingress=ingress, commands=commands, context=context).drain_once()
 
     assert report.stop is IngressDrainStop.RETRY_SCHEDULED
     assert (report.claimed, report.rescheduled) == (1, 1)
@@ -564,6 +569,14 @@ async def test_missing_starter_status_reschedules_before_slot_or_context_work() 
     assert context.prepared == []
     assert context.activated == []
     assert ingress.events == [("claim", "first"), ("reschedule", "first")]
+    retry = json.loads(caplog.records[-1].message)
+    assert retry == {
+        "delivery_attempt": 1,
+        "error_code": "status_message_pending",
+        "event": "ingress_retry_scheduled",
+        "ingress_kind": "new_debate",
+        "severity": "INFO",
+    }
 
 
 @pytest.mark.asyncio
