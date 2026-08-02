@@ -342,6 +342,46 @@ def test_ci_requires_loaded_image_file_timestamp_rewrite(tmp_path: Path) -> None
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+def test_ci_regenerates_cache_sensitive_final_image_stages(
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / "ci.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f"          no-cache-filters: {stage}\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="cache-sensitive"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+def test_release_regenerates_cache_sensitive_final_image_stages(
+    tmp_path: Path,
+    stage: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f"          no-cache-filters: {stage}\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="cache-sensitive"):
+        validate_notification_workflows(directory)
+
+
 def test_ci_requires_actual_docker_context_bytecode_proof(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"
