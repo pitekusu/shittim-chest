@@ -46,7 +46,7 @@ USER 65532:65532
 STOPSIGNAL SIGTERM
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD ["python", "-m", "shittim_chest.runtime.health"]
+    CMD ["python", "-m", "shittim_chest.healthcheck"]
 
 ENTRYPOINT ["python", "-m", "shittim_chest"]
 
@@ -85,6 +85,6 @@ USER 65532:65532
 STOPSIGNAL SIGTERM
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-    CMD ["python", "-m", "shittim_chest.runtime.health"]
+    CMD ["python", "-m", "shittim_chest.healthcheck"]
 
 ENTRYPOINT ["python", "-m", "shittim_chest"]

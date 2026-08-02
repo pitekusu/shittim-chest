@@ -105,7 +105,7 @@ def validate_image_configuration(document: object, expected_architecture: str) -
     health = config.get("Healthcheck", image.get("Healthcheck"))
     if not isinstance(health, dict):
         raise ContainerGateError("image health check is missing")
-    if health.get("Test") != ["CMD", "python", "-m", "shittim_chest.runtime.health"]:
+    if health.get("Test") != ["CMD", "python", "-m", "shittim_chest.healthcheck"]:
         raise ContainerGateError("image health command is unexpected")
     expected_health = {
         "Interval": 10_000_000_000,
@@ -128,6 +128,7 @@ import pwd
 import shutil
 import sys
 import shittim_chest
+from shittim_chest.healthcheck import HealthStatus, heartbeat_status
 from shittim_chest.runtime.health import EventLoopHeartbeat, heartbeat_is_healthy
 
 async def verify():
@@ -168,6 +169,7 @@ async def verify():
     async with EventLoopHeartbeat(interval_seconds=0.01):
         await asyncio.sleep(0.03)
         assert heartbeat_is_healthy(max_age_seconds=1)
+        assert heartbeat_status(max_age_seconds=1) is HealthStatus.HEALTHY
 
 asyncio.run(verify())
 """

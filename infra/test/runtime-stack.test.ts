@@ -383,6 +383,13 @@ describe("RuntimeStack", () => {
       const container = (properties.ContainerDefinitions as Array<Record<string, unknown>>)[0]!;
       expect(JSON.stringify(container.Image)).toContain("@");
       expect(container).toMatchObject({
+        HealthCheck: {
+          Command: ["CMD", "python", "-m", "shittim_chest.healthcheck"],
+          Interval: 10,
+          Retries: 3,
+          StartPeriod: 30,
+          Timeout: 3,
+        },
         LinuxParameters: {
           Capabilities: { Drop: ["ALL"] },
           InitProcessEnabled: true,

@@ -1064,7 +1064,7 @@ export class RuntimeStack extends Stack {
         SHITTIM_LOG_LEVEL: "INFO",
       },
       healthCheck: {
-        command: ["CMD", "python", "-m", "shittim_chest.runtime.health"],
+        command: ["CMD", "python", "-m", "shittim_chest.healthcheck"],
         interval: Duration.seconds(10),
         retries: 3,
         startPeriod: Duration.seconds(30),

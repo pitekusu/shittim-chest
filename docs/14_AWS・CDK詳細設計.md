@@ -87,14 +87,14 @@ application側のgraceful shutdown deadlineは90秒とし、`stopTimeout=120`の
 ## 5. Container definition
 
 - 平常taskはinit process有効、application userはnon-root、read-only root filesystem、privileged無効、Linux capability全削除、ECS Exec無効とする。
-- app health checkはprocess/event-loop heartbeatだけを確認し、Discord/OpenAI障害をrestart理由にしない。
+- app health checkはtask固有tmpfs上のevent-loop heartbeat鮮度だけを確認し、Discord/OpenAI障害をrestart理由にしない。
 - `awslogs` modeは`blocking`を明示し、secret・質問・回答全文をstdoutへ出さない。
 - applicationとbreak-glass Execは専用log groupに分け、各90日保持、`RETAIN`、AWS-managed encryption、CloudWatch Logs data protectionによるcredential・個人識別情報のmaskを適用する。
 - 一時書込みはheartbeat用の`/tmp/shittim-chest` tmpfs mount（1 MiB、`nosuid,nodev,noexec,uid=65532,gid=65532,mode=0700`）だけに許可する。Fargate既定20 GiB ephemeral storageは引き続き追加容量なしとする。平常imageはECS Execだけのためにshell utilityを追加しない。
 
 runtime identityはDHI runtimeに定義済みの`nonroot` (`65532:65532`、home `/home/nonroot`)を使用する。Dockerfile、native container gate、CDK task definition、tmpfs mount optionはrepository rootの`container-policy.json`を共通契約とし、どれか一つだけのUID/GID変更をCIで拒否する。`/tmp/shittim-chest`はFargate起動時に同一UID/GIDとmode `0700`でmountし、non-root applicationがheartbeatを書込む。
 
-production containerはDHI Communityの`dhi.io/python:3.14.6-debian13`、builderは対応する`-dev`を採用し、tagとOCI image index digestの両方を固定する。2026-07-22にindexがARM64 manifestを含むこと、runtimeの`User=65532`、`nonroot` passwd/group/home、runtime variant、shell/package manager非搭載をregistry manifestとfilesystemで実測した。productionはexec形式entrypoint、`SIGTERM`を使用し、uv、build cache、raw source、testを含めない。DHIから継承したlabelとruntime variantもnative gateで検査する。event loop ownerが5秒ごとにPID付きheartbeatを`/tmp/shittim-chest/heartbeat`へatomic更新し、health commandは20秒以内の更新、PID形式、process生存だけを本文出力なしで検査する。
+production containerはDHI Communityの`dhi.io/python:3.14.6-debian13`、builderは対応する`-dev`を採用し、tagとOCI image index digestの両方を固定する。2026-07-22にindexがARM64 manifestを含むこと、runtimeの`User=65532`、`nonroot` passwd/group/home、runtime variant、shell/package manager非搭載をregistry manifestとfilesystemで実測した。productionはexec形式entrypoint、`SIGTERM`を使用し、uv、build cache、raw source、testを含めない。DHIから継承したlabelとruntime variantもnative gateで検査する。event loop ownerが5秒ごとにheartbeatを`/tmp/shittim-chest/heartbeat`へatomic更新する。health commandはstdlib-onlyの独立moduleとして20秒以内の更新だけを本文出力なしで検査し、Runtime packageやDiscord/OpenAI SDKをimportしない。taskごとに隔離され停止時に消えるtmpfsであるため、PID形式とprocess生存の重複検査は行わない。
 
 DHI CommunityはApache-2.0の無償catalogを使い、Select/Enterpriseの購入とSLAは前提にしない。ただし`dhi.io`のpullにはDocker IDとread-only PAT/OATでの認証が必要である。CIとDependabotは同名の`DHI_USERNAME`/`DHI_TOKEN`をActions secretsとDependabot secretsにそれぞれ登録し、値をartifactやlogに出力しない。DHI CommunityにはHigh/Critical修正SLAがないため、daily Dependabot、署名済みVEX、期限付きの個別risk acceptanceで補う。
 

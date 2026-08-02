@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import math
-import os
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
-# The production container has one numeric non-root user and an isolated /tmp volume.
-HEARTBEAT_PATH: Final = Path("/tmp/shittim-chest/heartbeat")  # noqa: S108
-DEFAULT_HEARTBEAT_INTERVAL_SECONDS: Final = 5.0
-DEFAULT_MAX_HEARTBEAT_AGE_SECONDS: Final = 20.0
+from shittim_chest.healthcheck import (
+    DEFAULT_MAX_HEARTBEAT_AGE_SECONDS,
+    HEARTBEAT_PATH,
+    HealthStatus,
+    heartbeat_status,
+)
 
-ProcessProbe = Callable[[int], bool]
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS: Final = 5.0
 
 
 class EventLoopHeartbeat:
@@ -65,8 +65,8 @@ class EventLoopHeartbeat:
 
     def _write(self) -> None:
         self._path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = self._path.with_name(f".{self._path.name}.{os.getpid()}.next")
-        temporary.write_text(f"{os.getpid()}\n", encoding="ascii")
+        temporary = self._path.with_name(f".{self._path.name}.next")
+        temporary.write_text("\n", encoding="ascii")
         temporary.chmod(0o600)
         temporary.replace(self._path)
 
@@ -76,56 +76,10 @@ def heartbeat_is_healthy(
     path: Path = HEARTBEAT_PATH,
     max_age_seconds: float = DEFAULT_MAX_HEARTBEAT_AGE_SECONDS,
     now: Callable[[], float] = time.time,
-    process_probe: ProcessProbe | None = None,
 ) -> bool:
-    """Return true only for a live process with a fresh heartbeat."""
+    """Return true when the task-local event-loop heartbeat is fresh."""
 
-    if max_age_seconds <= 0:
-        return False
-    try:
-        raw_pid = path.read_text(encoding="ascii").strip()
-        pid = int(raw_pid)
-        modified_at = path.stat().st_mtime
-    except OSError, UnicodeError, ValueError:
-        return False
-    if pid <= 0:
-        return False
-    age_seconds = now() - modified_at
-    if not 0 <= age_seconds <= max_age_seconds:
-        return False
-    return (process_probe or _process_exists)(pid)
-
-
-def heartbeat_age_seconds(
-    *,
-    path: Path = HEARTBEAT_PATH,
-    now: Callable[[], float] = time.time,
-) -> float | None:
-    """Return a non-negative heartbeat age or ``None`` for an invalid sample."""
-
-    try:
-        modified_at = path.stat().st_mtime
-    except OSError:
-        return None
-    age_seconds = now() - modified_at
-    if not math.isfinite(age_seconds) or age_seconds < 0:
-        return None
-    return age_seconds
-
-
-def _process_exists(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError, ValueError:
-        return False
-    return True
-
-
-def main() -> int:
-    """Provide a content-free command for Docker and ECS health checks."""
-
-    return 0 if heartbeat_is_healthy() else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return (
+        heartbeat_status(path=path, max_age_seconds=max_age_seconds, now=now)
+        is HealthStatus.HEALTHY
+    )
