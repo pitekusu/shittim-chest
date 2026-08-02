@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -192,6 +194,12 @@ class FakeApplication:
 
     async def abandoned_panel_refresh_count(self) -> int:
         return self.abandoned_panel_refreshes
+
+
+class FailingApplication(FakeApplication):
+    async def run_debate(self, debate_id: DebateId) -> None:
+        self.run_calls.append(debate_id)
+        raise RuntimeError("sensitive exception text must not be logged")
 
 
 @dataclass(slots=True)
@@ -517,6 +525,34 @@ async def test_recovery_registers_each_bound_debate_once_in_shared_task_registry
 
     await ingress_runtime.checkpoint_active()
     assert ingress_runtime.active_task_count == 0
+
+
+@pytest.mark.asyncio
+async def test_background_debate_failure_logs_only_structural_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    current = snapshot(bound=True)
+    application = FailingApplication(current, recoverable=(current,))
+    ingress_runtime = runtime(application)
+
+    with caplog.at_level(logging.ERROR, logger="shittim_chest"):
+        assert await ingress_runtime.recover_once() == 1
+        for _ in range(10):
+            await asyncio.sleep(0)
+            if ingress_runtime.active_task_count == 0 and any(
+                record.name == "shittim_chest" for record in caplog.records
+            ):
+                break
+
+    diagnostic_records = [record for record in caplog.records if record.name == "shittim_chest"]
+    event = json.loads(diagnostic_records[-1].message)
+    assert event == {
+        "debate_id": str(current.state.debate_id),
+        "error_type": "RuntimeError",
+        "event": "debate_task_failed",
+        "severity": "ERROR",
+    }
+    assert "sensitive exception text" not in caplog.text
 
 
 @pytest.mark.asyncio

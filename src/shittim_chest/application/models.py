@@ -437,4 +437,5 @@ class MetricEvent(StrEnum):
     RETRIED = "debate_retried"
     OUTBOX_RECOVERED = "discord_outbox_recovered"
     OUTBOX_RETRY_SCHEDULED = "discord_outbox_retry_scheduled"
+    TERMINAL_DELIVERY_CONFLICT_RETRY = "terminal_delivery_conflict_retry"
     PANEL_REFRESH_FAILED = "discord_panel_refresh_failed"

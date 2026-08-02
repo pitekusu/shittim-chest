@@ -63,9 +63,16 @@ from shittim_chest.domain import (
 
 _T = TypeVar("_T")
 
+DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRIES = 3
+DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRY_SECONDS = 1.0
+
 
 class _PhaseDeadlineExceeded(Exception):
     """Internal marker separating a phase timeout from the session deadline."""
+
+
+class _TerminalDeliveryConflictExhausted(RuntimeError):
+    """Signal that bounded terminal-delivery conflict recovery was exhausted."""
 
 
 class DebateApplication:
@@ -87,9 +94,21 @@ class DebateApplication:
         session_timeout_seconds: float = 300.0,
         phase_timeout_seconds: float = 60.0,
         lease_renewal_seconds: float = 20.0,
+        terminal_delivery_conflict_retries: int = DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRIES,
+        terminal_delivery_conflict_retry_seconds: float = (
+            DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRY_SECONDS
+        ),
     ) -> None:
         if session_timeout_seconds <= 0 or phase_timeout_seconds <= 0 or lease_renewal_seconds <= 0:
             raise ValueError("timeouts must be positive")
+        if (
+            isinstance(terminal_delivery_conflict_retries, bool)
+            or not isinstance(terminal_delivery_conflict_retries, int)
+            or not 1 <= terminal_delivery_conflict_retries <= 10
+        ):
+            raise ValueError("terminal delivery conflict retries must be between 1 and 10")
+        if terminal_delivery_conflict_retry_seconds < 0:
+            raise ValueError("terminal delivery conflict retry delay must not be negative")
         if not lease_owner.strip():
             raise ValueError("lease owner must not be empty")
         self._clock = clock
@@ -105,6 +124,8 @@ class DebateApplication:
         self._session_timeout_seconds = session_timeout_seconds
         self._phase_timeout_seconds = phase_timeout_seconds
         self._lease_renewal_seconds = lease_renewal_seconds
+        self._terminal_delivery_conflict_retries = terminal_delivery_conflict_retries
+        self._terminal_delivery_conflict_retry_seconds = terminal_delivery_conflict_retry_seconds
 
     async def accept_debate(
         self,
@@ -271,7 +292,7 @@ class DebateApplication:
             await self._recover_outbox_then_run_phases(debate_id)
         except asyncio.CancelledError:
             raise
-        except RepositoryConflict:
+        except _TerminalDeliveryConflictExhausted, RepositoryConflict:
             raise
         except _PhaseDeadlineExceeded:
             await self._fail_current(debate_id, error_code="phase_deadline_exceeded")
@@ -287,15 +308,51 @@ class DebateApplication:
         except Exception:
             await self._fail_current(debate_id, error_code="phase_failed")
 
+    async def _finish_terminal_delivery_with_conflict_retry(
+        self,
+        snapshot: DebateSnapshot,
+    ) -> None:
+        """Bound retries to a single staged terminal plan owned by this process."""
+
+        delivery = snapshot.terminal_delivery
+        if delivery is None:
+            raise InvalidApplicationOperation("terminal delivery is not staged")
+        current = snapshot
+        for retry in range(self._terminal_delivery_conflict_retries + 1):
+            try:
+                await self._finish_terminal_delivery(current)
+                return
+            except RepositoryConflict as error:
+                if retry == self._terminal_delivery_conflict_retries:
+                    raise _TerminalDeliveryConflictExhausted(
+                        "terminal delivery conflicts exceeded the bounded retry limit"
+                    ) from error
+            current = await self._require_snapshot(snapshot.state.debate_id)
+            if current.state.phase.is_terminal:
+                return
+            if current.terminal_delivery != delivery:
+                raise _TerminalDeliveryConflictExhausted(
+                    "terminal delivery changed during bounded conflict recovery"
+                )
+            self._require_owned_active_lease(current, at=self._clock.now())
+            self._metrics.increment(
+                MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY,
+                debate_id=current.state.debate_id,
+            )
+            await asyncio.sleep(self._terminal_delivery_conflict_retry_seconds)
+
     async def _recover_outbox_then_run_phases(self, debate_id: DebateId) -> None:
         snapshot = await self._require_snapshot(debate_id)
         self._require_owned_active_lease(snapshot, at=self._clock.now())
+        if snapshot.terminal_delivery is not None and not snapshot.state.phase.is_terminal:
+            await self._finish_terminal_delivery_with_conflict_retry(snapshot)
+            return
         await self._outbox_recovery.drain(expected=snapshot)
         async with asyncio.timeout(self._session_timeout_seconds):
             await self._run_phases(debate_id)
         current = await self._require_snapshot(debate_id)
         if current.terminal_delivery is not None and not current.state.phase.is_terminal:
-            await self._finish_terminal_delivery(current)
+            await self._finish_terminal_delivery_with_conflict_retry(current)
 
     async def _renew_lease_until_stopped(self, debate_id: DebateId) -> None:
         while True:
@@ -840,7 +897,7 @@ class DebateApplication:
         if current.state.phase.is_terminal:
             return
         if current.terminal_delivery is not None:
-            await self._finish_terminal_delivery(current)
+            await self._finish_terminal_delivery_with_conflict_retry(current)
             return
         try:
             staged = await self._stage_terminal_delivery(
@@ -848,7 +905,7 @@ class DebateApplication:
                 target=DebatePhase.FAILED,
                 error_code=error_code,
             )
-            await self._finish_terminal_delivery(staged)
+            await self._finish_terminal_delivery_with_conflict_retry(staged)
         except RepositoryConflict:
             return
 
