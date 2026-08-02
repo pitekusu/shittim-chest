@@ -20,6 +20,11 @@ class OpenAIUsageRecord:
     output_tokens: int
     cached_input_tokens: int
     reasoning_tokens: int
+    web_search_source_count: int | None = None
+    url_citation_count: int | None = None
+    evidence_source_count: int | None = None
+    title_fallback_count: int | None = None
+    title_fallback_kinds: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +35,8 @@ class OpenAIFailureRecord:
     code: str
     policy_id: str
     latency_ms: int
+    diagnostic_context: str | None = None
+    diagnostic_kind: str | None = None
 
 
 class OpenAIUsageRecorder(Protocol):

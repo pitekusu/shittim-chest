@@ -61,28 +61,41 @@ class ContentFreeTelemetry:
         self._emit(event.value, debate_id=str(debate_id))
 
     def record_usage(self, record: OpenAIUsageRecord) -> None:
-        self._emit(
-            "openai_request_completed",
-            operation=record.operation,
-            response_id=record.response_id,
-            model=record.model,
-            policy_id=record.policy_id,
-            reasoning_mode=record.reasoning_mode,
-            latency_ms=record.latency_ms,
-            input_tokens=record.input_tokens,
-            output_tokens=record.output_tokens,
-            cached_input_tokens=record.cached_input_tokens,
-            reasoning_tokens=record.reasoning_tokens,
-        )
+        fields: dict[str, str | int] = {
+            "operation": record.operation,
+            "response_id": record.response_id,
+            "model": record.model,
+            "policy_id": record.policy_id,
+            "reasoning_mode": record.reasoning_mode,
+            "latency_ms": record.latency_ms,
+            "input_tokens": record.input_tokens,
+            "output_tokens": record.output_tokens,
+            "cached_input_tokens": record.cached_input_tokens,
+            "reasoning_tokens": record.reasoning_tokens,
+        }
+        for name, value in (
+            ("web_search_source_count", record.web_search_source_count),
+            ("url_citation_count", record.url_citation_count),
+            ("evidence_source_count", record.evidence_source_count),
+            ("title_fallback_count", record.title_fallback_count),
+            ("title_fallback_kinds", record.title_fallback_kinds),
+        ):
+            if value is not None:
+                fields[name] = value
+        self._emit("openai_request_completed", **fields)
 
     def record_failure(self, record: OpenAIFailureRecord) -> None:
-        self._emit(
-            "openai_request_failed",
-            operation=record.operation,
-            code=record.code,
-            policy_id=record.policy_id,
-            latency_ms=record.latency_ms,
-        )
+        fields: dict[str, str | int] = {
+            "operation": record.operation,
+            "code": record.code,
+            "policy_id": record.policy_id,
+            "latency_ms": record.latency_ms,
+        }
+        if record.diagnostic_context is not None:
+            fields["diagnostic_context"] = record.diagnostic_context
+        if record.diagnostic_kind is not None:
+            fields["diagnostic_kind"] = record.diagnostic_kind
+        self._emit("openai_request_failed", **fields)
 
     def runtime_event(self, event: str, **fields: str | int) -> None:
         self._emit(event, **fields)
