@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 from openai.types.responses.response import Response
 from pydantic import ValidationError
 
+import shittim_chest.adapters.openai.evidence as evidence_module
 from shittim_chest.adapters.openai import (
     OpenAIFailureRecord,
     OpenAIRequestLimiter,
@@ -22,6 +23,7 @@ from shittim_chest.adapters.openai import (
     RequiredEvidenceUnavailable,
 )
 from shittim_chest.adapters.openai.schemas import EvidenceDigestOutputV1
+from shittim_chest.application.question_router import DeterministicQuestionRouter
 from shittim_chest.domain import EvidenceSearchStatus, SearchRequirement
 
 
@@ -37,8 +39,11 @@ class Observer:
         self.failures.append(record)
 
 
-def searched_response() -> SimpleNamespace:
-    url = "https://example.test/weather"
+def searched_response(
+    *,
+    url: str = "https://example.test/weather",
+    title: str = "Weather source",
+) -> SimpleNamespace:
     typed = Response.model_validate(
         {
             "id": "resp_evidence",
@@ -74,7 +79,7 @@ def searched_response() -> SimpleNamespace:
                                     "type": "url_citation",
                                     "start_index": 0,
                                     "end_index": 8,
-                                    "title": "Weather source",
+                                    "title": title,
                                     "url": url,
                                 }
                             ],
@@ -177,4 +182,63 @@ async def test_structured_output_validation_is_safely_classified() -> None:
     assert bundle.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
     assert bundle.required_search_satisfied is False
     assert [record.code for record in observer.failures] == ["openai_invalid_output"]
+    assert [record.operation for record in observer.failures] == [
+        "evidence_search.provider_response"
+    ]
     assert "unexpected" not in repr(observer.failures)
+
+
+@pytest.mark.asyncio
+async def test_invalid_source_is_safely_classified_and_optional_search_continues() -> None:
+    service, _, observer = service_for(searched_response(url="", title=""))
+
+    bundle = await service.prepare_evidence(question="今日の夕食は何がいい?")
+
+    assert bundle.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
+    assert bundle.required_search_satisfied is False
+    assert [record.code for record in observer.failures] == ["openai_invalid_output"]
+    assert [record.operation for record in observer.failures] == [
+        "evidence_search.source_extraction"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_source_failure_records_only_stable_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, observer = service_for(searched_response())
+
+    def fail_source_extraction(*_: object) -> tuple[()]:
+        raise RuntimeError("provider output must not be recorded")
+
+    monkeypatch.setattr(evidence_module, "_extract_sources", fail_source_extraction)
+
+    with pytest.raises(RuntimeError, match="provider output must not be recorded"):
+        await service.prepare_evidence(question="今日の夕食は何がいい?")
+
+    assert [record.code for record in observer.failures] == ["openai_unclassified"]
+    assert [record.operation for record in observer.failures] == [
+        "evidence_search.source_extraction"
+    ]
+    assert "provider output" not in repr(observer.failures)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_router_failure_records_only_stable_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, parse, observer = service_for()
+
+    def fail_routing(self: DeterministicQuestionRouter, question: str) -> None:
+        del self, question
+        raise RuntimeError("question must not be recorded")
+
+    monkeypatch.setattr(DeterministicQuestionRouter, "route", fail_routing)
+
+    with pytest.raises(RuntimeError, match="question must not be recorded"):
+        await service.prepare_evidence(question="private question")
+
+    parse.assert_not_awaited()
+    assert [record.code for record in observer.failures] == ["openai_unclassified"]
+    assert [record.operation for record in observer.failures] == ["evidence_search.routing"]
+    assert "question" not in repr(observer.failures)
