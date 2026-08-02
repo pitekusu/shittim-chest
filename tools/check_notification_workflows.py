@@ -377,6 +377,7 @@ def _validate_release(directory: Path) -> None:
             "Release must authenticate exactly two OCI client contexts to ECR"
         )
     _validate_release_referrer_delta(text)
+    _validate_release_attestation_summary(text)
     if text.count("${RUNNER_TEMP}/release/cdk.out/${artifact}.template.json") != 2:
         raise WorkflowPolicyError(
             "Release must revalidate downloaded CDK templates at their preserved artifact paths"
@@ -740,6 +741,51 @@ def _validate_release_referrer_delta(text: str) -> None:
         raise WorkflowPolicyError(
             "Release must capture referrers before creating and verifying attestations"
         )
+
+
+def _validate_release_attestation_summary(text: str) -> None:
+    action = "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
+    attestation_steps = (
+        ("Attest normal image provenance", "attest_normal_provenance"),
+        ("Attest normal image SBOM", "attest_normal_sbom"),
+        ("Attest normal image vulnerability assessment", "attest_normal_vulnerability"),
+        ("Attest break-glass image provenance", "attest_break_glass_provenance"),
+        ("Attest break-glass image SBOM", "attest_break_glass_sbom"),
+        ("Attest break-glass vulnerability assessment", "attest_break_glass_vulnerability"),
+        ("Attest the release manifest", "attest_release_manifest"),
+    )
+    if text.count(f"uses: {action}") != len(attestation_steps):
+        raise WorkflowPolicyError("Release must create exactly seven attestations")
+    try:
+        for name, step_id in attestation_steps:
+            block = _workflow_step_block(text, name)
+            if f"id: {step_id}" not in block or "show-summary: false" not in block:
+                raise WorkflowPolicyError(
+                    "Release attestation actions must defer to the canonical summary"
+                )
+        summary = _workflow_step_block(text, "Record canonical attestation links")
+    except ValueError as error:
+        raise WorkflowPolicyError("Release canonical attestation summary is incomplete") from error
+
+    if "https://github.com/pitekusu/shittim-chest/attestations/" in summary:
+        raise WorkflowPolicyError("Release attestation summary URL is vulnerable to owner masking")
+    required_summary_markers = (
+        "steps.attest_normal_provenance.outputs.attestation-id",
+        "steps.attest_normal_sbom.outputs.attestation-id",
+        "steps.attest_normal_vulnerability.outputs.attestation-id",
+        "steps.attest_break_glass_provenance.outputs.attestation-id",
+        "steps.attest_break_glass_sbom.outputs.attestation-id",
+        "steps.attest_break_glass_vulnerability.outputs.attestation-id",
+        "steps.attest_release_manifest.outputs.attestation-id",
+        '[[ ! "${attestation_id}" =~ ^[0-9]+$ ]]',
+        "https://github.com/pitek&#117;su/shittim-chest/attestations/",
+        "https://github.com/pitek%75su/shittim-chest/attestations/",
+        '>> "${GITHUB_STEP_SUMMARY}"',
+    )
+    if any(marker not in summary for marker in required_summary_markers):
+        raise WorkflowPolicyError("Release canonical attestation summary is incomplete")
+    if summary.count('write_attestation_link "') != len(attestation_steps):
+        raise WorkflowPolicyError("Release must summarize every created attestation exactly once")
 
 
 def _validate_ci_container_risk(directory: Path) -> None:

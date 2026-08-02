@@ -637,13 +637,16 @@ jobs:
               --output json > "${RUNNER_TEMP}/${mode}.referrers-before.json"
           done
       - name: Attest normal image provenance
+        id: attest_normal_provenance
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.normal_digest }}
           push-to-registry: true
           create-storage-record: false
+          show-summary: false
       - name: Attest normal image SBOM
+        id: attest_normal_sbom
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
@@ -651,7 +654,9 @@ jobs:
           sbom-path: ${{ runner.temp }}/normal.spdx.json
           push-to-registry: true
           create-storage-record: false
+          show-summary: false
       - name: Attest normal image vulnerability assessment
+        id: attest_normal_vulnerability
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
@@ -660,14 +665,18 @@ jobs:
           predicate-path: ${{ runner.temp }}/normal.vulnerability.json
           push-to-registry: true
           create-storage-record: false
+          show-summary: false
       - name: Attest break-glass image provenance
+        id: attest_break_glass_provenance
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.break_glass_digest }}
           push-to-registry: true
           create-storage-record: false
+          show-summary: false
       - name: Attest break-glass image SBOM
+        id: attest_break_glass_sbom
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
@@ -675,7 +684,9 @@ jobs:
           sbom-path: ${{ runner.temp }}/break-glass.spdx.json
           push-to-registry: true
           create-storage-record: false
+          show-summary: false
       - name: Attest break-glass vulnerability assessment
+        id: attest_break_glass_vulnerability
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
@@ -684,6 +695,7 @@ jobs:
           predicate-path: ${{ runner.temp }}/break-glass.vulnerability.json
           push-to-registry: true
           create-storage-record: false
+          show-summary: false
       - name: Strictly verify both Signer identities and four referrers
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
@@ -937,9 +949,43 @@ jobs:
             --templates "${RUNNER_TEMP}/template-hashes.json" \
             --output "${RUNNER_TEMP}/release-manifest.json"
       - name: Attest the release manifest
+        id: attest_release_manifest
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-path: ${{ runner.temp }}/release-manifest.json
+          show-summary: false
+      - name: Record canonical attestation links
+        env:
+          NORMAL_PROVENANCE_ID: ${{ steps.attest_normal_provenance.outputs.attestation-id }}
+          NORMAL_SBOM_ID: ${{ steps.attest_normal_sbom.outputs.attestation-id }}
+          NORMAL_VULNERABILITY_ID: ${{ steps.attest_normal_vulnerability.outputs.attestation-id }}
+          BREAK_GLASS_PROVENANCE_ID: ${{ steps.attest_break_glass_provenance.outputs.attestation-id }}
+          BREAK_GLASS_SBOM_ID: ${{ steps.attest_break_glass_sbom.outputs.attestation-id }}
+          BREAK_GLASS_VULNERABILITY_ID: ${{ steps.attest_break_glass_vulnerability.outputs.attestation-id }}
+          RELEASE_MANIFEST_ID: ${{ steps.attest_release_manifest.outputs.attestation-id }}
+        run: |
+          write_attestation_link() {
+            local label="$1"
+            local attestation_id="$2"
+            if [[ ! "${attestation_id}" =~ ^[0-9]+$ ]]
+            then
+              echo "Invalid attestation ID for ${label}" >&2
+              return 1
+            fi
+            local display_url="https://github.com/pitek&#117;su/shittim-chest/attestations/${attestation_id}"
+            local target_url="https://github.com/pitek%75su/shittim-chest/attestations/${attestation_id}"
+            printf '### Attestation Created\n%s: [%s](%s)\n\n' \
+              "${label}" "${display_url}" "${target_url}" >> "${GITHUB_STEP_SUMMARY}"
+          }
+          write_attestation_link "Normal image provenance" "${NORMAL_PROVENANCE_ID}"
+          write_attestation_link "Normal image SBOM" "${NORMAL_SBOM_ID}"
+          write_attestation_link "Normal image vulnerability assessment" \
+            "${NORMAL_VULNERABILITY_ID}"
+          write_attestation_link "Break-glass image provenance" "${BREAK_GLASS_PROVENANCE_ID}"
+          write_attestation_link "Break-glass image SBOM" "${BREAK_GLASS_SBOM_ID}"
+          write_attestation_link "Break-glass image vulnerability assessment" \
+            "${BREAK_GLASS_VULNERABILITY_ID}"
+          write_attestation_link "Release manifest" "${RELEASE_MANIFEST_ID}"
       - name: Record the immutable release evidence name
         id: evidence
         run: |

@@ -94,6 +94,34 @@ def test_release_referrer_snapshots_must_keep_aws_pagination(tmp_path: Path) -> 
         validate_notification_workflows(directory)
 
 
+def test_release_attestations_defer_to_the_canonical_summary(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("          show-summary: false\n", "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="canonical summary"):
+        validate_notification_workflows(directory)
+
+
+def test_release_attestation_summary_rejects_maskable_owner_url(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "https://github.com/pitek%75su/shittim-chest/attestations/",
+            "https://github.com/pitekusu/shittim-chest/attestations/",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="owner masking"):
+        validate_notification_workflows(directory)
+
+
 def test_repeated_action_version_requires_one_commit_pin(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
