@@ -31,7 +31,7 @@ def _inspect() -> list[object]:
                     "com.docker.dhi.variant": "runtime",
                 },
                 "Healthcheck": {
-                    "Test": ["CMD", "python", "-m", "shittim_chest.runtime.health"],
+                    "Test": ["CMD", "python", "-m", "shittim_chest.healthcheck"],
                     "Interval": 10_000_000_000,
                     "Timeout": 3_000_000_000,
                     "StartPeriod": 30_000_000_000,

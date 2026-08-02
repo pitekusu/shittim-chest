@@ -13,7 +13,7 @@ from enum import StrEnum, unique
 from pathlib import Path
 from typing import Final
 
-from shittim_chest.runtime.health import HEARTBEAT_PATH, heartbeat_age_seconds
+from shittim_chest.healthcheck import HEARTBEAT_PATH, heartbeat_age_seconds
 
 LOGGER = logging.getLogger(__name__)
 EMF_NAMESPACE: Final = "ShittimChest/Prod"
