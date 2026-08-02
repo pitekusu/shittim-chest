@@ -11,7 +11,6 @@ import {
   aws_events as events,
   aws_events_targets as eventTargets,
   aws_sns as sns,
-  aws_sns_subscriptions as subscriptions,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
@@ -49,9 +48,13 @@ export class OperationsStack extends Stack {
       enforceSSL: true,
       topicName: "shittim-chest-production-operations",
     });
-    this.alertTopic.addSubscription(
-      new subscriptions.EmailSubscription(operatorEmail.valueAsString),
-    );
+    // Keep this identity explicit: an externally deleted email subscription must be
+    // replaced through an auditable CloudFormation change, not an unmanaged SNS write.
+    new sns.Subscription(this, "OperatorEmailSubscription", {
+      endpoint: operatorEmail.valueAsString,
+      protocol: sns.SubscriptionProtocol.EMAIL,
+      topic: this.alertTopic,
+    });
     Validations.of(this.alertTopic).acknowledge({
       id: "AwsSolutions-SNS2",
       reason:

@@ -63,9 +63,15 @@ describe("OperationsStack", () => {
 
   test("uses one TLS-only topic and one confirmable email subscription", () => {
     const { template } = synthesize();
+    const emailSubscriptions = template.findResources("AWS::SNS::Subscription");
 
     template.resourceCountIs("AWS::SNS::Topic", 1);
     template.resourceCountIs("AWS::SNS::Subscription", 1);
+    expect(Object.keys(emailSubscriptions)).toHaveLength(1);
+    expect(Object.keys(emailSubscriptions)[0]).toMatch(/^OperatorEmailSubscription/);
+    expect(Object.keys(emailSubscriptions)[0]).not.toMatch(
+      /^RuntimeAlertTopicTokenSubscription/,
+    );
     template.hasResourceProperties("AWS::SNS::Subscription", {
       Endpoint: { Ref: "OperatorNotificationEmail" },
       Protocol: "email",
