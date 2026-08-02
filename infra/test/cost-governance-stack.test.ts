@@ -58,7 +58,7 @@ describe("CostGovernanceStack", () => {
             Values: ["shittim-chest"],
           },
         },
-        Metrics: ["NET_UNBLENDED_COST"],
+        Metrics: ["NetUnblendedCost"],
         TimeUnit: "MONTHLY",
       },
     });
@@ -72,7 +72,7 @@ describe("CostGovernanceStack", () => {
         BudgetLimit: { Amount: 30, Unit: "USD" },
         BudgetName: "shittim-chest-production-account",
         BudgetType: "COST",
-        Metrics: ["NET_UNBLENDED_COST"],
+        Metrics: ["NetUnblendedCost"],
         TimeUnit: "MONTHLY",
       },
     });

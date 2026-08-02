@@ -49,7 +49,7 @@ STEP-09C-Bでは`OperationsStack`を追加し、Runtime/Statefulの後に一方�
 
 EventBridgeは`ECS Task State Change`、対象cluster/service、`lastStatus=STOPPED`に加え、AWS公式の異常系`stopCode`である`TaskFailedToStart`、`EssentialContainerExited`、`SpotInterruption`、`TerminationNotice`だけをSNSへ送る。`UserInitiated`と`ServiceSchedulerInitiated`は計画scale-down/deploy通知ノイズを避けるため除外する。target payloadはtask ARN、cluster ARN、stop code/reason、exit code、時刻だけに絞り、元event全体を転送しない。
 
-STEP-09C-Cでは`us-east-1`へ独立`CostGovernanceStack`を追加する。Project 20 USDとaccount 30 USDの月次`NET_UNBLENDED_COST` Budgetを作成し、各Budgetはactual 80%、actual 100%、forecasted 100%を`GREATER_THAN`で通知する。自動停止やBudget Actionは作成しない。Project Budgetはdeprecatedな`CostFilters`ではなく`FilterExpression`を使い、activeなuser-defined tag `user:Project=shittim-chest`だけを対象にする。
+STEP-09C-Cでは`us-east-1`へ独立`CostGovernanceStack`を追加する。Project 20 USDとaccount 30 USDの月次`NetUnblendedCost` Budgetを作成し、各Budgetはactual 80%、actual 100%、forecasted 100%を`GREATER_THAN`で通知する。自動停止やBudget Actionは作成しない。Project Budgetはdeprecatedな`CostFilters`ではなく`FilterExpression`を使い、activeなuser-defined tag `user:Project=shittim-chest`だけを対象にする。
 
 Cost Anomaly Detectionは`AWS::CE::AnomalyMonitor`を作成せず、deploy時必須の`ExistingServiceAnomalyMonitorArn`でaccount既存のAWS managed `SERVICE` monitorを参照する。subscriptionはDAILY email、`ANOMALY_TOTAL_IMPACT_ABSOLUTE >= 10 USD`の`ThresholdExpression`を使用する。Cost ManagementとOperationsはそれぞれdefaultなし`NoEcho`の`OperatorNotificationEmail`を持ち、release manifestが同じ値を両stackへ渡す。実addressとmonitor ARN実値はGit、Obsidian、template outputへ保存しない。
 
