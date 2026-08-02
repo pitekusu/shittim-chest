@@ -17,10 +17,21 @@ authoritative documents and code, not a duplicate specification.
 - Read only the specified files and their direct dependencies.
 - Do not bundle adjacent problems, future improvements, cleanup, or refactoring.
 - If an unexpected problem appears, establish its cause and the safe state, then stop.
-- Stop immediately before an external write unless that single write step was explicitly
-  authorized.
-- After CI starts, do not use `gh run watch`, `gh pr checks --watch`, or sleep-based polling;
-  report the run ID and stop.
+- Perform live AWS, Discord, and OpenAI operations only within the explicitly requested task.
+- An explicit Production Release request authorizes workflow dispatch through plan completion
+  and arrival at the GitHub `production` Environment approval wait.
+- Treat Production Environment approval as an independent step; never approve it without the
+  user's explicit authorization.
+- At the approval wait, report the run ID, fixed SHA, plan result, Change Sets, deployment lock,
+  and unresolved issues, then stop.
+- If the plan fails, confirm only cleanup and the safe state; do not fix, rerun, redispatch, or
+  approve the Environment.
+- Do not treat post-approval deploy operations or incident response as implicitly authorized by
+  an approval task.
+- Do not use `gh run watch`, `gh pr checks --watch`, or sleep-based continuous polling.
+- After dispatching a workflow, report its run ID and stop. On the next instruction, retrieve its
+  state once; if it is awaiting approval, report that state and stop.
+- GitHub Actions may continue independently after Codex stops.
 - Do not rerun workflows, redispatch releases, or automatically fix a CI failure.
 - If the repository is dirty, protect the user's changes and stop without editing.
 - Final reports contain only results, evidence, external writes, and unresolved issues.
@@ -74,10 +85,19 @@ status note.
 - Unknown DynamoDB schemas fail closed.
 - Unknown provider responses, IAM ambiguity, and incomplete pagination fail closed.
 - Production images are digest-pinned.
-- Live AWS, Discord, and OpenAI operations require explicit authorization.
+- When Dockerfile, base image, dependency, or build-process changes alter an image config digest,
+  measure both production and break-glass targets under canonical CI-identical build conditions.
+- Even if only one target changes, update both production and break-glass config digest baselines
+  from that same measurement in the same PR.
+- Never update only one baseline, infer a config digest from a manifest digest, reuse another
+  exporter's build result, or transcribe a value from an earlier run.
+- Before updating baselines, confirm each image's SBOM, VEX, risk gate, and config digest mapping.
+- The CI-only `fault-test` image is not a baseline target.
 
 Service-specific limits, image reproducibility rules, alarm and budget configuration, and
 release details belong in the references in section 3.
+For measurement details, the baseline file, and validation workflows, use `docs/15_*`,
+`docs/18_*`, `security/container-risk-acceptance.json`, and the existing CI workflow.
 
 ## 5. Source and documentation rules
 
@@ -103,7 +123,6 @@ python tools/sync_docs.py --check --source "$SHITTIM_DOCS_SOURCE"
 - Never push directly to `main`.
 - Merge through a PR with squash merge only.
 - Confirm required checks and CodeQL before merge.
-- Once CI starts, do not watch it; report the run ID and stop.
 
 ## 7. Common commands
 
