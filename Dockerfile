@@ -60,15 +60,7 @@ COPY --chown=65532:65532 tests/fixtures/container_process.py \
 
 ENV PYTHONPATH=/fault-tests
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:3c9a295d653c9147f6732a0578cb5d2f19a764cc398d4291a0ab32152e751dfa AS break-glass
-
-ENV PATH="/app/.venv/bin:${PATH}" \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-WORKDIR /app
-
-COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:3c9a295d653c9147f6732a0578cb5d2f19a764cc398d4291a0ab32152e751dfa AS break-glass-tools
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bsdutils procps \
@@ -79,6 +71,16 @@ RUN apt-get update \
     && command -v cat \
     && command -v ps \
     && command -v script
+
+FROM break-glass-tools AS break-glass
+
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv
 
 USER 65532:65532
 

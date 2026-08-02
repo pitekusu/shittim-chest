@@ -243,8 +243,8 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
 
     text = dockerfile.read_text(encoding="utf-8")
     stages = parse_dockerfile_stages(dockerfile)
-    if len(stages) != 6:
-        raise ValueError("Dockerfile must declare the six approved stages")
+    if len(stages) != 7:
+        raise ValueError("Dockerfile must declare the seven approved stages")
     names = [name for name, _reference in stages]
     if names != [
         "uv",
@@ -252,6 +252,7 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         "runtime-base",
         "production",
         "fault-test",
+        "break-glass-tools",
         "break-glass",
     ]:
         raise ValueError("Dockerfile stages do not match the approved order")
@@ -285,22 +286,28 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("production stage must derive from runtime-base")
     if stages[4] != ("fault-test", "production"):
         raise ValueError("fault-test stage must derive from production")
-    if stages[5] != ("break-glass", builder_reference):
-        raise ValueError("break-glass stage must reuse the builder image pin")
+    if stages[5] != ("break-glass-tools", builder_reference):
+        raise ValueError("break-glass tooling stage must reuse the builder image pin")
+    if stages[6] != ("break-glass", "break-glass-tools"):
+        raise ValueError("break-glass final stage must derive from the tooling stage")
     linked_venv_copy = "COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv"
     if text.count(linked_venv_copy) != 2:
         raise ValueError(
             "production and break-glass stages must use independent linked venv layers"
         )
-    break_glass_start = text.index(f"FROM {builder_reference} AS break-glass")
+    break_glass_tools_start = text.index(f"FROM {builder_reference} AS break-glass-tools")
+    break_glass_start = text.index("FROM break-glass-tools AS break-glass")
+    break_glass_tools_text = text[break_glass_tools_start:break_glass_start]
     break_glass_text = text[break_glass_start:]
     volatile_apt_cleanup = (
         "apt-get clean",
         "rm -rf /var/lib/apt/lists/* /var/log/apt/*",
         "rm -f /var/log/dpkg.log",
     )
-    if any(marker not in break_glass_text for marker in volatile_apt_cleanup):
+    if any(marker not in break_glass_tools_text for marker in volatile_apt_cleanup):
         raise ValueError("break-glass stage must remove volatile apt and dpkg state")
+    if "apt-get" in break_glass_text:
+        raise ValueError("break-glass final stage must not rerun package installation")
     if f"USER {policy.identity.user_spec}" not in text:
         raise ValueError("Dockerfile USER does not match the DHI runtime identity")
     if "10001" in text:

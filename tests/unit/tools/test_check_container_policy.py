@@ -164,6 +164,25 @@ def test_dockerfile_requires_linked_venv_layers(tmp_path: Path) -> None:
         validate_dockerfile(policy, dockerfile)
 
 
+def test_dockerfile_keeps_break_glass_package_install_out_of_final_stage(
+    tmp_path: Path,
+) -> None:
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    dockerfile = tmp_path / "Dockerfile"
+    text = DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8")
+    dockerfile.write_text(
+        text.replace(
+            "FROM break-glass-tools AS break-glass\n",
+            "FROM break-glass-tools AS break-glass\n\nRUN apt-get update\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must not rerun package installation"):
+        validate_dockerfile(policy, dockerfile)
+
+
 @pytest.mark.parametrize(
     "cleanup",
     [

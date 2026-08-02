@@ -491,6 +491,14 @@ def _validate_release(directory: Path) -> None:
             raise WorkflowPolicyError(
                 "Release production and break-glass builds must share the immutable image context"
             )
+    if production_build_block.count("no-cache-filters: runtime-base") != 1:
+        raise WorkflowPolicyError(
+            "Release production build must regenerate the cache-sensitive runtime stage"
+        )
+    if break_glass_build_block.count("no-cache-filters: break-glass") != 1:
+        raise WorkflowPolicyError(
+            "Release break-glass build must regenerate the cache-sensitive final stage"
+        )
     immutable_context_region = text[image_checkout_index:build_index]
     forbidden_context_gate = re.compile(
         r"\b(?:pytest|uv\s+build|npm\s+run\s+check:infra|cdk\s+synth)\b"
@@ -814,6 +822,18 @@ def _validate_ci_container_risk(directory: Path) -> None:
     if text.count("outputs: type=docker,rewrite-timestamp=true") != 3:
         raise WorkflowPolicyError(
             "CI must rewrite file timestamps for all three loaded image exports"
+        )
+    production_build_block = _workflow_step_block(text, "Build and load the production image")
+    break_glass_build_block = _workflow_step_block(
+        text, "Build and load the break-glass image for risk validation"
+    )
+    if production_build_block.count("no-cache-filters: runtime-base") != 1:
+        raise WorkflowPolicyError(
+            "CI production build must regenerate the cache-sensitive runtime stage"
+        )
+    if break_glass_build_block.count("no-cache-filters: break-glass") != 1:
+        raise WorkflowPolicyError(
+            "CI break-glass build must regenerate the cache-sensitive final stage"
         )
     try:
         buildx_index = text.index("name: Set up Docker Buildx")
