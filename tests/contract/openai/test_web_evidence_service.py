@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from openai import AsyncOpenAI
 from openai.types.responses.response import Response
+from pydantic import ValidationError
 
 from shittim_chest.adapters.openai import (
     OpenAIFailureRecord,
@@ -163,3 +164,17 @@ async def test_optional_failure_continues_but_required_failure_stops() -> None:
 
     assert optional.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
     assert optional.required_search_satisfied is False
+
+
+@pytest.mark.asyncio
+async def test_structured_output_validation_is_safely_classified() -> None:
+    with pytest.raises(ValidationError) as captured:
+        EvidenceDigestOutputV1.model_validate({"unexpected": "field"})
+    service, _, observer = service_for(captured.value)
+
+    bundle = await service.prepare_evidence(question="今日の夕食は何がいい?")
+
+    assert bundle.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
+    assert bundle.required_search_satisfied is False
+    assert [record.code for record in observer.failures] == ["openai_invalid_output"]
+    assert "unexpected" not in repr(observer.failures)

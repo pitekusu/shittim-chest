@@ -24,6 +24,7 @@ from openai.types.responses.parsed_response import ParsedResponse
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_output_text import AnnotationURLCitation, ResponseOutputText
+from pydantic import ValidationError
 
 from shittim_chest.adapters.openai.config import OpenAIAdapterConfig
 from shittim_chest.adapters.openai.errors import (
@@ -123,6 +124,10 @@ class OpenAIWebEvidenceService:
                 raise OpenAIInvalidOutput()
         except asyncio.CancelledError:
             raise
+        except ValidationError as error:
+            invalid_output = OpenAIInvalidOutput()
+            self._record_failure(operation, invalid_output, started)
+            raise invalid_output from error
         except RateLimitError as error:
             rate_limited = OpenAIRateLimited()
             self._record_failure(operation, rate_limited, started)
