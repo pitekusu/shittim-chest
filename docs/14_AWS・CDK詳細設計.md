@@ -32,7 +32,7 @@ STEP-09Aの`StatefulStack`は次を実装する。
 
 - stack名は`ShittimChest-Prod-Stateful`、termination protectionを有効にする。
 - DynamoDB table名は`shittim-chest-production`。`PK`/`SK`、ALL projectionの`gsi1`/`gsi2`、on-demand、AWS-managed encryption、deletion protection、PITR 35日、`RETAIN`とする。TTLとmaximum throughputは設定しない。
-- ECR repository名は`shittim-chest`。暗号化propertyは指定せずECR既定暗号化を使用し、除外filterなしの完全`IMMUTABLE`、`RETAIN`とする。repository側の基本scan-on-pushは無効とし、registry scanning configurationで`shittim-chest`だけを対象とするAmazon Inspector拡張スキャン（`ENHANCED`、`CONTINUOUS_SCAN`）を有効にする。lifecycleはuntagged imageと全tag付きimageをそれぞれ直近5世代だけ保持し、それより古いimageを自動削除する。
+- ECR repository名は`shittim-chest`。暗号化propertyは指定せずECR既定暗号化を使用し、除外filterなしの完全`IMMUTABLE`、`RETAIN`とする。repository側の基本scan-on-pushは無効とし、registry scanning configurationで`shittim-chest`だけを対象とするAmazon Inspector拡張スキャン（`ENHANCED`、`CONTINUOUS_SCAN`）を有効にする。lifecycleはuntagged imageと全tag付きimageをそれぞれ直近3世代だけ保持し、それより古いimageを自動削除する。
 - AWS Signer profile `shittim_chest_ecr`を`Notation-OCI-SHA384-ECDSA`、署名有効期間135か月、`RETAIN`で作成する。registry全体で一意な`AWS::ECR::SigningConfiguration`はrepository filter `shittim-chest`だけへ同profileを適用し、push時のECR Managed Signingを有効にする。別repositoryのruleを追加するときは同resourceへ集約する。
 - `Project`、`Environment`、`ManagedBy` tagをapp rootから付与する。
 - local/PRではdummy accountを使うassertionとcredentialなしのstrict synthだけを行い、bootstrap、deploy、AWS resource作成は行わない。
@@ -112,7 +112,7 @@ DHI CommunityはApache-2.0の無償catalogを使い、Select/Enterpriseの購入
 - task definitionのimage URIは常に`<account>.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest@sha256:<64-hex>`とする。release manifest、change set、rollbackも同じdigestを正とし、tagからdeploy時に再解決しない。
 - repository暗号化はECR既定のserver-side encryptionを使用し、CDK/CloudFormationで`EncryptionConfiguration`を指定しない。customer managed KMS keyは作成しない。
 - registry scanning configurationで対象を`shittim-chest`だけに限定したAmazon Inspector拡張スキャン（`ENHANCED`、push時スキャンと継続的な再スキャンを含む`CONTINUOUS_SCAN`）を有効にし、repository側の基本scan-on-pushは無効とする。ECR Managed SigningはAWS Signer profile `shittim_chest_ecr`でpush時に自動署名する。push principalへ対象repositoryのupload権限と対象profileの`signer:SignPayload`だけを許可する。
-- untagged imageと全tag付きimage（`release-*`、`git-<full-sha>`、`candidate-*`を含む）をそれぞれ直近5世代だけ保持し、それより古いimageは自動削除する。rollback対象は直近5世代内の検証済みdigestに限定される。現行・直前正常digestをdeploy manifestとともに保護し、lifecycle preview後に適用する。
+- untagged imageと全tag付きimage（`release-*`、`git-<full-sha>`、`candidate-*`を含む）をそれぞれ直近3世代だけ保持し、それより古いimageは自動削除する。rollback対象は直近3世代内の検証済みdigestに限定される。現行・直前正常digestをdeploy manifestとともに保護し、lifecycle preview後に適用する。
 - ARM64 imageを必須、x86_64はcompatibility fallbackとして同一sourceからbuildする。
 
 ### 6.1 OCI reference artifact
@@ -233,6 +233,7 @@ toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示�
 | 2026-07-19 | DynamoDB Table CDK API | https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_dynamodb.Table.html | on-demand、PITR 35日、deletion protection、RETAIN |
 | 2026-07-19 | ECR CDK API | https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ecr-readme.html | immutable、scan-on-push、限定lifecycle、RETAIN |
 | 2026-07-20 | ECR RegistryScanningConfiguration / lifecycle count rule | https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ecr-registryscanningconfiguration.html、https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-properties-ecr-registryscanningconfiguration-scanningrule.html | 基本scan-on-push無効化、`ENHANCED`/`CONTINUOUS_SCAN`拡張スキャンを`shittim-chest`へ限定適用、`imageCountMoreThan`でuntagged/taggedとも直近5世代保持へ変更 |
+| 2026-08-03 | ECR lifecycle policy parameters | https://docs.aws.amazon.com/AmazonECR/latest/userguide/lifecycle_policy_parameters.html | `imageCountMoreThan`の`countNumber`をuntagged/taggedとも3へ変更し、各分類の最新3 imageを保持 |
 | 2026-07-19 | cdk-nag 3.0.1 | https://github.com/cdklabs/cdk-nag#usage | CDK `Validations` pluginとunsuppressed finding 0を採用 |
 | 2026-07-19 | ECR Managed Signing | https://docs.aws.amazon.com/AmazonECR/latest/userguide/managed-signing.html | Signer profile、repository限定registry rule、push時自動署名、status polling |
 | 2026-07-19 | ECR signature verification | https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-signing-verification.html、https://docs.aws.amazon.com/signer/latest/developerguide/image-verification.html | Notation strict verificationを自動deploy gate、ECS hookを防御層に採用 |
