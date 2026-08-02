@@ -205,7 +205,7 @@ def test_status_history_checkpoint_validates_gap_and_publication_bounds() -> Non
     )
 
     assert scanning.history_checkpoint == checkpoint
-    assert "700" not in repr(checkpoint)
+    assert repr(checkpoint) == object.__repr__(checkpoint)
     with pytest.raises(ValueError, match="set together"):
         StatusHistoryCheckpoint(
             history_verified_head_message_id="700",
