@@ -8,6 +8,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from time import monotonic
 
 from openai import (
@@ -52,6 +53,15 @@ from shittim_chest.domain import (
 )
 
 
+class _EvidenceStage(StrEnum):
+    ROUTING = "routing"
+    PROVIDER_RESPONSE = "provider_response"
+    OUTPUT_VALIDATION = "output_validation"
+    SOURCE_EXTRACTION = "source_extraction"
+    BUNDLE_VALIDATION = "bundle_validation"
+    USAGE_RECORDING = "usage_recording"
+
+
 @dataclass(slots=True)
 class OpenAIWebEvidenceService:
     """Prepare one immutable source-backed evidence bundle per debate."""
@@ -64,7 +74,12 @@ class OpenAIWebEvidenceService:
     clock: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
     async def prepare_evidence(self, *, question: str) -> EvidenceBundle:
-        route = self.router.route(question)
+        started = monotonic()
+        try:
+            route = self.router.route(question)
+        except Exception:
+            self._record_unclassified("evidence_search", _EvidenceStage.ROUTING, started)
+            raise
         requirement = route.requirement
         if requirement is SearchRequirement.NONE:
             return EvidenceBundle(
@@ -95,6 +110,7 @@ class OpenAIWebEvidenceService:
     ) -> EvidenceBundle:
         started = monotonic()
         operation = "evidence_search"
+        stage = _EvidenceStage.PROVIDER_RESPONSE
         try:
             async with self.limiter.slot():
                 response = await self.client.responses.parse(
@@ -116,64 +132,98 @@ class OpenAIWebEvidenceService:
                     parallel_tool_calls=False,
                     truncation="disabled",
                 )
+            stage = _EvidenceStage.OUTPUT_VALIDATION
             parsed = response.output_parsed
             if parsed is None:
                 raise OpenAIInvalidOutput()
-            items = _extract_sources(response, self.clock())
+            stage = _EvidenceStage.SOURCE_EXTRACTION
+            try:
+                items = _extract_sources(response, self.clock())
+            except ValueError as error:
+                raise OpenAIInvalidOutput() from error
             if not items:
                 raise OpenAIInvalidOutput()
+            stage = _EvidenceStage.BUNDLE_VALIDATION
+            try:
+                bundle = EvidenceBundle(
+                    items=items,
+                    summary=parsed.summary,
+                    search_requirement=route.requirement,
+                    search_status=EvidenceSearchStatus.COMPLETED,
+                    search_response_id=response.id,
+                    router_rules_version=route.rules_version,
+                    routing_reason=route.reason,
+                )
+            except ValueError as error:
+                raise OpenAIInvalidOutput() from error
+            stage = _EvidenceStage.USAGE_RECORDING
+            self.recorder.record_usage(_usage_record(operation, response, started, self.config))
         except asyncio.CancelledError:
             raise
         except ValidationError as error:
             invalid_output = OpenAIInvalidOutput()
-            self._record_failure(operation, invalid_output, started)
+            self._record_failure(operation, stage, invalid_output, started)
             raise invalid_output from error
         except RateLimitError as error:
             rate_limited = OpenAIRateLimited()
-            self._record_failure(operation, rate_limited, started)
+            self._record_failure(operation, stage, rate_limited, started)
             raise rate_limited from error
         except (AuthenticationError, PermissionDeniedError, NotFoundError) as error:
             configuration_error = OpenAIConfigurationError()
-            self._record_failure(operation, configuration_error, started)
+            self._record_failure(operation, stage, configuration_error, started)
             raise configuration_error from error
         except (APIConnectionError, APITimeoutError) as error:
             unavailable = OpenAIUnavailable()
-            self._record_failure(operation, unavailable, started)
+            self._record_failure(operation, stage, unavailable, started)
             raise unavailable from error
         except APIStatusError as error:
             status_error: OpenAIAdapterError = (
                 OpenAIUnavailable() if error.status_code >= 500 else OpenAIConfigurationError()
             )
-            self._record_failure(operation, status_error, started)
+            self._record_failure(operation, stage, status_error, started)
             raise status_error from error
         except OpenAIAdapterError as error:
-            self._record_failure(operation, error, started)
+            self._record_failure(operation, stage, error, started)
             raise
-        self.recorder.record_usage(_usage_record(operation, response, started, self.config))
-        return EvidenceBundle(
-            items=items,
-            summary=parsed.summary,
-            search_requirement=route.requirement,
-            search_status=EvidenceSearchStatus.COMPLETED,
-            search_response_id=response.id,
-            router_rules_version=route.rules_version,
-            routing_reason=route.reason,
-        )
+        except Exception:
+            self._record_unclassified(operation, stage, started)
+            raise
+        return bundle
 
     def _record_failure(
         self,
         operation: str,
+        stage: _EvidenceStage,
         error: OpenAIAdapterError,
         started: float,
     ) -> None:
         self.recorder.record_failure(
             OpenAIFailureRecord(
-                operation,
+                _stage_operation(operation, stage),
                 error.code,
                 self.config.policy.policy_id.value,
                 int((monotonic() - started) * 1000),
             )
         )
+
+    def _record_unclassified(
+        self,
+        operation: str,
+        stage: _EvidenceStage,
+        started: float,
+    ) -> None:
+        self.recorder.record_failure(
+            OpenAIFailureRecord(
+                _stage_operation(operation, stage),
+                "openai_unclassified",
+                self.config.policy.policy_id.value,
+                int((monotonic() - started) * 1000),
+            )
+        )
+
+
+def _stage_operation(operation: str, stage: _EvidenceStage) -> str:
+    return f"{operation}.{stage.value}"
 
 
 def _extract_sources(
