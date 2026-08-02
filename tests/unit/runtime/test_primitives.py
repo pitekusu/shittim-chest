@@ -49,9 +49,23 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
                 output_tokens=5,
                 cached_input_tokens=0,
                 reasoning_tokens=1,
+                web_search_source_count=3,
+                url_citation_count=2,
+                evidence_source_count=2,
+                title_fallback_count=1,
+                title_fallback_kinds="missing",
             )
         )
-        subject.record_failure(OpenAIFailureRecord("vote", "rate_limited", "policy", 8))
+        subject.record_failure(
+            OpenAIFailureRecord(
+                "vote",
+                "rate_limited",
+                "policy",
+                8,
+                "url_citation_url",
+                "object",
+            )
+        )
 
     payloads = [json.loads(record.message) for record in caplog.records]
     assert [payload["event"] for payload in payloads] == [
@@ -60,6 +74,13 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
         "openai_request_failed",
     ]
     assert all(payload["environment"] == "production" for payload in payloads)
+    assert payloads[1]["web_search_source_count"] == 3
+    assert payloads[1]["url_citation_count"] == 2
+    assert payloads[1]["evidence_source_count"] == 2
+    assert payloads[1]["title_fallback_count"] == 1
+    assert payloads[1]["title_fallback_kinds"] == "missing"
+    assert payloads[2]["diagnostic_context"] == "url_citation_url"
+    assert payloads[2]["diagnostic_kind"] == "object"
     encoded = json.dumps(payloads)
     assert "question" not in encoded
     assert "prompt" not in encoded

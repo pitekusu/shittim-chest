@@ -6,13 +6,25 @@ from __future__ import annotations
 class OpenAIAdapterError(RuntimeError):
     """Base class for an OpenAI boundary failure."""
 
-    __slots__ = ("code", "retryable")
+    __slots__ = ("code", "diagnostic_context", "diagnostic_kind", "retryable")
 
     code: str
+    diagnostic_context: str | None
+    diagnostic_kind: str | None
     retryable: bool
 
-    def __init__(self, code: str, message: str, *, retryable: bool) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool,
+        diagnostic_context: str | None = None,
+        diagnostic_kind: str | None = None,
+    ) -> None:
         self.code = code
+        self.diagnostic_context = diagnostic_context
+        self.diagnostic_kind = diagnostic_kind
         self.retryable = retryable
         super().__init__(message)
 
@@ -34,11 +46,18 @@ class OpenAIIncompleteResponse(OpenAIAdapterError):
 class OpenAIInvalidOutput(OpenAIAdapterError):
     """The response completed without one valid structured result."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        diagnostic_context: str | None = None,
+        diagnostic_kind: str | None = None,
+    ) -> None:
         super().__init__(
             "openai_invalid_output",
             "the model returned no valid structured output",
             retryable=False,
+            diagnostic_context=diagnostic_context,
+            diagnostic_kind=diagnostic_kind,
         )
 
 

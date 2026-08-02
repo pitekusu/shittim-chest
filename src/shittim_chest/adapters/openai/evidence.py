@@ -22,7 +22,13 @@ from openai import (
     RateLimitError,
 )
 from openai.types.responses.parsed_response import ParsedResponse
-from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from openai.types.responses.response_function_web_search import (
+    ActionFind,
+    ActionOpenPage,
+    ActionSearch,
+    ActionSearchSource,
+    ResponseFunctionWebSearch,
+)
 from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_output_text import AnnotationURLCitation, ResponseOutputText
 from pydantic import ValidationError
@@ -62,6 +68,65 @@ class _EvidenceStage(StrEnum):
     USAGE_RECORDING = "usage_recording"
 
 
+class _SourceDiagnosticContext(StrEnum):
+    RESPONSE_OUTPUT = "response_output"
+    WEB_SEARCH_ACTION = "web_search_action"
+    WEB_SEARCH_SOURCES = "web_search_sources"
+    WEB_SEARCH_SOURCE = "web_search_source"
+    WEB_SEARCH_SOURCE_URL = "web_search_source_url"
+    MESSAGE_CONTENT = "message_content"
+    OUTPUT_TEXT_ANNOTATIONS = "output_text_annotations"
+    URL_CITATION_URL = "url_citation_url"
+    EVIDENCE_SOURCES = "evidence_sources"
+    UNEXPECTED_EXCEPTION = "unexpected_exception"
+
+
+class _DiagnosticKind(StrEnum):
+    MISSING = "missing"
+    NULL = "null"
+    EMPTY_STRING = "empty_string"
+    STRING = "string"
+    BOOLEAN = "boolean"
+    NUMBER = "number"
+    ARRAY = "array"
+    OBJECT = "object"
+    OTHER = "other"
+    ATTRIBUTE_ERROR = "attribute_error"
+    KEY_ERROR = "key_error"
+    RUNTIME_ERROR = "runtime_error"
+    TYPE_ERROR = "type_error"
+    VALUE_ERROR = "value_error"
+
+
+_MISSING = object()
+
+
+class _SourceExtractionError(ValueError):
+    """Content-free classification for a malformed provider source field."""
+
+    __slots__ = ("context", "kind")
+
+    def __init__(self, context: _SourceDiagnosticContext, value: object) -> None:
+        self.context = context
+        self.kind = _diagnostic_kind(value)
+        super().__init__(f"invalid provider source field: {context.value}/{self.kind.value}")
+
+
+@dataclass(frozen=True, slots=True)
+class _CitationExtraction:
+    titles: dict[str, str]
+    count: int
+    title_fallback_kinds: tuple[_DiagnosticKind, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceExtraction:
+    items: tuple[EvidenceItem, ...]
+    web_search_source_count: int
+    url_citation_count: int
+    title_fallback_kinds: tuple[_DiagnosticKind, ...]
+
+
 @dataclass(slots=True)
 class OpenAIWebEvidenceService:
     """Prepare one immutable source-backed evidence bundle per debate."""
@@ -77,8 +142,8 @@ class OpenAIWebEvidenceService:
         started = monotonic()
         try:
             route = self.router.route(question)
-        except Exception:
-            self._record_unclassified("evidence_search", _EvidenceStage.ROUTING, started)
+        except Exception as error:
+            self._record_unclassified("evidence_search", _EvidenceStage.ROUTING, started, error)
             raise
         requirement = route.requirement
         if requirement is SearchRequirement.NONE:
@@ -138,15 +203,23 @@ class OpenAIWebEvidenceService:
                 raise OpenAIInvalidOutput()
             stage = _EvidenceStage.SOURCE_EXTRACTION
             try:
-                items = _extract_sources(response, self.clock())
+                extraction = _extract_sources(response, self.clock())
+            except _SourceExtractionError as error:
+                raise OpenAIInvalidOutput(
+                    diagnostic_context=error.context.value,
+                    diagnostic_kind=error.kind.value,
+                ) from error
             except ValueError as error:
                 raise OpenAIInvalidOutput() from error
-            if not items:
-                raise OpenAIInvalidOutput()
+            if not extraction.items:
+                raise OpenAIInvalidOutput(
+                    diagnostic_context=_SourceDiagnosticContext.EVIDENCE_SOURCES.value,
+                    diagnostic_kind=_DiagnosticKind.MISSING.value,
+                )
             stage = _EvidenceStage.BUNDLE_VALIDATION
             try:
                 bundle = EvidenceBundle(
-                    items=items,
+                    items=extraction.items,
                     summary=parsed.summary,
                     search_requirement=route.requirement,
                     search_status=EvidenceSearchStatus.COMPLETED,
@@ -157,7 +230,9 @@ class OpenAIWebEvidenceService:
             except ValueError as error:
                 raise OpenAIInvalidOutput() from error
             stage = _EvidenceStage.USAGE_RECORDING
-            self.recorder.record_usage(_usage_record(operation, response, started, self.config))
+            self.recorder.record_usage(
+                _usage_record(operation, response, extraction, started, self.config)
+            )
         except asyncio.CancelledError:
             raise
         except ValidationError as error:
@@ -185,8 +260,8 @@ class OpenAIWebEvidenceService:
         except OpenAIAdapterError as error:
             self._record_failure(operation, stage, error, started)
             raise
-        except Exception:
-            self._record_unclassified(operation, stage, started)
+        except Exception as error:
+            self._record_unclassified(operation, stage, started, error)
             raise
         return bundle
 
@@ -203,6 +278,8 @@ class OpenAIWebEvidenceService:
                 error.code,
                 self.config.policy.policy_id.value,
                 int((monotonic() - started) * 1000),
+                error.diagnostic_context,
+                error.diagnostic_kind,
             )
         )
 
@@ -211,6 +288,7 @@ class OpenAIWebEvidenceService:
         operation: str,
         stage: _EvidenceStage,
         started: float,
+        error: Exception,
     ) -> None:
         self.recorder.record_failure(
             OpenAIFailureRecord(
@@ -218,6 +296,8 @@ class OpenAIWebEvidenceService:
                 "openai_unclassified",
                 self.config.policy.policy_id.value,
                 int((monotonic() - started) * 1000),
+                _SourceDiagnosticContext.UNEXPECTED_EXCEPTION.value,
+                _unexpected_exception_kind(error).value,
             )
         )
 
@@ -229,18 +309,22 @@ def _stage_operation(operation: str, stage: _EvidenceStage) -> str:
 def _extract_sources(
     response: ParsedResponse[EvidenceDigestOutputV1],
     retrieved_at: datetime,
-) -> tuple[EvidenceItem, ...]:
+) -> _SourceExtraction:
     titles: dict[str, str] = {}
     source_urls: list[str] = []
-    for output in response.output:
-        if isinstance(output, ResponseFunctionWebSearch) and output.action.type == "search":
-            source_urls.extend(source.url for source in output.action.sources or ())
+    citation_count = 0
+    title_fallback_kinds: list[_DiagnosticKind] = []
+    outputs = getattr(response, "output", _MISSING)
+    if not isinstance(outputs, list):
+        raise _SourceExtractionError(_SourceDiagnosticContext.RESPONSE_OUTPUT, outputs)
+    for output in outputs:
+        if isinstance(output, ResponseFunctionWebSearch):
+            source_urls.extend(_search_source_urls(output))
         if isinstance(output, ResponseOutputMessage):
-            for content in output.content:
-                if isinstance(content, ResponseOutputText):
-                    for annotation in content.annotations:
-                        if isinstance(annotation, AnnotationURLCitation):
-                            titles[annotation.url] = annotation.title
+            citations = _message_citation_titles(output)
+            titles.update(citations.titles)
+            citation_count += citations.count
+            title_fallback_kinds.extend(citations.title_fallback_kinds)
     timestamp = retrieved_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
     items: list[EvidenceItem] = []
     for url in dict.fromkeys((*source_urls, *titles)):
@@ -260,12 +344,116 @@ def _extract_sources(
                 content_hash=hashlib.sha256(metadata.encode()).hexdigest(),
             )
         )
-    return tuple(items)
+    return _SourceExtraction(
+        items=tuple(items),
+        web_search_source_count=len(source_urls),
+        url_citation_count=citation_count,
+        title_fallback_kinds=tuple(title_fallback_kinds),
+    )
+
+
+def _search_source_urls(output: ResponseFunctionWebSearch) -> tuple[str, ...]:
+    action = getattr(output, "action", _MISSING)
+    if isinstance(action, (ActionOpenPage, ActionFind)):
+        return ()
+    if not isinstance(action, ActionSearch):
+        raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_ACTION, action)
+    sources = getattr(action, "sources", _MISSING)
+    if sources is _MISSING or sources is None:
+        return ()
+    if not isinstance(sources, list):
+        raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_SOURCES, sources)
+    urls: list[str] = []
+    for source in sources:
+        if not isinstance(source, ActionSearchSource):
+            raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_SOURCE, source)
+        urls.append(
+            _required_source_url(
+                getattr(source, "url", _MISSING),
+                _SourceDiagnosticContext.WEB_SEARCH_SOURCE_URL,
+            )
+        )
+    return tuple(urls)
+
+
+def _message_citation_titles(output: ResponseOutputMessage) -> _CitationExtraction:
+    content_items = getattr(output, "content", _MISSING)
+    if not isinstance(content_items, list):
+        raise _SourceExtractionError(_SourceDiagnosticContext.MESSAGE_CONTENT, content_items)
+    titles: dict[str, str] = {}
+    count = 0
+    title_fallback_kinds: list[_DiagnosticKind] = []
+    for content in content_items:
+        if not isinstance(content, ResponseOutputText):
+            continue
+        annotations = getattr(content, "annotations", _MISSING)
+        if not isinstance(annotations, list):
+            raise _SourceExtractionError(
+                _SourceDiagnosticContext.OUTPUT_TEXT_ANNOTATIONS,
+                annotations,
+            )
+        for annotation in annotations:
+            if isinstance(annotation, AnnotationURLCitation):
+                count += 1
+                url = _required_source_url(
+                    getattr(annotation, "url", _MISSING),
+                    _SourceDiagnosticContext.URL_CITATION_URL,
+                )
+                title, fallback_kind = _source_title(
+                    getattr(annotation, "title", _MISSING),
+                    url,
+                )
+                titles[url] = title
+                if fallback_kind is not None:
+                    title_fallback_kinds.append(fallback_kind)
+    return _CitationExtraction(titles, count, tuple(title_fallback_kinds))
+
+
+def _required_source_url(value: object, context: _SourceDiagnosticContext) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _SourceExtractionError(context, value)
+    return value
+
+
+def _source_title(value: object, fallback_url: str) -> tuple[str, _DiagnosticKind | None]:
+    if isinstance(value, str) and value.strip():
+        return value, None
+    return fallback_url, _diagnostic_kind(value)
+
+
+def _diagnostic_kind(value: object) -> _DiagnosticKind:
+    if value is _MISSING:
+        return _DiagnosticKind.MISSING
+    if value is None:
+        return _DiagnosticKind.NULL
+    if isinstance(value, str):
+        return _DiagnosticKind.EMPTY_STRING if not value.strip() else _DiagnosticKind.STRING
+    if isinstance(value, bool):
+        return _DiagnosticKind.BOOLEAN
+    if isinstance(value, (int, float)):
+        return _DiagnosticKind.NUMBER
+    if isinstance(value, (list, tuple)):
+        return _DiagnosticKind.ARRAY
+    if isinstance(value, dict):
+        return _DiagnosticKind.OBJECT
+    return _DiagnosticKind.OTHER
+
+
+def _unexpected_exception_kind(error: Exception) -> _DiagnosticKind:
+    kinds = {
+        AttributeError: _DiagnosticKind.ATTRIBUTE_ERROR,
+        KeyError: _DiagnosticKind.KEY_ERROR,
+        RuntimeError: _DiagnosticKind.RUNTIME_ERROR,
+        TypeError: _DiagnosticKind.TYPE_ERROR,
+        ValueError: _DiagnosticKind.VALUE_ERROR,
+    }
+    return kinds.get(type(error), _DiagnosticKind.OTHER)
 
 
 def _usage_record(
     operation: str,
     response: ParsedResponse[EvidenceDigestOutputV1],
+    extraction: _SourceExtraction,
     started: float,
     config: OpenAIAdapterConfig,
 ) -> OpenAIUsageRecord:
@@ -281,4 +469,11 @@ def _usage_record(
         output_tokens=usage.output_tokens if usage else 0,
         cached_input_tokens=(usage.input_tokens_details.cached_tokens if usage else 0),
         reasoning_tokens=(usage.output_tokens_details.reasoning_tokens if usage else 0),
+        web_search_source_count=extraction.web_search_source_count,
+        url_citation_count=extraction.url_citation_count,
+        evidence_source_count=len(extraction.items),
+        title_fallback_count=len(extraction.title_fallback_kinds),
+        title_fallback_kinds=(
+            ",".join(sorted({kind.value for kind in extraction.title_fallback_kinds})) or None
+        ),
     )

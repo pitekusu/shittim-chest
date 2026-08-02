@@ -200,6 +200,81 @@ async def test_invalid_source_is_safely_classified_and_optional_search_continues
     assert [record.operation for record in observer.failures] == [
         "evidence_search.source_extraction"
     ]
+    assert observer.failures[0].diagnostic_context == "web_search_source_url"
+    assert observer.failures[0].diagnostic_kind == "empty_string"
+
+
+@pytest.mark.asyncio
+async def test_missing_search_source_url_is_safely_classified() -> None:
+    response = searched_response()
+    delattr(response.output[0].action.sources[0], "url")
+    service, _, observer = service_for(response)
+
+    bundle = await service.prepare_evidence(question="今日の夕食は何がいい?")
+
+    assert bundle.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
+    assert [record.code for record in observer.failures] == ["openai_invalid_output"]
+    assert [record.operation for record in observer.failures] == [
+        "evidence_search.source_extraction"
+    ]
+    assert observer.failures[0].diagnostic_context == "web_search_source_url"
+    assert observer.failures[0].diagnostic_kind == "missing"
+
+
+@pytest.mark.asyncio
+async def test_non_string_annotation_url_is_safely_classified() -> None:
+    response = searched_response()
+    object.__setattr__(
+        response.output[1].content[0].annotations[0],
+        "url",
+        {"private": "provider output must not be recorded"},
+    )
+    service, _, observer = service_for(response)
+
+    bundle = await service.prepare_evidence(question="今日の夕食は何がいい?")
+
+    assert bundle.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
+    assert [record.code for record in observer.failures] == ["openai_invalid_output"]
+    assert [record.operation for record in observer.failures] == [
+        "evidence_search.source_extraction"
+    ]
+    assert observer.failures[0].diagnostic_context == "url_citation_url"
+    assert observer.failures[0].diagnostic_kind == "object"
+    assert "provider output" not in repr(observer.failures)
+
+
+@pytest.mark.asyncio
+async def test_missing_annotation_title_uses_url_without_recording_provider_output() -> None:
+    response = searched_response()
+    delattr(response.output[1].content[0].annotations[0], "title")
+    service, _, observer = service_for(response)
+
+    bundle = await service.prepare_evidence(question="今日の天気は?")
+
+    assert bundle.items[0].title == "https://example.test/weather"
+    assert observer.failures == []
+    assert observer.usages[0].web_search_source_count == 1
+    assert observer.usages[0].url_citation_count == 1
+    assert observer.usages[0].evidence_source_count == 1
+    assert observer.usages[0].title_fallback_count == 1
+    assert observer.usages[0].title_fallback_kinds == "missing"
+
+
+@pytest.mark.asyncio
+async def test_null_annotations_are_safely_classified() -> None:
+    response = searched_response()
+    object.__setattr__(response.output[1].content[0], "annotations", None)
+    service, _, observer = service_for(response)
+
+    bundle = await service.prepare_evidence(question="今日の夕食は何がいい?")
+
+    assert bundle.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
+    assert [record.code for record in observer.failures] == ["openai_invalid_output"]
+    assert [record.operation for record in observer.failures] == [
+        "evidence_search.source_extraction"
+    ]
+    assert observer.failures[0].diagnostic_context == "output_text_annotations"
+    assert observer.failures[0].diagnostic_kind == "null"
 
 
 @pytest.mark.asyncio
@@ -220,6 +295,8 @@ async def test_unexpected_source_failure_records_only_stable_stage(
     assert [record.operation for record in observer.failures] == [
         "evidence_search.source_extraction"
     ]
+    assert observer.failures[0].diagnostic_context == "unexpected_exception"
+    assert observer.failures[0].diagnostic_kind == "runtime_error"
     assert "provider output" not in repr(observer.failures)
 
 
@@ -241,4 +318,6 @@ async def test_unexpected_router_failure_records_only_stable_stage(
     parse.assert_not_awaited()
     assert [record.code for record in observer.failures] == ["openai_unclassified"]
     assert [record.operation for record in observer.failures] == ["evidence_search.routing"]
+    assert observer.failures[0].diagnostic_context == "unexpected_exception"
+    assert observer.failures[0].diagnostic_kind == "runtime_error"
     assert "question" not in repr(observer.failures)
