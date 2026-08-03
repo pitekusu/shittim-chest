@@ -40,6 +40,18 @@ DEFAULT_INGRESS_RETRY_SECONDS = 5.0
 _LOGGER = logging.getLogger("shittim_chest")
 
 
+@unique
+class DiscordIngressOperation(StrEnum):
+    """Safe Discord API operation labels for ingress retry diagnostics."""
+
+    STATUS_CHANNEL_FETCH = "status_channel_fetch"
+    STATUS_MESSAGE_FETCH = "status_message_fetch"
+    THREAD_LOOKUP = "thread_lookup"
+    THREAD_CREATE = "thread_create"
+    PANEL_LOOKUP = "panel_lookup"
+    PANEL_CREATE = "panel_create"
+
+
 class _IngressCommandExecutor(Protocol):
     """Apply one request with the claim fenced into its first durable mutation.
 
@@ -116,7 +128,13 @@ class _RuntimeAdmission(Protocol):
 class IngressRetryableFailure(RuntimeError):
     """Request a durable retry for a typed, temporary command-boundary failure."""
 
-    def __init__(self, code: str, *, retry_after_seconds: float | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        retry_after_seconds: float | None = None,
+        discord_operation: DiscordIngressOperation | None = None,
+    ) -> None:
         self.code = _validated_error_code(code)
         if retry_after_seconds is not None and (
             isinstance(retry_after_seconds, bool)
@@ -125,6 +143,7 @@ class IngressRetryableFailure(RuntimeError):
         ):
             raise ValueError("ingress retry-after must be a positive finite number")
         self.retry_after_seconds = retry_after_seconds
+        self.discord_operation = discord_operation
         super().__init__(self.code)
 
 
@@ -455,6 +474,7 @@ class IngressDrainer:
                     disposition.error_code,
                     retry_delay=retry_delay,
                     provider_retry_after_seconds=disposition.retry_after_seconds,
+                    discord_operation=disposition.discord_operation,
                 )
                 stop = (
                     IngressDrainStop.SLOT_BUSY
@@ -488,6 +508,7 @@ def _log_ingress_retry(
     *,
     retry_delay: timedelta,
     provider_retry_after_seconds: float | None,
+    discord_operation: DiscordIngressOperation | None,
 ) -> None:
     payload = {
         "severity": "INFO",
@@ -502,6 +523,8 @@ def _log_ingress_retry(
             else "application_default"
         ),
     }
+    if discord_operation is not None:
+        payload["discord_operation"] = discord_operation.value
     _LOGGER.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
@@ -512,6 +535,7 @@ class IngressFailureDisposition:
     status: IngressStatus | None
     error_code: str
     retry_after_seconds: float | None = None
+    discord_operation: DiscordIngressOperation | None = None
 
     def __post_init__(self) -> None:
         _validated_error_code(self.error_code)
@@ -523,6 +547,8 @@ class IngressFailureDisposition:
             raise ValueError("ingress retry-after must be a positive finite number")
         if self.status is not IngressStatus.RETRYING and self.retry_after_seconds is not None:
             raise ValueError("only retrying dispositions may carry retry-after")
+        if self.status is not IngressStatus.RETRYING and self.discord_operation is not None:
+            raise ValueError("only retrying dispositions may carry a Discord operation")
         if self.status not in {
             None,
             IngressStatus.RETRYING,
@@ -546,6 +572,7 @@ def classify_ingress_failure(error: Exception) -> IngressFailureDisposition:
             IngressStatus.RETRYING,
             error.code,
             retry_after_seconds=error.retry_after_seconds,
+            discord_operation=error.discord_operation,
         )
     if isinstance(error, IngressRejectedFailure):
         return IngressFailureDisposition(IngressStatus.REJECTED, error.code)
@@ -576,6 +603,7 @@ def _validated_error_code(code: str) -> str:
 __all__ = (
     "DEFAULT_DRAIN_POLL_SECONDS",
     "DEFAULT_INGRESS_RETRY_SECONDS",
+    "DiscordIngressOperation",
     "IngressDrainReport",
     "IngressDrainStop",
     "IngressDrainer",

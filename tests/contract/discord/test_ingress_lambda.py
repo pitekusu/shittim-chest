@@ -54,6 +54,12 @@ def test_signed_command_reaches_token_free_application_and_returns_type_four() -
     assert body["type"] == 4
     assert body["data"]["flags"] == 64
     assert body["data"]["allowed_mentions"] == {"parse": []}
+    assert body["data"]["content"] == (
+        "✅ 議論依頼を受け付けました。処理開始を準備しています。"
+        "\n推定待ち時間: 通常は約1分以内。連続実行時はDiscordの制限により"
+        "約5分かかる場合があります。"
+        "\nチャンネルへ進行状況を表示します。"
+    )
     assert len(application.operations) == 1
     operation = application.operations[0]
     assert operation.question == "question"

@@ -14,6 +14,7 @@ import pytest
 from shittim_chest.application.commands import AppliedIngressCommand
 from shittim_chest.application.errors import InvalidApplicationOperation, RuntimeNotReady
 from shittim_chest.application.ingress_drain import (
+    DiscordIngressOperation,
     IngressDrainer,
     IngressDrainReport,
     IngressDrainStop,
@@ -592,6 +593,7 @@ async def test_discord_retry_after_controls_durable_ingress_schedule(
             item.interaction_id: IngressRetryableFailure(
                 "DISCORD_RATE_LIMITED",
                 retry_after_seconds=65.25,
+                discord_operation=DiscordIngressOperation.THREAD_CREATE,
             )
         }
     )
@@ -605,6 +607,7 @@ async def test_discord_retry_after_controls_durable_ingress_schedule(
     assert retry["retry_delay_seconds"] == 65.25
     assert retry["retry_delay_source"] == "discord_retry_after"
     assert retry["error_code"] == "DISCORD_RATE_LIMITED"
+    assert retry["discord_operation"] == "thread_create"
 
 
 @pytest.mark.asyncio

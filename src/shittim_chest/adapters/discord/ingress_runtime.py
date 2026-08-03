@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import math
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -37,6 +37,7 @@ from shittim_chest.application.discord import (
     nonce_from_uuid7,
 )
 from shittim_chest.application.ingress_drain import (
+    DiscordIngressOperation,
     IngressRetryableFailure,
     IngressTerminalFailure,
 )
@@ -280,7 +281,10 @@ class DiscordIngressRuntime:
             return
 
         channel = await self._resolve_status_channel(request)
-        starter = await channel.fetch_message(int(request.status_message_id))
+        starter = await _await_discord_operation(
+            DiscordIngressOperation.STATUS_MESSAGE_FETCH,
+            channel.fetch_message(int(request.status_message_id)),
+        )
         self._validate_status_message(request, channel, starter)
         thread = await self._resolve_or_create_thread(starter, snapshot)
         panel = await self._resolve_or_create_panel(thread, snapshot)
@@ -296,7 +300,10 @@ class DiscordIngressRuntime:
     async def _resolve_status_channel(self, request: IngressRequest) -> discord.TextChannel:
         channel = self._moderator.get_channel(int(request.status_channel_id))
         if channel is None:
-            channel = await self._moderator.fetch_channel(int(request.status_channel_id))
+            channel = await _await_discord_operation(
+                DiscordIngressOperation.STATUS_CHANNEL_FETCH,
+                self._moderator.fetch_channel(int(request.status_channel_id)),
+            )
         if (
             not isinstance(channel, discord.TextChannel)
             or str(channel.id) != request.status_channel_id
@@ -337,14 +344,20 @@ class DiscordIngressRuntime:
             thread = cached if isinstance(cached, discord.Thread) else None
         if thread is None:
             try:
-                fetched = await self._moderator.fetch_channel(starter.id)
+                fetched = await _await_discord_operation(
+                    DiscordIngressOperation.THREAD_LOOKUP,
+                    self._moderator.fetch_channel(starter.id),
+                )
             except discord.NotFound:
                 fetched = None
             thread = fetched if isinstance(fetched, discord.Thread) else None
         if thread is None:
-            thread = await starter.create_thread(
-                name=f"Shittim {str(snapshot.state.debate_id)[:8]}",
-                auto_archive_duration=1440,
+            thread = await _await_discord_operation(
+                DiscordIngressOperation.THREAD_CREATE,
+                starter.create_thread(
+                    name=f"Shittim {str(snapshot.state.debate_id)[:8]}",
+                    auto_archive_duration=1440,
+                ),
             )
         if str(thread.guild.id) != snapshot.guild_id:
             raise DiscordThreadUnavailable
@@ -359,19 +372,25 @@ class DiscordIngressRuntime:
     ) -> discord.Message:
         content = _panel_content(snapshot)
         nonce = nonce_from_uuid7(snapshot.state.attempt_id.value)
-        panel = await self._find_message(
-            thread,
-            nonce=nonce,
-            content=content,
-            after=snapshot.attempt_created_at,
+        panel = await _await_discord_operation(
+            DiscordIngressOperation.PANEL_LOOKUP,
+            self._find_message(
+                thread,
+                nonce=nonce,
+                content=content,
+                after=snapshot.attempt_created_at,
+            ),
         )
         if panel is not None:
             return panel
-        return await thread.send(
-            content,
-            nonce=nonce,
-            allowed_mentions=discord.AllowedMentions.none(),
-            view=_panel_view(snapshot),
+        return await _await_discord_operation(
+            DiscordIngressOperation.PANEL_CREATE,
+            thread.send(
+                content,
+                nonce=nonce,
+                allowed_mentions=discord.AllowedMentions.none(),
+                view=_panel_view(snapshot),
+            ),
         )
 
     async def _find_message(
@@ -604,6 +623,32 @@ def _ingress_failure(
     if error.retryable:
         return IngressRetryableFailure(error.code)
     return IngressTerminalFailure(error.code)
+
+
+async def _await_discord_operation[T](
+    operation: DiscordIngressOperation,
+    awaitable: Awaitable[T],
+) -> T:
+    """Attach one safe operation label only to Discord rate-limit retries."""
+
+    try:
+        return await awaitable
+    except asyncio.CancelledError:
+        raise
+    except discord.RateLimited as error:
+        raise IngressRetryableFailure(
+            DiscordRateLimited().code,
+            retry_after_seconds=max(1.0, error.retry_after),
+            discord_operation=operation,
+        ) from error
+    except discord.HTTPException as error:
+        if error.status != 429:
+            raise
+        raise IngressRetryableFailure(
+            DiscordRateLimited().code,
+            retry_after_seconds=_discord_retry_after(error),
+            discord_operation=operation,
+        ) from error
 
 
 def _discord_retry_after(error: discord.HTTPException) -> float:
