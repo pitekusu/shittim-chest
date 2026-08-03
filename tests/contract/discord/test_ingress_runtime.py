@@ -29,6 +29,7 @@ from shittim_chest.application.discord import (
     DiscordRuntimeConfig,
 )
 from shittim_chest.application.ingress_drain import (
+    DiscordIngressOperation,
     IngressRetryableFailure,
     IngressTerminalFailure,
 )
@@ -487,6 +488,32 @@ async def test_prepare_preserves_discord_rate_limit_retry_after() -> None:
 
     assert caught.value.code == "DISCORD_RATE_LIMITED"
     assert caught.value.retry_after_seconds == 74.5
+    assert caught.value.discord_operation is DiscordIngressOperation.STATUS_CHANNEL_FETCH
+
+
+@pytest.mark.asyncio
+async def test_prepare_identifies_thread_creation_rate_limit_without_provider_content() -> None:
+    current = snapshot()
+    request = claimed_request(current)
+    application = FakeApplication(current)
+    client_set = clients()
+    moderator = client_set[DiscordBotSlot.MODERATOR]
+    channel, starter, _, _ = discord_context(request)
+    starter.thread = None
+    starter.create_thread = AsyncMock(side_effect=discord.RateLimited(87.25))
+    cast(Any, moderator).get_channel = MagicMock(
+        side_effect=lambda channel_id: channel if channel_id == int(CHANNEL_ID) else None
+    )
+    cast(Any, moderator).fetch_channel = AsyncMock(return_value=None)
+    ingress_runtime = runtime(application, client_set=client_set)
+
+    with pytest.raises(IngressRetryableFailure) as caught:
+        await ingress_runtime.prepare(request, application_result(current))
+
+    assert caught.value.code == "DISCORD_RATE_LIMITED"
+    assert caught.value.retry_after_seconds == 87.25
+    assert caught.value.discord_operation is DiscordIngressOperation.THREAD_CREATE
+    assert application.binds == []
 
 
 @pytest.mark.asyncio

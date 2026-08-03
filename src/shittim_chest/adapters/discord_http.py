@@ -334,7 +334,10 @@ def ingress_response(outcome: IngressOutcome) -> ApiGatewayV2Response:
 
     content = {
         IngressOutcome.STARTING: (
-            "\u23f3 シッテムの箱を起動しています。\nチャンネルへ起動状況を表示します。"
+            "\u2705 議論依頼を受け付けました。処理開始を準備しています。"
+            "\n推定待ち時間: 通常は約1分以内。連続実行時はDiscordの制限により"
+            "約5分かかる場合があります。"
+            "\nチャンネルへ進行状況を表示します。"
         ),
         IngressOutcome.ACCEPTED: (
             "\u2705 議論依頼を受け付けました。\nチャンネルへ進行状況を表示します。"
