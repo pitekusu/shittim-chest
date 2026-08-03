@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -170,14 +171,20 @@ class DiscordIngressRuntime:
         except TimeoutError as error:
             raise _ingress_failure(DiscordUnavailable()) from error
         except discord.RateLimited as error:
-            raise _ingress_failure(DiscordRateLimited()) from error
+            raise IngressRetryableFailure(
+                DiscordRateLimited().code,
+                retry_after_seconds=max(1.0, error.retry_after),
+            ) from error
         except discord.Forbidden as error:
             raise _ingress_failure(DiscordPermissionDenied()) from error
         except discord.NotFound as error:
             raise _ingress_failure(DiscordUnavailable()) from error
         except discord.HTTPException as error:
             if error.status == 429:
-                raise _ingress_failure(DiscordRateLimited()) from error
+                raise IngressRetryableFailure(
+                    DiscordRateLimited().code,
+                    retry_after_seconds=_discord_retry_after(error),
+                ) from error
             if error.status in {408, 409} or error.status >= 500:
                 raise _ingress_failure(DiscordUnavailable()) from error
             raise _ingress_failure(DiscordDeliveryRejected()) from error
@@ -597,6 +604,19 @@ def _ingress_failure(
     if error.retryable:
         return IngressRetryableFailure(error.code)
     return IngressTerminalFailure(error.code)
+
+
+def _discord_retry_after(error: discord.HTTPException) -> float:
+    raw = error.response.headers.get("Retry-After")
+    if isinstance(raw, bool) or not isinstance(raw, str | int | float):
+        return DEFAULT_PANEL_REFRESH_RETRY_SECONDS
+    try:
+        parsed = float(raw)
+    except TypeError, ValueError:
+        return DEFAULT_PANEL_REFRESH_RETRY_SECONDS
+    if not math.isfinite(parsed) or parsed <= 0:
+        return DEFAULT_PANEL_REFRESH_RETRY_SECONDS
+    return max(1.0, parsed)
 
 
 def _panel_failure_disposition(error: Exception) -> tuple[bool, str]:

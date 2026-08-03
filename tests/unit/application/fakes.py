@@ -210,6 +210,7 @@ class FakeRepository:
         self.terminal_operations: dict[str, OutboxOperation] = {}
         self.terminal_stages: list[DebateSnapshot] = []
         self.terminal_finalizations: list[DebateSnapshot] = []
+        self.terminal_finalize_errors: list[RepositoryConflict] = []
 
     async def get_operation_result(
         self,
@@ -315,6 +316,8 @@ class FakeRepository:
         expected: DebateSnapshot,
         updated: DebateSnapshot,
     ) -> DebateSnapshot:
+        if self.terminal_finalize_errors:
+            raise self.terminal_finalize_errors.pop(0)
         debate_id = expected.state.debate_id
         current = self.current.get(debate_id)
         if current is None or not _same_snapshot_version(current, expected):

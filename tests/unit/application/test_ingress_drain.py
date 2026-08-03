@@ -575,8 +575,36 @@ async def test_missing_starter_status_reschedules_before_slot_or_context_work(
         "error_code": "status_message_pending",
         "event": "ingress_retry_scheduled",
         "ingress_kind": "new_debate",
+        "retry_delay_seconds": 5.0,
+        "retry_delay_source": "application_default",
         "severity": "INFO",
     }
+
+
+@pytest.mark.asyncio
+async def test_discord_retry_after_controls_durable_ingress_schedule(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    item = request("first")
+    ingress = FakeIngressRepository(ready=(item,))
+    context = FakeContext(
+        prepare_errors={
+            item.interaction_id: IngressRetryableFailure(
+                "DISCORD_RATE_LIMITED",
+                retry_after_seconds=65.25,
+            )
+        }
+    )
+
+    with caplog.at_level(logging.INFO, logger="shittim_chest"):
+        report = await drainer(ingress=ingress, context=context).drain_once()
+
+    assert report.stop is IngressDrainStop.RETRY_SCHEDULED
+    assert ingress.rescheduled[0][1] >= NOW + timedelta(seconds=65.25)
+    retry = json.loads(caplog.records[-1].message)
+    assert retry["retry_delay_seconds"] == 65.25
+    assert retry["retry_delay_source"] == "discord_retry_after"
+    assert retry["error_code"] == "DISCORD_RATE_LIMITED"
 
 
 @pytest.mark.asyncio
@@ -1003,6 +1031,12 @@ def test_additional_failure_classifications(
 def test_typed_failure_rejects_invalid_public_error_code(code: str) -> None:
     with pytest.raises(ValueError, match="error code"):
         IngressRetryableFailure(code)
+
+
+@pytest.mark.parametrize("retry_after", [0.0, -1.0, float("inf"), float("nan"), True])
+def test_typed_failure_rejects_invalid_retry_after(retry_after: float) -> None:
+    with pytest.raises(ValueError, match="retry-after"):
+        IngressRetryableFailure("DISCORD_RATE_LIMITED", retry_after_seconds=retry_after)
 
 
 def test_failure_disposition_rejects_nonsettlement_status() -> None:

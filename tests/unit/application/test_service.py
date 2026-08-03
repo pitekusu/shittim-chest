@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -25,7 +27,13 @@ from shittim_chest.application import (
     RuntimeNotReady,
 )
 from shittim_chest.application.models import DebateSnapshot, MetricEvent
-from shittim_chest.application.ports import RepositoryConflict
+from shittim_chest.application.ports import (
+    RepositoryCancellationCode,
+    RepositoryConflict,
+    RepositoryTransactionAction,
+    RepositoryTransactionConflict,
+    RepositoryTransactionStage,
+)
 from shittim_chest.domain import (
     PARTICIPANTS,
     DebatePhase,
@@ -1147,6 +1155,109 @@ async def test_owned_terminal_delivery_conflict_retries_without_waiting_for_reco
     assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY in {
         event for event, _ in dependencies[2].events
     }
+
+
+@pytest.mark.asyncio
+async def test_terminal_attempt_cas_conflict_logs_action_and_retries(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = dependencies[6]
+    repository.terminal_finalize_errors.append(
+        RepositoryTransactionConflict(
+            stage=RepositoryTransactionStage.TERMINAL_FINALIZE,
+            failures=(
+                (
+                    RepositoryTransactionAction.ATTEMPT_CAS,
+                    RepositoryCancellationCode.CONDITIONAL_CHECK_FAILED,
+                ),
+            ),
+            reasons_complete=True,
+        )
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    with caplog.at_level(logging.WARNING, logger="shittim_chest"):
+        await app.run_debate(accepted.debate_id)
+
+    assert repository.current[accepted.debate_id].state.phase is DebatePhase.COMPLETED
+    event = json.loads(
+        next(
+            record.message
+            for record in caplog.records
+            if json.loads(record.message).get("event") == "terminal_delivery_conflict"
+        )
+    )
+    assert event == {
+        "cancellation_reasons_complete": True,
+        "debate_id": str(accepted.debate_id),
+        "event": "terminal_delivery_conflict",
+        "failed_action_kinds": ["attempt_cas"],
+        "failure_codes": ["ConditionalCheckFailed"],
+        "retry_delay_seconds": 0.0,
+        "retry_number": 1,
+        "retryable": True,
+        "severity": "WARNING",
+        "transaction_stage": "terminal_finalize",
+    }
+
+
+@pytest.mark.asyncio
+async def test_terminal_outbox_condition_conflict_fails_closed_without_hot_retry(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = dependencies[6]
+    repository.terminal_finalize_errors.append(
+        RepositoryTransactionConflict(
+            stage=RepositoryTransactionStage.TERMINAL_FINALIZE,
+            failures=(
+                (
+                    RepositoryTransactionAction.OUTBOX_SENT_CHECK,
+                    RepositoryCancellationCode.CONDITIONAL_CHECK_FAILED,
+                ),
+            ),
+            reasons_complete=True,
+        )
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="shittim_chest"),
+        pytest.raises(RuntimeError, match="not retryable"),
+    ):
+        await app.run_debate(accepted.debate_id)
+
+    assert repository.terminal_finalize_errors == []
+    assert repository.terminal_finalizations == []
+    assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY not in {
+        event for event, _ in dependencies[2].events
+    }
+    event = json.loads(caplog.records[-1].message)
+    assert event["failed_action_kinds"] == ["outbox_sent_check"]
+    assert event["failure_codes"] == ["ConditionalCheckFailed"]
+    assert event["retryable"] is False
+    assert event["retry_number"] is None
 
 
 @pytest.mark.asyncio

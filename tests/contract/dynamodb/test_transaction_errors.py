@@ -18,10 +18,16 @@ from mypy_boto3_dynamodb.client import DynamoDBClient
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.adapters.dynamodb.repository import _ingress_claim_token_component
 from shittim_chest.adapters.dynamodb.transaction_errors import (
+    classified_transaction_conflict,
     is_condition_only_cancellation,
 )
 from shittim_chest.application import IngressClaimFence, IngressStatus
-from shittim_chest.application.ports import RepositoryUnavailable
+from shittim_chest.application.ports import (
+    RepositoryCancellationCode,
+    RepositoryTransactionAction,
+    RepositoryTransactionStage,
+    RepositoryUnavailable,
+)
 from tests.contract.dynamodb.test_ingress_sdk_boundary import request
 
 if TYPE_CHECKING:
@@ -72,6 +78,63 @@ def test_other_or_malformed_cancellations_fail_safe_as_unavailable(
     assert not is_condition_only_cancellation(
         client_error(reasons, include_reasons=include_reasons)
     )
+
+
+def test_ordered_cancellation_reason_identifies_exact_terminal_action() -> None:
+    conflict = classified_transaction_conflict(
+        client_error(
+            [
+                {"Code": "None"},
+                {"Code": "ConditionalCheckFailed"},
+                {"Code": "None"},
+            ]
+        ),
+        stage=RepositoryTransactionStage.TERMINAL_FINALIZE,
+        action_kinds=(
+            RepositoryTransactionAction.ATTEMPT_CAS,
+            RepositoryTransactionAction.OUTBOX_SENT_CHECK,
+            RepositoryTransactionAction.SLOT_RELEASE,
+        ),
+    )
+
+    assert conflict.failures == (
+        (
+            RepositoryTransactionAction.OUTBOX_SENT_CHECK,
+            RepositoryCancellationCode.CONDITIONAL_CHECK_FAILED,
+        ),
+    )
+    assert conflict.reasons_complete
+    assert not conflict.retryable
+
+
+def test_attempt_cas_conflict_is_the_only_retryable_condition_miss() -> None:
+    conflict = classified_transaction_conflict(
+        client_error([{"Code": "ConditionalCheckFailed"}, {"Code": "None"}]),
+        stage=RepositoryTransactionStage.TERMINAL_FINALIZE,
+        action_kinds=(
+            RepositoryTransactionAction.ATTEMPT_CAS,
+            RepositoryTransactionAction.SLOT_RELEASE,
+        ),
+    )
+
+    assert conflict.retryable
+
+
+def test_incomplete_cancellation_reasons_fail_closed() -> None:
+    conflict = classified_transaction_conflict(
+        client_error([{"Code": "ConditionalCheckFailed"}]),
+        stage=RepositoryTransactionStage.TERMINAL_FINALIZE,
+        action_kinds=(
+            RepositoryTransactionAction.ATTEMPT_CAS,
+            RepositoryTransactionAction.SLOT_RELEASE,
+        ),
+    )
+
+    assert conflict.failures == (
+        (RepositoryTransactionAction.UNKNOWN, RepositoryCancellationCode.UNKNOWN),
+    )
+    assert not conflict.reasons_complete
+    assert not conflict.retryable
 
 
 def client() -> DynamoDBClient:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import Awaitable
 from dataclasses import replace
 from datetime import datetime
@@ -42,6 +44,7 @@ from shittim_chest.application.ports import (
     OpenAIService,
     RepositoryClaimLost,
     RepositoryConflict,
+    RepositoryTransactionConflict,
 )
 from shittim_chest.application.scale_to_zero import IngressClaimFence, IngressKind
 from shittim_chest.domain import (
@@ -65,6 +68,7 @@ _T = TypeVar("_T")
 
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRIES = 3
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRY_SECONDS = 1.0
+_LOGGER = logging.getLogger("shittim_chest")
 
 
 class _PhaseDeadlineExceeded(Exception):
@@ -73,6 +77,28 @@ class _PhaseDeadlineExceeded(Exception):
 
 class _TerminalDeliveryConflictExhausted(RuntimeError):
     """Signal that bounded terminal-delivery conflict recovery was exhausted."""
+
+
+class _TerminalDeliveryConflict(RuntimeError):
+    """Content-free terminal-delivery conflict with an explicit retry decision."""
+
+    __slots__ = ("actions", "codes", "reasons_complete", "retryable", "stage")
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        actions: tuple[str, ...],
+        codes: tuple[str, ...],
+        reasons_complete: bool,
+        retryable: bool,
+    ) -> None:
+        self.stage = stage
+        self.actions = actions
+        self.codes = codes
+        self.reasons_complete = reasons_complete
+        self.retryable = retryable
+        super().__init__("terminal delivery conflict")
 
 
 class DebateApplication:
@@ -322,10 +348,20 @@ class DebateApplication:
             try:
                 await self._finish_terminal_delivery(current)
                 return
-            except RepositoryConflict as error:
-                if retry == self._terminal_delivery_conflict_retries:
+            except _TerminalDeliveryConflict as error:
+                will_retry = error.retryable and retry < self._terminal_delivery_conflict_retries
+                _log_terminal_delivery_conflict(
+                    snapshot.state.debate_id,
+                    error,
+                    retry_number=retry + 1 if will_retry else None,
+                    retry_delay_seconds=(
+                        self._terminal_delivery_conflict_retry_seconds if will_retry else None
+                    ),
+                )
+                if not will_retry:
                     raise _TerminalDeliveryConflictExhausted(
-                        "terminal delivery conflicts exceeded the bounded retry limit"
+                        "terminal delivery conflicts exceeded the bounded retry limit "
+                        "or were not retryable"
                     ) from error
             current = await self._require_snapshot(snapshot.state.debate_id)
             if current.state.phase.is_terminal:
@@ -966,12 +1002,27 @@ class DebateApplication:
         if snapshot.state.phase.is_terminal:
             return snapshot
         self._require_owned_active_lease(snapshot, at=self._clock.now())
-        await self._outbox_recovery.drain(expected=snapshot)
+        try:
+            await self._outbox_recovery.drain(expected=snapshot)
+        except RepositoryConflict as error:
+            raise _TerminalDeliveryConflict(
+                stage="outbox_recovery",
+                actions=("outbox_operation",),
+                codes=("repository_conflict",),
+                reasons_complete=False,
+                retryable=True,
+            ) from error
         current = await self._require_snapshot(snapshot.state.debate_id)
         if current.state.phase.is_terminal:
             return current
         if current.terminal_delivery != delivery:
-            raise RepositoryConflict("terminal delivery changed while it was being drained")
+            raise _TerminalDeliveryConflict(
+                stage="state_recheck",
+                actions=("terminal_delivery_plan",),
+                codes=("identity_mismatch",),
+                reasons_complete=True,
+                retryable=False,
+            )
         at = self._clock.now()
         self._require_owned_active_lease(current, at=at)
         finalized = replace(
@@ -979,10 +1030,27 @@ class DebateApplication:
             state=current.state.transition_to(delivery.target_phase, at=at),
             terminal_delivery=delivery.complete(at=at),
         )
-        persisted = await self._repository.finalize_terminal(
-            expected=current,
-            updated=finalized,
-        )
+        try:
+            persisted = await self._repository.finalize_terminal(
+                expected=current,
+                updated=finalized,
+            )
+        except RepositoryTransactionConflict as error:
+            raise _TerminalDeliveryConflict(
+                stage=error.stage.value,
+                actions=tuple(action.value for action, _ in error.failures),
+                codes=tuple(code.value for _, code in error.failures),
+                reasons_complete=error.reasons_complete,
+                retryable=error.retryable,
+            ) from error
+        except RepositoryConflict as error:
+            raise _TerminalDeliveryConflict(
+                stage="terminal_finalize",
+                actions=("unknown",),
+                codes=("repository_conflict",),
+                reasons_complete=False,
+                retryable=False,
+            ) from error
         metric = {
             DebatePhase.COMPLETED: MetricEvent.COMPLETED,
             DebatePhase.FAILED: MetricEvent.FAILED,
@@ -1039,6 +1107,33 @@ class DebateApplication:
     ) -> None:
         if actor_id != snapshot.requester_id and not can_manage_messages:
             raise RequestNotAllowed("only the requester or a moderator may perform this operation")
+
+
+def _log_terminal_delivery_conflict(
+    debate_id: DebateId,
+    error: _TerminalDeliveryConflict,
+    *,
+    retry_number: int | None,
+    retry_delay_seconds: float | None,
+) -> None:
+    _LOGGER.warning(
+        json.dumps(
+            {
+                "severity": "WARNING" if error.retryable else "ERROR",
+                "event": "terminal_delivery_conflict",
+                "debate_id": str(debate_id),
+                "transaction_stage": error.stage,
+                "failed_action_kinds": error.actions,
+                "failure_codes": error.codes,
+                "cancellation_reasons_complete": error.reasons_complete,
+                "retryable": error.retryable,
+                "retry_number": retry_number,
+                "retry_delay_seconds": retry_delay_seconds,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 def _claim_for_write(

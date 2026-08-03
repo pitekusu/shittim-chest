@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
@@ -115,8 +116,15 @@ class _RuntimeAdmission(Protocol):
 class IngressRetryableFailure(RuntimeError):
     """Request a durable retry for a typed, temporary command-boundary failure."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, retry_after_seconds: float | None = None) -> None:
         self.code = _validated_error_code(code)
+        if retry_after_seconds is not None and (
+            isinstance(retry_after_seconds, bool)
+            or not math.isfinite(retry_after_seconds)
+            or retry_after_seconds <= 0
+        ):
+            raise ValueError("ingress retry-after must be a positive finite number")
+        self.retry_after_seconds = retry_after_seconds
         super().__init__(self.code)
 
 
@@ -428,14 +436,26 @@ class IngressDrainer:
         at = self._clock.now()
         try:
             if disposition.status is IngressStatus.RETRYING:
+                retry_delay = self._retry_delay
+                if disposition.retry_after_seconds is not None:
+                    retry_delay = max(
+                        retry_delay,
+                        timedelta(seconds=disposition.retry_after_seconds),
+                    )
+                next_attempt_at = at + retry_delay
                 await self._ingress.reschedule(
                     request=request,
                     claim_owner=self._runtime_instance_id,
                     at=at,
-                    next_attempt_at=at + self._retry_delay,
+                    next_attempt_at=next_attempt_at,
                     error_code=disposition.error_code,
                 )
-                _log_ingress_retry(request, disposition.error_code)
+                _log_ingress_retry(
+                    request,
+                    disposition.error_code,
+                    retry_delay=retry_delay,
+                    provider_retry_after_seconds=disposition.retry_after_seconds,
+                )
                 stop = (
                     IngressDrainStop.SLOT_BUSY
                     if isinstance(error, RepositoryBusy)
@@ -462,13 +482,25 @@ class IngressDrainer:
         return replace(report, failed=report.failed + 1), False
 
 
-def _log_ingress_retry(request: IngressRequest, error_code: str) -> None:
+def _log_ingress_retry(
+    request: IngressRequest,
+    error_code: str,
+    *,
+    retry_delay: timedelta,
+    provider_retry_after_seconds: float | None,
+) -> None:
     payload = {
         "severity": "INFO",
         "event": "ingress_retry_scheduled",
         "ingress_kind": request.kind.value,
         "delivery_attempt": request.delivery_attempt,
         "error_code": error_code,
+        "retry_delay_seconds": retry_delay.total_seconds(),
+        "retry_delay_source": (
+            "discord_retry_after"
+            if provider_retry_after_seconds is not None
+            else "application_default"
+        ),
     }
     _LOGGER.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
@@ -479,9 +511,18 @@ class IngressFailureDisposition:
 
     status: IngressStatus | None
     error_code: str
+    retry_after_seconds: float | None = None
 
     def __post_init__(self) -> None:
         _validated_error_code(self.error_code)
+        if self.retry_after_seconds is not None and (
+            isinstance(self.retry_after_seconds, bool)
+            or not math.isfinite(self.retry_after_seconds)
+            or self.retry_after_seconds <= 0
+        ):
+            raise ValueError("ingress retry-after must be a positive finite number")
+        if self.status is not IngressStatus.RETRYING and self.retry_after_seconds is not None:
+            raise ValueError("only retrying dispositions may carry retry-after")
         if self.status not in {
             None,
             IngressStatus.RETRYING,
@@ -501,7 +542,11 @@ def classify_ingress_failure(error: Exception) -> IngressFailureDisposition:
     if isinstance(error, RepositoryQuotaExceeded):
         return IngressFailureDisposition(IngressStatus.REJECTED, "daily_quota_exceeded")
     if isinstance(error, IngressRetryableFailure):
-        return IngressFailureDisposition(IngressStatus.RETRYING, error.code)
+        return IngressFailureDisposition(
+            IngressStatus.RETRYING,
+            error.code,
+            retry_after_seconds=error.retry_after_seconds,
+        )
     if isinstance(error, IngressRejectedFailure):
         return IngressFailureDisposition(IngressStatus.REJECTED, error.code)
     if isinstance(error, IngressTerminalFailure):

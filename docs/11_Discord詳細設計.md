@@ -102,6 +102,8 @@ STEP-06Bはdiscord.py 2.7.1の公開`Thread.send()`を使用する。22文字non
 
 2回目以降のclaimでは、outbox作成時刻より後のthread履歴を古い順に最大500件調べ、同一Bot author、nonce、content、SHA-256が一致する最古messageを採用する。同一nonceで内容が異なる場合は`DISCORD_OUTBOX_CONFLICT`として送信せず停止する。discord.pyがRetry-Afterを用いた内部retryを使い切った`RateLimited`はその`retry_after`、HTTP 429はheader、408/409/5xxは30秒の既定値でoutboxを1回だけ再scheduleし、publisher自身は同じHTTP requestをloop retryしない。Discordのchannel解決、履歴照合、sendは45秒でtimeoutし、共有outbox claim 60秒より前に30秒後へ再scheduleする。DynamoDBの`mark_sent`はDiscord timeout外でfenced writeとして実行する。権限不足、thread消失、wrong Guild、locked thread、その他4xxは自動再送・自動unlockしない。
 
+HTTP ingressからRuntimeがstarter message、thread、panelを準備する経路でも、discord.pyの`RateLimited.retry_after`またはHTTP 429の`Retry-After`をcontent-freeな秒数としてapplication境界へ渡す。Ingress Requestは固定5秒より長いprovider指定値を`next_attempt_at`へ保存し、その時刻より前に再claimしない。構造化logはerror code、delivery attempt、実際のretry delayとdelay sourceだけを記録し、header/body、質問、tokenは記録しない。
+
 STEP-07Bの`DiscordOutboxRecovery`はlease取得済みattemptの全未送信operationを強整合Queryで取得し、`chunk_sequence`とoperation IDの保存済み順序で1件ずつpublisherへ渡す。`next_retry_at`未来値と未失効claimはその永続時刻までasync待機し、pollによるbusy loopを行わない。retryable provider errorはpublisherが保存したscheduleを再読込みし、同じHTTP requestを直接retryしない。非retryable errorは安定Discord codeを保持してattemptをFAILEDへする。shutdown cancellationは再送出し、送信途中recordを次回のclaim/reconciliationへ残す。
 
 ## 8. Error code
