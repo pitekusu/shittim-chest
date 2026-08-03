@@ -39,6 +39,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     serialize_panel_operation,
     serialize_snapshot,
 )
+from shittim_chest.adapters.dynamodb.transaction_errors import classified_transaction_conflict
 from shittim_chest.application.discord import (
     MAX_TERMINAL_OUTBOX_CHUNKS,
     DiscordBotSlot,
@@ -54,6 +55,8 @@ from shittim_chest.application.ports import (
     RepositoryClaimLost,
     RepositoryConflict,
     RepositoryQuotaExceeded,
+    RepositoryTransactionAction,
+    RepositoryTransactionStage,
 )
 from shittim_chest.application.scale_to_zero import (
     IngressClaimFence,
@@ -594,6 +597,7 @@ class DynamoDbDebateRepository:
                 write_at=persisted.state.updated_at,
             ),
         ]
+        action_kinds = [RepositoryTransactionAction.ATTEMPT_CAS]
         delivery = expected.terminal_delivery
         if delivery is None:  # pragma: no cover - validated above
             raise AssertionError("terminal delivery disappeared during finalization")
@@ -613,17 +617,28 @@ class DynamoDbDebateRepository:
                 )
             )
         )
+        action_kinds.extend(
+            RepositoryTransactionAction.OUTBOX_SENT_CHECK for _ in delivery.operation_ids
+        )
         for key, item in new_items.items():
             if old_items.get(key) != item:
                 actions.append(self._put(item))
+                action_kinds.append(RepositoryTransactionAction.RELATED_ITEM_PUT)
         actions.extend(
             (
                 self._release_slot_action(lease, persisted.state.updated_at),
                 self._active_attempt_count_action(-1, persisted.state.updated_at),
             )
         )
+        action_kinds.extend(
+            (
+                RepositoryTransactionAction.SLOT_RELEASE,
+                RepositoryTransactionAction.ACTIVE_ATTEMPT_COUNT,
+            )
+        )
         if not expected.panel_refresh_pending and persisted.panel_refresh_pending:
             actions.append(self._panel_refresh_count_action(1, persisted.state.updated_at))
+            action_kinds.append(RepositoryTransactionAction.PANEL_REFRESH_COUNT)
         _require_transaction_size(actions)
         token_source = ":".join(
             (
@@ -637,7 +652,12 @@ class DynamoDbDebateRepository:
             )
         )
         try:
-            self._transact(actions, token=_client_token(token_source))
+            self._transact(
+                actions,
+                token=_client_token(token_source),
+                cancellation_stage=RepositoryTransactionStage.TERMINAL_FINALIZE,
+                cancellation_action_kinds=tuple(action_kinds),
+            )
         except RepositoryConflict:
             current = self._load_snapshot(expected.state.debate_id, None)
             if (
@@ -2364,10 +2384,21 @@ class DynamoDbDebateRepository:
         except PersistenceFormatError, ValueError:
             raise RepositoryClaimLost("ingress claim operation is invalid") from None
 
-    def _transact(self, actions: Iterable[TransactWriteItemTypeDef], *, token: str) -> None:
+    def _transact(
+        self,
+        actions: Iterable[TransactWriteItemTypeDef],
+        *,
+        token: str,
+        cancellation_stage: RepositoryTransactionStage | None = None,
+        cancellation_action_kinds: tuple[RepositoryTransactionAction, ...] = (),
+    ) -> None:
         action_list = list(actions)
         if not 1 <= len(action_list) <= 100:
             raise ValueError("DynamoDB transaction must contain between 1 and 100 actions")
+        if cancellation_stage is None and cancellation_action_kinds:
+            raise ValueError("transaction action kinds require a cancellation stage")
+        if cancellation_stage is not None and len(cancellation_action_kinds) != len(action_list):
+            raise ValueError("transaction action kinds must match the transaction size")
         try:
             self._client.transact_write_items(
                 TransactItems=action_list,
@@ -2375,6 +2406,12 @@ class DynamoDbDebateRepository:
                 ReturnConsumedCapacity="NONE",
             )
         except self._client.exceptions.TransactionCanceledException as error:
+            if cancellation_stage is not None:
+                raise classified_transaction_conflict(
+                    error,
+                    stage=cancellation_stage,
+                    action_kinds=cancellation_action_kinds,
+                ) from error
             raise RepositoryConflict("DynamoDB transaction condition failed") from error
         except self._client.exceptions.IdempotentParameterMismatchException as error:
             raise RepositoryConflict("transaction token was reused with different input") from error

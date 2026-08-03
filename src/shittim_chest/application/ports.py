@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum, unique
 from typing import Protocol
 
 from shittim_chest.application.discord import OutboxOperation
@@ -51,6 +52,74 @@ from shittim_chest.domain import (
 
 class RepositoryConflict(Exception):
     """Raised when a conditional repository operation loses its expected state."""
+
+
+@unique
+class RepositoryTransactionStage(StrEnum):
+    """Content-free repository transaction stages safe for diagnostics."""
+
+    TERMINAL_FINALIZE = "terminal_finalize"
+
+
+@unique
+class RepositoryTransactionAction(StrEnum):
+    """Content-free transaction action kinds safe for diagnostics."""
+
+    ATTEMPT_CAS = "attempt_cas"
+    OUTBOX_SENT_CHECK = "outbox_sent_check"
+    RELATED_ITEM_PUT = "related_item_put"
+    SLOT_RELEASE = "slot_release"
+    ACTIVE_ATTEMPT_COUNT = "active_attempt_count"
+    PANEL_REFRESH_COUNT = "panel_refresh_count"
+    UNKNOWN = "unknown"
+
+
+@unique
+class RepositoryCancellationCode(StrEnum):
+    """Allowlisted DynamoDB cancellation codes without provider messages."""
+
+    CONDITIONAL_CHECK_FAILED = "ConditionalCheckFailed"
+    TRANSACTION_CONFLICT = "TransactionConflict"
+    ITEM_COLLECTION_SIZE_LIMIT_EXCEEDED = "ItemCollectionSizeLimitExceeded"
+    PROVISIONED_THROUGHPUT_EXCEEDED = "ProvisionedThroughputExceeded"
+    THROTTLING_ERROR = "ThrottlingError"
+    VALIDATION_ERROR = "ValidationError"
+    UNKNOWN = "Unknown"
+
+
+class RepositoryTransactionConflict(RepositoryConflict):
+    """Expose only safe action/code metadata for a cancelled transaction."""
+
+    __slots__ = ("failures", "reasons_complete", "stage")
+
+    def __init__(
+        self,
+        *,
+        stage: RepositoryTransactionStage,
+        failures: tuple[tuple[RepositoryTransactionAction, RepositoryCancellationCode], ...],
+        reasons_complete: bool,
+    ) -> None:
+        if not failures:
+            raise ValueError("repository transaction conflict requires at least one failure")
+        self.stage = stage
+        self.failures = failures
+        self.reasons_complete = reasons_complete
+        super().__init__("repository transaction condition failed")
+
+    @property
+    def retryable(self) -> bool:
+        """Retry only complete transient conflicts or the attempt CAS race."""
+
+        if not self.reasons_complete:
+            return False
+        return all(
+            code is RepositoryCancellationCode.TRANSACTION_CONFLICT
+            or (
+                action is RepositoryTransactionAction.ATTEMPT_CAS
+                and code is RepositoryCancellationCode.CONDITIONAL_CHECK_FAILED
+            )
+            for action, code in self.failures
+        )
 
 
 class RepositoryIdentityConflict(RepositoryConflict):

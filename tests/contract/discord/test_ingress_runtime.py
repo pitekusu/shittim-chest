@@ -18,6 +18,7 @@ import pytest
 from shittim_chest.adapters.discord import build_discord_clients
 from shittim_chest.adapters.discord.ingress_runtime import (
     DiscordIngressRuntime,
+    _discord_retry_after,
     _panel_failure_disposition,
 )
 from shittim_chest.application.commands import AppliedIngressCommand
@@ -472,6 +473,23 @@ async def test_prepare_maps_transport_failure_to_stable_retryable_error() -> Non
 
 
 @pytest.mark.asyncio
+async def test_prepare_preserves_discord_rate_limit_retry_after() -> None:
+    current = snapshot()
+    application = FakeApplication(current)
+    client_set = clients()
+    moderator = client_set[DiscordBotSlot.MODERATOR]
+    cast(Any, moderator).get_channel = MagicMock(return_value=None)
+    cast(Any, moderator).fetch_channel = AsyncMock(side_effect=discord.RateLimited(74.5))
+    ingress_runtime = runtime(application, client_set=client_set)
+
+    with pytest.raises(IngressRetryableFailure) as caught:
+        await ingress_runtime.prepare(claimed_request(current), application_result(current))
+
+    assert caught.value.code == "DISCORD_RATE_LIMITED"
+    assert caught.value.retry_after_seconds == 74.5
+
+
+@pytest.mark.asyncio
 async def test_control_preflight_accepts_exact_persisted_context_without_mutation() -> None:
     current = snapshot(bound=True)
     application = FakeApplication(current)
@@ -750,6 +768,13 @@ def test_panel_http_failure_classification_is_explicit(
     error = discord.HTTPException(cast(Any, response), "fixture")
 
     assert _panel_failure_disposition(error) == (retryable, code)
+
+
+def test_ingress_http_rate_limit_uses_retry_after_header() -> None:
+    response = SimpleNamespace(status=429, reason="fixture", headers={"Retry-After": "91.25"})
+    error = discord.HTTPException(cast(Any, response), "fixture")
+
+    assert _discord_retry_after(error) == 91.25
 
 
 def test_panel_delivery_timeout_preserves_claim_completion_margin() -> None:

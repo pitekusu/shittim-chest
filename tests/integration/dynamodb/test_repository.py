@@ -34,9 +34,12 @@ from shittim_chest.application import (
 )
 from shittim_chest.application.ports import (
     RepositoryBusy,
+    RepositoryCancellationCode,
     RepositoryClaimLost,
     RepositoryConflict,
     RepositoryQuotaExceeded,
+    RepositoryTransactionAction,
+    RepositoryTransactionConflict,
 )
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
 
@@ -1640,8 +1643,17 @@ async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
         state=persisted.state.transition_to(DebatePhase.CANCELLED, at=terminal_at),
         terminal_delivery=plan.complete(at=terminal_at),
     )
-    with pytest.raises(RepositoryConflict):
+    with pytest.raises(RepositoryTransactionConflict) as caught:
         await debates.finalize_terminal(expected=persisted, updated=terminal)
+    assert caught.value.failures == tuple(
+        (
+            RepositoryTransactionAction.OUTBOX_SENT_CHECK,
+            RepositoryCancellationCode.CONDITIONAL_CHECK_FAILED,
+        )
+        for _ in operations
+    )
+    assert caught.value.reasons_complete
+    assert not caught.value.retryable
 
     for index, operation in enumerate(operations):
         claim_at = NOW + timedelta(seconds=2, microseconds=index)
