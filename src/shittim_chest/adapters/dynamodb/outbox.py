@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
@@ -23,13 +24,20 @@ from shittim_chest.adapters.dynamodb.serializer import (
     deserialize_outbox,
     serialize_outbox,
 )
+from shittim_chest.adapters.dynamodb.transaction_errors import classified_transaction_conflict
 from shittim_chest.application.discord import (
     OUTBOX_CLAIM_SECONDS,
     OutboxOperation,
     OutboxStatus,
 )
 from shittim_chest.application.models import DebateSnapshot
-from shittim_chest.application.ports import RepositoryConflict
+from shittim_chest.application.ports import (
+    RepositoryCancellationCode,
+    RepositoryConflict,
+    RepositoryTransactionAction,
+    RepositoryTransactionConflict,
+    RepositoryTransactionStage,
+)
 from shittim_chest.application.scale_to_zero import OutboxActivity
 from shittim_chest.domain import AttemptId, DebateId
 
@@ -162,7 +170,17 @@ class DynamoDbOutboxRepository:
             ),
         ]
         try:
-            self._transact(actions, operation.operation_id)
+            self._transact(
+                actions,
+                operation.operation_id,
+                cancellation_stage=RepositoryTransactionStage.OUTBOX_PREPARE,
+                cancellation_action_kinds=(
+                    RepositoryTransactionAction.ATTEMPT_CAS,
+                    RepositoryTransactionAction.LEASE_FENCE,
+                    RepositoryTransactionAction.OUTBOX_OPERATION,
+                    RepositoryTransactionAction.OUTBOX_ACTIVITY,
+                ),
+            )
         except RepositoryConflict:
             existing = self._get(operation.debate_id, operation.attempt_id, operation.operation_id)
             if existing is None or existing != operation:
@@ -246,9 +264,18 @@ class DynamoDbOutboxRepository:
                     at=at,
                 )
             )
+        action_kinds = [
+            RepositoryTransactionAction.ATTEMPT_CAS,
+            RepositoryTransactionAction.LEASE_FENCE,
+            RepositoryTransactionAction.OUTBOX_OPERATION,
+        ]
+        if not reclaim:
+            action_kinds.append(RepositoryTransactionAction.OUTBOX_ACTIVITY)
         self._transact(
             actions,
             f"claim-{operation_id}-{operation.delivery_attempt + 1}",
+            cancellation_stage=RepositoryTransactionStage.OUTBOX_CLAIM,
+            cancellation_action_kinds=tuple(action_kinds),
         )
         claimed = self._get(operation.debate_id, operation.attempt_id, operation_id)
         if claimed is None:
@@ -309,6 +336,13 @@ class DynamoDbOutboxRepository:
                 ),
             ],
             f"sent-{operation_id}-{operation.delivery_attempt}",
+            cancellation_stage=RepositoryTransactionStage.OUTBOX_MARK_SENT,
+            cancellation_action_kinds=(
+                RepositoryTransactionAction.ATTEMPT_CAS,
+                RepositoryTransactionAction.LEASE_FENCE,
+                RepositoryTransactionAction.OUTBOX_OPERATION,
+                RepositoryTransactionAction.OUTBOX_ACTIVITY,
+            ),
         )
         sent = self._require_operation(expected, operation_id)
         if sent.status is not OutboxStatus.SENT:
@@ -366,6 +400,13 @@ class DynamoDbOutboxRepository:
                 ),
             ],
             f"retry-{operation_id}-{operation.delivery_attempt}",
+            cancellation_stage=RepositoryTransactionStage.OUTBOX_RESCHEDULE,
+            cancellation_action_kinds=(
+                RepositoryTransactionAction.ATTEMPT_CAS,
+                RepositoryTransactionAction.LEASE_FENCE,
+                RepositoryTransactionAction.OUTBOX_OPERATION,
+                RepositoryTransactionAction.OUTBOX_ACTIVITY,
+            ),
         )
         return self._require_operation(expected, operation_id)
 
@@ -534,16 +575,47 @@ class DynamoDbOutboxRepository:
             at=at,
         )
 
-    def _transact(self, actions: list[TransactWriteItemTypeDef], token: str) -> None:
+    def _transact(
+        self,
+        actions: list[TransactWriteItemTypeDef],
+        token: str,
+        *,
+        cancellation_stage: RepositoryTransactionStage | None = None,
+        cancellation_action_kinds: tuple[RepositoryTransactionAction, ...] = (),
+    ) -> None:
+        if cancellation_stage is None and cancellation_action_kinds:
+            raise ValueError("transaction action kinds require a cancellation stage")
+        if cancellation_stage is not None and len(cancellation_action_kinds) != len(actions):
+            raise ValueError("transaction action kinds must match the transaction size")
         try:
             self._client.transact_write_items(
                 TransactItems=actions,
-                ClientRequestToken=_client_token(f"{self._table_name}:{token}"),
+                ClientRequestToken=_transaction_token(
+                    f"{self._table_name}:{token}",
+                    actions,
+                ),
                 ReturnConsumedCapacity="NONE",
             )
         except self._client.exceptions.TransactionCanceledException as error:
+            if cancellation_stage is not None:
+                raise classified_transaction_conflict(
+                    error,
+                    stage=cancellation_stage,
+                    action_kinds=cancellation_action_kinds,
+                ) from error
             raise RepositoryConflict("outbox transaction condition failed") from error
         except self._client.exceptions.IdempotentParameterMismatchException as error:
+            if cancellation_stage is not None:
+                raise RepositoryTransactionConflict(
+                    stage=cancellation_stage,
+                    failures=(
+                        (
+                            RepositoryTransactionAction.UNKNOWN,
+                            RepositoryCancellationCode.IDEMPOTENT_PARAMETER_MISMATCH,
+                        ),
+                    ),
+                    reasons_complete=True,
+                ) from error
             raise RepositoryConflict("outbox transaction token mismatch") from error
 
 
@@ -661,6 +733,13 @@ def _client_token(value: str) -> str:
     import hashlib
 
     return f"ob-{hashlib.sha256(value.encode()).hexdigest()[:33]}"
+
+
+def _transaction_token(label: str, actions: list[TransactWriteItemTypeDef]) -> str:
+    """Bind DynamoDB idempotency to the complete transaction request body."""
+
+    canonical = json.dumps(actions, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return _client_token(f"{label}:{canonical}")
 
 
 def _timestamp(value: datetime) -> str:

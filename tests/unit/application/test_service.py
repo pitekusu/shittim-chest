@@ -1121,7 +1121,7 @@ async def test_nonretryable_outbox_recovery_failure_preserves_required_delivery_
 
 
 @pytest.mark.asyncio
-async def test_owned_terminal_delivery_conflict_retries_without_waiting_for_recovery(
+async def test_typed_outbox_transaction_conflict_retries_without_waiting_for_recovery(
     dependencies: tuple[
         FakeClock,
         FakeIds,
@@ -1132,6 +1132,7 @@ async def test_owned_terminal_delivery_conflict_retries_without_waiting_for_reco
         FakeRepository,
         FakeCandidateOrderer,
     ],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     class ConflictOnceTerminalOutbox(FakeOutboxRecovery):
         conflicted = False
@@ -1140,13 +1141,23 @@ async def test_owned_terminal_delivery_conflict_retries_without_waiting_for_reco
             self.calls.append(expected)
             if expected.terminal_delivery is not None and not self.conflicted:
                 self.conflicted = True
-                raise RepositoryConflict("simulated terminal delivery race")
+                raise RepositoryTransactionConflict(
+                    stage=RepositoryTransactionStage.OUTBOX_CLAIM,
+                    failures=(
+                        (
+                            RepositoryTransactionAction.OUTBOX_OPERATION,
+                            RepositoryCancellationCode.TRANSACTION_CONFLICT,
+                        ),
+                    ),
+                    reasons_complete=True,
+                )
 
     outbox_recovery = ConflictOnceTerminalOutbox()
     app = make_application(dependencies, outbox_recovery=outbox_recovery)
     accepted = await accept_bound_debate(app)
 
-    await app.run_debate(accepted.debate_id)
+    with caplog.at_level(logging.WARNING, logger="shittim_chest"):
+        await app.run_debate(accepted.debate_id)
 
     completed = dependencies[6].current[accepted.debate_id]
     assert completed.state.phase is DebatePhase.COMPLETED
@@ -1155,6 +1166,18 @@ async def test_owned_terminal_delivery_conflict_retries_without_waiting_for_reco
     assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY in {
         event for event, _ in dependencies[2].events
     }
+    event = json.loads(
+        next(
+            record.message
+            for record in caplog.records
+            if json.loads(record.message).get("event") == "terminal_delivery_conflict"
+        )
+    )
+    assert event["transaction_stage"] == "outbox_claim"
+    assert event["failed_action_kinds"] == ["outbox_operation"]
+    assert event["failure_codes"] == ["TransactionConflict"]
+    assert event["cancellation_reasons_complete"] is True
+    assert event["retryable"] is True
 
 
 @pytest.mark.asyncio
@@ -1283,21 +1306,17 @@ async def test_terminal_delivery_conflict_exhaustion_remains_durable_and_is_not_
     app = make_application(dependencies, outbox_recovery=outbox_recovery)
     accepted = await accept_bound_debate(app)
 
-    with pytest.raises(RuntimeError, match="bounded retry limit"):
+    with pytest.raises(RuntimeError, match="not retryable"):
         await app.run_debate(accepted.debate_id)
 
     pending = dependencies[6].current[accepted.debate_id]
     assert not pending.state.phase.is_terminal
     assert pending.terminal_delivery is not None
     assert pending.terminal_delivery.completed_at is None
-    assert len(outbox_recovery.calls) == 5
-    assert (
-        sum(
-            event is MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY
-            for event, _ in dependencies[2].events
-        )
-        == 3
-    )
+    assert len(outbox_recovery.calls) == 2
+    assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY not in {
+        event for event, _ in dependencies[2].events
+    }
 
 
 @pytest.mark.asyncio

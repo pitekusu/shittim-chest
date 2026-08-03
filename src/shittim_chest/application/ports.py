@@ -58,6 +58,10 @@ class RepositoryConflict(Exception):
 class RepositoryTransactionStage(StrEnum):
     """Content-free repository transaction stages safe for diagnostics."""
 
+    OUTBOX_PREPARE = "outbox_prepare"
+    OUTBOX_CLAIM = "outbox_claim"
+    OUTBOX_MARK_SENT = "outbox_mark_sent"
+    OUTBOX_RESCHEDULE = "outbox_reschedule"
     TERMINAL_FINALIZE = "terminal_finalize"
 
 
@@ -66,6 +70,9 @@ class RepositoryTransactionAction(StrEnum):
     """Content-free transaction action kinds safe for diagnostics."""
 
     ATTEMPT_CAS = "attempt_cas"
+    LEASE_FENCE = "lease_fence"
+    OUTBOX_OPERATION = "outbox_operation"
+    OUTBOX_ACTIVITY = "outbox_activity"
     OUTBOX_SENT_CHECK = "outbox_sent_check"
     RELATED_ITEM_PUT = "related_item_put"
     SLOT_RELEASE = "slot_release"
@@ -84,6 +91,7 @@ class RepositoryCancellationCode(StrEnum):
     PROVISIONED_THROUGHPUT_EXCEEDED = "ProvisionedThroughputExceeded"
     THROTTLING_ERROR = "ThrottlingError"
     VALIDATION_ERROR = "ValidationError"
+    IDEMPOTENT_PARAMETER_MISMATCH = "IdempotentParameterMismatch"
     UNKNOWN = "Unknown"
 
 
@@ -112,9 +120,12 @@ class RepositoryTransactionConflict(RepositoryConflict):
 
         if not self.reasons_complete:
             return False
-        return all(
-            code is RepositoryCancellationCode.TRANSACTION_CONFLICT
-            or (
+        if all(
+            code is RepositoryCancellationCode.TRANSACTION_CONFLICT for _, code in self.failures
+        ):
+            return True
+        return self.stage is RepositoryTransactionStage.TERMINAL_FINALIZE and all(
+            (
                 action is RepositoryTransactionAction.ATTEMPT_CAS
                 and code is RepositoryCancellationCode.CONDITIONAL_CHECK_FAILED
             )

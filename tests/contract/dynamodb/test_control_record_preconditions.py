@@ -9,7 +9,7 @@ import boto3
 import pytest
 from botocore import UNSIGNED
 from botocore.config import Config
-from botocore.stub import Stubber
+from botocore.stub import ANY, Stubber
 from mypy_boto3_dynamodb.client import DynamoDBClient
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item
@@ -23,7 +23,13 @@ from shittim_chest.adapters.dynamodb.repository import (
     DynamoDbDebateRepository,
 )
 from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION, DynamoItem
-from shittim_chest.application.ports import RepositoryConflict
+from shittim_chest.application.ports import (
+    RepositoryCancellationCode,
+    RepositoryConflict,
+    RepositoryTransactionAction,
+    RepositoryTransactionConflict,
+    RepositoryTransactionStage,
+)
 
 NOW = datetime(2026, 7, 28, 1, 0, tzinfo=UTC)
 TABLE_NAME = "test-table"
@@ -101,6 +107,49 @@ def test_counter_reads_reject_missing_control_records() -> None:
             debates._active_attempt_count()
         with pytest.raises(RepositoryConflict, match="outbox activity counter is missing"):
             outbox._activity()
+        stubber.assert_no_pending_responses()
+
+
+def test_outbox_token_mismatch_preserves_the_safe_operation_stage() -> None:
+    sdk = _client()
+    outbox = DynamoDbOutboxRepository(client=sdk, table_name=TABLE_NAME)
+    action = outbox_activity_action(
+        table_name=TABLE_NAME,
+        pending_delta=1,
+        claimed_delta=0,
+        at=NOW,
+    )
+
+    with Stubber(sdk) as stubber:
+        stubber.add_client_error(
+            "transact_write_items",
+            service_error_code="IdempotentParameterMismatchException",
+            service_message="sensitive provider detail",
+            http_status_code=400,
+            expected_params={
+                "TransactItems": [action],
+                "ClientRequestToken": ANY,
+                "ReturnConsumedCapacity": "NONE",
+            },
+        )
+
+        with pytest.raises(RepositoryTransactionConflict) as caught:
+            outbox._transact(
+                [action],
+                "claim-operation",
+                cancellation_stage=RepositoryTransactionStage.OUTBOX_CLAIM,
+                cancellation_action_kinds=(RepositoryTransactionAction.OUTBOX_ACTIVITY,),
+            )
+
+        assert caught.value.stage is RepositoryTransactionStage.OUTBOX_CLAIM
+        assert caught.value.failures == (
+            (
+                RepositoryTransactionAction.UNKNOWN,
+                RepositoryCancellationCode.IDEMPOTENT_PARAMETER_MISMATCH,
+            ),
+        )
+        assert caught.value.reasons_complete
+        assert not caught.value.retryable
         stubber.assert_no_pending_responses()
 
 
