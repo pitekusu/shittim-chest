@@ -20,6 +20,7 @@ from shittim_chest.adapters.dynamodb import (
     ingress_request_sort_key,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.application import (
     DebateSnapshot,
     DiscordBotSlot,
@@ -1579,6 +1580,36 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
         debate_id=snapshot.state.debate_id,
         attempt_id=snapshot.state.attempt_id,
     ) == (second_claimed,)
+
+
+@pytest.mark.asyncio
+async def test_outbox_idempotency_token_binds_the_complete_transaction_request(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    """A later application retry with a new timestamp must not reuse an old payload token."""
+
+    outbox = DynamoDbOutboxRepository(
+        client=dynamodb_client,
+        table_name=dynamodb_table,
+    )
+    first = outbox_activity_action(
+        table_name=dynamodb_table,
+        pending_delta=1,
+        claimed_delta=0,
+        at=NOW,
+    )
+    second = outbox_activity_action(
+        table_name=dynamodb_table,
+        pending_delta=1,
+        claimed_delta=0,
+        at=NOW + timedelta(seconds=1),
+    )
+
+    await asyncio.to_thread(outbox._transact, [first], "same-logical-outbox-retry")
+    await asyncio.to_thread(outbox._transact, [second], "same-logical-outbox-retry")
+
+    assert await outbox.activity() == OutboxActivity(pending=2, claimed=0)
 
 
 @pytest.mark.asyncio

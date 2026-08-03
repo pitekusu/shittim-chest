@@ -1004,13 +1004,21 @@ class DebateApplication:
         self._require_owned_active_lease(snapshot, at=self._clock.now())
         try:
             await self._outbox_recovery.drain(expected=snapshot)
+        except RepositoryTransactionConflict as error:
+            raise _TerminalDeliveryConflict(
+                stage=error.stage.value,
+                actions=tuple(action.value for action, _ in error.failures),
+                codes=tuple(code.value for _, code in error.failures),
+                reasons_complete=error.reasons_complete,
+                retryable=error.retryable,
+            ) from error
         except RepositoryConflict as error:
             raise _TerminalDeliveryConflict(
                 stage="outbox_recovery",
-                actions=("outbox_operation",),
+                actions=("unknown",),
                 codes=("repository_conflict",),
                 reasons_complete=False,
-                retryable=True,
+                retryable=False,
             ) from error
         current = await self._require_snapshot(snapshot.state.debate_id)
         if current.state.phase.is_terminal:
