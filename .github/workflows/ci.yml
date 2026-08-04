@@ -324,7 +324,7 @@ jobs:
           target: production
           no-cache-filters: runtime-base
           tags: shittim-chest:step-08b-arm64
-          outputs: type=docker,rewrite-timestamp=true
+          outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
           cache-from: type=gha,scope=container-arm64-production
           cache-to: type=gha,scope=container-arm64-production,mode=max,ignore-error=true
       - name: Record the tested image digest and size
@@ -349,7 +349,7 @@ jobs:
           context: .
           target: fault-test
           tags: shittim-chest:step-08b-fault-arm64
-          outputs: type=docker,rewrite-timestamp=true
+          outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
       - name: Validate image security and inject termination faults
         run: |
           python -m tools.run_container_gate \
@@ -366,7 +366,7 @@ jobs:
           target: break-glass
           no-cache-filters: break-glass
           tags: shittim-chest:step-10-break-glass-arm64
-          outputs: type=docker,rewrite-timestamp=true
+          outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
           cache-from: type=gha,scope=container-arm64-break-glass
           cache-to: type=gha,scope=container-arm64-break-glass,mode=max,ignore-error=true
       - name: Record the tested break-glass config digest

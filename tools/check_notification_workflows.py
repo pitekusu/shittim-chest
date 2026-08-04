@@ -335,9 +335,13 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release pytest must inherit PYTHONDONTWRITEBYTECODE=1 from workflow env"
         )
-    if text.count("outputs: type=docker,rewrite-timestamp=true") != 2:
+    reproducible_docker_exporter = (
+        "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+        "compression-level=6,force-compression=true"
+    )
+    if text.count(reproducible_docker_exporter) != 2:
         raise WorkflowPolicyError(
-            "Release must use the CI-identical Docker exporter for both loaded images"
+            "Release must use the CI-identical deterministic Docker exporter for both images"
         )
     if "outputs: type=registry" in text:
         raise WorkflowPolicyError(
@@ -819,9 +823,13 @@ def _validate_ci_container_risk(directory: Path) -> None:
         raise WorkflowPolicyError(
             "CI must make production, fault, and break-glass image builds reproducible"
         )
-    if text.count("outputs: type=docker,rewrite-timestamp=true") != 3:
+    reproducible_docker_exporter = (
+        "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+        "compression-level=6,force-compression=true"
+    )
+    if text.count(reproducible_docker_exporter) != 3:
         raise WorkflowPolicyError(
-            "CI must rewrite file timestamps for all three loaded image exports"
+            "CI must deterministically compress all three timestamp-normalized image exports"
         )
     production_build_block = _workflow_step_block(text, "Build and load the production image")
     break_glass_build_block = _workflow_step_block(
