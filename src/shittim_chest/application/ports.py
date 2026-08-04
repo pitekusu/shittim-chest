@@ -78,6 +78,9 @@ class RepositoryTransactionAction(StrEnum):
     SLOT_RELEASE = "slot_release"
     ACTIVE_ATTEMPT_COUNT = "active_attempt_count"
     PANEL_REFRESH_COUNT = "panel_refresh_count"
+    INGRESS_REQUEST = "ingress_request"
+    INGRESS_OPERATION = "ingress_operation"
+    STATUS_PUBLICATION = "status_publication"
     UNKNOWN = "unknown"
 
 

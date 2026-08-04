@@ -46,10 +46,12 @@ from shittim_chest.adapters.dynamodb.serializer import (
 from shittim_chest.adapters.dynamodb.transaction_errors import (
     is_condition_only_cancellation,
 )
+from shittim_chest.application.models import DebateSnapshot
 from shittim_chest.application.ports import (
     RepositoryConflict,
     RepositoryIdentityConflict,
     RepositoryQueueFull,
+    RepositoryTransactionAction,
     RepositoryUnavailable,
 )
 from shittim_chest.application.scale_to_zero import (
@@ -74,7 +76,7 @@ from shittim_chest.application.status_publication import (
     render_public_status,
     status_content_hash,
 )
-from shittim_chest.domain import AttemptId, DebateId
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
 INGRESS_RECORD_SCHEMA_VERSION = 1
 INGRESS_STATUS_PUBLICATION_RECORD_SCHEMA_VERSION = 3
@@ -95,6 +97,72 @@ class DynamoDbIngressRepository:
 
     async def enqueue(self, request: IngressRequest) -> EnqueuedIngress:
         return await self._run(self._enqueue, request)
+
+    def terminal_projection_actions(
+        self,
+        *,
+        snapshot: DebateSnapshot,
+        at: datetime,
+    ) -> tuple[
+        tuple[TransactWriteItemTypeDef, ...],
+        tuple[RepositoryTransactionAction, ...],
+    ]:
+        """Build fenced ingress/status actions for one terminal debate transaction."""
+
+        interaction_id = snapshot.origin_ingress_interaction_id
+        if interaction_id is None:
+            return (), ()
+        operation_item = self._get_item(_operation_key(interaction_id))
+        if operation_item is None:
+            raise RepositoryConflict("terminal debate origin operation is missing")
+        operation = deserialize_ingress_operation_result(operation_item)
+        request_item = self._get_item(_request_key(operation.request_sort_key))
+        if request_item is None:
+            raise RepositoryConflict("terminal debate origin request is missing")
+        request = deserialize_ingress_request(request_item)
+        if (
+            operation.status is not IngressStatus.ACCEPTED
+            or request.status is not IngressStatus.ACCEPTED
+            or request.interaction_id != interaction_id
+            or request.kind not in {IngressKind.NEW_DEBATE, IngressKind.RETRY}
+            or request.accepted_debate_id != snapshot.state.debate_id
+            or request.accepted_attempt_id != snapshot.state.attempt_id
+            or operation.accepted_debate_id != snapshot.state.debate_id
+            or operation.accepted_attempt_id != snapshot.state.attempt_id
+            or operation.operation_id != request.operation_id
+            or operation.request_sort_key != ingress_request_sort_key(request)
+        ):
+            raise RepositoryConflict("terminal debate origin identity is inconsistent")
+        terminal_status, message_state, error_code = _terminal_ingress_state(snapshot)
+        updated = replace(
+            request,
+            status=terminal_status,
+            status_message_state=message_state,
+            updated_at=at,
+            next_attempt_at=None,
+            claim_owner=None,
+            claim_expires_at=None,
+            error_code=error_code,
+            completed_at=at,
+        )
+        status_actions = self._rearm_status_actions(
+            request=updated,
+            state=message_state,
+            at=at,
+        )
+        request_actions = self._replace_request_and_operation_actions(
+            previous=request,
+            updated=updated,
+            condition=self._request_condition(request),
+            values=self._expected_values(request),
+        )
+        actions = (*request_actions, *status_actions)
+        action_kinds = (
+            RepositoryTransactionAction.INGRESS_REQUEST,
+            RepositoryTransactionAction.INGRESS_OPERATION,
+            *(RepositoryTransactionAction.STATUS_PUBLICATION for _ in status_actions),
+        )
+        return actions, action_kinds
 
     async def get_replay(self, request: IngressRequest) -> EnqueuedIngress | None:
         return await self._run(self._replay, request)
@@ -2135,6 +2203,30 @@ class DynamoDbIngressRepository:
         operation_condition: str | None = None,
         operation_values: Mapping[str, DynamoValue] | None = None,
     ) -> None:
+        request_actions = self._replace_request_and_operation_actions(
+            previous=previous,
+            updated=updated,
+            condition=condition,
+            values=values,
+            operation_condition=operation_condition,
+            operation_values=operation_values,
+        )
+        token_source = f"{self._table_name}:{previous.operation_id}:{token_suffix}"
+        self._transact(
+            (*request_actions, *extra_actions),
+            token=_client_token(token_source),
+        )
+
+    def _replace_request_and_operation_actions(
+        self,
+        *,
+        previous: IngressRequest,
+        updated: IngressRequest,
+        condition: str,
+        values: Mapping[str, DynamoValue],
+        operation_condition: str | None = None,
+        operation_values: Mapping[str, DynamoValue] | None = None,
+    ) -> tuple[TransactWriteItemTypeDef, TransactWriteItemTypeDef]:
         operation = _operation_for_request(updated)
         request_action = cast(
             TransactWriteItemTypeDef,
@@ -2169,11 +2261,7 @@ class DynamoDbIngressRepository:
                 }
             },
         )
-        token_source = f"{self._table_name}:{previous.operation_id}:{token_suffix}"
-        self._transact(
-            (request_action, operation_action, *extra_actions),
-            token=_client_token(token_source),
-        )
+        return request_action, operation_action
 
     def _request_condition(self, request: IngressRequest) -> str:
         condition = (
@@ -2513,6 +2601,21 @@ def _operation_for_request(request: IngressRequest) -> IngressOperationResult:
         accepted_attempt_id=request.accepted_attempt_id,
         error_code=request.error_code,
     )
+
+
+def _terminal_ingress_state(
+    snapshot: DebateSnapshot,
+) -> tuple[IngressStatus, StatusMessageState, str | None]:
+    phase = snapshot.state.phase
+    if phase is DebatePhase.COMPLETED:
+        return IngressStatus.COMPLETED, StatusMessageState.COMPLETED, None
+    if phase is DebatePhase.CANCELLED:
+        return IngressStatus.COMPLETED, StatusMessageState.CANCELLED, None
+    if phase is DebatePhase.FAILED:
+        if snapshot.error_code is None:
+            raise RepositoryConflict("failed debate origin has no error code")
+        return IngressStatus.FAILED, StatusMessageState.TERMINAL_FAILED, snapshot.error_code
+    raise RepositoryConflict("only a terminal debate may settle its origin ingress")
 
 
 def _binding_for_request(request: IngressRequest) -> IngressSemanticOperationBinding:

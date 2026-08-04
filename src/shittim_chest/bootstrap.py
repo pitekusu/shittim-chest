@@ -14,8 +14,13 @@ from openai import AsyncOpenAI
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_lambda.client import LambdaClient
 
-from shittim_chest.adapters.aws import ecs_task_instance_id
+from shittim_chest.adapters.aws import (
+    LambdaStatusPublicationTrigger,
+    create_lambda_client,
+    ecs_task_instance_id,
+)
 from shittim_chest.adapters.discord import (
     DiscordClientSupervisor,
     DiscordInteractionController,
@@ -74,6 +79,7 @@ class ProductionRuntime:
     supervisor: DiscordClientSupervisor
     openai_client: AsyncOpenAI
     dynamodb_client: DynamoDBClient
+    lambda_client: LambdaClient
     telemetry: ContentFreeTelemetry
     operational_metrics: RuntimeMetricsReporter | None = None
     client_close_timeout_seconds: float = DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS
@@ -111,6 +117,7 @@ class ProductionRuntime:
                     self.supervisor.close(),
                     self.openai_client.close(),
                     _close_sync_client(self.dynamodb_client.close),
+                    _close_sync_client(self.lambda_client.close),
                     return_exceptions=True,
                 )
         except TimeoutError as error:
@@ -173,11 +180,11 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
     owner_id = ecs_task_instance_id()
 
     dynamodb_client = create_dynamodb_client(region_name=config.aws_region)
-    repository = DynamoDbDebateRepository(
+    ingress_repository = DynamoDbIngressRepository(
         client=dynamodb_client,
         table_name=config.table_name,
     )
-    ingress_repository = DynamoDbIngressRepository(
+    repository = DynamoDbDebateRepository(
         client=dynamodb_client,
         table_name=config.table_name,
     )
@@ -188,6 +195,11 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
     outbox = DynamoDbOutboxRepository(
         client=dynamodb_client,
         table_name=config.table_name,
+    )
+    lambda_client = create_lambda_client(region_name=config.aws_region)
+    status_trigger = LambdaStatusPublicationTrigger(
+        client=lambda_client,
+        function_name=config.status_publisher_function,
     )
 
     clients = build_discord_clients(config.runtime)
@@ -248,6 +260,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         panel_refresh=repository,
         clock=clock,
         metrics=telemetry,
+        status_trigger=status_trigger,
         claim_owner=owner_id,
     )
     drain_gate = RuntimeIngressDrainGate(admission)
@@ -282,6 +295,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         supervisor=supervisor,
         openai_client=openai_client,
         dynamodb_client=dynamodb_client,
+        lambda_client=lambda_client,
         telemetry=telemetry,
         operational_metrics=RuntimeMetricsReporter(
             metrics=CloudWatchEmfMetrics(
