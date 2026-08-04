@@ -214,6 +214,32 @@ async def test_enqueue_replay_fifo_claim_retry_accept_and_counter(
 
 
 @pytest.mark.asyncio
+async def test_enqueue_preserves_runtime_aware_ready_publication(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    ready = replace(
+        new_request(1),
+        status_message_state=StatusMessageState.READY,
+    )
+    starting = new_request(2)
+
+    enqueued = await repository.enqueue(ready)
+    await repository.enqueue(starting)
+    ready_publication = await repository.get_status_publication(ready.interaction_id)
+    starting_publication = await repository.get_status_publication(starting.interaction_id)
+
+    assert enqueued.request.status_message_state is StatusMessageState.READY
+    assert ready_publication is not None
+    assert ready_publication.desired_state is StatusMessageState.READY
+    assert ready_publication.content_hash == status_content_hash(ready_publication.content)
+    assert starting_publication is not None
+    assert starting_publication.desired_state is StatusMessageState.STARTING
+    assert starting_publication.content_hash == status_content_hash(starting_publication.content)
+
+
+@pytest.mark.asyncio
 async def test_queue_limit_is_atomic_and_terminal_transition_releases_capacity(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,

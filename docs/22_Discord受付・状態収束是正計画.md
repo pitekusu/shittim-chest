@@ -2,9 +2,9 @@
 aliases:
   - Discord受付・状態収束是正計画
 tags: [project, discord, aws, lambda, dynamodb, scale-to-zero]
-status: approved-for-implementation
+status: pr-b-in-implementation
 created: 2026-08-04
-updated: 2026-08-04
+updated: 2026-08-05
 ---
 
 # Discord受付・状態収束是正計画
@@ -49,6 +49,8 @@ updated: 2026-08-04
 - Invoke失敗はterminal commitをrollbackしない。pending publicationをReconcilerが再取得できる状態に保つ。
 - crash、transaction replay、Invoke失敗でも二重counter更新や別Ingress更新を発生させない。
 
+PR-AはPR `#155`で実装・merge・Production Release済みである。2026-08-05の連続live受入では、1件目と2件目のchannel／threadがそれぞれ`COMPLETED`へ収束し、2件目の受付が1件目の公開状態を変更しなかった。channel反映には約1分を要したため、正しさとInteraction分離は合格、低遅延化はPR-Bの対象として残す。
+
 ### PR-B: runtime-aware initial status
 
 PR-Aの安定後、公開初期状態とACCEPTED通知timingを修正する。
@@ -58,6 +60,8 @@ PR-Aの安定後、公開初期状態とACCEPTED通知timingを修正する。
 - Status Publisherの初回kick前に、該当Ingressだけのdesired stateを確定する。
 - Fargateが`mark_accepted`した直後に、PR-Aで追加した限定Invoke経路で該当statusを通知する。
 - 別Ingressの状態やpublication versionを変更しない。
+
+PR-Bは2026-08-05に実装開始した。受付transaction前のread-only Runtime判定で該当Ingressの初期desired stateを確定し、`mark_accepted`直後は同じInteraction IDだけを既存の限定Invoke経路へ渡す。DynamoDB desired stateと1分Reconcilerを正本・回復経路として維持する。
 
 ### PR-C: Discord Ingress SnapStart
 

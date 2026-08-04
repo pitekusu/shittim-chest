@@ -185,6 +185,25 @@ def test_prepared_status_publication_is_due_and_validates_nonce() -> None:
         replace(publication, nonce="not-valid")
 
 
+def test_prepared_status_publication_accepts_only_runtime_aware_initial_states() -> None:
+    ready_request = replace(
+        request(),
+        status_message_state=StatusMessageState.READY,
+    )
+
+    ready = IngressStatusPublication.prepared(
+        ready_request,
+        content=render_public_status(ready_request, StatusMessageState.READY),
+    )
+
+    assert ready.desired_state is StatusMessageState.READY
+    with pytest.raises(ValueError, match="STARTING or READY"):
+        IngressStatusPublication.prepared(
+            replace(request(), status_message_state=StatusMessageState.ACCEPTED),
+            content=render_public_status(request(), StatusMessageState.ACCEPTED),
+        )
+
+
 def test_status_history_checkpoint_validates_gap_and_publication_bounds() -> None:
     source_request = replace(request(), interaction_id="300", operation_id="300")
     publication = IngressStatusPublication.prepared(

@@ -41,6 +41,7 @@ from shittim_chest.application.scale_to_zero import (
     EnqueuedIngress,
     RuntimeState,
     RuntimeStatus,
+    StatusMessageState,
 )
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
@@ -251,11 +252,12 @@ async def test_persists_before_status_and_reconciler_kicks() -> None:
 
     assert result.outcome is IngressOutcome.STARTING
     assert result.created
-    assert events == ["enqueue", "runtime-read", "status", "reconcile"]
+    assert events == ["runtime-read", "enqueue", "status", "reconcile"]
     assert ingress.saved is not None
     assert ingress.saved.application_id == MODERATOR_APPLICATION_ID
     assert not ingress.saved.requester_can_manage_messages
     assert ingress.saved.question == "甘い朝ごはんは何がいい?"
+    assert ingress.saved.status_message_state is StatusMessageState.STARTING
 
 
 @pytest.mark.asyncio
@@ -266,7 +268,7 @@ async def test_required_persistence_failure_runs_no_accelerator() -> None:
     with pytest.raises(RepositoryUnavailable):
         await app.accept(command())
 
-    assert events == ["enqueue"]
+    assert events == ["runtime-read", "enqueue"]
 
 
 @pytest.mark.asyncio
@@ -277,7 +279,7 @@ async def test_queue_full_is_ephemeral_result_without_side_effects() -> None:
     result = await app.accept(command())
 
     assert result.outcome is IngressOutcome.QUEUE_FULL
-    assert events == ["enqueue"]
+    assert events == ["runtime-read", "enqueue"]
 
 
 @pytest.mark.asyncio
@@ -286,14 +288,14 @@ async def test_post_persistence_failures_keep_accepted_result() -> None:
     runtime.error = RepositoryUnavailable()
 
     assert (await app.accept(command())).outcome is IngressOutcome.STARTING
-    assert events == ["enqueue", "runtime-read", "status", "reconcile"]
+    assert events == ["runtime-read", "enqueue", "status", "reconcile"]
 
     events.clear()
     runtime.error = None
     status.error = StatusTriggerUnavailable()
     reconciler.error = ReconciliationTriggerUnavailable()
     assert (await app.accept(command())).outcome is IngressOutcome.STARTING
-    assert events == ["enqueue", "runtime-read", "status", "reconcile"]
+    assert events == ["runtime-read", "enqueue", "status", "reconcile"]
 
 
 @pytest.mark.asyncio
@@ -303,15 +305,53 @@ async def test_expired_accelerator_budget_leaves_durable_reconciliation_work() -
     result = await app.accept(command())
 
     assert result.outcome is IngressOutcome.STARTING
-    assert events == ["enqueue"]
+    assert events == ["runtime-read", "enqueue"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [RuntimeStatus.READY, RuntimeStatus.BUSY, RuntimeStatus.IDLE],
+)
+async def test_running_runtime_uses_ready_status_and_accepted_response(
+    status: RuntimeStatus,
+) -> None:
+    app, ingress, runtime, _, _, _ = application()
+    runtime.state = _ready_runtime(status=status)
+
+    result = await app.accept(command())
+
+    assert result.outcome is IngressOutcome.ACCEPTED
+    assert ingress.saved is not None
+    assert ingress.saved.status_message_state is StatusMessageState.READY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [None, RuntimeStatus.STOPPED, RuntimeStatus.STARTING],
+)
+async def test_inactive_runtime_keeps_starting_status(
+    status: RuntimeStatus | None,
+) -> None:
+    app, ingress, runtime, _, _, _ = application()
+    runtime.state = None if status is None else _runtime_with_status(status)
+
+    result = await app.accept(command())
+
+    assert result.outcome is IngressOutcome.STARTING
+    assert ingress.saved is not None
+    assert ingress.saved.status_message_state is StatusMessageState.STARTING
 
 
 @pytest.mark.asyncio
 async def test_ready_runtime_uses_operation_specific_accepted_responses() -> None:
-    app, _, runtime, _, _, _ = application()
+    app, ingress, runtime, _, _, _ = application()
     runtime.state = _ready_runtime()
 
     assert (await app.accept(command())).outcome is IngressOutcome.ACCEPTED
+    assert ingress.saved is not None
+    assert ingress.saved.status_message_state is StatusMessageState.READY
 
     debate_id = DebateId.new()
     attempt_id = AttemptId.new()
@@ -354,7 +394,7 @@ async def test_duplicate_uses_canonical_interaction_for_recovery_kicks() -> None
     result = await app.accept(command(interaction_id="399", operation_id="399"))
 
     assert not result.created
-    assert events == ["enqueue", "runtime-read", "status", "reconcile"]
+    assert events == ["runtime-read", "enqueue", "status", "reconcile"]
     assert status.interaction_ids == ["399"]
     assert reconciler.interaction_ids == ["399"]
 
@@ -419,7 +459,7 @@ async def test_processed_replay_only_repairs_public_status() -> None:
     result = await app.accept(command())
 
     assert result.outcome is IngressOutcome.REJECTED
-    assert events == ["enqueue", "status"]
+    assert events == ["runtime-read", "enqueue", "status"]
     assert status.interaction_ids == ["301"]
 
 
@@ -453,7 +493,7 @@ async def test_component_is_authorized_against_persisted_context_before_enqueue(
     result = await app.accept(operation)
 
     assert result.outcome is IngressOutcome.CANCEL_STARTING
-    assert events == ["replay", "enqueue", "runtime-read", "status", "reconcile"]
+    assert events == ["replay", "runtime-read", "enqueue", "status", "reconcile"]
     assert ingress.saved is not None
     assert ingress.saved.target_debate_id == debate_id
     assert ingress.saved.expected_attempt_id == attempt_id
@@ -527,8 +567,8 @@ def _snapshot(
     )
 
 
-def _ready_runtime() -> RuntimeState:
-    return (
+def _ready_runtime(*, status: RuntimeStatus = RuntimeStatus.READY) -> RuntimeState:
+    ready = (
         RuntimeState.stopped(at=NOW - timedelta(seconds=3))
         .request_wake(at=NOW - timedelta(seconds=2))
         .mark_started(
@@ -541,6 +581,22 @@ def _ready_runtime() -> RuntimeState:
             runtime_instance_id="runtime-instance",
         )
     )
+    if status is RuntimeStatus.READY:
+        return ready
+    if status is RuntimeStatus.BUSY:
+        return ready.transition(RuntimeStatus.BUSY, at=NOW + timedelta(microseconds=1))
+    if status is RuntimeStatus.IDLE:
+        return ready.begin_idle(at=NOW + timedelta(microseconds=1))
+    raise AssertionError("ready runtime helper supports READY, BUSY, or IDLE")
+
+
+def _runtime_with_status(status: RuntimeStatus) -> RuntimeState:
+    stopped = RuntimeState.stopped(at=NOW - timedelta(seconds=3))
+    if status is RuntimeStatus.STOPPED:
+        return stopped
+    if status is RuntimeStatus.STARTING:
+        return stopped.request_wake(at=NOW - timedelta(seconds=2))
+    raise AssertionError("inactive runtime helper supports STOPPED or STARTING")
 
 
 def _enqueued(request: IngressRequest, *, created: bool) -> EnqueuedIngress:

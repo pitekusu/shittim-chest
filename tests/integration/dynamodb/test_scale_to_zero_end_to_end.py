@@ -208,6 +208,7 @@ class RecordingCommands:
 class RecordingContext:
     def __init__(self) -> None:
         self.prepared: list[str] = []
+        self.accepted_notifications: list[str] = []
         self.activated: list[str] = []
 
     async def preflight(self, request: IngressRequest) -> None:
@@ -229,6 +230,9 @@ class RecordingContext:
     ) -> None:
         del applied
         self.activated.append(request.interaction_id)
+
+    async def notify_accepted(self, request: IngressRequest) -> None:
+        self.accepted_notifications.append(request.interaction_id)
 
 
 def _runtime_config() -> DiscordRuntimeConfig:
@@ -399,6 +403,7 @@ async def test_signed_http_ingress_wakes_recovers_and_drains_from_dynamodb_local
     assert (drain_report.claimed, drain_report.accepted) == (1, 1)
     assert commands.calls == [INTERACTION_ID]
     assert context.prepared == [INTERACTION_ID]
+    assert context.accepted_notifications == [INTERACTION_ID]
     assert context.activated == [INTERACTION_ID]
     result = await ingress.get_operation_result(INTERACTION_ID)
     assert result is not None

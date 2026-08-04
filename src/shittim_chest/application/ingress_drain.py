@@ -96,6 +96,11 @@ class _IngressContextExecutor(Protocol):
 
         ...
 
+    async def notify_accepted(self, request: IngressRequest) -> None:
+        """Best-effort kick the exact durable ACCEPTED status publication."""
+
+        ...
+
     async def activate(
         self,
         request: IngressRequest,
@@ -401,6 +406,7 @@ class IngressDrainer:
             except RepositoryUnavailable:
                 return replace(report, stop=IngressDrainStop.REPOSITORY_UNAVAILABLE)
             report = replace(report, accepted=report.accepted + 1)
+            await self._context.notify_accepted(accepted)
             if self._runtime_session is not None:
                 await self._runtime_session.mark_busy()
             await self._context.activate(accepted, applied)

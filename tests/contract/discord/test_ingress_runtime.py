@@ -40,7 +40,12 @@ from shittim_chest.application.models import (
     MetricEvent,
 )
 from shittim_chest.application.ports import StatusTriggerUnavailable
-from shittim_chest.application.scale_to_zero import IngressKind, IngressRequest, IngressStatus
+from shittim_chest.application.scale_to_zero import (
+    IngressKind,
+    IngressRequest,
+    IngressStatus,
+    StatusMessageState,
+)
 from shittim_chest.application.status_publication import status_publication_marker
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
 
@@ -638,6 +643,52 @@ async def test_activate_does_not_start_after_shutdown_begins_during_snapshot_loa
     await asyncio.wait_for(activation, timeout=1)
     assert ingress_runtime.active_task_count == 0
     assert application.run_calls == []
+
+
+@pytest.mark.asyncio
+async def test_notify_accepted_kicks_only_the_exact_interaction() -> None:
+    current = snapshot(bound=True)
+    application = FakeApplication(current)
+    trigger = FakeStatusTrigger()
+    ingress_runtime = runtime(application, status_trigger=trigger)
+    claimed = claimed_request(current)
+    accepted = replace(
+        claimed,
+        status=IngressStatus.ACCEPTED,
+        status_message_state=StatusMessageState.ACCEPTED,
+        updated_at=NOW + timedelta(seconds=2),
+        claim_owner=None,
+        claim_expires_at=None,
+        accepted_debate_id=current.state.debate_id,
+        accepted_attempt_id=current.state.attempt_id,
+    )
+
+    await ingress_runtime.notify_accepted(accepted)
+
+    assert trigger.calls == [accepted.interaction_id]
+
+
+@pytest.mark.asyncio
+async def test_notify_accepted_keeps_durable_fallback_when_status_kick_fails() -> None:
+    current = snapshot(bound=True)
+    application = FakeApplication(current)
+    trigger = FailingStatusTrigger()
+    ingress_runtime = runtime(application, status_trigger=trigger)
+    claimed = claimed_request(current)
+    accepted = replace(
+        claimed,
+        status=IngressStatus.ACCEPTED,
+        status_message_state=StatusMessageState.ACCEPTED,
+        updated_at=NOW + timedelta(seconds=2),
+        claim_owner=None,
+        claim_expires_at=None,
+        accepted_debate_id=current.state.debate_id,
+        accepted_attempt_id=current.state.attempt_id,
+    )
+
+    await ingress_runtime.notify_accepted(accepted)
+
+    assert trigger.calls == [accepted.interaction_id]
 
 
 @pytest.mark.asyncio

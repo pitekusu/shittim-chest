@@ -408,7 +408,7 @@ class DynamoDbIngressRepository:
         operation = _operation_for_request(request)
         publication = IngressStatusPublication.prepared(
             request,
-            content=render_public_status(request, StatusMessageState.STARTING),
+            content=render_public_status(request, request.status_message_state),
         )
         actions = [
             self._increment_counter_action(request.created_at),

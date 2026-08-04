@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
 
@@ -30,6 +30,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressRequest,
     IngressStatus,
     RuntimeStatus,
+    StatusMessageState,
 )
 from shittim_chest.domain import DebatePhase
 
@@ -115,6 +116,12 @@ class DiscordIngressApplication:
             and not await self._component_is_authorized(operation)
         ):
             return IngressAcceptance(IngressOutcome.NOT_ALLOWED)
+        runtime_status = await self._read_runtime_status()
+        if replay is None:
+            request = replace(
+                request,
+                status_message_state=_initial_status_for_runtime(runtime_status),
+            )
         try:
             enqueued = replay or await self._ingress.enqueue(request)
         except RepositoryQueueFull:
@@ -122,7 +129,7 @@ class DiscordIngressApplication:
         except RepositoryIdentityConflict:
             return IngressAcceptance(IngressOutcome.NOT_ALLOWED)
 
-        runtime_status = await self._accelerate(enqueued, at=operation.received_at)
+        await self._accelerate(enqueued, at=operation.received_at)
         return IngressAcceptance(
             _outcome_for_status(
                 enqueued.request.status,
@@ -179,19 +186,17 @@ class DiscordIngressApplication:
         enqueued: EnqueuedIngress,
         *,
         at: datetime,
-    ) -> RuntimeStatus | None:
+    ) -> None:
         request = enqueued.request
         if not self._has_accelerator_budget(at):
-            return None
+            return
         if not request.status.counts_toward_queue_limit:
             await self._kick_status(request.interaction_id)
-            return None
-        runtime_status, _, _ = await asyncio.gather(
-            self._read_runtime_status(),
+            return
+        await asyncio.gather(
             self._kick_status(request.interaction_id),
             self._kick_reconciler(request.interaction_id),
         )
-        return runtime_status
 
     async def _read_runtime_status(self) -> RuntimeStatus | None:
         try:
@@ -266,7 +271,11 @@ def _outcome_for_status(
     runtime_status: RuntimeStatus | None,
 ) -> IngressOutcome:
     if status in {IngressStatus.PENDING, IngressStatus.CLAIMED, IngressStatus.RETRYING}:
-        ready = runtime_status in {RuntimeStatus.READY, RuntimeStatus.BUSY}
+        ready = runtime_status in {
+            RuntimeStatus.READY,
+            RuntimeStatus.BUSY,
+            RuntimeStatus.IDLE,
+        }
         if kind is IngressKind.RETRY:
             return IngressOutcome.RETRY_ACCEPTED if ready else IngressOutcome.RETRY_STARTING
         if kind is IngressKind.CANCEL:
@@ -285,6 +294,12 @@ def _outcome_for_status(
     if status is IngressStatus.FAILED:
         return IngressOutcome.TERMINAL_FAILED
     raise AssertionError("unsupported ingress status")
+
+
+def _initial_status_for_runtime(runtime_status: RuntimeStatus | None) -> StatusMessageState:
+    if runtime_status in {RuntimeStatus.READY, RuntimeStatus.BUSY, RuntimeStatus.IDLE}:
+        return StatusMessageState.READY
+    return StatusMessageState.STARTING
 
 
 __all__ = (

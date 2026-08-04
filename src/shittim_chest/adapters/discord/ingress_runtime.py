@@ -220,6 +220,12 @@ class DiscordIngressRuntime:
             return
         self._start_debate(applied.debate_id)
 
+    async def notify_accepted(self, request: IngressRequest) -> None:
+        """Kick only the exact ACCEPTED publication, retaining durable fallback."""
+
+        with suppress(StatusTriggerUnavailable):
+            await self._status_trigger.request_publication(request.interaction_id)
+
     async def recover_once(self) -> int:
         """Claim recoverable bound debates and start them in the shared registry."""
 

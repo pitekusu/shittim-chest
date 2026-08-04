@@ -698,10 +698,13 @@ class IngressStatusPublication:
         *,
         content: str,
     ) -> IngressStatusPublication:
-        """Prepare the initial STARTING publication without a Discord token."""
+        """Prepare one runtime-aware initial publication without a Discord token."""
 
-        if request.status_message_state is not StatusMessageState.STARTING:
-            raise ValueError("new ingress status publication must start in STARTING")
+        if request.status_message_state not in {
+            StatusMessageState.STARTING,
+            StatusMessageState.READY,
+        }:
+            raise ValueError("new ingress status publication must start in STARTING or READY")
         return cls(
             canonical_interaction_id=request.interaction_id,
             request_sort_key=(
@@ -710,7 +713,7 @@ class IngressStatusPublication:
                 f"{request.interaction_id}"
             ),
             status_channel_id=request.status_channel_id,
-            desired_state=StatusMessageState.STARTING,
+            desired_state=request.status_message_state,
             state=StatusPublicationState.PREPARED,
             nonce=status_publication_nonce(request.interaction_id, incarnation=0),
             content=content,
