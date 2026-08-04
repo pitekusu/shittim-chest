@@ -7,6 +7,9 @@ from collections.abc import Awaitable, Callable, Mapping
 
 import discord
 
+from shittim_chest.adapters.discord.rate_limit_evidence import (
+    build_discord_rate_limit_trace,
+)
 from shittim_chest.application import (
     DISCORD_BOT_SLOTS,
     AcceptDebateRequest,
@@ -56,6 +59,7 @@ def build_discord_clients(
             application_id=int(config.application_id_for(slot)),
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),
+            http_trace=build_discord_rate_limit_trace(),
             max_ratelimit_timeout=DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS,
         )
     return clients

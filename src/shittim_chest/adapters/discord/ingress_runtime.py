@@ -30,6 +30,9 @@ from shittim_chest.adapters.discord.interactions import (
     _panel_content,
     _panel_view,
 )
+from shittim_chest.adapters.discord.rate_limit_evidence import (
+    discord_rate_limit_operation,
+)
 from shittim_chest.application.commands import AppliedIngressCommand
 from shittim_chest.application.discord import (
     DiscordBotSlot,
@@ -631,24 +634,25 @@ async def _await_discord_operation[T](
 ) -> T:
     """Attach one safe operation label only to Discord rate-limit retries."""
 
-    try:
-        return await awaitable
-    except asyncio.CancelledError:
-        raise
-    except discord.RateLimited as error:
-        raise IngressRetryableFailure(
-            DiscordRateLimited().code,
-            retry_after_seconds=max(1.0, error.retry_after),
-            discord_operation=operation,
-        ) from error
-    except discord.HTTPException as error:
-        if error.status != 429:
+    with discord_rate_limit_operation(operation):
+        try:
+            return await awaitable
+        except asyncio.CancelledError:
             raise
-        raise IngressRetryableFailure(
-            DiscordRateLimited().code,
-            retry_after_seconds=_discord_retry_after(error),
-            discord_operation=operation,
-        ) from error
+        except discord.RateLimited as error:
+            raise IngressRetryableFailure(
+                DiscordRateLimited().code,
+                retry_after_seconds=max(1.0, error.retry_after),
+                discord_operation=operation,
+            ) from error
+        except discord.HTTPException as error:
+            if error.status != 429:
+                raise
+            raise IngressRetryableFailure(
+                DiscordRateLimited().code,
+                retry_after_seconds=_discord_retry_after(error),
+                discord_operation=operation,
+            ) from error
 
 
 def _discord_retry_after(error: discord.HTTPException) -> float:

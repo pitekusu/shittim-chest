@@ -11,6 +11,9 @@ from typing import cast
 
 import httpx
 
+from shittim_chest.adapters.discord.rate_limit_evidence import (
+    record_status_rate_limit_response,
+)
 from shittim_chest.application.scale_to_zero import StatusHistoryCheckpoint
 from shittim_chest.application.status_publication import (
     DiscordStatusMessage,
@@ -47,6 +50,7 @@ def create_discord_status_http_client() -> httpx.Client:
         timeout=httpx.Timeout(10.0, connect=3.0),
         limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
         follow_redirects=False,
+        event_hooks={"response": [record_status_rate_limit_response]},
     )
 
 
