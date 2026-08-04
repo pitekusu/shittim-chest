@@ -111,8 +111,14 @@ class DynamoDbDebateRepository:
     def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
         if not table_name.strip():
             raise ValueError("table name must not be empty")
+        from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
+
         self._client = client
         self._table_name = table_name
+        self._ingress_terminal_projection = DynamoDbIngressRepository(
+            client=client,
+            table_name=table_name,
+        )
 
     async def get_operation_result(
         self,
@@ -639,6 +645,14 @@ class DynamoDbDebateRepository:
         if not expected.panel_refresh_pending and persisted.panel_refresh_pending:
             actions.append(self._panel_refresh_count_action(1, persisted.state.updated_at))
             action_kinds.append(RepositoryTransactionAction.PANEL_REFRESH_COUNT)
+        ingress_actions, ingress_action_kinds = (
+            self._ingress_terminal_projection.terminal_projection_actions(
+                snapshot=persisted,
+                at=persisted.state.updated_at,
+            )
+        )
+        actions.extend(ingress_actions)
+        action_kinds.extend(ingress_action_kinds)
         _require_transaction_size(actions)
         token_source = ":".join(
             (

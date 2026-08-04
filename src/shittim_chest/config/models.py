@@ -103,6 +103,7 @@ class BootstrapConfig:
     environment: str
     aws_region: str
     table_name: str
+    status_publisher_function: str
     log_level: str
     runtime: DiscordRuntimeConfig
     config_version: str
@@ -154,6 +155,12 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         table_name = _required(environ, "SHITTIM_DYNAMODB_TABLE")
         if re.fullmatch(r"[A-Za-z0-9_.-]{3,255}", table_name) is None:
             raise ValueError("invalid DynamoDB table name")
+        status_publisher_function = _required(
+            environ,
+            "SHITTIM_STATUS_PUBLISHER_FUNCTION",
+        )
+        if re.fullmatch(r"[A-Za-z0-9-_]{1,64}", status_publisher_function) is None:
+            raise ValueError("invalid status publisher function name")
         log_level = environ.get("SHITTIM_LOG_LEVEL", "INFO").strip().upper()
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("unsupported log level")
@@ -187,6 +194,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             environment=environment,
             aws_region=aws_region,
             table_name=table_name,
+            status_publisher_function=status_publisher_function,
             log_level=log_level,
             runtime=runtime,
             config_version=runtime_version,

@@ -383,6 +383,12 @@ describe("RuntimeStack", () => {
       const container = (properties.ContainerDefinitions as Array<Record<string, unknown>>)[0]!;
       expect(JSON.stringify(container.Image)).toContain("@");
       expect(container).toMatchObject({
+        Environment: expect.arrayContaining([
+          {
+            Name: "SHITTIM_STATUS_PUBLISHER_FUNCTION",
+            Value: "shittim-chest-production-discord-status-publisher",
+          },
+        ]),
         HealthCheck: {
           Command: ["CMD", "python", "-m", "shittim_chest.healthcheck"],
           Interval: 10,
@@ -475,6 +481,18 @@ describe("RuntimeStack", () => {
     expect(JSON.stringify(normal)).not.toContain("dynamodb:TransactWriteItems");
     expect(JSON.stringify(normal)).not.toContain("ssm:");
     expect(JSON.stringify(normal)).not.toContain("ssmmessages:");
+    for (const policy of [normal, breakGlass]) {
+      const invokeStatements = policy?.Properties.PolicyDocument.Statement.filter(
+        (statement: { Action?: string | string[] }) =>
+          [statement.Action].flat().includes("lambda:InvokeFunction"),
+      );
+      expect(invokeStatements).toHaveLength(1);
+      expect(invokeStatements?.[0].Action).toBe("lambda:InvokeFunction");
+      expect(JSON.stringify(invokeStatements?.[0].Resource)).toContain(
+        "shittim-chest-production-discord-status-publisher",
+      );
+      expect(invokeStatements?.[0].Resource).not.toBe("*");
+    }
     expect(JSON.stringify(breakGlass)).toContain("ssmmessages:OpenControlChannel");
     expect(JSON.stringify(breakGlass)).toContain("logs:PutLogEvents");
   });

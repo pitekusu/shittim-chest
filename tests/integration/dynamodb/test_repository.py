@@ -30,6 +30,8 @@ from shittim_chest.application import (
     IngressStatus,
     OutboxActivity,
     PanelRefreshState,
+    StatusMessageState,
+    StatusPublicationState,
     TerminalDeliveryPlan,
     prepare_terminal_outbox_operations,
 )
@@ -42,7 +44,14 @@ from shittim_chest.application.ports import (
     RepositoryTransactionAction,
     RepositoryTransactionConflict,
 )
-from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
+from shittim_chest.domain import (
+    AttemptId,
+    DebateId,
+    DebatePhase,
+    DebateState,
+    FinalDecision,
+    ParticipantSlot,
+)
 
 NOW = datetime(2026, 7, 17, 2, 0, tzinfo=UTC)
 
@@ -184,6 +193,83 @@ async def finalize_terminal_delivery(
         terminal_delivery=plan.complete(at=terminal_at),
     )
     return await debates.finalize_terminal(expected=persisted, updated=terminal)
+
+
+@pytest.mark.asyncio
+async def test_terminal_finalize_atomically_completes_origin_ingress_status(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
+    claimed, fence = await claimed_ingress(
+        repository=ingress,
+        operation_id="terminal-origin",
+    )
+    source = replace(
+        new_snapshot(),
+        question="question",
+        requester_id="requester",
+        requester_username="requester",
+        requester_display_name="Requester",
+        guild_id="guild",
+        channel_id="channel",
+    )
+    accepted = await debates.create(
+        source,
+        operation_id="terminal-origin",
+        lease_owner="runtime-instance",
+        ingress_claim=fence,
+    )
+    accepted_request = await ingress.mark_accepted(
+        request=claimed,
+        claim_owner="runtime-instance",
+        at=NOW + timedelta(microseconds=3),
+        debate_id=accepted.state.debate_id,
+        attempt_id=accepted.state.attempt_id,
+    )
+    bound = await debates.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=replace(
+                accepted.state,
+                phase=DebatePhase.GENERATING_DECISION,
+                updated_at=NOW + timedelta(milliseconds=500),
+            ),
+            starter_message_id="101",
+            thread_id="102",
+            control_panel_message_id="103",
+            final_decision=FinalDecision(
+                winner=ParticipantSlot.PARTICIPANT_A,
+                decision="fixture decision",
+                actions=("fixture action",),
+                caveats=("fixture caveat",),
+            ),
+        ),
+    )
+
+    completed = await finalize_terminal_delivery(
+        debates=debates,
+        outbox=outbox,
+        expected=bound,
+        target_phase=DebatePhase.COMPLETED,
+        staged_at=NOW + timedelta(seconds=1),
+        terminal_at=NOW + timedelta(seconds=2),
+    )
+
+    assert completed.state.phase is DebatePhase.COMPLETED
+    replay = await ingress.get_replay(accepted_request)
+    assert replay is not None
+    assert replay.request.status is IngressStatus.COMPLETED
+    assert replay.request.status_message_state is StatusMessageState.COMPLETED
+    assert replay.request.accepted_debate_id == completed.state.debate_id
+    assert replay.request.accepted_attempt_id == completed.state.attempt_id
+    publication = await ingress.get_status_publication(accepted_request.interaction_id)
+    assert publication is not None
+    assert publication.desired_state is StatusMessageState.COMPLETED
+    assert publication.state is StatusPublicationState.PREPARED
 
 
 @pytest.mark.asyncio
@@ -1249,7 +1335,7 @@ async def test_retry_and_cancel_mutations_share_the_ingress_claim_transaction(
         claim_owner="panel-publisher",
         at=NOW + timedelta(seconds=1, microseconds=2),
     )
-    _, retry_fence = await claimed_ingress(
+    retry_claimed, retry_fence = await claimed_ingress(
         repository=ingress,
         operation_id="fenced-retry",
         kind=IngressKind.RETRY,
@@ -1274,6 +1360,13 @@ async def test_retry_and_cancel_mutations_share_the_ingress_claim_transaction(
         operation_id="fenced-retry",
         lease_owner="runtime-instance",
         ingress_claim=retry_fence.for_write_at(retry_state.updated_at),
+    )
+    await ingress.mark_accepted(
+        request=retry_claimed,
+        claim_owner="runtime-instance",
+        at=NOW + timedelta(seconds=3, microseconds=1),
+        debate_id=persisted_retry.state.debate_id,
+        attempt_id=persisted_retry.state.attempt_id,
     )
     _, cancel_fence = await claimed_ingress(
         repository=ingress,

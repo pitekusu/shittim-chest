@@ -35,6 +35,8 @@ const RUNTIME_SERVICE_NAME = "shittim-chest-production";
 const NORMAL_TASK_DEFINITION_FAMILY = "shittim-chest-production-normal";
 const BREAK_GLASS_TASK_DEFINITION_FAMILY = "shittim-chest-production-break-glass";
 const RECONCILER_SCHEDULE_NAME = "shittim-chest-production-runtime-reconciler";
+const DISCORD_STATUS_PUBLISHER_FUNCTION_NAME =
+  "shittim-chest-production-discord-status-publisher";
 const DISCORD_INGRESS_HANDLER =
   "shittim_chest.lambda_handlers.discord_ingress.lambda_handler";
 const DISCORD_STATUS_HANDLER =
@@ -253,6 +255,19 @@ export class RuntimeStack extends Stack {
     );
     this.grantApplicationData(normalTaskRole, props.debateTable);
     this.grantApplicationData(breakGlassTaskRole, props.debateTable);
+    const statusPublisherArn = this.formatArn({
+      resource: "function",
+      resourceName: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
+      service: "lambda",
+    });
+    for (const role of [normalTaskRole, breakGlassTaskRole]) {
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ["lambda:InvokeFunction"],
+          resources: [statusPublisherArn],
+        }),
+      );
+    }
     this.grantBreakGlassAccess(breakGlassTaskRole);
 
     const parameters = this.runtimeParameters(configVersion.valueAsString);
@@ -339,7 +354,7 @@ export class RuntimeStack extends Stack {
         SHITTIM_MODERATOR_TOKEN_PARAMETER: MODERATOR_TOKEN_PARAMETER,
         SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
       },
-      functionName: "shittim-chest-production-discord-status-publisher",
+      functionName: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
       handler: DISCORD_STATUS_HANDLER,
       id: "DiscordStatusPublisherFunction",
       memorySize: 256,
@@ -1062,6 +1077,7 @@ export class RuntimeStack extends Stack {
         SHITTIM_DYNAMODB_TABLE: "shittim-chest-production",
         SHITTIM_ENVIRONMENT: "production",
         SHITTIM_LOG_LEVEL: "INFO",
+        SHITTIM_STATUS_PUBLISHER_FUNCTION: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
       },
       healthCheck: {
         command: ["CMD", "python", "-m", "shittim_chest.healthcheck"],

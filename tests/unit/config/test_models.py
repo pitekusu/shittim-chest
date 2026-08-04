@@ -15,6 +15,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.environment == "production"
     assert config.aws_region == "ap-northeast-1"
     assert config.table_name == "shittim-chest-production"
+    assert config.status_publisher_function == "shittim-status-publisher"
     assert config.config_version == "v0001"
     assert config.runtime.guild_id == "101"
     assert config.runtime.allowed_channel_ids == frozenset({"201", "202"})
@@ -35,6 +36,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
         {"AWS_REGION": "us-east-1"},
         {"SHITTIM_DYNAMODB_TABLE": ""},
         {"SHITTIM_DYNAMODB_TABLE": "invalid/table"},
+        {"SHITTIM_STATUS_PUBLISHER_FUNCTION": "invalid/function"},
         {"OPENAI_API_KEY": ""},
         {"DISCORD_TOKEN_PARTICIPANT_C": "token-moderator-placeholder"},
         {"SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH": "not-a-hash"},
@@ -88,6 +90,7 @@ def _valid_environment() -> dict[str, str]:
         "SHITTIM_ENVIRONMENT": "production",
         "AWS_REGION": "ap-northeast-1",
         "SHITTIM_DYNAMODB_TABLE": "shittim-chest-production",
+        "SHITTIM_STATUS_PUBLISHER_FUNCTION": "shittim-status-publisher",
         "SHITTIM_LOG_LEVEL": "INFO",
         "OPENAI_API_KEY": "openai-key-placeholder",
         "DISCORD_TOKEN_MODERATOR": "token-moderator-placeholder",
