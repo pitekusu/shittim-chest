@@ -44,6 +44,8 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 
 Docker build cacheは性能最適化であり、依存関係の正本ではない。`uv.lock`、`--frozen`、digest固定base imageを再現性境界とし、cache missまたはcache evictionでも同一gateを通るimageを再構築できなければならない。`UV_NO_CACHE=1`は使用せず、uv cacheはbuild mountの寿命へ限定する。
 
+Docker exporterはcache hitとcache missで既存の圧縮blobと新規圧縮blobを使い分けてはならない。CIのproduction、fault-test、break-glassとReleaseのproduction、break-glassは、`type=docker`と`rewrite-timestamp=true`に加え、`compression=gzip`、`compression-level=6`、`force-compression=true`を共通のexporter条件とする。stage限定no-cacheはlinked layerの構築を強制する境界として維持し、強制再圧縮により同一uncompressed diff IDから必ず同じ圧縮表現を生成する。
+
 GHA cacheはGitHubのref access restrictionに従う。forkを含むPull Requestへsecret、OIDC、write permissionを追加せず、cache exportは`ignore-error=true`としてcache service障害やevictionをCI correctness failureへ変えない。build、`load`、container gate、SBOMは引き続きfail closedとする。scopeはjob名に依存しないtarget別固定値にし、別architectureとは共有しない。同じmain commitをreleaseするproduction/break-glass buildだけはCIと同じscopeを読み、同じDocker exporter resultを再利用する。cache miss時もpush前config gateは必須であり、不一致imageをregistryへ送らない。Buildx summaryと診断用`.dockerbuild` recordはSBOMと同じ30日保持とし、imageやcredentialの代替artifactとして扱わない。
 
 fork由来を含む`pull_request` jobへsecret、OIDC、write permission、self-hosted runnerを渡さない。fork codeのcheckout・実行を伴う`pull_request_target`は禁止する。例外は`.github/workflows/discord-repository-events.yml`のmetadata通知だけとし、`contents: read`と`pull-requests: read`、default branchの通知code、head checkout・artifactーcache不使用を専用policy testで強制する。外部contributorのworkflowは毎回maintainer承認を要求する。

@@ -175,8 +175,10 @@ def test_release_requires_ci_identical_docker_exporters(tmp_path: Path) -> None:
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "outputs: type=docker,rewrite-timestamp=true",
-            "outputs: type=registry,rewrite-timestamp=true",
+            "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+            "compression-level=6,force-compression=true",
+            "outputs: type=registry,rewrite-timestamp=true,compression=gzip,"
+            "compression-level=6,force-compression=true",
             1,
         ),
         encoding="utf-8",
@@ -331,14 +333,35 @@ def test_ci_requires_loaded_image_file_timestamp_rewrite(tmp_path: Path) -> None
     path = directory / "ci.yml"
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "outputs: type=docker,rewrite-timestamp=true",
+            "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+            "compression-level=6,force-compression=true",
             "load: true",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="rewrite file timestamps"):
+    with pytest.raises(WorkflowPolicyError, match="deterministically compress"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
+def test_image_builds_require_forced_canonical_compression(
+    tmp_path: Path,
+    workflow: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            ",force-compression=true",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"deterministic|deterministically"):
         validate_notification_workflows(directory)
 
 
