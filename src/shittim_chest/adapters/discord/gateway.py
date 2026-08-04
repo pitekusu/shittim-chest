@@ -17,7 +17,7 @@ from shittim_chest.application import (
     DiscordRuntimeConfig,
 )
 
-DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 30.0
+DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 300.0
 InteractionHandler = Callable[[discord.Interaction[discord.Client]], Awaitable[None]]
 
 

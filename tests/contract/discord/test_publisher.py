@@ -291,7 +291,7 @@ def clients_and_thread(
     for index, slot in enumerate(DISCORD_BOT_SLOTS):
         client_mock = MagicMock(spec=discord.Client)
         client_mock.user = SimpleNamespace(id=201 + index)
-        cast(Any, client_mock).http = SimpleNamespace(max_ratelimit_timeout=30.0)
+        cast(Any, client_mock).http = SimpleNamespace(max_ratelimit_timeout=300.0)
         client_mock.is_ready.return_value = True
         client_mock.get_channel.return_value = thread if slot is operation.bot_slot else None
         client_mock.fetch_channel = AsyncMock(return_value=thread)

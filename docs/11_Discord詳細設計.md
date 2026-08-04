@@ -96,7 +96,7 @@ panelはphase、active elapsed、recovery状態、開始者を表示する。com
 - outboxへprivate runtimeでApplication IDへ解決するgeneric Bot slot、nonce、content hash、chunk sequenceを保存してから送信する。DynamoDB型をapplication層へ置き、Discord adapterとDynamoDB adapterを相互依存させない。
 - nonceはUUIDv7の16 byteをpaddingなしbase64urlへ変換した22文字とする。RESTで対応する投稿は`enforce_nonce=true`を使用し、送信後にmessage IDを保存する。
 - Discordのnonce重複抑止は直近数分に限定される。長時間停止後やDiscord send成功・DB更新失敗時はnonce、content hash、chunk sequence、thread履歴で照合する。exactly-onceは主張せず、outboxとreconciliationによる表示上の重複抑止を保証する。
-- 429はdiscord.pyと`Retry-After`へ従い、application側で同じrequestを独自retryしない。4 clientは`max_ratelimit_timeout=30`で生成し、値が異なるclientをpublisherがfail closedで拒否する。
+- 429はdiscord.pyと`Retry-After`へ従い、application側で同じrequestを独自retryしない。4 clientは`max_ratelimit_timeout=300`で生成し、値が異なるclientをpublisherがfail closedで拒否する。discord.py 2.7.1はresetまでの時間がこの値を超えると、bucketに残数があってもHTTP送信前に`RateLimited`を発生させるため、Discordのthread-createが返す300秒windowを下回る値へ戻してはならない。実際のapplication操作はingress context 45秒、panel refresh 30秒、outbox delivery 45秒の各timeoutで有界化する。
 
 STEP-06Bはdiscord.py 2.7.1の公開`Thread.send()`を使用する。22文字nonceを渡すと同versionの`handle_message_parameters()`が`enforce_nonce=true`を設定することをcontract testで固定する。`AllowedMentions.none()`のpayloadは`{"parse":[]}`でなければならない。publisherはexactly 4つのdistinct client、expected leased snapshot、attempt内operation IDを受け、永続recordの`get → claim → send/reconcile → mark_sent`だけを実行する。
 

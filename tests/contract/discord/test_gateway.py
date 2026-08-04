@@ -74,7 +74,25 @@ def test_client_builder_uses_guilds_only_safe_mentions_and_bounded_rate_limits()
         assert cast(Any, client.allowed_mentions).to_dict() == {"parse": []}
         assert client.http.http_trace is not None
         assert len(client.http.http_trace.on_request_end) == 1
-        assert client.http.max_ratelimit_timeout == 30.0
+        assert client.http.max_ratelimit_timeout == 300.0
+
+
+@pytest.mark.asyncio
+async def test_client_rate_limit_ceiling_allows_a_300_second_bucket_with_capacity() -> None:
+    ratelimit = discord.http.Ratelimit(300.0)
+    ratelimit.update(
+        SimpleNamespace(
+            headers={
+                "X-Ratelimit-Limit": "50",
+                "X-Ratelimit-Remaining": "49",
+                "X-Ratelimit-Reset-After": "300.0",
+            }
+        )
+    )
+
+    await ratelimit.acquire()
+
+    assert ratelimit.remaining == 48
 
 
 @pytest.mark.asyncio
