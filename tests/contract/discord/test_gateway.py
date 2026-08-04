@@ -72,6 +72,8 @@ def test_client_builder_uses_guilds_only_safe_mentions_and_bounded_rate_limits()
         assert not client.intents.members
         assert client.allowed_mentions is not None
         assert cast(Any, client.allowed_mentions).to_dict() == {"parse": []}
+        assert client.http.http_trace is not None
+        assert len(client.http.http_trace.on_request_end) == 1
         assert client.http.max_ratelimit_timeout == 30.0
 
 
