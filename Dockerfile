@@ -4,7 +4,7 @@ ARG SOURCE_DATE_EPOCH=0
 
 FROM ghcr.io/astral-sh/uv:0.11.33@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:3c9a295d653c9147f6732a0578cb5d2f19a764cc398d4291a0ab32152e751dfa AS builder
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:b1b502f0903fb63589bb660570872c94569a2475f3ff53597754257baff8d06c AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-editable \
     && python /tmp/canonicalize_wheel_records.py /app/.venv
 
-FROM dhi.io/python:3.14.6-debian13@sha256:9db32cc9009c5674edf024d212c2217f6ccbe700c7cd513cda7acb21c767e653 AS runtime-base
+FROM dhi.io/python:3.14.6-debian13@sha256:f3c4e102e557c0eee652cfd14b7da473c89d9126a07f5b0ebd9f8e79183f4038 AS runtime-base
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -60,7 +60,7 @@ COPY --chown=65532:65532 tests/fixtures/container_process.py \
 
 ENV PYTHONPATH=/fault-tests
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:3c9a295d653c9147f6732a0578cb5d2f19a764cc398d4291a0ab32152e751dfa AS break-glass-tools
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:b1b502f0903fb63589bb660570872c94569a2475f3ff53597754257baff8d06c AS break-glass-tools
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bsdutils procps \
