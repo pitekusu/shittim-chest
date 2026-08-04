@@ -8,6 +8,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
+import discord.http
 import pytest
 
 from shittim_chest.adapters.discord import (
@@ -81,12 +82,15 @@ def test_client_builder_uses_guilds_only_safe_mentions_and_bounded_rate_limits()
 async def test_client_rate_limit_ceiling_allows_a_300_second_bucket_with_capacity() -> None:
     ratelimit = discord.http.Ratelimit(300.0)
     ratelimit.update(
-        SimpleNamespace(
-            headers={
-                "X-Ratelimit-Limit": "50",
-                "X-Ratelimit-Remaining": "49",
-                "X-Ratelimit-Reset-After": "300.0",
-            }
+        cast(
+            Any,
+            SimpleNamespace(
+                headers={
+                    "X-Ratelimit-Limit": "50",
+                    "X-Ratelimit-Remaining": "49",
+                    "X-Ratelimit-Reset-After": "300.0",
+                }
+            ),
         )
     )
 
