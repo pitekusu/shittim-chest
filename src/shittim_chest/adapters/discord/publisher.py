@@ -34,7 +34,7 @@ from shittim_chest.application.ports import Clock, DiscordOutboxRepository
 
 DEFAULT_HISTORY_LIMIT = 500
 DEFAULT_RETRY_DELAY_SECONDS = 30.0
-DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 30.0
+DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 300.0
 DEFAULT_DELIVERY_TIMEOUT_SECONDS = 45.0
 
 
@@ -60,7 +60,7 @@ class DiscordPyPublisher:
             client.http.max_ratelimit_timeout != DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS
             for client in clients.values()
         ):
-            raise ValueError("publisher clients must set max_ratelimit_timeout to 30 seconds")
+            raise ValueError("publisher clients must set max_ratelimit_timeout to 300 seconds")
         if not claim_owner.strip():
             raise ValueError("claim owner must not be empty")
         if isinstance(history_limit, bool) or not isinstance(history_limit, int):
