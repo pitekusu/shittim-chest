@@ -2,9 +2,9 @@
 aliases:
   - Discord受付・状態収束是正計画
 tags: [project, discord, aws, lambda, dynamodb, scale-to-zero]
-status: pr-c-in-ci
+status: completed
 created: 2026-08-04
-updated: 2026-08-08
+updated: 2026-08-09
 ---
 
 # Discord受付・状態収束是正計画
@@ -73,23 +73,25 @@ PR-Bの安定後、初回Interactionの応答期限を修正する。
 - content-addressed Lambda bundleの変更ごとに新versionが作成され、固定aliasがそのversionへ移る構成にする。
 - API Gateway integrationとLambda permissionはaliasを参照する。
 - Ingress handlerのaggregate package importを直接module importへ縮小する。
-- snapshot作成時にAWS SDK client、認証情報、SSM parameter値、request dataを保持しない。
+- snapshot作成時にexactなSSM parameter 2件を取得・検証し、SDK client、認証情報、request dataを保持せず、token-freeなRuntime ConfigとPublic Keyだけを保持する。
 - 現行のEd25519検証、type 4 callback、永続受付前の成功応答禁止、2.2秒application soft deadlineを維持する。
 - content-freeなcold/restore区分と処理区間時間だけを記録し、質問、token、署名、raw bodyを含めない。
 
-PR-CはDraft PR `#158`で実装し、shared Lambda ZIPの実測SHA-256をCloudFormation Parameterとして渡し、Discord IngressだけにSnapStartを設定したpublished versionを作成する。固定`live` aliasとAPI Gateway permission/integrationは同versionだけを参照し、bundle checksum変更時にversionを置換する。Ingress moduleはaggregate adapter importを廃止し、SDK client、SSM値、request dataをhandler開始前に生成しない。第1 canonical CIで両image config digest、SBOM、VEX、risk gateの対応を確認し、両baselineを同じPRで一括更新した。transitive `nanoid`の新規High findingはaudit例外を追加せず、安全版へのlockfile更新で解消して最終CIを行う。
+PR-CはPR `#158`で実装・merge・Production Release済みである。shared Lambda ZIPの実測SHA-256をCloudFormation Parameterとして渡し、Discord IngressだけにSnapStartを設定したpublished versionを作成した。固定`live` aliasとAPI Gateway permission/integrationは同versionだけを参照し、bundle checksum変更時にversionを置換する。第1 canonical CIで両image config digest、SBOM、VEX、risk gateの対応を確認し、両baselineを同じPRで一括更新した。transitive `nanoid`の新規High findingはaudit例外を追加せず、安全版へのlockfile更新で解消した。
 
 ### PR-D: Discord Ingress durable fast acknowledgement
 
 PR-C後のlive受入でも初回callbackが3秒を超えたため、cold startだけでなく同期受付経路を縮小する。
 
-- versioned Runtime Configとmoderator Public KeyはCloudFormationのSSM dynamic referenceでLambda環境へ解決し、request中にSSMを呼ばない。
+- versioned Runtime Configとmoderator Public Keyはpublished versionの初期化時にexactな`ssm:GetParameter`で取得・検証し、SnapStart snapshotへtoken-freeな値だけを固定する。request中にSSMを呼ばない。
 - published versionはLambda bundle key、versioned Runtime Config path、Public Key pathへ束縛する。Public KeyをrotationするときはRuntime Config versionもbumpし、新Releaseでsnapshotを更新する。
 - 受付transactionの初期Status publicationは`PENDING`とし、IngressからRuntime Stateを読まない。
 - 受付後のStatus Publisher／Runtime Reconciler Invokeを削除する。非同期収束は既存の1分Reconcilerだけを正とする。
 - Lambda入口から1.2秒でdurable受付を打ち切り、active SDK callに0.4秒、restore／API Gateway／Discord transitに1.4秒を予約する。
 - 署名検証後のdeadlineまたはprovider失敗は、HTTP 503ではなく再試行可否を案内するcontent-freeなephemeral type 4で終了する。永続化の成否を成功として推測しない。
 - SQS、DynamoDB Streams、新worker、Provisioned Concurrencyは追加しない。
+
+PR-DはPR `#160`で同期受付経路を縮小し、PR `#162`でSecureStringをCloudFormationのplaintext `ssm` dynamic referenceへ渡せない初回Release問題を是正した。PR `#162`ではSecureStringの型と値を変更せず、Ingress roleへRuntime Configとmoderator Public Keyのexact 2 ARNだけの`ssm:GetParameter`を付与し、Lambda初期化後にSDK clientとcredentialを破棄する。Production Release run `31266529460`はplan、deploy、cleanupを完走し、固定`live` aliasはSnapStart最適化済みversion `2`を参照した。
 
 ## 5. 状態契約
 
@@ -109,7 +111,7 @@ Status Publisherの配送失敗はdesired stateを巻き戻さない。次の`/s
 
 Runtime taskへ追加できる権限は、production Discord Status Publisher Lambdaのexact ARNに対する`lambda:InvokeFunction`だけとする。
 
-Discord Ingress LambdaはSSM readと`lambda:InvokeFunction`を持たない。既存DynamoDB tableのdurable受付に必要な最小Actionとleading key条件だけを許可する。
+Discord Ingress LambdaはRuntime Configとmoderator Public Keyのexact 2 ARNに対する`ssm:GetParameter`と、既存DynamoDB tableのdurable受付に必要な最小Action／leading key条件だけを持つ。`lambda:InvokeFunction`は持たず、Discord token、participant token、OpenAI API key、persona parameterを読めない。
 
 - wildcard Action、wildcard Resource、managed policyを追加しない。
 - Status Publisher以外のLambda、ECS、Discord、OpenAI権限を追加しない。
@@ -139,10 +141,17 @@ Discord Ingress LambdaはSSM readと`lambda:InvokeFunction`を持たない。既
 - SnapStartはDiscord Ingress Lambdaだけに設定される。
 - API Gatewayはaliasを呼び、`$LATEST`を呼ばない。
 - bundle変更でversion identityが変わる。
-- snapshot時にSDK client、secret、parameter値を生成しない。
+- snapshot初期化時にexact 2 parameterだけを取得・検証し、SDK client、credential、request dataを保持しない。
 - initial callbackのdeadline、署名検証、privacy contractを維持する。
 
-各PRでfocused Python/DynamoDB Local/CDK/cdk-nag/workflow policyを実行し、required CIとCodeQLをterminalまで確認する。実Discord、Production Release、AWS live変更は各PR実装とは別工程とする。
+### PR-D
+
+- request-time SSM、Runtime State read、Status Publisher／Reconciler Invokeが0件である。
+- exact 2 parameter以外のSSM readをIAMとapplicationの両方で拒否する。
+- 初期Status publicationを`PENDING`とし、1.2秒soft deadlineとcontent-free failure応答を維持する。
+- SnapStart restoreを含む初回live受付がDiscordの3秒initial response期限内にHTTP 200を返す。
+
+各PRでfocused Python/DynamoDB Local/CDK/cdk-nag/workflow policyを実行し、required CIとCodeQLをterminalまで確認した。実DiscordとProduction Releaseは各PR実装後の独立工程で確認した。
 
 ## 8. Image baseline
 
@@ -161,10 +170,18 @@ Discord Ingress LambdaはSSM readと`lambda:InvokeFunction`を持たない。既
 
 ## 10. 完了条件
 
-- PR-A、PR-B、PR-Cが別々のDraft PRとして実装される。
+- PR-A、PR-B、PR-C、PR-Dが分離して実装される。
 - 各PRが単一問題に限定され、required CIとCodeQLが成功する。
 - thread、channel、DynamoDBのterminal stateが一致する。
 - 起動済みRuntimeの受付を`STARTING`と表示しない。
 - cold invocationでもDiscord initial response期限を満たす。
 - 状態通知は低遅延hintとdurable reconciliationの両方を持つ。
 - AWS／Discord／OpenAI live操作とProduction Releaseは各PR実装中0回とする。
+
+## 11. クローズ記録
+
+2026-08-09、main `a121c4e2f61beeedeb4c9fb1bbe682982a52b201`のProduction Release run `31266529460`はplan、deploy、post-deploy structural smoke、cleanupをすべて成功した。01:52 JSTの初回live `/shittim`ではAPI GatewayがHTTP 200を返し、SnapStart restoreは493.786 ms、Lambda handlerは994.384 ms、API Gateway受付からLambda完了までの実測差は約1.63秒だった。Lambda Error、Throttle、`deadline_exceeded`、`configuration_unavailable`、Status Publisher／Reconciler failureは0件で、SSM取得はsnapshot初期化中に完了しrequest中は0件だった。
+
+同受付は01:53:38に処理を開始し、01:54:00にDynamoDBのIngressとdebateが`COMPLETED`、01:54:09にchannelの公開Status Messageも`COMPLETED`へ収束した。利用者側にも「アプリケーションが応答しませんでした」は表示されなかった。別のwarm受付も112 msで応答し、thread、channel、DynamoDBが独立して`COMPLETED`へ収束した。
+
+3件の当初問題について、誤った`STARTING`／別依頼への影響、初回Interaction timeout、threadとchannelのterminal state分裂がすべて解消し、完了条件を満たしたため本計画をクローズする。
