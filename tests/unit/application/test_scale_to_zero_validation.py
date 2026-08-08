@@ -186,18 +186,27 @@ def test_prepared_status_publication_is_due_and_validates_nonce() -> None:
 
 
 def test_prepared_status_publication_accepts_only_runtime_aware_initial_states() -> None:
+    pending_request = replace(
+        request(),
+        status_message_state=StatusMessageState.PENDING,
+    )
     ready_request = replace(
         request(),
         status_message_state=StatusMessageState.READY,
     )
 
+    pending = IngressStatusPublication.prepared(
+        pending_request,
+        content=render_public_status(pending_request, StatusMessageState.PENDING),
+    )
     ready = IngressStatusPublication.prepared(
         ready_request,
         content=render_public_status(ready_request, StatusMessageState.READY),
     )
 
+    assert pending.desired_state is StatusMessageState.PENDING
     assert ready.desired_state is StatusMessageState.READY
-    with pytest.raises(ValueError, match="STARTING or READY"):
+    with pytest.raises(ValueError, match="PENDING, STARTING, or READY"):
         IngressStatusPublication.prepared(
             replace(request(), status_message_state=StatusMessageState.ACCEPTED),
             content=render_public_status(request(), StatusMessageState.ACCEPTED),

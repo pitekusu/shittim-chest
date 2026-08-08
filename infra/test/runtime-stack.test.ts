@@ -201,7 +201,24 @@ describe("RuntimeStack", () => {
     const [versionLogicalId, version] = Object.entries(versions)[0]!;
     expect(version.Properties).toEqual({
       CodeSha256: { Ref: "LambdaBundleCodeSha256" },
-      Description: { Ref: "LambdaBundleObjectKey" },
+      Description: {
+        "Fn::Join": [
+          "|",
+          [
+            { Ref: "LambdaBundleObjectKey" },
+            {
+              "Fn::Join": [
+                "",
+                [
+                  "/shittim-chest/production/runtime/",
+                  { Ref: "RuntimeConfigVersion" },
+                ],
+              ],
+            },
+            "/shittim-chest/production/discord/moderator/public-key",
+          ],
+        ],
+      },
       FunctionName: { Ref: ingressLogicalId },
     });
     expect(version.Properties.ProvisionedConcurrencyConfig).toBeUndefined();
@@ -301,11 +318,19 @@ describe("RuntimeStack", () => {
     );
 
     expect(ingress?.Environment.Variables).toMatchObject({
-      SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER:
-        "/shittim-chest/production/discord/moderator/public-key",
-      SHITTIM_RUNTIME_CONFIG_PARAMETER: expect.anything(),
-      SHITTIM_RUNTIME_RECONCILER_FUNCTION: expect.anything(),
-      SHITTIM_STATUS_PUBLISHER_FUNCTION: expect.anything(),
+      SHITTIM_DISCORD_PUBLIC_KEY_HEX:
+        "{{resolve:ssm:/shittim-chest/production/discord/moderator/public-key}}",
+      SHITTIM_RUNTIME_CONFIG_JSON: {
+        "Fn::Join": [
+          "",
+          [
+            "{{resolve:ssm:/shittim-chest/production/runtime/",
+            { Ref: "RuntimeConfigVersion" },
+            "}}",
+          ],
+        ],
+      },
+      SHITTIM_RUNTIME_CONFIG_VERSION: { Ref: "RuntimeConfigVersion" },
     });
     expect(status?.Environment.Variables).toMatchObject({
       SHITTIM_MODERATOR_TOKEN_PARAMETER:
@@ -600,7 +625,8 @@ describe("RuntimeStack", () => {
     }
     expect(reconciler).toContain("/index/gsi1");
     expect(reconciler).toContain("/index/gsi2");
-    expect(ingress).toContain("discord/moderator/public-key");
+    expect(ingress).not.toContain("ssm:GetParameter");
+    expect(ingress).not.toContain("lambda:InvokeFunction");
     expect(ingress).not.toContain("discord/moderator/token");
     expect(status).toContain("discord/moderator/token");
     expect(status).not.toContain("discord/moderator/public-key");
@@ -677,7 +703,6 @@ describe("RuntimeStack", () => {
         "DiscordIngressFunctionRole",
         [
           "CONTROL#INGRESS",
-          "CONTROL#RUNTIME",
           "DEBATE#*",
           "INGRESS_OPERATION#*",
           "INGRESS_SEMANTIC_OPERATION#*",

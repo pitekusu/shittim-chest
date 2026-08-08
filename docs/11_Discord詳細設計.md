@@ -63,10 +63,10 @@ STEP-06Cではcommandを設定済みGuildへだけlocal登録し、schema hash�
 2. header名をcase-insensitiveに一意化し、`X-Signature-Ed25519`、`X-Signature-Timestamp`、変更していないraw body bytesを使う。JSON parseより先にEd25519署名と現在UTCから前後5分以内のtimestampを検証し、欠落・重複・不正hex・長さ・署名・過去/未来replayを401で拒否する。
 3. 署名検証後だけUTF-8 JSONをparseし、duplicate key、非有限数、未知Interactionをfail closedとする。`PING`はDynamoDB、Lambda invoke、ECSへ触れず即時`PONG` (`{"type":1}`) を返す。
 4. `APPLICATION_COMMAND`と`MESSAGE_COMPONENT`をSDK非依存の型付きinputへ変換し、moderator Application ID、Guild、channel/thread、allowlist、question、component context、`requester_id`認可を検証する。
-5. queue counter 20件上限、Ingress Request、active pointer、operation result、公開Status publicationをDynamoDB transactionで先に永続化する。永続化不明な場合は成功応答を返さない。
-6. 永続化後だけStatus PublisherとRuntime Reconcilerをbest-effortで起動し、即時のInteraction callback type 4を`flags=64`、`allowed_mentions.parse=[]`で返す。停止中/起動中は起動中、READY/BUSYは受付済み、上限時は20件混雑を表示する。
+5. queue counter 20件上限、Ingress Request、active pointer、operation result、初期状態`PENDING`の公開Status publicationをDynamoDB transactionで先に永続化する。永続化不明な場合は成功応答を返さない。
+6. 永続化後は追加のSSM取得、Runtime State参照、Lambda Invokeを行わず、即時のInteraction callback type 4を`flags=64`、`allowed_mentions.parse=[]`で返す。Runtime状態判定、Status配送、wakeは既存の1分Runtime Reconcilerが非同期に収束させる。
 
-DiscordのInteraction tokenは初回callbackに必要なhandler-scopeの一時値とし、domain/application model、DynamoDB、queue、Status publication、logへ渡さない。HTTP handlerはDiscord Gateway、discord.py client、participant token、OpenAIを初期化しない。Lambda入口から永続受付を終えるsoft deadlineは2.2秒とし、新しいAWS SDK callをその0.1秒前に閉じ、Discordの3秒初回応答までの余白を確保する。
+DiscordのInteraction tokenは初回callbackに必要なhandler-scopeの一時値とし、domain/application model、DynamoDB、queue、Status publication、logへ渡さない。HTTP handlerはDiscord Gateway、discord.py client、participant token、OpenAIを初期化しない。Runtime Configとmoderator Public Keyはdeploy時にLambda環境へ解決し、request中にSSMを呼ばない。Lambda入口からdurable受付を終えるsoft deadlineは1.2秒とし、新しいAWS SDK callをその0.1秒前に閉じる。active SDK callに0.4秒、SnapStart restore／API Gateway／Discord transitに1.4秒を予約する。署名検証後のdeadlineまたはprovider失敗はcontent-freeなephemeral type 4で返し、状態が表示されない場合だけ再実行するよう案内する。
 
 ### 5.2 Runtime処理と公開Status
 

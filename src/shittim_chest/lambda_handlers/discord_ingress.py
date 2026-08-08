@@ -18,23 +18,16 @@ from shittim_chest.adapters.aws.clients import (
     IngressSdkCancellationGate,
     activate_ingress_sdk_cancellation_gate,
     create_ingress_dynamodb_client,
-    create_lambda_client,
-    create_ssm_client,
-)
-from shittim_chest.adapters.aws.ssm import SsmParameterReader
-from shittim_chest.adapters.aws.status_trigger import (
-    LambdaRuntimeReconciliationTrigger,
-    LambdaStatusPublicationTrigger,
 )
 from shittim_chest.adapters.discord_http import (
     DiscordHttpBoundary,
     DiscordRequestVerifier,
     ingress_response,
     ingress_unavailable_response,
+    verified_ingress_unavailable_response,
 )
 from shittim_chest.adapters.dynamodb.debate_lookup import DynamoDbDebateAuthorizationLookup
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
-from shittim_chest.adapters.dynamodb.runtime_state import DynamoDbRuntimeStateRepository
 from shittim_chest.application.discord_http import DiscordHttpOperation
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
@@ -43,26 +36,23 @@ from shittim_chest.application.ingress import (
 from shittim_chest.application.ports import (
     Clock,
     IngressExecutionDeadlineExceeded,
-    ParameterReadUnavailable,
     RepositoryConflict,
     RepositoryUnavailable,
 )
 from shittim_chest.config.ingress import (
     IngressBootstrapSettings,
-    IngressRuntimeSettings,
     load_ingress_bootstrap_settings,
-    load_ingress_runtime_settings,
 )
 from shittim_chest.config.models import StartupConfigurationError
 from shittim_chest.runtime.primitives import SystemClock
 
 LOGGER = logging.getLogger(__name__)
 
-# Stop durable acceptance at 2.2s from Lambda entry. A currently active AWS SDK
-# call may take up to 0.4s to unwind, leaving 0.4s for API Gateway/Discord before
-# Discord's 3.0s initial-response deadline. Stop admitting new SDK calls 0.1s
-# before cancellation to absorb event-loop scheduling jitter. The Lambda hard
-# timeout remains 5s.
+# Stop durable acceptance at 1.2s from Lambda entry. A currently active AWS SDK
+# call may take up to 0.4s to unwind, reserving 1.4s for SnapStart restore,
+# API Gateway, and Discord before the 3.0s initial-response deadline. Stop
+# admitting new SDK calls 0.1s before cancellation to absorb scheduling jitter.
+# The Lambda hard timeout remains 5s.
 DISCORD_INGRESS_MAX_ACTIVE_SDK_CALL_SECONDS: Final = (
     INGRESS_CONNECT_TIMEOUT_SECONDS + INGRESS_READ_TIMEOUT_SECONDS
 )
@@ -80,6 +70,16 @@ class DiscordIngressDeadlineExceeded(TimeoutError):
 
     def __init__(self) -> None:
         super().__init__("discord_ingress_deadline_exceeded")
+
+
+class DiscordVerifiedIngressFailure(RuntimeError):
+    """Content-free failure after Discord authentication has succeeded."""
+
+    __slots__ = ("category",)
+
+    def __init__(self, category: str) -> None:
+        super().__init__("discord_verified_ingress_failed")
+        self.category = category
 
 
 class DiscordIngressLambda:
@@ -121,26 +121,29 @@ class DiscordIngressLambda:
         operation = reception.interaction
         if not isinstance(operation, DiscordHttpOperation):
             raise AssertionError("verified Discord reception has no result")
-        remaining_seconds = self._remaining_seconds(entry_at)
-        if remaining_seconds <= 0:
-            raise DiscordIngressDeadlineExceeded
-        # Client construction is intentionally synchronous and local. Keep it
-        # outside the event loop so it cannot postpone asyncio's timeout callback,
-        # then remeasure the entry budget before any SDK request can start.
-        application = self._application()
-        remaining_seconds = self._remaining_seconds(entry_at)
-        if remaining_seconds <= 0:
-            raise DiscordIngressDeadlineExceeded
-        gate = IngressSdkCancellationGate()
-        with activate_ingress_sdk_cancellation_gate(gate):
-            result = asyncio.run(
-                self._accept(
-                    application,
-                    operation,
-                    gate=gate,
-                    timeout_seconds=remaining_seconds,
+        try:
+            remaining_seconds = self._remaining_seconds(entry_at)
+            if remaining_seconds <= 0:
+                raise DiscordIngressDeadlineExceeded
+            # Client construction is intentionally synchronous and local. Keep it
+            # outside the event loop so it cannot postpone asyncio's timeout callback,
+            # then remeasure the entry budget before any SDK request can start.
+            application = self._application()
+            remaining_seconds = self._remaining_seconds(entry_at)
+            if remaining_seconds <= 0:
+                raise DiscordIngressDeadlineExceeded
+            gate = IngressSdkCancellationGate()
+            with activate_ingress_sdk_cancellation_gate(gate):
+                result = asyncio.run(
+                    self._accept(
+                        application,
+                        operation,
+                        gate=gate,
+                        timeout_seconds=remaining_seconds,
+                    )
                 )
-            )
+        except Exception as error:
+            raise DiscordVerifiedIngressFailure(_failure_category(error)) from None
         return ingress_response(result.outcome).as_event()
 
     def _remaining_seconds(self, entry_at: datetime) -> float:
@@ -197,6 +200,13 @@ def lambda_handler(event: object, context: object) -> dict[str, object]:
             cast(Mapping[str, object], event),
             received_at=received_at,
         )
+    except DiscordVerifiedIngressFailure as error:
+        LOGGER.error(
+            "discord_ingress_failure category=%s request_id=%s",
+            error.category,
+            request_id,
+        )
+        return verified_ingress_unavailable_response().as_event()
     except Exception as error:
         LOGGER.error(
             "discord_ingress_failure category=%s request_id=%s",
@@ -234,13 +244,9 @@ def _get_handler() -> DiscordIngressLambda:
 
 def _build_handler(environ: Mapping[str, str]) -> DiscordIngressLambda:
     settings = load_ingress_bootstrap_settings(environ)
-    ssm = SsmParameterReader(
-        client=create_ssm_client(region_name=settings.aws_region),
-    )
-    runtime = asyncio.run(load_ingress_runtime_settings(settings, ssm))
-    application = _lazy_application(settings, runtime)
+    application = _lazy_application(settings)
     return DiscordIngressLambda(
-        boundary=DiscordHttpBoundary(DiscordRequestVerifier(runtime.public_key_hex)),
+        boundary=DiscordHttpBoundary(DiscordRequestVerifier(settings.public_key_hex)),
         application=application,
         clock=SystemClock(),
     )
@@ -248,7 +254,6 @@ def _build_handler(environ: Mapping[str, str]) -> DiscordIngressLambda:
 
 def _lazy_application(
     settings: IngressBootstrapSettings,
-    runtime: IngressRuntimeSettings,
 ) -> Callable[[], DiscordIngressApplication]:
     cached: DiscordIngressApplication | None = None
 
@@ -257,29 +262,15 @@ def _lazy_application(
         if cached is not None:
             return cached
         dynamodb = create_ingress_dynamodb_client(region_name=settings.aws_region)
-        lambda_client = create_lambda_client(region_name=settings.aws_region)
         cached = DiscordIngressApplication(
-            runtime_config=runtime.discord,
-            clock=SystemClock(),
+            runtime_config=settings.discord,
             ingress=DynamoDbIngressRepository(
-                client=dynamodb,
-                table_name=settings.table_name,
-            ),
-            runtime_state=DynamoDbRuntimeStateRepository(
                 client=dynamodb,
                 table_name=settings.table_name,
             ),
             debates=DynamoDbDebateAuthorizationLookup(
                 client=dynamodb,
                 table_name=settings.table_name,
-            ),
-            status_trigger=LambdaStatusPublicationTrigger(
-                client=lambda_client,
-                function_name=settings.status_publisher_function,
-            ),
-            reconciler_trigger=LambdaRuntimeReconciliationTrigger(
-                client=lambda_client,
-                function_name=settings.runtime_reconciler_function,
             ),
         )
         return cached
@@ -297,7 +288,7 @@ def _request_id(context: object) -> str:
 def _failure_category(error: Exception) -> str:
     if isinstance(error, DiscordIngressDeadlineExceeded):
         return "deadline_exceeded"
-    if isinstance(error, (ParameterReadUnavailable, StartupConfigurationError)):
+    if isinstance(error, StartupConfigurationError):
         return "configuration_unavailable"
     if isinstance(error, RepositoryUnavailable):
         return "repository_unavailable"
@@ -314,5 +305,6 @@ __all__ = (
     "DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS",
     "DiscordIngressDeadlineExceeded",
     "DiscordIngressLambda",
+    "DiscordVerifiedIngressFailure",
     "lambda_handler",
 )

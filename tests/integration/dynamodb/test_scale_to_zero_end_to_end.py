@@ -317,21 +317,15 @@ async def test_signed_http_ingress_wakes_recovers_and_drains_from_dynamodb_local
 
     acceptance = await DiscordIngressApplication(
         runtime_config=_runtime_config(),
-        clock=clock,
         ingress=ingress,
-        runtime_state=runtime,
-        status_trigger=triggers,
-        reconciler_trigger=triggers,
         debates=DynamoDbDebateAuthorizationLookup(
             client=dynamodb_client,
             table_name=dynamodb_table,
         ),
     ).accept(reception.interaction)
 
-    assert acceptance.outcome is IngressOutcome.STARTING
+    assert acceptance.outcome is IngressOutcome.PENDING
     assert acceptance.created
-    assert triggers.status_ids == [INTERACTION_ID]
-    assert triggers.reconciliation_ids == [INTERACTION_ID]
 
     status_gateway = RecordingStatusGateway()
 

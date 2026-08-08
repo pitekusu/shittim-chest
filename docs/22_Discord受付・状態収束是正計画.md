@@ -24,7 +24,7 @@ updated: 2026-08-08
 | 問題 | 直接原因 | 性質 |
 |---|---|---|
 | 誤った`STARTING`と複数依頼の同時更新 | 新規Ingressが常に`STARTING`でstatus publicationを作り、Fargateの`mark_accepted`後は即時通知せず1分Reconcilerまたは次の受付triggerでまとめて収束する | 表示状態と通知timing |
-| 初回Interaction timeout | Discord Ingress Lambdaのcold initと同期受付処理の合計がDiscordの3秒期限を超える。Lambda/APIは成功しているため処理は継続する | serverless cold start |
+| 初回Interaction timeout | SnapStart適用後も、受付中のSSM取得、Runtime State参照、Status Publisher／Reconciler Invokeを含む同期処理がDiscordの3秒期限を消費する | 同期受付経路の過多 |
 | channelが`ACCEPTED`のまま | debate終端時はthread panelを収束させるが、元Ingress Requestをterminal化するproduction callerがない | 永続状態整合性 |
 
 ## 3. 採用決定
@@ -35,6 +35,8 @@ updated: 2026-08-08
 - Invokeは低遅延化のhintであり、DynamoDBのdesired statusを正本とする。Invoke失敗時は既存の1分Reconcilerで回復する。
 - Interaction token、raw body、署名、質問本文は永続化・log出力しない。
 - Provisioned Concurrencyは採用しない。SnapStartと同時使用しない。
+- Discord Ingressの同期経路は署名検証、parse、既存DynamoDB受付transaction、type 4 callbackだけとする。SSM取得、Runtime State参照、Status Publisher／Reconciler Invokeは行わない。
+- 初期公開状態はRuntime推測を含まない`PENDING`とし、既存の1分Runtime ReconcilerがRuntime状態、status配送、wakeを非同期に収束させる。
 
 ## 4. 実装順序
 
@@ -77,12 +79,25 @@ PR-Bの安定後、初回Interactionの応答期限を修正する。
 
 PR-CはDraft PR `#158`で実装し、shared Lambda ZIPの実測SHA-256をCloudFormation Parameterとして渡し、Discord IngressだけにSnapStartを設定したpublished versionを作成する。固定`live` aliasとAPI Gateway permission/integrationは同versionだけを参照し、bundle checksum変更時にversionを置換する。Ingress moduleはaggregate adapter importを廃止し、SDK client、SSM値、request dataをhandler開始前に生成しない。第1 canonical CIで両image config digest、SBOM、VEX、risk gateの対応を確認し、両baselineを同じPRで一括更新した。transitive `nanoid`の新規High findingはaudit例外を追加せず、安全版へのlockfile更新で解消して最終CIを行う。
 
+### PR-D: Discord Ingress durable fast acknowledgement
+
+PR-C後のlive受入でも初回callbackが3秒を超えたため、cold startだけでなく同期受付経路を縮小する。
+
+- versioned Runtime Configとmoderator Public KeyはCloudFormationのSSM dynamic referenceでLambda環境へ解決し、request中にSSMを呼ばない。
+- published versionはLambda bundle key、versioned Runtime Config path、Public Key pathへ束縛する。Public KeyをrotationするときはRuntime Config versionもbumpし、新Releaseでsnapshotを更新する。
+- 受付transactionの初期Status publicationは`PENDING`とし、IngressからRuntime Stateを読まない。
+- 受付後のStatus Publisher／Runtime Reconciler Invokeを削除する。非同期収束は既存の1分Reconcilerだけを正とする。
+- Lambda入口から1.2秒でdurable受付を打ち切り、active SDK callに0.4秒、restore／API Gateway／Discord transitに1.4秒を予約する。
+- 署名検証後のdeadlineまたはprovider失敗は、HTTP 503ではなく再試行可否を案内するcontent-freeなephemeral type 4で終了する。永続化の成否を成功として推測しない。
+- SQS、DynamoDB Streams、新worker、Provisioned Concurrencyは追加しない。
+
 ## 5. 状態契約
 
 | 観測／処理 | 公開状態 |
 |---|---|
-| Runtime不在、`STOPPED`、起動収束中 | `STARTING` |
-| Runtime `READY`、`BUSY`、`IDLE`で未claim | `READY` |
+| HTTPでdurable受付済み、Runtime状態未判定 | `PENDING` |
+| ReconcilerがRuntime不在、`STOPPED`、起動収束中を確認 | `STARTING` |
+| ReconcilerがRuntime `READY`、`BUSY`、`IDLE`を確認 | `READY` |
 | requestをclaimしdebate/attemptへ束縛済み | `ACCEPTED` |
 | debate正常終了 | `COMPLETED` |
 | debate失敗 | `TERMINAL_FAILED` |
@@ -93,6 +108,8 @@ Status Publisherの配送失敗はdesired stateを巻き戻さない。次の`/s
 ## 6. IAM境界
 
 Runtime taskへ追加できる権限は、production Discord Status Publisher Lambdaのexact ARNに対する`lambda:InvokeFunction`だけとする。
+
+Discord Ingress LambdaはSSM readと`lambda:InvokeFunction`を持たない。既存DynamoDB tableのdurable受付に必要な最小Actionとleading key条件だけを許可する。
 
 - wildcard Action、wildcard Resource、managed policyを追加しない。
 - Status Publisher以外のLambda、ECS、Discord、OpenAI権限を追加しない。
