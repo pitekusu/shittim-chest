@@ -175,10 +175,14 @@ def create_lambda_client(*, region_name: str) -> LambdaClient:
 
 
 def create_ssm_client(*, region_name: str) -> SSMClient:
-    """Create one SSM client to reuse for an ingress Lambda execution environment."""
+    """Create a one-shot SSM client without retaining boto3's default session."""
 
     _require_region(region_name)
-    return boto3.client("ssm", region_name=region_name, config=ingress_sdk_config())
+    return boto3.Session().client(
+        "ssm",
+        region_name=region_name,
+        config=ingress_sdk_config(),
+    )
 
 
 def create_status_dynamodb_client(*, region_name: str) -> DynamoDBClient:

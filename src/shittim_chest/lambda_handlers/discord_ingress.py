@@ -18,7 +18,9 @@ from shittim_chest.adapters.aws.clients import (
     IngressSdkCancellationGate,
     activate_ingress_sdk_cancellation_gate,
     create_ingress_dynamodb_client,
+    create_ssm_client,
 )
+from shittim_chest.adapters.aws.ssm import SsmParameterReader
 from shittim_chest.adapters.discord_http import (
     DiscordHttpBoundary,
     DiscordRequestVerifier,
@@ -36,12 +38,15 @@ from shittim_chest.application.ingress import (
 from shittim_chest.application.ports import (
     Clock,
     IngressExecutionDeadlineExceeded,
+    ParameterReadUnavailable,
     RepositoryConflict,
     RepositoryUnavailable,
 )
 from shittim_chest.config.ingress import (
     IngressBootstrapSettings,
+    IngressRuntimeSettings,
     load_ingress_bootstrap_settings,
+    load_ingress_runtime_settings,
 )
 from shittim_chest.config.models import StartupConfigurationError
 from shittim_chest.runtime.primitives import SystemClock
@@ -244,9 +249,13 @@ def _get_handler() -> DiscordIngressLambda:
 
 def _build_handler(environ: Mapping[str, str]) -> DiscordIngressLambda:
     settings = load_ingress_bootstrap_settings(environ)
-    application = _lazy_application(settings)
+    ssm = SsmParameterReader(
+        client=create_ssm_client(region_name=settings.aws_region),
+    )
+    runtime = asyncio.run(load_ingress_runtime_settings(settings, ssm))
+    application = _lazy_application(settings, runtime)
     return DiscordIngressLambda(
-        boundary=DiscordHttpBoundary(DiscordRequestVerifier(settings.public_key_hex)),
+        boundary=DiscordHttpBoundary(DiscordRequestVerifier(runtime.public_key_hex)),
         application=application,
         clock=SystemClock(),
     )
@@ -254,6 +263,7 @@ def _build_handler(environ: Mapping[str, str]) -> DiscordIngressLambda:
 
 def _lazy_application(
     settings: IngressBootstrapSettings,
+    runtime: IngressRuntimeSettings,
 ) -> Callable[[], DiscordIngressApplication]:
     cached: DiscordIngressApplication | None = None
 
@@ -263,7 +273,7 @@ def _lazy_application(
             return cached
         dynamodb = create_ingress_dynamodb_client(region_name=settings.aws_region)
         cached = DiscordIngressApplication(
-            runtime_config=settings.discord,
+            runtime_config=runtime.discord,
             ingress=DynamoDbIngressRepository(
                 client=dynamodb,
                 table_name=settings.table_name,
@@ -288,13 +298,24 @@ def _request_id(context: object) -> str:
 def _failure_category(error: Exception) -> str:
     if isinstance(error, DiscordIngressDeadlineExceeded):
         return "deadline_exceeded"
-    if isinstance(error, StartupConfigurationError):
+    if isinstance(error, (ParameterReadUnavailable, StartupConfigurationError)):
         return "configuration_unavailable"
     if isinstance(error, RepositoryUnavailable):
         return "repository_unavailable"
     if isinstance(error, RepositoryConflict):
         return "repository_state_conflict"
     return "internal_error"
+
+
+def _initialize_for_lambda(environ: Mapping[str, str]) -> None:
+    """Resolve immutable SecureStrings during init so requests never call SSM."""
+
+    global _handler
+    if environ.get("AWS_LAMBDA_FUNCTION_NAME") and _handler is None:
+        _handler = _build_handler(environ)
+
+
+_initialize_for_lambda(os.environ)
 
 
 __all__ = (

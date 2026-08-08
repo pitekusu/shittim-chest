@@ -1,7 +1,5 @@
 import {
   Aws,
-  CfnDynamicReference,
-  CfnDynamicReferenceService,
   CfnOutput,
   CfnParameter,
   Duration,
@@ -358,14 +356,6 @@ export class RuntimeStack extends Stack {
       runtimeServiceArn,
     );
     const runtimeConfigParameter = `${PARAMETER_ROOT}/runtime/${configVersion.valueAsString}`;
-    const ingressRuntimeConfig = new CfnDynamicReference(
-      CfnDynamicReferenceService.SSM,
-      runtimeConfigParameter,
-    ).toString();
-    const ingressPublicKey = new CfnDynamicReference(
-      CfnDynamicReferenceService.SSM,
-      DISCORD_PUBLIC_KEY_PARAMETER,
-    ).toString();
     this.discordStatusPublisherFunction = this.createApplicationFunction({
       code: sharedLambdaBundle.code,
       environment: {
@@ -399,10 +389,9 @@ export class RuntimeStack extends Stack {
     this.discordIngressFunction = this.createApplicationFunction({
       code: sharedLambdaBundle.code,
       environment: {
-        SHITTIM_DISCORD_PUBLIC_KEY_HEX: ingressPublicKey,
+        SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER: DISCORD_PUBLIC_KEY_PARAMETER,
         SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
-        SHITTIM_RUNTIME_CONFIG_JSON: ingressRuntimeConfig,
-        SHITTIM_RUNTIME_CONFIG_VERSION: configVersion.valueAsString,
+        SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
       },
       functionName: "shittim-chest-production-discord-ingress",
       handler: DISCORD_INGRESS_HANDLER,
@@ -564,6 +553,12 @@ export class RuntimeStack extends Stack {
       this.runtimeReconcilerFunction,
       table,
       RECONCILER_READABLE_PARTITION_PATTERNS,
+    );
+
+    this.grantParameterRead(this.discordIngressFunction, runtimeConfigParameter);
+    this.grantParameterRead(
+      this.discordIngressFunction,
+      DISCORD_PUBLIC_KEY_PARAMETER,
     );
 
     this.grantParameterRead(

@@ -898,6 +898,35 @@ def test_release_diagnostic_failure_does_not_replace_deploy_failure(
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            'status_reason: ((.StatusReason // "") | scrub)',
+            'status_reason: "discarded"',
+        ),
+        (
+            "steps.prepare_changes.outcome == 'failure'",
+            "steps.prepare_changes.outcome == 'success'",
+        ),
+    ),
+)
+def test_release_retains_change_set_failure_reason_before_cleanup(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(old, new, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="Change Set failure"):
+        validate_notification_workflows(directory)
+
+
 def test_release_cleanup_success_does_not_replace_deploy_failure(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

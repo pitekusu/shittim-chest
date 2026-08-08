@@ -318,20 +318,19 @@ describe("RuntimeStack", () => {
     );
 
     expect(ingress?.Environment.Variables).toMatchObject({
-      SHITTIM_DISCORD_PUBLIC_KEY_HEX:
-        "{{resolve:ssm:/shittim-chest/production/discord/moderator/public-key}}",
-      SHITTIM_RUNTIME_CONFIG_JSON: {
+      SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER:
+        "/shittim-chest/production/discord/moderator/public-key",
+      SHITTIM_RUNTIME_CONFIG_PARAMETER: {
         "Fn::Join": [
           "",
           [
-            "{{resolve:ssm:/shittim-chest/production/runtime/",
+            "/shittim-chest/production/runtime/",
             { Ref: "RuntimeConfigVersion" },
-            "}}",
           ],
         ],
       },
-      SHITTIM_RUNTIME_CONFIG_VERSION: { Ref: "RuntimeConfigVersion" },
     });
+    expect(JSON.stringify(ingress?.Environment.Variables)).not.toContain("{{resolve:ssm:");
     expect(status?.Environment.Variables).toMatchObject({
       SHITTIM_MODERATOR_TOKEN_PARAMETER:
         "/shittim-chest/production/discord/moderator/token",
@@ -344,6 +343,14 @@ describe("RuntimeStack", () => {
     });
     expect(JSON.stringify([ingress, status, reconciler])).not.toContain("participant-");
     expect(JSON.stringify([ingress, status, reconciler])).not.toContain("OPENAI_API_KEY");
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const ingressPolicy = policies.find((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes("DiscordIngressFunctionRole"),
+    );
+    const ingressPolicyText = JSON.stringify(ingressPolicy);
+    expect(ingressPolicyText).toContain("ssm:GetParameter");
+    expect(ingressPolicyText).toContain("/runtime/");
+    expect(ingressPolicyText).toContain("/discord/moderator/public-key");
   });
 
   test("exposes only the signed Discord POST route through HTTP API v2", () => {
@@ -625,7 +632,9 @@ describe("RuntimeStack", () => {
     }
     expect(reconciler).toContain("/index/gsi1");
     expect(reconciler).toContain("/index/gsi2");
-    expect(ingress).not.toContain("ssm:GetParameter");
+    expect(ingress).toContain("ssm:GetParameter");
+    expect(ingress).toContain("discord/moderator/public-key");
+    expect(ingress).toContain("production/runtime/");
     expect(ingress).not.toContain("lambda:InvokeFunction");
     expect(ingress).not.toContain("discord/moderator/token");
     expect(status).toContain("discord/moderator/token");

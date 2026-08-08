@@ -550,6 +550,37 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError("Release change set recording is incomplete") from error
     if not create_change_set_index < record_change_set_index < poll_change_set_index:
         raise WorkflowPolicyError("Release must record each change set before polling it")
+    prepare_block = _workflow_step_block(text, "Prepare immutable CloudFormation change sets")
+    failure_markers = (
+        '"${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json"',
+        '"${RUNNER_TEMP}/${artifact}.change-set-failure.json"',
+        'status_reason: ((.StatusReason // "") | scrub)',
+        "jq --compact-output .",
+        "reason=$(jq --raw-output .status_reason",
+    )
+    if any(marker not in prepare_block for marker in failure_markers):
+        raise WorkflowPolicyError(
+            "Release must retain a bounded Change Set failure reason before cleanup"
+        )
+    failed_status_index = prepare_block.index('if [ "${status}" = "FAILED" ]')
+    evidence_index = prepare_block.index(
+        '"${RUNNER_TEMP}/${artifact}.change-set-failure.json"',
+        failed_status_index,
+    )
+    exit_index = prepare_block.index("*) exit 1 ;;", failed_status_index)
+    if not failed_status_index < evidence_index < exit_index:
+        raise WorkflowPolicyError("Release must record Change Set failure evidence before exiting")
+    failure_upload = _workflow_step_block(text, "Retain bounded Change Set failure evidence")
+    required_failure_upload = (
+        "failure()",
+        "steps.prepare_changes.outcome == 'failure'",
+        "*.change-set-failure.json",
+        "if-no-files-found: error",
+    )
+    if any(marker not in failure_upload for marker in required_failure_upload):
+        raise WorkflowPolicyError(
+            "Release must upload bounded Change Set failure evidence before cleanup"
+        )
     if (
         text.count('change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"')
         != 4
