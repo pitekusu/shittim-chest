@@ -469,6 +469,29 @@ def test_release_requires_the_fail_fast_image_evidence_waiter(tmp_path: Path) ->
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        '"ParameterKey=LambdaBundleCodeSha256,ParameterValue=${bundle_code_sha256}"',
+        '--expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"',
+        "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w 0)",
+    ],
+)
+def test_release_binds_lambda_version_to_exact_bundle_checksum(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact Lambda bundle checksum"):
+        validate_notification_workflows(directory)
+
+
 def test_release_rejects_notation_login(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

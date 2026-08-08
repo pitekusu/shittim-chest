@@ -5,25 +5,26 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Final, cast
 
-from shittim_chest.adapters.aws import (
-    IngressSdkCancellationGate,
-    LambdaRuntimeReconciliationTrigger,
-    LambdaStatusPublicationTrigger,
-    SsmParameterReader,
-    activate_ingress_sdk_cancellation_gate,
-    create_ingress_dynamodb_client,
-    create_lambda_client,
-    create_ssm_client,
-)
 from shittim_chest.adapters.aws.clients import (
     DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS,
     INGRESS_CONNECT_TIMEOUT_SECONDS,
     INGRESS_READ_TIMEOUT_SECONDS,
     INGRESS_RESPONSE_MARGIN_SECONDS,
+    IngressSdkCancellationGate,
+    activate_ingress_sdk_cancellation_gate,
+    create_ingress_dynamodb_client,
+    create_lambda_client,
+    create_ssm_client,
+)
+from shittim_chest.adapters.aws.ssm import SsmParameterReader
+from shittim_chest.adapters.aws.status_trigger import (
+    LambdaRuntimeReconciliationTrigger,
+    LambdaStatusPublicationTrigger,
 )
 from shittim_chest.adapters.discord_http import (
     DiscordHttpBoundary,
@@ -31,11 +32,9 @@ from shittim_chest.adapters.discord_http import (
     ingress_response,
     ingress_unavailable_response,
 )
-from shittim_chest.adapters.dynamodb import (
-    DynamoDbDebateAuthorizationLookup,
-    DynamoDbIngressRepository,
-    DynamoDbRuntimeStateRepository,
-)
+from shittim_chest.adapters.dynamodb.debate_lookup import DynamoDbDebateAuthorizationLookup
+from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
+from shittim_chest.adapters.dynamodb.runtime_state import DynamoDbRuntimeStateRepository
 from shittim_chest.application.discord_http import DiscordHttpOperation
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
@@ -177,20 +176,23 @@ class DiscordIngressLambda:
 
 
 _handler: DiscordIngressLambda | None = None
+_first_invocation = True
 
 
 def lambda_handler(event: object, context: object) -> dict[str, object]:
     """AWS entrypoint with entry-time budgeting and content-free failure telemetry."""
 
+    started_ns = time.monotonic_ns()
+    invocation_kind = _consume_invocation_kind(os.environ)
     received_at = SystemClock().now()
     request_id = _request_id(context)
-    if not isinstance(event, Mapping) or any(not isinstance(key, str) for key in event):
-        LOGGER.error(
-            "discord_ingress_failure category=invalid_event request_id=%s",
-            request_id,
-        )
-        return ingress_unavailable_response().as_event()
     try:
+        if not isinstance(event, Mapping) or any(not isinstance(key, str) for key in event):
+            LOGGER.error(
+                "discord_ingress_failure category=invalid_event request_id=%s",
+                request_id,
+            )
+            return ingress_unavailable_response().as_event()
         return _get_handler().handle(
             cast(Mapping[str, object], event),
             received_at=received_at,
@@ -202,6 +204,25 @@ def lambda_handler(event: object, context: object) -> dict[str, object]:
             request_id,
         )
         return ingress_unavailable_response().as_event()
+    finally:
+        duration_ms = max(0, (time.monotonic_ns() - started_ns) // 1_000_000)
+        LOGGER.info(
+            "discord_ingress_timing invocation_kind=%s duration_ms=%d",
+            invocation_kind,
+            duration_ms,
+        )
+
+
+def _consume_invocation_kind(environ: Mapping[str, str]) -> str:
+    """Classify one restore/cold boundary without retaining request data."""
+
+    global _first_invocation
+    if not _first_invocation:
+        return "warm"
+    _first_invocation = False
+    if environ.get("AWS_LAMBDA_INITIALIZATION_TYPE") == "snap-start":
+        return "restore"
+    return "cold"
 
 
 def _get_handler() -> DiscordIngressLambda:

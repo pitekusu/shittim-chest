@@ -806,6 +806,9 @@ jobs:
         run: |
           [[ "${RUNTIME_CONFIG_VERSION}" =~ ^v[0-9]{4}$ ]]
           bundle_key=$(jq --raw-output .key "${RUNNER_TEMP}/lambda-bundle.json")
+          bundle_hash=$(jq --raw-output .sha256 "${RUNNER_TEMP}/lambda-bundle.json")
+          bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
+          [[ "${bundle_code_sha256}" =~ ^[A-Za-z0-9+/]{43}=$ ]]
           change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           jq --null-input '{}' > "${RUNNER_TEMP}/change-sets.json"
           prepare_change_set() {
@@ -893,7 +896,8 @@ jobs:
               "ParameterKey=BreakGlassImageDigest,ParameterValue=${BREAK_GLASS_DIGEST}" \
               "ParameterKey=RuntimeConfigVersion,ParameterValue=${RUNTIME_CONFIG_VERSION}" \
               "ParameterKey=LambdaBundleBucketName,ParameterValue=${ASSET_BUCKET}" \
-              "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}"
+              "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}" \
+              "ParameterKey=LambdaBundleCodeSha256,ParameterValue=${bundle_code_sha256}"
           prepare_change_set ShittimChest-Prod-Operations "${AWS_REGION}" \
             "${TOKYO_EXECUTION_ROLE}" \
             --parameters \
@@ -918,7 +922,8 @@ jobs:
             --expected-parameter "BreakGlassImageDigest=${BREAK_GLASS_DIGEST}" \
             --expected-parameter "RuntimeConfigVersion=${RUNTIME_CONFIG_VERSION}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
-            --expected-parameter "LambdaBundleObjectKey=${bundle_key}"
+            --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
+            --expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"
           validate_change_set ShittimChest-Prod-Operations Operations \
             --expected-noecho-parameter OperatorNotificationEmail
           validate_change_set ShittimChest-Prod-CostGovernance CostGovernance \
@@ -1325,6 +1330,9 @@ jobs:
           normal_digest=$(jq --raw-output .images.normal.digest "${manifest}")
           break_glass_digest=$(jq --raw-output .images.break_glass.digest "${manifest}")
           bundle_key=$(jq --raw-output .lambda_bundle.key "${manifest}")
+          bundle_hash=$(jq --raw-output .lambda_bundle.sha256 "${manifest}")
+          bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
+          [[ "${bundle_code_sha256}" =~ ^[A-Za-z0-9+/]{43}=$ ]]
           validate_change_set() {
             local stack="$1" region="$2" artifact="$3" arn
             shift 3
@@ -1342,7 +1350,8 @@ jobs:
             --expected-parameter "BreakGlassImageDigest=${break_glass_digest}" \
             --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
-            --expected-parameter "LambdaBundleObjectKey=${bundle_key}"
+            --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
+            --expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"
           validate_change_set ShittimChest-Prod-Operations "${AWS_REGION}" Operations \
             --expected-noecho-parameter OperatorNotificationEmail
           validate_change_set ShittimChest-Prod-CostGovernance "${COST_REGION}" \
