@@ -2,8 +2,8 @@
   "schema_version": 3,
   "maximum_validity_days": 90,
   "image_config_digests": {
-    "production": "sha256:dd2d65cda462280affeba2e0ba85c820cf5e055159035f98e8c9dea757e0e674",
-    "break-glass": "sha256:54d6dff08975d8ec040bf623ef422e5b43b1e889eb067fc4b810e60ceee0e36e"
+    "production": "sha256:83cc80f38891de16e80f228c27a277d3894f7c262ce54bb051c010043d96a98f",
+    "break-glass": "sha256:61120f52b9185738e2bd99d60f4b206a968bfc78351822057c56cfa79dc2550b"
   },
   "acceptances": []
 }
