@@ -1,6 +1,7 @@
 """Thin HTTP ingress Lambda boundary behavior."""
 
 import asyncio
+import inspect
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -369,6 +370,47 @@ def test_lambda_entry_captures_time_before_handler_build(
 
     assert ingress_module.lambda_handler({}, object()) == {"statusCode": 200}
     assert events == ["entry-time", "build", "handle"]
+
+
+def test_snapstart_restore_and_warm_invocations_emit_content_free_timing(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Handler:
+        def handle(
+            self,
+            event: object,
+            *,
+            received_at: datetime,
+        ) -> dict[str, object]:
+            del event, received_at
+            return {"statusCode": 200}
+
+    timestamps = iter((1_000_000_000, 1_125_000_000, 2_000_000_000, 2_050_000_000))
+    monkeypatch.setattr(ingress_module, "_first_invocation", True)
+    monkeypatch.setattr(ingress_module, "_get_handler", Handler)
+    monkeypatch.setattr(ingress_module.time, "monotonic_ns", lambda: next(timestamps))
+    monkeypatch.setenv("AWS_LAMBDA_INITIALIZATION_TYPE", "snap-start")
+    caplog.set_level(logging.INFO)
+
+    private_event = {"body": "private question, signature, and token"}
+    assert ingress_module.lambda_handler(private_event, object()) == {"statusCode": 200}
+    assert ingress_module.lambda_handler(private_event, object()) == {"statusCode": 200}
+
+    assert "invocation_kind=restore duration_ms=125" in caplog.text
+    assert "invocation_kind=warm duration_ms=50" in caplog.text
+    assert "private question" not in caplog.text
+    assert "signature" not in caplog.text
+    assert "token" not in caplog.text
+
+
+def test_ingress_composition_uses_direct_lazy_adapter_imports() -> None:
+    source = inspect.getsource(ingress_module)
+
+    assert "from shittim_chest.adapters.aws import" not in source
+    assert "from shittim_chest.adapters.dynamodb import" not in source
+    assert "_handler: DiscordIngressLambda | None = None" in source
+    assert source.index("def lambda_handler") < source.index("def _build_handler")
 
 
 def test_failure_log_contains_only_category_and_request_id(

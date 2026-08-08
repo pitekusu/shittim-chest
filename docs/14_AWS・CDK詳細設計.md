@@ -59,7 +59,7 @@ Cost Anomaly Detectionは`AWS::CE::AnomalyMonitor`を作成せず、deploy時必
 - Fargateは`awsvpc`、`AssignPublicIp=ENABLED`、routeは`0.0.0.0/0 -> IGW`。
 - Security Groupはingress ruleなし。egressはTCP 443を許可する。
 - ALB、NAT instance、DNS64、NAT64、Service Connectは作成しない。
-- Discordからの公開ingressはAPI Gateway HTTP APIで受け、DiscordIngress Lambdaへ直接統合する。3 LambdaはVPC外に配置し、LambdaのためのNAT GatewayやVPC endpointを追加しない。
+- Discordからの公開ingressはAPI Gateway HTTP APIで受け、DiscordIngress Lambdaの固定`live` aliasへ統合する。IngressだけにSnapStartを適用し、実測したcontent-addressed Lambda ZIPのSHA-256へ束縛したpublished versionをaliasから参照する。`$LATEST`、Provisioned Concurrency、EFSは使用しない。3 LambdaはVPC外に配置し、LambdaのためのNAT GatewayやVPC endpointを追加しない。
 - ECS taskのSecurity Groupはinboundを持たず、HTTP APIからECSへの直接routeも作成しない。Ingress Request、status更新要求、runtime control recordは既存DynamoDB tableを介して連携する。
 - VPC Flow Logsはno-ingress・TCP 443 outboundのみの単一task MVPでは費用対効果が低いため作成しない。セキュリティincidentの調査でnetwork visibility不足が実証された場合はADRで再評価する。
 - Discord/OpenAIがAAAAを公式supportし、24時間canaryを満たし、IPv6-only移行時にbreak-glass ECS Execを廃止する判断が完了するまでIPv6-onlyへ移行しない。

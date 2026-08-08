@@ -328,6 +328,18 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must make both image builds reproducible with the Unix epoch"
         )
+    bundle_checksum_conversion = (
+        "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w 0)"
+    )
+    if (
+        text.count(bundle_checksum_conversion) != 2
+        or text.count('"ParameterKey=LambdaBundleCodeSha256,ParameterValue=${bundle_code_sha256}"')
+        != 1
+        or text.count('--expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"') != 2
+    ):
+        raise WorkflowPolicyError(
+            "Release must bind the exact Lambda bundle checksum to the published version"
+        )
     if (
         text.count("PYTHONDONTWRITEBYTECODE") != 1
         or '  PYTHONDONTWRITEBYTECODE: "1"' not in text[: text.index("\njobs:")]

@@ -62,6 +62,11 @@ describe("RuntimeStack", () => {
       AllowedPattern:
         "^lambda/shittim-chest/[0-9a-f]{64}/shittim-chest-lambda-arm64\\.zip$",
     });
+    expect(parameters.LambdaBundleCodeSha256).toEqual({
+      AllowedPattern: "^[A-Za-z0-9+/]{43}=$",
+      Description: "Base64 SHA-256 checksum of the verified shared Python Lambda bundle",
+      Type: "String",
+    });
   });
 
   test("creates a two-AZ public-only VPC without paid network appliances", () => {
@@ -172,6 +177,56 @@ describe("RuntimeStack", () => {
       });
       expect(properties.VpcConfig).toBeUndefined();
     }
+  });
+
+  test("routes Discord ingress only through one content-bound SnapStart alias", () => {
+    const { template } = synthesize();
+    const functions = template.findResources("AWS::Lambda::Function");
+    const ingressEntry = Object.entries(functions).find(
+      ([, resource]) =>
+        resource.Properties.Handler ===
+        "shittim_chest.lambda_handlers.discord_ingress.lambda_handler",
+    );
+    expect(ingressEntry).toBeDefined();
+    const [ingressLogicalId, ingress] = ingressEntry!;
+    expect(ingress.Properties.SnapStart).toEqual({ ApplyOn: "PublishedVersions" });
+    for (const [logicalId, resource] of Object.entries(functions)) {
+      if (logicalId !== ingressLogicalId) {
+        expect(resource.Properties.SnapStart).toBeUndefined();
+      }
+    }
+
+    const versions = template.findResources("AWS::Lambda::Version");
+    expect(Object.keys(versions)).toHaveLength(1);
+    const [versionLogicalId, version] = Object.entries(versions)[0]!;
+    expect(version.Properties).toEqual({
+      CodeSha256: { Ref: "LambdaBundleCodeSha256" },
+      Description: { Ref: "LambdaBundleObjectKey" },
+      FunctionName: { Ref: ingressLogicalId },
+    });
+    expect(version.Properties.ProvisionedConcurrencyConfig).toBeUndefined();
+
+    const aliases = template.findResources("AWS::Lambda::Alias");
+    expect(Object.keys(aliases)).toHaveLength(1);
+    const [aliasLogicalId, alias] = Object.entries(aliases)[0]!;
+    expect(alias.Properties).toEqual({
+      FunctionName: { Ref: ingressLogicalId },
+      FunctionVersion: { "Fn::GetAtt": [versionLogicalId, "Version"] },
+      Name: "live",
+    });
+
+    const integration = Object.values(
+      template.findResources("AWS::ApiGatewayV2::Integration"),
+    )[0];
+    expect(JSON.stringify(integration?.Properties.IntegrationUri)).toContain(aliasLogicalId);
+    expect(JSON.stringify(integration?.Properties.IntegrationUri)).not.toContain("$LATEST");
+    const apiPermissions = Object.values(
+      template.findResources("AWS::Lambda::Permission"),
+    ).filter((resource) => resource.Properties.Principal === "apigateway.amazonaws.com");
+    expect(apiPermissions).toHaveLength(1);
+    expect(JSON.stringify(apiPermissions[0]?.Properties.FunctionName)).toContain(
+      aliasLogicalId,
+    );
   });
 
   test("fails closed before scale-up unless the release image is admitted", () => {

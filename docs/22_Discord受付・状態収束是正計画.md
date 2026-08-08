@@ -2,9 +2,9 @@
 aliases:
   - Discord受付・状態収束是正計画
 tags: [project, discord, aws, lambda, dynamodb, scale-to-zero]
-status: pr-b-in-implementation
+status: pr-c-in-ci
 created: 2026-08-04
-updated: 2026-08-05
+updated: 2026-08-08
 ---
 
 # Discord受付・状態収束是正計画
@@ -61,7 +61,7 @@ PR-Aの安定後、公開初期状態とACCEPTED通知timingを修正する。
 - Fargateが`mark_accepted`した直後に、PR-Aで追加した限定Invoke経路で該当statusを通知する。
 - 別Ingressの状態やpublication versionを変更しない。
 
-PR-Bは2026-08-05に実装開始した。受付transaction前のread-only Runtime判定で該当Ingressの初期desired stateを確定し、`mark_accepted`直後は同じInteraction IDだけを既存の限定Invoke経路へ渡す。DynamoDB desired stateと1分Reconcilerを正本・回復経路として維持する。
+PR-BはPR `#157`で実装・merge・Production Release済みである。2026-08-08の連続live受入では、2件目受付時にRuntime Stateが`BUSY`、ECSがdesired/running/pending `1/1/0`のまま、別Status Messageを約2秒で作成した。両publicationは各1回の配送で独立して`COMPLETED`へ収束し、Status Publisher失敗、Discord API 429、Reconciler失敗は0件だった。
 
 ### PR-C: Discord Ingress SnapStart
 
@@ -74,6 +74,8 @@ PR-Bの安定後、初回Interactionの応答期限を修正する。
 - snapshot作成時にAWS SDK client、認証情報、SSM parameter値、request dataを保持しない。
 - 現行のEd25519検証、type 4 callback、永続受付前の成功応答禁止、2.2秒application soft deadlineを維持する。
 - content-freeなcold/restore区分と処理区間時間だけを記録し、質問、token、署名、raw bodyを含めない。
+
+PR-CはDraft PR `#158`で実装し、shared Lambda ZIPの実測SHA-256をCloudFormation Parameterとして渡し、Discord IngressだけにSnapStartを設定したpublished versionを作成する。固定`live` aliasとAPI Gateway permission/integrationは同versionだけを参照し、bundle checksum変更時にversionを置換する。Ingress moduleはaggregate adapter importを廃止し、SDK client、SSM値、request dataをhandler開始前に生成しない。第1 canonical CIで両image config digest、SBOM、VEX、risk gateの対応を確認し、両baselineを同じPRで一括更新した。transitive `nanoid`の新規High findingはaudit例外を追加せず、安全版へのlockfile更新で解消して最終CIを行う。
 
 ## 5. 状態契約
 
