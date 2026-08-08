@@ -411,17 +411,39 @@ def test_snapstart_restore_and_warm_invocations_emit_content_free_timing(
     assert "token" not in caplog.text
 
 
-def test_ingress_composition_uses_direct_lazy_adapter_imports() -> None:
+def test_ingress_composition_loads_secure_config_during_lambda_initialization() -> None:
     source = inspect.getsource(ingress_module)
 
     assert "from shittim_chest.adapters.aws import" not in source
     assert "from shittim_chest.adapters.dynamodb import" not in source
-    assert "create_ssm_client" not in source
+    assert "create_ssm_client" in source
     assert "create_lambda_client" not in source
     assert "LambdaStatusPublicationTrigger" not in source
     assert "LambdaRuntimeReconciliationTrigger" not in source
     assert "_handler: DiscordIngressLambda | None = None" in source
     assert source.index("def lambda_handler") < source.index("def _build_handler")
+    assert source.index("def _build_handler") < source.index("_initialize_for_lambda(os.environ)")
+
+
+def test_lambda_initialization_resolves_handler_before_first_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = cast(DiscordIngressLambda, object())
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(ingress_module, "_handler", None)
+
+    def build(environ: dict[str, str]) -> DiscordIngressLambda:
+        calls.append(environ)
+        return marker
+
+    monkeypatch.setattr(ingress_module, "_build_handler", build)
+    environment = {"AWS_LAMBDA_FUNCTION_NAME": "discord-ingress"}
+
+    ingress_module._initialize_for_lambda(environment)
+    ingress_module._initialize_for_lambda(environment)
+
+    assert calls == [environment]
+    assert ingress_module._handler is marker
 
 
 def test_failure_log_contains_only_category_and_request_id(

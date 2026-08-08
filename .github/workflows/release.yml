@@ -872,9 +872,30 @@ jobs:
                 break
               fi
               if [ "${status}" = "FAILED" ]; then
-                reason=$(aws cloudformation describe-change-set \
-                  --region "${region}" --change-set-name "${arn}" \
-                  --query StatusReason --output text)
+                aws cloudformation describe-change-set \
+                  --region "${region}" --change-set-name "${arn}" --output json \
+                  > "${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json"
+                jq --arg artifact "${artifact}" --arg stack "${stack}" '
+                  def scrub:
+                    gsub("[0-9]{12}"; "<account>") |
+                    gsub("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}";
+                      "<redacted-email>") |
+                    gsub("https?://[^ ]+"; "<redacted-url>");
+                  {
+                    schema_version: 1,
+                    artifact: $artifact,
+                    stack: $stack,
+                    status: (.Status // "unknown"),
+                    execution_status: (.ExecutionStatus // "unknown"),
+                    status_reason: ((.StatusReason // "") | scrub)
+                  }
+                ' "${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json" \
+                  > "${RUNNER_TEMP}/${artifact}.change-set-failure.json"
+                rm "${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json"
+                jq --compact-output . \
+                  "${RUNNER_TEMP}/${artifact}.change-set-failure.json" >&2
+                reason=$(jq --raw-output .status_reason \
+                  "${RUNNER_TEMP}/${artifact}.change-set-failure.json")
                 case "${reason}" in
                   *"didn't contain changes"*) break ;;
                   *) exit 1 ;;
@@ -1025,6 +1046,14 @@ jobs:
             ${{ runner.temp }}/change-sets.json
             ${{ runner.temp }}/template-hashes.json
             ${{ runner.temp }}/lambda-bundle.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain bounded Change Set failure evidence
+        if: ${{ failure() && steps.prepare_changes.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-release-plan-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/*.change-set-failure.json
           if-no-files-found: error
           retention-days: 90
       - name: Remove this failed plan's unexecuted change sets
