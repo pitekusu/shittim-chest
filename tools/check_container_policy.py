@@ -290,10 +290,10 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("break-glass tooling stage must reuse the builder image pin")
     if stages[6] != ("break-glass", "break-glass-tools"):
         raise ValueError("break-glass final stage must derive from the tooling stage")
-    linked_venv_copy = "COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv"
-    if text.count(linked_venv_copy) != 2:
+    venv_copy = "COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv"
+    if text.count(venv_copy) != 2:
         raise ValueError(
-            "production and break-glass stages must use independent linked venv layers"
+            "production and break-glass stages must use final-stage non-linked venv copies"
         )
     break_glass_tools_start = text.index(f"FROM {builder_reference} AS break-glass-tools")
     break_glass_start = text.index("FROM break-glass-tools AS break-glass")

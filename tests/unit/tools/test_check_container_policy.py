@@ -148,19 +148,19 @@ def test_dockerfile_requires_canonical_wheel_records(tmp_path: Path) -> None:
         validate_dockerfile(policy, dockerfile)
 
 
-def test_dockerfile_requires_linked_venv_layers(tmp_path: Path) -> None:
+def test_dockerfile_rejects_independently_cached_linked_venv_layers(tmp_path: Path) -> None:
     policy = load_container_policy(DEFAULT_POLICY_PATH)
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(
         DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(
-            "COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv",
             "COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv",
+            "COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="independent linked venv layers"):
+    with pytest.raises(ValueError, match="final-stage non-linked venv copies"):
         validate_dockerfile(policy, dockerfile)
 
 
