@@ -39,7 +39,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 
 WORKDIR /app
 
-COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv
+COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
 
 USER 65532:65532
 
@@ -80,7 +80,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 
 WORKDIR /app
 
-COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv
+COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
 
 USER 65532:65532
 
