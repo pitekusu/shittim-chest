@@ -2,7 +2,7 @@
 aliases:
   - Discord受付・状態収束是正計画
 tags: [project, discord, aws, lambda, dynamodb, scale-to-zero]
-status: pr-c-in-implementation
+status: pr-c-in-ci
 created: 2026-08-04
 updated: 2026-08-08
 ---
@@ -75,7 +75,7 @@ PR-Bの安定後、初回Interactionの応答期限を修正する。
 - 現行のEd25519検証、type 4 callback、永続受付前の成功応答禁止、2.2秒application soft deadlineを維持する。
 - content-freeなcold/restore区分と処理区間時間だけを記録し、質問、token、署名、raw bodyを含めない。
 
-PR-Cは2026-08-08に実装開始した。shared Lambda ZIPの実測SHA-256をCloudFormation Parameterとして渡し、Discord IngressだけにSnapStartを設定したpublished versionを作成する。固定`live` aliasとAPI Gateway permission/integrationは同versionだけを参照し、bundle checksum変更時にversionを置換する。Ingress moduleはaggregate adapter importを廃止し、SDK client、SSM値、request dataをhandler開始前に生成しない。
+PR-CはDraft PR `#158`で実装し、shared Lambda ZIPの実測SHA-256をCloudFormation Parameterとして渡し、Discord IngressだけにSnapStartを設定したpublished versionを作成する。固定`live` aliasとAPI Gateway permission/integrationは同versionだけを参照し、bundle checksum変更時にversionを置換する。Ingress moduleはaggregate adapter importを廃止し、SDK client、SSM値、request dataをhandler開始前に生成しない。第1 canonical CIで両image config digest、SBOM、VEX、risk gateの対応を確認し、両baselineを同じPRで一括更新した。transitive `nanoid`の新規High findingはaudit例外を追加せず、安全版へのlockfile更新で解消して最終CIを行う。
 
 ## 5. 状態契約
 
