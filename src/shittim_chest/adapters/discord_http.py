@@ -342,6 +342,10 @@ def ingress_response(outcome: IngressOutcome) -> ApiGatewayV2Response:
         IngressOutcome.ACCEPTED: (
             "\u2705 議論依頼を受け付けました。\nチャンネルへ進行状況を表示します。"
         ),
+        IngressOutcome.PENDING: (
+            "議論依頼を受け付けました。処理開始までお待ちください。"
+            "\nチャンネルへ進行状況を表示します。"
+        ),
         IngressOutcome.RETRY_STARTING: (
             "\u23f3 再試行を受け付け、シッテムの箱を起動しています。"
             "\nチャンネルへ操作状況を表示します。"
@@ -381,6 +385,25 @@ def ingress_unavailable_response() -> ApiGatewayV2Response:
     """Fail without claiming Discord acceptance when durable persistence is unknown."""
 
     return _json_response(503, {"error": "ingress_unavailable"})
+
+
+def verified_ingress_unavailable_response() -> ApiGatewayV2Response:
+    """Acknowledge a verified request without claiming durable acceptance."""
+
+    return _json_response(
+        200,
+        {
+            "data": {
+                "allowed_mentions": {"parse": []},
+                "content": (
+                    "受付結果を時間内に確認できませんでした。"
+                    "\nチャンネルに状態が表示されない場合のみ、もう一度実行してください。"
+                ),
+                "flags": 64,
+            },
+            "type": 4,
+        },
+    )
 
 
 def _parse_command(
@@ -611,4 +634,5 @@ __all__ = (
     "ingress_unavailable_response",
     "parse_verified_interaction",
     "pong_response",
+    "verified_ingress_unavailable_response",
 )

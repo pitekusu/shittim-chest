@@ -22,10 +22,11 @@ if TYPE_CHECKING:
 DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS = 3.0
 INGRESS_CONNECT_TIMEOUT_SECONDS = 0.1
 INGRESS_READ_TIMEOUT_SECONDS = 0.3
-# Cold SSM, semantic probe, authorization, enqueue, race classification,
-# and canonical replay bundle are the longest serial pre-response path.
-INGRESS_MAX_SERIAL_SDK_ROUNDS = 6
-INGRESS_RESPONSE_MARGIN_SECONDS = 0.4
+# A new command uses one durable enqueue. Conflict classification may use two
+# more bounded reads before the gate rejects additional SDK work.
+INGRESS_MAX_SERIAL_SDK_ROUNDS = 3
+# Reserve restore plus API Gateway and Discord transit outside handler timing.
+INGRESS_RESPONSE_MARGIN_SECONDS = 1.4
 INGRESS_TOTAL_MAX_ATTEMPTS = 1
 STATUS_CONNECT_TIMEOUT_SECONDS = 1.0
 STATUS_READ_TIMEOUT_SECONDS = 2.0

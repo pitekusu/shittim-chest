@@ -1,8 +1,11 @@
 import {
   Aws,
+  CfnDynamicReference,
+  CfnDynamicReferenceService,
   CfnOutput,
   CfnParameter,
   Duration,
+  Fn,
   RemovalPolicy,
   Stack,
   StackProps,
@@ -54,7 +57,6 @@ const HEARTBEAT_TMPFS = containerPolicy.heartbeat_tmpfs;
 const DEPLOYMENT_LOCK_PARTITION = "CONTROL#DEPLOYMENT";
 const INGRESS_READABLE_PARTITION_PATTERNS = [
   "CONTROL#INGRESS",
-  "CONTROL#RUNTIME",
   "DEBATE#*",
   "INGRESS_OPERATION#*",
   "INGRESS_SEMANTIC_OPERATION#*",
@@ -356,6 +358,14 @@ export class RuntimeStack extends Stack {
       runtimeServiceArn,
     );
     const runtimeConfigParameter = `${PARAMETER_ROOT}/runtime/${configVersion.valueAsString}`;
+    const ingressRuntimeConfig = new CfnDynamicReference(
+      CfnDynamicReferenceService.SSM,
+      runtimeConfigParameter,
+    ).toString();
+    const ingressPublicKey = new CfnDynamicReference(
+      CfnDynamicReferenceService.SSM,
+      DISCORD_PUBLIC_KEY_PARAMETER,
+    ).toString();
     this.discordStatusPublisherFunction = this.createApplicationFunction({
       code: sharedLambdaBundle.code,
       environment: {
@@ -389,13 +399,10 @@ export class RuntimeStack extends Stack {
     this.discordIngressFunction = this.createApplicationFunction({
       code: sharedLambdaBundle.code,
       environment: {
-        SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER: DISCORD_PUBLIC_KEY_PARAMETER,
+        SHITTIM_DISCORD_PUBLIC_KEY_HEX: ingressPublicKey,
         SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
-        SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
-        SHITTIM_RUNTIME_RECONCILER_FUNCTION:
-          this.runtimeReconcilerFunction.functionName,
-        SHITTIM_STATUS_PUBLISHER_FUNCTION:
-          this.discordStatusPublisherFunction.functionName,
+        SHITTIM_RUNTIME_CONFIG_JSON: ingressRuntimeConfig,
+        SHITTIM_RUNTIME_CONFIG_VERSION: configVersion.valueAsString,
       },
       functionName: "shittim-chest-production-discord-ingress",
       handler: DISCORD_INGRESS_HANDLER,
@@ -403,7 +410,7 @@ export class RuntimeStack extends Stack {
       memorySize: 512,
       reservedConcurrency: 5,
       snapStart: lambda.SnapStartConf.ON_PUBLISHED_VERSIONS,
-      // The application stops at 2.2s; 5s is only a final safety net for an
+      // The application stops at 1.2s; 5s is only a final safety net for an
       // SDK call unwinding after cancellation and must not define Discord UX.
       timeout: Duration.seconds(5),
     });
@@ -412,7 +419,11 @@ export class RuntimeStack extends Stack {
       "DiscordIngressVersion",
       {
         codeSha256: sharedLambdaBundle.codeSha256,
-        description: sharedLambdaBundle.objectKey,
+        description: Fn.join("|", [
+          sharedLambdaBundle.objectKey,
+          runtimeConfigParameter,
+          DISCORD_PUBLIC_KEY_PARAMETER,
+        ]),
         lambda: this.discordIngressFunction,
         removalPolicy: RemovalPolicy.DESTROY,
       },
@@ -556,11 +567,6 @@ export class RuntimeStack extends Stack {
     );
 
     this.grantParameterRead(
-      this.discordIngressFunction,
-      runtimeConfigParameter,
-    );
-    this.grantParameterRead(this.discordIngressFunction, DISCORD_PUBLIC_KEY_PARAMETER);
-    this.grantParameterRead(
       this.discordStatusPublisherFunction,
       runtimeConfigParameter,
     );
@@ -569,15 +575,6 @@ export class RuntimeStack extends Stack {
       MODERATOR_TOKEN_PARAMETER,
     );
 
-    this.discordIngressFunction.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["lambda:InvokeFunction"],
-        resources: [
-          this.discordStatusPublisherFunction.functionArn,
-          this.runtimeReconcilerFunction.functionArn,
-        ],
-      }),
-    );
     this.runtimeReconcilerFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["lambda:InvokeFunction"],

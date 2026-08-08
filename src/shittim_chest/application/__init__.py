@@ -54,7 +54,6 @@ from shittim_chest.application.generation_policy import (
 from shittim_chest.application.ingress import (
     GUILD_PUBLIC_THREAD,
     GUILD_TEXT_CHANNEL,
-    POST_PERSISTENCE_ACCELERATOR_BUDGET,
     DiscordIngressApplication,
     IngressAcceptance,
     IngressOutcome,
@@ -132,7 +131,6 @@ __all__ = (
     "LUNA_PRO",
     "LUNA_STANDARD",
     "OUTBOX_CLAIM_SECONDS",
-    "POST_PERSISTENCE_ACCELERATOR_BUDGET",
     "PRODUCTION_POLICY",
     "SHITTIM_COMMAND_NAME",
     "STARTUP_TERMINAL_DEADLINE_ERROR",

@@ -31,8 +31,8 @@ from shittim_chest.lambda_handlers.discord_ingress import (
     DISCORD_INGRESS_SDK_GATE_LEAD_SECONDS,
     DISCORD_INGRESS_SOFT_DEADLINE_SECONDS,
     DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS,
-    DiscordIngressDeadlineExceeded,
     DiscordIngressLambda,
+    DiscordVerifiedIngressFailure,
 )
 from shittim_chest.runtime.primitives import SystemClock
 
@@ -223,9 +223,9 @@ def test_explicit_entry_timestamp_includes_bootstrap_time_in_budget() -> None:
 
 
 def test_deadline_budget_reserves_sdk_unwind_and_api_response_time() -> None:
-    assert pytest.approx(2.2) == DISCORD_INGRESS_SOFT_DEADLINE_SECONDS
+    assert pytest.approx(1.2) == DISCORD_INGRESS_SOFT_DEADLINE_SECONDS
     assert pytest.approx(0.4) == DISCORD_INGRESS_MAX_ACTIVE_SDK_CALL_SECONDS
-    assert pytest.approx(0.4) == DISCORD_INGRESS_RESPONSE_MARGIN_SECONDS
+    assert pytest.approx(1.4) == DISCORD_INGRESS_RESPONSE_MARGIN_SECONDS
     assert pytest.approx(0.1) == DISCORD_INGRESS_SDK_GATE_LEAD_SECONDS
     assert pytest.approx(DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS) == (
         DISCORD_INGRESS_SOFT_DEADLINE_SECONDS
@@ -242,12 +242,13 @@ def test_bootstrap_elapsed_time_exhausts_budget_before_application_call() -> Non
             FakeBoundary(DiscordHttpReception(interaction=operation())),
         ),
         application=lambda: cast(DiscordIngressApplication, application),
-        clock=cast(Clock, FixedClock(NOW + timedelta(seconds=2.21))),
+        clock=cast(Clock, FixedClock(NOW + timedelta(seconds=1.21))),
     )
 
-    with pytest.raises(DiscordIngressDeadlineExceeded):
+    with pytest.raises(DiscordVerifiedIngressFailure) as caught:
         handler.handle({}, received_at=NOW)
 
+    assert caught.value.category == "deadline_exceeded"
     assert application.calls == 0
 
 
@@ -268,13 +269,14 @@ def test_synchronous_application_factory_time_is_inside_entry_budget() -> None:
         application=load,
         clock=cast(
             Clock,
-            SequenceClock(NOW, NOW + timedelta(seconds=2.21)),
+            SequenceClock(NOW, NOW + timedelta(seconds=1.21)),
         ),
     )
 
-    with pytest.raises(DiscordIngressDeadlineExceeded):
+    with pytest.raises(DiscordVerifiedIngressFailure) as caught:
         handler.handle({}, received_at=NOW)
 
+    assert caught.value.category == "deadline_exceeded"
     assert constructed == 1
     assert application.calls == 0
 
@@ -291,9 +293,10 @@ def test_deadline_waits_for_one_active_round_then_blocks_the_next_round() -> Non
         soft_deadline_seconds=0.02,
     )
 
-    with pytest.raises(DiscordIngressDeadlineExceeded):
+    with pytest.raises(DiscordVerifiedIngressFailure) as caught:
         handler.handle({}, received_at=NOW)
 
+    assert caught.value.category == "deadline_exceeded"
     assert application.active_rounds == 1
     assert application.durable_round_finished
     assert application.next_rounds == 0
@@ -328,9 +331,13 @@ def test_slow_accept_is_cancelled_and_returns_content_free_unavailable(
 
     assert application.cancelled
     assert response == {
-        "statusCode": 503,
+        "statusCode": 200,
         "headers": {"content-type": "application/json; charset=utf-8"},
-        "body": '{"error":"ingress_unavailable"}',
+        "body": (
+            '{"data":{"allowed_mentions":{"parse":[]},"content":'
+            '"受付結果を時間内に確認できませんでした。\\nチャンネルに状態が表示されない場合のみ、'
+            'もう一度実行してください。","flags":64},"type":4}'
+        ),
         "isBase64Encoded": False,
     }
     assert "category=deadline_exceeded" in caplog.text
@@ -409,6 +416,10 @@ def test_ingress_composition_uses_direct_lazy_adapter_imports() -> None:
 
     assert "from shittim_chest.adapters.aws import" not in source
     assert "from shittim_chest.adapters.dynamodb import" not in source
+    assert "create_ssm_client" not in source
+    assert "create_lambda_client" not in source
+    assert "LambdaStatusPublicationTrigger" not in source
+    assert "LambdaRuntimeReconciliationTrigger" not in source
     assert "_handler: DiscordIngressLambda | None = None" in source
     assert source.index("def lambda_handler") < source.index("def _build_handler")
 
