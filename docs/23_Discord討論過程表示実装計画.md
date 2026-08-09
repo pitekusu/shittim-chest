@@ -7,225 +7,208 @@ created: 2026-08-09
 updated: 2026-08-09
 ---
 
-# Discord討論過程表示実装計画
+# Discord討論過程表示 実装計画（反証反映版）
 
-## 1. 目的
+## 1. 反証判定
 
-内部では生成・永続化済みである3人格の初回意見、最終案、投票と最終決定を、Discordの討論threadへ設計どおり表示する。
+既存計画への **DENY** は概ね妥当であり、Draft PR #164の計画書を全面改訂する。
 
-現在のproductionは討論を最後まで完了し、threadの操作panel、channelの公開Status Message、DynamoDBを`COMPLETED`へ収束できる。一方、通常の完了投稿はmoderatorによる最終決定だけで、途中の3人格の発言はDiscord Outboxへ作成されない。このため利用者からは討論過程が見えない。
+- B-01、B-03、B-04、C-02、C-03、C-06、C-07は設計変更が必要。
+- B-02は指摘どおり計画の定義不足。ただし現行コードには22文字base64url nonce生成器があるため、operation全体からの導出を明記して再利用する。[Discordはnonceを25文字以下とし、enforce_nonceによる短期間の重複排除を提供する](https://docs.discord.com/developers/resources/message)。
+- C-01の「出力が無制限」は現行Pydantic schemaと文字数上限に反する。ただしDynamoDBの100 actions、4 MB、1 item 400 KBを実測で証明する必要はある。[TransactWriteItems](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html)
+- C-04のTOCTOUは、現行Releaseが読取値をConditionCheckしてdeployment lockを原子的に取得し、各producerもlock-open条件をtransactionへ含めるため成立しない。改訂計画ではこの原子的取得を正式なRelease gateとして明記する。
+- B-06は正本で解決済み。投票中は候補名を匿名化し、3票確定後に投票者Bot名・投票先・理由を公開する。
+- H-01について、保証対象を「phase確定時にDiscordが受理・照合したこと」とする。後から利用者や管理者がmessageを編集・削除しないことまでは保証しない。
 
-本計画は表示責務だけを4本の独立PRへ分割する。1本ずつrequired CIとCodeQLを完了し、前のPRの結果を確認してから次へ進む。
+## 2. Durable generation／delivery protocol
 
-## 2. 正本と現行契約
+### 2.1 OpenAI generation checkpoint
 
-- [[01_要求仕様書・基本設計書#13. Discord上の表示仕様]]は、各人格Botが自分の初回意見、最終案、投票を投稿し、採択者だけが決定事項を投稿することを要求する。
-- [[10_アプリケーション・Python詳細設計]]は、初回意見、最終案、投票、最終決定をPythonのphase順序で生成し、winnerをPythonだけで選ぶ。
-- [[11_Discord詳細設計]]は、4 Bot identity、thread、2,000文字分割、mention無効化、nonce、Outbox、履歴reconciliationを定義する。
-- [[13_DynamoDB・データ整合性詳細設計]]は、fenced lease、attempt-bound transaction、OutboxのPREPARED／CLAIMED／SENTと強整合readを正とする。
-- [[18_試験・品質保証設計]]は、phase cancellation、Discord POST前後の停止、DynamoDB transaction、再送重複抑止を検証する。
-- [[22_Discord受付・状態収束是正計画]]は受付と終端状態の是正を完了済みであり、本計画では再openしない。
+provider-level exactly-onceには依存しない。[Responses API create契約](https://developers.openai.com/api/reference/resources/responses/methods/create)で本用途の永続的な冪等性を前提にせず、store=falseを維持する。
 
-## 3. 現行実装との差分
+GenerationCheckpointをphase＋participant単位で永続化する。
 
-| 項目 | 現行 | 目標 |
-|---|---|---|
-| 初回意見 | 3件を生成・snapshot保存後、Discord投稿なしで次phaseへ進む | participant-a／b／cが自分の初回意見を1回ずつ投稿し、全件SENT後だけ次phaseへ進む |
-| 最終案 | 3件を生成・snapshot保存後、Discord投稿なし | 各participantが自分の最終案を投稿する |
-| 投票 | Pythonでwinnerを決めるために保存するがDiscord投稿なし | ballot確定後、採用した公開方式で投票先と理由を表示する |
-| 最終決定 | moderator Botが投稿する | COMPLETEDだけはwinnerのparticipant Botが投稿し、失敗・取消はmoderatorのまま |
-| 討論状況 | panelのphase表示だけ | panelを維持し、各phaseの実発言により進行を可視化する。追加のmoderator進捗投稿は作らない |
-| recovery | terminal deliveryだけがstage→drain→finalizeを持つ | 各非terminal出力もstage→drain→advanceを持つ |
+    PLANNED
+    → IN_FLIGHT(attempt=1)
+    → COMPLETED
 
-## 4. 採用方式
+    IN_FLIGHT(attempt=1)でworker喪失
+    → IN_FLIGHT(attempt=2)
+    → COMPLETED
 
-### 4.1 phase出力を先に永続化する
+    IN_FLIGHT(attempt=2)で再び結果不明
+    → FAILED
 
-各phaseは次の固定順序で処理する。
+- OpenAI呼出し前にcheckpointをfenced transactionでclaimする。
+- 各participantの結果は、取得でき次第、既存output itemとcheckpointを同一transactionで保存する。
+- 3件の生成は並列のままだが、Discord公開は3件すべての保存後だけ行う。
+- 応答後・保存前の停止では1回だけ再呼出しを許可する。1 logical outputにつき最大2 SDK callとする。
+- SDK内部のmax_retries=2は維持するため、最悪時のHTTP attempt上限はlogical output当たり6回である。
+- CASにより永続化されるoutputは1件だけとし、再生成内容による上書きを拒否する。
+- OpenAI API呼出し自体のexactly-onceは完了条件から外し、「永続outputとDiscord表示の重複なし」を保証する。
 
-```text
-OpenAI出力を生成
-→ snapshotのphase出力と対応Outbox operationsを同一transactionでstage
-→ Outboxを既存publisherでdrain
-→ 対応operationがすべてSENTであることをtransaction内で確認
-→ 次phaseへadvance
-```
+### 2.2 Phase deliveryとOutbox v2
 
-生成結果だけを保存して先にphaseを進めない。Discord送信をDynamoDB transaction内で行わない。送信に失敗またはprocess停止した場合は同じphaseに留まり、保存済み出力とOutboxから再開する。
+新しいrecord-level schemaとして以下を追加する。table全体のglobal schemaは変更せず、既存コードが完了済み履歴を無視できる互換形にする。
 
-### 4.2 新しいaggregate schema fieldを増やさない
+- GenerationCheckpoint
+- PhaseDeliveryPlan
+- Outboxのrecord_schema_version=2
+- OutboxStatus.ABANDONED
+- localなchunk_sequenceとは別のglobal delivery_sequence
+- abandoned_atとallowlist済みabandon_reason
 
-phase deliveryのidentityは、既存snapshot内のphase出力、attempt ID、phase、participant slot、chunk sequenceから決定的に再構築する。新しい`phase_delivery` fieldとDynamoDB schema migrationは追加しない。
+PhaseDeliveryPlanはSTAGED／TERMINATING／DELIVERED／ABANDONEDを持つ。
 
-repositoryへ非terminal phase専用のstage／finalize transactionを追加する。
+- 全output保存後、PhaseDeliveryPlanと全Outboxを1 transactionでstageする。
+- 全必須OutboxがSENTになった場合だけplanをDELIVEREDにし、同じtransactionで次phaseへ進む。
+- 非retryable error、3回のdelivery attempt消費、またはstageから15分のdeadline超過では、新規claimを停止して残件をABANDONEDへ収束させ、attemptをFAILEDにする。
+- FAILED／CANCELLED通知はmoderator Botによるbounded best-effortとする。通知自体が送れなくてもABANDONし、Status Publisher、lease解放、scale-to-zeroを妨げない。
+- COMPLETEDの最終決定は必須配送とし、送れなければCOMPLETEDにせずFAILEDへ変換する。
 
-- stageはexpected phase、lease fencing、出力未設定、operation ID不在を条件に、snapshot更新とOutbox作成を原子的に行う。
-- replay時は保存済み出力から同じoperation ID、nonce、content hashを再構築し、完全一致だけを受理する。
-- finalizeは全operationの`SENT`、attempt ID、phase、lease fencingを強整合条件として次phaseへ進める。
-- 欠落、余分、content hash不一致、別attempt、未知slotはfail closedにする。
+利用者判断どおり、途中表示は必須機能とする。表示欠落のまま討論をCOMPLETEDにはしない。
 
-これによりPR-AをrevertしてもDynamoDB schema versionを戻す必要がない。ただしlive deployment前は既存Release gateどおりactive attempt、Ingress、Outboxが0の安全な停止状態を必須とする。
+### 2.3 Identityと実配送順序
 
-### 4.3 operation identityと投稿順
+operation identityは次の完全な組で決める。
 
-operation IDは次の要素から決定的に作る。
+    attempt ID + phase + Bot slot + local chunk sequence
 
-```text
-phase + attempt ID + participant slot + chunk sequence
-```
+nonceはこの完全identityからUUIDv7互換値を導出し、22文字のunpadded base64urlへ変換する。
 
-nonceもattempt IDからUUIDv7互換の決定的値として導出する。投稿順は生成完了順ではなく、`participant-a`、`participant-b`、`participant-c`、各messageのchunk sequence順に固定する。
+delivery_sequenceはattempt全体で次の固定範囲を使う。
 
-OpenAI呼出しの並列性は変更しない。3件がすべて生成・検証された後にstageするため、一部の人格だけを先に公開しない。
+- 初回意見: 0–23
+- 最終案: 100–123
+- 投票: 200–223
+- 最終決定: 300–319
+- FAILED／CANCELLED通知: 900–919
 
-### 4.4 message形式
+1 logical participant outputは最大8 chunks、3人phase全体は最大24 operations、最終決定は既存どおり最大20 chunksとする。
 
-各投稿は対応participant Botから次の形式で送る。
+Outbox claimは、同じattempt内で小さいdelivery_sequenceがすべてSENTまたは正当にABANDONEDであり、現在のPhaseDeliveryPlanがSTAGEDの場合だけ成功させる。これにより、複数claimer、429、timeoutがあってもDiscordへのPOSTは常に1件ずつ順番に行われる。
 
-```text
-**初回意見**
-<本文>
+### 2.4 Cancel／failure
 
-**最終案**
-<本文>
+partial delivery中のCancelは次の順序に固定する。
 
-**投票**
-投票先: <participant>
-理由: <本文>
-```
+1. PhaseDeliveryPlanをTERMINATINGへ変更し、新しいclaimを禁止する。
+2. 既存のCLAIMED operationは60秒のclaim期限まで待ち、新しいPOSTを行わないreconciliation-only処理をする。
+3. 見つかった完全一致messageはSENT、存在しない残件はABANDONEDにする。
+4. CANCELLED通知をstageし、最終状態、activity counter、leaseを収束させる。
 
-最終決定は既存の「最終決定」「実行案」「注意点」「AI生成に関する注意書き」を維持し、送信Botだけをwinnerへ変更する。
+Retryは旧attemptがFAILEDかつ全OutboxがSENTまたはABANDONEDになった後だけ新attemptを作る。旧messageは削除せず、新attempt IDによりoperation IDとnonceを完全に分離する。
 
-2,000文字制限、段落優先分割、`[n/m]`、`allowed_mentions.parse=[]`、content hash、履歴reconciliation、providerの`Retry-After`は既存契約を再利用する。質問、意見、投票理由、最終案、決定本文をstructured logやmetricへ追加しない。
+### 2.5 Discord境界
 
-## 5. PR分割
+各phaseのOpenAI呼出し前に、対象Botについて次を検証する。
 
-### PR-A: 初回意見の表示
+- threadが存在し、対象Guild内で、archived／lockedでない
+- VIEW_CHANNEL
+- SEND_MESSAGES_IN_THREADS
+- READ_MESSAGE_HISTORY
 
-最初に実装する。後続PRが再利用する最小の非terminal phase delivery primitiveと、初回意見3件の投稿だけを含める。
+権限変更をコードやDiscord API writeで自動修正しない。Discordではthread送信に専用権限が必要である。[Discord Permissions](https://docs.discord.com/developers/topics/permissions)
 
-変更対象候補:
+モデル本文は次のdisplay-only正規化後にOutboxへ保存する。
 
-- `src/shittim_chest/application/discord.py`
-- `src/shittim_chest/application/models.py`（既存型のvalidationが必要な場合だけ。schema fieldは追加しない）
-- `src/shittim_chest/application/ports.py`
-- `src/shittim_chest/application/service.py`
-- `src/shittim_chest/adapters/dynamodb/repository.py`
-- 対応するunit／DynamoDB Local／Discord contract tests
+- CRLF／CRをLFへ統一し、Unicode NFCへ正規化
+- tabを空白へ変換
+- Unicode noncharacterとCc／Cf／Cs／Co／Cnを拒否
+- Discord Markdownをescape
+- 固定見出しの下ですべての本文行を引用表示
+- allowed_mentions=[]とembed抑止を維持
 
-合格条件:
+Discordが返したcontentまたはhistory上のcontentが保存済みcontentと異なる場合はDISCORD_OUTBOX_CONFLICTとして送信を成功扱いせず、planをABANDONしてattemptをFAILEDへ収束させる。Discordが一部文字を除去し得るため、完全一致失敗を無期限待機へ変換しない。[Discord Message Resource](https://docs.discord.com/developers/resources/message)
 
-- 3件の初回意見とOutboxが同一transactionでstageされる。
-- participant-a／b／cが自分の本文だけを投稿する。
-- 3件の全chunkがSENTになるまで`DISCUSSING`へ進まない。
-- transaction直前・直後、Discord POST直前・直後、mark-sent失敗、SIGTERM後も生成または表示が重複しない。
-- pending／claimed Outboxがある間はscale-to-zeroしない。
+## 3. 順序付きPR構成
 
-### PR-B: 最終案の表示
+従来の「4本の独立PR」は撤回し、以下の依存順を持つ5本とする。
 
-PR-Aのprimitiveを変更せず再利用し、3人の最終案だけを追加する。
+### PR-0: Delivery safety foundation
 
-合格条件:
+- GenerationCheckpoint、Outbox v2、ABANDONED、global ordering、bounded deadline、sanitizerを実装する。
+- 現行の最終決定生成・terminal deliveryへ適用し、新しい途中投稿はまだ有効化しない。
+- 通常討論が従来どおり完了・停止することをproductionで確認する。
 
-- 初回意見の全送信後だけ最終案生成へ進む。
-- 3件の最終案の全chunkがSENTになるまで`SELECTING_WINNER`へ進まない。
-- 初回意見のoperation、nonce、messageを変更しない。
+### PR-A: 初回意見
 
-### PR-C: 投票の表示
+- participant 3人のcheckpoint、権限preflight、PhaseDeliveryPlan、初回意見投稿を有効化する。
+- 初回意見だけが表示される状態を明示的なprogressive rolloutとして受け入れる。
 
-3票がすべて永続化されPythonによるwinner選択が確定した後に、投票表示をstageする。投票生成中に他者の票を見せず、公開はballot close後に行う。
+### PR-B: 最終案
 
-合格条件:
+- 同じprimitiveを変更せず、最終案3件を追加する。
 
-- winnerは既存のPython `select_winner()`だけが選ぶ。
-- DiscordまたはLLM出力からwinnerを再計算しない。
-- 3票の全chunkがSENTになるまで`GENERATING_DECISION`へ進まない。
-- 同票ruleと既存のdeterministic tie-breakを変更しない。
+### PR-C: 投票
 
-PR-C開始前に、7章の投票表示判断を確定する。
+- 3票を非公開で生成・保存後、participant Bot名、投票先、理由を順番に公開する。
+- winnerは既存Python select_winner()だけが決定する。
 
 ### PR-D: 採択者による最終発表
 
-COMPLETEDのterminal Outboxだけをwinner participant slotへ割り当てる。CANCELLED、REJECTED、TERMINAL_FAILEDなどのsystem状態はmoderator投稿を維持する。
+- COMPLETEDの最終決定Outboxだけを保存済みwinnerのBotへ割り当てる。
+- FAILED／CANCELLEDなどsystem通知はmoderatorのままにする。
+- prompt、model、決定生成内容は変更しない。
 
-合格条件:
+各PRをmerge後、manager承認を得て個別にProduction Releaseし、live確認後に次PRへ進む。部分表示期間は意図した段階投入として計画書と進捗記録に明記する。
 
-- 採択者だけが最終決定を投稿する。
-- final decisionのwinnerは保存済み`VotingResult`と完全一致する。
-- 現行terminal stage→drain→finalize、channel Status MessageのCOMPLETED収束、注意書きを維持する。
-- failure/cancel時にparticipant Botがsystem errorを投稿しない。
+PRは独立revert可能とは主張しない。rollbackはdeployment lock取得、Runtime停止、durable activity clearを確認して、PR-Dから逆順に行う。コードrollbackはDiscordへ送信済みmessageを削除しない。
 
-## 6. 試験計画
+## 4. 試験・Release gate
 
-| Layer | 必須確認 |
-|---|---|
-| pure unit | slot mapping、message形式、長文分割、決定的operation ID／nonce／hash、順序、unknown slot拒否 |
-| application | stage前にadvanceしない、全SENT後だけadvance、保存済み出力を再生成しない、partial delivery recovery |
-| repository | snapshot＋Outboxの原子stage、fencing、attempt/phase CAS、全SENT ConditionCheck、replay完全一致、欠落／余分fail closed |
-| DynamoDB Local | crash boundary、transaction conflict、mark-sent不明、旧worker fencing、retry/resume、active counter不変 |
-| Discord contract | 各Botが自分の投稿だけを送る、mention 0、history reconciliation、429／timeout、locked/deleted thread |
-| lifecycle | pending／claimed Outbox中の停止抑止、SIGTERM checkpoint、4 READY復帰後のdrain |
-| regression | terminal status convergence、HTTP受付時間、3 global lease、cancel/retry、status publisher、scale-to-zero |
-| live acceptance | 1討論で投稿者、順序、内容種別、panel、channel、DynamoDB terminal、停止収束をcontent-free AWS evidenceと利用者確認で照合 |
+### 4.1 Focused tests
 
-focused testは各PRの直接変更範囲へ限定する。PR-Aではprimitiveのfault boundaryを厚く確認し、PR-B〜Dで同じ基盤試験を複製しない。local production／break-glass full image buildは行わず、canonical CIをimage identityの正とする。
+- crash境界: OpenAI call前、応答後・保存前、保存後、2回目の結果不明
+- nonce: 全phase／slot／chunkで一意、22文字、enforce_nonce=true
+- ordering: 複数claimer、先頭429、timeout、mark-sent失敗でもarrival順を維持
+- cancellation: 0件／一部／全件SENTからCANCELLEDへ収束
+- permanent failure: permission、locked／deleted thread、content mismatch、deadline超過
+- activity: SENT／ABANDONED後にpending・claimed counterが0
+- compatibility: Outbox v1読込、v2履歴を残した安全なreverse rollback
+- winner: a／b／c、tie-breakの全経路で正しいBotを選ぶ
+- vote: 3票確定前のDiscord writeが0
+- renderer: Markdown、mention、bidi／control文字、multi-chunk
+- pagination: 500件上限到達を不完全としてfail closed
 
-## 7. 要判断事項
+DynamoDB Localでは最大24-operation phaseと最大20-chunk terminalを実際のserializer／transactionで構築し、次をassertする。
 
-要求書は「匿名投票」としつつ、Discord表示仕様は「各人格Botが投票先と理由を発言」と定義している。
+- action数100未満
+- aggregate item size 4 MB未満
+- 各item 400 KB以下
+- stage／finalize／abandonが原子的
+- fencing喪失時は書込み0
 
-推奨解釈は、投票生成中は他者票を見せないsecret ballotとし、3票が確定したballot close後に各人格Bot名付きで投票先と理由を公開する方式である。これは独立投票を守りながら現行のDiscord表示仕様を満たす。
+### 4.2 CIとimage baseline
 
-PR-AとPR-Bには影響しない。PR-C開始前にmanagerが次のどちらかを確定する。
+各実装PRはcanonical CIでproduction／break-glassを同時に実測する。
 
-1. 推奨: ballot close後にBot名、投票先、理由を公開する。
-2. voter名を隠し、moderatorが匿名票として集約表示する。この場合は[[01_要求仕様書・基本設計書]]と[[11_Discord詳細設計]]の変更を先に行う。
+- SBOM、VEX、risk gateと両config digestの対応を確認する。
+- 片方だけ変わっても両baselineを同じ実測結果から一括更新する。
+- required CI、Grype、CodeQLがgreenになるまでmergeしない。
+- local full image buildは行わない。
 
-## 8. CI・image baseline
+### 4.3 Progressive live acceptance
 
-各PRは`src/`を変更するため、image config digestを事前推測しない。
+- PR-0: 現行形式の通常討論1件とterminal／scale-to-zero
+- PR-A: 初回意見の3 Bot・順序・重複なし
+- PR-B: 初回意見後の最終案3件
+- PR-C: ballot close前write 0、close後の3票公開
+- PR-D: 保存済みwinnerと最終投稿Botの一致
 
-- 最初のcanonical CIでproductionとbreak-glassを同じbuild条件から実測する。
-- 両imageのSBOM、verified VEX、risk gateとconfig digestの対応を確認する。
-- 片方だけが変化しても、同じ測定で得た両baselineを同じPRで一括更新する。
-- `fault-test`はbaseline対象に含めない。
-- required CI、Grype、CodeQLがすべてgreenになるまでmergeしない。
+各回、panel、channel Status、DynamoDB、Outbox activity、ECS 0／0／0を確認する。winner全組合せ、multi-chunk、障害注入はlocal／contract試験で行い、live OpenAI試験を不必要に増やさない。
 
-Production ReleaseとEnvironment承認は各PRの実装・CIとは独立したmanager承認工程とする。Release前にRuntime `STOPPED`、ECS `0/0/0`、durable activity clear、deployment lock open、active Change Set 0を確認する。
+## 5. 文書と境界
 
-## 9. Rollback・停止条件
+- 既存Draft PR #164を維持し、Obsidian正本の23_Discord討論過程表示実装計画.mdをこの内容へ置換してから既存手順でmirrorを同期する。新しい計画書は追加しない。
+- 実装PRでは変更した契約に直接関係する正本だけを更新する。
+- 新しいAWS resource、IAM、CDK stack、Discord Application設定は追加しない。
+- OpenAI prompt、model、reasoning、token budget、winner規則、Runtime起動方式は変更しない。
+- Release安全性は既存の原子的deployment lock取得を正とし、単なる事前readをdeploy許可には使わない。
+- SENTは送信・照合時点の成功を意味する。後日の外部編集・削除を継続監視する機能は別課題とする。
 
-- 各PRは後続PRを含めず単独revertできる状態にする。
-- Discord送信済みmessageをrollback時に削除しない。
-- phase delivery失敗時は同じphaseとOutboxを保持し、次回起動でreconcileする。
-- unknown schema、別attempt、content hash不一致、不完全pagination、fencing喪失はfail closedにする。
-- DynamoDB schema migration、新queue、SQS、DynamoDB Streams、新Lambda、CDK／IAM変更が必要になった場合は、そのPRへ追加せず再計画する。
-- 1本のPRで隣接phaseまで変更する必要が出た場合は実装を停止する。
-- CI failure、image digest再現性不一致、新規High/Critical residualはrerunやbaseline転記をせず直接原因を確定して停止する。
+## 6. 開始工程と停止点
 
-## 10. 明示的な非対象
+計画PR #164の改訂後、最初に実装する工程はPR-0「Delivery safety foundation」とする。PR-0では新しい途中投稿を有効化しない。
 
-- OpenAI prompt、model、reasoning effort、token budget
-- Evidence生成、citation表示、Web archive
-- `/shittim` command schema、HTTP ingress、SnapStart
-- Runtime起動、30分idle、global 3 lease、FIFO 20件
-- Status Publisher／Reconcilerの状態体系
-- 新しいAWS resource、IAM、Discord Application設定
-- 一般messageへのBot応答
-- moderatorによる追加のphase実況message
-
-## 11. 完了条件
-
-- PR-A〜Dが独立して実装・review・mergeされる。
-- 初回意見、最終案、投票、最終決定が要求どおりのBotから順序どおり表示される。
-- 各phaseは全必須Outbox SENT後だけ次へ進む。
-- retry、process停止、Discord timeout、DynamoDB conflictで重複表示しない。
-- Pythonだけがwinnerを選ぶ。
-- thread panel、channel Status Message、DynamoDBがCOMPLETEDへ収束する。
-- 最後のdurable activity完了後30分でECS `desired/running/pending=0/0/0`へ収束する。
-- required CI、Grype、CodeQL、live acceptanceが合格する。
-- 未解決Critical／High issueがない。
-
-## 12. 最初に実施する工程
-
-PR-A「初回意見の表示」だけを実装する。投票表示方式の判断、最終案、投票、最終発表を同じPRへ含めない。
+PR-0の実装、merge、Production Release、live acceptanceは、それぞれ本計画の依存順とmanager承認境界に従う。PR #164の改訂作業ではPR-0のコード変更、Production Release、AWS／Discord／OpenAI writeを行わない。
