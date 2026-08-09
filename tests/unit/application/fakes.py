@@ -71,6 +71,7 @@ class FakeDiscord:
     ready: bool = True
     allowed: bool = True
     delivery_ready: bool = True
+    delivery_ready_by_slot: dict[DiscordBotSlot, bool] = field(default_factory=dict)
     delivery_checks: list[tuple[DiscordBotSlot, str, str]] = field(default_factory=list)
 
     async def all_identities_ready(self) -> bool:
@@ -88,7 +89,7 @@ class FakeDiscord:
         thread_id: str,
     ) -> bool:
         self.delivery_checks.append((bot_slot, guild_id, thread_id))
-        return self.delivery_ready
+        return self.delivery_ready_by_slot.get(bot_slot, self.delivery_ready)
 
 
 @dataclass(slots=True)
@@ -153,6 +154,8 @@ class FakeOpenAI:
         self.vote_calls: list[tuple[ParticipantSlot, tuple[ParticipantSlot, ...]]] = []
         self.decision_calls: list[ParticipantSlot] = []
         self.decision_errors: list[BaseException] = []
+        self.initial_errors: dict[ParticipantSlot, BaseException] = {}
+        self.initial_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
         self.decision_delay = 0.0
         self.fail_initial_for: ParticipantSlot | None = None
         self.block_initial = False
@@ -167,6 +170,9 @@ class FakeOpenAI:
     ) -> InitialOpinion:
         del question, evidence
         self.initial_calls.append(participant)
+        initial_error = self.initial_errors.get(participant)
+        if initial_error is not None:
+            raise initial_error
         if participant is self.fail_initial_for:
             await asyncio.sleep(0)
             raise RuntimeError("generated failure")
@@ -175,7 +181,11 @@ class FakeOpenAI:
                 await asyncio.Event().wait()
             finally:
                 self.cancelled_initial.add(participant)
-        return InitialOpinion(participant, "summary", "proposal")
+        return InitialOpinion(
+            self.initial_participant_override.get(participant, participant),
+            "summary",
+            "proposal",
+        )
 
     async def generate_final_proposal(
         self,
@@ -236,6 +246,7 @@ class FakeRepository:
         self.terminal_operations: dict[str, OutboxOperation] = {}
         self.terminal_stages: list[DebateSnapshot] = []
         self.terminal_finalizations: list[DebateSnapshot] = []
+        self.phase_delivery_finalizations: list[DebateSnapshot] = []
         self.terminal_finalize_errors: list[RepositoryConflict] = []
 
     async def get_operation_result(
@@ -358,6 +369,22 @@ class FakeRepository:
                 and result.state.attempt_id == persisted.state.attempt_id
             ):
                 self.operations[operation_id] = persisted
+        return persisted
+
+    async def finalize_phase_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
+            raise RepositoryConflict
+        persisted = replace(updated, lease=current.lease)
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        self.phase_delivery_finalizations.append(persisted)
         return persisted
 
     async def terminate_terminal_delivery(

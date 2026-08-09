@@ -24,6 +24,7 @@ from shittim_chest.application import (
     PanelOperationKind,
     content_sha256,
     nonce_from_uuid7,
+    prepare_initial_opinion_outbox_operations,
     prepare_outbox_operations,
     prepare_terminal_outbox_operations,
     sanitize_discord_model_text,
@@ -35,6 +36,7 @@ from shittim_chest.domain import (
     DebatePhase,
     DebateState,
     FinalDecision,
+    InitialOpinion,
     ParticipantSlot,
 )
 
@@ -102,6 +104,39 @@ def terminal_snapshot() -> DebateSnapshot:
             "first *line*\r\nsecond",
             ("@everyone action",),
             ("careful",),
+        ),
+    )
+
+
+def initial_opinion_snapshot() -> DebateSnapshot:
+    debate_id = DebateId.new()
+    attempt_id = AttemptId.new()
+    state = DebateState.accepted(debate_id, attempt_id, at=NOW)
+    state = state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=NOW + timedelta(seconds=1))
+    state = state.transition_to(
+        DebatePhase.COLLECTING_INITIAL_OPINIONS,
+        at=NOW + timedelta(seconds=2),
+    )
+    return DebateSnapshot(
+        state=state,
+        question="question",
+        requester_id="requester",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
+        guild_id=GUILD_ID,
+        channel_id=CHANNEL_ID,
+        created_at=NOW,
+        attempt_created_at=NOW,
+        starter_message_id="201",
+        thread_id=THREAD_ID,
+        control_panel_message_id="202",
+        initial_opinions=tuple(
+            InitialOpinion(
+                participant,
+                f"summary *{participant.value}*",
+                f"proposal @everyone {participant.value}",
+            )
+            for participant in ParticipantSlot
         ),
     )
 
@@ -233,6 +268,64 @@ def test_prepare_outbox_operations_binds_chunks_slots_hashes_and_unique_nonces()
             thread_id=THREAD_ID,
             content=content,
             nonce_sources=(),
+            created_at=NOW,
+        )
+
+
+def test_prepare_initial_opinions_binds_three_bots_global_order_and_replay_stable_nonces() -> None:
+    snapshot = initial_opinion_snapshot()
+
+    operations = prepare_initial_opinion_outbox_operations(snapshot=snapshot, created_at=NOW)
+    replay = prepare_initial_opinion_outbox_operations(snapshot=snapshot, created_at=NOW)
+
+    assert operations == replay
+    assert tuple(operation.bot_slot for operation in operations) == (
+        DiscordBotSlot.PARTICIPANT_A,
+        DiscordBotSlot.PARTICIPANT_B,
+        DiscordBotSlot.PARTICIPANT_C,
+    )
+    assert tuple(operation.delivery_sequence for operation in operations) == (0, 8, 16)
+    assert all(operation.phase is DebatePhase.DISCUSSING for operation in operations)
+    assert all(operation.plan_id == "initial-opinions" for operation in operations)
+    assert len({operation.nonce for operation in operations}) == 3
+    assert all(len(operation.nonce) == 22 for operation in operations)
+    assert all("@everyone" in operation.content for operation in operations)
+    assert all("\\*" in operation.content for operation in operations)
+
+
+def test_prepare_initial_opinions_rejects_wrong_phase_context_and_oversized_output() -> None:
+    snapshot = initial_opinion_snapshot()
+    with pytest.raises(ValueError, match="generation phase"):
+        prepare_initial_opinion_outbox_operations(
+            snapshot=replace(
+                snapshot,
+                state=snapshot.state.transition_to(
+                    DebatePhase.DISCUSSING,
+                    at=NOW + timedelta(seconds=3),
+                ),
+            ),
+            created_at=NOW,
+        )
+    with pytest.raises(ValueError, match="bound Discord thread"):
+        prepare_initial_opinion_outbox_operations(
+            snapshot=replace(snapshot, thread_id=None),
+            created_at=NOW,
+        )
+    with pytest.raises(ValueError, match="each participant exactly once"):
+        prepare_initial_opinion_outbox_operations(
+            snapshot=replace(snapshot, initial_opinions=snapshot.initial_opinions[:2]),
+            created_at=NOW,
+        )
+    oversized = replace(
+        snapshot.initial_opinions[0],
+        summary="x" * 18_000,
+    )
+    with pytest.raises(ValueError, match="reserved delivery sequence"):
+        prepare_initial_opinion_outbox_operations(
+            snapshot=replace(
+                snapshot,
+                initial_opinions=(oversized, *snapshot.initial_opinions[1:]),
+            ),
             created_at=NOW,
         )
 

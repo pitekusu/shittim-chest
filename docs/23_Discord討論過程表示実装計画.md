@@ -2,7 +2,7 @@
 aliases:
   - Discord討論過程表示実装計画
 tags: [project, discord, application, dynamodb, outbox]
-status: planned
+status: in-progress
 created: 2026-08-09
 updated: 2026-08-09
 ---
@@ -136,6 +136,9 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 
 - participant 3人のcheckpoint、権限preflight、PhaseDeliveryPlan、初回意見投稿を有効化する。
 - 初回意見だけが表示される状態を明示的なprogressive rolloutとして受け入れる。
+- local実装では、3 Botのthread／Guild／permission preflight後に3件を並列生成し、結果ごとにoutputとcheckpointを同じfenced writeで保存する。全3件保存後だけPhaseDeliveryPlanとOutbox v2を一括stageし、participant-a／b／cの順で全件SENTを確認してからDISCUSSINGへ進む。
+- 実装Draft PRは`#171`。focused application test 100件、DynamoDB Localを含むfull pytest 1,830件により、participant Bot所有、delivery_sequence 0／8／16、22文字の再現可能nonce、結果ごとの永続化、successor leaseでの第2 logical call、3回目のlogical call禁止、active leaseを保持したphase finalizeを確認した。
+- canonical CI run `31318794695`の同一測定で得たproduction／break-glassの両config digestへbaselineを一括更新した。両SBOMにfixable High／Criticalはなく、canonical risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。Production Releaseとlive acceptanceは未実施である。
 
 ### PR-B: 最終案
 

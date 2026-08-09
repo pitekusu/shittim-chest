@@ -12,14 +12,16 @@ from enum import StrEnum, unique
 from uuid import RFC_4122, UUID
 
 from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason
-from shittim_chest.domain import AttemptId, DebateId, DebatePhase
+from shittim_chest.domain import PARTICIPANTS, AttemptId, DebateId, DebatePhase
 
 DISCORD_MESSAGE_LIMIT = 2_000
 DISCORD_CUSTOM_ID_LIMIT = 100
 DISCORD_NONCE_LIMIT = 25
 OUTBOX_CLAIM_SECONDS = 60
 MAX_TERMINAL_OUTBOX_CHUNKS = 20
+MAX_INITIAL_OPINION_CHUNKS = 8
 MAX_OUTBOX_DELIVERY_ATTEMPTS = 3
+INITIAL_OPINION_DELIVERY_SEQUENCE_START = 0
 COMPLETED_DELIVERY_SEQUENCE_START = 300
 FAILED_DELIVERY_SEQUENCE_START = 900
 CANCELLED_DELIVERY_SEQUENCE_START = 910
@@ -543,6 +545,69 @@ def prepare_terminal_outbox_operations(
         plan_id=plan_id,
         delivery_sequence_start=delivery_sequence_start,
     )
+
+
+def prepare_initial_opinion_outbox_operations(
+    *,
+    snapshot: DebateSnapshot,
+    created_at: datetime,
+) -> tuple[OutboxOperation, ...]:
+    """Build the ordered participant-owned delivery for all three initial opinions."""
+
+    _require_utc(created_at, label="initial opinion delivery creation timestamp")
+    if snapshot.state.phase is not DebatePhase.COLLECTING_INITIAL_OPINIONS:
+        raise ValueError("initial opinions can only be delivered from their generation phase")
+    if snapshot.thread_id is None:
+        raise ValueError("initial opinion delivery requires a bound Discord thread")
+    opinions = {opinion.participant: opinion for opinion in snapshot.initial_opinions}
+    if len(opinions) != len(PARTICIPANTS) or set(opinions) != set(PARTICIPANTS):
+        raise ValueError("initial opinion delivery requires each participant exactly once")
+
+    plan_id = "initial-opinions"
+    operations: list[OutboxOperation] = []
+    for participant_index, participant in enumerate(PARTICIPANTS):
+        opinion = opinions[participant]
+        bot_slot = DiscordBotSlot(participant.value)
+        content = "\n".join(
+            (
+                "**初回意見**",
+                "**要点**",
+                _quoted_model_text(opinion.summary),
+                "**提案**",
+                _quoted_model_text(opinion.proposal),
+            )
+        )
+        chunks = split_discord_message(content)
+        if len(chunks) > MAX_INITIAL_OPINION_CHUNKS:
+            raise ValueError("one initial opinion exceeds its reserved delivery sequence range")
+        sequence_start = (
+            INITIAL_OPINION_DELIVERY_SEQUENCE_START + participant_index * MAX_INITIAL_OPINION_CHUNKS
+        )
+        operations.extend(
+            prepare_outbox_operations(
+                operation_prefix=f"initial-opinion-{participant.value}",
+                debate_id=snapshot.state.debate_id,
+                attempt_id=snapshot.state.attempt_id,
+                bot_slot=bot_slot,
+                thread_id=snapshot.thread_id,
+                content=content,
+                nonce_sources=tuple(
+                    _derived_uuid7(
+                        snapshot.state.attempt_id,
+                        phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                        bot_slot=bot_slot,
+                        sequence=sequence,
+                    )
+                    for sequence in range(len(chunks))
+                ),
+                created_at=created_at,
+                record_schema_version=2,
+                phase=DebatePhase.DISCUSSING,
+                plan_id=plan_id,
+                delivery_sequence_start=sequence_start,
+            )
+        )
+    return tuple(operations)
 
 
 def _terminal_content(
