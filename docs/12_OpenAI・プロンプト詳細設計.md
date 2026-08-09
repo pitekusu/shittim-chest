@@ -75,8 +75,10 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 - Routerは追加model callを使わないversion付き決定規則`question-router-v2`とする。現在情報と高risk topicの明示語・類似語は`required`、時間・場所・推薦contextは`optional`、創作・言換え・要約・時間非依存の比較など明示的な検索不要patternだけ`none`とする。どれにも一致しない未知・類似表現はfail-safeに`optional`とする。
 - Evidence METAへ`router_rules_version`と安定した`routing_reason`を保存し、誤分類を質問本文のlog出力なしで集計・回帰test化できるようにする。
 - Web searchはorchestratorが1つのResponses API requestだけを送る。hosted toolはそのrequest内でsearch/open/findを複数回実行し得るため、`max_tool_calls=4`で上限を設ける。`tools=[{"type":"web_search"}]`、`tool_choice="required"`、`include=["web_search_call.action.sources"]`、`store=false`を指定する。
-- Responses APIの`message.content[].annotations`にある有効な`url_citation`をEvidence URLとtitleの正本とする。`web_search_call.action.sources`は検索callの補助観測情報であり、valid URL数と拒否したURL fieldの件数・型だけをcontent-free telemetryへ記録する。欠落、`null`、空文字などの補助URLをEvidenceへ採用せず、有効なcitationが0件ならfail closedとする。不正なcitation、未知annotation、未完了responseは引き続き拒否する。
-- citation URLを重複排除し、URL、title、canonical source metadata、UTC取得時刻、metadata SHA-256、要約、response IDをimmutable Evidenceとして保存する。hashはsource page本文ではなく保存するcanonical metadataの完全性確認値である。model本文中のURL文字列だけをsourceの正としない。
+- Responses APIの`message.content[].annotations`にある有効な`url_citation`をWeb page EvidenceのURLとtitleの正本とする。`web_search_call.action.sources`のURL entryは補助観測に限定し、欠落、`null`、空文字をEvidenceへ昇格しない。
+- Responses APIが`action.sources`だけに返すreal-time third-party feedは、公式契約に明記された`oai-weather`、`oai-sports`、`oai-finance`だけをallowlistする。`type="api"`、`url=null`、exact provider name以外のfieldがないことを検証し、stableな`openai://web-search/<provider>` source URIとcanonical metadataへ変換する。未知provider、未知source type、余分なfieldはfail closedとする。
+- URL citationまたはallowlist済みreal-time feedが1件以上ある場合だけEvidenceを成立させる。URL、provider identityをそれぞれ重複排除し、source URI、title、canonical source metadata、UTC取得時刻、metadata SHA-256、要約、response IDをimmutable Evidenceとして保存する。hashはsource本文ではなく保存するcanonical metadataの完全性確認値である。model本文中のURL文字列だけをsourceの正としない。
+- content-free telemetryはsource総数、拒否したURL fieldの件数・型、URL citation数、Evidence数に加え、allowlist済みreal-time feedの件数と`weather`／`sports`／`finance`だけを記録する。provider応答本文、query、質問は記録しない。
 - source本文はuntrusted dataとして区切り、命令、secret要求、tool実行指示を無視する。
 
 ## 6. 投票・決定

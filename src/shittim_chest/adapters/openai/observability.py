@@ -23,6 +23,8 @@ class OpenAIUsageRecord:
     web_search_source_count: int | None = None
     web_search_source_rejected_count: int | None = None
     web_search_source_rejected_kinds: str | None = None
+    realtime_feed_count: int | None = None
+    realtime_feed_kinds: str | None = None
     url_citation_count: int | None = None
     evidence_source_count: int | None = None
     title_fallback_count: int | None = None
