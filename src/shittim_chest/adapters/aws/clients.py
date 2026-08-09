@@ -25,8 +25,10 @@ INGRESS_READ_TIMEOUT_SECONDS = 0.3
 # A new command uses one durable enqueue. Conflict classification may use two
 # more bounded reads before the gate rejects additional SDK work.
 INGRESS_MAX_SERIAL_SDK_ROUNDS = 3
-# Reserve restore plus API Gateway and Discord transit outside handler timing.
-INGRESS_RESPONSE_MARGIN_SECONDS = 1.4
+# Reserve API Gateway and Discord transit outside handler timing. SnapStart
+# restores are classified in content-free timing telemetry so the 2.0s handler
+# budget can be tuned from one bounded live acceptance run.
+INGRESS_RESPONSE_MARGIN_SECONDS = 0.6
 INGRESS_TOTAL_MAX_ATTEMPTS = 1
 STATUS_CONNECT_TIMEOUT_SECONDS = 1.0
 STATUS_READ_TIMEOUT_SECONDS = 2.0

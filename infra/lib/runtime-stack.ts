@@ -399,7 +399,7 @@ export class RuntimeStack extends Stack {
       memorySize: 512,
       reservedConcurrency: 5,
       snapStart: lambda.SnapStartConf.ON_PUBLISHED_VERSIONS,
-      // The application stops at 1.2s; 5s is only a final safety net for an
+      // The application stops at 2.0s; 5s is only a final safety net for an
       // SDK call unwinding after cancellation and must not define Discord UX.
       timeout: Duration.seconds(5),
     });
