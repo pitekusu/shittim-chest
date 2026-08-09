@@ -52,6 +52,8 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
                 web_search_source_count=3,
                 web_search_source_rejected_count=2,
                 web_search_source_rejected_kinds="missing,null",
+                realtime_feed_count=1,
+                realtime_feed_kinds="weather",
                 url_citation_count=2,
                 evidence_source_count=2,
                 title_fallback_count=1,
@@ -79,6 +81,8 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
     assert payloads[1]["web_search_source_count"] == 3
     assert payloads[1]["web_search_source_rejected_count"] == 2
     assert payloads[1]["web_search_source_rejected_kinds"] == "missing,null"
+    assert payloads[1]["realtime_feed_count"] == 1
+    assert payloads[1]["realtime_feed_kinds"] == "weather"
     assert payloads[1]["url_citation_count"] == 2
     assert payloads[1]["evidence_source_count"] == 2
     assert payloads[1]["title_fallback_count"] == 1

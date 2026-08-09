@@ -73,7 +73,10 @@ class _SourceDiagnosticContext(StrEnum):
     WEB_SEARCH_ACTION = "web_search_action"
     WEB_SEARCH_SOURCES = "web_search_sources"
     WEB_SEARCH_SOURCE = "web_search_source"
+    WEB_SEARCH_SOURCE_TYPE = "web_search_source_type"
     WEB_SEARCH_SOURCE_URL = "web_search_source_url"
+    WEB_SEARCH_SOURCE_PROVIDER = "web_search_source_provider"
+    WEB_SEARCH_SOURCE_SHAPE = "web_search_source_shape"
     MESSAGE_CONTENT = "message_content"
     OUTPUT_TEXT_ANNOTATIONS = "output_text_annotations"
     OUTPUT_TEXT_ANNOTATION = "output_text_annotation"
@@ -101,6 +104,24 @@ class _DiagnosticKind(StrEnum):
 
 _MISSING = object()
 
+_REALTIME_FEEDS = {
+    "oai-finance": (
+        "openai://web-search/oai-finance",
+        "OpenAI real-time finance feed",
+        "finance",
+    ),
+    "oai-sports": (
+        "openai://web-search/oai-sports",
+        "OpenAI real-time sports feed",
+        "sports",
+    ),
+    "oai-weather": (
+        "openai://web-search/oai-weather",
+        "OpenAI real-time weather feed",
+        "weather",
+    ),
+}
+
 
 class _SourceExtractionError(ValueError):
     """Content-free classification for a malformed provider source field."""
@@ -123,6 +144,7 @@ class _CitationExtraction:
 @dataclass(frozen=True, slots=True)
 class _SearchSourceExtraction:
     urls: tuple[str, ...]
+    realtime_feeds: tuple[str, ...]
     rejected_url_kinds: tuple[_DiagnosticKind, ...]
 
 
@@ -131,6 +153,7 @@ class _SourceExtraction:
     items: tuple[EvidenceItem, ...]
     web_search_source_count: int
     web_search_source_rejected_kinds: tuple[_DiagnosticKind, ...]
+    realtime_feed_kinds: tuple[str, ...]
     url_citation_count: int
     title_fallback_kinds: tuple[_DiagnosticKind, ...]
 
@@ -320,6 +343,7 @@ def _extract_sources(
 ) -> _SourceExtraction:
     titles: dict[str, str] = {}
     source_urls: list[str] = []
+    realtime_feeds: dict[str, None] = {}
     rejected_source_kinds: list[_DiagnosticKind] = []
     citation_count = 0
     title_fallback_kinds: list[_DiagnosticKind] = []
@@ -328,8 +352,9 @@ def _extract_sources(
         raise _SourceExtractionError(_SourceDiagnosticContext.RESPONSE_OUTPUT, outputs)
     for output in outputs:
         if isinstance(output, ResponseFunctionWebSearch):
-            search_sources = _search_source_urls(output)
+            search_sources = _search_sources(output)
             source_urls.extend(search_sources.urls)
+            realtime_feeds.update(dict.fromkeys(search_sources.realtime_feeds))
             rejected_source_kinds.extend(search_sources.rejected_url_kinds)
         if isinstance(output, ResponseOutputMessage):
             citations = _message_citation_titles(output)
@@ -338,9 +363,9 @@ def _extract_sources(
             title_fallback_kinds.extend(citations.title_fallback_kinds)
     timestamp = retrieved_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
     items: list[EvidenceItem] = []
-    # The response message's url_citation annotations are the canonical evidence
-    # references. action.sources is supplemental search-call metadata and is
-    # observed separately, but never promotes an uncited URL into Evidence.
+    # URL citations remain the canonical references for web pages. The Responses
+    # API exposes its fixed real-time feeds only through action.sources, so those
+    # exact allowlisted identities are represented by stable non-HTTP URIs.
     for url in titles:
         title = titles.get(url, url)
         metadata = json.dumps(
@@ -358,37 +383,91 @@ def _extract_sources(
                 content_hash=hashlib.sha256(metadata.encode()).hexdigest(),
             )
         )
+    for provider in realtime_feeds:
+        source_uri, title, _ = _REALTIME_FEEDS[provider]
+        metadata = json.dumps(
+            {"provider": provider, "source_type": "api", "source_uri": source_uri},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        items.append(
+            EvidenceItem(
+                source_url=source_uri,
+                title=title,
+                source_metadata=metadata,
+                retrieved_at=timestamp,
+                content_hash=hashlib.sha256(metadata.encode()).hexdigest(),
+            )
+        )
     return _SourceExtraction(
         items=tuple(items),
-        web_search_source_count=len(source_urls),
+        web_search_source_count=len(source_urls) + len(realtime_feeds),
         web_search_source_rejected_kinds=tuple(rejected_source_kinds),
+        realtime_feed_kinds=tuple(_REALTIME_FEEDS[name][2] for name in realtime_feeds),
         url_citation_count=citation_count,
         title_fallback_kinds=tuple(title_fallback_kinds),
     )
 
 
-def _search_source_urls(output: ResponseFunctionWebSearch) -> _SearchSourceExtraction:
+def _search_sources(output: ResponseFunctionWebSearch) -> _SearchSourceExtraction:
     action = getattr(output, "action", _MISSING)
     if isinstance(action, (ActionOpenPage, ActionFind)):
-        return _SearchSourceExtraction((), ())
+        return _SearchSourceExtraction((), (), ())
     if not isinstance(action, ActionSearch):
         raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_ACTION, action)
     sources = getattr(action, "sources", _MISSING)
     if sources is _MISSING or sources is None:
-        return _SearchSourceExtraction((), ())
+        return _SearchSourceExtraction((), (), ())
     if not isinstance(sources, list):
         raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_SOURCES, sources)
     urls: list[str] = []
+    realtime_feeds: list[str] = []
     rejected_url_kinds: list[_DiagnosticKind] = []
     for source in sources:
         if not isinstance(source, ActionSearchSource):
             raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_SOURCE, source)
+        source_type = getattr(source, "type", _MISSING)
+        extras = source.model_extra or {}
+        if source_type == "api":
+            if set(extras) != {"name"}:
+                raise _SourceExtractionError(
+                    _SourceDiagnosticContext.WEB_SEARCH_SOURCE_SHAPE,
+                    extras,
+                )
+            provider = extras["name"]
+            if not isinstance(provider, str) or provider not in _REALTIME_FEEDS:
+                raise _SourceExtractionError(
+                    _SourceDiagnosticContext.WEB_SEARCH_SOURCE_PROVIDER,
+                    provider,
+                )
+            if getattr(source, "url", None) is not None:
+                raise _SourceExtractionError(
+                    _SourceDiagnosticContext.WEB_SEARCH_SOURCE_SHAPE,
+                    getattr(source, "url", None),
+                )
+            realtime_feeds.append(provider)
+            continue
+        if source_type != "url":
+            raise _SourceExtractionError(
+                _SourceDiagnosticContext.WEB_SEARCH_SOURCE_TYPE,
+                source_type,
+            )
+        if extras:
+            raise _SourceExtractionError(
+                _SourceDiagnosticContext.WEB_SEARCH_SOURCE_SHAPE,
+                extras,
+            )
         value = getattr(source, "url", _MISSING)
         if not isinstance(value, str) or not value.strip():
             rejected_url_kinds.append(_diagnostic_kind(value))
             continue
         urls.append(value)
-    return _SearchSourceExtraction(tuple(urls), tuple(rejected_url_kinds))
+    return _SearchSourceExtraction(
+        tuple(urls),
+        tuple(realtime_feeds),
+        tuple(rejected_url_kinds),
+    )
 
 
 def _message_citation_titles(output: ResponseOutputMessage) -> _CitationExtraction:
@@ -494,6 +573,8 @@ def _usage_record(
             ",".join(sorted({kind.value for kind in extraction.web_search_source_rejected_kinds}))
             or None
         ),
+        realtime_feed_count=len(extraction.realtime_feed_kinds),
+        realtime_feed_kinds=(",".join(extraction.realtime_feed_kinds) or None),
         url_citation_count=extraction.url_citation_count,
         evidence_source_count=len(extraction.items),
         title_fallback_count=len(extraction.title_fallback_kinds),

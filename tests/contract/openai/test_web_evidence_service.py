@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from openai import AsyncOpenAI
 from openai.types.responses.response import Response
+from openai.types.responses.response_function_web_search import ActionSearchSource
 from pydantic import ValidationError
 
 import shittim_chest.adapters.openai.evidence as evidence_module
@@ -108,6 +109,22 @@ def searched_response(
     )
 
 
+def realtime_feed_response(
+    provider: str = "oai-weather",
+    *,
+    include_unknown_field: bool = False,
+) -> SimpleNamespace:
+    response = searched_response()
+    source = (
+        ActionSearchSource.model_construct(type="api", name=provider, private="value")
+        if include_unknown_field
+        else ActionSearchSource.model_construct(type="api", name=provider)
+    )
+    object.__setattr__(response.output[0].action, "sources", [source])
+    object.__setattr__(response.output[1].content[0], "annotations", [])
+    return response
+
+
 def service_for(*responses: object) -> tuple[OpenAIWebEvidenceService, AsyncMock, Observer]:
     parse = AsyncMock(side_effect=responses)
     client = cast(AsyncOpenAI, SimpleNamespace(responses=SimpleNamespace(parse=parse)))
@@ -144,6 +161,86 @@ async def test_required_search_persists_digest_sources_and_safe_request_shape() 
     assert request["max_tool_calls"] == 4
     assert request["store"] is False
     assert observer.usages[0].operation == "evidence_search"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "source_uri", "feed_kind"),
+    [
+        ("oai-finance", "openai://web-search/oai-finance", "finance"),
+        ("oai-sports", "openai://web-search/oai-sports", "sports"),
+        ("oai-weather", "openai://web-search/oai-weather", "weather"),
+    ],
+)
+async def test_documented_realtime_feed_is_canonical_evidence(
+    provider: str,
+    source_uri: str,
+    feed_kind: str,
+) -> None:
+    service, _, observer = service_for(realtime_feed_response(provider))
+
+    bundle = await service.prepare_evidence(question="今日の天気は?")
+
+    assert bundle.search_status is EvidenceSearchStatus.COMPLETED
+    assert bundle.required_search_satisfied is True
+    assert len(bundle.items) == 1
+    assert bundle.items[0].source_url == source_uri
+    assert bundle.items[0].source_metadata == (
+        f'{{"provider":"{provider}","source_type":"api","source_uri":"{source_uri}"}}'
+    )
+    assert len(bundle.items[0].content_hash) == 64
+    assert observer.failures == []
+    assert observer.usages[0].web_search_source_count == 1
+    assert observer.usages[0].web_search_source_rejected_count == 0
+    assert observer.usages[0].realtime_feed_count == 1
+    assert observer.usages[0].realtime_feed_kinds == feed_kind
+    assert observer.usages[0].url_citation_count == 0
+    assert observer.usages[0].evidence_source_count == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_realtime_feed_fails_closed_without_recording_provider_name() -> None:
+    service, _, observer = service_for(realtime_feed_response("private-provider"))
+
+    with pytest.raises(RequiredEvidenceUnavailable):
+        await service.prepare_evidence(question="今日の天気は?")
+
+    assert [record.code for record in observer.failures] == ["openai_invalid_output"]
+    assert observer.failures[0].diagnostic_context == "web_search_source_provider"
+    assert observer.failures[0].diagnostic_kind == "string"
+    assert "private-provider" not in repr(observer.failures)
+
+
+@pytest.mark.asyncio
+async def test_realtime_feed_with_unknown_shape_fails_closed() -> None:
+    service, _, observer = service_for(
+        realtime_feed_response("oai-weather", include_unknown_field=True)
+    )
+
+    with pytest.raises(RequiredEvidenceUnavailable):
+        await service.prepare_evidence(question="今日の天気は?")
+
+    assert observer.failures[0].diagnostic_context == "web_search_source_shape"
+    assert observer.failures[0].diagnostic_kind == "object"
+    assert "private" not in repr(observer.failures)
+
+
+@pytest.mark.asyncio
+async def test_unknown_search_source_type_fails_closed() -> None:
+    response = searched_response()
+    source = ActionSearchSource.model_construct(
+        type="private",
+        url="https://example.test/private",
+    )
+    object.__setattr__(response.output[0].action, "sources", [source])
+    service, _, observer = service_for(response)
+
+    with pytest.raises(RequiredEvidenceUnavailable):
+        await service.prepare_evidence(question="今日の天気は?")
+
+    assert observer.failures[0].diagnostic_context == "web_search_source_type"
+    assert observer.failures[0].diagnostic_kind == "string"
+    assert "private" not in repr(observer.failures)
 
 
 @pytest.mark.asyncio
