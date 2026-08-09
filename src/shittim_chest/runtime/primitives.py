@@ -75,6 +75,14 @@ class ContentFreeTelemetry:
         }
         for name, value in (
             ("web_search_source_count", record.web_search_source_count),
+            (
+                "web_search_source_rejected_count",
+                record.web_search_source_rejected_count,
+            ),
+            (
+                "web_search_source_rejected_kinds",
+                record.web_search_source_rejected_kinds,
+            ),
             ("url_citation_count", record.url_citation_count),
             ("evidence_source_count", record.evidence_source_count),
             ("title_fallback_count", record.title_fallback_count),

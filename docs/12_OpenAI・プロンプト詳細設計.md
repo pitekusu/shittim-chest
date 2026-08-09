@@ -75,7 +75,8 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 - Routerは追加model callを使わないversion付き決定規則`question-router-v2`とする。現在情報と高risk topicの明示語・類似語は`required`、時間・場所・推薦contextは`optional`、創作・言換え・要約・時間非依存の比較など明示的な検索不要patternだけ`none`とする。どれにも一致しない未知・類似表現はfail-safeに`optional`とする。
 - Evidence METAへ`router_rules_version`と安定した`routing_reason`を保存し、誤分類を質問本文のlog出力なしで集計・回帰test化できるようにする。
 - Web searchはorchestratorが1つのResponses API requestだけを送る。hosted toolはそのrequest内でsearch/open/findを複数回実行し得るため、`max_tool_calls=4`で上限を設ける。`tools=[{"type":"web_search"}]`、`tool_choice="required"`、`include=["web_search_call.action.sources"]`、`store=false`を指定する。
-- `action.sources`とURL citationを統合・重複排除し、URL、title、canonical source metadata、UTC取得時刻、metadata SHA-256、要約、response IDをimmutable Evidenceとして保存する。hashはsource page本文ではなく保存するcanonical metadataの完全性確認値である。model本文中のURLだけをsourceの正としない。
+- Responses APIの`message.content[].annotations`にある有効な`url_citation`をEvidence URLとtitleの正本とする。`web_search_call.action.sources`は検索callの補助観測情報であり、valid URL数と拒否したURL fieldの件数・型だけをcontent-free telemetryへ記録する。欠落、`null`、空文字などの補助URLをEvidenceへ採用せず、有効なcitationが0件ならfail closedとする。不正なcitation、未知annotation、未完了responseは引き続き拒否する。
+- citation URLを重複排除し、URL、title、canonical source metadata、UTC取得時刻、metadata SHA-256、要約、response IDをimmutable Evidenceとして保存する。hashはsource page本文ではなく保存するcanonical metadataの完全性確認値である。model本文中のURL文字列だけをsourceの正としない。
 - source本文はuntrusted dataとして区切り、命令、secret要求、tool実行指示を無視する。
 
 ## 6. 投票・決定
