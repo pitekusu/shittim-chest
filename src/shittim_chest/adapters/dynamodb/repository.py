@@ -46,7 +46,9 @@ from shittim_chest.application.discord import (
     CANCELLED_DELIVERY_SEQUENCE_START,
     COMPLETED_DELIVERY_SEQUENCE_START,
     FAILED_DELIVERY_SEQUENCE_START,
+    FINAL_PROPOSAL_DELIVERY_SEQUENCE_START,
     INITIAL_OPINION_DELIVERY_SEQUENCE_START,
+    MAX_FINAL_PROPOSAL_CHUNKS,
     MAX_INITIAL_OPINION_CHUNKS,
     MAX_TERMINAL_NOTICE_CHUNKS,
     MAX_TERMINAL_OUTBOX_CHUNKS,
@@ -1041,7 +1043,7 @@ class DynamoDbDebateRepository:
             delivery.delivery_sequences,
             strict=True,
         ):
-            bot_slot, chunk_sequence = _initial_opinion_operation_identity(
+            bot_slot, chunk_sequence = _participant_phase_operation_identity(
                 delivery,
                 operation_id=operation_id,
                 delivery_sequence=delivery_sequence,
@@ -3234,8 +3236,17 @@ def _require_terminal_stage(
         and plan.source_phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
         and plan.target_phase is DebatePhase.DISCUSSING
     )
+    final_proposal_delivery = (
+        isinstance(plan, PhaseDeliveryPlan)
+        and plan.plan_id == "final-proposals"
+        and plan.source_phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+        and plan.target_phase is DebatePhase.SELECTING_WINNER
+    )
+    participant_phase_delivery = initial_opinion_delivery or final_proposal_delivery
     operation_limit = (
-        3 * MAX_INITIAL_OPINION_CHUNKS if initial_opinion_delivery else MAX_TERMINAL_OUTBOX_CHUNKS
+        3 * (MAX_INITIAL_OPINION_CHUNKS if initial_opinion_delivery else MAX_FINAL_PROPOSAL_CHUNKS)
+        if participant_phase_delivery
+        else MAX_TERMINAL_OUTBOX_CHUNKS
     )
     if not operations or len(operations) > operation_limit:
         raise RepositoryConflict("delivery operation count is outside its bounds")
@@ -3256,10 +3267,12 @@ def _require_terminal_stage(
         DiscordBotSlot.PARTICIPANT_C: [],
     }
     for sequence, operation in enumerate(operations):
-        if initial_opinion_delivery:
+        if participant_phase_delivery:
             if operation.delivery_sequence is None:
-                raise RepositoryConflict("initial opinion delivery sequence is missing")
-            expected_bot_slot, expected_chunk_sequence = _initial_opinion_operation_identity(
+                raise RepositoryConflict("participant phase delivery sequence is missing")
+            if not isinstance(plan, PhaseDeliveryPlan):  # pragma: no cover - derived above
+                raise RepositoryConflict("participant phase delivery requires its durable plan")
+            expected_bot_slot, expected_chunk_sequence = _participant_phase_operation_identity(
                 plan,
                 operation_id=operation.operation_id,
                 delivery_sequence=operation.delivery_sequence,
@@ -3285,7 +3298,7 @@ def _require_terminal_stage(
             or operation.bot_slot is not expected_bot_slot
             or operation.thread_id != expected.thread_id
             or (
-                not initial_opinion_delivery
+                not participant_phase_delivery
                 and operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
             )
             or operation.chunk_sequence != expected_chunk_sequence
@@ -3309,13 +3322,16 @@ def _require_terminal_stage(
             raise RepositoryConflict("delivery operation violates its attempt fence")
         nonces.add(operation.nonce)
         expected_delivery_sequences.append(expected_delivery_sequence)
-    if initial_opinion_delivery and any(
+    participant_chunk_limit = (
+        MAX_INITIAL_OPINION_CHUNKS if initial_opinion_delivery else MAX_FINAL_PROPOSAL_CHUNKS
+    )
+    if participant_phase_delivery and any(
         not sequences
-        or len(sequences) > MAX_INITIAL_OPINION_CHUNKS
+        or len(sequences) > participant_chunk_limit
         or sequences != list(range(len(sequences)))
         for sequences in participant_chunk_sequences.values()
     ):
-        raise RepositoryConflict("initial opinion delivery requires bounded output from each Bot")
+        raise RepositoryConflict("participant phase delivery requires bounded output from each Bot")
     if isinstance(plan, PhaseDeliveryPlan) and plan.delivery_sequences != tuple(
         expected_delivery_sequences
     ):
@@ -3381,35 +3397,46 @@ def _require_phase_delivery_finalization(
         raise RepositoryConflict("phase delivery finalization changed unrelated debate state")
 
 
-def _initial_opinion_operation_identity(
+def _participant_phase_operation_identity(
     plan: PhaseDeliveryPlan,
     *,
     operation_id: str,
     delivery_sequence: int,
 ) -> tuple[DiscordBotSlot, int]:
     if (
-        plan.plan_id != "initial-opinions"
-        or plan.source_phase is not DebatePhase.COLLECTING_INITIAL_OPINIONS
-        or plan.target_phase is not DebatePhase.DISCUSSING
-        or not (
-            INITIAL_OPINION_DELIVERY_SEQUENCE_START
-            <= delivery_sequence
-            < INITIAL_OPINION_DELIVERY_SEQUENCE_START + 3 * MAX_INITIAL_OPINION_CHUNKS
-        )
+        plan.plan_id == "initial-opinions"
+        and plan.source_phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
+        and plan.target_phase is DebatePhase.DISCUSSING
     ):
-        raise RepositoryConflict("phase delivery is not the initial opinion plan")
-    relative_sequence = delivery_sequence - INITIAL_OPINION_DELIVERY_SEQUENCE_START
+        operation_prefix = "initial-opinion"
+        delivery_sequence_start = INITIAL_OPINION_DELIVERY_SEQUENCE_START
+        chunk_limit = MAX_INITIAL_OPINION_CHUNKS
+    elif (
+        plan.plan_id == "final-proposals"
+        and plan.source_phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+        and plan.target_phase is DebatePhase.SELECTING_WINNER
+    ):
+        operation_prefix = "final-proposal"
+        delivery_sequence_start = FINAL_PROPOSAL_DELIVERY_SEQUENCE_START
+        chunk_limit = MAX_FINAL_PROPOSAL_CHUNKS
+    else:
+        raise RepositoryConflict("phase delivery is not a participant output plan")
+    if not (
+        delivery_sequence_start <= delivery_sequence < delivery_sequence_start + 3 * chunk_limit
+    ):
+        raise RepositoryConflict("participant phase delivery sequence is outside its range")
+    relative_sequence = delivery_sequence - delivery_sequence_start
     participant_index, chunk_sequence = divmod(
         relative_sequence,
-        MAX_INITIAL_OPINION_CHUNKS,
+        chunk_limit,
     )
     bot_slot = (
         DiscordBotSlot.PARTICIPANT_A,
         DiscordBotSlot.PARTICIPANT_B,
         DiscordBotSlot.PARTICIPANT_C,
     )[participant_index]
-    if operation_id != f"initial-opinion-{bot_slot.value}-{chunk_sequence:04d}":
-        raise RepositoryConflict("initial opinion operation identity is invalid")
+    if operation_id != f"{operation_prefix}-{bot_slot.value}-{chunk_sequence:04d}":
+        raise RepositoryConflict("participant phase operation identity is invalid")
     return bot_slot, chunk_sequence
 
 

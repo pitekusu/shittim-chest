@@ -72,6 +72,7 @@ class FakeDiscord:
     allowed: bool = True
     delivery_ready: bool = True
     delivery_ready_by_slot: dict[DiscordBotSlot, bool] = field(default_factory=dict)
+    delivery_ready_results: list[bool] = field(default_factory=list)
     delivery_checks: list[tuple[DiscordBotSlot, str, str]] = field(default_factory=list)
 
     async def all_identities_ready(self) -> bool:
@@ -89,6 +90,8 @@ class FakeDiscord:
         thread_id: str,
     ) -> bool:
         self.delivery_checks.append((bot_slot, guild_id, thread_id))
+        if self.delivery_ready_results:
+            return self.delivery_ready_results.pop(0)
         return self.delivery_ready_by_slot.get(bot_slot, self.delivery_ready)
 
 
@@ -156,6 +159,8 @@ class FakeOpenAI:
         self.decision_errors: list[BaseException] = []
         self.initial_errors: dict[ParticipantSlot, BaseException] = {}
         self.initial_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
+        self.proposal_errors: dict[ParticipantSlot, BaseException] = {}
+        self.proposal_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
         self.decision_delay = 0.0
         self.fail_initial_for: ParticipantSlot | None = None
         self.block_initial = False
@@ -197,7 +202,14 @@ class FakeOpenAI:
     ) -> FinalProposal:
         del question, evidence, initial_opinions
         self.proposal_calls.append(participant)
-        return FinalProposal(participant, f"title-{participant.value}", "proposal")
+        proposal_error = self.proposal_errors.get(participant)
+        if proposal_error is not None:
+            raise proposal_error
+        return FinalProposal(
+            self.proposal_participant_override.get(participant, participant),
+            f"title-{participant.value}",
+            "proposal",
+        )
 
     async def cast_vote(
         self,

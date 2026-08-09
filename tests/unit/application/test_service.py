@@ -471,6 +471,11 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
         DebatePhase.DISCUSSING,
         DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        DebatePhase.COLLECTING_FINAL_PROPOSALS,
         DebatePhase.SELECTING_WINNER,
         DebatePhase.GENERATING_DECISION,
         DebatePhase.GENERATING_DECISION,
@@ -539,6 +544,222 @@ async def test_initial_opinions_are_persisted_then_delivered_by_each_participant
             )
             assert checkpoint is not None
             assert checkpoint.status is GenerationStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_final_proposals_are_persisted_then_delivered_by_each_participant_in_order(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    discord = dependencies[3]
+    repository = dependencies[6]
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    final_stage = next(
+        snapshot
+        for snapshot in repository.terminal_stages
+        if isinstance(snapshot.terminal_delivery, PhaseDeliveryPlan)
+        and snapshot.terminal_delivery.plan_id == "final-proposals"
+    )
+    operations = tuple(
+        operation
+        for operation in repository.terminal_operations.values()
+        if operation.plan_id == "final-proposals"
+    )
+    assert tuple(operation.bot_slot for operation in operations) == (
+        DiscordBotSlot.PARTICIPANT_A,
+        DiscordBotSlot.PARTICIPANT_B,
+        DiscordBotSlot.PARTICIPANT_C,
+    )
+    assert tuple(operation.delivery_sequence for operation in operations) == (100, 108, 116)
+    assert final_stage.state.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+    assert repository.phase_delivery_finalizations[1].state.phase is DebatePhase.SELECTING_WINNER
+    assert repository.phase_delivery_finalizations[1].terminal_delivery is None
+    assert discord.delivery_checks[3:6] == [
+        (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
+        (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
+        (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
+    ]
+    persisted_counts = [
+        len(snapshot.final_proposals)
+        for snapshot in repository.history[accepted.debate_id]
+        if snapshot.state.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+        and snapshot.final_proposals
+    ]
+    assert persisted_counts[:3] == [1, 2, 3]
+    for snapshot in repository.history[accepted.debate_id]:
+        for proposal in snapshot.final_proposals:
+            checkpoint = snapshot.checkpoint_for(
+                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                participant=proposal.participant,
+            )
+            assert checkpoint is not None
+            assert checkpoint.status is GenerationStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_final_proposal_preflight_failure_stops_before_every_proposal_call(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    discord = dependencies[3]
+    openai = dependencies[5]
+    repository = dependencies[6]
+    discord.delivery_ready_results = [True, True, True, True, False]
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = repository.current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "discord_delivery_preflight_failed"
+    assert set(openai.initial_calls) == set(PARTICIPANTS)
+    assert openai.proposal_calls == []
+    checkpoints = tuple(
+        checkpoint
+        for checkpoint in failed.generation_checkpoints
+        if checkpoint.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+    )
+    assert len(checkpoints) == 3
+    assert all(checkpoint.status is GenerationStatus.FAILED for checkpoint in checkpoints)
+    assert all(checkpoint.logical_attempt == 0 for checkpoint in checkpoints)
+
+
+@pytest.mark.asyncio
+async def test_known_final_proposal_failure_keeps_other_completed_outputs_durable(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.proposal_errors[ParticipantSlot.PARTICIPANT_A] = GenerationProviderError(
+        "openai_proposal_failure",
+        "content-free provider failure",
+        retryable=False,
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = repository.current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "openai_proposal_failure"
+    assert {proposal.participant for proposal in failed.final_proposals} == {
+        ParticipantSlot.PARTICIPANT_B,
+        ParticipantSlot.PARTICIPANT_C,
+    }
+    checkpoints = {
+        checkpoint.participant: checkpoint
+        for checkpoint in failed.generation_checkpoints
+        if checkpoint.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+    }
+    assert checkpoints[ParticipantSlot.PARTICIPANT_A].status is GenerationStatus.FAILED
+    assert checkpoints[ParticipantSlot.PARTICIPANT_B].status is GenerationStatus.COMPLETED
+    assert checkpoints[ParticipantSlot.PARTICIPANT_C].status is GenerationStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_final_proposal_recovery_uses_one_successor_call_per_participant(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    clock, ids, _, _, _, openai, repository, _ = dependencies
+    debate_id = ids.new_debate_id()
+    attempt_id = ids.new_attempt_id()
+    accepted_at = clock.now()
+    state = (
+        DebateState.accepted(debate_id, attempt_id, at=accepted_at)
+        .transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
+        .transition_to(DebatePhase.COLLECTING_INITIAL_OPINIONS, at=clock.now())
+        .transition_to(DebatePhase.DISCUSSING, at=clock.now())
+        .transition_to(DebatePhase.COLLECTING_FINAL_PROPOSALS, at=clock.now())
+    )
+    old_lease = LeaseGrant(
+        owner_id="worker-old",
+        slot=0,
+        fencing_token=10,
+        expires_at=state.updated_at + timedelta(seconds=60),
+    )
+    checkpoints = tuple(
+        GenerationCheckpoint.planned(
+            phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+            participant=participant,
+            at=state.updated_at,
+        ).claim(lease=old_lease, at=clock.now())
+        for participant in PARTICIPANTS
+    )
+    snapshot = DebateSnapshot(
+        state=state,
+        question="question",
+        requester_id="requester",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
+        guild_id="guild",
+        channel_id="channel",
+        created_at=accepted_at,
+        attempt_created_at=accepted_at,
+        starter_message_id="101",
+        thread_id="102",
+        control_panel_message_id="103",
+        evidence=EvidenceBundle(),
+        initial_opinions=tuple(
+            InitialOpinion(participant, "summary", "proposal") for participant in PARTICIPANTS
+        ),
+        generation_checkpoints=checkpoints,
+    )
+    await repository.create(snapshot, operation_id="recover-proposals", lease_owner="worker-1")
+    app = make_application(dependencies)
+
+    await app.run_debate(debate_id)
+
+    completed = repository.current[debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    recovered = tuple(
+        checkpoint
+        for checkpoint in completed.generation_checkpoints
+        if checkpoint.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+    )
+    assert len(recovered) == 3
+    assert all(checkpoint.status is GenerationStatus.COMPLETED for checkpoint in recovered)
+    assert all(checkpoint.logical_attempt == 2 for checkpoint in recovered)
+    assert set(openai.proposal_calls) == set(PARTICIPANTS)
 
 
 @pytest.mark.asyncio
@@ -1388,7 +1609,7 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
     await app.resume_recoverable()
 
     assert repository.current[accepted.debate_id].state.phase is DebatePhase.COMPLETED
-    assert len(outbox_recovery.calls) == 3
+    assert len(outbox_recovery.calls) == 4
     assert outbox_recovery.calls[0].state.recovery_state is RecoveryState.CHECKPOINTED
     assert outbox_recovery.calls[1].terminal_delivery is not None
     assert MetricEvent.RESUMED in {event for event, _ in dependencies[2].events}
@@ -1601,6 +1822,9 @@ async def test_delivery_preflight_failure_stops_before_the_provider_call(
         (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
         (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
         (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
+        (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
+        (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
+        (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
         (DiscordBotSlot.MODERATOR, "guild", "102"),
     ]
 
@@ -1736,7 +1960,7 @@ async def test_bounded_delivery_reconciles_before_abandonment(
     assert completed.state.phase is DebatePhase.COMPLETED
     assert isinstance(completed.terminal_delivery, PhaseDeliveryPlan)
     assert completed.terminal_delivery.status is PhaseDeliveryStatus.DELIVERED
-    assert len(recovery.calls) == 5
+    assert len(recovery.calls) == 7
     terminating = recovery.calls[-1].terminal_delivery
     assert isinstance(terminating, PhaseDeliveryPlan)
     assert terminating.status is PhaseDeliveryStatus.TERMINATING
@@ -1908,7 +2132,7 @@ async def test_typed_outbox_transaction_conflict_retries_without_waiting_for_rec
     completed = dependencies[6].current[accepted.debate_id]
     assert completed.state.phase is DebatePhase.COMPLETED
     assert completed.terminal_delivery_complete
-    assert len(outbox_recovery.calls) == 4
+    assert len(outbox_recovery.calls) == 5
     assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY in {
         event for event, _ in dependencies[2].events
     }

@@ -854,6 +854,27 @@ class DebateSnapshot:
                 for participant in initial_outputs
             ):
                 raise ValueError("initial output requires its completed generation checkpoint")
+        final_proposal_checkpoints = {
+            checkpoint.participant: checkpoint
+            for checkpoint in self.generation_checkpoints
+            if checkpoint.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+        }
+        final_proposal_outputs = {proposal.participant for proposal in self.final_proposals}
+        if final_proposal_checkpoints:
+            if any(
+                participant not in final_proposal_outputs
+                for participant, checkpoint in final_proposal_checkpoints.items()
+                if checkpoint.status is GenerationStatus.COMPLETED
+            ):
+                raise ValueError("completed final proposal generation requires its durable output")
+            if any(
+                final_proposal_checkpoints.get(participant) is None
+                or final_proposal_checkpoints[participant].status is not GenerationStatus.COMPLETED
+                for participant in final_proposal_outputs
+            ):
+                raise ValueError(
+                    "final proposal output requires its completed generation checkpoint"
+                )
         delivery = self.terminal_delivery
         if delivery is not None:
             if any(

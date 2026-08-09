@@ -24,6 +24,7 @@ from shittim_chest.application import (
     PanelOperationKind,
     content_sha256,
     nonce_from_uuid7,
+    prepare_final_proposal_outbox_operations,
     prepare_initial_opinion_outbox_operations,
     prepare_outbox_operations,
     prepare_terminal_outbox_operations,
@@ -36,6 +37,7 @@ from shittim_chest.domain import (
     DebatePhase,
     DebateState,
     FinalDecision,
+    FinalProposal,
     InitialOpinion,
     ParticipantSlot,
 )
@@ -134,6 +136,29 @@ def initial_opinion_snapshot() -> DebateSnapshot:
             InitialOpinion(
                 participant,
                 f"summary *{participant.value}*",
+                f"proposal @everyone {participant.value}",
+            )
+            for participant in ParticipantSlot
+        ),
+    )
+
+
+def final_proposal_snapshot() -> DebateSnapshot:
+    snapshot = initial_opinion_snapshot()
+    state = snapshot.state.transition_to(
+        DebatePhase.DISCUSSING,
+        at=NOW + timedelta(seconds=3),
+    ).transition_to(
+        DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        at=NOW + timedelta(seconds=4),
+    )
+    return replace(
+        snapshot,
+        state=state,
+        final_proposals=tuple(
+            FinalProposal(
+                participant,
+                f"title *{participant.value}*",
                 f"proposal @everyone {participant.value}",
             )
             for participant in ParticipantSlot
@@ -325,6 +350,51 @@ def test_prepare_initial_opinions_rejects_wrong_phase_context_and_oversized_outp
             snapshot=replace(
                 snapshot,
                 initial_opinions=(oversized, *snapshot.initial_opinions[1:]),
+            ),
+            created_at=NOW,
+        )
+
+
+def test_prepare_final_proposals_binds_three_bots_reserved_order_and_stable_nonces() -> None:
+    snapshot = final_proposal_snapshot()
+
+    operations = prepare_final_proposal_outbox_operations(snapshot=snapshot, created_at=NOW)
+    replay = prepare_final_proposal_outbox_operations(snapshot=snapshot, created_at=NOW)
+
+    assert operations == replay
+    assert tuple(operation.bot_slot for operation in operations) == (
+        DiscordBotSlot.PARTICIPANT_A,
+        DiscordBotSlot.PARTICIPANT_B,
+        DiscordBotSlot.PARTICIPANT_C,
+    )
+    assert tuple(operation.delivery_sequence for operation in operations) == (100, 108, 116)
+    assert all(operation.phase is DebatePhase.SELECTING_WINNER for operation in operations)
+    assert all(operation.plan_id == "final-proposals" for operation in operations)
+    assert len({operation.nonce for operation in operations}) == 3
+    assert all(len(operation.nonce) == 22 for operation in operations)
+    assert all("@everyone" in operation.content for operation in operations)
+    assert all("\\*" in operation.content for operation in operations)
+
+
+def test_prepare_final_proposals_rejects_wrong_phase_and_oversized_output() -> None:
+    snapshot = final_proposal_snapshot()
+    with pytest.raises(ValueError, match="generation phase"):
+        prepare_final_proposal_outbox_operations(
+            snapshot=replace(
+                snapshot,
+                state=snapshot.state.transition_to(
+                    DebatePhase.SELECTING_WINNER,
+                    at=NOW + timedelta(seconds=5),
+                ),
+            ),
+            created_at=NOW,
+        )
+    oversized = replace(snapshot.final_proposals[0], proposal="x" * 18_000)
+    with pytest.raises(ValueError, match="reserved delivery sequence"):
+        prepare_final_proposal_outbox_operations(
+            snapshot=replace(
+                snapshot,
+                final_proposals=(oversized, *snapshot.final_proposals[1:]),
             ),
             created_at=NOW,
         )
