@@ -223,9 +223,9 @@ def test_explicit_entry_timestamp_includes_bootstrap_time_in_budget() -> None:
 
 
 def test_deadline_budget_reserves_sdk_unwind_and_api_response_time() -> None:
-    assert pytest.approx(1.2) == DISCORD_INGRESS_SOFT_DEADLINE_SECONDS
+    assert pytest.approx(2.0) == DISCORD_INGRESS_SOFT_DEADLINE_SECONDS
     assert pytest.approx(0.4) == DISCORD_INGRESS_MAX_ACTIVE_SDK_CALL_SECONDS
-    assert pytest.approx(1.4) == DISCORD_INGRESS_RESPONSE_MARGIN_SECONDS
+    assert pytest.approx(0.6) == DISCORD_INGRESS_RESPONSE_MARGIN_SECONDS
     assert pytest.approx(0.1) == DISCORD_INGRESS_SDK_GATE_LEAD_SECONDS
     assert pytest.approx(DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS) == (
         DISCORD_INGRESS_SOFT_DEADLINE_SECONDS
@@ -242,7 +242,7 @@ def test_bootstrap_elapsed_time_exhausts_budget_before_application_call() -> Non
             FakeBoundary(DiscordHttpReception(interaction=operation())),
         ),
         application=lambda: cast(DiscordIngressApplication, application),
-        clock=cast(Clock, FixedClock(NOW + timedelta(seconds=1.21))),
+        clock=cast(Clock, FixedClock(NOW + timedelta(seconds=2.01))),
     )
 
     with pytest.raises(DiscordVerifiedIngressFailure) as caught:
@@ -269,7 +269,7 @@ def test_synchronous_application_factory_time_is_inside_entry_budget() -> None:
         application=load,
         clock=cast(
             Clock,
-            SequenceClock(NOW, NOW + timedelta(seconds=1.21)),
+            SequenceClock(NOW, NOW + timedelta(seconds=2.01)),
         ),
     )
 
@@ -362,8 +362,9 @@ def test_lambda_entry_captures_time_before_handler_build(
             event: object,
             *,
             received_at: datetime,
+            timings: object,
         ) -> dict[str, object]:
-            del event
+            del event, timings
             events.append("handle")
             assert received_at == NOW
             return {"statusCode": 200}
@@ -389,8 +390,9 @@ def test_snapstart_restore_and_warm_invocations_emit_content_free_timing(
             event: object,
             *,
             received_at: datetime,
+            timings: object,
         ) -> dict[str, object]:
-            del event, received_at
+            del event, received_at, timings
             return {"statusCode": 200}
 
     timestamps = iter((1_000_000_000, 1_125_000_000, 2_000_000_000, 2_050_000_000))
@@ -406,6 +408,42 @@ def test_snapstart_restore_and_warm_invocations_emit_content_free_timing(
 
     assert "invocation_kind=restore duration_ms=125" in caplog.text
     assert "invocation_kind=warm duration_ms=50" in caplog.text
+    assert "private question" not in caplog.text
+    assert "signature" not in caplog.text
+    assert "token" not in caplog.text
+
+
+def test_success_timing_reports_content_free_stage_durations(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    application = FakeApplication(IngressOutcome.STARTING)
+    handler = DiscordIngressLambda(
+        boundary=cast(
+            DiscordHttpBoundary,
+            FakeBoundary(DiscordHttpReception(interaction=operation())),
+        ),
+        application=lambda: cast(DiscordIngressApplication, application),
+        clock=cast(Clock, FixedClock(NOW)),
+    )
+    timestamps = iter(value * 1_000_000 for value in (0, 10, 20, 30, 40, 50, 70, 80, 90, 100))
+    monkeypatch.setattr(ingress_module, "_first_invocation", False)
+    monkeypatch.setattr(ingress_module, "SystemClock", lambda: FixedClock(NOW))
+    monkeypatch.setattr(ingress_module, "_get_handler", lambda: handler)
+    monkeypatch.setattr(ingress_module.time, "monotonic_ns", lambda: next(timestamps))
+    caplog.set_level(logging.INFO)
+
+    response = ingress_module.lambda_handler(
+        {"body": "private question, signature, and token"},
+        object(),
+    )
+
+    assert response["statusCode"] == 200
+    assert (
+        "discord_ingress_timing invocation_kind=warm duration_ms=100 "
+        "boundary_ms=10 application_prepare_ms=10 durable_acceptance_ms=20 "
+        "response_build_ms=10"
+    ) in caplog.text
     assert "private question" not in caplog.text
     assert "signature" not in caplog.text
     assert "token" not in caplog.text
@@ -454,8 +492,14 @@ def test_failure_log_contains_only_category_and_request_id(
         aws_request_id = "request-id"
 
     class FailingHandler:
-        def handle(self, event: object, *, received_at: datetime) -> dict[str, object]:
-            del event, received_at
+        def handle(
+            self,
+            event: object,
+            *,
+            received_at: datetime,
+            timings: object,
+        ) -> dict[str, object]:
+            del event, received_at, timings
             raise RepositoryUnavailable()
 
     monkeypatch.setattr(
