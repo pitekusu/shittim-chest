@@ -1,6 +1,6 @@
 # Design document mirror
 
-The 18 project documents in this directory are a public, one-way mirror of the
+The 20 project documents in this directory are a public, one-way mirror of the
 operator's canonical Obsidian notes. They include requirements, design, and the
 append-only implementation/test evidence record. The local Vault path is
 intentionally not stored in this public repository.
@@ -26,8 +26,8 @@ python tools/sync_docs.py --write --source "$SHITTIM_DOCS_SOURCE"
 python tools/sync_docs.py --check --source "$SHITTIM_DOCS_SOURCE"
 ```
 
-The synchronization tool requires the 15 approved root Markdown filenames and
-the exact nested directory with its three approved files (18 documents total).
+The synchronization tool requires the 17 approved root Markdown filenames and
+the exact nested directory with its three approved files (20 documents total).
 It rejects missing or unexpected entries, symlinks, representative credentials,
 Discord snowflakes, absolute home paths, and email addresses, and compares file
 bytes without rewriting Markdown formatting. Production identifiers and persona
