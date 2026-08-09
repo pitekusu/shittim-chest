@@ -138,11 +138,15 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - 初回意見だけが表示される状態を明示的なprogressive rolloutとして受け入れる。
 - local実装では、3 Botのthread／Guild／permission preflight後に3件を並列生成し、結果ごとにoutputとcheckpointを同じfenced writeで保存する。全3件保存後だけPhaseDeliveryPlanとOutbox v2を一括stageし、participant-a／b／cの順で全件SENTを確認してからDISCUSSINGへ進む。
 - 実装Draft PRは`#171`。focused application test 100件、DynamoDB Localを含むfull pytest 1,830件により、participant Bot所有、delivery_sequence 0／8／16、22文字の再現可能nonce、結果ごとの永続化、successor leaseでの第2 logical call、3回目のlogical call禁止、active leaseを保持したphase finalizeを確認した。
-- canonical CI run `31318794695`の同一測定で得たproduction／break-glassの両config digestへbaselineを一括更新した。両SBOMにfixable High／Criticalはなく、canonical risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。Production Releaseとlive acceptanceは未実施である。
+- canonical CI run `31318794695`の同一測定で得たproduction／break-glassの両config digestへbaselineを一括更新した。両SBOMにfixable High／Criticalはなく、canonical risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
+- Production Release run `31320074255`はmain SHA `b5fd10cf89c2780c83423dc8e5c45f1ad83d0d68`で成功した。live acceptanceでは、利用者が初回意見3件のBot所有、participant-a／b／c順、重複なしを確認した。scale-to-zeroの追加確認は利用者側で実施するため、この記録ではCodexによる確認済みとは扱わない。
 
 ### PR-B: 最終案
 
 - 同じprimitiveを変更せず、最終案3件を追加する。
+- local実装では、`COLLECTING_FINAL_PROPOSALS`でparticipantごとのGenerationCheckpointを用い、3 Botのdelivery preflight後に3件を並列生成する。各結果はcheckpoint完了と同じfenced writeで個別保存し、全3件がdurableになった後だけ`final-proposals`のPhaseDeliveryPlanとOutbox v2をstageする。
+- Discord配送はparticipant-a／b／cの順、固定delivery_sequence 100／108／116から開始し、1人最大8 chunks、phase全体最大24 operationsとする。全件SENT後だけ`SELECTING_WINNER`へ進み、provider失敗、participant不一致、preflight失敗、2回のlogical call消費では既存のbounded failureへ収束する。
+- focused application test 107件、DynamoDB Local repository test 29件、DynamoDB Localを含むfull pytest 1,838件で、参加者Bot所有、reserved sequence、22文字の再現可能nonce、結果ごとの永続化、successor leaseでの第2 logical call、preflight前のprovider call 0、失敗時の成功済みoutput保持、active leaseを保持したphase finalizeを確認した。Production Releaseとlive acceptanceは未実施である。
 
 ### PR-C: 投票
 

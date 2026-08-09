@@ -20,8 +20,10 @@ DISCORD_NONCE_LIMIT = 25
 OUTBOX_CLAIM_SECONDS = 60
 MAX_TERMINAL_OUTBOX_CHUNKS = 20
 MAX_INITIAL_OPINION_CHUNKS = 8
+MAX_FINAL_PROPOSAL_CHUNKS = 8
 MAX_OUTBOX_DELIVERY_ATTEMPTS = 3
 INITIAL_OPINION_DELIVERY_SEQUENCE_START = 0
+FINAL_PROPOSAL_DELIVERY_SEQUENCE_START = 100
 COMPLETED_DELIVERY_SEQUENCE_START = 300
 FAILED_DELIVERY_SEQUENCE_START = 900
 CANCELLED_DELIVERY_SEQUENCE_START = 910
@@ -603,6 +605,69 @@ def prepare_initial_opinion_outbox_operations(
                 created_at=created_at,
                 record_schema_version=2,
                 phase=DebatePhase.DISCUSSING,
+                plan_id=plan_id,
+                delivery_sequence_start=sequence_start,
+            )
+        )
+    return tuple(operations)
+
+
+def prepare_final_proposal_outbox_operations(
+    *,
+    snapshot: DebateSnapshot,
+    created_at: datetime,
+) -> tuple[OutboxOperation, ...]:
+    """Build the ordered participant-owned delivery for all three final proposals."""
+
+    _require_utc(created_at, label="final proposal delivery creation timestamp")
+    if snapshot.state.phase is not DebatePhase.COLLECTING_FINAL_PROPOSALS:
+        raise ValueError("final proposals can only be delivered from their generation phase")
+    if snapshot.thread_id is None:
+        raise ValueError("final proposal delivery requires a bound Discord thread")
+    proposals = {proposal.participant: proposal for proposal in snapshot.final_proposals}
+    if len(proposals) != len(PARTICIPANTS) or set(proposals) != set(PARTICIPANTS):
+        raise ValueError("final proposal delivery requires each participant exactly once")
+
+    plan_id = "final-proposals"
+    operations: list[OutboxOperation] = []
+    for participant_index, participant in enumerate(PARTICIPANTS):
+        proposal = proposals[participant]
+        bot_slot = DiscordBotSlot(participant.value)
+        content = "\n".join(
+            (
+                "**最終案**",
+                "**タイトル**",
+                _quoted_model_text(proposal.title),
+                "**提案**",
+                _quoted_model_text(proposal.proposal),
+            )
+        )
+        chunks = split_discord_message(content)
+        if len(chunks) > MAX_FINAL_PROPOSAL_CHUNKS:
+            raise ValueError("one final proposal exceeds its reserved delivery sequence range")
+        sequence_start = (
+            FINAL_PROPOSAL_DELIVERY_SEQUENCE_START + participant_index * MAX_FINAL_PROPOSAL_CHUNKS
+        )
+        operations.extend(
+            prepare_outbox_operations(
+                operation_prefix=f"final-proposal-{participant.value}",
+                debate_id=snapshot.state.debate_id,
+                attempt_id=snapshot.state.attempt_id,
+                bot_slot=bot_slot,
+                thread_id=snapshot.thread_id,
+                content=content,
+                nonce_sources=tuple(
+                    _derived_uuid7(
+                        snapshot.state.attempt_id,
+                        phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                        bot_slot=bot_slot,
+                        sequence=sequence,
+                    )
+                    for sequence in range(len(chunks))
+                ),
+                created_at=created_at,
+                record_schema_version=2,
+                phase=DebatePhase.SELECTING_WINNER,
                 plan_id=plan_id,
                 delivery_sequence_start=sequence_start,
             )
