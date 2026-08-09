@@ -130,6 +130,7 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - GenerationCheckpoint、Outbox v2、ABANDONED、global ordering、bounded deadline、sanitizerを実装する。
 - 現行の最終決定生成・terminal deliveryへ適用し、新しい途中投稿はまだ有効化しない。
 - 通常討論が従来どおり完了・停止することをproductionで確認する。
+- 実装Draft PRは`#165`。新しい途中投稿を有効化せず、最終決定生成とterminal deliveryだけへ安全基盤を適用した。最初のcanonical CIで得た両imageのSBOM、VEX、risk gate、config digestを対応付け、同じ測定の両baselineを一括更新する。Production Releaseとlive acceptanceはmerge後の独立工程とする。
 
 ### PR-A: 初回意見
 

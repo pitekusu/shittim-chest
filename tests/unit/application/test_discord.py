@@ -368,6 +368,125 @@ def test_outbox_v2_abandonment_is_bounded_and_cannot_retain_delivery_state() -> 
         replace(abandoned, next_retry_at=NOW + timedelta(seconds=9))
 
 
+def test_outbox_v2_rejects_incomplete_or_mismatched_delivery_identity() -> None:
+    prepared = prepare_terminal_outbox_operations(
+        snapshot=terminal_snapshot(),
+        target_phase=DebatePhase.CANCELLED,
+        created_at=NOW + timedelta(seconds=7),
+    )[0]
+
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, phase=None)
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, plan_id=None)
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, delivery_sequence=None)
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, deadline_at=None)
+    with pytest.raises(ValueError, match="cannot contain v2 delivery fields"):
+        replace(prepared, record_schema_version=1)
+    with pytest.raises(ValueError, match="abandonment cannot precede"):
+        replace(
+            prepared,
+            status=OutboxStatus.ABANDONED,
+            abandoned_at=NOW,
+            abandon_reason=DeliveryAbandonReason.CANCELLED,
+        )
+    with pytest.raises(ValueError, match="timestamp and reason"):
+        replace(prepared, status=OutboxStatus.ABANDONED)
+
+
+def test_outbox_rejects_persisted_hash_schema_deadline_and_result_conflicts() -> None:
+    legacy = outbox()
+    v2 = prepare_terminal_outbox_operations(
+        snapshot=terminal_snapshot(),
+        target_phase=DebatePhase.CANCELLED,
+        created_at=NOW + timedelta(seconds=7),
+    )[0]
+
+    with pytest.raises(ValueError, match="timezone-aware UTC"):
+        replace(legacy, created_at=NOW.replace(tzinfo=None))
+    with pytest.raises(ValueError, match="must match the UTF-8"):
+        replace(legacy, content_hash="a" * 64)
+    with pytest.raises(ValueError, match="unsupported outbox"):
+        replace(legacy, record_schema_version=3)
+    with pytest.raises(ValueError, match="delivery sequence"):
+        replace(v2, delivery_sequence=True)
+    with pytest.raises(ValueError, match="exactly 15 minutes"):
+        replace(v2, deadline_at=v2.created_at + timedelta(minutes=14))
+    with pytest.raises(ValueError, match="only an abandoned"):
+        replace(legacy, abandon_reason=DeliveryAbandonReason.CANCELLED)
+    with pytest.raises(ValueError, match="positive delivery attempt"):
+        replace(
+            legacy,
+            status=OutboxStatus.SENT,
+            message_id=MESSAGE_ID,
+            sent_at=NOW + timedelta(seconds=1),
+        )
+    with pytest.raises(ValueError, match="only outbox v2"):
+        replace(
+            legacy,
+            status=OutboxStatus.ABANDONED,
+            abandoned_at=NOW + timedelta(seconds=1),
+            abandon_reason=DeliveryAbandonReason.CANCELLED,
+        )
+
+
+def test_terminal_delivery_rejects_invalid_target_content_and_bounds() -> None:
+    source = terminal_snapshot()
+
+    with pytest.raises(ValueError, match="active attempt"):
+        prepare_terminal_outbox_operations(
+            snapshot=replace(
+                source,
+                state=source.state.transition_to(
+                    DebatePhase.CANCELLED,
+                    at=NOW + timedelta(seconds=8),
+                ),
+            ),
+            target_phase=DebatePhase.CANCELLED,
+            created_at=NOW + timedelta(seconds=9),
+        )
+    with pytest.raises(ValueError, match="bound Discord thread"):
+        prepare_terminal_outbox_operations(
+            snapshot=replace(source, thread_id=None),
+            target_phase=DebatePhase.CANCELLED,
+            created_at=NOW + timedelta(seconds=8),
+        )
+    with pytest.raises(ValueError, match="completed delivery requires"):
+        prepare_terminal_outbox_operations(
+            snapshot=replace(source, final_decision=None),
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW + timedelta(seconds=8),
+        )
+    with pytest.raises(ValueError, match="completed delivery requires"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW + timedelta(seconds=8),
+            error_code="provider_failed",
+        )
+    with pytest.raises(ValueError, match="failed delivery requires"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.FAILED,
+            created_at=NOW + timedelta(seconds=8),
+        )
+    with pytest.raises(ValueError, match="cancelled delivery cannot"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.CANCELLED,
+            created_at=NOW + timedelta(seconds=8),
+            error_code="provider_failed",
+        )
+    with pytest.raises(ValueError, match="target must be"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.DISCUSSING,
+            created_at=NOW + timedelta(seconds=8),
+        )
+
+
 def test_terminal_renderer_preserves_quotes_and_escapes_across_chunk_boundaries() -> None:
     source = replace(
         terminal_snapshot(),
@@ -400,3 +519,35 @@ def test_model_display_sanitizer_escapes_complete_discord_markdown_surface() -> 
     assert sanitize_discord_model_text(r"\\`*_{}[]()<>#+-.!|>~=") == (
         r"\\\\\`\*\_\{\}\[\]\(\)\<\>\#\+\-\.\!\|\>\~\="
     )
+
+
+def test_terminal_renderer_preserves_intentional_blank_quoted_lines() -> None:
+    source = replace(
+        terminal_snapshot(),
+        final_decision=FinalDecision(
+            ParticipantSlot.PARTICIPANT_B,
+            "first\n\nthird",
+            (),
+            (),
+        ),
+    )
+
+    operation = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW + timedelta(seconds=7),
+    )[0]
+
+    assert "> first\n>\n> third" in operation.content
+    with pytest.raises(ValueError, match="must not be empty"):
+        sanitize_discord_model_text(" \t\r\n")
+
+
+def test_panel_custom_id_rejects_invalid_action_and_non_uuid_attempt() -> None:
+    debate_id = DebateId.new()
+
+    with pytest.raises(ValueError, match="invalid panel custom ID"):
+        PanelCustomId.parse(f"shittim:v1:{debate_id}:operation:unknown")
+    invalid = PanelCustomId(debate_id, "z" * 32 + "c", PanelAction.CANCEL)
+    with pytest.raises(ValueError, match="does not contain a UUIDv7"):
+        invalid.expected_attempt_id()
