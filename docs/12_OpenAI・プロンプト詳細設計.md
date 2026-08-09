@@ -29,10 +29,10 @@ HTTP Interactionから受け取ったInteraction tokenはOpenAIへ送らず、Dy
 | Phase | reasoning | `max_output_tokens` | application文字上限 | request deadline |
 |---|---|---:|---:|---:|
 | Evidence整理 | medium | 1,200 | 4,000 | 60秒 |
-| 初回意見 | medium | 1,200 | 1,600 | 60秒 |
-| 最終案 | medium | 1,600 | 2,000 | 60秒 |
-| 投票 | low | 800 | 理由500 | 45秒 |
-| 決定事項 | medium | 1,200 | 2,000 | 60秒 |
+| 初回意見 | high | 1,200 | 1,600 | 60秒 |
+| 最終案 | high | 1,600 | 2,000 | 60秒 |
+| 投票 | medium | 800 | 理由500 | 45秒 |
+| 決定事項 | high | 1,200 | 2,000 | 60秒 |
 
 接続5秒、書込み30秒、pool5秒を初期値とする。retryable transport errorはSDK既定retryを含め最大3 attemptかつsession残時間内に限定する。認証、権限、model不存在、validation、安全拒否はretryしない。
 

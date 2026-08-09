@@ -159,6 +159,7 @@ async def test_required_search_persists_digest_sources_and_safe_request_shape() 
     assert request["tool_choice"] == "required"
     assert request["include"] == ["web_search_call.action.sources"]
     assert request["max_tool_calls"] == 4
+    assert request["reasoning"] == {"effort": "medium"}
     assert request["store"] is False
     assert observer.usages[0].operation == "evidence_search"
 
