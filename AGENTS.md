@@ -125,6 +125,11 @@ python tools/sync_docs.py --check --source "$SHITTIM_DOCS_SOURCE"
 - Never push directly to `main`.
 - Merge through a PR with squash merge only.
 - Confirm required checks and CodeQL before merge.
+- Before merging a PR that changes the image build context, reread the two-phase image baseline
+  gate in `docs/15_*`. Treat an initial `grype` failure caused only by the expected config-digest
+  baseline mismatch as the measurement phase: use that run's artifacts to verify both images and
+  update both baselines in the same PR, then require a new required-CI run. Never rerun the failed
+  job or merge with the old baseline.
 - Prefer `gh run watch <run-id> --exit-status --interval 60` for a GitHub Actions run.
 - Use `gh pr checks <pr> --watch --interval 60` when the whole PR check set must be monitored.
 - Use one watcher per run; do not add a second watcher or a custom duplicate polling loop.
