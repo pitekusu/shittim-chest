@@ -220,7 +220,7 @@ class OpenAIWebEvidenceService:
                     text_format=EvidenceDigestOutputV1,
                     include=["web_search_call.action.sources"],
                     max_output_tokens=1_200,
-                    reasoning={"effort": "low"},
+                    reasoning={"effort": "medium"},
                     store=False,
                     tools=[{"type": "web_search", "search_context_size": "medium"}],
                     tool_choice="required",

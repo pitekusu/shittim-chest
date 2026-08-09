@@ -241,8 +241,12 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
         assert "previous_response_id" not in request
         assert "OpenAI-Beta" not in headers
         assert "test-key" not in json.dumps(request)
-    assert server.requests[2]["reasoning"] == {"effort": "low"}
-    assert server.requests[0]["reasoning"] == {"effort": "medium"}
+    assert [request["reasoning"] for request in server.requests] == [
+        {"effort": "high"},
+        {"effort": "high"},
+        {"effort": "medium"},
+        {"effort": "high"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -564,8 +568,8 @@ def test_config_and_persona_prompts_fail_closed() -> None:
 @pytest.mark.parametrize(
     ("policy", "expected_model", "expected_reasoning"),
     [
-        (TERRA_STANDARD, "gpt-5.6-terra", {"effort": "medium"}),
-        (LUNA_PRO, "gpt-5.6-luna", {"effort": "medium", "mode": "pro"}),
+        (TERRA_STANDARD, "gpt-5.6-terra", {"effort": "high"}),
+        (LUNA_PRO, "gpt-5.6-luna", {"effort": "high", "mode": "pro"}),
     ],
 )
 async def test_comparison_policies_have_explicit_request_shapes(
