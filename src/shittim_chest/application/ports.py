@@ -770,6 +770,13 @@ class DebateRepository(Protocol):
         updated: DebateSnapshot,
     ) -> DebateSnapshot: ...
 
+    async def finalize_phase_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot: ...
+
     async def terminate_terminal_delivery(
         self,
         *,

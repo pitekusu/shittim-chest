@@ -23,6 +23,7 @@ from shittim_chest.domain import (
     DebateId,
     DebatePhase,
     DebateState,
+    InitialOpinion,
     ParticipantSlot,
 )
 
@@ -63,6 +64,49 @@ def test_panel_refresh_state_is_derived_from_durable_delivery_fields() -> None:
     assert delivered.panel_refresh_state is PanelRefreshState.DELIVERED
     assert abandoned.panel_refresh_state is PanelRefreshState.ABANDONED
     assert abandoned.panel_refresh_pending is False
+
+
+def test_initial_generation_checkpoint_and_output_must_settle_together() -> None:
+    source = snapshot()
+    collecting_state = source.state.transition_to(
+        DebatePhase.PREPARING_EVIDENCE,
+        at=NOW + timedelta(seconds=1),
+    ).transition_to(
+        DebatePhase.COLLECTING_INITIAL_OPINIONS,
+        at=NOW + timedelta(seconds=2),
+    )
+    lease = LeaseGrant(
+        owner_id="worker",
+        slot=0,
+        fencing_token=1,
+        expires_at=NOW + timedelta(minutes=1),
+    )
+    planned = GenerationCheckpoint.planned(
+        phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+        participant=ParticipantSlot.PARTICIPANT_A,
+        at=NOW + timedelta(seconds=2),
+    )
+    completed = planned.claim(lease=lease, at=NOW + timedelta(seconds=3)).complete(
+        lease=lease,
+        at=NOW + timedelta(seconds=4),
+    )
+    with pytest.raises(ValueError, match="requires its durable output"):
+        replace(
+            source,
+            state=collecting_state,
+            lease=lease,
+            generation_checkpoints=(completed,),
+        )
+    with pytest.raises(ValueError, match="requires its completed generation checkpoint"):
+        replace(
+            source,
+            state=collecting_state,
+            lease=lease,
+            initial_opinions=(
+                InitialOpinion(ParticipantSlot.PARTICIPANT_A, "summary", "proposal"),
+            ),
+            generation_checkpoints=(planned,),
+        )
 
 
 def test_panel_refresh_failure_requires_timestamp_code_and_current_requirement() -> None:

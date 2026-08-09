@@ -835,6 +835,25 @@ class DebateSnapshot:
                     and self.final_decision is not None
                 ):
                     raise ValueError("failed generation cannot retain a final decision")
+        initial_checkpoints = {
+            checkpoint.participant: checkpoint
+            for checkpoint in self.generation_checkpoints
+            if checkpoint.phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
+        }
+        initial_outputs = {opinion.participant for opinion in self.initial_opinions}
+        if initial_checkpoints:
+            if any(
+                participant not in initial_outputs
+                for participant, checkpoint in initial_checkpoints.items()
+                if checkpoint.status is GenerationStatus.COMPLETED
+            ):
+                raise ValueError("completed initial generation requires its durable output")
+            if any(
+                initial_checkpoints.get(participant) is None
+                or initial_checkpoints[participant].status is not GenerationStatus.COMPLETED
+                for participant in initial_outputs
+            ):
+                raise ValueError("initial output requires its completed generation checkpoint")
         delivery = self.terminal_delivery
         if delivery is not None:
             if any(

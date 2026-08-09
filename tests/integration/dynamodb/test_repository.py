@@ -35,6 +35,7 @@ from shittim_chest.application import (
     PhaseDeliveryPlan,
     StatusMessageState,
     StatusPublicationState,
+    prepare_initial_opinion_outbox_operations,
     prepare_terminal_outbox_operations,
 )
 from shittim_chest.application.ports import (
@@ -52,6 +53,7 @@ from shittim_chest.domain import (
     DebatePhase,
     DebateState,
     FinalDecision,
+    InitialOpinion,
     ParticipantSlot,
 )
 
@@ -202,6 +204,128 @@ async def finalize_terminal_delivery(
         terminal_delivery=plan.complete(at=terminal_at),
     )
     return await debates.finalize_terminal(expected=persisted, updated=terminal)
+
+
+@pytest.mark.asyncio
+async def test_initial_opinion_delivery_stages_and_finalizes_without_releasing_the_lease(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await debates.create(
+        new_snapshot(),
+        operation_id="initial-opinion-accept",
+        lease_owner="worker-1",
+    )
+    bound = await debates.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            starter_message_id="101",
+            thread_id="102",
+            control_panel_message_id="103",
+        ),
+    )
+    preparing = await debates.replace(
+        expected=bound,
+        updated=replace(
+            bound,
+            state=bound.state.transition_to(
+                DebatePhase.PREPARING_EVIDENCE,
+                at=NOW + timedelta(seconds=1),
+            ),
+        ),
+    )
+    collecting = await debates.replace(
+        expected=preparing,
+        updated=replace(
+            preparing,
+            state=preparing.state.transition_to(
+                DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                at=NOW + timedelta(seconds=2),
+            ),
+            initial_opinions=tuple(
+                InitialOpinion(participant, "summary", "proposal")
+                for participant in ParticipantSlot
+            ),
+        ),
+    )
+    staged_at = NOW + timedelta(seconds=3)
+    operations = prepare_initial_opinion_outbox_operations(
+        snapshot=collecting,
+        created_at=staged_at,
+    )
+    plan = PhaseDeliveryPlan(
+        plan_id="initial-opinions",
+        source_phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+        target_phase=DebatePhase.DISCUSSING,
+        operation_ids=tuple(operation.operation_id for operation in operations),
+        content_hashes=tuple(operation.content_hash for operation in operations),
+        delivery_sequences=tuple(
+            operation.delivery_sequence
+            for operation in operations
+            if operation.delivery_sequence is not None
+        ),
+        staged_at=staged_at,
+        deadline_at=staged_at + timedelta(minutes=15),
+    )
+    staged = await debates.stage_terminal_delivery(
+        expected=collecting,
+        staged=replace(
+            collecting,
+            state=replace(collecting.state, updated_at=staged_at),
+            terminal_delivery=plan,
+        ),
+        operations=operations,
+    )
+    finalized_at = NOW + timedelta(seconds=10)
+    finalized_snapshot = replace(
+        staged,
+        state=staged.state.transition_to(DebatePhase.DISCUSSING, at=finalized_at),
+        terminal_delivery=None,
+    )
+    with pytest.raises(RepositoryTransactionConflict):
+        await debates.finalize_phase_delivery(
+            expected=staged,
+            updated=finalized_snapshot,
+        )
+
+    for index, operation in enumerate(operations):
+        claimed = await outbox.claim(
+            expected=staged,
+            operation_id=operation.operation_id,
+            claim_owner="initial-opinion-publisher",
+            at=staged_at + timedelta(seconds=index + 1),
+        )
+        assert claimed is not None
+        await outbox.mark_sent(
+            expected=staged,
+            operation=claimed,
+            message_id=str(200 + index),
+            at=staged_at + timedelta(seconds=index + 1, microseconds=1),
+        )
+
+    finalized = await debates.finalize_phase_delivery(
+        expected=staged,
+        updated=finalized_snapshot,
+    )
+    assert finalized.state.phase is DebatePhase.DISCUSSING
+    assert finalized.terminal_delivery is None
+    assert finalized.lease == staged.lease
+    assert await debates.get(finalized.state.debate_id) == finalized
+    assert await outbox.activity() == OutboxActivity()
+    plan_response = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": f"DEBATE#{staged.state.debate_id}",
+                "SK": f"ATTEMPT#{staged.state.attempt_id}#DELIVERY#initial-opinions",
+            }
+        ),
+        ConsistentRead=True,
+    )
+    assert unmarshal_item(plan_response["Item"])["status"] == "delivered"
 
 
 @pytest.mark.asyncio
