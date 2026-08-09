@@ -147,6 +147,7 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - local実装では、`COLLECTING_FINAL_PROPOSALS`でparticipantごとのGenerationCheckpointを用い、3 Botのdelivery preflight後に3件を並列生成する。各結果はcheckpoint完了と同じfenced writeで個別保存し、全3件がdurableになった後だけ`final-proposals`のPhaseDeliveryPlanとOutbox v2をstageする。
 - Discord配送はparticipant-a／b／cの順、固定delivery_sequence 100／108／116から開始し、1人最大8 chunks、phase全体最大24 operationsとする。全件SENT後だけ`SELECTING_WINNER`へ進み、provider失敗、participant不一致、preflight失敗、2回のlogical call消費では既存のbounded failureへ収束する。
 - focused application test 107件、DynamoDB Local repository test 29件、DynamoDB Localを含むfull pytest 1,838件で、参加者Bot所有、reserved sequence、22文字の再現可能nonce、結果ごとの永続化、successor leaseでの第2 logical call、preflight前のprovider call 0、失敗時の成功済みoutput保持、active leaseを保持したphase finalizeを確認した。Production Releaseとlive acceptanceは未実施である。
+- canonical CI run `31322069591`では、baseline不一致以外のrequired checkとCodeQL 3言語が成功した。同一測定のartifactからproduction config digest `sha256:0de66ace43dd8c8532b49a557b52512723a7f62e0d9bae2cf275750cea5e547e`、break-glass config digest `sha256:7d53e6ed500340b71db9d76f65cd8bd16d142cfdfb4dbd61a30dd94a92299246`を取得し、両baselineを一括更新した。両SBOMはcanonical validatorで有効、fixable High／Criticalは0であり、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
 
 ### PR-C: 投票
 
