@@ -10,6 +10,8 @@ import pytest
 
 from shittim_chest.application import (
     DISCORD_BOT_SLOTS,
+    DebateSnapshot,
+    DeliveryAbandonReason,
     DiscordBotSlot,
     DiscordErrorCode,
     DiscordIdentityConfig,
@@ -23,9 +25,18 @@ from shittim_chest.application import (
     content_sha256,
     nonce_from_uuid7,
     prepare_outbox_operations,
+    prepare_terminal_outbox_operations,
+    sanitize_discord_model_text,
     split_discord_message,
 )
-from shittim_chest.domain import AttemptId, DebateId
+from shittim_chest.domain import (
+    AttemptId,
+    DebateId,
+    DebatePhase,
+    DebateState,
+    FinalDecision,
+    ParticipantSlot,
+)
 
 NOW = datetime(2026, 7, 17, tzinfo=UTC)
 GUILD_ID = "101"
@@ -54,6 +65,44 @@ def outbox() -> OutboxOperation:
         chunk_sequence=0,
         status=OutboxStatus.PREPARED,
         created_at=NOW,
+    )
+
+
+def terminal_snapshot() -> DebateSnapshot:
+    debate_id = DebateId.new()
+    attempt_id = AttemptId.new()
+    state = DebateState.accepted(debate_id, attempt_id, at=NOW)
+    for index, phase in enumerate(
+        (
+            DebatePhase.PREPARING_EVIDENCE,
+            DebatePhase.COLLECTING_INITIAL_OPINIONS,
+            DebatePhase.DISCUSSING,
+            DebatePhase.COLLECTING_FINAL_PROPOSALS,
+            DebatePhase.SELECTING_WINNER,
+            DebatePhase.GENERATING_DECISION,
+        ),
+        1,
+    ):
+        state = state.transition_to(phase, at=NOW + timedelta(seconds=index))
+    return DebateSnapshot(
+        state=state,
+        question="question",
+        requester_id="requester",
+        requester_username="pitekusu",
+        requester_display_name="ぬし",
+        guild_id=GUILD_ID,
+        channel_id=CHANNEL_ID,
+        created_at=NOW,
+        attempt_created_at=NOW,
+        starter_message_id="201",
+        thread_id=THREAD_ID,
+        control_panel_message_id="202",
+        final_decision=FinalDecision(
+            ParticipantSlot.PARTICIPANT_B,
+            "first *line*\r\nsecond",
+            ("@everyone action",),
+            ("careful",),
+        ),
     )
 
 
@@ -143,7 +192,7 @@ def test_message_split_is_deterministic_bounded_and_prefers_paragraphs() -> None
     assert chunks == split_discord_message(content)
     assert len(chunks) >= 3
     assert all(len(chunk) <= 2_000 for chunk in chunks)
-    assert tuple(chunk.split(" ", 1)[0] for chunk in chunks) == tuple(
+    assert tuple(chunk.splitlines()[0] for chunk in chunks) == tuple(
         f"[{index}/{len(chunks)}]" for index in range(1, len(chunks) + 1)
     )
     with pytest.raises(ValueError, match="must not be empty"):
@@ -200,6 +249,8 @@ def test_outbox_and_panel_contracts_reject_invalid_external_identifiers_and_stat
     sent = replace(
         claimed,
         status=OutboxStatus.SENT,
+        claim_owner=None,
+        claim_expires_at=None,
         message_id=MESSAGE_ID,
         sent_at=NOW + timedelta(seconds=1),
     )
@@ -219,12 +270,20 @@ def test_outbox_and_panel_contracts_reject_invalid_external_identifiers_and_stat
         replace(prepared, delivery_attempt=-1)
     with pytest.raises(ValueError, match="owner and expiry"):
         replace(prepared, claim_owner="publisher")
-    with pytest.raises(ValueError, match="requires an owner"):
+    with pytest.raises(ValueError, match="attempted owner"):
         replace(prepared, status=OutboxStatus.CLAIMED)
     with pytest.raises(ValueError, match="requires message ID"):
         replace(prepared, status=OutboxStatus.SENT)
     with pytest.raises(ValueError, match="only a sent"):
         replace(prepared, message_id=MESSAGE_ID)
+    with pytest.raises(ValueError, match="cannot retain a claim"):
+        replace(prepared, claim_owner="publisher", claim_expires_at=NOW)
+    with pytest.raises(ValueError, match=r"unattempted.*retry"):
+        replace(prepared, next_retry_at=NOW + timedelta(seconds=1))
+    with pytest.raises(ValueError, match="retain a retry"):
+        replace(claimed, next_retry_at=NOW + timedelta(seconds=1))
+    with pytest.raises(ValueError, match="retain delivery"):
+        replace(sent, claim_owner="publisher", claim_expires_at=NOW)
 
     panel = PanelOperation(
         operation_id="cancel-operation",
@@ -246,3 +305,249 @@ def test_outbox_and_panel_contracts_reject_invalid_external_identifiers_and_stat
         replace(panel, result_attempt_id=AttemptId.new())
     with pytest.raises(ValueError, match="control panel message"):
         replace(panel, message_id="panel-message")
+
+
+def test_terminal_v2_operations_reserve_global_ranges_and_unique_nonces() -> None:
+    source = terminal_snapshot()
+    completed = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW + timedelta(seconds=7),
+    )
+    failed = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.FAILED,
+        created_at=NOW + timedelta(seconds=7),
+        error_code="provider_failed",
+    )
+    cancelled = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.CANCELLED,
+        created_at=NOW + timedelta(seconds=7),
+    )
+
+    assert completed[0].delivery_sequence == 300
+    assert failed[0].delivery_sequence == 900
+    assert cancelled[0].delivery_sequence == 910
+    assert len({completed[0].nonce, failed[0].nonce, cancelled[0].nonce}) == 3
+    assert all(
+        operation.record_schema_version == 2 for operation in (*completed, *failed, *cancelled)
+    )
+    assert "**最終決定**" in completed[0].content
+    assert "> first \\*line\\*" in completed[0].content
+    assert "> second" in completed[0].content
+    assert "> - @everyone action" in completed[0].content
+
+
+def test_model_display_sanitizer_normalizes_escapes_and_rejects_controls() -> None:
+    assert sanitize_discord_model_text("e\u0301\r\n\t*bold* @everyone") == (
+        "é\n \\*bold\\* @everyone"
+    )
+    for unsafe in ("bad\x00text", "bad\u202etext", "bad\ufdd0text"):
+        with pytest.raises(ValueError, match="forbidden Unicode"):
+            sanitize_discord_model_text(unsafe)
+
+
+def test_outbox_v2_abandonment_is_bounded_and_cannot_retain_delivery_state() -> None:
+    prepared = prepare_terminal_outbox_operations(
+        snapshot=terminal_snapshot(),
+        target_phase=DebatePhase.CANCELLED,
+        created_at=NOW + timedelta(seconds=7),
+    )[0]
+    abandoned = replace(
+        prepared,
+        status=OutboxStatus.ABANDONED,
+        abandoned_at=NOW + timedelta(seconds=8),
+        abandon_reason=DeliveryAbandonReason.CANCELLED,
+    )
+
+    assert abandoned.status is OutboxStatus.ABANDONED
+    with pytest.raises(ValueError, match="exceeds its bound"):
+        replace(prepared, delivery_attempt=4)
+    with pytest.raises(ValueError, match="cannot retain delivery state"):
+        replace(abandoned, next_retry_at=NOW + timedelta(seconds=9))
+
+
+def test_outbox_v2_rejects_incomplete_or_mismatched_delivery_identity() -> None:
+    prepared = prepare_terminal_outbox_operations(
+        snapshot=terminal_snapshot(),
+        target_phase=DebatePhase.CANCELLED,
+        created_at=NOW + timedelta(seconds=7),
+    )[0]
+
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, phase=None)
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, plan_id=None)
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, delivery_sequence=None)
+    with pytest.raises(ValueError, match="requires phase, plan, sequence, and deadline"):
+        replace(prepared, deadline_at=None)
+    with pytest.raises(ValueError, match="cannot contain v2 delivery fields"):
+        replace(prepared, record_schema_version=1)
+    with pytest.raises(ValueError, match="abandonment cannot precede"):
+        replace(
+            prepared,
+            status=OutboxStatus.ABANDONED,
+            abandoned_at=NOW,
+            abandon_reason=DeliveryAbandonReason.CANCELLED,
+        )
+    with pytest.raises(ValueError, match="timestamp and reason"):
+        replace(prepared, status=OutboxStatus.ABANDONED)
+
+
+def test_outbox_rejects_persisted_hash_schema_deadline_and_result_conflicts() -> None:
+    legacy = outbox()
+    v2 = prepare_terminal_outbox_operations(
+        snapshot=terminal_snapshot(),
+        target_phase=DebatePhase.CANCELLED,
+        created_at=NOW + timedelta(seconds=7),
+    )[0]
+
+    with pytest.raises(ValueError, match="timezone-aware UTC"):
+        replace(legacy, created_at=NOW.replace(tzinfo=None))
+    with pytest.raises(ValueError, match="must match the UTF-8"):
+        replace(legacy, content_hash="a" * 64)
+    with pytest.raises(ValueError, match="unsupported outbox"):
+        replace(legacy, record_schema_version=3)
+    with pytest.raises(ValueError, match="delivery sequence"):
+        replace(v2, delivery_sequence=True)
+    with pytest.raises(ValueError, match="exactly 15 minutes"):
+        replace(v2, deadline_at=v2.created_at + timedelta(minutes=14))
+    with pytest.raises(ValueError, match="only an abandoned"):
+        replace(legacy, abandon_reason=DeliveryAbandonReason.CANCELLED)
+    with pytest.raises(ValueError, match="positive delivery attempt"):
+        replace(
+            legacy,
+            status=OutboxStatus.SENT,
+            message_id=MESSAGE_ID,
+            sent_at=NOW + timedelta(seconds=1),
+        )
+    with pytest.raises(ValueError, match="only outbox v2"):
+        replace(
+            legacy,
+            status=OutboxStatus.ABANDONED,
+            abandoned_at=NOW + timedelta(seconds=1),
+            abandon_reason=DeliveryAbandonReason.CANCELLED,
+        )
+
+
+def test_terminal_delivery_rejects_invalid_target_content_and_bounds() -> None:
+    source = terminal_snapshot()
+
+    with pytest.raises(ValueError, match="active attempt"):
+        prepare_terminal_outbox_operations(
+            snapshot=replace(
+                source,
+                state=source.state.transition_to(
+                    DebatePhase.CANCELLED,
+                    at=NOW + timedelta(seconds=8),
+                ),
+            ),
+            target_phase=DebatePhase.CANCELLED,
+            created_at=NOW + timedelta(seconds=9),
+        )
+    with pytest.raises(ValueError, match="bound Discord thread"):
+        prepare_terminal_outbox_operations(
+            snapshot=replace(source, thread_id=None),
+            target_phase=DebatePhase.CANCELLED,
+            created_at=NOW + timedelta(seconds=8),
+        )
+    with pytest.raises(ValueError, match="completed delivery requires"):
+        prepare_terminal_outbox_operations(
+            snapshot=replace(source, final_decision=None),
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW + timedelta(seconds=8),
+        )
+    with pytest.raises(ValueError, match="completed delivery requires"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW + timedelta(seconds=8),
+            error_code="provider_failed",
+        )
+    with pytest.raises(ValueError, match="failed delivery requires"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.FAILED,
+            created_at=NOW + timedelta(seconds=8),
+        )
+    with pytest.raises(ValueError, match="cancelled delivery cannot"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.CANCELLED,
+            created_at=NOW + timedelta(seconds=8),
+            error_code="provider_failed",
+        )
+    with pytest.raises(ValueError, match="target must be"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.DISCUSSING,
+            created_at=NOW + timedelta(seconds=8),
+        )
+
+
+def test_terminal_renderer_preserves_quotes_and_escapes_across_chunk_boundaries() -> None:
+    source = replace(
+        terminal_snapshot(),
+        final_decision=FinalDecision(
+            ParticipantSlot.PARTICIPANT_B,
+            "word " * 1_000 + "a" * 1_971 + "*" * 40,
+            ("action " * 600,),
+            (),
+        ),
+    )
+
+    operations = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW + timedelta(seconds=7),
+    )
+
+    assert len(operations) > 1
+    assert all(len(operation.content) <= 2_000 for operation in operations)
+    for operation in operations:
+        body = operation.content.split("\n", 1)[1]
+        for line in body.splitlines():
+            if "word" in line or "action" in line or "a" * 100 in line or "\\*" in line:
+                assert line.startswith(">")
+                assert not line.startswith("*")
+                assert not line.endswith("\\")
+
+
+def test_model_display_sanitizer_escapes_complete_discord_markdown_surface() -> None:
+    assert sanitize_discord_model_text(r"\\`*_{}[]()<>#+-.!|>~=") == (
+        r"\\\\\`\*\_\{\}\[\]\(\)\<\>\#\+\-\.\!\|\>\~\="
+    )
+
+
+def test_terminal_renderer_preserves_intentional_blank_quoted_lines() -> None:
+    source = replace(
+        terminal_snapshot(),
+        final_decision=FinalDecision(
+            ParticipantSlot.PARTICIPANT_B,
+            "first\n\nthird",
+            (),
+            (),
+        ),
+    )
+
+    operation = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW + timedelta(seconds=7),
+    )[0]
+
+    assert "> first\n>\n> third" in operation.content
+    with pytest.raises(ValueError, match="must not be empty"):
+        sanitize_discord_model_text(" \t\r\n")
+
+
+def test_panel_custom_id_rejects_invalid_action_and_non_uuid_attempt() -> None:
+    debate_id = DebateId.new()
+
+    with pytest.raises(ValueError, match="invalid panel custom ID"):
+        PanelCustomId.parse(f"shittim:v1:{debate_id}:operation:unknown")
+    invalid = PanelCustomId(debate_id, "z" * 32 + "c", PanelAction.CANCEL)
+    with pytest.raises(ValueError, match="does not contain a UUIDv7"):
+        invalid.expected_attempt_id()

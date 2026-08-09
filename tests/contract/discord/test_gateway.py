@@ -113,6 +113,68 @@ async def test_gateway_closes_acceptance_when_one_identity_is_not_ready() -> Non
 
 
 @pytest.mark.asyncio
+async def test_gateway_preflights_exact_thread_permissions_without_a_write() -> None:
+    clients = mocked_clients()
+    moderator = cast(Any, clients[DiscordBotSlot.MODERATOR])
+    member = SimpleNamespace(id=moderator.user.id)
+    guild = SimpleNamespace(id=101, me=member)
+    permissions = SimpleNamespace(
+        view_channel=True,
+        send_messages_in_threads=True,
+        read_message_history=True,
+    )
+    thread = MagicMock(spec=discord.Thread)
+    thread.guild = guild
+    thread.archived = False
+    thread.locked = False
+    thread.permissions_for.return_value = permissions
+    moderator.get_channel.return_value = thread
+    gateway = DiscordPyGateway(clients=clients, config=config())
+
+    assert await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
+    moderator.fetch_channel.assert_not_awaited()
+    thread.permissions_for.assert_called_once_with(member)
+
+    permissions.send_messages_in_threads = False
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
+    permissions.send_messages_in_threads = True
+    thread.archived = True
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_preflight_fails_closed_for_unknown_or_wrong_guild_thread() -> None:
+    clients = mocked_clients()
+    moderator = cast(Any, clients[DiscordBotSlot.MODERATOR])
+    moderator.get_channel.return_value = None
+    moderator.fetch_channel.return_value = None
+    gateway = DiscordPyGateway(clients=clients, config=config())
+
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="not-a-snowflake",
+    )
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
+
+
+@pytest.mark.asyncio
 async def test_supervisor_starts_and_closes_every_client_when_one_exits() -> None:
     clients = mocked_clients()
     blocker = asyncio.Event()

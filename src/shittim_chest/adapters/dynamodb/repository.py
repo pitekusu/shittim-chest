@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     PersistenceFormatError,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
+    deserialize_outbox,
     deserialize_panel_operation,
     deserialize_snapshot,
     ingress_request_sort_key_from_identity,
@@ -41,6 +43,10 @@ from shittim_chest.adapters.dynamodb.serializer import (
 )
 from shittim_chest.adapters.dynamodb.transaction_errors import classified_transaction_conflict
 from shittim_chest.application.discord import (
+    CANCELLED_DELIVERY_SEQUENCE_START,
+    COMPLETED_DELIVERY_SEQUENCE_START,
+    FAILED_DELIVERY_SEQUENCE_START,
+    MAX_TERMINAL_NOTICE_CHUNKS,
     MAX_TERMINAL_OUTBOX_CHUNKS,
     DiscordBotSlot,
     OutboxOperation,
@@ -49,7 +55,14 @@ from shittim_chest.application.discord import (
     PanelOperationKind,
     content_sha256,
 )
-from shittim_chest.application.models import DebateSnapshot, LeaseGrant, TerminalDeliveryPlan
+from shittim_chest.application.models import (
+    DebateSnapshot,
+    DeliveryAbandonReason,
+    LeaseGrant,
+    PhaseDeliveryPlan,
+    PhaseDeliveryStatus,
+    TerminalDeliveryPlan,
+)
 from shittim_chest.application.ports import (
     RepositoryBusy,
     RepositoryClaimLost,
@@ -75,6 +88,7 @@ ACTIVE_ATTEMPT_COUNT_LIMIT = 100_000
 ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION = 1
 DAILY_GUILD_QUOTA = 30
 GLOBAL_LEASE_SLOTS = 3
+MAX_TRANSACTION_BYTES = 4 * 1024 * 1024
 RECOVERABLE_INDEX = "gsi2"
 _JST = ZoneInfo("Asia/Tokyo")
 
@@ -192,6 +206,34 @@ class DynamoDbDebateRepository:
         updated: DebateSnapshot,
     ) -> DebateSnapshot:
         return await asyncio.to_thread(self._finalize_terminal, expected, updated)
+
+    async def terminate_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(
+            self._terminate_terminal_delivery,
+            expected,
+            at,
+            reason,
+        )
+
+    async def abandon_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(
+            self._abandon_terminal_delivery,
+            expected,
+            at,
+            reason,
+        )
 
     async def create_retry(
         self,
@@ -443,7 +485,11 @@ class DynamoDbDebateRepository:
         ]
         for key, item in new_items.items():
             if old_items.get(key) != item:
-                actions.append(self._put(item))
+                actions.append(
+                    self._put_new(item)
+                    if item.get("record_type") == "phase_delivery_plan" and key not in old_items
+                    else self._put(item)
+                )
         if persisted.state.phase.is_terminal:
             actions.append(self._release_slot_action(lease, persisted.state.updated_at))
             actions.append(self._active_attempt_count_action(-1, persisted.state.updated_at))
@@ -526,7 +572,11 @@ class DynamoDbDebateRepository:
         ]
         for key, item in new_items.items():
             if old_items.get(key) != item:
-                actions.append(self._put(item))
+                actions.append(
+                    self._put_new(item)
+                    if item.get("record_type") == "phase_delivery_plan" and key not in old_items
+                    else self._put(item)
+                )
         actions.extend(_put_new_outbox(self._table_name, operation) for operation in operations)
         actions.append(
             outbox_activity_action(
@@ -580,6 +630,234 @@ class DynamoDbDebateRepository:
             raise
         return staged
 
+    def _terminate_terminal_delivery(
+        self,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        plan = expected.terminal_delivery
+        if not isinstance(plan, PhaseDeliveryPlan):
+            raise RepositoryConflict("terminal termination requires a phase delivery plan")
+        if plan.status is PhaseDeliveryStatus.TERMINATING:
+            if plan.abandon_reason is not reason:
+                raise RepositoryConflict("phase delivery is terminating for another reason")
+            return expected
+        if plan.status is not PhaseDeliveryStatus.STAGED or expected.state.phase.is_terminal:
+            raise RepositoryConflict("terminal delivery is not terminable")
+        if expected.lease is None or at < expected.state.updated_at:
+            raise RepositoryConflict("terminal termination requires a current fenced lease")
+        updated = replace(
+            expected,
+            state=replace(expected.state, updated_at=at),
+            terminal_delivery=plan.terminate(reason=reason),
+        )
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(updated))
+        attempt_key = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+        attempt_item = new_items[attempt_tuple]
+        plan_tuple = (
+            f"DEBATE#{expected.state.debate_id}",
+            f"ATTEMPT#{expected.state.attempt_id}#DELIVERY#{plan.plan_id}",
+        )
+        plan_item = new_items.get(plan_tuple)
+        if plan_item is None:
+            raise RepositoryConflict("terminating phase delivery plan was not serialized")
+        actions = [
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=attempt_item,
+                expected=expected,
+                write_at=at,
+            ),
+            self._put_phase_plan(
+                previous=old_items[plan_tuple],
+                updated=plan_item,
+            ),
+        ]
+        try:
+            self._transact(
+                actions,
+                token=_client_token(
+                    ":".join(
+                        (
+                            self._table_name,
+                            "phase-delivery-terminate",
+                            str(expected.state.debate_id),
+                            str(expected.state.attempt_id),
+                            plan.plan_id,
+                            reason.value,
+                            _timestamp(at),
+                        )
+                    )
+                ),
+                cancellation_stage=RepositoryTransactionStage.PHASE_DELIVERY_TERMINATE,
+                cancellation_action_kinds=(
+                    RepositoryTransactionAction.ATTEMPT_CAS,
+                    RepositoryTransactionAction.PHASE_DELIVERY_PLAN,
+                ),
+            )
+        except RepositoryConflict:
+            current = self._load_snapshot(expected.state.debate_id, None)
+            if (
+                current is not None
+                and isinstance(current.terminal_delivery, PhaseDeliveryPlan)
+                and current.terminal_delivery.plan_id == plan.plan_id
+                and current.terminal_delivery.status is PhaseDeliveryStatus.TERMINATING
+                and current.terminal_delivery.abandon_reason is reason
+            ):
+                return current
+            raise
+        return updated
+
+    def _abandon_terminal_delivery(
+        self,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        plan = expected.terminal_delivery
+        if not isinstance(plan, PhaseDeliveryPlan):
+            raise RepositoryConflict("terminal abandonment requires a phase delivery plan")
+        if plan.status is PhaseDeliveryStatus.ABANDONED:
+            if plan.abandon_reason is not reason:
+                raise RepositoryConflict("phase delivery was abandoned for another reason")
+            return expected
+        if plan.status not in {PhaseDeliveryStatus.STAGED, PhaseDeliveryStatus.TERMINATING}:
+            raise RepositoryConflict("phase delivery is already settled")
+        if expected.state.phase.is_terminal or expected.lease is None:
+            raise RepositoryConflict("phase delivery abandonment requires an active fenced attempt")
+        if at < expected.state.updated_at or at < plan.staged_at:
+            raise RepositoryConflict("phase delivery abandonment timestamp moved backwards")
+
+        operation_items = {
+            _text(item, "operation_id"): item
+            for item in self._query_partition(
+                f"DEBATE#{expected.state.debate_id}",
+                consistent=True,
+            )
+            if item.get("record_type") == "outbox"
+            and item.get("attempt_id") == str(expected.state.attempt_id)
+            and item.get("operation_id") in set(plan.operation_ids)
+        }
+        if set(operation_items) != set(plan.operation_ids):
+            raise RepositoryConflict("phase delivery outbox is incomplete")
+        operations = tuple(
+            deserialize_outbox(operation_items[value]) for value in plan.operation_ids
+        )
+        for operation_id, content_hash, delivery_sequence, operation in zip(
+            plan.operation_ids,
+            plan.content_hashes,
+            plan.delivery_sequences,
+            operations,
+            strict=True,
+        ):
+            if (
+                operation.operation_id != operation_id
+                or operation.content_hash != content_hash
+                or operation.delivery_sequence != delivery_sequence
+                or operation.plan_id != plan.plan_id
+                or operation.record_schema_version != 2
+            ):
+                raise RepositoryConflict("phase delivery outbox identity is inconsistent")
+
+        abandoned = plan.abandon(at=at, reason=reason)
+        updated = replace(
+            expected,
+            state=replace(expected.state, updated_at=at),
+            terminal_delivery=abandoned,
+        )
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(updated))
+        attempt_key = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+        plan_tuple = (
+            f"DEBATE#{expected.state.debate_id}",
+            f"ATTEMPT#{expected.state.attempt_id}#DELIVERY#{plan.plan_id}",
+        )
+        plan_item = new_items.get(plan_tuple)
+        if plan_item is None:
+            raise RepositoryConflict("abandoned phase delivery plan was not serialized")
+        actions: list[TransactWriteItemTypeDef] = [
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=new_items[attempt_tuple],
+                expected=expected,
+                write_at=at,
+            ),
+            self._put_phase_plan(
+                previous=old_items[plan_tuple],
+                updated=plan_item,
+            ),
+        ]
+        action_kinds = [
+            RepositoryTransactionAction.ATTEMPT_CAS,
+            RepositoryTransactionAction.PHASE_DELIVERY_PLAN,
+        ]
+        prepared_count = 0
+        claimed_count = 0
+        for operation in operations:
+            if operation.status is OutboxStatus.SENT:
+                continue
+            if operation.status is OutboxStatus.PREPARED:
+                prepared_count += 1
+            elif operation.status is OutboxStatus.CLAIMED:
+                claimed_count += 1
+            else:
+                raise RepositoryConflict("phase delivery operation is already abandoned")
+            actions.append(
+                _abandon_outbox_action(
+                    self._table_name,
+                    operation,
+                    at=at,
+                    reason=reason,
+                )
+            )
+            action_kinds.append(RepositoryTransactionAction.OUTBOX_OPERATION)
+        if prepared_count or claimed_count:
+            actions.append(
+                outbox_activity_action(
+                    table_name=self._table_name,
+                    pending_delta=-prepared_count,
+                    claimed_delta=-claimed_count,
+                    at=at,
+                )
+            )
+            action_kinds.append(RepositoryTransactionAction.OUTBOX_ACTIVITY)
+        _require_transaction_size(actions)
+        try:
+            self._transact(
+                actions,
+                token=_client_token(
+                    ":".join(
+                        (
+                            self._table_name,
+                            "phase-delivery-abandon",
+                            str(expected.state.debate_id),
+                            str(expected.state.attempt_id),
+                            plan.plan_id,
+                            reason.value,
+                            _timestamp(at),
+                        )
+                    )
+                ),
+                cancellation_stage=RepositoryTransactionStage.PHASE_DELIVERY_ABANDON,
+                cancellation_action_kinds=tuple(action_kinds),
+            )
+        except RepositoryConflict:
+            current = self._load_snapshot(expected.state.debate_id, None)
+            if (
+                current is not None
+                and isinstance(current.terminal_delivery, PhaseDeliveryPlan)
+                and current.terminal_delivery.plan_id == plan.plan_id
+                and current.terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
+                and current.terminal_delivery.abandon_reason is reason
+            ):
+                return current
+            raise
+        return updated
+
     def _finalize_terminal(
         self,
         expected: DebateSnapshot,
@@ -607,29 +885,51 @@ class DynamoDbDebateRepository:
         delivery = expected.terminal_delivery
         if delivery is None:  # pragma: no cover - validated above
             raise AssertionError("terminal delivery disappeared during finalization")
-        actions.extend(
-            _sent_outbox_check(
-                self._table_name,
-                expected,
-                operation_id=operation_id,
-                content_hash=content_hash,
-                chunk_sequence=chunk_sequence,
+        if not isinstance(delivery, PhaseDeliveryPlan) or delivery.status in {
+            PhaseDeliveryStatus.STAGED,
+            PhaseDeliveryStatus.TERMINATING,
+        }:
+            delivery_sequences = (
+                tuple(range(len(delivery.operation_ids)))
+                if isinstance(delivery, TerminalDeliveryPlan)
+                else delivery.delivery_sequences
             )
-            for chunk_sequence, (operation_id, content_hash) in enumerate(
-                zip(
-                    delivery.operation_ids,
-                    delivery.content_hashes,
-                    strict=True,
+            actions.extend(
+                _sent_outbox_check(
+                    self._table_name,
+                    expected,
+                    operation_id=operation_id,
+                    content_hash=content_hash,
+                    chunk_sequence=chunk_sequence,
+                    plan_id=(delivery.plan_id if isinstance(delivery, PhaseDeliveryPlan) else None),
+                    delivery_sequence=delivery_sequence,
+                )
+                for chunk_sequence, (operation_id, content_hash, delivery_sequence) in enumerate(
+                    zip(
+                        delivery.operation_ids,
+                        delivery.content_hashes,
+                        delivery_sequences,
+                        strict=True,
+                    )
                 )
             )
-        )
-        action_kinds.extend(
-            RepositoryTransactionAction.OUTBOX_SENT_CHECK for _ in delivery.operation_ids
-        )
+            action_kinds.extend(
+                RepositoryTransactionAction.OUTBOX_SENT_CHECK for _ in delivery.operation_ids
+            )
+        elif delivery.status is not PhaseDeliveryStatus.ABANDONED:
+            raise RepositoryConflict("phase delivery is not settled for finalization")
         for key, item in new_items.items():
             if old_items.get(key) != item:
-                actions.append(self._put(item))
-                action_kinds.append(RepositoryTransactionAction.RELATED_ITEM_PUT)
+                actions.append(
+                    self._put_phase_plan(previous=old_items[key], updated=item)
+                    if item.get("record_type") == "phase_delivery_plan"
+                    else self._put(item)
+                )
+                action_kinds.append(
+                    RepositoryTransactionAction.PHASE_DELIVERY_PLAN
+                    if item.get("record_type") == "phase_delivery_plan"
+                    else RepositoryTransactionAction.RELATED_ITEM_PUT
+                )
         actions.extend(
             (
                 self._release_slot_action(lease, persisted.state.updated_at),
@@ -1502,7 +1802,7 @@ class DynamoDbDebateRepository:
         key_fields = {"PK", "SK"}
         set_fields = sorted(set(updated) - key_fields)
         remove_fields = sorted(set(previous) - set(updated) - key_fields)
-        names = {"#phase": "phase"}
+        names = {"#phase": "phase", "#generation": "generation_checkpoints"}
         values: DynamoItem = {
             ":phase": expected.state.phase.value,
             ":recovery": expected.state.recovery_state.value,
@@ -1513,6 +1813,11 @@ class DynamoDbDebateRepository:
             ":expiry": _timestamp(lease.expires_at),
             ":origin": ingress_claim.interaction_id,
         }
+        if "generation_checkpoints" in previous:
+            values[":expected_generation"] = previous["generation_checkpoints"]
+            generation_condition = "#generation=:expected_generation"
+        else:
+            generation_condition = "attribute_not_exists(#generation)"
         panel_condition = _panel_refresh_condition(expected, values)
         assignments: list[str] = []
         for index, field in enumerate(set_fields):
@@ -1542,7 +1847,10 @@ class DynamoDbDebateRepository:
                         "#phase=:phase AND recovery_state=:recovery AND updated_at=:updated "
                         "AND lease_owner=:owner AND lease_slot=:slot "
                         "AND fencing_token=:token AND lease_expiry=:expiry "
-                        "AND origin_ingress_interaction_id=:origin AND " + panel_condition
+                        "AND origin_ingress_interaction_id=:origin AND "
+                        + generation_condition
+                        + " AND "
+                        + panel_condition
                     ),
                     "ExpressionAttributeNames": names,
                     "ExpressionAttributeValues": marshal_item(values),
@@ -2026,16 +2334,41 @@ class DynamoDbDebateRepository:
         lease_fields = {"lease_owner", "lease_slot", "lease_expiry", "fencing_token"}
         set_fields = sorted(set(updated) - key_fields - lease_fields)
         remove_fields = sorted(set(previous) - set(updated) - key_fields)
-        names = {"#phase": "phase"}
+        names = {"#phase": "phase", "#generation": "generation_checkpoints"}
         values: DynamoItem = {
             ":phase": expected.state.phase.value,
             ":recovery": expected.state.recovery_state.value,
             ":expected_updated": _timestamp(expected.state.updated_at),
             ":owner": lease.owner_id,
+            ":slot": lease.slot,
             ":token": lease.fencing_token,
             ":at": _timestamp(write_at),
         }
         panel_condition = _panel_refresh_condition(expected, values)
+        if "generation_checkpoints" in previous:
+            values[":expected_generation"] = previous["generation_checkpoints"]
+            generation_condition = "#generation=:expected_generation"
+        else:
+            generation_condition = "attribute_not_exists(#generation)"
+        pointer_conditions: list[str] = []
+        for index, field in enumerate(
+            (
+                "terminal_delivery_plan_id",
+                "terminal_delivery_source",
+                "terminal_delivery_sequences",
+                "terminal_delivery_deadline_at",
+                "terminal_delivery_plan_status",
+                "terminal_delivery_abandon_reason",
+            )
+        ):
+            name = f"#expected_pointer{index}"
+            names[name] = field
+            if field in previous:
+                value = f":expected_pointer{index}"
+                values[value] = previous[field]
+                pointer_conditions.append(f"{name}={value}")
+            else:
+                pointer_conditions.append(f"attribute_not_exists({name})")
         assignments: list[str] = []
         for index, field in enumerate(set_fields):
             name = f"#set{index}"
@@ -2063,8 +2396,14 @@ class DynamoDbDebateRepository:
                     "ConditionExpression": (
                         "#phase=:phase AND recovery_state=:recovery "
                         "AND updated_at=:expected_updated "
-                        "AND lease_owner=:owner AND fencing_token=:token AND lease_expiry >= :at "
-                        "AND " + panel_condition
+                        "AND lease_owner=:owner AND lease_slot=:slot "
+                        "AND fencing_token=:token AND lease_expiry >= :at "
+                        "AND "
+                        + generation_condition
+                        + " AND "
+                        + " AND ".join(pointer_conditions)
+                        + " AND "
+                        + panel_condition
                     ),
                     "ExpressionAttributeNames": names,
                     "ExpressionAttributeValues": marshal_item(values),
@@ -2168,6 +2507,47 @@ class DynamoDbDebateRepository:
         return cast(
             TransactWriteItemTypeDef,
             {"Put": {"TableName": self._table_name, "Item": marshal_item(item)}},
+        )
+
+    def _put_phase_plan(
+        self,
+        *,
+        previous: DynamoItem,
+        updated: DynamoItem,
+    ) -> TransactWriteItemTypeDef:
+        """Replace one phase plan only while its complete observed version is current."""
+
+        if (
+            previous.get("record_type") != "phase_delivery_plan"
+            or updated.get("record_type") != "phase_delivery_plan"
+            or previous.get("PK") != updated.get("PK")
+            or previous.get("SK") != updated.get("SK")
+        ):
+            raise RepositoryConflict("phase delivery plan identity changed during replacement")
+        names: dict[str, str] = {}
+        values: DynamoItem = {}
+        conditions: list[str] = []
+        fields = sorted((set(previous) | set(updated)) - {"PK", "SK"})
+        for index, field in enumerate(fields):
+            name = f"#plan{index}"
+            names[name] = field
+            if field in previous:
+                value = f":plan{index}"
+                values[value] = previous[field]
+                conditions.append(f"{name}={value}")
+            else:
+                conditions.append(f"attribute_not_exists({name})")
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(updated),
+                    "ConditionExpression": " AND ".join(conditions),
+                    "ExpressionAttributeNames": names,
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
         )
 
     def _put_pre_activation_meta(
@@ -2407,8 +2787,7 @@ class DynamoDbDebateRepository:
         cancellation_action_kinds: tuple[RepositoryTransactionAction, ...] = (),
     ) -> None:
         action_list = list(actions)
-        if not 1 <= len(action_list) <= 100:
-            raise ValueError("DynamoDB transaction must contain between 1 and 100 actions")
+        _require_transaction_size(action_list)
         if cancellation_stage is None and cancellation_action_kinds:
             raise ValueError("transaction action kinds require a cancellation stage")
         if cancellation_stage is not None and len(cancellation_action_kinds) != len(action_list):
@@ -2416,7 +2795,7 @@ class DynamoDbDebateRepository:
         try:
             self._client.transact_write_items(
                 TransactItems=action_list,
-                ClientRequestToken=token[:36],
+                ClientRequestToken=_transaction_token(token, action_list),
                 ReturnConsumedCapacity="NONE",
             )
         except self._client.exceptions.TransactionCanceledException as error:
@@ -2641,18 +3020,28 @@ def _is_direct_unbound_cancellation(
 
 
 def _same_terminal_delivery_plan(
-    actual: TerminalDeliveryPlan | None,
-    requested: TerminalDeliveryPlan,
+    actual: TerminalDeliveryPlan | PhaseDeliveryPlan | None,
+    requested: TerminalDeliveryPlan | PhaseDeliveryPlan,
 ) -> bool:
     """Compare the immutable plan identity while allowing completion to differ."""
 
-    return (
-        actual is not None
-        and actual.target_phase is requested.target_phase
+    if actual is None or type(actual) is not type(requested):
+        return False
+    same = (
+        actual.target_phase is requested.target_phase
         and actual.operation_ids == requested.operation_ids
         and actual.content_hashes == requested.content_hashes
         and actual.staged_at == requested.staged_at
     )
+    if isinstance(actual, PhaseDeliveryPlan) and isinstance(requested, PhaseDeliveryPlan):
+        return (
+            same
+            and actual.plan_id == requested.plan_id
+            and actual.source_phase is requested.source_phase
+            and actual.delivery_sequences == requested.delivery_sequences
+            and actual.deadline_at == requested.deadline_at
+        )
+    return same
 
 
 def _require_terminal_stage(
@@ -2665,12 +3054,25 @@ def _require_terminal_stage(
 ) -> None:
     _require_same_attempt(expected, staged)
     plan = staged.terminal_delivery
-    if expected.state.phase.is_terminal or expected.terminal_delivery is not None:
+    prior_plan = expected.terminal_delivery
+    if expected.state.phase.is_terminal or (
+        prior_plan is not None
+        and not (
+            isinstance(prior_plan, PhaseDeliveryPlan)
+            and prior_plan.status is PhaseDeliveryStatus.ABANDONED
+        )
+    ):
         raise RepositoryConflict("terminal delivery is already staged or finalized")
     if expected.lease is None or staged.lease != expected.lease:
         raise RepositoryConflict("terminal delivery staging requires the current fenced lease")
-    if plan is None or plan.completed_at is not None:
+    if (
+        plan is None
+        or (isinstance(plan, PhaseDeliveryPlan) and plan.status is not PhaseDeliveryStatus.STAGED)
+        or (isinstance(plan, TerminalDeliveryPlan) and plan.completed_at is not None)
+    ):
         raise RepositoryConflict("terminal delivery staging requires an incomplete plan")
+    if isinstance(plan, PhaseDeliveryPlan) and plan.source_phase is not expected.state.phase:
+        raise RepositoryConflict("phase delivery source does not match the current phase")
     expected.state.transition_to(plan.target_phase, at=plan.staged_at)
     staged_state = replace(expected.state, updated_at=plan.staged_at)
     if plan.target_phase is DebatePhase.COMPLETED:
@@ -2679,6 +3081,8 @@ def _require_terminal_stage(
             state=staged_state,
             terminal_delivery=plan,
             final_decision=staged.final_decision,
+            generation_checkpoints=staged.generation_checkpoints,
+            error_code=staged.error_code,
         )
     elif plan.target_phase is DebatePhase.FAILED:
         baseline = replace(
@@ -2686,9 +3090,16 @@ def _require_terminal_stage(
             state=staged_state,
             terminal_delivery=plan,
             error_code=staged.error_code,
+            generation_checkpoints=staged.generation_checkpoints,
         )
     else:
-        baseline = replace(expected, state=staged_state, terminal_delivery=plan)
+        baseline = replace(
+            expected,
+            state=staged_state,
+            terminal_delivery=plan,
+            error_code=staged.error_code,
+            generation_checkpoints=staged.generation_checkpoints,
+        )
     if staged != baseline:
         raise RepositoryConflict("terminal delivery staging changed unrelated debate state")
     if (
@@ -2701,10 +3112,22 @@ def _require_terminal_stage(
         )
     if not operations or len(operations) > MAX_TERMINAL_OUTBOX_CHUNKS:
         raise RepositoryConflict("terminal delivery operation count is outside its bounds")
+    if (
+        plan.target_phase in {DebatePhase.FAILED, DebatePhase.CANCELLED}
+        and len(operations) > MAX_TERMINAL_NOTICE_CHUNKS
+    ):
+        raise RepositoryConflict("terminal notice exceeds its reserved sequence range")
     operation_ids = tuple(operation.operation_id for operation in operations)
     content_hashes = tuple(operation.content_hash for operation in operations)
     if operation_ids != plan.operation_ids or content_hashes != plan.content_hashes:
         raise RepositoryConflict("terminal delivery operations do not match their durable plan")
+    delivery_sequence_start = {
+        DebatePhase.COMPLETED: COMPLETED_DELIVERY_SEQUENCE_START,
+        DebatePhase.FAILED: FAILED_DELIVERY_SEQUENCE_START,
+        DebatePhase.CANCELLED: CANCELLED_DELIVERY_SEQUENCE_START,
+    }.get(plan.target_phase)
+    if delivery_sequence_start is None:
+        raise RepositoryConflict("terminal delivery target has no sequence range")
     nonces: set[str] = set()
     for sequence, operation in enumerate(operations):
         if (
@@ -2714,6 +3137,12 @@ def _require_terminal_stage(
             or operation.thread_id != expected.thread_id
             or operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
             or operation.chunk_sequence != sequence
+            or operation.record_schema_version != 2
+            or operation.phase is not plan.target_phase
+            or not isinstance(plan, PhaseDeliveryPlan)
+            or operation.plan_id != plan.plan_id
+            or operation.delivery_sequence != delivery_sequence_start + sequence
+            or operation.deadline_at != plan.deadline_at
             or operation.status is not OutboxStatus.PREPARED
             or operation.delivery_attempt != 0
             or operation.claim_owner is not None
@@ -2727,6 +3156,10 @@ def _require_terminal_stage(
         ):
             raise RepositoryConflict("terminal delivery operation violates its attempt fence")
         nonces.add(operation.nonce)
+    if isinstance(plan, PhaseDeliveryPlan) and plan.delivery_sequences != tuple(
+        delivery_sequence_start + sequence for sequence in range(len(operations))
+    ):
+        raise RepositoryConflict("phase delivery sequence range is invalid")
 
 
 def _require_terminal_finalization(
@@ -2735,10 +3168,32 @@ def _require_terminal_finalization(
 ) -> None:
     _require_same_attempt(expected, updated)
     plan = expected.terminal_delivery
-    if expected.state.phase.is_terminal or plan is None or plan.completed_at is not None:
+    if expected.state.phase.is_terminal or plan is None:
         raise RepositoryConflict("terminal finalization requires an active staged delivery")
-    transitioned = expected.state.transition_to(plan.target_phase, at=updated.state.updated_at)
-    completed_delivery = plan.complete(at=updated.state.updated_at)
+    if isinstance(plan, PhaseDeliveryPlan):
+        if plan.status in {
+            PhaseDeliveryStatus.STAGED,
+            PhaseDeliveryStatus.TERMINATING,
+        }:
+            target_phase = plan.target_phase
+            completed_delivery: TerminalDeliveryPlan | PhaseDeliveryPlan = plan.complete(
+                at=updated.state.updated_at
+            )
+        elif plan.status is PhaseDeliveryStatus.ABANDONED:
+            target_phase = (
+                DebatePhase.FAILED
+                if plan.target_phase is DebatePhase.COMPLETED
+                else plan.target_phase
+            )
+            completed_delivery = plan
+        else:
+            raise RepositoryConflict("phase delivery is not finalizable")
+    else:
+        if plan.completed_at is not None:
+            raise RepositoryConflict("terminal delivery is already completed")
+        target_phase = plan.target_phase
+        completed_delivery = plan.complete(at=updated.state.updated_at)
+    transitioned = expected.state.transition_to(target_phase, at=updated.state.updated_at)
     if updated != replace(
         expected,
         state=transitioned,
@@ -2770,10 +3225,54 @@ def _sent_outbox_check(
     operation_id: str,
     content_hash: str,
     chunk_sequence: int,
+    plan_id: str | None,
+    delivery_sequence: int,
 ) -> TransactWriteItemTypeDef:
     thread_id = expected.thread_id
     if thread_id is None:  # pragma: no cover - staged delivery invariant narrows this
         raise RepositoryConflict("terminal delivery has no Discord thread")
+    condition = (
+        "record_type=:type AND schema_version=:schema "
+        "AND debate_id=:debate AND attempt_id=:attempt "
+        "AND operation_id=:operation AND #status=:sent "
+        "AND bot_slot=:moderator AND thread_id=:thread "
+        "AND chunk_sequence=:chunk_sequence "
+        "AND content_hash=:content_hash "
+        "AND attribute_exists(nonce) AND attribute_exists(message_id) "
+        "AND attribute_exists(sent_at) AND delivery_attempt >= :one"
+    )
+    values: DynamoItem = {
+        ":type": "outbox",
+        ":schema": CURRENT_SCHEMA_VERSION,
+        ":debate": str(expected.state.debate_id),
+        ":attempt": str(expected.state.attempt_id),
+        ":operation": operation_id,
+        ":sent": OutboxStatus.SENT.value,
+        ":moderator": DiscordBotSlot.MODERATOR.value,
+        ":thread": thread_id,
+        ":chunk_sequence": chunk_sequence,
+        ":content_hash": content_hash,
+        ":one": 1,
+    }
+    if plan_id is not None:
+        delivery = expected.terminal_delivery
+        if not isinstance(delivery, PhaseDeliveryPlan) or delivery.plan_id != plan_id:
+            raise RepositoryConflict("outbox completion plan is not current")
+        condition += (
+            " AND record_schema_version=:record_schema AND plan_id=:plan "
+            "AND phase=:delivery_phase AND delivery_sequence=:delivery_sequence "
+            "AND deadline_at=:deadline AND created_at=:staged_at"
+        )
+        values.update(
+            {
+                ":record_schema": 2,
+                ":plan": plan_id,
+                ":delivery_phase": delivery.target_phase.value,
+                ":delivery_sequence": delivery_sequence,
+                ":deadline": _timestamp(delivery.deadline_at),
+                ":staged_at": _timestamp(delivery.staged_at),
+            }
+        )
     return cast(
         TransactWriteItemTypeDef,
         {
@@ -2785,32 +3284,95 @@ def _sent_outbox_check(
                         "SK": (f"ATTEMPT#{expected.state.attempt_id}#OUTBOX#{operation_id}"),
                     }
                 ),
-                "ConditionExpression": (
-                    "record_type=:type AND schema_version=:schema "
-                    "AND debate_id=:debate AND attempt_id=:attempt "
-                    "AND operation_id=:operation AND #status=:sent "
-                    "AND bot_slot=:moderator AND thread_id=:thread "
-                    "AND chunk_sequence=:chunk_sequence "
-                    "AND content_hash=:content_hash "
-                    "AND attribute_exists(nonce) AND attribute_exists(message_id) "
-                    "AND attribute_exists(sent_at) AND delivery_attempt >= :one"
-                ),
+                "ConditionExpression": condition,
                 "ExpressionAttributeNames": {"#status": "status"},
-                "ExpressionAttributeValues": marshal_item(
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        },
+    )
+
+
+def _abandon_outbox_action(
+    table_name: str,
+    operation: OutboxOperation,
+    *,
+    at: datetime,
+    reason: DeliveryAbandonReason,
+) -> TransactWriteItemTypeDef:
+    if operation.delivery_sequence is None or operation.plan_id is None:
+        raise RepositoryConflict("only outbox v2 may be abandoned")
+    if operation.phase is None or operation.deadline_at is None:
+        raise RepositoryConflict("outbox v2 identity is incomplete")
+    if operation.status not in {OutboxStatus.PREPARED, OutboxStatus.CLAIMED}:
+        raise RepositoryConflict("only unsettled outbox may be abandoned")
+    values: DynamoItem = {
+        ":type": "outbox",
+        ":schema": CURRENT_SCHEMA_VERSION,
+        ":record_schema": 2,
+        ":debate": str(operation.debate_id),
+        ":attempt": str(operation.attempt_id),
+        ":operation": operation.operation_id,
+        ":plan": operation.plan_id,
+        ":phase": operation.phase.value,
+        ":delivery_sequence": operation.delivery_sequence,
+        ":deadline": _timestamp(operation.deadline_at),
+        ":created": _timestamp(operation.created_at),
+        ":content_hash": operation.content_hash,
+        ":delivery_attempt": operation.delivery_attempt,
+        ":expected_status": operation.status.value,
+        ":abandoned": OutboxStatus.ABANDONED.value,
+        ":reason": reason.value,
+        ":at": _timestamp(at),
+    }
+    if operation.claim_owner is None:
+        claim_condition = "attribute_not_exists(claim_owner) AND attribute_not_exists(claim_expiry)"
+    else:
+        claim_expiry = operation.claim_expires_at
+        if claim_expiry is None:  # pragma: no cover - model invariant narrows this
+            raise RepositoryConflict("claimed outbox has no claim expiry")
+        values[":claim_owner"] = operation.claim_owner
+        values[":claim_expiry"] = _timestamp(claim_expiry)
+        claim_condition = "claim_owner=:claim_owner AND claim_expiry=:claim_expiry"
+    if operation.next_retry_at is None:
+        retry_condition = "attribute_not_exists(next_retry_at)"
+    else:
+        values[":next_retry"] = _timestamp(operation.next_retry_at)
+        retry_condition = "next_retry_at=:next_retry"
+    return cast(
+        TransactWriteItemTypeDef,
+        {
+            "Update": {
+                "TableName": table_name,
+                "Key": marshal_item(
                     {
-                        ":type": "outbox",
-                        ":schema": CURRENT_SCHEMA_VERSION,
-                        ":debate": str(expected.state.debate_id),
-                        ":attempt": str(expected.state.attempt_id),
-                        ":operation": operation_id,
-                        ":sent": OutboxStatus.SENT.value,
-                        ":moderator": DiscordBotSlot.MODERATOR.value,
-                        ":thread": thread_id,
-                        ":chunk_sequence": chunk_sequence,
-                        ":content_hash": content_hash,
-                        ":one": 1,
+                        "PK": f"DEBATE#{operation.debate_id}",
+                        "SK": (f"ATTEMPT#{operation.attempt_id}#OUTBOX#{operation.operation_id}"),
                     }
                 ),
+                "UpdateExpression": (
+                    "SET #status=:abandoned, abandoned_at=:at, "
+                    "abandon_reason=:reason, updated_at=:at "
+                    "REMOVE claim_owner, claim_expiry, next_retry_at"
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema "
+                    "AND debate_id=:debate AND attempt_id=:attempt "
+                    "AND operation_id=:operation AND plan_id=:plan AND phase=:phase "
+                    "AND delivery_sequence=:delivery_sequence AND deadline_at=:deadline "
+                    "AND created_at=:created AND content_hash=:content_hash "
+                    "AND delivery_attempt=:delivery_attempt AND #status=:expected_status "
+                    "AND "
+                    + claim_condition
+                    + " AND "
+                    + retry_condition
+                    + " AND attribute_not_exists(message_id) "
+                    "AND attribute_not_exists(sent_at) "
+                    "AND attribute_not_exists(abandoned_at) "
+                    "AND attribute_not_exists(abandon_reason)"
+                ),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": marshal_item(values),
             }
         },
     )
@@ -2819,6 +3381,33 @@ def _sent_outbox_check(
 def _require_transaction_size(actions: list[TransactWriteItemTypeDef]) -> None:
     if not 1 <= len(actions) <= 100:
         raise RepositoryConflict("DynamoDB transaction action count is outside its bounds")
+    # DynamoDB applies a 4 MB aggregate item limit. The low-level AttributeValue
+    # JSON envelope is larger than the stored values, so this deterministic
+    # preflight is conservative and fails before the SDK can receive an unsafe
+    # transaction.
+    encoded = json.dumps(
+        actions,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if len(encoded) > MAX_TRANSACTION_BYTES:
+        raise RepositoryConflict("DynamoDB transaction exceeds the 4 MB aggregate limit")
+
+
+def _transaction_token(
+    label: str,
+    actions: list[TransactWriteItemTypeDef],
+) -> str:
+    """Bind idempotency to the full payload, including same-timestamp CAS writes."""
+
+    canonical = json.dumps(
+        actions,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return _client_token(f"{label}:{canonical}")
 
 
 def _require_same_attempt(expected: DebateSnapshot, updated: DebateSnapshot) -> None:
