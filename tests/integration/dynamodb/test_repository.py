@@ -23,16 +23,18 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.application import (
     DebateSnapshot,
+    DeliveryAbandonReason,
     DiscordBotSlot,
+    GenerationCheckpoint,
     IngressClaimFence,
     IngressKind,
     IngressRequest,
     IngressStatus,
     OutboxActivity,
     PanelRefreshState,
+    PhaseDeliveryPlan,
     StatusMessageState,
     StatusPublicationState,
-    TerminalDeliveryPlan,
     prepare_terminal_outbox_operations,
 )
 from shittim_chest.application.ports import (
@@ -152,11 +154,19 @@ async def finalize_terminal_delivery(
         created_at=staged_at,
         error_code=error_code,
     )
-    plan = TerminalDeliveryPlan(
+    plan = PhaseDeliveryPlan(
+        plan_id=operations[0].plan_id or f"terminal-{target_phase.value}",
+        source_phase=expected.state.phase,
         target_phase=target_phase,
         operation_ids=tuple(operation.operation_id for operation in operations),
         content_hashes=tuple(operation.content_hash for operation in operations),
+        delivery_sequences=tuple(
+            operation.delivery_sequence
+            for operation in operations
+            if operation.delivery_sequence is not None
+        ),
         staged_at=staged_at,
+        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = replace(
         expected,
@@ -182,8 +192,7 @@ async def finalize_terminal_delivery(
         assert claimed is not None
         await outbox.mark_sent(
             expected=persisted,
-            operation_id=operation.operation_id,
-            claim_owner="terminal-publisher",
+            operation=claimed,
             message_id=str(10_000 + index),
             at=claim_at + timedelta(microseconds=1),
         )
@@ -1616,8 +1625,7 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
     assert claimed.status is OutboxStatus.CLAIMED
     rescheduled = await outbox_repository.reschedule(
         expected=snapshot,
-        operation_id=first.operation_id,
-        claim_owner="publisher",
+        operation=claimed,
         at=NOW + timedelta(seconds=2),
         next_retry_at=NOW + timedelta(seconds=5),
     )
@@ -1643,10 +1651,23 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
         at=NOW + timedelta(seconds=5),
     )
     assert reclaimed is not None
+    with pytest.raises(RepositoryConflict, match="claim changed"):
+        await outbox_repository.mark_sent(
+            expected=snapshot,
+            operation=claimed,
+            message_id="104",
+            at=NOW + timedelta(seconds=6),
+        )
+    with pytest.raises(RepositoryConflict, match="claim changed"):
+        await outbox_repository.reschedule(
+            expected=snapshot,
+            operation=claimed,
+            at=NOW + timedelta(seconds=6),
+            next_retry_at=NOW + timedelta(seconds=8),
+        )
     sent = await outbox_repository.mark_sent(
         expected=snapshot,
-        operation_id=first.operation_id,
-        claim_owner="publisher",
+        operation=reclaimed,
         message_id="104",
         at=NOW + timedelta(seconds=6),
     )
@@ -1654,8 +1675,7 @@ async def test_outbox_enforces_chunk_order_claim_retry_and_idempotent_completion
     assert (
         await outbox_repository.mark_sent(
             expected=snapshot,
-            operation_id=first.operation_id,
-            claim_owner="publisher",
+            operation=reclaimed,
             message_id="104",
             at=NOW + timedelta(seconds=7),
         )
@@ -1739,11 +1759,19 @@ async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
         target_phase=DebatePhase.CANCELLED,
         created_at=staged_at,
     )
-    plan = TerminalDeliveryPlan(
+    plan = PhaseDeliveryPlan(
+        plan_id=operations[0].plan_id or "terminal-cancelled",
+        source_phase=bound.state.phase,
         target_phase=DebatePhase.CANCELLED,
         operation_ids=tuple(operation.operation_id for operation in operations),
         content_hashes=tuple(operation.content_hash for operation in operations),
+        delivery_sequences=tuple(
+            operation.delivery_sequence
+            for operation in operations
+            if operation.delivery_sequence is not None
+        ),
         staged_at=staged_at,
+        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = replace(
         bound,
@@ -1790,8 +1818,7 @@ async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
         assert claimed is not None
         await outbox.mark_sent(
             expected=persisted,
-            operation_id=operation.operation_id,
-            claim_owner="publisher",
+            operation=claimed,
             message_id=str(104 + index),
             at=claim_at + timedelta(microseconds=1),
         )
@@ -1810,3 +1837,336 @@ async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
     )
     counter_item = unmarshal_item(counter_response["Item"])
     assert counter_item["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_collection_cas_rejects_same_timestamp_stale_writer(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await debates.create(
+        new_snapshot(),
+        operation_id="generation-cas",
+        lease_owner="worker-1",
+    )
+    phase_at = NOW + timedelta(seconds=1)
+    generating = await debates.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=replace(
+                accepted.state,
+                phase=DebatePhase.GENERATING_DECISION,
+                updated_at=phase_at,
+            ),
+        ),
+    )
+    participant_a = replace(
+        generating,
+        generation_checkpoints=(
+            GenerationCheckpoint.planned(
+                phase=DebatePhase.GENERATING_DECISION,
+                participant=ParticipantSlot.PARTICIPANT_A,
+                at=phase_at,
+            ),
+        ),
+    )
+    persisted = await debates.replace(expected=generating, updated=participant_a)
+    stale_participant_b = replace(
+        generating,
+        generation_checkpoints=(
+            GenerationCheckpoint.planned(
+                phase=DebatePhase.GENERATING_DECISION,
+                participant=ParticipantSlot.PARTICIPANT_B,
+                at=phase_at,
+            ),
+        ),
+    )
+
+    with pytest.raises(RepositoryConflict):
+        await debates.replace(expected=generating, updated=stale_participant_b)
+
+    assert await debates.get(generating.state.debate_id) == persisted
+
+
+@pytest.mark.asyncio
+async def test_phase_outbox_requires_atomic_stage_and_complete_predecessors(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await debates.create(
+        new_snapshot(),
+        operation_id="phase-order",
+        lease_owner="worker-1",
+    )
+    bound = await debates.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            starter_message_id="101",
+            thread_id="102",
+            control_panel_message_id="103",
+        ),
+    )
+    staged_at = NOW + timedelta(seconds=1)
+    deadline_at = staged_at + timedelta(minutes=15)
+    operations = tuple(
+        OutboxOperation(
+            operation_id=f"terminal-cancelled-{sequence:04d}",
+            debate_id=bound.state.debate_id,
+            attempt_id=bound.state.attempt_id,
+            bot_slot=DiscordBotSlot.MODERATOR,
+            thread_id="102",
+            content=f"chunk-{sequence}",
+            content_hash=hashlib.sha256(f"chunk-{sequence}".encode()).hexdigest(),
+            nonce=("A" if sequence == 0 else "B") * 22,
+            chunk_sequence=sequence,
+            status=OutboxStatus.PREPARED,
+            created_at=staged_at,
+            record_schema_version=2,
+            phase=DebatePhase.CANCELLED,
+            plan_id="terminal-cancelled",
+            delivery_sequence=910 + sequence,
+            deadline_at=deadline_at,
+        )
+        for sequence in range(2)
+    )
+    with pytest.raises(RepositoryConflict, match="staged atomically"):
+        await outbox.prepare(expected=bound, operation=operations[0])
+
+    plan = PhaseDeliveryPlan(
+        plan_id="terminal-cancelled",
+        source_phase=bound.state.phase,
+        target_phase=DebatePhase.CANCELLED,
+        operation_ids=tuple(operation.operation_id for operation in operations),
+        content_hashes=tuple(operation.content_hash for operation in operations),
+        delivery_sequences=tuple(
+            operation.delivery_sequence
+            for operation in operations
+            if operation.delivery_sequence is not None
+        ),
+        staged_at=staged_at,
+        deadline_at=deadline_at,
+    )
+    staged = replace(
+        bound,
+        state=replace(bound.state, updated_at=staged_at),
+        terminal_delivery=plan,
+    )
+    persisted = await debates.stage_terminal_delivery(
+        expected=bound,
+        staged=staged,
+        operations=operations,
+        operation_id="phase-cancel",
+    )
+    assert (
+        await outbox.claim(
+            expected=persisted,
+            operation_id=operations[1].operation_id,
+            claim_owner="publisher",
+            at=staged_at + timedelta(seconds=1),
+        )
+        is None
+    )
+    first_claim = await outbox.claim(
+        expected=persisted,
+        operation_id=operations[0].operation_id,
+        claim_owner="publisher",
+        at=staged_at + timedelta(seconds=1),
+    )
+    assert first_claim is not None
+    prepared_again = await outbox.reschedule(
+        expected=persisted,
+        operation=first_claim,
+        at=staged_at + timedelta(seconds=2),
+        next_retry_at=staged_at + timedelta(seconds=3),
+    )
+    second_claim = await outbox.claim(
+        expected=persisted,
+        operation_id=prepared_again.operation_id,
+        claim_owner="publisher",
+        at=staged_at + timedelta(seconds=3),
+    )
+    assert second_claim is not None
+    with pytest.raises(RepositoryConflict, match="claim changed"):
+        await outbox.mark_sent(
+            expected=persisted,
+            operation=first_claim,
+            message_id="104",
+            at=staged_at + timedelta(seconds=4),
+        )
+    await outbox.mark_sent(
+        expected=persisted,
+        operation=second_claim,
+        message_id="104",
+        at=staged_at + timedelta(seconds=4),
+    )
+    dynamodb_client.delete_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": f"DEBATE#{bound.state.debate_id}",
+                "SK": (f"ATTEMPT#{bound.state.attempt_id}#OUTBOX#{operations[0].operation_id}"),
+            }
+        ),
+    )
+
+    with pytest.raises(RepositoryConflict, match="outbox is incomplete"):
+        await outbox.claim(
+            expected=persisted,
+            operation_id=operations[1].operation_id,
+            claim_owner="publisher",
+            at=staged_at + timedelta(seconds=1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_phase_abandonment_atomically_clears_mixed_outbox_activity(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await debates.create(
+        new_snapshot(),
+        operation_id="phase-abandon",
+        lease_owner="worker-1",
+    )
+    bound = await debates.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            starter_message_id="101",
+            thread_id="102",
+            control_panel_message_id="103",
+        ),
+    )
+    staged_at = NOW + timedelta(seconds=1)
+    operations = tuple(
+        OutboxOperation(
+            operation_id=f"terminal-cancelled-{sequence:04d}",
+            debate_id=bound.state.debate_id,
+            attempt_id=bound.state.attempt_id,
+            bot_slot=DiscordBotSlot.MODERATOR,
+            thread_id="102",
+            content=f"chunk-{sequence}",
+            content_hash=hashlib.sha256(f"chunk-{sequence}".encode()).hexdigest(),
+            nonce=chr(ord("A") + sequence) * 22,
+            chunk_sequence=sequence,
+            status=OutboxStatus.PREPARED,
+            created_at=staged_at,
+            record_schema_version=2,
+            phase=DebatePhase.CANCELLED,
+            plan_id="terminal-cancelled",
+            delivery_sequence=910 + sequence,
+            deadline_at=staged_at + timedelta(minutes=15),
+        )
+        for sequence in range(3)
+    )
+    plan = PhaseDeliveryPlan(
+        plan_id="terminal-cancelled",
+        source_phase=bound.state.phase,
+        target_phase=DebatePhase.CANCELLED,
+        operation_ids=tuple(operation.operation_id for operation in operations),
+        content_hashes=tuple(operation.content_hash for operation in operations),
+        delivery_sequences=tuple(
+            operation.delivery_sequence
+            for operation in operations
+            if operation.delivery_sequence is not None
+        ),
+        staged_at=staged_at,
+        deadline_at=staged_at + timedelta(minutes=15),
+    )
+    staged = await debates.stage_terminal_delivery(
+        expected=bound,
+        staged=replace(
+            bound,
+            state=replace(bound.state, updated_at=staged_at),
+            terminal_delivery=plan,
+        ),
+        operations=operations,
+    )
+    first = await outbox.claim(
+        expected=staged,
+        operation_id=operations[0].operation_id,
+        claim_owner="publisher",
+        at=staged_at + timedelta(seconds=1),
+    )
+    assert first is not None
+    await outbox.mark_sent(
+        expected=staged,
+        operation=first,
+        message_id="104",
+        at=staged_at + timedelta(seconds=2),
+    )
+    second = await outbox.claim(
+        expected=staged,
+        operation_id=operations[1].operation_id,
+        claim_owner="publisher",
+        at=staged_at + timedelta(seconds=3),
+    )
+    assert second is not None
+
+    terminating = await debates.terminate_terminal_delivery(
+        expected=staged,
+        at=staged_at + timedelta(seconds=4),
+        reason=DeliveryAbandonReason.CANCELLED,
+    )
+    abandoned = await debates.abandon_terminal_delivery(
+        expected=terminating,
+        at=staged_at + timedelta(seconds=5),
+        reason=DeliveryAbandonReason.CANCELLED,
+    )
+
+    activity_response = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": "CONTROL#OUTBOX", "SK": "ACTIVITY"}),
+        ConsistentRead=True,
+    )
+    activity_item = activity_response.get("Item")
+    assert activity_item is not None
+    activity = unmarshal_item(activity_item)
+    assert activity["pending_count"] == 0
+    assert activity["claimed_count"] == 0
+    assert (
+        await outbox.list_pending(
+            debate_id=bound.state.debate_id,
+            attempt_id=bound.state.attempt_id,
+        )
+        == ()
+    )
+    settled_operations = []
+    for operation in operations:
+        settled_operations.append(
+            await outbox.get(
+                debate_id=bound.state.debate_id,
+                attempt_id=bound.state.attempt_id,
+                operation_id=operation.operation_id,
+            )
+        )
+    assert settled_operations[0] is not None
+    assert settled_operations[0].status is OutboxStatus.SENT
+    assert all(
+        operation is not None and operation.status is OutboxStatus.ABANDONED
+        for operation in settled_operations[1:]
+    )
+
+    terminal_at = staged_at + timedelta(seconds=6)
+    terminal = await debates.finalize_terminal(
+        expected=abandoned,
+        updated=replace(
+            abandoned,
+            state=abandoned.state.transition_to(DebatePhase.CANCELLED, at=terminal_at),
+        ),
+    )
+    active_response = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": "CONTROL#DEBATE", "SK": "ACTIVE_ATTEMPT_COUNT"}),
+        ConsistentRead=True,
+    )
+    active = unmarshal_item(active_response["Item"])
+    assert terminal.state.phase is DebatePhase.CANCELLED
+    assert active["count"] == 0

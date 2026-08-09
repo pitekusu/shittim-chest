@@ -31,6 +31,16 @@ class FakeDiscordGateway:
         del request
         return self.allowed
 
+    async def delivery_target_is_ready(
+        self,
+        *,
+        bot_slot: DiscordBotSlot,
+        guild_id: str,
+        thread_id: str,
+    ) -> bool:
+        del bot_slot, guild_id, thread_id
+        return self.ready
+
 
 class RecordingAdmissionGateway(RuntimeAdmissionGateway):
     def __init__(self, delegate: FakeDiscordGateway, events: list[str]) -> None:

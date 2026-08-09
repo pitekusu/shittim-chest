@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum, unique
 from typing import TYPE_CHECKING, cast
 
@@ -53,6 +53,12 @@ from shittim_chest.adapters.dynamodb.serializer import (
 )
 from shittim_chest.application.deployment_guard import DeploymentLock, DeploymentLockState
 from shittim_chest.application.discord import OutboxStatus, PanelOperationKind
+from shittim_chest.application.models import (
+    DeliveryAbandonReason,
+    GenerationCheckpoint,
+    GenerationStatus,
+    PhaseDeliveryStatus,
+)
 from shittim_chest.application.scale_to_zero import (
     INGRESS_QUEUE_LIMIT,
     STARTUP_TIMEOUT,
@@ -790,6 +796,24 @@ _LEGACY_SCAN_FIELDS = (
     "terminal_delivery_content_hashes",
     "terminal_delivery_staged_at",
     "terminal_delivery_completed_at",
+    "terminal_delivery_plan_id",
+    "terminal_delivery_source",
+    "terminal_delivery_sequences",
+    "terminal_delivery_deadline_at",
+    "terminal_delivery_plan_status",
+    "terminal_delivery_abandon_reason",
+    "generation_checkpoints",
+    "plan_id",
+    "source_phase",
+    "target_phase",
+    "operation_ids",
+    "content_hashes",
+    "delivery_sequences",
+    "deadline_at",
+    "settled_at",
+    "abandoned_at",
+    "abandon_reason",
+    "delivery_sequence",
     "manifest_version",
     "manifest_hash",
     "slot",
@@ -801,6 +825,11 @@ _LEGACY_SCAN_FIELDS = (
     "current_attempt_id",
     "attempt_created_at",
     "operation_id",
+    "bot_slot",
+    "thread_id",
+    "content_hash",
+    "nonce",
+    "chunk_sequence",
     "interaction_id",
     "canonical_interaction_id",
     "request_sort_key",
@@ -895,7 +924,9 @@ def _legacy_item_is_active(item: DynamoItem) -> bool:
         _validate_debate_activity_identity(item, record_type=record_type)
         phase_field = "phase" if record_type == "attempt_meta" else "current_phase"
         phase = _enum_value(DebatePhase, item, phase_field)
+        generation_is_active = False
         if record_type == "attempt_meta":
+            generation_is_active = _validate_generation_checkpoint_collection(item)
             recovery_state = _required_text(item, "recovery_state")
             if recovery_state == "checkpointed":
                 return True
@@ -904,6 +935,8 @@ def _legacy_item_is_active(item: DynamoItem) -> bool:
         if not phase.is_terminal:
             return True
         if record_type == "attempt_meta":
+            if generation_is_active:
+                return True
             if _panel_refresh_is_pending(item):
                 return True
             if schema_version == CURRENT_SCHEMA_VERSION:
@@ -917,10 +950,16 @@ def _legacy_item_is_active(item: DynamoItem) -> bool:
     if record_type == "outbox":
         _validate_outbox_identity(item)
         status = _enum_value(OutboxStatus, item, "status")
-        if status is not OutboxStatus.SENT:
+        if status in {OutboxStatus.PREPARED, OutboxStatus.CLAIMED}:
             return True
-        _validate_sent_outbox(item)
+        if status is OutboxStatus.SENT:
+            _validate_sent_outbox(item)
+        else:
+            _validate_abandoned_outbox(item)
         return False
+    if record_type == "phase_delivery_plan":
+        status = _validate_phase_delivery_plan(item)
+        return status in {PhaseDeliveryStatus.STAGED, PhaseDeliveryStatus.TERMINATING}
     if record_type in {"ingress_request", "ingress_operation_result"}:
         _require_record_schema_version(item, expected=1)
         _validate_ingress_identity(item, record_type=record_type)
@@ -1001,6 +1040,121 @@ def _validate_terminal_delivery(item: DynamoItem) -> None:
         raise ControlRecordInitializationError("terminal delivery plan is invalid")
     _required_utc(item, "terminal_delivery_staged_at")
     _required_utc(item, "terminal_delivery_completed_at")
+    pointer_fields = (
+        "terminal_delivery_plan_id",
+        "terminal_delivery_source",
+        "terminal_delivery_sequences",
+        "terminal_delivery_deadline_at",
+        "terminal_delivery_plan_status",
+    )
+    present = tuple(field in item for field in pointer_fields)
+    if any(present) and not all(present):
+        raise ControlRecordInitializationError("phase delivery pointer is incomplete")
+    if all(present):
+        _required_text(item, "terminal_delivery_plan_id")
+        _enum_value(DebatePhase, item, "terminal_delivery_source")
+        _required_non_negative_integer_list(item, "terminal_delivery_sequences")
+        _required_utc(item, "terminal_delivery_deadline_at")
+        status = _enum_value(
+            PhaseDeliveryStatus,
+            item,
+            "terminal_delivery_plan_status",
+        )
+        if status is PhaseDeliveryStatus.ABANDONED:
+            _enum_value(
+                DeliveryAbandonReason,
+                item,
+                "terminal_delivery_abandon_reason",
+            )
+        elif "terminal_delivery_abandon_reason" in item:
+            raise ControlRecordInitializationError(
+                "settled phase delivery pointer retains an abandonment reason"
+            )
+    elif "terminal_delivery_abandon_reason" in item:
+        raise ControlRecordInitializationError("phase delivery reason has no pointer")
+
+
+def _validate_generation_checkpoint_collection(item: DynamoItem) -> bool:
+    value = item.get("generation_checkpoints")
+    if value is None:
+        return False
+    if not isinstance(value, list):
+        raise ControlRecordInitializationError("generation checkpoints are invalid")
+    required = {
+        "record_schema_version",
+        "phase",
+        "participant",
+        "status",
+        "logical_attempt",
+        "planned_at",
+    }
+    optional = {
+        "claim_owner",
+        "claim_slot",
+        "claim_fencing_token",
+        "claimed_at",
+        "settled_at",
+        "error_code",
+    }
+    identities: set[tuple[DebatePhase, ParticipantSlot]] = set()
+    has_unsettled = False
+    for raw in value:
+        if not isinstance(raw, dict) or not all(isinstance(key, str) for key in raw):
+            raise ControlRecordInitializationError("generation checkpoint is invalid")
+        checkpoint = raw
+        fields = set(checkpoint)
+        if not required.issubset(fields) or not fields.issubset(required | optional):
+            raise ControlRecordInitializationError("generation checkpoint schema is invalid")
+        try:
+            model = GenerationCheckpoint(
+                phase=_enum_value(DebatePhase, checkpoint, "phase"),
+                participant=_enum_value(ParticipantSlot, checkpoint, "participant"),
+                status=_enum_value(GenerationStatus, checkpoint, "status"),
+                logical_attempt=_required_non_negative_integer(
+                    checkpoint,
+                    "logical_attempt",
+                ),
+                planned_at=_required_utc(checkpoint, "planned_at"),
+                claim_owner=(
+                    _required_text(checkpoint, "claim_owner")
+                    if "claim_owner" in checkpoint
+                    else None
+                ),
+                claim_slot=(
+                    _required_non_negative_integer(checkpoint, "claim_slot")
+                    if "claim_slot" in checkpoint
+                    else None
+                ),
+                claim_fencing_token=(
+                    _required_non_negative_integer(checkpoint, "claim_fencing_token")
+                    if "claim_fencing_token" in checkpoint
+                    else None
+                ),
+                claimed_at=(
+                    _required_utc(checkpoint, "claimed_at") if "claimed_at" in checkpoint else None
+                ),
+                settled_at=(
+                    _required_utc(checkpoint, "settled_at") if "settled_at" in checkpoint else None
+                ),
+                error_code=(
+                    _required_text(checkpoint, "error_code") if "error_code" in checkpoint else None
+                ),
+                record_schema_version=_required_non_negative_integer(
+                    checkpoint,
+                    "record_schema_version",
+                ),
+            )
+        except (TypeError, ValueError) as error:
+            raise ControlRecordInitializationError("generation checkpoint is invalid") from error
+        identity = (model.phase, model.participant)
+        if identity in identities:
+            raise ControlRecordInitializationError("generation checkpoint is duplicated")
+        identities.add(identity)
+        has_unsettled = has_unsettled or model.status in {
+            GenerationStatus.PLANNED,
+            GenerationStatus.IN_FLIGHT,
+        }
+    return has_unsettled
 
 
 def _validate_outbox_identity(item: DynamoItem) -> None:
@@ -1014,6 +1168,29 @@ def _validate_outbox_identity(item: DynamoItem) -> None:
         raise ControlRecordInitializationError("outbox key is invalid")
     _required_utc(item, "created_at")
     _required_utc(item, "updated_at")
+    record_schema_version = item.get("record_schema_version", 1)
+    if (
+        isinstance(record_schema_version, bool)
+        or not isinstance(record_schema_version, int)
+        or record_schema_version not in {1, 2}
+    ):
+        raise ControlRecordInitializationError("outbox record schema is unsupported")
+    v2_fields = ("phase", "plan_id", "delivery_sequence", "deadline_at")
+    if record_schema_version == 1:
+        if any(field in item for field in (*v2_fields, "abandoned_at", "abandon_reason")):
+            raise ControlRecordInitializationError("outbox v1 contains v2 fields")
+        return
+    _enum_value(DebatePhase, item, "phase")
+    _required_text(item, "plan_id")
+    _required_non_negative_integer(item, "delivery_sequence")
+    deadline = _required_utc(item, "deadline_at")
+    if deadline != _required_utc(item, "created_at") + timedelta(minutes=15):
+        raise ControlRecordInitializationError("outbox deadline is invalid")
+    content_hash = _required_text(item, "content_hash")
+    if len(content_hash) != 64 or any(
+        character not in "0123456789abcdef" for character in content_hash
+    ):
+        raise ControlRecordInitializationError("outbox content hash is invalid")
 
 
 def _validate_sent_outbox(item: DynamoItem) -> None:
@@ -1025,7 +1202,87 @@ def _validate_sent_outbox(item: DynamoItem) -> None:
         raise ControlRecordInitializationError("sent outbox timestamps are invalid")
     if _required_non_negative_integer(item, "delivery_attempt") < 1:
         raise ControlRecordInitializationError("sent outbox delivery attempt is invalid")
-    _require_absent(item, "claim_owner", "claim_expiry", "next_retry_at")
+    _require_absent(
+        item,
+        "claim_owner",
+        "claim_expiry",
+        "next_retry_at",
+        "abandoned_at",
+        "abandon_reason",
+    )
+
+
+def _validate_abandoned_outbox(item: DynamoItem) -> None:
+    _require_record_schema_version(item, expected=2)
+    abandoned_at = _required_utc(item, "abandoned_at")
+    created_at = _required_utc(item, "created_at")
+    updated_at = _required_utc(item, "updated_at")
+    if abandoned_at < created_at or updated_at != abandoned_at:
+        raise ControlRecordInitializationError("abandoned outbox timestamps are invalid")
+    _enum_value(DeliveryAbandonReason, item, "abandon_reason")
+    _require_absent(
+        item,
+        "claim_owner",
+        "claim_expiry",
+        "next_retry_at",
+        "message_id",
+        "sent_at",
+    )
+
+
+def _validate_phase_delivery_plan(item: DynamoItem) -> PhaseDeliveryStatus:
+    _require_record_schema_version(item, expected=2)
+    debate_id = _required_text(item, "debate_id")
+    attempt_id = _required_text(item, "attempt_id")
+    plan_id = _required_text(item, "plan_id")
+    if (
+        _required_text(item, "PK") != f"DEBATE#{debate_id}"
+        or _required_text(item, "SK") != f"ATTEMPT#{attempt_id}#DELIVERY#{plan_id}"
+    ):
+        raise ControlRecordInitializationError("phase delivery plan key is invalid")
+    source = _enum_value(DebatePhase, item, "source_phase")
+    target = _enum_value(DebatePhase, item, "target_phase")
+    if source.is_terminal or source is target:
+        raise ControlRecordInitializationError("phase delivery transition is invalid")
+    operation_ids = _required_text_list(item, "operation_ids")
+    content_hashes = _required_text_list(item, "content_hashes")
+    sequences = _required_non_negative_integer_list(item, "delivery_sequences")
+    if (
+        not operation_ids
+        or len(operation_ids) != len(set(operation_ids))
+        or len(content_hashes) != len(operation_ids)
+        or len(sequences) != len(operation_ids)
+        or sequences != tuple(sorted(sequences))
+        or len(sequences) != len(set(sequences))
+    ):
+        raise ControlRecordInitializationError("phase delivery operation mapping is invalid")
+    for content_hash in content_hashes:
+        if len(content_hash) != 64 or any(
+            character not in "0123456789abcdef" for character in content_hash
+        ):
+            raise ControlRecordInitializationError("phase delivery content hash is invalid")
+    staged_at = _required_utc(item, "staged_at")
+    deadline_at = _required_utc(item, "deadline_at")
+    updated_at = _required_utc(item, "updated_at")
+    if deadline_at != staged_at + timedelta(minutes=15) or updated_at < staged_at:
+        raise ControlRecordInitializationError("phase delivery timestamps are invalid")
+    status = _enum_value(PhaseDeliveryStatus, item, "status")
+    if status is PhaseDeliveryStatus.STAGED:
+        _require_absent(item, "settled_at", "abandon_reason")
+    elif status is PhaseDeliveryStatus.TERMINATING:
+        _require_absent(item, "settled_at")
+        _enum_value(DeliveryAbandonReason, item, "abandon_reason")
+    elif status is PhaseDeliveryStatus.DELIVERED:
+        settled_at = _required_utc(item, "settled_at")
+        if settled_at < staged_at or updated_at != settled_at:
+            raise ControlRecordInitializationError("delivered phase timestamps are invalid")
+        _require_absent(item, "abandon_reason")
+    else:
+        settled_at = _required_utc(item, "settled_at")
+        if settled_at < staged_at or updated_at != settled_at:
+            raise ControlRecordInitializationError("abandoned phase timestamps are invalid")
+        _enum_value(DeliveryAbandonReason, item, "abandon_reason")
+    return status
 
 
 def _validate_ingress_identity(item: DynamoItem, *, record_type: str) -> None:
@@ -1345,6 +1602,19 @@ def _required_text_list(item: Mapping[str, DynamoValue], field: str) -> tuple[st
     ):
         raise ControlRecordInitializationError(f"legacy {field} is invalid")
     return cast(tuple[str, ...], tuple(value))
+
+
+def _required_non_negative_integer_list(
+    item: Mapping[str, DynamoValue],
+    field: str,
+) -> tuple[int, ...]:
+    value = item.get(field)
+    if not isinstance(value, list) or any(
+        isinstance(element, bool) or not isinstance(element, int) or element < 0
+        for element in value
+    ):
+        raise ControlRecordInitializationError(f"legacy {field} is invalid")
+    return cast(tuple[int, ...], tuple(value))
 
 
 def _required_boolean(item: Mapping[str, DynamoValue], field: str) -> bool:

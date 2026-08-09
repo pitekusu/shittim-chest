@@ -27,8 +27,10 @@ from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from shittim_chest.application import (
     DebateSnapshot,
     DiscordBotSlot,
+    GenerationCheckpoint,
     LeaseGrant,
     PanelRefreshState,
+    PhaseDeliveryPlan,
     TerminalDeliveryPlan,
     content_sha256,
 )
@@ -244,6 +246,93 @@ def test_terminal_delivery_round_trip_and_partial_fields_fail_closed() -> None:
     restored = deserialize_snapshot(serialize_snapshot(completed))
     assert restored == completed
     assert restored.terminal_delivery_complete
+
+
+def test_generation_checkpoint_collection_is_strict_and_v7_absence_is_compatible() -> None:
+    source = snapshot()
+    checkpoints = (
+        GenerationCheckpoint.planned(
+            phase=DebatePhase.GENERATING_DECISION,
+            participant=ParticipantSlot.PARTICIPANT_A,
+            at=source.state.updated_at,
+        ),
+        GenerationCheckpoint.planned(
+            phase=DebatePhase.GENERATING_DECISION,
+            participant=ParticipantSlot.PARTICIPANT_B,
+            at=source.state.updated_at,
+        ),
+    )
+    versioned = replace(source, generation_checkpoints=checkpoints)
+    items = serialize_snapshot(versioned)
+    attempt = next(item for item in items if item["record_type"] == "attempt_meta")
+
+    assert deserialize_snapshot(items) == versioned
+    raw_checkpoints = attempt["generation_checkpoints"]
+    assert isinstance(raw_checkpoints, list)
+    assert len(raw_checkpoints) == 2
+
+    without_collection = tuple(
+        {key: value for key, value in item.items() if key != "generation_checkpoints"}
+        if item["record_type"] == "attempt_meta"
+        else item
+        for item in items
+    )
+    assert deserialize_snapshot(without_collection).generation_checkpoints == ()
+
+    first = raw_checkpoints[0]
+    assert isinstance(first, dict)
+    malformed_checkpoint = {**first, "unknown": "unsafe"}
+    malformed = tuple(
+        {
+            **item,
+            "generation_checkpoints": [malformed_checkpoint, *raw_checkpoints[1:]],
+        }
+        if item["record_type"] == "attempt_meta"
+        else item
+        for item in items
+    )
+    with pytest.raises(PersistenceFormatError, match="unknown fields"):
+        deserialize_snapshot(malformed)
+
+
+def test_phase_delivery_pointer_matches_the_complete_plan() -> None:
+    source = snapshot()
+    staged_at = source.state.updated_at + timedelta(seconds=1)
+    plan = PhaseDeliveryPlan(
+        plan_id="terminal-completed",
+        source_phase=source.state.phase,
+        target_phase=DebatePhase.COMPLETED,
+        operation_ids=("terminal-completed-0000",),
+        content_hashes=("a" * 64,),
+        delivery_sequences=(300,),
+        staged_at=staged_at,
+        deadline_at=staged_at + timedelta(minutes=15),
+    )
+    staged = replace(
+        source,
+        state=replace(source.state, updated_at=staged_at),
+        terminal_delivery=plan,
+    )
+    items = serialize_snapshot(staged)
+
+    assert deserialize_snapshot(items) == staged
+    partial_pointer = tuple(
+        {key: value for key, value in item.items() if key != "terminal_delivery_source"}
+        if item["record_type"] == "attempt_meta"
+        else item
+        for item in items
+    )
+    with pytest.raises(PersistenceFormatError, match="pointer is incomplete"):
+        deserialize_snapshot(partial_pointer)
+
+    conflicting_pointer = tuple(
+        {**item, "terminal_delivery_sequences": [301]}
+        if item["record_type"] == "attempt_meta"
+        else item
+        for item in items
+    )
+    with pytest.raises(PersistenceFormatError, match="pointer conflicts"):
+        deserialize_snapshot(conflicting_pointer)
 
 
 def test_pending_terminal_panel_refresh_uses_distinct_due_index_and_round_trips() -> None:
@@ -497,6 +586,34 @@ def test_outbox_validation_rejects_inconsistent_records() -> None:
         replace(valid, message_id="104")
     with pytest.raises(ValueError, match="2000"):
         replace(valid, content="x" * 2_001)
+
+    versioned = replace(
+        valid,
+        record_schema_version=2,
+        phase=DebatePhase.COMPLETED,
+        plan_id="terminal-completed",
+        delivery_sequence=300,
+        deadline_at=NOW + timedelta(minutes=15),
+    )
+    item = serialize_outbox(versioned)
+    with pytest.raises(PersistenceFormatError, match="key conflicts"):
+        deserialize_outbox({**item, "PK": "DEBATE#substituted"})
+    with pytest.raises(PersistenceFormatError, match="invalid outbox"):
+        deserialize_outbox({**item, "record_schema_version": 3})
+    with pytest.raises(PersistenceFormatError, match="fields"):
+        deserialize_outbox(
+            {key: value for key, value in item.items() if key != "record_schema_version"}
+        )
+    with pytest.raises(PersistenceFormatError, match="fields"):
+        deserialize_outbox({**item, "future_field": "unknown"})
+
+    legacy_item = serialize_outbox(valid)
+    legacy_item.pop("record_schema_version")
+    assert deserialize_outbox(legacy_item) == valid
+    with pytest.raises(PersistenceFormatError, match="fields"):
+        deserialize_outbox({**legacy_item, "phase": DebatePhase.COMPLETED.value})
+    with pytest.raises(PersistenceFormatError, match="fields"):
+        deserialize_outbox({**legacy_item, "future_field": "unknown"})
 
 
 def test_sent_outbox_requires_complete_delivery_result() -> None:

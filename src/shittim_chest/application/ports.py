@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import StrEnum, unique
 from typing import Protocol
 
-from shittim_chest.application.discord import OutboxOperation
+from shittim_chest.application.discord import DiscordBotSlot, OutboxOperation
 from shittim_chest.application.models import (
     AcceptDebateRequest,
     AcceptedDebate,
@@ -17,6 +17,7 @@ from shittim_chest.application.models import (
     CancelledDebate,
     DebateAuthorizationSnapshot,
     DebateSnapshot,
+    DeliveryAbandonReason,
     LeaseGrant,
     MetricEvent,
     RetryDebateCommand,
@@ -62,6 +63,8 @@ class RepositoryTransactionStage(StrEnum):
     OUTBOX_CLAIM = "outbox_claim"
     OUTBOX_MARK_SENT = "outbox_mark_sent"
     OUTBOX_RESCHEDULE = "outbox_reschedule"
+    PHASE_DELIVERY_TERMINATE = "phase_delivery_terminate"
+    PHASE_DELIVERY_ABANDON = "phase_delivery_abandon"
     TERMINAL_FINALIZE = "terminal_finalize"
 
 
@@ -74,6 +77,7 @@ class RepositoryTransactionAction(StrEnum):
     OUTBOX_OPERATION = "outbox_operation"
     OUTBOX_ACTIVITY = "outbox_activity"
     OUTBOX_SENT_CHECK = "outbox_sent_check"
+    PHASE_DELIVERY_PLAN = "phase_delivery_plan"
     RELATED_ITEM_PUT = "related_item_put"
     SLOT_RELEASE = "slot_release"
     ACTIVE_ATTEMPT_COUNT = "active_attempt_count"
@@ -516,6 +520,14 @@ class DiscordGateway(Protocol):
 
     async def request_is_allowed(self, request: AcceptDebateRequest) -> bool: ...
 
+    async def delivery_target_is_ready(
+        self,
+        *,
+        bot_slot: DiscordBotSlot,
+        guild_id: str,
+        thread_id: str,
+    ) -> bool: ...
+
 
 class DiscordPublisher(Protocol):
     """Publish only an operation previously persisted by an outbox adapter."""
@@ -527,11 +539,20 @@ class DiscordPublisher(Protocol):
         operation_id: str,
     ) -> OutboxOperation | None: ...
 
+    async def reconcile_persisted(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation_id: str,
+    ) -> OutboxOperation | None: ...
+
 
 class DiscordOutboxDrainer(Protocol):
     """Drain persisted Discord operations before debate phase work resumes."""
 
     async def drain(self, *, expected: DebateSnapshot) -> None: ...
+
+    async def terminate(self, *, expected: DebateSnapshot) -> bool: ...
 
 
 class PanelRefreshRepository(Protocol):
@@ -615,8 +636,7 @@ class DiscordOutboxRepository(Protocol):
         self,
         *,
         expected: DebateSnapshot,
-        operation_id: str,
-        claim_owner: str,
+        operation: OutboxOperation,
         message_id: str,
         at: datetime,
     ) -> OutboxOperation: ...
@@ -625,10 +645,18 @@ class DiscordOutboxRepository(Protocol):
         self,
         *,
         expected: DebateSnapshot,
-        operation_id: str,
-        claim_owner: str,
+        operation: OutboxOperation,
         at: datetime,
         next_retry_at: datetime,
+    ) -> OutboxOperation: ...
+
+    async def mark_reconciled_sent(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation: OutboxOperation,
+        message_id: str,
+        at: datetime,
     ) -> OutboxOperation: ...
 
     async def list_pending(
@@ -740,6 +768,22 @@ class DebateRepository(Protocol):
         *,
         expected: DebateSnapshot,
         updated: DebateSnapshot,
+    ) -> DebateSnapshot: ...
+
+    async def terminate_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot: ...
+
+    async def abandon_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
     ) -> DebateSnapshot: ...
 
     async def create_retry(

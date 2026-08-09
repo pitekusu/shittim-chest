@@ -20,6 +20,16 @@ class _Gateway:
         del request
         return True
 
+    async def delivery_target_is_ready(
+        self,
+        *,
+        bot_slot: DiscordBotSlot,
+        guild_id: str,
+        thread_id: str,
+    ) -> bool:
+        del bot_slot, guild_id, thread_id
+        return True
+
 
 class _Supervisor:
     def __init__(self, journal: Path) -> None:

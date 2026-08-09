@@ -17,16 +17,26 @@ from shittim_chest.application import (
     CancelDebateCommand,
     DebateApplication,
     DebateNotFound,
+    DiscordBotSlot,
+    GenerationProviderError,
     IngressClaimFence,
     IngressKind,
     InvalidApplicationOperation,
+    OutboxRecoveryAbandoned,
     OutboxRecoveryFailed,
     RequestNotAllowed,
     RequiredEvidenceUnavailable,
     RetryDebateCommand,
     RuntimeNotReady,
 )
-from shittim_chest.application.models import DebateSnapshot, MetricEvent
+from shittim_chest.application.models import (
+    DebateSnapshot,
+    GenerationCheckpoint,
+    GenerationStatus,
+    MetricEvent,
+    PhaseDeliveryPlan,
+    PhaseDeliveryStatus,
+)
 from shittim_chest.application.ports import (
     RepositoryCancellationCode,
     RepositoryConflict,
@@ -456,6 +466,7 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
         DebatePhase.DISCUSSING,
         DebatePhase.COLLECTING_FINAL_PROPOSALS,
         DebatePhase.SELECTING_WINNER,
+        DebatePhase.GENERATING_DECISION,
         DebatePhase.GENERATING_DECISION,
         DebatePhase.GENERATING_DECISION,
         DebatePhase.COMPLETED,
@@ -1062,6 +1073,417 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
     assert outbox_recovery.calls[0].state.recovery_state is RecoveryState.CHECKPOINTED
     assert outbox_recovery.calls[1].terminal_delivery is not None
     assert MetricEvent.RESUMED in {event for event, _ in dependencies[2].events}
+
+
+@pytest.mark.asyncio
+async def test_generation_recovery_persists_claim_before_call_and_completes_on_second_call(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.decision_errors.append(asyncio.CancelledError())
+    first_worker = make_application(dependencies, lease_owner="worker-1")
+    accepted = await accept_bound_debate(first_worker)
+
+    with pytest.raises(asyncio.CancelledError):
+        await first_worker.run_debate(accepted.debate_id)
+
+    persisted_claims = tuple(
+        checkpoint
+        for historical in repository.history[accepted.debate_id]
+        for checkpoint in historical.generation_checkpoints
+        if checkpoint.status is GenerationStatus.IN_FLIGHT
+    )
+    assert len(openai.decision_calls) == 1
+    assert persisted_claims
+    assert persisted_claims[0].logical_attempt == 1
+    repository.recoverable = (accepted.debate_id,)
+
+    await make_application(dependencies, lease_owner="worker-2").resume_recoverable()
+
+    completed = repository.current[accepted.debate_id]
+    checkpoint = completed.checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert checkpoint is not None
+    assert checkpoint.status is GenerationStatus.COMPLETED
+    assert checkpoint.logical_attempt == 2
+    assert len(openai.decision_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_generation_recovery_fails_without_a_third_provider_call(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.decision_errors.extend((asyncio.CancelledError(), asyncio.CancelledError()))
+    first_worker = make_application(dependencies, lease_owner="worker-1")
+    accepted = await accept_bound_debate(first_worker)
+
+    with pytest.raises(asyncio.CancelledError):
+        await first_worker.run_debate(accepted.debate_id)
+    repository.recoverable = (accepted.debate_id,)
+    await make_application(dependencies, lease_owner="worker-2").resume_recoverable()
+
+    second_claim = repository.current[accepted.debate_id].checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert second_claim is not None
+    assert second_claim.status is GenerationStatus.IN_FLIGHT
+    assert second_claim.logical_attempt == 2
+    await make_application(dependencies, lease_owner="worker-3").resume_recoverable()
+
+    failed = repository.current[accepted.debate_id]
+    checkpoint = failed.checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "generation_attempts_exhausted"
+    assert checkpoint is not None
+    assert checkpoint.status is GenerationStatus.FAILED
+    assert checkpoint.logical_attempt == 2
+    assert len(openai.decision_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_generation_settlement_uses_a_heartbeat_renewed_lease(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.decision_delay = 0.03
+    app = make_application(dependencies, lease_renewal=0.005)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = repository.current[accepted.debate_id]
+    checkpoint = completed.checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert checkpoint is not None
+    assert checkpoint.status is GenerationStatus.COMPLETED
+    assert checkpoint.logical_attempt == 1
+    assert len(openai.decision_calls) == 1
+    assert repository.renew_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retryable", [False, True])
+async def test_known_generation_provider_failure_records_one_logical_call(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+    *,
+    retryable: bool,
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.decision_errors.append(
+        GenerationProviderError(
+            "openai_known_failure",
+            "content-free provider failure",
+            retryable=retryable,
+        )
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = repository.current[accepted.debate_id]
+    checkpoint = failed.checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "openai_known_failure"
+    assert checkpoint is not None
+    assert checkpoint.status is GenerationStatus.FAILED
+    assert checkpoint.logical_attempt == 1
+    assert len(openai.decision_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_delivery_preflight_failure_stops_before_the_provider_call(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    discord = dependencies[3]
+    openai = dependencies[5]
+    repository = dependencies[6]
+    discord.delivery_ready = False
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = repository.current[accepted.debate_id]
+    checkpoint = failed.checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "discord_delivery_preflight_failed"
+    assert checkpoint is not None
+    assert checkpoint.status is GenerationStatus.FAILED
+    assert checkpoint.logical_attempt == 0
+    assert openai.decision_calls == []
+    assert discord.delivery_checks == [(DiscordBotSlot.MODERATOR, "guild", "102")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("checkpoint_shape", ["wrong_participant", "duplicate"])
+async def test_decision_generation_rejects_an_ambiguous_checkpoint_set_before_external_calls(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+    checkpoint_shape: str,
+) -> None:
+    discord = dependencies[3]
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.decision_errors.append(asyncio.CancelledError())
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    with pytest.raises(asyncio.CancelledError):
+        await app.run_debate(accepted.debate_id)
+
+    current = repository.current[accepted.debate_id]
+    winner_checkpoint = current.checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert winner_checkpoint is not None
+    wrong_checkpoint = replace(
+        winner_checkpoint,
+        participant=ParticipantSlot.PARTICIPANT_A,
+    )
+    checkpoints = (
+        (wrong_checkpoint,)
+        if checkpoint_shape == "wrong_participant"
+        else (
+            winner_checkpoint,
+            GenerationCheckpoint.planned(
+                phase=DebatePhase.GENERATING_DECISION,
+                participant=ParticipantSlot.PARTICIPANT_A,
+                at=current.state.updated_at,
+            ),
+        )
+    )
+    repository.current[accepted.debate_id] = replace(
+        current,
+        generation_checkpoints=checkpoints,
+    )
+    provider_calls = tuple(openai.decision_calls)
+    delivery_checks = tuple(discord.delivery_checks)
+
+    await app.run_debate(accepted.debate_id)
+
+    assert tuple(openai.decision_calls) == provider_calls
+    assert tuple(discord.delivery_checks) == delivery_checks
+    unchanged = repository.current[accepted.debate_id]
+    assert unchanged.state.phase is DebatePhase.GENERATING_DECISION
+    assert unchanged.generation_checkpoints == checkpoints
+    assert unchanged.terminal_delivery is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_settles_an_in_flight_generation_without_another_provider_call(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.decision_errors.append(asyncio.CancelledError())
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+    with pytest.raises(asyncio.CancelledError):
+        await app.run_debate(accepted.debate_id)
+
+    await app.cancel_debate(
+        CancelDebateCommand(accepted.debate_id, "requester", "cancel-generation")
+    )
+    await app.run_debate(accepted.debate_id)
+
+    cancelled = repository.current[accepted.debate_id]
+    checkpoint = cancelled.checkpoint_for(
+        phase=DebatePhase.GENERATING_DECISION,
+        participant=ParticipantSlot.PARTICIPANT_B,
+    )
+    assert cancelled.state.phase is DebatePhase.CANCELLED
+    assert checkpoint is not None
+    assert checkpoint.status is GenerationStatus.FAILED
+    assert checkpoint.error_code == "generation_cancelled"
+    assert len(openai.decision_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_bounded_delivery_reconciles_before_abandonment(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    class BoundAtTerminalRecovery(FakeOutboxRecovery):
+        async def drain(self, *, expected: DebateSnapshot) -> None:
+            self.calls.append(expected)
+            if expected.terminal_delivery is not None:
+                raise OutboxRecoveryAbandoned("deadline_exceeded")
+
+    recovery = BoundAtTerminalRecovery(termination_complete=True)
+    app = make_application(dependencies, outbox_recovery=recovery)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = dependencies[6].current[accepted.debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert isinstance(completed.terminal_delivery, PhaseDeliveryPlan)
+    assert completed.terminal_delivery.status is PhaseDeliveryStatus.DELIVERED
+    assert len(recovery.calls) == 3
+    terminating = recovery.calls[-1].terminal_delivery
+    assert isinstance(terminating, PhaseDeliveryPlan)
+    assert terminating.status is PhaseDeliveryStatus.TERMINATING
+
+
+@pytest.mark.asyncio
+async def test_completed_delivery_abandonment_converges_through_best_effort_failed_notice(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    class AbandonEveryPlan(FakeOutboxRecovery):
+        async def drain(self, *, expected: DebateSnapshot) -> None:
+            self.calls.append(expected)
+            if expected.terminal_delivery is not None:
+                raise OutboxRecoveryAbandoned("deadline_exceeded")
+
+    recovery = AbandonEveryPlan(termination_complete=False)
+    app = make_application(dependencies, outbox_recovery=recovery)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = dependencies[6].current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "discord_outbox_deadline_exceeded"
+    assert isinstance(failed.terminal_delivery, PhaseDeliveryPlan)
+    assert failed.terminal_delivery.target_phase is DebatePhase.FAILED
+    assert failed.terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
+
+
+@pytest.mark.asyncio
+async def test_cancelled_notice_abandonment_does_not_block_terminal_convergence(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    class AbandonEveryPlan(FakeOutboxRecovery):
+        async def drain(self, *, expected: DebateSnapshot) -> None:
+            self.calls.append(expected)
+            if expected.terminal_delivery is not None:
+                raise OutboxRecoveryAbandoned("deadline_exceeded")
+
+    recovery = AbandonEveryPlan(termination_complete=False)
+    app = make_application(dependencies, outbox_recovery=recovery)
+    accepted = await accept_bound_debate(app)
+    await app.cancel_debate(
+        CancelDebateCommand(accepted.debate_id, "requester", "cancel-best-effort")
+    )
+
+    await app.run_debate(accepted.debate_id)
+
+    cancelled = dependencies[6].current[accepted.debate_id]
+    assert cancelled.state.phase is DebatePhase.CANCELLED
+    assert isinstance(cancelled.terminal_delivery, PhaseDeliveryPlan)
+    assert cancelled.terminal_delivery.target_phase is DebatePhase.CANCELLED
+    assert cancelled.terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
 
 
 @pytest.mark.asyncio
