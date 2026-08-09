@@ -76,6 +76,7 @@ class _SourceDiagnosticContext(StrEnum):
     WEB_SEARCH_SOURCE_URL = "web_search_source_url"
     MESSAGE_CONTENT = "message_content"
     OUTPUT_TEXT_ANNOTATIONS = "output_text_annotations"
+    OUTPUT_TEXT_ANNOTATION = "output_text_annotation"
     URL_CITATION_URL = "url_citation_url"
     EVIDENCE_SOURCES = "evidence_sources"
     UNEXPECTED_EXCEPTION = "unexpected_exception"
@@ -120,9 +121,16 @@ class _CitationExtraction:
 
 
 @dataclass(frozen=True, slots=True)
+class _SearchSourceExtraction:
+    urls: tuple[str, ...]
+    rejected_url_kinds: tuple[_DiagnosticKind, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceExtraction:
     items: tuple[EvidenceItem, ...]
     web_search_source_count: int
+    web_search_source_rejected_kinds: tuple[_DiagnosticKind, ...]
     url_citation_count: int
     title_fallback_kinds: tuple[_DiagnosticKind, ...]
 
@@ -312,6 +320,7 @@ def _extract_sources(
 ) -> _SourceExtraction:
     titles: dict[str, str] = {}
     source_urls: list[str] = []
+    rejected_source_kinds: list[_DiagnosticKind] = []
     citation_count = 0
     title_fallback_kinds: list[_DiagnosticKind] = []
     outputs = getattr(response, "output", _MISSING)
@@ -319,7 +328,9 @@ def _extract_sources(
         raise _SourceExtractionError(_SourceDiagnosticContext.RESPONSE_OUTPUT, outputs)
     for output in outputs:
         if isinstance(output, ResponseFunctionWebSearch):
-            source_urls.extend(_search_source_urls(output))
+            search_sources = _search_source_urls(output)
+            source_urls.extend(search_sources.urls)
+            rejected_source_kinds.extend(search_sources.rejected_url_kinds)
         if isinstance(output, ResponseOutputMessage):
             citations = _message_citation_titles(output)
             titles.update(citations.titles)
@@ -327,7 +338,10 @@ def _extract_sources(
             title_fallback_kinds.extend(citations.title_fallback_kinds)
     timestamp = retrieved_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
     items: list[EvidenceItem] = []
-    for url in dict.fromkeys((*source_urls, *titles)):
+    # The response message's url_citation annotations are the canonical evidence
+    # references. action.sources is supplemental search-call metadata and is
+    # observed separately, but never promotes an uncited URL into Evidence.
+    for url in titles:
         title = titles.get(url, url)
         metadata = json.dumps(
             {"source_type": "url", "title": title, "url": url},
@@ -347,33 +361,34 @@ def _extract_sources(
     return _SourceExtraction(
         items=tuple(items),
         web_search_source_count=len(source_urls),
+        web_search_source_rejected_kinds=tuple(rejected_source_kinds),
         url_citation_count=citation_count,
         title_fallback_kinds=tuple(title_fallback_kinds),
     )
 
 
-def _search_source_urls(output: ResponseFunctionWebSearch) -> tuple[str, ...]:
+def _search_source_urls(output: ResponseFunctionWebSearch) -> _SearchSourceExtraction:
     action = getattr(output, "action", _MISSING)
     if isinstance(action, (ActionOpenPage, ActionFind)):
-        return ()
+        return _SearchSourceExtraction((), ())
     if not isinstance(action, ActionSearch):
         raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_ACTION, action)
     sources = getattr(action, "sources", _MISSING)
     if sources is _MISSING or sources is None:
-        return ()
+        return _SearchSourceExtraction((), ())
     if not isinstance(sources, list):
         raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_SOURCES, sources)
     urls: list[str] = []
+    rejected_url_kinds: list[_DiagnosticKind] = []
     for source in sources:
         if not isinstance(source, ActionSearchSource):
             raise _SourceExtractionError(_SourceDiagnosticContext.WEB_SEARCH_SOURCE, source)
-        urls.append(
-            _required_source_url(
-                getattr(source, "url", _MISSING),
-                _SourceDiagnosticContext.WEB_SEARCH_SOURCE_URL,
-            )
-        )
-    return tuple(urls)
+        value = getattr(source, "url", _MISSING)
+        if not isinstance(value, str) or not value.strip():
+            rejected_url_kinds.append(_diagnostic_kind(value))
+            continue
+        urls.append(value)
+    return _SearchSourceExtraction(tuple(urls), tuple(rejected_url_kinds))
 
 
 def _message_citation_titles(output: ResponseOutputMessage) -> _CitationExtraction:
@@ -393,19 +408,23 @@ def _message_citation_titles(output: ResponseOutputMessage) -> _CitationExtracti
                 annotations,
             )
         for annotation in annotations:
-            if isinstance(annotation, AnnotationURLCitation):
-                count += 1
-                url = _required_source_url(
-                    getattr(annotation, "url", _MISSING),
-                    _SourceDiagnosticContext.URL_CITATION_URL,
+            if not isinstance(annotation, AnnotationURLCitation):
+                raise _SourceExtractionError(
+                    _SourceDiagnosticContext.OUTPUT_TEXT_ANNOTATION,
+                    annotation,
                 )
-                title, fallback_kind = _source_title(
-                    getattr(annotation, "title", _MISSING),
-                    url,
-                )
-                titles[url] = title
-                if fallback_kind is not None:
-                    title_fallback_kinds.append(fallback_kind)
+            count += 1
+            url = _required_source_url(
+                getattr(annotation, "url", _MISSING),
+                _SourceDiagnosticContext.URL_CITATION_URL,
+            )
+            title, fallback_kind = _source_title(
+                getattr(annotation, "title", _MISSING),
+                url,
+            )
+            titles[url] = title
+            if fallback_kind is not None:
+                title_fallback_kinds.append(fallback_kind)
     return _CitationExtraction(titles, count, tuple(title_fallback_kinds))
 
 
@@ -470,6 +489,11 @@ def _usage_record(
         cached_input_tokens=(usage.input_tokens_details.cached_tokens if usage else 0),
         reasoning_tokens=(usage.output_tokens_details.reasoning_tokens if usage else 0),
         web_search_source_count=extraction.web_search_source_count,
+        web_search_source_rejected_count=len(extraction.web_search_source_rejected_kinds),
+        web_search_source_rejected_kinds=(
+            ",".join(sorted({kind.value for kind in extraction.web_search_source_rejected_kinds}))
+            or None
+        ),
         url_citation_count=extraction.url_citation_count,
         evidence_source_count=len(extraction.items),
         title_fallback_count=len(extraction.title_fallback_kinds),
