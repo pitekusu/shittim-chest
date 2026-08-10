@@ -2,7 +2,7 @@
 aliases:
   - Discord討論過程表示実装計画
 tags: [project, discord, application, dynamodb, outbox]
-status: in-progress
+status: completed
 created: 2026-08-09
 updated: 2026-08-10
 ---
@@ -178,6 +178,9 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - live feedbackを反映し、COMPLETED配送は同一の最大20 operations内で2主体へ分割する。delivery sequence 300でmoderatorが3候補の票数とPythonが確定した勝者を発表し、その後のsequence 301以降でwinner Botが勝者personaに基づく勝利コメントと最終決定・実行案・注意点を投稿する。
 - 勝利コメントのためにOpenAI callを追加しない。既存の最終決定Structured Outputへ必須`victory_message`を追加し、同じ1回のdecision callをwinnerのprivate persona instructionsで実行する。Pythonのwinner規則、model、reasoning、token budget、`store=false`、生成checkpointは変更せず、旧decision itemの`victory_message`欠落はlegacy互換として読み取る。
 - 新形式のstage／finalizeはmoderator 1 operationの後にwinner最大19 operationsだけを許可し、欠落、逆順、別Bot、重複chunkをfail closedにする。deploy時に進行中の旧PhaseDeliveryPlan／TerminalDeliveryPlanは、旧uniform moderatorまたは旧uniform winnerの完全なoperation identityに限ってfinalize可能とする。
+- PR `#177`で保存済みwinnerに対応するBotへ最終決定を割り当て、PR `#178`でmoderatorの票数・勝者発表とwinner personaによる勝利コメント／最終決定を分離した。PR `#179`は同一Git treeのPR merge-ref／squash main間で生じたimage config digest差をbuilder stageの再構築で是正し、機能契約は変更していない。
+- main SHA `9df35570ca61faebfcf4e0241cf4fa51e2a4f148`のProduction Release run `31374787215`はplan、Environment承認後のdeploy、cleanupを完走した。release evidence、署名／attestation、Change Set実行、deployment lock解放、未実行Change Set 0をworkflow内で確認した。
+- 2026-08-10の最終live acceptanceでは、moderator所有のdelivery sequence 300が票数とwinnerを1回で投稿し、保存済みwinner `participant-c`所有のsequence 301がpersonaに基づく勝利コメントと最終決定を1回で投稿した。両operationはdelivery attempt 1でSENT、terminal planはDELIVERED、全phaseの重複／ABANDONEDは0、Outbox pending／claimedとactive attemptは0へ収束した。ECS `0/0/0`は利用者判断によりこの機能受入の確認対象外とした。
 
 各PRをmerge後、manager承認を得て個別にProduction Releaseし、live確認後に次PRへ進む。部分表示期間は意図した段階投入として計画書と進捗記録に明記する。
 
@@ -224,19 +227,19 @@ DynamoDB Localでは最大24-operation phaseと最大20-chunk terminalを実際�
 - PR-C: ballot close前write 0、close後の3票公開
 - PR-D: 保存済みwinnerと最終投稿Botの一致
 
-各回、panel、channel Status、DynamoDB、Outbox activity、ECS 0／0／0を確認する。winner全組合せ、multi-chunk、障害注入はlocal／contract試験で行い、live OpenAI試験を不必要に増やさない。
+各回、panel、channel Status、DynamoDB、Outbox activityを確認する。ECS `0/0/0`は[[10_scale-to-zero-goal]]の運用受入であり、本表示計画の機能受入とは分離する。Runtime停止を改めて確認するかは変更scopeと利用者判断で決め、本表示計画の完了条件には含めない。winner全組合せ、multi-chunk、障害注入はlocal／contract試験で行い、live OpenAI試験を不必要に増やさない。
 
 ## 5. 文書と境界
 
-- 既存Draft PR #164を維持し、Obsidian正本の23_Discord討論過程表示実装計画.mdをこの内容へ置換してから既存手順でmirrorを同期する。新しい計画書は追加しない。
+- 本計画の正本はこの文書を維持し、実装・受入結果を同じ文書へ反映して既存手順でmirrorを同期する。新しい計画書は追加しない。
 - 実装PRでは変更した契約に直接関係する正本だけを更新する。
 - 新しいAWS resource、IAM、CDK stack、Discord Application設定は追加しない。
-- OpenAI prompt、model、reasoning、token budget、winner規則、Runtime起動方式は変更しない。
+- model、reasoning、token budget、winner規則、Runtime起動方式は変更しない。PR `#178`で承認された例外として、既存の1回のdecision callをwinner persona instructionsで実行し、Structured Outputへ必須`victory_message`を追加した。追加OpenAI requestは行わない。
 - Release安全性は既存の原子的deployment lock取得を正とし、単なる事前readをdeploy許可には使わない。
 - SENTは送信・照合時点の成功を意味する。後日の外部編集・削除を継続監視する機能は別課題とする。
 
-## 6. 開始工程と停止点
+## 6. 完了状態
 
-計画PR #164の改訂後、最初に実装する工程はPR-0「Delivery safety foundation」とする。PR-0では新しい途中投稿を有効化しない。
+PR-0、PR-A、PR-B、PR-C、PR-D、およびlive feedbackに基づく票数・勝者発表／persona別勝利コメントは、個別のmerge、Production Release、live acceptanceを完了した。
 
-PR-0の実装、merge、Production Release、live acceptanceは、それぞれ本計画の依存順とmanager承認境界に従う。PR #164の改訂作業ではPR-0のコード変更、Production Release、AWS／Discord／OpenAI writeを行わない。
+初回意見、最終案、投票、moderatorの集計、winner Botの最終発表は、保存済みwinnerとglobal delivery sequenceに従って重複なく表示される。Pythonによるwinner決定、OpenAI `store=false`、bounded generation、fail-closed Outbox、Discord content照合、Release承認境界は維持される。本計画をクローズし、追加機能は新しい承認済み工程として扱う。
