@@ -426,6 +426,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             _text(decision_item, "decision"),
             _string_tuple(decision_item, "actions"),
             _string_tuple(decision_item, "caveats"),
+            _optional_text(decision_item, "victory_message"),
         )
     escalation_item = _optional_one(items, "escalation_assessment", attempt_id=attempt_id)
     escalation_assessment = None
@@ -1678,7 +1679,7 @@ def _serialize_decision(
     attempt_id: str,
     value: FinalDecision,
 ) -> DynamoItem:
-    return {
+    item: DynamoItem = {
         **common,
         "SK": f"ATTEMPT#{attempt_id}#DECISION",
         "record_type": "decision",
@@ -1688,6 +1689,8 @@ def _serialize_decision(
         "actions": list(value.actions),
         "caveats": list(value.caveats),
     }
+    _put_optional(item, "victory_message", value.victory_message)
+    return item
 
 
 def _serialize_escalation(

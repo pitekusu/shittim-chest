@@ -94,6 +94,7 @@ def final_decision(
         decision=decision,
         actions=("薄力粉と卵を混ぜる", "いちごを添える"),
         caveats=("甘さは好みで調整する",),
+        victory_message="選んでくれてありがとう。私らしくまとめるね。",
     )
 
 
@@ -130,7 +131,7 @@ def test_completed_delivery_contains_decision_actions_caveats_and_disclaimer() -
     assert "- 安倍晋三: 0票" in result_content
     assert "**勝者**\n> プラナ (2票)" in result_content
     assert "**勝利の言葉**" in decision_content
-    assert "選んでいただきありがとうございます" in decision_content
+    assert "選んでくれてありがとう。私らしくまとめるね。" in decision_content
     assert "**最終決定**" in decision_content
     assert "フルーツを添えたパンケーキ" in decision_content
     assert "- 薄力粉と卵を混ぜる" in decision_content
@@ -181,6 +182,24 @@ def test_completed_delivery_explains_a_tied_ballot_before_the_winner_speaks() ->
     assert "**勝者**\n> アロナ (1票)" in operations[0].content
     assert "同票のため、規定の評価基準で勝者を決定しました。" in operations[0].content
     assert operations[1].bot_slot is DiscordBotSlot.PARTICIPANT_A
+
+
+def test_legacy_completed_delivery_without_victory_message_keeps_the_decision() -> None:
+    source = snapshot(
+        final_decision=replace(final_decision(), victory_message=None),
+    )
+
+    operations = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
+    )
+    decision_content = "\n".join(operation.content for operation in operations[1:])
+
+    assert "**勝利の言葉**" not in decision_content
+    assert "**最終決定**" in decision_content
+    assert "フルーツを添えたパンケーキ" in decision_content
 
 
 def test_failed_and_cancelled_delivery_have_safe_terminal_content() -> None:

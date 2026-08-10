@@ -836,13 +836,16 @@ def _terminal_content(
         decision = snapshot.final_decision
         if decision is None or error_code is not None:
             raise ValueError("completed delivery requires a decision without an error")
-        sections = [
-            "**勝利の言葉**",
-            "> 選んでいただきありがとうございます。私の意見をまとめてお伝えします。",
-            "",
-            "**最終決定**",
-            _quoted_model_text(decision.decision),
-        ]
+        sections = []
+        if decision.victory_message is not None:
+            sections.extend(
+                (
+                    "**勝利の言葉**",
+                    _quoted_model_text(decision.victory_message),
+                    "",
+                )
+            )
+        sections.extend(("**最終決定**", _quoted_model_text(decision.decision)))
         if decision.actions:
             sections.extend(
                 (

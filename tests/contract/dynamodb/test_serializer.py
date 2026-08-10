@@ -128,6 +128,7 @@ def snapshot() -> DebateSnapshot:
             "フレンチトースト",
             ("パンを卵液に浸す",),
             ("アレルギーを確認する",),
+            "私らしい朝食に決まりました。ありがとう。",
         ),
         escalation_assessment=EscalationAssessment(
             rules_version="escalation-shadow-v1",
@@ -163,6 +164,21 @@ def test_snapshot_round_trip_preserves_current_attempt_and_vertical_items() -> N
     assert debate_meta["control_panel_message_id"] == "103"
     assert attempt_meta["gsi2pk"] == "RECOVERABLE"
     assert attempt_meta["fencing_token"] == 42
+
+
+def test_legacy_decision_without_victory_message_remains_readable() -> None:
+    source = snapshot()
+    assert source.final_decision is not None
+    legacy_items = tuple(
+        {key: value for key, value in item.items() if key != "victory_message"}
+        if item["record_type"] == "decision"
+        else item
+        for item in serialize_snapshot(source)
+    )
+
+    restored = deserialize_snapshot(legacy_items)
+
+    assert restored.final_decision == replace(source.final_decision, victory_message=None)
 
 
 def test_terminal_snapshot_removes_recoverable_index() -> None:

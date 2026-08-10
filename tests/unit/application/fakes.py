@@ -248,7 +248,13 @@ class FakeOpenAI:
             await asyncio.sleep(self.decision_delay)
         if self.decision_errors:
             raise self.decision_errors.pop(0)
-        return FinalDecision(voting_result.winner, "decision", ("action",), ())
+        return FinalDecision(
+            voting_result.winner,
+            "decision",
+            ("action",),
+            (),
+            "persona victory message",
+        )
 
 
 class FakeRepository:

@@ -28,13 +28,15 @@ def participant_instructions(persona_prompt: str) -> str:
     return f"{BASE_INSTRUCTIONS}\n<private_persona>\n{persona_prompt}\n</private_persona>"
 
 
-def moderator_instructions() -> str:
-    """Return fixed instructions for final decision wording."""
+def winner_decision_instructions(persona_prompt: str) -> str:
+    """Generate the final wording in the mechanically selected winner's persona."""
 
     return (
-        f"{BASE_INSTRUCTIONS}\n"
-        "Preserve the mechanically selected winner. Do not replace it, add new facts, "
-        "or calculate the winner yourself."
+        f"{participant_instructions(persona_prompt)}\n"
+        "You are the mechanically selected winner. Do not replace the winner, add new facts, "
+        "or calculate the winner yourself. Write victory_message as a concise first-person "
+        "acknowledgement in the private persona's characteristic voice, then organize that "
+        "winner's proposal into the final decision fields."
     )
 
 

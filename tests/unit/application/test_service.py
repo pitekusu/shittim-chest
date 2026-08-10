@@ -475,6 +475,7 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert completed.state.phase is DebatePhase.COMPLETED
     assert completed.final_decision is not None
     assert completed.final_decision.winner is ParticipantSlot.PARTICIPANT_B
+    assert completed.final_decision.victory_message == "persona victory message"
     assert completed.escalation_assessment is not None
     assert completed.escalation_assessment.split_vote is True
     assert completed.escalation_assessment.executed is False
@@ -500,6 +501,9 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert completed_operations[0].bot_slot is DiscordBotSlot.MODERATOR
     assert all(
         operation.bot_slot is DiscordBotSlot.PARTICIPANT_B for operation in completed_operations[1:]
+    )
+    assert "persona victory message" in "\n".join(
+        operation.content for operation in completed_operations[1:]
     )
     assert MetricEvent.COMPLETED in {event for event, _ in metrics.events}
     assert [item.state.phase for item in repository.history[accepted.debate_id]] == [
