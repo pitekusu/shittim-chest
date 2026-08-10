@@ -80,6 +80,18 @@ def test_load_bootstrap_config_redacts_invalid_private_values() -> None:
     assert private_marker not in repr(captured.value)
 
 
+def test_load_bootstrap_config_rejects_renderer_incompatible_display_name() -> None:
+    environment = _valid_environment()
+    persona = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"])
+    persona["display_name"] = "Generic\u200dA"
+    environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"] = json.dumps(persona)
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        load_bootstrap_config(environment)
+
+    assert str(captured.value) == "startup_configuration_invalid"
+
+
 def test_load_bootstrap_config_requires_one_matching_version_for_all_payloads() -> None:
     environment = _valid_environment()
     persona = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_C_JSON"])

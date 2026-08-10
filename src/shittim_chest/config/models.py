@@ -15,6 +15,7 @@ from shittim_chest.application import (
     DiscordBotSlot,
     DiscordIdentityConfig,
     DiscordRuntimeConfig,
+    sanitize_discord_model_text,
 )
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
@@ -75,6 +76,12 @@ class PersonaConfigPayload(_StrictModel):
     def _reject_blank_text(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("text must not be blank")
+        return value
+
+    @field_validator("display_name")
+    @classmethod
+    def _require_renderer_compatible_display_name(cls, value: str) -> str:
+        sanitize_discord_model_text(value)
         return value
 
     @field_validator("system_prompt")

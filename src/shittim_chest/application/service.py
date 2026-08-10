@@ -17,6 +17,7 @@ from shittim_chest.application.discord import (
     prepare_initial_opinion_outbox_operations,
     prepare_terminal_outbox_operations,
     prepare_vote_outbox_operations,
+    sanitize_discord_model_text,
 )
 from shittim_chest.application.errors import (
     DebateNotFound,
@@ -158,6 +159,8 @@ class DebateApplication:
             not isinstance(name, str) or not name.strip() for name in copied_display_names.values()
         ):
             raise ValueError("participant display name must not be empty")
+        for name in copied_display_names.values():
+            sanitize_discord_model_text(name)
         self._clock = clock
         self._ids = ids
         self._metrics = metrics
