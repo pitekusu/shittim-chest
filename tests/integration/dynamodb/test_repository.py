@@ -654,9 +654,11 @@ async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("winner", tuple(ParticipantSlot))
 async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,
+    winner: ParticipantSlot,
 ) -> None:
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
     ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
@@ -700,7 +702,7 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
             thread_id="102",
             control_panel_message_id="103",
             final_decision=FinalDecision(
-                winner=ParticipantSlot.PARTICIPANT_A,
+                winner=winner,
                 decision="fixture decision",
                 actions=("fixture action",),
                 caveats=("fixture caveat",),
