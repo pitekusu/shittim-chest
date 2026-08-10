@@ -163,7 +163,32 @@ def test_dockerfile_rejects_independently_cached_linked_venv_layers(tmp_path: Pa
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="final-stage non-linked venv copies"):
+    with pytest.raises(ValueError, match=r"production stage.*non-linked venv copy"):
+        validate_dockerfile(policy, dockerfile)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "target=/tmp/source-venv,ro",
+        "--sort=name",
+        '--mtime="@${SOURCE_DATE_EPOCH}"',
+        "--owner=65532 --group=65532 --numeric-owner --format=gnu .",
+        "--numeric-owner --delay-directory-restore",
+    ],
+)
+def test_dockerfile_requires_deterministic_break_glass_venv_transfer(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(marker, "unsafe", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="deterministic tar stream"):
         validate_dockerfile(policy, dockerfile)
 
 

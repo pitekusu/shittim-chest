@@ -75,13 +75,21 @@ RUN apt-get update \
 
 FROM break-glass-tools AS break-glass
 
+ARG SOURCE_DATE_EPOCH
+
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
+RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro \
+    mkdir -p /app/.venv \
+    && tar --create --file=- --directory=/tmp/source-venv \
+        --sort=name --mtime="@${SOURCE_DATE_EPOCH}" \
+        --owner=65532 --group=65532 --numeric-owner --format=gnu . \
+    | tar --extract --file=- --directory=/app/.venv \
+        --numeric-owner --delay-directory-restore
 
 USER 65532:65532
 
