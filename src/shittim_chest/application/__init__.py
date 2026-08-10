@@ -25,6 +25,7 @@ from shittim_chest.application.discord import (
     prepare_initial_opinion_outbox_operations,
     prepare_outbox_operations,
     prepare_terminal_outbox_operations,
+    prepare_vote_outbox_operations,
     sanitize_discord_model_text,
     split_discord_message,
 )
@@ -236,6 +237,7 @@ __all__ = (
     "prepare_initial_opinion_outbox_operations",
     "prepare_outbox_operations",
     "prepare_terminal_outbox_operations",
+    "prepare_vote_outbox_operations",
     "render_public_status",
     "sanitize_discord_model_text",
     "sanitize_status_text",

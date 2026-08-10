@@ -52,6 +52,8 @@ from shittim_chest.application.discord import (
     MAX_INITIAL_OPINION_CHUNKS,
     MAX_TERMINAL_NOTICE_CHUNKS,
     MAX_TERMINAL_OUTBOX_CHUNKS,
+    MAX_VOTE_CHUNKS,
+    VOTE_DELIVERY_SEQUENCE_START,
     DiscordBotSlot,
     OutboxOperation,
     OutboxStatus,
@@ -3242,11 +3244,24 @@ def _require_terminal_stage(
         and plan.source_phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
         and plan.target_phase is DebatePhase.SELECTING_WINNER
     )
-    participant_phase_delivery = initial_opinion_delivery or final_proposal_delivery
+    vote_delivery = (
+        isinstance(plan, PhaseDeliveryPlan)
+        and plan.plan_id == "votes"
+        and plan.source_phase is DebatePhase.SELECTING_WINNER
+        and plan.target_phase is DebatePhase.GENERATING_DECISION
+    )
+    participant_phase_delivery = (
+        initial_opinion_delivery or final_proposal_delivery or vote_delivery
+    )
+    participant_chunk_limit = (
+        MAX_INITIAL_OPINION_CHUNKS
+        if initial_opinion_delivery
+        else MAX_FINAL_PROPOSAL_CHUNKS
+        if final_proposal_delivery
+        else MAX_VOTE_CHUNKS
+    )
     operation_limit = (
-        3 * (MAX_INITIAL_OPINION_CHUNKS if initial_opinion_delivery else MAX_FINAL_PROPOSAL_CHUNKS)
-        if participant_phase_delivery
-        else MAX_TERMINAL_OUTBOX_CHUNKS
+        3 * participant_chunk_limit if participant_phase_delivery else MAX_TERMINAL_OUTBOX_CHUNKS
     )
     if not operations or len(operations) > operation_limit:
         raise RepositoryConflict("delivery operation count is outside its bounds")
@@ -3322,9 +3337,6 @@ def _require_terminal_stage(
             raise RepositoryConflict("delivery operation violates its attempt fence")
         nonces.add(operation.nonce)
         expected_delivery_sequences.append(expected_delivery_sequence)
-    participant_chunk_limit = (
-        MAX_INITIAL_OPINION_CHUNKS if initial_opinion_delivery else MAX_FINAL_PROPOSAL_CHUNKS
-    )
     if participant_phase_delivery and any(
         not sequences
         or len(sequences) > participant_chunk_limit
@@ -3419,6 +3431,14 @@ def _participant_phase_operation_identity(
         operation_prefix = "final-proposal"
         delivery_sequence_start = FINAL_PROPOSAL_DELIVERY_SEQUENCE_START
         chunk_limit = MAX_FINAL_PROPOSAL_CHUNKS
+    elif (
+        plan.plan_id == "votes"
+        and plan.source_phase is DebatePhase.SELECTING_WINNER
+        and plan.target_phase is DebatePhase.GENERATING_DECISION
+    ):
+        operation_prefix = "vote"
+        delivery_sequence_start = VOTE_DELIVERY_SEQUENCE_START
+        chunk_limit = MAX_VOTE_CHUNKS
     else:
         raise RepositoryConflict("phase delivery is not a participant output plan")
     if not (

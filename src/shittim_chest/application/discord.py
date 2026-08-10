@@ -21,9 +21,11 @@ OUTBOX_CLAIM_SECONDS = 60
 MAX_TERMINAL_OUTBOX_CHUNKS = 20
 MAX_INITIAL_OPINION_CHUNKS = 8
 MAX_FINAL_PROPOSAL_CHUNKS = 8
+MAX_VOTE_CHUNKS = 8
 MAX_OUTBOX_DELIVERY_ATTEMPTS = 3
 INITIAL_OPINION_DELIVERY_SEQUENCE_START = 0
 FINAL_PROPOSAL_DELIVERY_SEQUENCE_START = 100
+VOTE_DELIVERY_SEQUENCE_START = 200
 COMPLETED_DELIVERY_SEQUENCE_START = 300
 FAILED_DELIVERY_SEQUENCE_START = 900
 CANCELLED_DELIVERY_SEQUENCE_START = 910
@@ -668,6 +670,67 @@ def prepare_final_proposal_outbox_operations(
                 created_at=created_at,
                 record_schema_version=2,
                 phase=DebatePhase.SELECTING_WINNER,
+                plan_id=plan_id,
+                delivery_sequence_start=sequence_start,
+            )
+        )
+    return tuple(operations)
+
+
+def prepare_vote_outbox_operations(
+    *,
+    snapshot: DebateSnapshot,
+    created_at: datetime,
+) -> tuple[OutboxOperation, ...]:
+    """Build the ordered participant-owned delivery for one complete ballot."""
+
+    _require_utc(created_at, label="vote delivery creation timestamp")
+    if snapshot.state.phase is not DebatePhase.SELECTING_WINNER:
+        raise ValueError("votes can only be delivered from their generation phase")
+    if snapshot.thread_id is None:
+        raise ValueError("vote delivery requires a bound Discord thread")
+    votes = {vote.voter: vote for vote in snapshot.votes}
+    if len(votes) != len(PARTICIPANTS) or set(votes) != set(PARTICIPANTS):
+        raise ValueError("vote delivery requires each participant exactly once")
+
+    plan_id = "votes"
+    operations: list[OutboxOperation] = []
+    for participant_index, participant in enumerate(PARTICIPANTS):
+        vote = votes[participant]
+        bot_slot = DiscordBotSlot(participant.value)
+        content = "\n".join(
+            (
+                "**投票**",
+                "**投票先**",
+                _quoted_model_text(vote.candidate.value),
+                "**理由**",
+                _quoted_model_text(vote.reason),
+            )
+        )
+        chunks = split_discord_message(content)
+        if len(chunks) > MAX_VOTE_CHUNKS:
+            raise ValueError("one vote exceeds its reserved delivery sequence range")
+        sequence_start = VOTE_DELIVERY_SEQUENCE_START + participant_index * MAX_VOTE_CHUNKS
+        operations.extend(
+            prepare_outbox_operations(
+                operation_prefix=f"vote-{participant.value}",
+                debate_id=snapshot.state.debate_id,
+                attempt_id=snapshot.state.attempt_id,
+                bot_slot=bot_slot,
+                thread_id=snapshot.thread_id,
+                content=content,
+                nonce_sources=tuple(
+                    _derived_uuid7(
+                        snapshot.state.attempt_id,
+                        phase=DebatePhase.SELECTING_WINNER,
+                        bot_slot=bot_slot,
+                        sequence=sequence,
+                    )
+                    for sequence in range(len(chunks))
+                ),
+                created_at=created_at,
+                record_schema_version=2,
+                phase=DebatePhase.GENERATING_DECISION,
                 plan_id=plan_id,
                 delivery_sequence_start=sequence_start,
             )
