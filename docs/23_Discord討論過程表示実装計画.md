@@ -234,7 +234,7 @@ DynamoDB Localでは最大24-operation phaseと最大20-chunk terminalを実際�
 - 本計画の正本はこの文書を維持し、実装・受入結果を同じ文書へ反映して既存手順でmirrorを同期する。新しい計画書は追加しない。
 - 実装PRでは変更した契約に直接関係する正本だけを更新する。
 - 新しいAWS resource、IAM、CDK stack、Discord Application設定は追加しない。
-- OpenAI prompt、model、reasoning、token budget、winner規則、Runtime起動方式は変更しない。
+- model、reasoning、token budget、winner規則、Runtime起動方式は変更しない。PR `#178`で承認された例外として、既存の1回のdecision callをwinner persona instructionsで実行し、Structured Outputへ必須`victory_message`を追加した。追加OpenAI requestは行わない。
 - Release安全性は既存の原子的deployment lock取得を正とし、単なる事前readをdeploy許可には使わない。
 - SENTは送信・照合時点の成功を意味する。後日の外部編集・削除を継続監視する機能は別課題とする。
 
