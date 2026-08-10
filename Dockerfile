@@ -4,7 +4,7 @@ ARG SOURCE_DATE_EPOCH=0
 
 FROM ghcr.io/astral-sh/uv:0.11.33@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:3c9a295d653c9147f6732a0578cb5d2f19a764cc398d4291a0ab32152e751dfa AS builder
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:4e6d70f6819594aa6210ba629695eaec7e56f72cd1ec0dca22e9cf0699ff01d7 AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
-FROM dhi.io/python:3.14.6-debian13@sha256:9db32cc9009c5674edf024d212c2217f6ccbe700c7cd513cda7acb21c767e653 AS runtime-base
+FROM dhi.io/python:3.14.6-debian13@sha256:7fa71fa6509c110456742c8505dfea44f0b4656018123b3eaf4f33f71ae902b7 AS runtime-base
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -61,7 +61,7 @@ COPY --chown=65532:65532 tests/fixtures/container_process.py \
 
 ENV PYTHONPATH=/fault-tests
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:3c9a295d653c9147f6732a0578cb5d2f19a764cc398d4291a0ab32152e751dfa AS break-glass-tools
+FROM dhi.io/python:3.14.6-debian13-dev@sha256:4e6d70f6819594aa6210ba629695eaec7e56f72cd1ec0dca22e9cf0699ff01d7 AS break-glass-tools
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bsdutils procps \
@@ -75,13 +75,21 @@ RUN apt-get update \
 
 FROM break-glass-tools AS break-glass
 
+ARG SOURCE_DATE_EPOCH
+
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
+RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro \
+    mkdir -p /app/.venv \
+    && tar --create --file=- --directory=/tmp/source-venv \
+        --sort=name --mtime="@${SOURCE_DATE_EPOCH}" \
+        --owner=65532 --group=65532 --numeric-owner --format=gnu . \
+    | tar --extract --file=- --directory=/app/.venv \
+        --numeric-owner --delay-directory-restore
 
 USER 65532:65532
 

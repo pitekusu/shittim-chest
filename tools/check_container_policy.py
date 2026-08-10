@@ -264,9 +264,14 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     validate_dhi_reference(builder_reference, expected_tag=policy.builder_tag, dev=True)
     validate_dhi_reference(runtime_reference, expected_tag=policy.runtime_tag, dev=False)
     source_date_args = re.findall(r"^ARG SOURCE_DATE_EPOCH(?:=0)?$", text, re.MULTILINE)
-    if source_date_args != ["ARG SOURCE_DATE_EPOCH=0", "ARG SOURCE_DATE_EPOCH"]:
+    if source_date_args != [
+        "ARG SOURCE_DATE_EPOCH=0",
+        "ARG SOURCE_DATE_EPOCH",
+        "ARG SOURCE_DATE_EPOCH",
+    ]:
         raise ValueError(
-            "Dockerfile must default SOURCE_DATE_EPOCH globally and consume it in the builder"
+            "Dockerfile must default SOURCE_DATE_EPOCH globally and consume it in the builder "
+            "and break-glass stages"
         )
     first_from = text.index("FROM ")
     if text.index("ARG SOURCE_DATE_EPOCH=0") > first_from:
@@ -297,14 +302,23 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     if stages[6] != ("break-glass", "break-glass-tools"):
         raise ValueError("break-glass final stage must derive from the tooling stage")
     venv_copy = "COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv"
-    if text.count(venv_copy) != 2:
-        raise ValueError(
-            "production and break-glass stages must use final-stage non-linked venv copies"
-        )
+    if text.count(venv_copy) != 1:
+        raise ValueError("production stage must use one final-stage non-linked venv copy")
     break_glass_tools_start = text.index(f"FROM {builder_reference} AS break-glass-tools")
     break_glass_start = text.index("FROM break-glass-tools AS break-glass")
     break_glass_tools_text = text[break_glass_tools_start:break_glass_start]
     break_glass_text = text[break_glass_start:]
+    deterministic_venv_transfer = (
+        "RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro",
+        "--sort=name",
+        '--mtime="@${SOURCE_DATE_EPOCH}"',
+        "--owner=65532 --group=65532 --numeric-owner --format=gnu .",
+        "--numeric-owner --delay-directory-restore",
+    )
+    if any(marker not in break_glass_text for marker in deterministic_venv_transfer):
+        raise ValueError(
+            "break-glass stage must transfer the venv through a deterministic tar stream"
+        )
     volatile_apt_cleanup = (
         "apt-get clean",
         "rm -rf /var/lib/apt/lists/* /var/log/apt/*",
