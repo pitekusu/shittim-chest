@@ -29,7 +29,8 @@ COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py
 
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-editable \
-    && python /tmp/canonicalize_wheel_records.py /app/.venv
+    && python /tmp/canonicalize_wheel_records.py \
+        --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
 FROM dhi.io/python:3.14.6-debian13@sha256:9db32cc9009c5674edf024d212c2217f6ccbe700c7cd513cda7acb21c767e653 AS runtime-base
 
