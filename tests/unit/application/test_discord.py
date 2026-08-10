@@ -114,6 +114,32 @@ def terminal_snapshot() -> DebateSnapshot:
             ("@everyone action",),
             ("careful",),
         ),
+        votes=(
+            Vote(
+                ParticipantSlot.PARTICIPANT_A,
+                ParticipantSlot.PARTICIPANT_B,
+                5,
+                5,
+                5,
+                "support b",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_B,
+                ParticipantSlot.PARTICIPANT_A,
+                3,
+                3,
+                3,
+                "support a",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_C,
+                ParticipantSlot.PARTICIPANT_B,
+                4,
+                4,
+                4,
+                "support b again",
+            ),
+        ),
     )
 
 
@@ -592,6 +618,7 @@ def test_terminal_v2_operations_reserve_global_ranges_and_unique_nonces() -> Non
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW + timedelta(seconds=7),
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
     )
     failed = prepare_terminal_outbox_operations(
         snapshot=source,
@@ -612,10 +639,12 @@ def test_terminal_v2_operations_reserve_global_ranges_and_unique_nonces() -> Non
     assert all(
         operation.record_schema_version == 2 for operation in (*completed, *failed, *cancelled)
     )
-    assert "**最終決定**" in completed[0].content
-    assert "> first \\*line\\*" in completed[0].content
-    assert "> second" in completed[0].content
-    assert "> - @everyone action" in completed[0].content
+    assert "**投票結果**" in completed[0].content
+    completed_decision = "\n".join(operation.content for operation in completed[1:])
+    assert "**最終決定**" in completed_decision
+    assert "> first \\*line\\*" in completed_decision
+    assert "> second" in completed_decision
+    assert "> - @everyone action" in completed_decision
 
 
 def test_model_display_sanitizer_normalizes_escapes_and_rejects_controls() -> None:
@@ -781,11 +810,12 @@ def test_terminal_renderer_preserves_quotes_and_escapes_across_chunk_boundaries(
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW + timedelta(seconds=7),
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
     )
 
     assert len(operations) > 1
     assert all(len(operation.content) <= 2_000 for operation in operations)
-    for operation in operations:
+    for operation in operations[1:]:
         body = operation.content.split("\n", 1)[1]
         for line in body.splitlines():
             if "word" in line or "action" in line or "a" * 100 in line or "\\*" in line:
@@ -815,7 +845,8 @@ def test_terminal_renderer_preserves_intentional_blank_quoted_lines() -> None:
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW + timedelta(seconds=7),
-    )[0]
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+    )[1]
 
     assert "> first\n>\n> third" in operation.content
     with pytest.raises(ValueError, match="must not be empty"):

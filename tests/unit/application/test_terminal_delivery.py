@@ -26,10 +26,25 @@ from shittim_chest.domain import (
     FinalDecision,
     ParticipantSlot,
     RecoveryState,
+    Vote,
 )
 
 NOW = datetime(2026, 7, 27, 1, 0, tzinfo=UTC)
 AI_DISCLAIMER = "AI生成であり、正確性や専門的判断を保証するものではありません。"
+DISPLAY_NAMES = {
+    ParticipantSlot.PARTICIPANT_A: "アロナ",
+    ParticipantSlot.PARTICIPANT_B: "プラナ",
+    ParticipantSlot.PARTICIPANT_C: "安倍晋三",
+}
+
+
+def votes_for_winner(winner: ParticipantSlot) -> tuple[Vote, ...]:
+    others = tuple(participant for participant in ParticipantSlot if participant is not winner)
+    return (
+        Vote(winner, others[0], 3, 3, 3, "winner vote"),
+        Vote(others[0], winner, 5, 5, 5, "support one"),
+        Vote(others[1], winner, 4, 4, 4, "support two"),
+    )
 
 
 def snapshot(
@@ -63,6 +78,7 @@ def snapshot(
         thread_id=thread_id,
         control_panel_message_id="105",
         final_decision=final_decision,
+        votes=(votes_for_winner(final_decision.winner) if final_decision is not None else ()),
         error_code=error_code,
         terminal_delivery=terminal_delivery,
     )
@@ -103,14 +119,68 @@ def test_completed_delivery_contains_decision_actions_caveats_and_disclaimer() -
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
     )
-    content = "\n".join(operation.content for operation in operations)
+    result_content = operations[0].content
+    decision_content = "\n".join(operation.content for operation in operations[1:])
 
-    assert "**最終決定**" in content
-    assert "フルーツを添えたパンケーキ" in content
-    assert "- 薄力粉と卵を混ぜる" in content
-    assert "- 甘さは好みで調整する" in content
-    assert AI_DISCLAIMER in content
+    assert result_content.startswith("**投票結果**")
+    assert "- アロナ: 1票" in result_content
+    assert "- プラナ: 2票" in result_content
+    assert "- 安倍晋三: 0票" in result_content
+    assert "**勝者**\n> プラナ (2票)" in result_content
+    assert "**勝利の言葉**" in decision_content
+    assert "選んでいただきありがとうございます" in decision_content
+    assert "**最終決定**" in decision_content
+    assert "フルーツを添えたパンケーキ" in decision_content
+    assert "- 薄力粉と卵を混ぜる" in decision_content
+    assert "- 甘さは好みで調整する" in decision_content
+    assert AI_DISCLAIMER in decision_content
+
+
+def test_completed_delivery_explains_a_tied_ballot_before_the_winner_speaks() -> None:
+    tied_votes = (
+        Vote(
+            ParticipantSlot.PARTICIPANT_A,
+            ParticipantSlot.PARTICIPANT_B,
+            1,
+            1,
+            1,
+            "support b",
+        ),
+        Vote(
+            ParticipantSlot.PARTICIPANT_B,
+            ParticipantSlot.PARTICIPANT_C,
+            2,
+            2,
+            2,
+            "support c",
+        ),
+        Vote(
+            ParticipantSlot.PARTICIPANT_C,
+            ParticipantSlot.PARTICIPANT_A,
+            5,
+            5,
+            5,
+            "support a",
+        ),
+    )
+    source = replace(
+        snapshot(final_decision=final_decision(winner=ParticipantSlot.PARTICIPANT_A)),
+        votes=tied_votes,
+    )
+
+    operations = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
+    )
+
+    assert all(f"- {name}: 1票" in operations[0].content for name in DISPLAY_NAMES.values())
+    assert "**勝者**\n> アロナ (1票)" in operations[0].content
+    assert "同票のため、規定の評価基準で勝者を決定しました。" in operations[0].content
+    assert operations[1].bot_slot is DiscordBotSlot.PARTICIPANT_A
 
 
 def test_failed_and_cancelled_delivery_have_safe_terminal_content() -> None:
@@ -146,7 +216,7 @@ def test_failed_and_cancelled_delivery_have_safe_terminal_content() -> None:
         (ParticipantSlot.PARTICIPANT_C, DiscordBotSlot.PARTICIPANT_C),
     ),
 )
-def test_completed_delivery_is_owned_by_the_persisted_winner(
+def test_completed_delivery_announces_with_moderator_then_uses_the_persisted_winner(
     winner: ParticipantSlot,
     expected_bot_slot: DiscordBotSlot,
 ) -> None:
@@ -154,9 +224,14 @@ def test_completed_delivery_is_owned_by_the_persisted_winner(
         snapshot=snapshot(final_decision=final_decision(winner=winner)),
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
     )
 
-    assert all(operation.bot_slot is expected_bot_slot for operation in operations)
+    assert operations[0].bot_slot is DiscordBotSlot.MODERATOR
+    assert all(operation.bot_slot is expected_bot_slot for operation in operations[1:])
+    assert tuple(operation.delivery_sequence for operation in operations) == tuple(
+        range(300, 300 + len(operations))
+    )
 
 
 def test_terminal_operations_are_replay_stable_and_use_unique_uuid7_nonces() -> None:
@@ -166,11 +241,13 @@ def test_terminal_operations_are_replay_stable_and_use_unique_uuid7_nonces() -> 
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
     )
     replay = prepare_terminal_outbox_operations(
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
     )
     decoded_nonces = tuple(
         UUID(bytes=base64.urlsafe_b64decode(f"{operation.nonce}==")) for operation in first
@@ -180,7 +257,8 @@ def test_terminal_operations_are_replay_stable_and_use_unique_uuid7_nonces() -> 
     assert first == replay
     assert len({operation.nonce for operation in first}) == len(first)
     assert all(nonce.version == 7 and nonce.variant == RFC_4122 for nonce in decoded_nonces)
-    assert all(operation.bot_slot is DiscordBotSlot.PARTICIPANT_B for operation in first)
+    assert first[0].bot_slot is DiscordBotSlot.MODERATOR
+    assert all(operation.bot_slot is DiscordBotSlot.PARTICIPANT_B for operation in first[1:])
     assert all(operation.status is OutboxStatus.PREPARED for operation in first)
 
 
@@ -190,6 +268,7 @@ def test_plan_preserves_chunk_operation_id_and_content_hash_correspondence() -> 
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
     )
     delivery = plan_from_operations(
         target_phase=DebatePhase.COMPLETED,
@@ -199,17 +278,43 @@ def test_plan_preserves_chunk_operation_id_and_content_hash_correspondence() -> 
     assert tuple(zip(delivery.operation_ids, delivery.content_hashes, strict=True)) == tuple(
         (operation.operation_id, operation.content_hash) for operation in operations
     )
-    assert tuple(operation.chunk_sequence for operation in operations) == tuple(
-        range(len(operations))
+    assert operations[0].operation_id == "terminal-completed-result-0000"
+    assert operations[0].chunk_sequence == 0
+    assert tuple(operation.chunk_sequence for operation in operations[1:]) == tuple(
+        range(len(operations) - 1)
     )
     assert all(
-        operation.operation_id == f"terminal-completed-{operation.chunk_sequence:04d}"
+        operation.operation_id == f"terminal-completed-decision-{operation.chunk_sequence:04d}"
         and operation.content_hash == content_sha256(operation.content)
-        for operation in operations
+        for operation in operations[1:]
     )
 
 
 def test_terminal_operation_preconditions_fail_closed() -> None:
+    completed = snapshot(final_decision=final_decision())
+    with pytest.raises(ValueError, match="participant display names"):
+        prepare_terminal_outbox_operations(
+            snapshot=completed,
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW,
+        )
+    with pytest.raises(ValueError, match="each participant display name exactly once"):
+        prepare_terminal_outbox_operations(
+            snapshot=completed,
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW,
+            participant_display_names={ParticipantSlot.PARTICIPANT_A: "アロナ"},
+        )
+    with pytest.raises(ValueError, match="winner conflicts with the durable ballot"):
+        prepare_terminal_outbox_operations(
+            snapshot=replace(
+                completed,
+                final_decision=final_decision(winner=ParticipantSlot.PARTICIPANT_A),
+            ),
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW,
+            participant_display_names=DISPLAY_NAMES,
+        )
     with pytest.raises(ValueError, match="bound Discord thread"):
         prepare_terminal_outbox_operations(
             snapshot=snapshot(final_decision=final_decision(), thread_id=None),
@@ -299,6 +404,9 @@ def test_snapshot_requires_delivery_to_complete_only_after_terminal_transition(
         target_phase=target_phase,
         error_code=error_code,
         created_at=NOW,
+        participant_display_names=(
+            DISPLAY_NAMES if target_phase is DebatePhase.COMPLETED else None
+        ),
     )
     staged_plan = plan_from_operations(target_phase=target_phase, operations=operations)
     active = replace(source, terminal_delivery=staged_plan)

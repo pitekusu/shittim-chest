@@ -1241,11 +1241,16 @@ class DebateApplication:
             return
         thread_id = snapshot.thread_id
         winner_bot_slot = DiscordBotSlot(voting_result.winner.value)
-        delivery_ready = thread_id is not None and await self._discord.delivery_target_is_ready(
-            bot_slot=winner_bot_slot,
-            guild_id=snapshot.guild_id,
-            thread_id=thread_id,
-        )
+        delivery_ready = thread_id is not None
+        if thread_id is not None:
+            for bot_slot in (DiscordBotSlot.MODERATOR, winner_bot_slot):
+                if not await self._discord.delivery_target_is_ready(
+                    bot_slot=bot_slot,
+                    guild_id=snapshot.guild_id,
+                    thread_id=thread_id,
+                ):
+                    delivery_ready = False
+                    break
         if not delivery_ready:
             error_code = "discord_delivery_preflight_failed"
             if checkpoint.status is GenerationStatus.PLANNED:
@@ -2018,6 +2023,9 @@ class DebateApplication:
             target_phase=target,
             created_at=staged_at,
             error_code=error_code,
+            participant_display_names=(
+                self._participant_display_names if target is DebatePhase.COMPLETED else None
+            ),
         )
         delivery = PhaseDeliveryPlan(
             plan_id=operations[0].plan_id or f"terminal-{target.value}",
