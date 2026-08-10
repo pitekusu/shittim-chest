@@ -4,7 +4,7 @@ aliases:
 tags: [project, discord, application, dynamodb, outbox]
 status: in-progress
 created: 2026-08-09
-updated: 2026-08-09
+updated: 2026-08-10
 ---
 
 # Discord討論過程表示 実装計画（反証反映版）
@@ -146,13 +146,17 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - 同じprimitiveを変更せず、最終案3件を追加する。
 - local実装では、`COLLECTING_FINAL_PROPOSALS`でparticipantごとのGenerationCheckpointを用い、3 Botのdelivery preflight後に3件を並列生成する。各結果はcheckpoint完了と同じfenced writeで個別保存し、全3件がdurableになった後だけ`final-proposals`のPhaseDeliveryPlanとOutbox v2をstageする。
 - Discord配送はparticipant-a／b／cの順、固定delivery_sequence 100／108／116から開始し、1人最大8 chunks、phase全体最大24 operationsとする。全件SENT後だけ`SELECTING_WINNER`へ進み、provider失敗、participant不一致、preflight失敗、2回のlogical call消費では既存のbounded failureへ収束する。
-- focused application test 107件、DynamoDB Local repository test 29件、DynamoDB Localを含むfull pytest 1,838件で、参加者Bot所有、reserved sequence、22文字の再現可能nonce、結果ごとの永続化、successor leaseでの第2 logical call、preflight前のprovider call 0、失敗時の成功済みoutput保持、active leaseを保持したphase finalizeを確認した。Production Releaseとlive acceptanceは未実施である。
+- focused application test 107件、DynamoDB Local repository test 29件、DynamoDB Localを含むfull pytest 1,838件で、参加者Bot所有、reserved sequence、22文字の再現可能nonce、結果ごとの永続化、successor leaseでの第2 logical call、preflight前のprovider call 0、失敗時の成功済みoutput保持、active leaseを保持したphase finalizeを確認した。
 - canonical CI run `31322069591`では、baseline不一致以外のrequired checkとCodeQL 3言語が成功した。同一測定のartifactからproduction config digest `sha256:0de66ace43dd8c8532b49a557b52512723a7f62e0d9bae2cf275750cea5e547e`、break-glass config digest `sha256:7d53e6ed500340b71db9d76f65cd8bd16d142cfdfb4dbd61a30dd94a92299246`を取得し、両baselineを一括更新した。両SBOMはcanonical validatorで有効、fixable High／Criticalは0であり、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
+- Production Release run `31323023552`はmain SHA `a03469d9bf4e21b99351af9bdd8464a59c223f32`で成功した。live acceptanceでは、利用者が初回意見3件に続く最終案3件の表示と討論完了を確認した。
 
 ### PR-C: 投票
 
 - 3票を非公開で生成・保存後、participant Bot名、投票先、理由を順番に公開する。
 - winnerは既存Python select_winner()だけが決定する。
+- local実装では、`SELECTING_WINNER`でparticipantごとのGenerationCheckpointを用い、3 Botのdelivery preflight後に3件を並列生成する。各投票は取得でき次第checkpoint完了と同じfenced writeで保存し、全3件がdurableになった後だけ`votes`のPhaseDeliveryPlanとOutbox v2をstageする。
+- Discord配送はparticipant-a／b／cの順、固定delivery_sequence 200／208／216から開始し、各投稿を投票者Botが所有する。投稿内容は投票先とdisplay-only正規化済み理由に限定し、全件SENT後だけ`GENERATING_DECISION`へ進む。3票確定前、preflight失敗、provider失敗、participant不一致、2回のlogical call消費では投票Outboxを作成しない。
+- focused application test 117件、DynamoDB Local repository test 30件、DynamoDB Localを含むfull pytest 1,849件で、非公開の個別永続化、3票確定前write 0、参加者Bot所有、reserved sequence、22文字の再現可能nonce、successor leaseでの第2 logical call、3回目のlogical call禁止、legacy ballot互換、active leaseを保持したphase finalizeを確認した。Production Releaseとlive acceptanceは未実施である。
 
 ### PR-D: 採択者による最終発表
 

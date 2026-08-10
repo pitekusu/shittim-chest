@@ -161,6 +161,8 @@ class FakeOpenAI:
         self.initial_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
         self.proposal_errors: dict[ParticipantSlot, BaseException] = {}
         self.proposal_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
+        self.vote_errors: dict[ParticipantSlot, BaseException] = {}
+        self.vote_voter_override: dict[ParticipantSlot, ParticipantSlot] = {}
         self.decision_delay = 0.0
         self.fail_initial_for: ParticipantSlot | None = None
         self.block_initial = False
@@ -222,12 +224,15 @@ class FakeOpenAI:
         del question, evidence
         candidate_slots = tuple(candidate.participant for candidate in candidates)
         self.vote_calls.append((voter, candidate_slots))
+        vote_error = self.vote_errors.get(voter)
+        if vote_error is not None:
+            raise vote_error
         choice = {
             ParticipantSlot.PARTICIPANT_A: ParticipantSlot.PARTICIPANT_C,
             ParticipantSlot.PARTICIPANT_B: ParticipantSlot.PARTICIPANT_A,
             ParticipantSlot.PARTICIPANT_C: ParticipantSlot.PARTICIPANT_B,
         }[voter]
-        return Vote(voter, choice, 3, 3, 3, "reason")
+        return Vote(self.vote_voter_override.get(voter, voter), choice, 3, 3, 3, "reason")
 
     async def generate_decision(
         self,

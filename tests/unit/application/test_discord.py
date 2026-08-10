@@ -28,6 +28,7 @@ from shittim_chest.application import (
     prepare_initial_opinion_outbox_operations,
     prepare_outbox_operations,
     prepare_terminal_outbox_operations,
+    prepare_vote_outbox_operations,
     sanitize_discord_model_text,
     split_discord_message,
 )
@@ -40,6 +41,7 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    Vote,
 )
 
 NOW = datetime(2026, 7, 17, tzinfo=UTC)
@@ -162,6 +164,43 @@ def final_proposal_snapshot() -> DebateSnapshot:
                 f"proposal @everyone {participant.value}",
             )
             for participant in ParticipantSlot
+        ),
+    )
+
+
+def vote_snapshot() -> DebateSnapshot:
+    snapshot = final_proposal_snapshot()
+    return replace(
+        snapshot,
+        state=snapshot.state.transition_to(
+            DebatePhase.SELECTING_WINNER,
+            at=NOW + timedelta(seconds=5),
+        ),
+        votes=(
+            Vote(
+                ParticipantSlot.PARTICIPANT_A,
+                ParticipantSlot.PARTICIPANT_B,
+                3,
+                4,
+                5,
+                "reason *@everyone* a",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_B,
+                ParticipantSlot.PARTICIPANT_C,
+                3,
+                4,
+                5,
+                "reason *@everyone* b",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_C,
+                ParticipantSlot.PARTICIPANT_A,
+                3,
+                4,
+                5,
+                "reason *@everyone* c",
+            ),
         ),
     )
 
@@ -396,6 +435,53 @@ def test_prepare_final_proposals_rejects_wrong_phase_and_oversized_output() -> N
                 snapshot,
                 final_proposals=(oversized, *snapshot.final_proposals[1:]),
             ),
+            created_at=NOW,
+        )
+
+
+def test_prepare_votes_binds_three_bots_reserved_order_and_stable_nonces() -> None:
+    snapshot = vote_snapshot()
+
+    operations = prepare_vote_outbox_operations(snapshot=snapshot, created_at=NOW)
+    replay = prepare_vote_outbox_operations(snapshot=snapshot, created_at=NOW)
+
+    assert operations == replay
+    assert tuple(operation.bot_slot for operation in operations) == (
+        DiscordBotSlot.PARTICIPANT_A,
+        DiscordBotSlot.PARTICIPANT_B,
+        DiscordBotSlot.PARTICIPANT_C,
+    )
+    assert tuple(operation.delivery_sequence for operation in operations) == (200, 208, 216)
+    assert all(operation.phase is DebatePhase.GENERATING_DECISION for operation in operations)
+    assert all(operation.plan_id == "votes" for operation in operations)
+    assert len({operation.nonce for operation in operations}) == 3
+    assert all(len(operation.nonce) == 22 for operation in operations)
+    assert all("**投票先**" in operation.content for operation in operations)
+    assert all("@everyone" in operation.content for operation in operations)
+    assert all("\\*" in operation.content for operation in operations)
+
+
+def test_prepare_votes_rejects_wrong_phase_and_incomplete_ballot() -> None:
+    snapshot = vote_snapshot()
+    with pytest.raises(ValueError, match="generation phase"):
+        prepare_vote_outbox_operations(
+            snapshot=replace(
+                snapshot,
+                state=snapshot.state.transition_to(
+                    DebatePhase.GENERATING_DECISION,
+                    at=NOW + timedelta(seconds=6),
+                ),
+            ),
+            created_at=NOW,
+        )
+    with pytest.raises(ValueError, match="bound Discord thread"):
+        prepare_vote_outbox_operations(
+            snapshot=replace(snapshot, thread_id=None),
+            created_at=NOW,
+        )
+    with pytest.raises(ValueError, match="each participant exactly once"):
+        prepare_vote_outbox_operations(
+            snapshot=replace(snapshot, votes=snapshot.votes[:2]),
             created_at=NOW,
         )
 
