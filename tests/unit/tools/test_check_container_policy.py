@@ -137,7 +137,10 @@ def test_dockerfile_requires_canonical_wheel_records(tmp_path: Path) -> None:
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(
         DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(
-            "python /tmp/canonicalize_wheel_records.py /app/.venv",
+            (
+                "python /tmp/canonicalize_wheel_records.py \\\n"
+                '        --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv'
+            ),
             "true",
             1,
         ),
