@@ -151,6 +151,10 @@ async def finalize_terminal_delivery(
     error_code: str | None = None,
     operation_id: str | None = None,
     ingress_claim: IngressClaimFence | None = None,
+    persisted_bot_slot_override: DiscordBotSlot | None = None,
+    legacy_terminal_plan: bool = False,
+    dynamodb_client: DynamoDBClient | None = None,
+    dynamodb_table: str | None = None,
 ) -> DebateSnapshot:
     """Drive a bound attempt through the required durable terminal delivery path."""
 
@@ -187,6 +191,25 @@ async def finalize_terminal_delivery(
         operation_id=operation_id,
         ingress_claim=ingress_claim,
     )
+    if persisted_bot_slot_override is not None:
+        if dynamodb_client is None or dynamodb_table is None:
+            raise AssertionError("persisted owner override requires a DynamoDB table")
+        for operation in operations:
+            dynamodb_client.update_item(
+                TableName=dynamodb_table,
+                Key=marshal_item(
+                    {
+                        "PK": f"DEBATE#{persisted.state.debate_id}",
+                        "SK": (
+                            f"ATTEMPT#{persisted.state.attempt_id}#OUTBOX#{operation.operation_id}"
+                        ),
+                    }
+                ),
+                UpdateExpression="SET bot_slot=:bot_slot",
+                ExpressionAttributeValues=marshal_item(
+                    {":bot_slot": persisted_bot_slot_override.value}
+                ),
+            )
     for index, operation in enumerate(operations):
         claim_at = staged_at + timedelta(microseconds=(index * 2) + 1)
         claimed = await outbox.claim(
@@ -202,10 +225,43 @@ async def finalize_terminal_delivery(
             message_id=str(10_000 + index),
             at=claim_at + timedelta(microseconds=1),
         )
+    if legacy_terminal_plan:
+        if dynamodb_client is None or dynamodb_table is None:
+            raise AssertionError("legacy plan conversion requires a DynamoDB table")
+        dynamodb_client.update_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(
+                {
+                    "PK": f"DEBATE#{persisted.state.debate_id}",
+                    "SK": f"ATTEMPT#{persisted.state.attempt_id}#META",
+                }
+            ),
+            UpdateExpression=(
+                "REMOVE terminal_delivery_plan_id, terminal_delivery_source, "
+                "terminal_delivery_sequences, terminal_delivery_deadline_at, "
+                "terminal_delivery_plan_status"
+            ),
+        )
+        dynamodb_client.delete_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(
+                {
+                    "PK": f"DEBATE#{persisted.state.debate_id}",
+                    "SK": f"ATTEMPT#{persisted.state.attempt_id}#DELIVERY#{plan.plan_id}",
+                }
+            ),
+        )
+        reloaded = await debates.get(persisted.state.debate_id)
+        if reloaded is None:
+            raise AssertionError("legacy plan conversion removed the debate")
+        persisted = reloaded
+    persisted_plan = persisted.terminal_delivery
+    if persisted_plan is None:
+        raise AssertionError("terminal delivery plan disappeared")
     terminal = replace(
         persisted,
         state=persisted.state.transition_to(target_phase, at=terminal_at),
-        terminal_delivery=plan.complete(at=terminal_at),
+        terminal_delivery=persisted_plan.complete(at=terminal_at),
     )
     return await debates.finalize_terminal(expected=persisted, updated=terminal)
 
@@ -654,11 +710,35 @@ async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("winner", tuple(ParticipantSlot))
+@pytest.mark.parametrize(
+    (
+        "winner",
+        "persisted_bot_slot_override",
+        "legacy_terminal_plan",
+        "finalization_succeeds",
+    ),
+    (
+        *((winner, None, False, True) for winner in ParticipantSlot),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, False, True),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, True),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.PARTICIPANT_B, False, False),
+    ),
+    ids=(
+        "new-winner-a",
+        "new-winner-b",
+        "new-winner-c",
+        "pre-upgrade-phase-plan-moderator",
+        "legacy-terminal-plan-moderator",
+        "non-winner-participant-rejected",
+    ),
+)
 async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,
     winner: ParticipantSlot,
+    persisted_bot_slot_override: DiscordBotSlot | None,
+    legacy_terminal_plan: bool,
+    finalization_succeeds: bool,
 ) -> None:
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
     ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
@@ -710,14 +790,23 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
         ),
     )
 
-    completed = await finalize_terminal_delivery(
+    terminal_delivery = finalize_terminal_delivery(
         debates=debates,
         outbox=outbox,
         expected=bound,
         target_phase=DebatePhase.COMPLETED,
         staged_at=NOW + timedelta(seconds=1),
         terminal_at=NOW + timedelta(seconds=2),
+        persisted_bot_slot_override=persisted_bot_slot_override,
+        legacy_terminal_plan=legacy_terminal_plan,
+        dynamodb_client=dynamodb_client,
+        dynamodb_table=dynamodb_table,
     )
+    if not finalization_succeeds:
+        with pytest.raises(RepositoryConflict, match="invalid Bot owner"):
+            await terminal_delivery
+        return
+    completed = await terminal_delivery
 
     assert completed.state.phase is DebatePhase.COMPLETED
     replay = await ingress.get_replay(accepted_request)

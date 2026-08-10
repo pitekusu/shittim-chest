@@ -903,9 +903,9 @@ class DynamoDbDebateRepository:
             PhaseDeliveryStatus.STAGED,
             PhaseDeliveryStatus.TERMINATING,
         }:
-            terminal_bot_slot = _terminal_delivery_bot_slot(
+            terminal_bot_slot = self._persisted_terminal_delivery_bot_slot(
                 expected,
-                target_phase=delivery.target_phase,
+                delivery,
             )
             delivery_sequences = (
                 tuple(range(len(delivery.operation_ids)))
@@ -1004,6 +1004,48 @@ class DynamoDbDebateRepository:
                 return current
             raise
         return persisted
+
+    def _persisted_terminal_delivery_bot_slot(
+        self,
+        expected: DebateSnapshot,
+        delivery: TerminalDeliveryPlan | PhaseDeliveryPlan,
+    ) -> DiscordBotSlot:
+        """Retain a safe owner already persisted by an earlier release."""
+
+        operation_ids = set(delivery.operation_ids)
+        matching_operation_items = tuple(
+            item
+            for item in self._query_partition(
+                f"DEBATE#{expected.state.debate_id}",
+                consistent=True,
+            )
+            if item.get("record_type") == "outbox"
+            and item.get("attempt_id") == str(expected.state.attempt_id)
+            and item.get("operation_id") in operation_ids
+        )
+        operation_items = {_text(item, "operation_id"): item for item in matching_operation_items}
+        if (
+            len(matching_operation_items) != len(operation_ids)
+            or set(operation_items) != operation_ids
+        ):
+            raise RepositoryConflict("terminal delivery outbox is incomplete")
+        bot_slots = {
+            deserialize_outbox(operation_items[operation_id]).bot_slot
+            for operation_id in delivery.operation_ids
+        }
+        if len(bot_slots) != 1:
+            raise RepositoryConflict("terminal delivery outbox has mixed Bot owners")
+        persisted_bot_slot = next(iter(bot_slots))
+        expected_bot_slot = _terminal_delivery_bot_slot(
+            expected,
+            target_phase=delivery.target_phase,
+        )
+        allowed_bot_slots = {expected_bot_slot}
+        if delivery.target_phase is DebatePhase.COMPLETED:
+            allowed_bot_slots.add(DiscordBotSlot.MODERATOR)
+        if persisted_bot_slot not in allowed_bot_slots:
+            raise RepositoryConflict("terminal delivery outbox has an invalid Bot owner")
+        return persisted_bot_slot
 
     def _finalize_phase_delivery(
         self,
