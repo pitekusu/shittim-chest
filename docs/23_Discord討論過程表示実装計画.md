@@ -157,6 +157,7 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - local実装では、`SELECTING_WINNER`でparticipantごとのGenerationCheckpointを用い、3 Botのdelivery preflight後に3件を並列生成する。各投票は取得でき次第checkpoint完了と同じfenced writeで保存し、全3件がdurableになった後だけ`votes`のPhaseDeliveryPlanとOutbox v2をstageする。
 - Discord配送はparticipant-a／b／cの順、固定delivery_sequence 200／208／216から開始し、各投稿を投票者Botが所有する。投稿内容は投票先とdisplay-only正規化済み理由に限定し、全件SENT後だけ`GENERATING_DECISION`へ進む。3票確定前、preflight失敗、provider失敗、participant不一致、2回のlogical call消費では投票Outboxを作成しない。
 - focused application test 117件、DynamoDB Local repository test 30件、DynamoDB Localを含むfull pytest 1,849件で、非公開の個別永続化、3票確定前write 0、参加者Bot所有、reserved sequence、22文字の再現可能nonce、successor leaseでの第2 logical call、3回目のlogical call禁止、legacy ballot互換、active leaseを保持したphase finalizeを確認した。Production Releaseとlive acceptanceは未実施である。
+- Draft PRは`#174`。canonical CI run `31348172329`では両targetのbaseline不一致だけが失敗し、他のrequired checkとCodeQL 3言語は成功した。同一測定のartifactからproduction config digest `sha256:c2973bb08af48cac70f16c49b1d38af93a1339432edd71826323eca04c314428`、break-glass config digest `sha256:099013420b88983305ebad27d8cf4acfa37cc3b05fb2e726e306db929fe3e636`を取得し、両baselineを一括更新した。両SBOMはcanonical validatorで有効、fixable High／Criticalは0であり、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
 
 ### PR-D: 採択者による最終発表
 
