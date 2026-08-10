@@ -160,6 +160,7 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - Draft PRは`#174`。canonical CI run `31348172329`では両targetのbaseline不一致だけが失敗し、他のrequired checkとCodeQL 3言語は成功した。同一測定のartifactからproduction config digest `sha256:c2973bb08af48cac70f16c49b1d38af93a1339432edd71826323eca04c314428`、break-glass config digest `sha256:099013420b88983305ebad27d8cf4acfa37cc3b05fb2e726e306db929fe3e636`を取得し、両baselineを一括更新した。両SBOMはcanonical validatorで有効、fixable High／Criticalは0であり、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
 - Production Release run `31349694346`はmain SHA `a0ec97573f114accff36b403630dbb9f2e1ee369`で成功した。live acceptanceでは投票3件を含む討論完了を確認したが、投票先へprivate personaの表示名ではなく内部slot名が表示されるpresentation defectを検出した。
 - 是正では、投票・winner計算・永続schemaの正本である`ParticipantSlot`を変更しない。起動時に検証済み`PersonaConfig.display_name`の3件完全mappingをcomposition rootからapplicationへ注入し、3票確定後のDiscord Outbox生成時だけ候補slotを表示名へ変換する。実表示名はrepositoryや文書へ直書きせず、欠落・余分・空表示名はfail closedとする。
+- 是正PRは`#175`。canonical CI run `31351020310`では両targetのbaseline不一致だけが失敗し、他のrequired checkとCodeQL 3言語は成功した。同一測定のartifactからproduction config digest `sha256:8ac98dbbf0f18c7042d6c037d7752827d4bde5b3998be856aa61f21d28cda95b`、break-glass config digest `sha256:4ce52288b35eebb3bfd574e30c21a97588a0effb8de23c7310774cb4c230bf74`を取得し、両baselineを一括更新した。両SBOMとapplication RECORDはcanonical validatorで有効、fixable High／Criticalは0であり、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
 
 ### PR-D: 採択者による最終発表
 
