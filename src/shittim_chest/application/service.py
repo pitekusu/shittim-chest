@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import TypeVar
 
 from shittim_chest.application.discord import (
@@ -128,6 +129,7 @@ class DebateApplication:
         repository: DebateRepository,
         candidate_orderer: CandidateOrderer,
         outbox_recovery: DiscordOutboxDrainer,
+        participant_display_names: Mapping[ParticipantSlot, str],
         lease_owner: str,
         session_timeout_seconds: float = 300.0,
         phase_timeout_seconds: float = 60.0,
@@ -149,6 +151,13 @@ class DebateApplication:
             raise ValueError("terminal delivery conflict retry delay must not be negative")
         if not lease_owner.strip():
             raise ValueError("lease owner must not be empty")
+        copied_display_names = dict(participant_display_names)
+        if set(copied_display_names) != set(PARTICIPANTS):
+            raise ValueError("display names must contain exactly the three participant slots")
+        if any(
+            not isinstance(name, str) or not name.strip() for name in copied_display_names.values()
+        ):
+            raise ValueError("participant display name must not be empty")
         self._clock = clock
         self._ids = ids
         self._metrics = metrics
@@ -158,6 +167,7 @@ class DebateApplication:
         self._repository = repository
         self._candidate_orderer = candidate_orderer
         self._outbox_recovery = outbox_recovery
+        self._participant_display_names = MappingProxyType(copied_display_names)
         self._lease_owner = lease_owner
         self._session_timeout_seconds = session_timeout_seconds
         self._phase_timeout_seconds = phase_timeout_seconds
@@ -1802,6 +1812,7 @@ class DebateApplication:
         self._require_owned_active_lease(snapshot, at=staged_at)
         operations = prepare_vote_outbox_operations(
             snapshot=snapshot,
+            participant_display_names=self._participant_display_names,
             created_at=staged_at,
         )
         delivery = PhaseDeliveryPlan(

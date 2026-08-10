@@ -122,6 +122,16 @@ class BootstrapConfig:
             }
         )
 
+    def participant_display_names(self) -> Mapping[ParticipantSlot, str]:
+        """Map stable participant slots to their validated public display names."""
+
+        return MappingProxyType(
+            {
+                participant: self.personas[DiscordBotSlot(participant.value)].display_name
+                for participant in PARTICIPANTS
+            }
+        )
+
 
 def parse_discord_runtime_config(raw_json: str) -> tuple[DiscordRuntimeConfig, str]:
     """Validate the token-free shared runtime parameter for ECS or Lambda."""

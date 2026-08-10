@@ -123,6 +123,11 @@ def make_application(
         repository=repository,
         candidate_orderer=orderer,
         outbox_recovery=outbox_recovery or FakeOutboxRecovery(),
+        participant_display_names={
+            ParticipantSlot.PARTICIPANT_A: "Generic A",
+            ParticipantSlot.PARTICIPANT_B: "Generic B",
+            ParticipantSlot.PARTICIPANT_C: "Generic C",
+        },
         lease_owner=lease_owner,
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,

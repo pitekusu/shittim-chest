@@ -49,6 +49,11 @@ GUILD_ID = "101"
 CHANNEL_ID = "102"
 THREAD_ID = "103"
 MESSAGE_ID = "104"
+PARTICIPANT_DISPLAY_NAMES = {
+    ParticipantSlot.PARTICIPANT_A: "Generic A",
+    ParticipantSlot.PARTICIPANT_B: "Generic B",
+    ParticipantSlot.PARTICIPANT_C: "Generic C",
+}
 
 
 def identities() -> tuple[DiscordIdentityConfig, ...]:
@@ -442,8 +447,16 @@ def test_prepare_final_proposals_rejects_wrong_phase_and_oversized_output() -> N
 def test_prepare_votes_binds_three_bots_reserved_order_and_stable_nonces() -> None:
     snapshot = vote_snapshot()
 
-    operations = prepare_vote_outbox_operations(snapshot=snapshot, created_at=NOW)
-    replay = prepare_vote_outbox_operations(snapshot=snapshot, created_at=NOW)
+    operations = prepare_vote_outbox_operations(
+        snapshot=snapshot,
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+        created_at=NOW,
+    )
+    replay = prepare_vote_outbox_operations(
+        snapshot=snapshot,
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+        created_at=NOW,
+    )
 
     assert operations == replay
     assert tuple(operation.bot_slot for operation in operations) == (
@@ -457,6 +470,10 @@ def test_prepare_votes_binds_three_bots_reserved_order_and_stable_nonces() -> No
     assert len({operation.nonce for operation in operations}) == 3
     assert all(len(operation.nonce) == 22 for operation in operations)
     assert all("**投票先**" in operation.content for operation in operations)
+    assert "Generic B" in operations[0].content
+    assert "Generic C" in operations[1].content
+    assert "Generic A" in operations[2].content
+    assert all("participant-" not in operation.content for operation in operations)
     assert all("@everyone" in operation.content for operation in operations)
     assert all("\\*" in operation.content for operation in operations)
 
@@ -472,16 +489,29 @@ def test_prepare_votes_rejects_wrong_phase_and_incomplete_ballot() -> None:
                     at=NOW + timedelta(seconds=6),
                 ),
             ),
+            participant_display_names=PARTICIPANT_DISPLAY_NAMES,
             created_at=NOW,
         )
     with pytest.raises(ValueError, match="bound Discord thread"):
         prepare_vote_outbox_operations(
             snapshot=replace(snapshot, thread_id=None),
+            participant_display_names=PARTICIPANT_DISPLAY_NAMES,
             created_at=NOW,
         )
     with pytest.raises(ValueError, match="each participant exactly once"):
         prepare_vote_outbox_operations(
             snapshot=replace(snapshot, votes=snapshot.votes[:2]),
+            participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+            created_at=NOW,
+        )
+
+    with pytest.raises(ValueError, match="display name exactly once"):
+        prepare_vote_outbox_operations(
+            snapshot=snapshot,
+            participant_display_names={
+                ParticipantSlot.PARTICIPANT_A: "Generic A",
+                ParticipantSlot.PARTICIPANT_B: "Generic B",
+            },
             created_at=NOW,
         )
 

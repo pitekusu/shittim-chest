@@ -23,6 +23,11 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.participant_prompts()[ParticipantSlot.PARTICIPANT_B] == (
         "Generic private prompt for participant-b."
     )
+    assert config.participant_display_names() == {
+        ParticipantSlot.PARTICIPANT_A: "Generic participant-a",
+        ParticipantSlot.PARTICIPANT_B: "Generic participant-b",
+        ParticipantSlot.PARTICIPANT_C: "Generic participant-c",
+    }
     rendered = repr(config)
     assert "openai-key-placeholder" not in rendered
     assert "token-moderator-placeholder" not in rendered

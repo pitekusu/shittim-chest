@@ -158,6 +158,8 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - Discord配送はparticipant-a／b／cの順、固定delivery_sequence 200／208／216から開始し、各投稿を投票者Botが所有する。投稿内容は投票先とdisplay-only正規化済み理由に限定し、全件SENT後だけ`GENERATING_DECISION`へ進む。3票確定前、preflight失敗、provider失敗、participant不一致、2回のlogical call消費では投票Outboxを作成しない。
 - focused application test 117件、DynamoDB Local repository test 30件、DynamoDB Localを含むfull pytest 1,849件で、非公開の個別永続化、3票確定前write 0、参加者Bot所有、reserved sequence、22文字の再現可能nonce、successor leaseでの第2 logical call、3回目のlogical call禁止、legacy ballot互換、active leaseを保持したphase finalizeを確認した。Production Releaseとlive acceptanceは未実施である。
 - Draft PRは`#174`。canonical CI run `31348172329`では両targetのbaseline不一致だけが失敗し、他のrequired checkとCodeQL 3言語は成功した。同一測定のartifactからproduction config digest `sha256:c2973bb08af48cac70f16c49b1d38af93a1339432edd71826323eca04c314428`、break-glass config digest `sha256:099013420b88983305ebad27d8cf4acfa37cc3b05fb2e726e306db929fe3e636`を取得し、両baselineを一括更新した。両SBOMはcanonical validatorで有効、fixable High／Criticalは0であり、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
+- Production Release run `31349694346`はmain SHA `a0ec97573f114accff36b403630dbb9f2e1ee369`で成功した。live acceptanceでは投票3件を含む討論完了を確認したが、投票先へprivate personaの表示名ではなく内部slot名が表示されるpresentation defectを検出した。
+- 是正では、投票・winner計算・永続schemaの正本である`ParticipantSlot`を変更しない。起動時に検証済み`PersonaConfig.display_name`の3件完全mappingをcomposition rootからapplicationへ注入し、3票確定後のDiscord Outbox生成時だけ候補slotを表示名へ変換する。実表示名はrepositoryや文書へ直書きせず、欠落・余分・空表示名はfail closedとする。
 
 ### PR-D: 採択者による最終発表
 
