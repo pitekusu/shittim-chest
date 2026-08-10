@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Mapping
 from typing import Protocol, cast
 
+import boto3
 import pytest
 from botocore.config import Config
 
@@ -138,6 +139,20 @@ def test_client_factories_use_tokyo_and_the_bounded_policy(
         assert config.connect_timeout == INGRESS_CONNECT_TIMEOUT_SECONDS
         assert config.read_timeout == INGRESS_READ_TIMEOUT_SECONDS
         assert config.retries["total_max_attempts"] == 1
+
+
+def test_ingress_ssm_client_does_not_retain_a_default_boto3_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)
+
+    client = create_ssm_client(region_name=DEFAULT_AWS_REGION)
+
+    assert client.meta.region_name == DEFAULT_AWS_REGION
+    assert boto3.DEFAULT_SESSION is None
 
 
 def test_cancelled_invocation_gate_rejects_ingress_clients_before_send(

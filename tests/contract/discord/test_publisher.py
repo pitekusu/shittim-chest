@@ -33,12 +33,14 @@ from shittim_chest.application import (
     DiscordBotSlot,
     LeaseGrant,
     OutboxOperation,
+    OutboxRecoveryAbandoned,
     OutboxStatus,
     content_sha256,
     nonce_from_uuid7,
 )
+from shittim_chest.application.models import DeliveryAbandonReason
 from shittim_chest.application.ports import RepositoryConflict
-from shittim_chest.domain import AttemptId, DebateId, DebateState
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
 
 NOW = datetime(2026, 7, 17, 10, 0, tzinfo=UTC)
 GUILD_ID = "101"
@@ -139,18 +141,16 @@ class FakeOutboxRepository:
         self,
         *,
         expected: DebateSnapshot,
-        operation_id: str,
-        claim_owner: str,
+        operation: OutboxOperation,
         message_id: str,
         at: datetime,
     ) -> OutboxOperation:
-        del expected, operation_id
+        del expected
         if self.fail_mark_once:
             self.fail_mark_once = False
             raise RepositoryConflict("injected completion failure")
-        operation = self.operation
-        if operation is None or operation.claim_owner != claim_owner:
-            raise RepositoryConflict("claim owner mismatch")
+        if self.operation != operation:
+            raise RepositoryConflict("claim generation mismatch")
         self.marks.append(message_id)
         self.operation = replace(
             operation,
@@ -162,19 +162,40 @@ class FakeOutboxRepository:
         )
         return self.operation
 
+    async def mark_reconciled_sent(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation: OutboxOperation,
+        message_id: str,
+        at: datetime,
+    ) -> OutboxOperation:
+        del expected
+        if self.operation != operation:
+            raise RepositoryConflict("operation generation mismatch")
+        self.marks.append(message_id)
+        self.operation = replace(
+            operation,
+            status=OutboxStatus.SENT,
+            claim_owner=None,
+            claim_expires_at=None,
+            next_retry_at=None,
+            message_id=message_id,
+            sent_at=at,
+        )
+        return self.operation
+
     async def reschedule(
         self,
         *,
         expected: DebateSnapshot,
-        operation_id: str,
-        claim_owner: str,
+        operation: OutboxOperation,
         at: datetime,
         next_retry_at: datetime,
     ) -> OutboxOperation:
-        del expected, operation_id
-        operation = self.operation
-        if operation is None or operation.claim_owner != claim_owner:
-            raise RepositoryConflict("claim owner mismatch")
+        del expected
+        if self.operation != operation:
+            raise RepositoryConflict("claim generation mismatch")
         self.retry_delays.append(next_retry_at - at)
         self.operation = replace(
             operation,
@@ -242,6 +263,24 @@ def prepared(expected: DebateSnapshot) -> OutboxOperation:
     )
 
 
+def prepared_v2(
+    expected: DebateSnapshot,
+    *,
+    created_at: datetime = NOW,
+    delivery_attempt: int = 0,
+) -> OutboxOperation:
+    return replace(
+        prepared(expected),
+        created_at=created_at,
+        delivery_attempt=delivery_attempt,
+        record_schema_version=2,
+        phase=DebatePhase.COMPLETED,
+        plan_id="terminal-completed",
+        delivery_sequence=300,
+        deadline_at=created_at + timedelta(minutes=15),
+    )
+
+
 def message(
     operation: OutboxOperation,
     *,
@@ -291,7 +330,7 @@ def clients_and_thread(
     for index, slot in enumerate(DISCORD_BOT_SLOTS):
         client_mock = MagicMock(spec=discord.Client)
         client_mock.user = SimpleNamespace(id=201 + index)
-        cast(Any, client_mock).http = SimpleNamespace(max_ratelimit_timeout=30.0)
+        cast(Any, client_mock).http = SimpleNamespace(max_ratelimit_timeout=300.0)
         client_mock.is_ready.return_value = True
         client_mock.get_channel.return_value = thread if slot is operation.bot_slot else None
         client_mock.fetch_channel = AsyncMock(return_value=thread)
@@ -327,15 +366,18 @@ def publisher(
 
 
 def test_discord_py_payload_enforces_nonce_and_disables_every_mention() -> None:
+    flags = discord.MessageFlags(suppress_embeds=True)
     with handle_message_parameters(
         content="hello <@123> @everyone",
         nonce="nonce",
         allowed_mentions=discord.AllowedMentions.none(),
+        flags=flags,
     ) as parameters:
         assert parameters.payload is not None
         assert parameters.payload["nonce"] == "nonce"
         assert parameters.payload["enforce_nonce"] is True
         assert parameters.payload["allowed_mentions"] == {"parse": []}
+        assert parameters.payload["flags"] == flags.value
 
 
 def test_publisher_rejects_clients_with_unbounded_rate_limit_waits() -> None:
@@ -390,6 +432,7 @@ async def test_publisher_claims_sends_with_safe_mentions_and_completes() -> None
     kwargs = await_args.kwargs
     assert kwargs["nonce"] == operation.nonce
     assert kwargs["allowed_mentions"].to_dict() == {"parse": []}
+    assert kwargs["suppress_embeds"] is True
 
 
 @pytest.mark.asyncio
@@ -453,6 +496,111 @@ async def test_reconciliation_fails_closed_on_same_nonce_with_different_content(
         await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
 
     send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_fails_closed_on_duplicate_exact_messages() -> None:
+    expected = snapshot()
+    operation = replace(
+        prepared(expected),
+        status=OutboxStatus.CLAIMED,
+        claim_owner="old-publisher",
+        claim_expires_at=NOW - timedelta(seconds=1),
+        delivery_attempt=1,
+    )
+    repository = FakeOutboxRepository(operation)
+    subject, _, send_mock, _ = publisher(
+        operation,
+        repository,
+        history_messages=(
+            message(operation, message_id=MESSAGE_ID),
+            message(operation, message_id=MESSAGE_ID + 1),
+        ),
+    )
+
+    with pytest.raises(DiscordDeliveryConflict):
+        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+
+    send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_fails_closed_when_history_reaches_500_items() -> None:
+    expected = snapshot()
+    operation = replace(
+        prepared(expected),
+        status=OutboxStatus.CLAIMED,
+        claim_owner="old-publisher",
+        claim_expires_at=NOW - timedelta(seconds=1),
+        delivery_attempt=1,
+    )
+    unrelated = tuple(
+        message(operation, user_id=999, message_id=1_000 + index) for index in range(500)
+    )
+    repository = FakeOutboxRepository(operation)
+    subject, _, send_mock, _ = publisher(
+        operation,
+        repository,
+        history_messages=unrelated,
+    )
+
+    with pytest.raises(DiscordDeliveryConflict):
+        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+
+    send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_terminating_reconciliation_reads_history_without_posting() -> None:
+    expected = snapshot()
+    operation = replace(
+        prepared_v2(expected, delivery_attempt=1),
+        status=OutboxStatus.CLAIMED,
+        claim_owner="old-publisher",
+        claim_expires_at=NOW - timedelta(seconds=1),
+    )
+    existing = message(operation)
+    repository = FakeOutboxRepository(operation)
+    subject, _, send_mock, _ = publisher(
+        operation,
+        repository,
+        history_messages=(existing,),
+    )
+
+    sent = await subject.reconcile_persisted(
+        expected=expected,
+        operation_id=operation.operation_id,
+    )
+
+    assert sent is not None and sent.status is OutboxStatus.SENT
+    assert repository.claims == 0
+    send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deadline_caps_delivery_timeout_and_raises_typed_abandonment() -> None:
+    expected = snapshot()
+    created_at = NOW - timedelta(minutes=15) + timedelta(milliseconds=10)
+    operation = prepared_v2(expected, created_at=created_at)
+    repository = FakeOutboxRepository(operation)
+    subject, _, send_mock, _ = publisher(
+        operation,
+        repository,
+        delivery_timeout_seconds=1.0,
+    )
+
+    async def blocked_send(*args: object, **kwargs: object) -> discord.Message:
+        del args, kwargs
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    send_mock.side_effect = blocked_send
+    with pytest.raises(OutboxRecoveryAbandoned) as captured:
+        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+
+    assert captured.value.reason == DeliveryAbandonReason.DEADLINE_EXCEEDED.value
+    assert repository.retry_delays == []
+    assert send_mock.await_count == 1
 
 
 @pytest.mark.asyncio

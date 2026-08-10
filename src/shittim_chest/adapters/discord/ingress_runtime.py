@@ -7,6 +7,7 @@ import json
 import logging
 import math
 from collections.abc import AsyncIterator, Awaitable, Mapping
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -54,6 +55,8 @@ from shittim_chest.application.ports import (
     Metrics,
     PanelRefreshRepository,
     RepositoryConflict,
+    StatusPublicationTrigger,
+    StatusTriggerUnavailable,
 )
 from shittim_chest.application.scale_to_zero import (
     IngressKind,
@@ -98,6 +101,7 @@ class DiscordIngressRuntime:
         panel_refresh: PanelRefreshRepository,
         clock: Clock,
         metrics: Metrics,
+        status_trigger: StatusPublicationTrigger,
         claim_owner: str,
         setup_timeout_seconds: float = DEFAULT_SETUP_TIMEOUT_SECONDS,
         panel_refresh_retry_seconds: float = DEFAULT_PANEL_REFRESH_RETRY_SECONDS,
@@ -121,6 +125,7 @@ class DiscordIngressRuntime:
         self._panel_refresh = panel_refresh
         self._clock = clock
         self._metrics = metrics
+        self._status_trigger = status_trigger
         self._claim_owner = claim_owner
         self._setup_timeout_seconds = setup_timeout_seconds
         self._panel_refresh_retry = timedelta(seconds=panel_refresh_retry_seconds)
@@ -214,6 +219,12 @@ class DiscordIngressRuntime:
         ):
             return
         self._start_debate(applied.debate_id)
+
+    async def notify_accepted(self, request: IngressRequest) -> None:
+        """Kick only the exact ACCEPTED publication, retaining durable fallback."""
+
+        with suppress(StatusTriggerUnavailable):
+            await self._status_trigger.request_publication(request.interaction_id)
 
     async def recover_once(self) -> int:
         """Claim recoverable bound debates and start them in the shared registry."""
@@ -451,6 +462,11 @@ class DiscordIngressRuntime:
     async def _run_and_refresh(self, debate_id: DebateId) -> None:
         await self._application.run_debate(debate_id)
         snapshot = await self._application.get_debate(debate_id)
+        if snapshot.state.phase.is_terminal and snapshot.origin_ingress_interaction_id is not None:
+            with suppress(StatusTriggerUnavailable):
+                await self._status_trigger.request_publication(
+                    snapshot.origin_ingress_interaction_id
+                )
         await self._converge_panel(debate_id, snapshot.state.attempt_id)
 
     async def _converge_panel(self, debate_id: DebateId, attempt_id: AttemptId) -> bool:

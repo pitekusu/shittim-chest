@@ -62,6 +62,11 @@ describe("RuntimeStack", () => {
       AllowedPattern:
         "^lambda/shittim-chest/[0-9a-f]{64}/shittim-chest-lambda-arm64\\.zip$",
     });
+    expect(parameters.LambdaBundleCodeSha256).toEqual({
+      AllowedPattern: "^[A-Za-z0-9+/]{43}=$",
+      Description: "Base64 SHA-256 checksum of the verified shared Python Lambda bundle",
+      Type: "String",
+    });
   });
 
   test("creates a two-AZ public-only VPC without paid network appliances", () => {
@@ -174,6 +179,73 @@ describe("RuntimeStack", () => {
     }
   });
 
+  test("routes Discord ingress only through one content-bound SnapStart alias", () => {
+    const { template } = synthesize();
+    const functions = template.findResources("AWS::Lambda::Function");
+    const ingressEntry = Object.entries(functions).find(
+      ([, resource]) =>
+        resource.Properties.Handler ===
+        "shittim_chest.lambda_handlers.discord_ingress.lambda_handler",
+    );
+    expect(ingressEntry).toBeDefined();
+    const [ingressLogicalId, ingress] = ingressEntry!;
+    expect(ingress.Properties.SnapStart).toEqual({ ApplyOn: "PublishedVersions" });
+    for (const [logicalId, resource] of Object.entries(functions)) {
+      if (logicalId !== ingressLogicalId) {
+        expect(resource.Properties.SnapStart).toBeUndefined();
+      }
+    }
+
+    const versions = template.findResources("AWS::Lambda::Version");
+    expect(Object.keys(versions)).toHaveLength(1);
+    const [versionLogicalId, version] = Object.entries(versions)[0]!;
+    expect(version.Properties).toEqual({
+      CodeSha256: { Ref: "LambdaBundleCodeSha256" },
+      Description: {
+        "Fn::Join": [
+          "|",
+          [
+            { Ref: "LambdaBundleObjectKey" },
+            {
+              "Fn::Join": [
+                "",
+                [
+                  "/shittim-chest/production/runtime/",
+                  { Ref: "RuntimeConfigVersion" },
+                ],
+              ],
+            },
+            "/shittim-chest/production/discord/moderator/public-key",
+          ],
+        ],
+      },
+      FunctionName: { Ref: ingressLogicalId },
+    });
+    expect(version.Properties.ProvisionedConcurrencyConfig).toBeUndefined();
+
+    const aliases = template.findResources("AWS::Lambda::Alias");
+    expect(Object.keys(aliases)).toHaveLength(1);
+    const [aliasLogicalId, alias] = Object.entries(aliases)[0]!;
+    expect(alias.Properties).toEqual({
+      FunctionName: { Ref: ingressLogicalId },
+      FunctionVersion: { "Fn::GetAtt": [versionLogicalId, "Version"] },
+      Name: "live",
+    });
+
+    const integration = Object.values(
+      template.findResources("AWS::ApiGatewayV2::Integration"),
+    )[0];
+    expect(JSON.stringify(integration?.Properties.IntegrationUri)).toContain(aliasLogicalId);
+    expect(JSON.stringify(integration?.Properties.IntegrationUri)).not.toContain("$LATEST");
+    const apiPermissions = Object.values(
+      template.findResources("AWS::Lambda::Permission"),
+    ).filter((resource) => resource.Properties.Principal === "apigateway.amazonaws.com");
+    expect(apiPermissions).toHaveLength(1);
+    expect(JSON.stringify(apiPermissions[0]?.Properties.FunctionName)).toContain(
+      aliasLogicalId,
+    );
+  });
+
   test("fails closed before scale-up unless the release image is admitted", () => {
     const { template } = synthesize();
 
@@ -248,10 +320,17 @@ describe("RuntimeStack", () => {
     expect(ingress?.Environment.Variables).toMatchObject({
       SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER:
         "/shittim-chest/production/discord/moderator/public-key",
-      SHITTIM_RUNTIME_CONFIG_PARAMETER: expect.anything(),
-      SHITTIM_RUNTIME_RECONCILER_FUNCTION: expect.anything(),
-      SHITTIM_STATUS_PUBLISHER_FUNCTION: expect.anything(),
+      SHITTIM_RUNTIME_CONFIG_PARAMETER: {
+        "Fn::Join": [
+          "",
+          [
+            "/shittim-chest/production/runtime/",
+            { Ref: "RuntimeConfigVersion" },
+          ],
+        ],
+      },
     });
+    expect(JSON.stringify(ingress?.Environment.Variables)).not.toContain("{{resolve:ssm:");
     expect(status?.Environment.Variables).toMatchObject({
       SHITTIM_MODERATOR_TOKEN_PARAMETER:
         "/shittim-chest/production/discord/moderator/token",
@@ -264,6 +343,14 @@ describe("RuntimeStack", () => {
     });
     expect(JSON.stringify([ingress, status, reconciler])).not.toContain("participant-");
     expect(JSON.stringify([ingress, status, reconciler])).not.toContain("OPENAI_API_KEY");
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const ingressPolicy = policies.find((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes("DiscordIngressFunctionRole"),
+    );
+    const ingressPolicyText = JSON.stringify(ingressPolicy);
+    expect(ingressPolicyText).toContain("ssm:GetParameter");
+    expect(ingressPolicyText).toContain("/runtime/");
+    expect(ingressPolicyText).toContain("/discord/moderator/public-key");
   });
 
   test("exposes only the signed Discord POST route through HTTP API v2", () => {
@@ -383,6 +470,12 @@ describe("RuntimeStack", () => {
       const container = (properties.ContainerDefinitions as Array<Record<string, unknown>>)[0]!;
       expect(JSON.stringify(container.Image)).toContain("@");
       expect(container).toMatchObject({
+        Environment: expect.arrayContaining([
+          {
+            Name: "SHITTIM_STATUS_PUBLISHER_FUNCTION",
+            Value: "shittim-chest-production-discord-status-publisher",
+          },
+        ]),
         HealthCheck: {
           Command: ["CMD", "python", "-m", "shittim_chest.healthcheck"],
           Interval: 10,
@@ -475,6 +568,18 @@ describe("RuntimeStack", () => {
     expect(JSON.stringify(normal)).not.toContain("dynamodb:TransactWriteItems");
     expect(JSON.stringify(normal)).not.toContain("ssm:");
     expect(JSON.stringify(normal)).not.toContain("ssmmessages:");
+    for (const policy of [normal, breakGlass]) {
+      const invokeStatements = policy?.Properties.PolicyDocument.Statement.filter(
+        (statement: { Action?: string | string[] }) =>
+          [statement.Action].flat().includes("lambda:InvokeFunction"),
+      );
+      expect(invokeStatements).toHaveLength(1);
+      expect(invokeStatements?.[0].Action).toBe("lambda:InvokeFunction");
+      expect(JSON.stringify(invokeStatements?.[0].Resource)).toContain(
+        "shittim-chest-production-discord-status-publisher",
+      );
+      expect(invokeStatements?.[0].Resource).not.toBe("*");
+    }
     expect(JSON.stringify(breakGlass)).toContain("ssmmessages:OpenControlChannel");
     expect(JSON.stringify(breakGlass)).toContain("logs:PutLogEvents");
   });
@@ -527,7 +632,10 @@ describe("RuntimeStack", () => {
     }
     expect(reconciler).toContain("/index/gsi1");
     expect(reconciler).toContain("/index/gsi2");
+    expect(ingress).toContain("ssm:GetParameter");
     expect(ingress).toContain("discord/moderator/public-key");
+    expect(ingress).toContain("production/runtime/");
+    expect(ingress).not.toContain("lambda:InvokeFunction");
     expect(ingress).not.toContain("discord/moderator/token");
     expect(status).toContain("discord/moderator/token");
     expect(status).not.toContain("discord/moderator/public-key");
@@ -604,7 +712,6 @@ describe("RuntimeStack", () => {
         "DiscordIngressFunctionRole",
         [
           "CONTROL#INGRESS",
-          "CONTROL#RUNTIME",
           "DEBATE#*",
           "INGRESS_OPERATION#*",
           "INGRESS_SEMANTIC_OPERATION#*",

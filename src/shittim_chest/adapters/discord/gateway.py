@@ -17,7 +17,7 @@ from shittim_chest.application import (
     DiscordRuntimeConfig,
 )
 
-DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 30.0
+DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 300.0
 InteractionHandler = Callable[[discord.Interaction[discord.Client]], Awaitable[None]]
 
 
@@ -92,6 +92,42 @@ class DiscordPyGateway:
         """Apply the fail-closed public Guild/channel allowlist."""
 
         return self._config.allows(guild_id=request.guild_id, channel_id=request.channel_id)
+
+    async def delivery_target_is_ready(
+        self,
+        *,
+        bot_slot: DiscordBotSlot,
+        guild_id: str,
+        thread_id: str,
+    ) -> bool:
+        """Read and verify one thread boundary before provider generation starts."""
+
+        try:
+            channel_id = int(thread_id)
+        except ValueError:
+            return False
+        client = self._clients[bot_slot]
+        if client.user is None or not client.is_ready():
+            return False
+        try:
+            channel = client.get_channel(channel_id)
+            if channel is None:
+                channel = await client.fetch_channel(channel_id)
+        except discord.HTTPException, OSError:
+            return False
+        if not isinstance(channel, discord.Thread):
+            return False
+        if str(channel.guild.id) != guild_id or channel.archived or channel.locked:
+            return False
+        member = channel.guild.me
+        if member is None or member.id != client.user.id:
+            return False
+        permissions = channel.permissions_for(member)
+        return bool(
+            permissions.view_channel
+            and permissions.send_messages_in_threads
+            and permissions.read_message_history
+        )
 
 
 class DiscordClientSupervisor:

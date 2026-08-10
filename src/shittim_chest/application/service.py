@@ -5,15 +5,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import TypeVar
 
-from shittim_chest.application.discord import prepare_terminal_outbox_operations
+from shittim_chest.application.discord import (
+    DiscordBotSlot,
+    prepare_final_proposal_outbox_operations,
+    prepare_initial_opinion_outbox_operations,
+    prepare_terminal_outbox_operations,
+    prepare_vote_outbox_operations,
+    sanitize_discord_model_text,
+)
 from shittim_chest.application.errors import (
     DebateNotFound,
+    GenerationProviderError,
     InvalidApplicationOperation,
+    OutboxRecoveryAbandoned,
     OutboxRecoveryFailed,
     RequestNotAllowed,
     RequiredEvidenceUnavailable,
@@ -28,9 +38,14 @@ from shittim_chest.application.models import (
     CancelDebateCommand,
     CancelledDebate,
     DebateSnapshot,
+    DeliveryAbandonReason,
+    GenerationCheckpoint,
+    GenerationStatus,
+    LeaseGrant,
     MetricEvent,
+    PhaseDeliveryPlan,
+    PhaseDeliveryStatus,
     RetryDebateCommand,
-    TerminalDeliveryPlan,
 )
 from shittim_chest.application.ports import (
     CandidateOrderer,
@@ -59,7 +74,6 @@ from shittim_chest.domain import (
     InitialOpinion,
     ParticipantSlot,
     RecoveryState,
-    Vote,
     assess_escalation,
     select_winner,
 )
@@ -116,6 +130,7 @@ class DebateApplication:
         repository: DebateRepository,
         candidate_orderer: CandidateOrderer,
         outbox_recovery: DiscordOutboxDrainer,
+        participant_display_names: Mapping[ParticipantSlot, str],
         lease_owner: str,
         session_timeout_seconds: float = 300.0,
         phase_timeout_seconds: float = 60.0,
@@ -137,6 +152,15 @@ class DebateApplication:
             raise ValueError("terminal delivery conflict retry delay must not be negative")
         if not lease_owner.strip():
             raise ValueError("lease owner must not be empty")
+        copied_display_names = dict(participant_display_names)
+        if set(copied_display_names) != set(PARTICIPANTS):
+            raise ValueError("display names must contain exactly the three participant slots")
+        if any(
+            not isinstance(name, str) or not name.strip() for name in copied_display_names.values()
+        ):
+            raise ValueError("participant display name must not be empty")
+        for name in copied_display_names.values():
+            sanitize_discord_model_text(name)
         self._clock = clock
         self._ids = ids
         self._metrics = metrics
@@ -146,6 +170,7 @@ class DebateApplication:
         self._repository = repository
         self._candidate_orderer = candidate_orderer
         self._outbox_recovery = outbox_recovery
+        self._participant_display_names = MappingProxyType(copied_display_names)
         self._lease_owner = lease_owner
         self._session_timeout_seconds = session_timeout_seconds
         self._phase_timeout_seconds = phase_timeout_seconds
@@ -378,17 +403,20 @@ class DebateApplication:
             await asyncio.sleep(self._terminal_delivery_conflict_retry_seconds)
 
     async def _recover_outbox_then_run_phases(self, debate_id: DebateId) -> None:
-        snapshot = await self._require_snapshot(debate_id)
-        self._require_owned_active_lease(snapshot, at=self._clock.now())
-        if snapshot.terminal_delivery is not None and not snapshot.state.phase.is_terminal:
-            await self._finish_terminal_delivery_with_conflict_retry(snapshot)
-            return
-        await self._outbox_recovery.drain(expected=snapshot)
-        async with asyncio.timeout(self._session_timeout_seconds):
-            await self._run_phases(debate_id)
-        current = await self._require_snapshot(debate_id)
-        if current.terminal_delivery is not None and not current.state.phase.is_terminal:
-            await self._finish_terminal_delivery_with_conflict_retry(current)
+        recovered_legacy_outbox = False
+        while True:
+            snapshot = await self._require_snapshot(debate_id)
+            if snapshot.state.phase.is_terminal:
+                return
+            self._require_owned_active_lease(snapshot, at=self._clock.now())
+            if snapshot.terminal_delivery is not None:
+                await self._finish_terminal_delivery_with_conflict_retry(snapshot)
+                continue
+            if not recovered_legacy_outbox:
+                await self._outbox_recovery.drain(expected=snapshot)
+                recovered_legacy_outbox = True
+            async with asyncio.timeout(self._session_timeout_seconds):
+                await self._run_phases(debate_id)
 
     async def _renew_lease_until_stopped(self, debate_id: DebateId) -> None:
         while True:
@@ -440,13 +468,43 @@ class DebateApplication:
 
         now = self._clock.now()
         self._require_owned_active_lease(snapshot, at=now)
+        if snapshot.state.recovery_state is RecoveryState.CHECKPOINTED:
+            snapshot = await self._replace_state(
+                snapshot,
+                snapshot.state.resume(at=now),
+                metric_event=MetricEvent.RESUMED,
+            )
+            now = self._clock.now()
+            self._require_owned_active_lease(snapshot, at=now)
         if snapshot.thread_id is not None:
+            if isinstance(snapshot.terminal_delivery, PhaseDeliveryPlan):
+                plan = snapshot.terminal_delivery
+                if plan.status is PhaseDeliveryStatus.STAGED:
+                    snapshot = await self._repository.terminate_terminal_delivery(
+                        expected=snapshot,
+                        at=now,
+                        reason=DeliveryAbandonReason.CANCELLED,
+                    )
+                if snapshot.terminal_delivery is None or not isinstance(
+                    snapshot.terminal_delivery,
+                    PhaseDeliveryPlan,
+                ):
+                    raise RepositoryConflict("terminal cancellation lost its phase plan")
+                if snapshot.terminal_delivery.status is PhaseDeliveryStatus.TERMINATING:
+                    await self._outbox_recovery.terminate(expected=snapshot)
+                    current = await self._require_snapshot(snapshot.state.debate_id)
+                    snapshot = await self._repository.abandon_terminal_delivery(
+                        expected=current,
+                        at=self._clock.now(),
+                        reason=DeliveryAbandonReason.CANCELLED,
+                    )
+            staged_at = self._clock.now()
             persisted = await self._stage_terminal_delivery(
                 snapshot,
                 target=DebatePhase.CANCELLED,
                 operation_id=command.operation_id,
-                ingress_claim=_claim_for_write(ingress_claim, at=now),
-                at=now,
+                ingress_claim=_claim_for_write(ingress_claim, at=staged_at),
+                at=staged_at,
             )
             return CancelledDebate(command.debate_id, persisted.state.attempt_id)
 
@@ -527,6 +585,7 @@ class DebateApplication:
             lease=None,
             error_code=None,
             final_decision=None,
+            generation_checkpoints=(),
             terminal_delivery=None,
         )
         persisted = await self._repository.create_retry(
@@ -667,7 +726,7 @@ class DebateApplication:
             elif phase is DebatePhase.COLLECTING_INITIAL_OPINIONS:
                 await self._collect_initial_opinions(snapshot)
             elif phase is DebatePhase.DISCUSSING:
-                await self._advance(snapshot, DebatePhase.COLLECTING_FINAL_PROPOSALS)
+                await self._begin_final_proposals(snapshot)
             elif phase is DebatePhase.COLLECTING_FINAL_PROPOSALS:
                 await self._collect_final_proposals(snapshot)
             elif phase is DebatePhase.SELECTING_WINNER:
@@ -683,73 +742,551 @@ class DebateApplication:
             evidence = await self._within_phase(
                 self._evidence.prepare_evidence(question=snapshot.question)
             )
-        await self._replace_with_phase(
-            replace(snapshot, evidence=evidence),
+        at = self._clock.now()
+        checkpoints = snapshot.generation_checkpoints
+        if not snapshot.initial_opinions:
+            checkpoints = tuple(
+                sorted(
+                    (
+                        *snapshot.generation_checkpoints,
+                        *(
+                            GenerationCheckpoint.planned(
+                                phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                                participant=participant,
+                                at=at,
+                            )
+                            for participant in PARTICIPANTS
+                        ),
+                    ),
+                    key=lambda checkpoint: (checkpoint.phase.value, checkpoint.participant.value),
+                )
+            )
+        await self._replace_snapshot(
             expected=snapshot,
-            target=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+            updated=replace(
+                snapshot,
+                state=snapshot.state.transition_to(
+                    DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                    at=at,
+                ),
+                evidence=evidence,
+                generation_checkpoints=checkpoints,
+            ),
         )
 
     async def _collect_initial_opinions(self, snapshot: DebateSnapshot) -> None:
         evidence = self._require_evidence(snapshot)
-        opinions = snapshot.initial_opinions
-        if not opinions:
-            opinions = await self._within_phase(
-                self._generate_initial_opinions(snapshot.question, evidence)
+        snapshot = await self._ensure_initial_opinion_checkpoints(snapshot)
+        checkpoints = self._initial_opinion_checkpoints(snapshot)
+        opinions = {opinion.participant: opinion for opinion in snapshot.initial_opinions}
+        if len(opinions) != len(snapshot.initial_opinions):
+            raise RepositoryConflict("initial opinion participant is duplicated")
+        for participant, opinion in opinions.items():
+            del opinion
+            checkpoint = checkpoints.get(participant)
+            if checkpoint is not None and checkpoint.status is not GenerationStatus.COMPLETED:
+                raise RepositoryConflict("durable initial opinion conflicts with its generation")
+
+        missing = tuple(participant for participant in PARTICIPANTS if participant not in opinions)
+        if missing:
+            thread_id = snapshot.thread_id
+            if thread_id is None:
+                await self._stage_terminal_delivery(
+                    snapshot,
+                    target=DebatePhase.FAILED,
+                    error_code="discord_delivery_preflight_failed",
+                )
+                return
+            for participant in missing:
+                delivery_ready = await self._discord.delivery_target_is_ready(
+                    bot_slot=DiscordBotSlot(participant.value),
+                    guild_id=snapshot.guild_id,
+                    thread_id=thread_id,
+                )
+                if not delivery_ready:
+                    await self._stage_terminal_delivery(
+                        snapshot,
+                        target=DebatePhase.FAILED,
+                        error_code="discord_delivery_preflight_failed",
+                    )
+                    return
+
+            lease = snapshot.lease
+            if lease is None:
+                raise RepositoryConflict("initial opinion generation requires a fenced lease")
+            at = self._clock.now()
+            claimed_checkpoints = snapshot.generation_checkpoints
+            for participant in missing:
+                checkpoint = checkpoints[participant]
+                if (
+                    checkpoint.status is GenerationStatus.IN_FLIGHT
+                    and checkpoint.logical_attempt == 2
+                ):
+                    failed = checkpoint.exhaust_after_recovery(
+                        lease=lease,
+                        at=at,
+                        error_code="generation_attempts_exhausted",
+                    )
+                    await self._stage_terminal_delivery(
+                        snapshot,
+                        target=DebatePhase.FAILED,
+                        error_code="generation_attempts_exhausted",
+                        generation_checkpoint=failed,
+                        at=at,
+                    )
+                    return
+                claimed = checkpoint.claim(lease=lease, at=at)
+                claimed_checkpoints = _generation_checkpoints_with(
+                    claimed_checkpoints,
+                    claimed,
+                )
+            claimed_snapshot = replace(
+                snapshot,
+                state=replace(snapshot.state, updated_at=at),
+                generation_checkpoints=claimed_checkpoints,
             )
-        _validate_participant_outputs(opinions, label="initial opinions")
-        await self._replace_with_phase(
-            replace(snapshot, initial_opinions=opinions),
+            snapshot = await self._repository.replace(
+                expected=snapshot,
+                updated=claimed_snapshot,
+            )
+            write_lock = asyncio.Lock()
+            failures: dict[ParticipantSlot, str | None] = {}
+            async with asyncio.TaskGroup() as task_group:
+                tasks = {
+                    participant: task_group.create_task(
+                        self._generate_and_persist_initial_opinion(
+                            snapshot=snapshot,
+                            participant=participant,
+                            evidence=evidence,
+                            write_lock=write_lock,
+                        ),
+                        name=f"initial:{participant.value}",
+                    )
+                    for participant in missing
+                }
+            failures = {participant: tasks[participant].result() for participant in missing}
+            error_code = next(
+                (
+                    failures[participant]
+                    for participant in PARTICIPANTS
+                    if failures.get(participant)
+                ),
+                None,
+            )
+            if error_code is not None:
+                current = await self._require_snapshot(snapshot.state.debate_id)
+                await self._stage_terminal_delivery(
+                    current,
+                    target=DebatePhase.FAILED,
+                    error_code=error_code,
+                )
+                return
+            snapshot = await self._require_snapshot(snapshot.state.debate_id)
+
+        _validate_participant_outputs(snapshot.initial_opinions, label="initial opinions")
+        current_checkpoints = self._initial_opinion_checkpoints(snapshot)
+        if current_checkpoints and any(
+            current_checkpoints[participant].status is not GenerationStatus.COMPLETED
+            for participant in PARTICIPANTS
+        ):
+            raise RepositoryConflict("initial opinions are not durably generated")
+        staged = await self._stage_initial_opinion_delivery(snapshot)
+        if staged.terminal_delivery is None:  # pragma: no cover - repository contract
+            raise RepositoryConflict("initial opinion delivery plan was not persisted")
+
+    async def _begin_final_proposals(self, snapshot: DebateSnapshot) -> None:
+        at = self._clock.now()
+        checkpoints = snapshot.generation_checkpoints
+        if not snapshot.final_proposals:
+            checkpoints = tuple(
+                sorted(
+                    (
+                        *checkpoints,
+                        *(
+                            GenerationCheckpoint.planned(
+                                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                                participant=participant,
+                                at=at,
+                            )
+                            for participant in PARTICIPANTS
+                        ),
+                    ),
+                    key=lambda checkpoint: (checkpoint.phase.value, checkpoint.participant.value),
+                )
+            )
+        await self._replace_snapshot(
             expected=snapshot,
-            target=DebatePhase.DISCUSSING,
+            updated=replace(
+                snapshot,
+                state=snapshot.state.transition_to(
+                    DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                    at=at,
+                ),
+                generation_checkpoints=checkpoints,
+            ),
         )
 
     async def _collect_final_proposals(self, snapshot: DebateSnapshot) -> None:
         evidence = self._require_evidence(snapshot)
         _validate_participant_outputs(snapshot.initial_opinions, label="initial opinions")
-        proposals = snapshot.final_proposals
-        if not proposals:
-            proposals = await self._within_phase(
-                self._generate_final_proposals(
-                    snapshot.question,
-                    evidence,
-                    snapshot.initial_opinions,
+        snapshot = await self._ensure_final_proposal_checkpoints(snapshot)
+        checkpoints = self._final_proposal_checkpoints(snapshot)
+        proposals = {proposal.participant: proposal for proposal in snapshot.final_proposals}
+        if len(proposals) != len(snapshot.final_proposals):
+            raise RepositoryConflict("final proposal participant is duplicated")
+        for participant, proposal in proposals.items():
+            del proposal
+            checkpoint = checkpoints.get(participant)
+            if checkpoint is not None and checkpoint.status is not GenerationStatus.COMPLETED:
+                raise RepositoryConflict("durable final proposal conflicts with its generation")
+
+        missing = tuple(participant for participant in PARTICIPANTS if participant not in proposals)
+        if missing:
+            thread_id = snapshot.thread_id
+            if thread_id is None:
+                await self._stage_terminal_delivery(
+                    snapshot,
+                    target=DebatePhase.FAILED,
+                    error_code="discord_delivery_preflight_failed",
                 )
+                return
+            for participant in missing:
+                delivery_ready = await self._discord.delivery_target_is_ready(
+                    bot_slot=DiscordBotSlot(participant.value),
+                    guild_id=snapshot.guild_id,
+                    thread_id=thread_id,
+                )
+                if not delivery_ready:
+                    await self._stage_terminal_delivery(
+                        snapshot,
+                        target=DebatePhase.FAILED,
+                        error_code="discord_delivery_preflight_failed",
+                    )
+                    return
+
+            lease = snapshot.lease
+            if lease is None:
+                raise RepositoryConflict("final proposal generation requires a fenced lease")
+            at = self._clock.now()
+            claimed_checkpoints = snapshot.generation_checkpoints
+            for participant in missing:
+                checkpoint = checkpoints[participant]
+                if (
+                    checkpoint.status is GenerationStatus.IN_FLIGHT
+                    and checkpoint.logical_attempt == 2
+                ):
+                    failed = checkpoint.exhaust_after_recovery(
+                        lease=lease,
+                        at=at,
+                        error_code="generation_attempts_exhausted",
+                    )
+                    await self._stage_terminal_delivery(
+                        snapshot,
+                        target=DebatePhase.FAILED,
+                        error_code="generation_attempts_exhausted",
+                        generation_checkpoint=failed,
+                        at=at,
+                    )
+                    return
+                claimed = checkpoint.claim(lease=lease, at=at)
+                claimed_checkpoints = _generation_checkpoints_with(
+                    claimed_checkpoints,
+                    claimed,
+                )
+            claimed_snapshot = replace(
+                snapshot,
+                state=replace(snapshot.state, updated_at=at),
+                generation_checkpoints=claimed_checkpoints,
             )
-        _validate_participant_outputs(proposals, label="final proposals")
-        await self._replace_with_phase(
-            replace(snapshot, final_proposals=proposals),
-            expected=snapshot,
-            target=DebatePhase.SELECTING_WINNER,
-        )
+            snapshot = await self._repository.replace(
+                expected=snapshot,
+                updated=claimed_snapshot,
+            )
+            write_lock = asyncio.Lock()
+            async with asyncio.TaskGroup() as task_group:
+                tasks = {
+                    participant: task_group.create_task(
+                        self._generate_and_persist_final_proposal(
+                            snapshot=snapshot,
+                            participant=participant,
+                            evidence=evidence,
+                            write_lock=write_lock,
+                        ),
+                        name=f"proposal:{participant.value}",
+                    )
+                    for participant in missing
+                }
+            failures = {participant: tasks[participant].result() for participant in missing}
+            error_code = next(
+                (
+                    failures[participant]
+                    for participant in PARTICIPANTS
+                    if failures.get(participant)
+                ),
+                None,
+            )
+            if error_code is not None:
+                current = await self._require_snapshot(snapshot.state.debate_id)
+                await self._stage_terminal_delivery(
+                    current,
+                    target=DebatePhase.FAILED,
+                    error_code=error_code,
+                )
+                return
+            snapshot = await self._require_snapshot(snapshot.state.debate_id)
+
+        _validate_participant_outputs(snapshot.final_proposals, label="final proposals")
+        current_checkpoints = self._final_proposal_checkpoints(snapshot)
+        if current_checkpoints and any(
+            current_checkpoints[participant].status is not GenerationStatus.COMPLETED
+            for participant in PARTICIPANTS
+        ):
+            raise RepositoryConflict("final proposals are not durably generated")
+        staged = await self._stage_final_proposal_delivery(snapshot)
+        if staged.terminal_delivery is None:  # pragma: no cover - repository contract
+            raise RepositoryConflict("final proposal delivery plan was not persisted")
 
     async def _collect_votes(self, snapshot: DebateSnapshot) -> None:
         evidence = self._require_evidence(snapshot)
         _validate_participant_outputs(snapshot.final_proposals, label="final proposals")
-        votes = snapshot.votes
-        if not votes:
-            votes = await self._within_phase(
-                self._generate_votes(snapshot.question, evidence, snapshot.final_proposals)
+        snapshot = await self._ensure_vote_checkpoints(snapshot)
+        checkpoints = self._vote_checkpoints(snapshot)
+        votes = {vote.voter: vote for vote in snapshot.votes}
+        if len(votes) != len(snapshot.votes):
+            raise RepositoryConflict("vote participant is duplicated")
+        for voter, vote in votes.items():
+            del vote
+            checkpoint = checkpoints.get(voter)
+            if checkpoint is not None and checkpoint.status is not GenerationStatus.COMPLETED:
+                raise RepositoryConflict("durable vote conflicts with its generation")
+
+        missing = tuple(participant for participant in PARTICIPANTS if participant not in votes)
+        if missing:
+            thread_id = snapshot.thread_id
+            if thread_id is None:
+                await self._stage_terminal_delivery(
+                    snapshot,
+                    target=DebatePhase.FAILED,
+                    error_code="discord_delivery_preflight_failed",
+                )
+                return
+            for participant in missing:
+                delivery_ready = await self._discord.delivery_target_is_ready(
+                    bot_slot=DiscordBotSlot(participant.value),
+                    guild_id=snapshot.guild_id,
+                    thread_id=thread_id,
+                )
+                if not delivery_ready:
+                    await self._stage_terminal_delivery(
+                        snapshot,
+                        target=DebatePhase.FAILED,
+                        error_code="discord_delivery_preflight_failed",
+                    )
+                    return
+
+            candidates_by_voter = self._ordered_vote_candidates(snapshot.final_proposals)
+            lease = snapshot.lease
+            if lease is None:
+                raise RepositoryConflict("vote generation requires a fenced lease")
+            at = self._clock.now()
+            claimed_checkpoints = snapshot.generation_checkpoints
+            for participant in missing:
+                checkpoint = checkpoints[participant]
+                if (
+                    checkpoint.status is GenerationStatus.IN_FLIGHT
+                    and checkpoint.logical_attempt == 2
+                ):
+                    failed = checkpoint.exhaust_after_recovery(
+                        lease=lease,
+                        at=at,
+                        error_code="generation_attempts_exhausted",
+                    )
+                    await self._stage_terminal_delivery(
+                        snapshot,
+                        target=DebatePhase.FAILED,
+                        error_code="generation_attempts_exhausted",
+                        generation_checkpoint=failed,
+                        at=at,
+                    )
+                    return
+                claimed = checkpoint.claim(lease=lease, at=at)
+                claimed_checkpoints = _generation_checkpoints_with(
+                    claimed_checkpoints,
+                    claimed,
+                )
+            claimed_snapshot = replace(
+                snapshot,
+                state=replace(snapshot.state, updated_at=at),
+                generation_checkpoints=claimed_checkpoints,
             )
-        voting_result = select_winner(votes)
+            snapshot = await self._repository.replace(
+                expected=snapshot,
+                updated=claimed_snapshot,
+            )
+            write_lock = asyncio.Lock()
+            async with asyncio.TaskGroup() as task_group:
+                tasks = {
+                    participant: task_group.create_task(
+                        self._generate_and_persist_vote(
+                            snapshot=snapshot,
+                            participant=participant,
+                            evidence=evidence,
+                            candidates=candidates_by_voter[participant],
+                            write_lock=write_lock,
+                        ),
+                        name=f"vote:{participant.value}",
+                    )
+                    for participant in missing
+                }
+            failures = {participant: tasks[participant].result() for participant in missing}
+            error_code = next(
+                (
+                    failures[participant]
+                    for participant in PARTICIPANTS
+                    if failures.get(participant)
+                ),
+                None,
+            )
+            if error_code is not None:
+                current = await self._require_snapshot(snapshot.state.debate_id)
+                await self._stage_terminal_delivery(
+                    current,
+                    target=DebatePhase.FAILED,
+                    error_code=error_code,
+                )
+                return
+            snapshot = await self._require_snapshot(snapshot.state.debate_id)
+
+        voting_result = select_winner(snapshot.votes)
+        current_checkpoints = self._vote_checkpoints(snapshot)
+        if current_checkpoints and any(
+            current_checkpoints[participant].status is not GenerationStatus.COMPLETED
+            for participant in PARTICIPANTS
+        ):
+            raise RepositoryConflict("votes are not durably generated")
         assessment = snapshot.escalation_assessment or assess_escalation(
             voting_result,
             assessed_at=self._clock.now(),
         )
-        await self._replace_with_phase(
-            replace(
-                snapshot,
-                votes=voting_result.votes,
-                escalation_assessment=assessment,
-            ),
-            expected=snapshot,
-            target=DebatePhase.GENERATING_DECISION,
-        )
+        if snapshot.escalation_assessment is None:
+            at = self._clock.now()
+            snapshot = await self._repository.replace(
+                expected=snapshot,
+                updated=replace(
+                    snapshot,
+                    state=replace(snapshot.state, updated_at=at),
+                    votes=voting_result.votes,
+                    escalation_assessment=assessment,
+                ),
+            )
+        staged = await self._stage_vote_delivery(snapshot)
+        if staged.terminal_delivery is None:  # pragma: no cover - repository contract
+            raise RepositoryConflict("vote delivery plan was not persisted")
 
     async def _generate_decision(self, snapshot: DebateSnapshot) -> None:
         evidence = self._require_evidence(snapshot)
         voting_result = select_winner(snapshot.votes)
         decision = snapshot.final_decision
-        if decision is None:
+        decision_checkpoints = tuple(
+            checkpoint
+            for checkpoint in snapshot.generation_checkpoints
+            if checkpoint.phase is DebatePhase.GENERATING_DECISION
+        )
+        if len(decision_checkpoints) > 1 or (
+            decision_checkpoints and decision_checkpoints[0].participant is not voting_result.winner
+        ):
+            raise RepositoryConflict("generation checkpoint set conflicts with the Python winner")
+        checkpoint = decision_checkpoints[0] if decision_checkpoints else None
+        if decision is not None:
+            if decision.winner is not voting_result.winner:
+                raise RepositoryConflict("durable decision conflicts with the Python winner")
+            if checkpoint is not None and checkpoint.status is not GenerationStatus.COMPLETED:
+                raise RepositoryConflict("durable decision conflicts with its generation fence")
+            await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.COMPLETED,
+                final_decision=decision,
+                generation_checkpoint=checkpoint,
+            )
+            return
+        if checkpoint is None:
+            # Existing schema-v7 attempts may have reached this phase before PR-0.
+            checkpoint = GenerationCheckpoint.planned(
+                phase=DebatePhase.GENERATING_DECISION,
+                participant=voting_result.winner,
+                at=snapshot.state.updated_at,
+            )
+            snapshot = await self._repository.replace(
+                expected=snapshot,
+                updated=snapshot.with_generation_checkpoint(checkpoint),
+            )
+        if checkpoint.participant is not voting_result.winner:
+            raise RepositoryConflict("generation participant conflicts with Python winner")
+        lease = snapshot.lease
+        if lease is None:
+            raise RepositoryConflict("generation requires a fenced lease")
+        at = self._clock.now()
+        if checkpoint.status is GenerationStatus.IN_FLIGHT and checkpoint.logical_attempt == 2:
+            failed = checkpoint.exhaust_after_recovery(
+                lease=lease,
+                at=at,
+                error_code="generation_attempts_exhausted",
+            )
+            await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.FAILED,
+                error_code="generation_attempts_exhausted",
+                generation_checkpoint=failed,
+            )
+            return
+        thread_id = snapshot.thread_id
+        winner_bot_slot = DiscordBotSlot(voting_result.winner.value)
+        delivery_ready = thread_id is not None
+        if thread_id is not None:
+            for bot_slot in (DiscordBotSlot.MODERATOR, winner_bot_slot):
+                if not await self._discord.delivery_target_is_ready(
+                    bot_slot=bot_slot,
+                    guild_id=snapshot.guild_id,
+                    thread_id=thread_id,
+                ):
+                    delivery_ready = False
+                    break
+        if not delivery_ready:
+            error_code = "discord_delivery_preflight_failed"
+            if checkpoint.status is GenerationStatus.PLANNED:
+                failed = checkpoint.fail_before_call(at=at, error_code=error_code)
+            else:
+                claim_identity = (
+                    checkpoint.claim_owner,
+                    checkpoint.claim_slot,
+                    checkpoint.claim_fencing_token,
+                )
+                lease_identity = (lease.owner_id, lease.slot, lease.fencing_token)
+                failed = (
+                    checkpoint.fail(lease=lease, at=at, error_code=error_code)
+                    if claim_identity == lease_identity
+                    else checkpoint.fail_before_recovery_call(
+                        lease=lease,
+                        at=at,
+                        error_code=error_code,
+                    )
+                )
+            await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.FAILED,
+                error_code=error_code,
+                generation_checkpoint=failed,
+                at=at,
+            )
+            return
+        claimed_checkpoint = checkpoint.claim(lease=lease, at=at)
+        claimed = snapshot.with_generation_checkpoint(claimed_checkpoint)
+        claimed = replace(
+            claimed,
+            state=replace(snapshot.state, updated_at=at),
+        )
+        snapshot = await self._repository.replace(expected=snapshot, updated=claimed)
+        try:
             decision = await self._within_phase(
                 self._openai.generate_decision(
                     question=snapshot.question,
@@ -758,31 +1295,372 @@ class DebateApplication:
                     voting_result=voting_result,
                 )
             )
+        except asyncio.CancelledError:
+            raise
+        except GenerationProviderError as error:
+            await self._stage_generation_failure(snapshot, error_code=error.code)
+            return
+        except _PhaseDeadlineExceeded:
+            await self._stage_generation_failure(
+                snapshot,
+                error_code="generation_deadline_exceeded",
+            )
+            return
         if decision.winner is not voting_result.winner:
-            raise ValueError("generated decision must preserve the mechanically selected winner")
-        await self._stage_terminal_delivery(
+            await self._stage_generation_failure(
+                snapshot,
+                error_code="openai_winner_mismatch",
+            )
+            return
+        current, current_checkpoint = await self._refresh_generation_claim(
             snapshot,
+            claimed_checkpoint,
+        )
+        settled_at = self._clock.now()
+        lease = current.lease
+        if lease is None:  # pragma: no cover - refresh validates the lease
+            raise RepositoryConflict("generation lease disappeared before settlement")
+        completed_checkpoint = current_checkpoint.complete(lease=lease, at=settled_at)
+        await self._stage_terminal_delivery(
+            current,
             target=DebatePhase.COMPLETED,
             final_decision=decision,
+            generation_checkpoint=completed_checkpoint,
+            at=settled_at,
         )
 
-    async def _generate_initial_opinions(
+    async def _stage_generation_failure(
         self,
-        question: str,
-        evidence: EvidenceBundle,
-    ) -> tuple[InitialOpinion, ...]:
-        tasks: dict[ParticipantSlot, asyncio.Task[InitialOpinion]] = {}
-        async with asyncio.TaskGroup() as task_group:
-            for participant in PARTICIPANTS:
-                tasks[participant] = task_group.create_task(
-                    self._openai.generate_initial_opinion(
-                        participant=participant,
-                        question=question,
-                        evidence=evidence,
+        snapshot: DebateSnapshot,
+        *,
+        error_code: str,
+    ) -> None:
+        voting_result = select_winner(snapshot.votes)
+        checkpoint = snapshot.checkpoint_for(
+            phase=DebatePhase.GENERATING_DECISION,
+            participant=voting_result.winner,
+        )
+        if checkpoint is None:
+            raise RepositoryConflict("generation failure lost its durable fence")
+        current, checkpoint = await self._refresh_generation_claim(snapshot, checkpoint)
+        lease = current.lease
+        if lease is None:  # pragma: no cover - refresh validates the lease
+            raise RepositoryConflict("generation failure lost its lease")
+        at = self._clock.now()
+        failed = checkpoint.fail(lease=lease, at=at, error_code=error_code)
+        await self._stage_terminal_delivery(
+            current,
+            target=DebatePhase.FAILED,
+            error_code=error_code,
+            generation_checkpoint=failed,
+            at=at,
+        )
+
+    async def _refresh_generation_claim(
+        self,
+        snapshot: DebateSnapshot,
+        checkpoint: GenerationCheckpoint,
+    ) -> tuple[DebateSnapshot, GenerationCheckpoint]:
+        """Refresh lease expiry without accepting a changed generation fence."""
+
+        current = await self._require_snapshot(snapshot.state.debate_id)
+        current_checkpoint = current.checkpoint_for(
+            phase=checkpoint.phase,
+            participant=checkpoint.participant,
+        )
+        if current_checkpoint != checkpoint:
+            raise RepositoryConflict("generation result lost its exact durable claim")
+        self._require_owned_active_lease(current, at=self._clock.now())
+        return current, current_checkpoint
+
+    async def _ensure_initial_opinion_checkpoints(
+        self,
+        snapshot: DebateSnapshot,
+    ) -> DebateSnapshot:
+        checkpoints = self._initial_opinion_checkpoints(snapshot)
+        if checkpoints:
+            if set(checkpoints) != set(PARTICIPANTS):
+                raise RepositoryConflict("initial opinion generation checkpoint set is incomplete")
+            return snapshot
+        if snapshot.initial_opinions:
+            if len(snapshot.initial_opinions) != len(PARTICIPANTS):
+                raise RepositoryConflict("legacy initial opinions are incomplete")
+            return snapshot
+        at = self._clock.now()
+        updated = replace(
+            snapshot,
+            state=replace(snapshot.state, updated_at=at),
+            generation_checkpoints=tuple(
+                sorted(
+                    (
+                        *snapshot.generation_checkpoints,
+                        *(
+                            GenerationCheckpoint.planned(
+                                phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                                participant=participant,
+                                at=at,
+                            )
+                            for participant in PARTICIPANTS
+                        ),
                     ),
-                    name=f"initial:{participant.value}",
+                    key=lambda checkpoint: (checkpoint.phase.value, checkpoint.participant.value),
                 )
-        return tuple(tasks[participant].result() for participant in PARTICIPANTS)
+            ),
+        )
+        return await self._repository.replace(expected=snapshot, updated=updated)
+
+    @staticmethod
+    def _initial_opinion_checkpoints(
+        snapshot: DebateSnapshot,
+    ) -> dict[ParticipantSlot, GenerationCheckpoint]:
+        checkpoints = {
+            checkpoint.participant: checkpoint
+            for checkpoint in snapshot.generation_checkpoints
+            if checkpoint.phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
+        }
+        if len(checkpoints) != sum(
+            checkpoint.phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
+            for checkpoint in snapshot.generation_checkpoints
+        ):
+            raise RepositoryConflict("initial opinion generation checkpoint is duplicated")
+        return checkpoints
+
+    async def _generate_and_persist_initial_opinion(
+        self,
+        *,
+        snapshot: DebateSnapshot,
+        participant: ParticipantSlot,
+        evidence: EvidenceBundle,
+        write_lock: asyncio.Lock,
+    ) -> str | None:
+        try:
+            opinion = await self._within_phase(
+                self._openai.generate_initial_opinion(
+                    participant=participant,
+                    question=snapshot.question,
+                    evidence=evidence,
+                )
+            )
+        except GenerationProviderError as error:
+            return error.code
+        except _PhaseDeadlineExceeded:
+            return "generation_deadline_exceeded"
+        if opinion.participant is not participant:
+            return "openai_participant_mismatch"
+
+        async with write_lock:
+            current = await self._require_snapshot(snapshot.state.debate_id)
+            checkpoint = current.checkpoint_for(
+                phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                participant=participant,
+            )
+            expected_checkpoint = snapshot.checkpoint_for(
+                phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                participant=participant,
+            )
+            if checkpoint is None or checkpoint != expected_checkpoint:
+                raise RepositoryConflict("initial opinion result lost its exact generation claim")
+            if any(existing.participant is participant for existing in current.initial_opinions):
+                raise RepositoryConflict("initial opinion output is already durable")
+            lease = current.lease
+            if lease is None:
+                raise RepositoryConflict("initial opinion result lost its fenced lease")
+            settled_at = self._clock.now()
+            completed = checkpoint.complete(lease=lease, at=settled_at)
+            opinions = tuple(
+                sorted(
+                    (*current.initial_opinions, opinion),
+                    key=lambda item: PARTICIPANTS.index(item.participant),
+                )
+            )
+            updated = replace(
+                current,
+                state=replace(current.state, updated_at=settled_at),
+                initial_opinions=opinions,
+                generation_checkpoints=current.generation_checkpoints_with(completed),
+            )
+            await self._repository.replace(expected=current, updated=updated)
+        return None
+
+    async def _stage_initial_opinion_delivery(
+        self,
+        snapshot: DebateSnapshot,
+    ) -> DebateSnapshot:
+        staged_at = self._clock.now()
+        self._require_owned_active_lease(snapshot, at=staged_at)
+        operations = prepare_initial_opinion_outbox_operations(
+            snapshot=snapshot,
+            created_at=staged_at,
+        )
+        delivery = PhaseDeliveryPlan(
+            plan_id="initial-opinions",
+            source_phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
+            target_phase=DebatePhase.DISCUSSING,
+            operation_ids=tuple(operation.operation_id for operation in operations),
+            content_hashes=tuple(operation.content_hash for operation in operations),
+            delivery_sequences=tuple(
+                operation.delivery_sequence
+                for operation in operations
+                if operation.delivery_sequence is not None
+            ),
+            staged_at=staged_at,
+            deadline_at=staged_at + timedelta(minutes=15),
+        )
+        staged = replace(
+            snapshot,
+            state=replace(snapshot.state, updated_at=staged_at),
+            terminal_delivery=delivery,
+        )
+        return await self._repository.stage_terminal_delivery(
+            expected=snapshot,
+            staged=staged,
+            operations=operations,
+        )
+
+    async def _ensure_final_proposal_checkpoints(
+        self,
+        snapshot: DebateSnapshot,
+    ) -> DebateSnapshot:
+        checkpoints = self._final_proposal_checkpoints(snapshot)
+        if checkpoints:
+            if set(checkpoints) != set(PARTICIPANTS):
+                raise RepositoryConflict("final proposal generation checkpoint set is incomplete")
+            return snapshot
+        if snapshot.final_proposals:
+            if len(snapshot.final_proposals) != len(PARTICIPANTS):
+                raise RepositoryConflict("legacy final proposals are incomplete")
+            return snapshot
+        at = self._clock.now()
+        updated = replace(
+            snapshot,
+            state=replace(snapshot.state, updated_at=at),
+            generation_checkpoints=tuple(
+                sorted(
+                    (
+                        *snapshot.generation_checkpoints,
+                        *(
+                            GenerationCheckpoint.planned(
+                                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                                participant=participant,
+                                at=at,
+                            )
+                            for participant in PARTICIPANTS
+                        ),
+                    ),
+                    key=lambda checkpoint: (checkpoint.phase.value, checkpoint.participant.value),
+                )
+            ),
+        )
+        return await self._repository.replace(expected=snapshot, updated=updated)
+
+    @staticmethod
+    def _final_proposal_checkpoints(
+        snapshot: DebateSnapshot,
+    ) -> dict[ParticipantSlot, GenerationCheckpoint]:
+        checkpoints = {
+            checkpoint.participant: checkpoint
+            for checkpoint in snapshot.generation_checkpoints
+            if checkpoint.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+        }
+        if len(checkpoints) != sum(
+            checkpoint.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+            for checkpoint in snapshot.generation_checkpoints
+        ):
+            raise RepositoryConflict("final proposal generation checkpoint is duplicated")
+        return checkpoints
+
+    async def _generate_and_persist_final_proposal(
+        self,
+        *,
+        snapshot: DebateSnapshot,
+        participant: ParticipantSlot,
+        evidence: EvidenceBundle,
+        write_lock: asyncio.Lock,
+    ) -> str | None:
+        try:
+            proposal = await self._within_phase(
+                self._openai.generate_final_proposal(
+                    participant=participant,
+                    question=snapshot.question,
+                    evidence=evidence,
+                    initial_opinions=snapshot.initial_opinions,
+                )
+            )
+        except GenerationProviderError as error:
+            return error.code
+        except _PhaseDeadlineExceeded:
+            return "generation_deadline_exceeded"
+        if proposal.participant is not participant:
+            return "openai_participant_mismatch"
+
+        async with write_lock:
+            current = await self._require_snapshot(snapshot.state.debate_id)
+            checkpoint = current.checkpoint_for(
+                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                participant=participant,
+            )
+            expected_checkpoint = snapshot.checkpoint_for(
+                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                participant=participant,
+            )
+            if checkpoint is None or checkpoint != expected_checkpoint:
+                raise RepositoryConflict("final proposal result lost its exact generation claim")
+            if any(existing.participant is participant for existing in current.final_proposals):
+                raise RepositoryConflict("final proposal output is already durable")
+            lease = current.lease
+            if lease is None:
+                raise RepositoryConflict("final proposal result lost its fenced lease")
+            settled_at = self._clock.now()
+            completed = checkpoint.complete(lease=lease, at=settled_at)
+            proposals = tuple(
+                sorted(
+                    (*current.final_proposals, proposal),
+                    key=lambda item: PARTICIPANTS.index(item.participant),
+                )
+            )
+            updated = replace(
+                current,
+                state=replace(current.state, updated_at=settled_at),
+                final_proposals=proposals,
+                generation_checkpoints=current.generation_checkpoints_with(completed),
+            )
+            await self._repository.replace(expected=current, updated=updated)
+        return None
+
+    async def _stage_final_proposal_delivery(
+        self,
+        snapshot: DebateSnapshot,
+    ) -> DebateSnapshot:
+        staged_at = self._clock.now()
+        self._require_owned_active_lease(snapshot, at=staged_at)
+        operations = prepare_final_proposal_outbox_operations(
+            snapshot=snapshot,
+            created_at=staged_at,
+        )
+        delivery = PhaseDeliveryPlan(
+            plan_id="final-proposals",
+            source_phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+            target_phase=DebatePhase.SELECTING_WINNER,
+            operation_ids=tuple(operation.operation_id for operation in operations),
+            content_hashes=tuple(operation.content_hash for operation in operations),
+            delivery_sequences=tuple(
+                operation.delivery_sequence
+                for operation in operations
+                if operation.delivery_sequence is not None
+            ),
+            staged_at=staged_at,
+            deadline_at=staged_at + timedelta(minutes=15),
+        )
+        staged = replace(
+            snapshot,
+            state=replace(snapshot.state, updated_at=staged_at),
+            terminal_delivery=delivery,
+        )
+        return await self._repository.stage_terminal_delivery(
+            expected=snapshot,
+            staged=staged,
+            operations=operations,
+        )
 
     async def _generate_final_proposals(
         self,
@@ -804,12 +1682,62 @@ class DebateApplication:
                 )
         return tuple(tasks[participant].result() for participant in PARTICIPANTS)
 
-    async def _generate_votes(
+    async def _ensure_vote_checkpoints(
         self,
-        question: str,
-        evidence: EvidenceBundle,
+        snapshot: DebateSnapshot,
+    ) -> DebateSnapshot:
+        checkpoints = self._vote_checkpoints(snapshot)
+        if checkpoints:
+            if set(checkpoints) != set(PARTICIPANTS):
+                raise RepositoryConflict("vote generation checkpoint set is incomplete")
+            return snapshot
+        if snapshot.votes:
+            if len(snapshot.votes) != len(PARTICIPANTS):
+                raise RepositoryConflict("legacy votes are incomplete")
+            return snapshot
+        at = self._clock.now()
+        updated = replace(
+            snapshot,
+            state=replace(snapshot.state, updated_at=at),
+            generation_checkpoints=tuple(
+                sorted(
+                    (
+                        *snapshot.generation_checkpoints,
+                        *(
+                            GenerationCheckpoint.planned(
+                                phase=DebatePhase.SELECTING_WINNER,
+                                participant=participant,
+                                at=at,
+                            )
+                            for participant in PARTICIPANTS
+                        ),
+                    ),
+                    key=lambda checkpoint: (checkpoint.phase.value, checkpoint.participant.value),
+                )
+            ),
+        )
+        return await self._repository.replace(expected=snapshot, updated=updated)
+
+    @staticmethod
+    def _vote_checkpoints(
+        snapshot: DebateSnapshot,
+    ) -> dict[ParticipantSlot, GenerationCheckpoint]:
+        checkpoints = {
+            checkpoint.participant: checkpoint
+            for checkpoint in snapshot.generation_checkpoints
+            if checkpoint.phase is DebatePhase.SELECTING_WINNER
+        }
+        if len(checkpoints) != sum(
+            checkpoint.phase is DebatePhase.SELECTING_WINNER
+            for checkpoint in snapshot.generation_checkpoints
+        ):
+            raise RepositoryConflict("vote generation checkpoint is duplicated")
+        return checkpoints
+
+    def _ordered_vote_candidates(
+        self,
         proposals: tuple[FinalProposal, ...],
-    ) -> tuple[Vote, ...]:
+    ) -> dict[ParticipantSlot, tuple[FinalProposal, ...]]:
         ordered_candidates = {
             voter: self._candidate_orderer.order_candidates(
                 voter=voter,
@@ -824,25 +1752,102 @@ class DebateApplication:
                 PARTICIPANTS
             ) - {voter}:
                 raise ValueError("candidate orderer must preserve both eligible candidates")
+        return ordered_candidates
 
-        tasks: dict[ParticipantSlot, asyncio.Task[Vote]] = {}
-        async with asyncio.TaskGroup() as task_group:
-            for voter in PARTICIPANTS:
-                tasks[voter] = task_group.create_task(
-                    self._openai.cast_vote(
-                        voter=voter,
-                        question=question,
-                        evidence=evidence,
-                        candidates=ordered_candidates[voter],
-                    ),
-                    name=f"vote:{voter.value}",
+    async def _generate_and_persist_vote(
+        self,
+        *,
+        snapshot: DebateSnapshot,
+        participant: ParticipantSlot,
+        evidence: EvidenceBundle,
+        candidates: tuple[FinalProposal, ...],
+        write_lock: asyncio.Lock,
+    ) -> str | None:
+        try:
+            vote = await self._within_phase(
+                self._openai.cast_vote(
+                    voter=participant,
+                    question=snapshot.question,
+                    evidence=evidence,
+                    candidates=candidates,
                 )
-        votes = tuple(tasks[voter].result() for voter in PARTICIPANTS)
-        if any(
-            vote.voter is not expected for vote, expected in zip(votes, PARTICIPANTS, strict=True)
-        ):
-            raise ValueError("vote response voter does not match the requested participant")
-        return votes
+            )
+        except GenerationProviderError as error:
+            return error.code
+        except _PhaseDeadlineExceeded:
+            return "generation_deadline_exceeded"
+        if vote.voter is not participant:
+            return "openai_participant_mismatch"
+
+        async with write_lock:
+            current = await self._require_snapshot(snapshot.state.debate_id)
+            checkpoint = current.checkpoint_for(
+                phase=DebatePhase.SELECTING_WINNER,
+                participant=participant,
+            )
+            expected_checkpoint = snapshot.checkpoint_for(
+                phase=DebatePhase.SELECTING_WINNER,
+                participant=participant,
+            )
+            if checkpoint is None or checkpoint != expected_checkpoint:
+                raise RepositoryConflict("vote result lost its exact generation claim")
+            if any(existing.voter is participant for existing in current.votes):
+                raise RepositoryConflict("vote output is already durable")
+            lease = current.lease
+            if lease is None:
+                raise RepositoryConflict("vote result lost its fenced lease")
+            settled_at = self._clock.now()
+            completed = checkpoint.complete(lease=lease, at=settled_at)
+            votes = tuple(
+                sorted(
+                    (*current.votes, vote),
+                    key=lambda item: PARTICIPANTS.index(item.voter),
+                )
+            )
+            updated = replace(
+                current,
+                state=replace(current.state, updated_at=settled_at),
+                votes=votes,
+                generation_checkpoints=current.generation_checkpoints_with(completed),
+            )
+            await self._repository.replace(expected=current, updated=updated)
+        return None
+
+    async def _stage_vote_delivery(
+        self,
+        snapshot: DebateSnapshot,
+    ) -> DebateSnapshot:
+        staged_at = self._clock.now()
+        self._require_owned_active_lease(snapshot, at=staged_at)
+        operations = prepare_vote_outbox_operations(
+            snapshot=snapshot,
+            participant_display_names=self._participant_display_names,
+            created_at=staged_at,
+        )
+        delivery = PhaseDeliveryPlan(
+            plan_id="votes",
+            source_phase=DebatePhase.SELECTING_WINNER,
+            target_phase=DebatePhase.GENERATING_DECISION,
+            operation_ids=tuple(operation.operation_id for operation in operations),
+            content_hashes=tuple(operation.content_hash for operation in operations),
+            delivery_sequences=tuple(
+                operation.delivery_sequence
+                for operation in operations
+                if operation.delivery_sequence is not None
+            ),
+            staged_at=staged_at,
+            deadline_at=staged_at + timedelta(minutes=15),
+        )
+        staged = replace(
+            snapshot,
+            state=replace(snapshot.state, updated_at=staged_at),
+            terminal_delivery=delivery,
+        )
+        return await self._repository.stage_terminal_delivery(
+            expected=snapshot,
+            staged=staged,
+            operations=operations,
+        )
 
     async def _within_phase(self, operation: Awaitable[_T]) -> _T:
         try:
@@ -952,6 +1957,7 @@ class DebateApplication:
         target: DebatePhase,
         error_code: str | None = None,
         final_decision: FinalDecision | None = None,
+        generation_checkpoint: GenerationCheckpoint | None = None,
         operation_id: str | None = None,
         ingress_claim: IngressClaimFence | None = None,
         at: datetime | None = None,
@@ -960,29 +1966,86 @@ class DebateApplication:
 
         staged_at = self._clock.now() if at is None else at
         self._require_owned_active_lease(snapshot, at=staged_at)
-        payload = replace(snapshot, error_code=error_code)
+        checkpoints = snapshot.generation_checkpoints
+        if generation_checkpoint is not None:
+            checkpoints = snapshot.generation_checkpoints_with(generation_checkpoint)
+        if target is DebatePhase.FAILED:
+            if error_code is None:
+                raise ValueError("failed delivery requires an error code")
+            lease = snapshot.lease
+            if lease is None:
+                raise RepositoryConflict("generation failure settlement requires a fenced lease")
+            checkpoints = tuple(
+                _settle_generation_checkpoint_failure(
+                    checkpoint,
+                    lease=lease,
+                    at=staged_at,
+                    error_code=error_code,
+                )
+                for checkpoint in checkpoints
+            )
+        if target is DebatePhase.CANCELLED:
+            checkpoints = tuple(
+                checkpoint.cancel(at=staged_at)
+                if checkpoint.status in {GenerationStatus.PLANNED, GenerationStatus.IN_FLIGHT}
+                else checkpoint
+                for checkpoint in checkpoints
+            )
+        payload_source = (
+            replace(snapshot, terminal_delivery=None)
+            if isinstance(snapshot.terminal_delivery, PhaseDeliveryPlan)
+            and snapshot.terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
+            else snapshot
+        )
         if target is DebatePhase.COMPLETED:
             payload = replace(
-                payload,
+                payload_source,
+                error_code=error_code,
+                generation_checkpoints=checkpoints,
                 final_decision=final_decision or snapshot.final_decision,
             )
-        elif final_decision is not None:
-            raise ValueError("only completed delivery may supply a final decision")
+        elif target is DebatePhase.FAILED:
+            if final_decision is not None:
+                raise ValueError("only completed delivery may supply a final decision")
+            payload = replace(
+                payload_source,
+                error_code=error_code,
+                generation_checkpoints=checkpoints,
+            )
+        elif target is DebatePhase.CANCELLED:
+            if final_decision is not None:
+                raise ValueError("only completed delivery may supply a final decision")
+            payload = snapshot
+        else:
+            raise ValueError("terminal delivery target must be completed, failed, or cancelled")
         operations = prepare_terminal_outbox_operations(
             snapshot=payload,
             target_phase=target,
             created_at=staged_at,
             error_code=error_code,
+            participant_display_names=(
+                self._participant_display_names if target is DebatePhase.COMPLETED else None
+            ),
         )
-        delivery = TerminalDeliveryPlan(
+        delivery = PhaseDeliveryPlan(
+            plan_id=operations[0].plan_id or f"terminal-{target.value}",
+            source_phase=snapshot.state.phase,
             target_phase=target,
             operation_ids=tuple(operation.operation_id for operation in operations),
             content_hashes=tuple(operation.content_hash for operation in operations),
+            delivery_sequences=tuple(
+                operation.delivery_sequence
+                for operation in operations
+                if operation.delivery_sequence is not None
+            ),
             staged_at=staged_at,
+            deadline_at=staged_at + timedelta(minutes=15),
         )
         staged = replace(
-            payload,
-            state=replace(payload.state, updated_at=staged_at),
+            snapshot if target is DebatePhase.CANCELLED else payload,
+            state=replace(snapshot.state, updated_at=staged_at),
+            error_code=error_code,
+            generation_checkpoints=checkpoints,
             terminal_delivery=delivery,
         )
         return await self._repository.stage_terminal_delivery(
@@ -1001,9 +2064,37 @@ class DebateApplication:
             raise InvalidApplicationOperation("terminal delivery is not staged")
         if snapshot.state.phase.is_terminal:
             return snapshot
+        if (
+            isinstance(delivery, PhaseDeliveryPlan)
+            and delivery.status is PhaseDeliveryStatus.TERMINATING
+        ):
+            return await self._settle_terminating_delivery(snapshot)
+        if (
+            isinstance(delivery, PhaseDeliveryPlan)
+            and delivery.status is PhaseDeliveryStatus.ABANDONED
+        ):
+            return await self._continue_after_abandoned_delivery(snapshot)
         self._require_owned_active_lease(snapshot, at=self._clock.now())
         try:
             await self._outbox_recovery.drain(expected=snapshot)
+        except OutboxRecoveryAbandoned as error:
+            try:
+                reason = DeliveryAbandonReason(error.reason)
+            except ValueError as invalid_reason:  # pragma: no cover - local producer is typed
+                raise RepositoryConflict(
+                    "outbox recovery returned an unknown reason"
+                ) from invalid_reason
+            current = await self._require_snapshot(snapshot.state.debate_id)
+            self._require_owned_active_lease(current, at=self._clock.now())
+            terminating = await self._repository.terminate_terminal_delivery(
+                expected=current,
+                at=self._clock.now(),
+                reason=reason,
+            )
+            return await self._settle_terminating_delivery(
+                terminating,
+                delivery_code=error.delivery_code,
+            )
         except RepositoryTransactionConflict as error:
             raise _TerminalDeliveryConflict(
                 stage=error.stage.value,
@@ -1033,6 +2124,38 @@ class DebateApplication:
             )
         at = self._clock.now()
         self._require_owned_active_lease(current, at=at)
+        if not delivery.target_phase.is_terminal:
+            finalized_phase = replace(
+                current,
+                state=current.state.transition_to(delivery.target_phase, at=at),
+                terminal_delivery=None,
+            )
+            try:
+                persisted_phase = await self._repository.finalize_phase_delivery(
+                    expected=current,
+                    updated=finalized_phase,
+                )
+            except RepositoryTransactionConflict as error:
+                raise _TerminalDeliveryConflict(
+                    stage=error.stage.value,
+                    actions=tuple(action.value for action, _ in error.failures),
+                    codes=tuple(code.value for _, code in error.failures),
+                    reasons_complete=error.reasons_complete,
+                    retryable=error.retryable,
+                ) from error
+            except RepositoryConflict as error:
+                raise _TerminalDeliveryConflict(
+                    stage="phase_delivery_finalize",
+                    actions=("unknown",),
+                    codes=("repository_conflict",),
+                    reasons_complete=False,
+                    retryable=False,
+                ) from error
+            self._metrics.increment(
+                MetricEvent.PHASE_COMPLETED,
+                debate_id=persisted_phase.state.debate_id,
+            )
+            return persisted_phase
         finalized = replace(
             current,
             state=current.state.transition_to(delivery.target_phase, at=at),
@@ -1063,7 +2186,136 @@ class DebateApplication:
             DebatePhase.COMPLETED: MetricEvent.COMPLETED,
             DebatePhase.FAILED: MetricEvent.FAILED,
             DebatePhase.CANCELLED: MetricEvent.CANCELLED,
-        }[delivery.target_phase]
+        }[persisted.state.phase]
+        self._metrics.increment(metric, debate_id=persisted.state.debate_id)
+        return persisted
+
+    async def _settle_terminating_delivery(
+        self,
+        snapshot: DebateSnapshot,
+        *,
+        delivery_code: str | None = None,
+    ) -> DebateSnapshot:
+        """Reconcile an in-flight POST before the persisted stop intent settles."""
+
+        plan = snapshot.terminal_delivery
+        if (
+            not isinstance(plan, PhaseDeliveryPlan)
+            or plan.status is not PhaseDeliveryStatus.TERMINATING
+            or plan.abandon_reason is None
+        ):
+            raise RepositoryConflict("terminating delivery lost its durable stop intent")
+        all_sent = await self._outbox_recovery.terminate(expected=snapshot)
+        current = await self._require_snapshot(snapshot.state.debate_id)
+        current_plan = current.terminal_delivery
+        if (
+            not isinstance(current_plan, PhaseDeliveryPlan)
+            or current_plan.status is not PhaseDeliveryStatus.TERMINATING
+            or current_plan.abandon_reason is not plan.abandon_reason
+        ):
+            raise RepositoryConflict("terminating delivery changed during reconciliation")
+        if all_sent and plan.abandon_reason is not DeliveryAbandonReason.CANCELLED:
+            at = self._clock.now()
+            if not current_plan.target_phase.is_terminal:
+                finalized_phase = replace(
+                    current,
+                    state=current.state.transition_to(current_plan.target_phase, at=at),
+                    terminal_delivery=None,
+                )
+                persisted_phase = await self._repository.finalize_phase_delivery(
+                    expected=current,
+                    updated=finalized_phase,
+                )
+                self._metrics.increment(
+                    MetricEvent.PHASE_COMPLETED,
+                    debate_id=persisted_phase.state.debate_id,
+                )
+                return persisted_phase
+            finalized = replace(
+                current,
+                state=current.state.transition_to(current_plan.target_phase, at=at),
+                terminal_delivery=current_plan.complete(at=at),
+            )
+            persisted = await self._repository.finalize_terminal(
+                expected=current,
+                updated=finalized,
+            )
+            metric = {
+                DebatePhase.COMPLETED: MetricEvent.COMPLETED,
+                DebatePhase.FAILED: MetricEvent.FAILED,
+                DebatePhase.CANCELLED: MetricEvent.CANCELLED,
+            }[persisted.state.phase]
+            self._metrics.increment(metric, debate_id=persisted.state.debate_id)
+            return persisted
+        abandoned = await self._repository.abandon_terminal_delivery(
+            expected=current,
+            at=self._clock.now(),
+            reason=plan.abandon_reason,
+        )
+        return await self._continue_after_abandoned_delivery(
+            abandoned,
+            delivery_code=delivery_code,
+        )
+
+    async def _continue_after_abandoned_delivery(
+        self,
+        snapshot: DebateSnapshot,
+        *,
+        delivery_code: str | None = None,
+    ) -> DebateSnapshot:
+        plan = snapshot.terminal_delivery
+        if (
+            not isinstance(plan, PhaseDeliveryPlan)
+            or plan.status is not PhaseDeliveryStatus.ABANDONED
+        ):
+            raise RepositoryConflict("delivery abandonment lost its durable plan")
+        if plan.abandon_reason is DeliveryAbandonReason.CANCELLED:
+            staged = await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.CANCELLED,
+                at=self._clock.now(),
+            )
+            return await self._finish_terminal_delivery(staged)
+        if plan.target_phase is DebatePhase.COMPLETED:
+            reason = plan.abandon_reason
+            if reason is None:
+                raise RepositoryConflict("abandoned delivery lost its reason")
+            error_code = delivery_code or f"discord_outbox_{reason.value}"
+            staged = await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.FAILED,
+                error_code=error_code,
+                at=self._clock.now(),
+            )
+            return await self._finish_terminal_delivery(staged)
+        if not plan.target_phase.is_terminal:
+            reason = plan.abandon_reason
+            if reason is None:
+                raise RepositoryConflict("abandoned delivery lost its reason")
+            error_code = delivery_code or f"discord_outbox_{reason.value}"
+            staged = await self._stage_terminal_delivery(
+                snapshot,
+                target=DebatePhase.FAILED,
+                error_code=error_code,
+                at=self._clock.now(),
+            )
+            return await self._finish_terminal_delivery(staged)
+
+        at = self._clock.now()
+        target = plan.target_phase
+        finalized = replace(
+            snapshot,
+            state=snapshot.state.transition_to(target, at=at),
+            terminal_delivery=plan,
+        )
+        persisted = await self._repository.finalize_terminal(
+            expected=snapshot,
+            updated=finalized,
+        )
+        metric = {
+            DebatePhase.FAILED: MetricEvent.FAILED,
+            DebatePhase.CANCELLED: MetricEvent.CANCELLED,
+        }[persisted.state.phase]
         self._metrics.increment(metric, debate_id=persisted.state.debate_id)
         return persisted
 
@@ -1173,6 +2425,49 @@ def _validated_ingress_error_code(error_code: str) -> str:
     if not value or len(value) > 100:
         raise ValueError("ingress error code must contain at most 100 characters")
     return value
+
+
+def _generation_checkpoints_with(
+    checkpoints: tuple[GenerationCheckpoint, ...],
+    updated: GenerationCheckpoint,
+) -> tuple[GenerationCheckpoint, ...]:
+    retained = tuple(
+        checkpoint
+        for checkpoint in checkpoints
+        if (checkpoint.phase, checkpoint.participant) != (updated.phase, updated.participant)
+    )
+    return tuple(
+        sorted(
+            (*retained, updated),
+            key=lambda checkpoint: (checkpoint.phase.value, checkpoint.participant.value),
+        )
+    )
+
+
+def _settle_generation_checkpoint_failure(
+    checkpoint: GenerationCheckpoint,
+    *,
+    lease: LeaseGrant,
+    at: datetime,
+    error_code: str,
+) -> GenerationCheckpoint:
+    if checkpoint.status in {GenerationStatus.COMPLETED, GenerationStatus.FAILED}:
+        return checkpoint
+    if checkpoint.status is GenerationStatus.PLANNED:
+        return checkpoint.fail_before_call(at=at, error_code=error_code)
+    claim_identity = (
+        checkpoint.claim_owner,
+        checkpoint.claim_slot,
+        checkpoint.claim_fencing_token,
+    )
+    lease_identity = (lease.owner_id, lease.slot, lease.fencing_token)
+    if claim_identity == lease_identity:
+        return checkpoint.fail(lease=lease, at=at, error_code=error_code)
+    return checkpoint.fail_before_recovery_call(
+        lease=lease,
+        at=at,
+        error_code=error_code,
+    )
 
 
 def _validate_participant_outputs(

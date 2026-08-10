@@ -29,12 +29,13 @@ from shittim_chest.application.discord import (
     OutboxStatus,
     content_sha256,
 )
-from shittim_chest.application.models import DebateSnapshot
+from shittim_chest.application.errors import OutboxRecoveryAbandoned
+from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason
 from shittim_chest.application.ports import Clock, DiscordOutboxRepository
 
 DEFAULT_HISTORY_LIMIT = 500
 DEFAULT_RETRY_DELAY_SECONDS = 30.0
-DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 30.0
+DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 300.0
 DEFAULT_DELIVERY_TIMEOUT_SECONDS = 45.0
 
 
@@ -60,7 +61,7 @@ class DiscordPyPublisher:
             client.http.max_ratelimit_timeout != DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS
             for client in clients.values()
         ):
-            raise ValueError("publisher clients must set max_ratelimit_timeout to 30 seconds")
+            raise ValueError("publisher clients must set max_ratelimit_timeout to 300 seconds")
         if not claim_owner.strip():
             raise ValueError("claim owner must not be empty")
         if isinstance(history_limit, bool) or not isinstance(history_limit, int):
@@ -96,6 +97,8 @@ class DiscordPyPublisher:
             raise DiscordOutboxNotFound
         if current.status is OutboxStatus.SENT:
             return current
+        if current.status is OutboxStatus.ABANDONED:
+            raise DiscordDeliveryConflict
 
         claimed = await self._outbox.claim(
             expected=expected,
@@ -106,8 +109,18 @@ class DiscordPyPublisher:
         if claimed is None:
             return None
 
+        delivery_timeout = self._delivery_timeout_seconds
+        deadline_limited = False
+        if claimed.deadline_at is not None:
+            remaining = (claimed.deadline_at - self._clock.now()).total_seconds()
+            if remaining <= 0:
+                raise OutboxRecoveryAbandoned(DeliveryAbandonReason.DEADLINE_EXCEEDED.value)
+            if remaining < delivery_timeout:
+                delivery_timeout = remaining
+                deadline_limited = True
+
         try:
-            async with asyncio.timeout(self._delivery_timeout_seconds):
+            async with asyncio.timeout(delivery_timeout):
                 client = self._ready_client(claimed.bot_slot)
                 thread = await self._resolve_thread(client, expected, claimed)
                 if thread.locked:
@@ -125,6 +138,10 @@ class DiscordPyPublisher:
         except asyncio.CancelledError:
             raise
         except TimeoutError as error:
+            if deadline_limited:
+                raise OutboxRecoveryAbandoned(
+                    DeliveryAbandonReason.DEADLINE_EXCEEDED.value
+                ) from error
             await self._reschedule(expected, claimed, self._retry_delay_seconds)
             raise DiscordUnavailable from error
         except DiscordAdapterError:
@@ -143,6 +160,55 @@ class DiscordPyPublisher:
             raise mapped from error
         except OSError as error:
             await self._reschedule(expected, claimed, self._retry_delay_seconds)
+            raise DiscordUnavailable from error
+
+    async def reconcile_persisted(
+        self,
+        *,
+        expected: DebateSnapshot,
+        operation_id: str,
+    ) -> OutboxOperation | None:
+        """Inspect history without POSTing while a plan is terminating."""
+
+        operation = await self._outbox.get(
+            debate_id=expected.state.debate_id,
+            attempt_id=expected.state.attempt_id,
+            operation_id=operation_id,
+        )
+        if operation is None:
+            raise DiscordOutboxNotFound
+        if operation.status is OutboxStatus.SENT:
+            return operation
+        if operation.status is OutboxStatus.ABANDONED:
+            return None
+        if operation.delivery_attempt == 0:
+            return None
+        try:
+            async with asyncio.timeout(self._delivery_timeout_seconds):
+                client = self._ready_client(operation.bot_slot)
+                thread = await self._resolve_thread(client, expected, operation)
+                existing = await self._find_existing(client, thread, operation)
+            if existing is None:
+                return None
+            return await self._outbox.mark_reconciled_sent(
+                expected=expected,
+                operation=operation,
+                message_id=str(existing.id),
+                at=self._clock.now(),
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError as error:
+            raise DiscordUnavailable from error
+        except DiscordAdapterError:
+            raise
+        except discord.Forbidden as error:
+            raise DiscordPermissionDenied from error
+        except discord.NotFound as error:
+            raise DiscordThreadUnavailable from error
+        except discord.HTTPException as error:
+            raise self._map_http_error(error) from error
+        except OSError as error:
             raise DiscordUnavailable from error
 
     def _ready_client(self, slot: DiscordBotSlot) -> discord.Client:
@@ -176,19 +242,24 @@ class DiscordPyPublisher:
         if user is None:
             raise DiscordIdentityUnavailable
         matched: discord.Message | None = None
+        inspected = 0
         async for message in thread.history(
             limit=self._history_limit,
             after=operation.created_at,
             oldest_first=True,
         ):
+            inspected += 1
             if message.author.id != user.id or str(message.nonce) != operation.nonce:
                 continue
             if message.content != operation.content:
                 raise DiscordDeliveryConflict
             if content_sha256(message.content) != operation.content_hash:
                 raise DiscordDeliveryConflict
-            if matched is None or message.id < matched.id:
-                matched = message
+            if matched is not None:
+                raise DiscordDeliveryConflict
+            matched = message
+        if inspected >= self._history_limit:
+            raise DiscordDeliveryConflict
         return matched
 
     def _validate_message(
@@ -219,6 +290,7 @@ class DiscordPyPublisher:
             operation.content,
             nonce=operation.nonce,
             allowed_mentions=discord.AllowedMentions.none(),
+            suppress_embeds=True,
         )
         self._validate_message(client, message, operation)
         return message.id
@@ -231,8 +303,7 @@ class DiscordPyPublisher:
     ) -> OutboxOperation:
         return await self._outbox.mark_sent(
             expected=expected,
-            operation_id=operation.operation_id,
-            claim_owner=self._claim_owner,
+            operation=operation,
             message_id=str(message_id),
             at=self._clock.now(),
         )
@@ -246,8 +317,7 @@ class DiscordPyPublisher:
         at = self._clock.now()
         await self._outbox.reschedule(
             expected=expected,
-            operation_id=operation.operation_id,
-            claim_owner=self._claim_owner,
+            operation=operation,
             at=at,
             next_retry_at=at + timedelta(seconds=delay_seconds),
         )

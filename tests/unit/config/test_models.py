@@ -15,6 +15,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.environment == "production"
     assert config.aws_region == "ap-northeast-1"
     assert config.table_name == "shittim-chest-production"
+    assert config.status_publisher_function == "shittim-status-publisher"
     assert config.config_version == "v0001"
     assert config.runtime.guild_id == "101"
     assert config.runtime.allowed_channel_ids == frozenset({"201", "202"})
@@ -22,6 +23,11 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.participant_prompts()[ParticipantSlot.PARTICIPANT_B] == (
         "Generic private prompt for participant-b."
     )
+    assert config.participant_display_names() == {
+        ParticipantSlot.PARTICIPANT_A: "Generic participant-a",
+        ParticipantSlot.PARTICIPANT_B: "Generic participant-b",
+        ParticipantSlot.PARTICIPANT_C: "Generic participant-c",
+    }
     rendered = repr(config)
     assert "openai-key-placeholder" not in rendered
     assert "token-moderator-placeholder" not in rendered
@@ -35,6 +41,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
         {"AWS_REGION": "us-east-1"},
         {"SHITTIM_DYNAMODB_TABLE": ""},
         {"SHITTIM_DYNAMODB_TABLE": "invalid/table"},
+        {"SHITTIM_STATUS_PUBLISHER_FUNCTION": "invalid/function"},
         {"OPENAI_API_KEY": ""},
         {"DISCORD_TOKEN_PARTICIPANT_C": "token-moderator-placeholder"},
         {"SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH": "not-a-hash"},
@@ -73,6 +80,29 @@ def test_load_bootstrap_config_redacts_invalid_private_values() -> None:
     assert private_marker not in repr(captured.value)
 
 
+def test_load_bootstrap_config_rejects_renderer_incompatible_display_name() -> None:
+    environment = _valid_environment()
+    persona = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"])
+    persona["display_name"] = "Generic\u200dA"
+    environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"] = json.dumps(persona)
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        load_bootstrap_config(environment)
+
+    assert str(captured.value) == "startup_configuration_invalid"
+
+
+def test_load_bootstrap_config_does_not_apply_vote_renderer_to_moderator_name() -> None:
+    environment = _valid_environment()
+    persona = json.loads(environment["SHITTIM_PERSONA_MODERATOR_JSON"])
+    persona["display_name"] = "Generic\u200dModerator"
+    environment["SHITTIM_PERSONA_MODERATOR_JSON"] = json.dumps(persona)
+
+    config = load_bootstrap_config(environment)
+
+    assert config.personas[DiscordBotSlot.MODERATOR].display_name == "Generic\u200dModerator"
+
+
 def test_load_bootstrap_config_requires_one_matching_version_for_all_payloads() -> None:
     environment = _valid_environment()
     persona = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_C_JSON"])
@@ -88,6 +118,7 @@ def _valid_environment() -> dict[str, str]:
         "SHITTIM_ENVIRONMENT": "production",
         "AWS_REGION": "ap-northeast-1",
         "SHITTIM_DYNAMODB_TABLE": "shittim-chest-production",
+        "SHITTIM_STATUS_PUBLISHER_FUNCTION": "shittim-status-publisher",
         "SHITTIM_LOG_LEVEL": "INFO",
         "OPENAI_API_KEY": "openai-key-placeholder",
         "DISCORD_TOKEN_MODERATOR": "token-moderator-placeholder",

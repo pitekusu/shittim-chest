@@ -47,9 +47,9 @@ from shittim_chest.adapters.openai.prompts import (
     decision_input,
     final_proposal_input,
     initial_opinion_input,
-    moderator_instructions,
     participant_instructions,
     vote_input,
+    winner_decision_instructions,
 )
 from shittim_chest.adapters.openai.schemas import (
     DecisionOutputV1,
@@ -167,7 +167,9 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="decision",
             schema=DecisionOutputV1,
-            instructions=moderator_instructions(),
+            instructions=winner_decision_instructions(
+                self.personas.for_participant(voting_result.winner)
+            ),
             input_text=decision_input(question, evidence, proposals, voting_result),
             settings=self.config.decision,
         )
@@ -176,6 +178,7 @@ class OpenAIResponsesService:
             output.decision,
             output.actions,
             output.caveats,
+            output.victory_message,
         )
 
     async def _parse(

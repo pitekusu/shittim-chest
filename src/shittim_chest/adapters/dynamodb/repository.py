@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     PersistenceFormatError,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
+    deserialize_outbox,
     deserialize_panel_operation,
     deserialize_snapshot,
     ingress_request_sort_key_from_identity,
@@ -41,7 +43,19 @@ from shittim_chest.adapters.dynamodb.serializer import (
 )
 from shittim_chest.adapters.dynamodb.transaction_errors import classified_transaction_conflict
 from shittim_chest.application.discord import (
+    CANCELLED_DELIVERY_SEQUENCE_START,
+    COMPLETED_DELIVERY_SEQUENCE_START,
+    FAILED_DELIVERY_SEQUENCE_START,
+    FINAL_PROPOSAL_DELIVERY_SEQUENCE_START,
+    INITIAL_OPINION_DELIVERY_SEQUENCE_START,
+    MAX_COMPLETED_DECISION_CHUNKS,
+    MAX_COMPLETED_RESULT_CHUNKS,
+    MAX_FINAL_PROPOSAL_CHUNKS,
+    MAX_INITIAL_OPINION_CHUNKS,
+    MAX_TERMINAL_NOTICE_CHUNKS,
     MAX_TERMINAL_OUTBOX_CHUNKS,
+    MAX_VOTE_CHUNKS,
+    VOTE_DELIVERY_SEQUENCE_START,
     DiscordBotSlot,
     OutboxOperation,
     OutboxStatus,
@@ -49,7 +63,14 @@ from shittim_chest.application.discord import (
     PanelOperationKind,
     content_sha256,
 )
-from shittim_chest.application.models import DebateSnapshot, LeaseGrant, TerminalDeliveryPlan
+from shittim_chest.application.models import (
+    DebateSnapshot,
+    DeliveryAbandonReason,
+    LeaseGrant,
+    PhaseDeliveryPlan,
+    PhaseDeliveryStatus,
+    TerminalDeliveryPlan,
+)
 from shittim_chest.application.ports import (
     RepositoryBusy,
     RepositoryClaimLost,
@@ -75,6 +96,7 @@ ACTIVE_ATTEMPT_COUNT_LIMIT = 100_000
 ACTIVE_ATTEMPT_COUNTER_RECORD_SCHEMA_VERSION = 1
 DAILY_GUILD_QUOTA = 30
 GLOBAL_LEASE_SLOTS = 3
+MAX_TRANSACTION_BYTES = 4 * 1024 * 1024
 RECOVERABLE_INDEX = "gsi2"
 _JST = ZoneInfo("Asia/Tokyo")
 
@@ -111,8 +133,14 @@ class DynamoDbDebateRepository:
     def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
         if not table_name.strip():
             raise ValueError("table name must not be empty")
+        from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
+
         self._client = client
         self._table_name = table_name
+        self._ingress_terminal_projection = DynamoDbIngressRepository(
+            client=client,
+            table_name=table_name,
+        )
 
     async def get_operation_result(
         self,
@@ -186,6 +214,42 @@ class DynamoDbDebateRepository:
         updated: DebateSnapshot,
     ) -> DebateSnapshot:
         return await asyncio.to_thread(self._finalize_terminal, expected, updated)
+
+    async def finalize_phase_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(self._finalize_phase_delivery, expected, updated)
+
+    async def terminate_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(
+            self._terminate_terminal_delivery,
+            expected,
+            at,
+            reason,
+        )
+
+    async def abandon_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(
+            self._abandon_terminal_delivery,
+            expected,
+            at,
+            reason,
+        )
 
     async def create_retry(
         self,
@@ -437,7 +501,11 @@ class DynamoDbDebateRepository:
         ]
         for key, item in new_items.items():
             if old_items.get(key) != item:
-                actions.append(self._put(item))
+                actions.append(
+                    self._put_new(item)
+                    if item.get("record_type") == "phase_delivery_plan" and key not in old_items
+                    else self._put(item)
+                )
         if persisted.state.phase.is_terminal:
             actions.append(self._release_slot_action(lease, persisted.state.updated_at))
             actions.append(self._active_attempt_count_action(-1, persisted.state.updated_at))
@@ -520,7 +588,11 @@ class DynamoDbDebateRepository:
         ]
         for key, item in new_items.items():
             if old_items.get(key) != item:
-                actions.append(self._put(item))
+                actions.append(
+                    self._put_new(item)
+                    if item.get("record_type") == "phase_delivery_plan" and key not in old_items
+                    else self._put(item)
+                )
         actions.extend(_put_new_outbox(self._table_name, operation) for operation in operations)
         actions.append(
             outbox_activity_action(
@@ -574,6 +646,234 @@ class DynamoDbDebateRepository:
             raise
         return staged
 
+    def _terminate_terminal_delivery(
+        self,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        plan = expected.terminal_delivery
+        if not isinstance(plan, PhaseDeliveryPlan):
+            raise RepositoryConflict("terminal termination requires a phase delivery plan")
+        if plan.status is PhaseDeliveryStatus.TERMINATING:
+            if plan.abandon_reason is not reason:
+                raise RepositoryConflict("phase delivery is terminating for another reason")
+            return expected
+        if plan.status is not PhaseDeliveryStatus.STAGED or expected.state.phase.is_terminal:
+            raise RepositoryConflict("terminal delivery is not terminable")
+        if expected.lease is None or at < expected.state.updated_at:
+            raise RepositoryConflict("terminal termination requires a current fenced lease")
+        updated = replace(
+            expected,
+            state=replace(expected.state, updated_at=at),
+            terminal_delivery=plan.terminate(reason=reason),
+        )
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(updated))
+        attempt_key = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+        attempt_item = new_items[attempt_tuple]
+        plan_tuple = (
+            f"DEBATE#{expected.state.debate_id}",
+            f"ATTEMPT#{expected.state.attempt_id}#DELIVERY#{plan.plan_id}",
+        )
+        plan_item = new_items.get(plan_tuple)
+        if plan_item is None:
+            raise RepositoryConflict("terminating phase delivery plan was not serialized")
+        actions = [
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=attempt_item,
+                expected=expected,
+                write_at=at,
+            ),
+            self._put_phase_plan(
+                previous=old_items[plan_tuple],
+                updated=plan_item,
+            ),
+        ]
+        try:
+            self._transact(
+                actions,
+                token=_client_token(
+                    ":".join(
+                        (
+                            self._table_name,
+                            "phase-delivery-terminate",
+                            str(expected.state.debate_id),
+                            str(expected.state.attempt_id),
+                            plan.plan_id,
+                            reason.value,
+                            _timestamp(at),
+                        )
+                    )
+                ),
+                cancellation_stage=RepositoryTransactionStage.PHASE_DELIVERY_TERMINATE,
+                cancellation_action_kinds=(
+                    RepositoryTransactionAction.ATTEMPT_CAS,
+                    RepositoryTransactionAction.PHASE_DELIVERY_PLAN,
+                ),
+            )
+        except RepositoryConflict:
+            current = self._load_snapshot(expected.state.debate_id, None)
+            if (
+                current is not None
+                and isinstance(current.terminal_delivery, PhaseDeliveryPlan)
+                and current.terminal_delivery.plan_id == plan.plan_id
+                and current.terminal_delivery.status is PhaseDeliveryStatus.TERMINATING
+                and current.terminal_delivery.abandon_reason is reason
+            ):
+                return current
+            raise
+        return updated
+
+    def _abandon_terminal_delivery(
+        self,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        plan = expected.terminal_delivery
+        if not isinstance(plan, PhaseDeliveryPlan):
+            raise RepositoryConflict("terminal abandonment requires a phase delivery plan")
+        if plan.status is PhaseDeliveryStatus.ABANDONED:
+            if plan.abandon_reason is not reason:
+                raise RepositoryConflict("phase delivery was abandoned for another reason")
+            return expected
+        if plan.status not in {PhaseDeliveryStatus.STAGED, PhaseDeliveryStatus.TERMINATING}:
+            raise RepositoryConflict("phase delivery is already settled")
+        if expected.state.phase.is_terminal or expected.lease is None:
+            raise RepositoryConflict("phase delivery abandonment requires an active fenced attempt")
+        if at < expected.state.updated_at or at < plan.staged_at:
+            raise RepositoryConflict("phase delivery abandonment timestamp moved backwards")
+
+        operation_items = {
+            _text(item, "operation_id"): item
+            for item in self._query_partition(
+                f"DEBATE#{expected.state.debate_id}",
+                consistent=True,
+            )
+            if item.get("record_type") == "outbox"
+            and item.get("attempt_id") == str(expected.state.attempt_id)
+            and item.get("operation_id") in set(plan.operation_ids)
+        }
+        if set(operation_items) != set(plan.operation_ids):
+            raise RepositoryConflict("phase delivery outbox is incomplete")
+        operations = tuple(
+            deserialize_outbox(operation_items[value]) for value in plan.operation_ids
+        )
+        for operation_id, content_hash, delivery_sequence, operation in zip(
+            plan.operation_ids,
+            plan.content_hashes,
+            plan.delivery_sequences,
+            operations,
+            strict=True,
+        ):
+            if (
+                operation.operation_id != operation_id
+                or operation.content_hash != content_hash
+                or operation.delivery_sequence != delivery_sequence
+                or operation.plan_id != plan.plan_id
+                or operation.record_schema_version != 2
+            ):
+                raise RepositoryConflict("phase delivery outbox identity is inconsistent")
+
+        abandoned = plan.abandon(at=at, reason=reason)
+        updated = replace(
+            expected,
+            state=replace(expected.state, updated_at=at),
+            terminal_delivery=abandoned,
+        )
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(updated))
+        attempt_key = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+        plan_tuple = (
+            f"DEBATE#{expected.state.debate_id}",
+            f"ATTEMPT#{expected.state.attempt_id}#DELIVERY#{plan.plan_id}",
+        )
+        plan_item = new_items.get(plan_tuple)
+        if plan_item is None:
+            raise RepositoryConflict("abandoned phase delivery plan was not serialized")
+        actions: list[TransactWriteItemTypeDef] = [
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=new_items[attempt_tuple],
+                expected=expected,
+                write_at=at,
+            ),
+            self._put_phase_plan(
+                previous=old_items[plan_tuple],
+                updated=plan_item,
+            ),
+        ]
+        action_kinds = [
+            RepositoryTransactionAction.ATTEMPT_CAS,
+            RepositoryTransactionAction.PHASE_DELIVERY_PLAN,
+        ]
+        prepared_count = 0
+        claimed_count = 0
+        for operation in operations:
+            if operation.status is OutboxStatus.SENT:
+                continue
+            if operation.status is OutboxStatus.PREPARED:
+                prepared_count += 1
+            elif operation.status is OutboxStatus.CLAIMED:
+                claimed_count += 1
+            else:
+                raise RepositoryConflict("phase delivery operation is already abandoned")
+            actions.append(
+                _abandon_outbox_action(
+                    self._table_name,
+                    operation,
+                    at=at,
+                    reason=reason,
+                )
+            )
+            action_kinds.append(RepositoryTransactionAction.OUTBOX_OPERATION)
+        if prepared_count or claimed_count:
+            actions.append(
+                outbox_activity_action(
+                    table_name=self._table_name,
+                    pending_delta=-prepared_count,
+                    claimed_delta=-claimed_count,
+                    at=at,
+                )
+            )
+            action_kinds.append(RepositoryTransactionAction.OUTBOX_ACTIVITY)
+        _require_transaction_size(actions)
+        try:
+            self._transact(
+                actions,
+                token=_client_token(
+                    ":".join(
+                        (
+                            self._table_name,
+                            "phase-delivery-abandon",
+                            str(expected.state.debate_id),
+                            str(expected.state.attempt_id),
+                            plan.plan_id,
+                            reason.value,
+                            _timestamp(at),
+                        )
+                    )
+                ),
+                cancellation_stage=RepositoryTransactionStage.PHASE_DELIVERY_ABANDON,
+                cancellation_action_kinds=tuple(action_kinds),
+            )
+        except RepositoryConflict:
+            current = self._load_snapshot(expected.state.debate_id, None)
+            if (
+                current is not None
+                and isinstance(current.terminal_delivery, PhaseDeliveryPlan)
+                and current.terminal_delivery.plan_id == plan.plan_id
+                and current.terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
+                and current.terminal_delivery.abandon_reason is reason
+            ):
+                return current
+            raise
+        return updated
+
     def _finalize_terminal(
         self,
         expected: DebateSnapshot,
@@ -601,29 +901,62 @@ class DynamoDbDebateRepository:
         delivery = expected.terminal_delivery
         if delivery is None:  # pragma: no cover - validated above
             raise AssertionError("terminal delivery disappeared during finalization")
-        actions.extend(
-            _sent_outbox_check(
-                self._table_name,
+        if not isinstance(delivery, PhaseDeliveryPlan) or delivery.status in {
+            PhaseDeliveryStatus.STAGED,
+            PhaseDeliveryStatus.TERMINATING,
+        }:
+            terminal_identities = self._persisted_terminal_delivery_identities(
                 expected,
-                operation_id=operation_id,
-                content_hash=content_hash,
-                chunk_sequence=chunk_sequence,
+                delivery,
             )
-            for chunk_sequence, (operation_id, content_hash) in enumerate(
-                zip(
-                    delivery.operation_ids,
-                    delivery.content_hashes,
+            delivery_sequences = (
+                tuple(range(len(delivery.operation_ids)))
+                if isinstance(delivery, TerminalDeliveryPlan)
+                else delivery.delivery_sequences
+            )
+            actions.extend(
+                _sent_outbox_check(
+                    self._table_name,
+                    expected,
+                    operation_id=operation_id,
+                    content_hash=content_hash,
+                    chunk_sequence=chunk_sequence,
+                    bot_slot=bot_slot,
+                    delivery_phase=delivery.target_phase,
+                    plan_id=(delivery.plan_id if isinstance(delivery, PhaseDeliveryPlan) else None),
+                    delivery_sequence=delivery_sequence,
+                )
+                for (operation_id, content_hash, delivery_sequence), (
+                    bot_slot,
+                    chunk_sequence,
+                ) in zip(
+                    zip(
+                        delivery.operation_ids,
+                        delivery.content_hashes,
+                        delivery_sequences,
+                        strict=True,
+                    ),
+                    terminal_identities,
                     strict=True,
                 )
             )
-        )
-        action_kinds.extend(
-            RepositoryTransactionAction.OUTBOX_SENT_CHECK for _ in delivery.operation_ids
-        )
+            action_kinds.extend(
+                RepositoryTransactionAction.OUTBOX_SENT_CHECK for _ in delivery.operation_ids
+            )
+        elif delivery.status is not PhaseDeliveryStatus.ABANDONED:
+            raise RepositoryConflict("phase delivery is not settled for finalization")
         for key, item in new_items.items():
             if old_items.get(key) != item:
-                actions.append(self._put(item))
-                action_kinds.append(RepositoryTransactionAction.RELATED_ITEM_PUT)
+                actions.append(
+                    self._put_phase_plan(previous=old_items[key], updated=item)
+                    if item.get("record_type") == "phase_delivery_plan"
+                    else self._put(item)
+                )
+                action_kinds.append(
+                    RepositoryTransactionAction.PHASE_DELIVERY_PLAN
+                    if item.get("record_type") == "phase_delivery_plan"
+                    else RepositoryTransactionAction.RELATED_ITEM_PUT
+                )
         actions.extend(
             (
                 self._release_slot_action(lease, persisted.state.updated_at),
@@ -639,6 +972,14 @@ class DynamoDbDebateRepository:
         if not expected.panel_refresh_pending and persisted.panel_refresh_pending:
             actions.append(self._panel_refresh_count_action(1, persisted.state.updated_at))
             action_kinds.append(RepositoryTransactionAction.PANEL_REFRESH_COUNT)
+        ingress_actions, ingress_action_kinds = (
+            self._ingress_terminal_projection.terminal_projection_actions(
+                snapshot=persisted,
+                at=persisted.state.updated_at,
+            )
+        )
+        actions.extend(ingress_actions)
+        action_kinds.extend(ingress_action_kinds)
         _require_transaction_size(actions)
         token_source = ":".join(
             (
@@ -666,6 +1007,214 @@ class DynamoDbDebateRepository:
                 and current.state.phase is persisted.state.phase
                 and current.terminal_delivery == persisted.terminal_delivery
                 and current.lease is None
+            ):
+                return current
+            raise
+        return persisted
+
+    def _persisted_terminal_delivery_identities(
+        self,
+        expected: DebateSnapshot,
+        delivery: TerminalDeliveryPlan | PhaseDeliveryPlan,
+    ) -> tuple[tuple[DiscordBotSlot, int], ...]:
+        """Validate new mixed ownership while retaining prior terminal plans."""
+
+        operation_ids = set(delivery.operation_ids)
+        matching_operation_items = tuple(
+            item
+            for item in self._query_partition(
+                f"DEBATE#{expected.state.debate_id}",
+                consistent=True,
+            )
+            if item.get("record_type") == "outbox"
+            and item.get("attempt_id") == str(expected.state.attempt_id)
+            and item.get("operation_id") in operation_ids
+        )
+        operation_items = {_text(item, "operation_id"): item for item in matching_operation_items}
+        if (
+            len(matching_operation_items) != len(operation_ids)
+            or set(operation_items) != operation_ids
+        ):
+            raise RepositoryConflict("terminal delivery outbox is incomplete")
+        persisted_operations = tuple(
+            deserialize_outbox(operation_items[operation_id])
+            for operation_id in delivery.operation_ids
+        )
+        if (
+            delivery.target_phase is DebatePhase.COMPLETED
+            and isinstance(delivery, PhaseDeliveryPlan)
+            and any(
+                operation_id.startswith("terminal-completed-result-")
+                or operation_id.startswith("terminal-completed-decision-")
+                for operation_id in delivery.operation_ids
+            )
+        ):
+            identities = tuple(
+                _completed_terminal_operation_identity(
+                    expected,
+                    operation_id=operation.operation_id,
+                    delivery_sequence=delivery_sequence,
+                )
+                for operation, delivery_sequence in zip(
+                    persisted_operations,
+                    delivery.delivery_sequences,
+                    strict=True,
+                )
+            )
+            if any(
+                operation.bot_slot is not bot_slot or operation.chunk_sequence != chunk_sequence
+                for operation, (bot_slot, chunk_sequence) in zip(
+                    persisted_operations,
+                    identities,
+                    strict=True,
+                )
+            ):
+                raise RepositoryConflict("completed delivery outbox has an invalid Bot owner")
+            result_sequences = tuple(
+                chunk_sequence
+                for bot_slot, chunk_sequence in identities
+                if bot_slot is DiscordBotSlot.MODERATOR
+            )
+            decision_sequences = tuple(
+                chunk_sequence
+                for bot_slot, chunk_sequence in identities
+                if bot_slot is not DiscordBotSlot.MODERATOR
+            )
+            if (
+                result_sequences != (0,)
+                or not decision_sequences
+                or decision_sequences != tuple(range(len(decision_sequences)))
+            ):
+                raise RepositoryConflict("completed delivery outbox sequence is invalid")
+            return identities
+
+        expected_operation_ids = tuple(
+            f"terminal-{delivery.target_phase.value}-{sequence:04d}"
+            for sequence in range(len(delivery.operation_ids))
+        )
+        if delivery.operation_ids != expected_operation_ids or any(
+            operation.chunk_sequence != sequence
+            for sequence, operation in enumerate(persisted_operations)
+        ):
+            raise RepositoryConflict("legacy terminal delivery identity is invalid")
+        bot_slots = {operation.bot_slot for operation in persisted_operations}
+        if len(bot_slots) != 1:
+            raise RepositoryConflict("legacy terminal delivery outbox has mixed Bot owners")
+        persisted_bot_slot = next(iter(bot_slots))
+        expected_bot_slot = _terminal_delivery_bot_slot(
+            expected,
+            target_phase=delivery.target_phase,
+        )
+        allowed_bot_slots = {expected_bot_slot}
+        if delivery.target_phase is DebatePhase.COMPLETED:
+            allowed_bot_slots.add(DiscordBotSlot.MODERATOR)
+        if persisted_bot_slot not in allowed_bot_slots:
+            raise RepositoryConflict("terminal delivery outbox has an invalid Bot owner")
+        return tuple(
+            (persisted_bot_slot, sequence) for sequence in range(len(persisted_operations))
+        )
+
+    def _finalize_phase_delivery(
+        self,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        _require_phase_delivery_finalization(expected, updated)
+        lease = expected.lease
+        if lease is None:  # pragma: no cover - validated above
+            raise RepositoryConflict("phase delivery finalization requires a fenced lease")
+        persisted = updated
+        delivery = expected.terminal_delivery
+        if not isinstance(delivery, PhaseDeliveryPlan):  # pragma: no cover - validated above
+            raise AssertionError("phase delivery disappeared during finalization")
+        completed_delivery = delivery.complete(at=persisted.state.updated_at)
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(persisted))
+        history_items = _items_by_key(
+            serialize_snapshot(replace(persisted, terminal_delivery=completed_delivery))
+        )
+        attempt_key = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+        attempt_item = new_items.pop(attempt_tuple)
+        plan_tuple = (
+            f"DEBATE#{expected.state.debate_id}",
+            f"ATTEMPT#{expected.state.attempt_id}#DELIVERY#{delivery.plan_id}",
+        )
+        plan_item = history_items.get(plan_tuple)
+        if plan_item is None:
+            raise RepositoryConflict("completed phase delivery plan was not serialized")
+        actions: list[TransactWriteItemTypeDef] = [
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=attempt_item,
+                expected=expected,
+                write_at=persisted.state.updated_at,
+            )
+        ]
+        action_kinds = [RepositoryTransactionAction.ATTEMPT_CAS]
+        for operation_id, content_hash, delivery_sequence in zip(
+            delivery.operation_ids,
+            delivery.content_hashes,
+            delivery.delivery_sequences,
+            strict=True,
+        ):
+            bot_slot, chunk_sequence = _participant_phase_operation_identity(
+                delivery,
+                operation_id=operation_id,
+                delivery_sequence=delivery_sequence,
+            )
+            actions.append(
+                _sent_outbox_check(
+                    self._table_name,
+                    expected,
+                    operation_id=operation_id,
+                    content_hash=content_hash,
+                    chunk_sequence=chunk_sequence,
+                    bot_slot=bot_slot,
+                    delivery_phase=delivery.target_phase,
+                    plan_id=delivery.plan_id,
+                    delivery_sequence=delivery_sequence,
+                )
+            )
+            action_kinds.append(RepositoryTransactionAction.OUTBOX_SENT_CHECK)
+        for key, item in new_items.items():
+            if old_items.get(key) != item:
+                actions.append(self._put(item))
+                action_kinds.append(RepositoryTransactionAction.RELATED_ITEM_PUT)
+        actions.append(
+            self._put_phase_plan(
+                previous=old_items[plan_tuple],
+                updated=plan_item,
+            )
+        )
+        action_kinds.append(RepositoryTransactionAction.PHASE_DELIVERY_PLAN)
+        _require_transaction_size(actions)
+        try:
+            self._transact(
+                actions,
+                token=_client_token(
+                    ":".join(
+                        (
+                            self._table_name,
+                            "phase-delivery-finalize",
+                            str(persisted.state.debate_id),
+                            str(persisted.state.attempt_id),
+                            delivery.plan_id,
+                            str(persisted.state.updated_at),
+                        )
+                    )
+                ),
+                cancellation_stage=RepositoryTransactionStage.TERMINAL_FINALIZE,
+                cancellation_action_kinds=tuple(action_kinds),
+            )
+        except RepositoryConflict:
+            current = self._load_snapshot(expected.state.debate_id, None)
+            if (
+                current is not None
+                and current.state.attempt_id == expected.state.attempt_id
+                and current.state.phase is delivery.target_phase
+                and current.terminal_delivery is None
+                and current.lease == lease
             ):
                 return current
             raise
@@ -1488,7 +2037,7 @@ class DynamoDbDebateRepository:
         key_fields = {"PK", "SK"}
         set_fields = sorted(set(updated) - key_fields)
         remove_fields = sorted(set(previous) - set(updated) - key_fields)
-        names = {"#phase": "phase"}
+        names = {"#phase": "phase", "#generation": "generation_checkpoints"}
         values: DynamoItem = {
             ":phase": expected.state.phase.value,
             ":recovery": expected.state.recovery_state.value,
@@ -1499,6 +2048,11 @@ class DynamoDbDebateRepository:
             ":expiry": _timestamp(lease.expires_at),
             ":origin": ingress_claim.interaction_id,
         }
+        if "generation_checkpoints" in previous:
+            values[":expected_generation"] = previous["generation_checkpoints"]
+            generation_condition = "#generation=:expected_generation"
+        else:
+            generation_condition = "attribute_not_exists(#generation)"
         panel_condition = _panel_refresh_condition(expected, values)
         assignments: list[str] = []
         for index, field in enumerate(set_fields):
@@ -1528,7 +2082,10 @@ class DynamoDbDebateRepository:
                         "#phase=:phase AND recovery_state=:recovery AND updated_at=:updated "
                         "AND lease_owner=:owner AND lease_slot=:slot "
                         "AND fencing_token=:token AND lease_expiry=:expiry "
-                        "AND origin_ingress_interaction_id=:origin AND " + panel_condition
+                        "AND origin_ingress_interaction_id=:origin AND "
+                        + generation_condition
+                        + " AND "
+                        + panel_condition
                     ),
                     "ExpressionAttributeNames": names,
                     "ExpressionAttributeValues": marshal_item(values),
@@ -2012,16 +2569,41 @@ class DynamoDbDebateRepository:
         lease_fields = {"lease_owner", "lease_slot", "lease_expiry", "fencing_token"}
         set_fields = sorted(set(updated) - key_fields - lease_fields)
         remove_fields = sorted(set(previous) - set(updated) - key_fields)
-        names = {"#phase": "phase"}
+        names = {"#phase": "phase", "#generation": "generation_checkpoints"}
         values: DynamoItem = {
             ":phase": expected.state.phase.value,
             ":recovery": expected.state.recovery_state.value,
             ":expected_updated": _timestamp(expected.state.updated_at),
             ":owner": lease.owner_id,
+            ":slot": lease.slot,
             ":token": lease.fencing_token,
             ":at": _timestamp(write_at),
         }
         panel_condition = _panel_refresh_condition(expected, values)
+        if "generation_checkpoints" in previous:
+            values[":expected_generation"] = previous["generation_checkpoints"]
+            generation_condition = "#generation=:expected_generation"
+        else:
+            generation_condition = "attribute_not_exists(#generation)"
+        pointer_conditions: list[str] = []
+        for index, field in enumerate(
+            (
+                "terminal_delivery_plan_id",
+                "terminal_delivery_source",
+                "terminal_delivery_sequences",
+                "terminal_delivery_deadline_at",
+                "terminal_delivery_plan_status",
+                "terminal_delivery_abandon_reason",
+            )
+        ):
+            name = f"#expected_pointer{index}"
+            names[name] = field
+            if field in previous:
+                value = f":expected_pointer{index}"
+                values[value] = previous[field]
+                pointer_conditions.append(f"{name}={value}")
+            else:
+                pointer_conditions.append(f"attribute_not_exists({name})")
         assignments: list[str] = []
         for index, field in enumerate(set_fields):
             name = f"#set{index}"
@@ -2049,8 +2631,14 @@ class DynamoDbDebateRepository:
                     "ConditionExpression": (
                         "#phase=:phase AND recovery_state=:recovery "
                         "AND updated_at=:expected_updated "
-                        "AND lease_owner=:owner AND fencing_token=:token AND lease_expiry >= :at "
-                        "AND " + panel_condition
+                        "AND lease_owner=:owner AND lease_slot=:slot "
+                        "AND fencing_token=:token AND lease_expiry >= :at "
+                        "AND "
+                        + generation_condition
+                        + " AND "
+                        + " AND ".join(pointer_conditions)
+                        + " AND "
+                        + panel_condition
                     ),
                     "ExpressionAttributeNames": names,
                     "ExpressionAttributeValues": marshal_item(values),
@@ -2154,6 +2742,47 @@ class DynamoDbDebateRepository:
         return cast(
             TransactWriteItemTypeDef,
             {"Put": {"TableName": self._table_name, "Item": marshal_item(item)}},
+        )
+
+    def _put_phase_plan(
+        self,
+        *,
+        previous: DynamoItem,
+        updated: DynamoItem,
+    ) -> TransactWriteItemTypeDef:
+        """Replace one phase plan only while its complete observed version is current."""
+
+        if (
+            previous.get("record_type") != "phase_delivery_plan"
+            or updated.get("record_type") != "phase_delivery_plan"
+            or previous.get("PK") != updated.get("PK")
+            or previous.get("SK") != updated.get("SK")
+        ):
+            raise RepositoryConflict("phase delivery plan identity changed during replacement")
+        names: dict[str, str] = {}
+        values: DynamoItem = {}
+        conditions: list[str] = []
+        fields = sorted((set(previous) | set(updated)) - {"PK", "SK"})
+        for index, field in enumerate(fields):
+            name = f"#plan{index}"
+            names[name] = field
+            if field in previous:
+                value = f":plan{index}"
+                values[value] = previous[field]
+                conditions.append(f"{name}={value}")
+            else:
+                conditions.append(f"attribute_not_exists({name})")
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(updated),
+                    "ConditionExpression": " AND ".join(conditions),
+                    "ExpressionAttributeNames": names,
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
         )
 
     def _put_pre_activation_meta(
@@ -2393,8 +3022,7 @@ class DynamoDbDebateRepository:
         cancellation_action_kinds: tuple[RepositoryTransactionAction, ...] = (),
     ) -> None:
         action_list = list(actions)
-        if not 1 <= len(action_list) <= 100:
-            raise ValueError("DynamoDB transaction must contain between 1 and 100 actions")
+        _require_transaction_size(action_list)
         if cancellation_stage is None and cancellation_action_kinds:
             raise ValueError("transaction action kinds require a cancellation stage")
         if cancellation_stage is not None and len(cancellation_action_kinds) != len(action_list):
@@ -2402,7 +3030,7 @@ class DynamoDbDebateRepository:
         try:
             self._client.transact_write_items(
                 TransactItems=action_list,
-                ClientRequestToken=token[:36],
+                ClientRequestToken=_transaction_token(token, action_list),
                 ReturnConsumedCapacity="NONE",
             )
         except self._client.exceptions.TransactionCanceledException as error:
@@ -2627,18 +3255,28 @@ def _is_direct_unbound_cancellation(
 
 
 def _same_terminal_delivery_plan(
-    actual: TerminalDeliveryPlan | None,
-    requested: TerminalDeliveryPlan,
+    actual: TerminalDeliveryPlan | PhaseDeliveryPlan | None,
+    requested: TerminalDeliveryPlan | PhaseDeliveryPlan,
 ) -> bool:
     """Compare the immutable plan identity while allowing completion to differ."""
 
-    return (
-        actual is not None
-        and actual.target_phase is requested.target_phase
+    if actual is None or type(actual) is not type(requested):
+        return False
+    same = (
+        actual.target_phase is requested.target_phase
         and actual.operation_ids == requested.operation_ids
         and actual.content_hashes == requested.content_hashes
         and actual.staged_at == requested.staged_at
     )
+    if isinstance(actual, PhaseDeliveryPlan) and isinstance(requested, PhaseDeliveryPlan):
+        return (
+            same
+            and actual.plan_id == requested.plan_id
+            and actual.source_phase is requested.source_phase
+            and actual.delivery_sequences == requested.delivery_sequences
+            and actual.deadline_at == requested.deadline_at
+        )
+    return same
 
 
 def _require_terminal_stage(
@@ -2651,12 +3289,25 @@ def _require_terminal_stage(
 ) -> None:
     _require_same_attempt(expected, staged)
     plan = staged.terminal_delivery
-    if expected.state.phase.is_terminal or expected.terminal_delivery is not None:
+    prior_plan = expected.terminal_delivery
+    if expected.state.phase.is_terminal or (
+        prior_plan is not None
+        and not (
+            isinstance(prior_plan, PhaseDeliveryPlan)
+            and prior_plan.status is PhaseDeliveryStatus.ABANDONED
+        )
+    ):
         raise RepositoryConflict("terminal delivery is already staged or finalized")
     if expected.lease is None or staged.lease != expected.lease:
         raise RepositoryConflict("terminal delivery staging requires the current fenced lease")
-    if plan is None or plan.completed_at is not None:
+    if (
+        plan is None
+        or (isinstance(plan, PhaseDeliveryPlan) and plan.status is not PhaseDeliveryStatus.STAGED)
+        or (isinstance(plan, TerminalDeliveryPlan) and plan.completed_at is not None)
+    ):
         raise RepositoryConflict("terminal delivery staging requires an incomplete plan")
+    if isinstance(plan, PhaseDeliveryPlan) and plan.source_phase is not expected.state.phase:
+        raise RepositoryConflict("phase delivery source does not match the current phase")
     expected.state.transition_to(plan.target_phase, at=plan.staged_at)
     staged_state = replace(expected.state, updated_at=plan.staged_at)
     if plan.target_phase is DebatePhase.COMPLETED:
@@ -2665,6 +3316,8 @@ def _require_terminal_stage(
             state=staged_state,
             terminal_delivery=plan,
             final_decision=staged.final_decision,
+            generation_checkpoints=staged.generation_checkpoints,
+            error_code=staged.error_code,
         )
     elif plan.target_phase is DebatePhase.FAILED:
         baseline = replace(
@@ -2672,9 +3325,16 @@ def _require_terminal_stage(
             state=staged_state,
             terminal_delivery=plan,
             error_code=staged.error_code,
+            generation_checkpoints=staged.generation_checkpoints,
         )
     else:
-        baseline = replace(expected, state=staged_state, terminal_delivery=plan)
+        baseline = replace(
+            expected,
+            state=staged_state,
+            terminal_delivery=plan,
+            error_code=staged.error_code,
+            generation_checkpoints=staged.generation_checkpoints,
+        )
     if staged != baseline:
         raise RepositoryConflict("terminal delivery staging changed unrelated debate state")
     if (
@@ -2685,21 +3345,117 @@ def _require_terminal_stage(
         raise RepositoryConflict(
             "non-cancellation terminal staging requires its exact ingress claim"
         )
-    if not operations or len(operations) > MAX_TERMINAL_OUTBOX_CHUNKS:
-        raise RepositoryConflict("terminal delivery operation count is outside its bounds")
+    initial_opinion_delivery = (
+        isinstance(plan, PhaseDeliveryPlan)
+        and plan.plan_id == "initial-opinions"
+        and plan.source_phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
+        and plan.target_phase is DebatePhase.DISCUSSING
+    )
+    final_proposal_delivery = (
+        isinstance(plan, PhaseDeliveryPlan)
+        and plan.plan_id == "final-proposals"
+        and plan.source_phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+        and plan.target_phase is DebatePhase.SELECTING_WINNER
+    )
+    vote_delivery = (
+        isinstance(plan, PhaseDeliveryPlan)
+        and plan.plan_id == "votes"
+        and plan.source_phase is DebatePhase.SELECTING_WINNER
+        and plan.target_phase is DebatePhase.GENERATING_DECISION
+    )
+    participant_phase_delivery = (
+        initial_opinion_delivery or final_proposal_delivery or vote_delivery
+    )
+    participant_chunk_limit = (
+        MAX_INITIAL_OPINION_CHUNKS
+        if initial_opinion_delivery
+        else MAX_FINAL_PROPOSAL_CHUNKS
+        if final_proposal_delivery
+        else MAX_VOTE_CHUNKS
+    )
+    operation_limit = (
+        3 * participant_chunk_limit if participant_phase_delivery else MAX_TERMINAL_OUTBOX_CHUNKS
+    )
+    if not operations or len(operations) > operation_limit:
+        raise RepositoryConflict("delivery operation count is outside its bounds")
+    if (
+        plan.target_phase in {DebatePhase.FAILED, DebatePhase.CANCELLED}
+        and len(operations) > MAX_TERMINAL_NOTICE_CHUNKS
+    ):
+        raise RepositoryConflict("terminal notice exceeds its reserved sequence range")
     operation_ids = tuple(operation.operation_id for operation in operations)
     content_hashes = tuple(operation.content_hash for operation in operations)
     if operation_ids != plan.operation_ids or content_hashes != plan.content_hashes:
         raise RepositoryConflict("terminal delivery operations do not match their durable plan")
     nonces: set[str] = set()
+    expected_delivery_sequences: list[int] = []
+    participant_chunk_sequences: dict[DiscordBotSlot, list[int]] = {
+        DiscordBotSlot.PARTICIPANT_A: [],
+        DiscordBotSlot.PARTICIPANT_B: [],
+        DiscordBotSlot.PARTICIPANT_C: [],
+    }
+    completed_result_chunk_sequences: list[int] = []
+    completed_decision_chunk_sequences: list[int] = []
     for sequence, operation in enumerate(operations):
+        if participant_phase_delivery:
+            if operation.delivery_sequence is None:
+                raise RepositoryConflict("participant phase delivery sequence is missing")
+            if not isinstance(plan, PhaseDeliveryPlan):  # pragma: no cover - derived above
+                raise RepositoryConflict("participant phase delivery requires its durable plan")
+            expected_bot_slot, expected_chunk_sequence = _participant_phase_operation_identity(
+                plan,
+                operation_id=operation.operation_id,
+                delivery_sequence=operation.delivery_sequence,
+            )
+            expected_phase = plan.target_phase
+            expected_delivery_sequence = operation.delivery_sequence
+            participant_chunk_sequences[expected_bot_slot].append(expected_chunk_sequence)
+        elif plan.target_phase is DebatePhase.COMPLETED:
+            if operation.delivery_sequence is None or not isinstance(plan, PhaseDeliveryPlan):
+                raise RepositoryConflict("completed delivery requires its durable sequence")
+            expected_bot_slot, expected_chunk_sequence = _completed_terminal_operation_identity(
+                staged,
+                operation_id=operation.operation_id,
+                delivery_sequence=operation.delivery_sequence,
+            )
+            expected_phase = plan.target_phase
+            expected_delivery_sequence = operation.delivery_sequence
+            if expected_bot_slot is DiscordBotSlot.MODERATOR:
+                completed_result_chunk_sequences.append(expected_chunk_sequence)
+            else:
+                completed_decision_chunk_sequences.append(expected_chunk_sequence)
+        else:
+            delivery_sequence_start = {
+                DebatePhase.COMPLETED: COMPLETED_DELIVERY_SEQUENCE_START,
+                DebatePhase.FAILED: FAILED_DELIVERY_SEQUENCE_START,
+                DebatePhase.CANCELLED: CANCELLED_DELIVERY_SEQUENCE_START,
+            }.get(plan.target_phase)
+            if delivery_sequence_start is None:
+                raise RepositoryConflict("terminal delivery target has no sequence range")
+            expected_bot_slot = _terminal_delivery_bot_slot(
+                staged,
+                target_phase=plan.target_phase,
+            )
+            expected_chunk_sequence = sequence
+            expected_phase = plan.target_phase
+            expected_delivery_sequence = delivery_sequence_start + sequence
         if (
             operation.debate_id != expected.state.debate_id
             or operation.attempt_id != expected.state.attempt_id
-            or operation.bot_slot is not DiscordBotSlot.MODERATOR
+            or operation.bot_slot is not expected_bot_slot
             or operation.thread_id != expected.thread_id
-            or operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
-            or operation.chunk_sequence != sequence
+            or (
+                not participant_phase_delivery
+                and plan.target_phase is not DebatePhase.COMPLETED
+                and operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
+            )
+            or operation.chunk_sequence != expected_chunk_sequence
+            or operation.record_schema_version != 2
+            or operation.phase is not expected_phase
+            or not isinstance(plan, PhaseDeliveryPlan)
+            or operation.plan_id != plan.plan_id
+            or operation.delivery_sequence != expected_delivery_sequence
+            or operation.deadline_at != plan.deadline_at
             or operation.status is not OutboxStatus.PREPARED
             or operation.delivery_attempt != 0
             or operation.claim_owner is not None
@@ -2711,8 +3467,28 @@ def _require_terminal_stage(
             or operation.content_hash != content_sha256(operation.content)
             or operation.nonce in nonces
         ):
-            raise RepositoryConflict("terminal delivery operation violates its attempt fence")
+            raise RepositoryConflict("delivery operation violates its attempt fence")
         nonces.add(operation.nonce)
+        expected_delivery_sequences.append(expected_delivery_sequence)
+    if participant_phase_delivery and any(
+        not sequences
+        or len(sequences) > participant_chunk_limit
+        or sequences != list(range(len(sequences)))
+        for sequences in participant_chunk_sequences.values()
+    ):
+        raise RepositoryConflict("participant phase delivery requires bounded output from each Bot")
+    if plan.target_phase is DebatePhase.COMPLETED and (
+        completed_result_chunk_sequences != [0]
+        or not completed_decision_chunk_sequences
+        or len(completed_decision_chunk_sequences) > MAX_COMPLETED_DECISION_CHUNKS
+        or completed_decision_chunk_sequences
+        != list(range(len(completed_decision_chunk_sequences)))
+    ):
+        raise RepositoryConflict("completed delivery requires one result and bounded winner output")
+    if isinstance(plan, PhaseDeliveryPlan) and plan.delivery_sequences != tuple(
+        expected_delivery_sequences
+    ):
+        raise RepositoryConflict("phase delivery sequence range is invalid")
 
 
 def _require_terminal_finalization(
@@ -2721,16 +3497,157 @@ def _require_terminal_finalization(
 ) -> None:
     _require_same_attempt(expected, updated)
     plan = expected.terminal_delivery
-    if expected.state.phase.is_terminal or plan is None or plan.completed_at is not None:
+    if expected.state.phase.is_terminal or plan is None:
         raise RepositoryConflict("terminal finalization requires an active staged delivery")
-    transitioned = expected.state.transition_to(plan.target_phase, at=updated.state.updated_at)
-    completed_delivery = plan.complete(at=updated.state.updated_at)
+    if isinstance(plan, PhaseDeliveryPlan):
+        if plan.status in {
+            PhaseDeliveryStatus.STAGED,
+            PhaseDeliveryStatus.TERMINATING,
+        }:
+            target_phase = plan.target_phase
+            completed_delivery: TerminalDeliveryPlan | PhaseDeliveryPlan = plan.complete(
+                at=updated.state.updated_at
+            )
+        elif plan.status is PhaseDeliveryStatus.ABANDONED:
+            target_phase = (
+                DebatePhase.FAILED
+                if plan.target_phase is DebatePhase.COMPLETED
+                else plan.target_phase
+            )
+            completed_delivery = plan
+        else:
+            raise RepositoryConflict("phase delivery is not finalizable")
+    else:
+        if plan.completed_at is not None:
+            raise RepositoryConflict("terminal delivery is already completed")
+        target_phase = plan.target_phase
+        completed_delivery = plan.complete(at=updated.state.updated_at)
+    transitioned = expected.state.transition_to(target_phase, at=updated.state.updated_at)
     if updated != replace(
         expected,
         state=transitioned,
         terminal_delivery=completed_delivery,
     ):
         raise RepositoryConflict("terminal finalization does not match its staged delivery")
+
+
+def _require_phase_delivery_finalization(
+    expected: DebateSnapshot,
+    updated: DebateSnapshot,
+) -> None:
+    _require_same_attempt(expected, updated)
+    plan = expected.terminal_delivery
+    if (
+        expected.state.phase.is_terminal
+        or not isinstance(plan, PhaseDeliveryPlan)
+        or plan.target_phase.is_terminal
+        or plan.status not in {PhaseDeliveryStatus.STAGED, PhaseDeliveryStatus.TERMINATING}
+        or expected.lease is None
+    ):
+        raise RepositoryConflict("phase delivery finalization requires an active staged plan")
+    transitioned = expected.state.transition_to(plan.target_phase, at=updated.state.updated_at)
+    if updated != replace(expected, state=transitioned, terminal_delivery=None):
+        raise RepositoryConflict("phase delivery finalization changed unrelated debate state")
+
+
+def _participant_phase_operation_identity(
+    plan: PhaseDeliveryPlan,
+    *,
+    operation_id: str,
+    delivery_sequence: int,
+) -> tuple[DiscordBotSlot, int]:
+    if (
+        plan.plan_id == "initial-opinions"
+        and plan.source_phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
+        and plan.target_phase is DebatePhase.DISCUSSING
+    ):
+        operation_prefix = "initial-opinion"
+        delivery_sequence_start = INITIAL_OPINION_DELIVERY_SEQUENCE_START
+        chunk_limit = MAX_INITIAL_OPINION_CHUNKS
+    elif (
+        plan.plan_id == "final-proposals"
+        and plan.source_phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+        and plan.target_phase is DebatePhase.SELECTING_WINNER
+    ):
+        operation_prefix = "final-proposal"
+        delivery_sequence_start = FINAL_PROPOSAL_DELIVERY_SEQUENCE_START
+        chunk_limit = MAX_FINAL_PROPOSAL_CHUNKS
+    elif (
+        plan.plan_id == "votes"
+        and plan.source_phase is DebatePhase.SELECTING_WINNER
+        and plan.target_phase is DebatePhase.GENERATING_DECISION
+    ):
+        operation_prefix = "vote"
+        delivery_sequence_start = VOTE_DELIVERY_SEQUENCE_START
+        chunk_limit = MAX_VOTE_CHUNKS
+    else:
+        raise RepositoryConflict("phase delivery is not a participant output plan")
+    if not (
+        delivery_sequence_start <= delivery_sequence < delivery_sequence_start + 3 * chunk_limit
+    ):
+        raise RepositoryConflict("participant phase delivery sequence is outside its range")
+    relative_sequence = delivery_sequence - delivery_sequence_start
+    participant_index, chunk_sequence = divmod(
+        relative_sequence,
+        chunk_limit,
+    )
+    bot_slot = (
+        DiscordBotSlot.PARTICIPANT_A,
+        DiscordBotSlot.PARTICIPANT_B,
+        DiscordBotSlot.PARTICIPANT_C,
+    )[participant_index]
+    if operation_id != f"{operation_prefix}-{bot_slot.value}-{chunk_sequence:04d}":
+        raise RepositoryConflict("participant phase operation identity is invalid")
+    return bot_slot, chunk_sequence
+
+
+def _terminal_delivery_bot_slot(
+    snapshot: DebateSnapshot,
+    *,
+    target_phase: DebatePhase,
+) -> DiscordBotSlot:
+    """Return the durable Bot owner for one terminal outcome."""
+
+    if target_phase is DebatePhase.COMPLETED:
+        decision = snapshot.final_decision
+        if decision is None:
+            raise RepositoryConflict("completed terminal delivery has no durable winner")
+        return DiscordBotSlot(decision.winner.value)
+    if target_phase in {DebatePhase.FAILED, DebatePhase.CANCELLED}:
+        return DiscordBotSlot.MODERATOR
+    raise RepositoryConflict("terminal delivery target has no Bot owner")
+
+
+def _completed_terminal_operation_identity(
+    snapshot: DebateSnapshot,
+    *,
+    operation_id: str,
+    delivery_sequence: int,
+) -> tuple[DiscordBotSlot, int]:
+    """Validate the moderator result followed by the winner's decision."""
+
+    winner_bot_slot = _terminal_delivery_bot_slot(
+        snapshot,
+        target_phase=DebatePhase.COMPLETED,
+    )
+    result_start = COMPLETED_DELIVERY_SEQUENCE_START
+    decision_start = result_start + MAX_COMPLETED_RESULT_CHUNKS
+    if operation_id == "terminal-completed-result-0000":
+        if delivery_sequence != result_start:
+            raise RepositoryConflict("completed result delivery sequence is invalid")
+        return DiscordBotSlot.MODERATOR, 0
+    if operation_id.startswith("terminal-completed-decision-"):
+        sequence_text = operation_id.removeprefix("terminal-completed-decision-")
+        if len(sequence_text) != 4 or not sequence_text.isascii() or not sequence_text.isdigit():
+            raise RepositoryConflict("completed decision operation identity is invalid")
+        chunk_sequence = int(sequence_text)
+        if (
+            chunk_sequence >= MAX_COMPLETED_DECISION_CHUNKS
+            or delivery_sequence != decision_start + chunk_sequence
+        ):
+            raise RepositoryConflict("completed decision delivery sequence is invalid")
+        return winner_bot_slot, chunk_sequence
+    raise RepositoryConflict("completed terminal operation identity is invalid")
 
 
 def _put_new_outbox(
@@ -2756,10 +3673,56 @@ def _sent_outbox_check(
     operation_id: str,
     content_hash: str,
     chunk_sequence: int,
+    bot_slot: DiscordBotSlot,
+    delivery_phase: DebatePhase,
+    plan_id: str | None,
+    delivery_sequence: int,
 ) -> TransactWriteItemTypeDef:
     thread_id = expected.thread_id
     if thread_id is None:  # pragma: no cover - staged delivery invariant narrows this
         raise RepositoryConflict("terminal delivery has no Discord thread")
+    condition = (
+        "record_type=:type AND schema_version=:schema "
+        "AND debate_id=:debate AND attempt_id=:attempt "
+        "AND operation_id=:operation AND #status=:sent "
+        "AND bot_slot=:bot_slot AND thread_id=:thread "
+        "AND chunk_sequence=:chunk_sequence "
+        "AND content_hash=:content_hash "
+        "AND attribute_exists(nonce) AND attribute_exists(message_id) "
+        "AND attribute_exists(sent_at) AND delivery_attempt >= :one"
+    )
+    values: DynamoItem = {
+        ":type": "outbox",
+        ":schema": CURRENT_SCHEMA_VERSION,
+        ":debate": str(expected.state.debate_id),
+        ":attempt": str(expected.state.attempt_id),
+        ":operation": operation_id,
+        ":sent": OutboxStatus.SENT.value,
+        ":bot_slot": bot_slot.value,
+        ":thread": thread_id,
+        ":chunk_sequence": chunk_sequence,
+        ":content_hash": content_hash,
+        ":one": 1,
+    }
+    if plan_id is not None:
+        delivery = expected.terminal_delivery
+        if not isinstance(delivery, PhaseDeliveryPlan) or delivery.plan_id != plan_id:
+            raise RepositoryConflict("outbox completion plan is not current")
+        condition += (
+            " AND record_schema_version=:record_schema AND plan_id=:plan "
+            "AND phase=:delivery_phase AND delivery_sequence=:delivery_sequence "
+            "AND deadline_at=:deadline AND created_at=:staged_at"
+        )
+        values.update(
+            {
+                ":record_schema": 2,
+                ":plan": plan_id,
+                ":delivery_phase": delivery_phase.value,
+                ":delivery_sequence": delivery_sequence,
+                ":deadline": _timestamp(delivery.deadline_at),
+                ":staged_at": _timestamp(delivery.staged_at),
+            }
+        )
     return cast(
         TransactWriteItemTypeDef,
         {
@@ -2771,32 +3734,95 @@ def _sent_outbox_check(
                         "SK": (f"ATTEMPT#{expected.state.attempt_id}#OUTBOX#{operation_id}"),
                     }
                 ),
-                "ConditionExpression": (
-                    "record_type=:type AND schema_version=:schema "
-                    "AND debate_id=:debate AND attempt_id=:attempt "
-                    "AND operation_id=:operation AND #status=:sent "
-                    "AND bot_slot=:moderator AND thread_id=:thread "
-                    "AND chunk_sequence=:chunk_sequence "
-                    "AND content_hash=:content_hash "
-                    "AND attribute_exists(nonce) AND attribute_exists(message_id) "
-                    "AND attribute_exists(sent_at) AND delivery_attempt >= :one"
-                ),
+                "ConditionExpression": condition,
                 "ExpressionAttributeNames": {"#status": "status"},
-                "ExpressionAttributeValues": marshal_item(
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        },
+    )
+
+
+def _abandon_outbox_action(
+    table_name: str,
+    operation: OutboxOperation,
+    *,
+    at: datetime,
+    reason: DeliveryAbandonReason,
+) -> TransactWriteItemTypeDef:
+    if operation.delivery_sequence is None or operation.plan_id is None:
+        raise RepositoryConflict("only outbox v2 may be abandoned")
+    if operation.phase is None or operation.deadline_at is None:
+        raise RepositoryConflict("outbox v2 identity is incomplete")
+    if operation.status not in {OutboxStatus.PREPARED, OutboxStatus.CLAIMED}:
+        raise RepositoryConflict("only unsettled outbox may be abandoned")
+    values: DynamoItem = {
+        ":type": "outbox",
+        ":schema": CURRENT_SCHEMA_VERSION,
+        ":record_schema": 2,
+        ":debate": str(operation.debate_id),
+        ":attempt": str(operation.attempt_id),
+        ":operation": operation.operation_id,
+        ":plan": operation.plan_id,
+        ":phase": operation.phase.value,
+        ":delivery_sequence": operation.delivery_sequence,
+        ":deadline": _timestamp(operation.deadline_at),
+        ":created": _timestamp(operation.created_at),
+        ":content_hash": operation.content_hash,
+        ":delivery_attempt": operation.delivery_attempt,
+        ":expected_status": operation.status.value,
+        ":abandoned": OutboxStatus.ABANDONED.value,
+        ":reason": reason.value,
+        ":at": _timestamp(at),
+    }
+    if operation.claim_owner is None:
+        claim_condition = "attribute_not_exists(claim_owner) AND attribute_not_exists(claim_expiry)"
+    else:
+        claim_expiry = operation.claim_expires_at
+        if claim_expiry is None:  # pragma: no cover - model invariant narrows this
+            raise RepositoryConflict("claimed outbox has no claim expiry")
+        values[":claim_owner"] = operation.claim_owner
+        values[":claim_expiry"] = _timestamp(claim_expiry)
+        claim_condition = "claim_owner=:claim_owner AND claim_expiry=:claim_expiry"
+    if operation.next_retry_at is None:
+        retry_condition = "attribute_not_exists(next_retry_at)"
+    else:
+        values[":next_retry"] = _timestamp(operation.next_retry_at)
+        retry_condition = "next_retry_at=:next_retry"
+    return cast(
+        TransactWriteItemTypeDef,
+        {
+            "Update": {
+                "TableName": table_name,
+                "Key": marshal_item(
                     {
-                        ":type": "outbox",
-                        ":schema": CURRENT_SCHEMA_VERSION,
-                        ":debate": str(expected.state.debate_id),
-                        ":attempt": str(expected.state.attempt_id),
-                        ":operation": operation_id,
-                        ":sent": OutboxStatus.SENT.value,
-                        ":moderator": DiscordBotSlot.MODERATOR.value,
-                        ":thread": thread_id,
-                        ":chunk_sequence": chunk_sequence,
-                        ":content_hash": content_hash,
-                        ":one": 1,
+                        "PK": f"DEBATE#{operation.debate_id}",
+                        "SK": (f"ATTEMPT#{operation.attempt_id}#OUTBOX#{operation.operation_id}"),
                     }
                 ),
+                "UpdateExpression": (
+                    "SET #status=:abandoned, abandoned_at=:at, "
+                    "abandon_reason=:reason, updated_at=:at "
+                    "REMOVE claim_owner, claim_expiry, next_retry_at"
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema "
+                    "AND debate_id=:debate AND attempt_id=:attempt "
+                    "AND operation_id=:operation AND plan_id=:plan AND phase=:phase "
+                    "AND delivery_sequence=:delivery_sequence AND deadline_at=:deadline "
+                    "AND created_at=:created AND content_hash=:content_hash "
+                    "AND delivery_attempt=:delivery_attempt AND #status=:expected_status "
+                    "AND "
+                    + claim_condition
+                    + " AND "
+                    + retry_condition
+                    + " AND attribute_not_exists(message_id) "
+                    "AND attribute_not_exists(sent_at) "
+                    "AND attribute_not_exists(abandoned_at) "
+                    "AND attribute_not_exists(abandon_reason)"
+                ),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": marshal_item(values),
             }
         },
     )
@@ -2805,6 +3831,33 @@ def _sent_outbox_check(
 def _require_transaction_size(actions: list[TransactWriteItemTypeDef]) -> None:
     if not 1 <= len(actions) <= 100:
         raise RepositoryConflict("DynamoDB transaction action count is outside its bounds")
+    # DynamoDB applies a 4 MB aggregate item limit. The low-level AttributeValue
+    # JSON envelope is larger than the stored values, so this deterministic
+    # preflight is conservative and fails before the SDK can receive an unsafe
+    # transaction.
+    encoded = json.dumps(
+        actions,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if len(encoded) > MAX_TRANSACTION_BYTES:
+        raise RepositoryConflict("DynamoDB transaction exceeds the 4 MB aggregate limit")
+
+
+def _transaction_token(
+    label: str,
+    actions: list[TransactWriteItemTypeDef],
+) -> str:
+    """Bind idempotency to the full payload, including same-timestamp CAS writes."""
+
+    canonical = json.dumps(
+        actions,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return _client_token(f"{label}:{canonical}")
 
 
 def _require_same_attempt(expected: DebateSnapshot, updated: DebateSnapshot) -> None:

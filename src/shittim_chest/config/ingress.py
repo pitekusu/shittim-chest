@@ -15,7 +15,6 @@ from shittim_chest.config.models import (
     parse_discord_runtime_config,
 )
 
-_LAMBDA_FUNCTION_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 _TABLE_NAME = re.compile(r"[A-Za-z0-9_.-]{3,255}\Z")
 _RUNTIME_PARAMETER = re.compile(r"/shittim-chest/production/runtime/(?P<version>v[0-9]{4})\Z")
 _PUBLIC_KEY_PARAMETER = "/shittim-chest/production/discord/moderator/public-key"
@@ -23,19 +22,17 @@ _PUBLIC_KEY_PARAMETER = "/shittim-chest/production/discord/moderator/public-key"
 
 @dataclass(frozen=True, slots=True)
 class IngressBootstrapSettings:
-    """Resource identifiers only; no Discord token, API key, or private content."""
+    """Resource identifiers needed before the SnapStart checkpoint."""
 
     aws_region: str
     table_name: str
     runtime_config_parameter: str
     discord_public_key_parameter: str
-    status_publisher_function: str
-    runtime_reconciler_function: str
 
 
 @dataclass(frozen=True, slots=True)
 class IngressRuntimeSettings:
-    """Validated runtime allowlist plus its public interaction verification key."""
+    """Validated token-free routing data captured in the encrypted snapshot."""
 
     discord: DiscordRuntimeConfig
     public_key_hex: str = field(repr=False)
@@ -44,7 +41,7 @@ class IngressRuntimeSettings:
 def load_ingress_bootstrap_settings(
     environ: Mapping[str, str],
 ) -> IngressBootstrapSettings:
-    """Validate Lambda environment identifiers without echoing invalid values."""
+    """Validate immutable parameter names without echoing invalid values."""
 
     try:
         region = environ.get("AWS_REGION", DEFAULT_AWS_REGION).strip()
@@ -62,8 +59,6 @@ def load_ingress_bootstrap_settings(
         )
         if public_key_parameter != _PUBLIC_KEY_PARAMETER:
             raise ValueError
-        status_function = _function_name(environ, "SHITTIM_STATUS_PUBLISHER_FUNCTION")
-        reconciler_function = _function_name(environ, "SHITTIM_RUNTIME_RECONCILER_FUNCTION")
     except KeyError, TypeError, ValueError:
         raise StartupConfigurationError from None
     return IngressBootstrapSettings(
@@ -71,8 +66,6 @@ def load_ingress_bootstrap_settings(
         table_name=table_name,
         runtime_config_parameter=runtime_parameter,
         discord_public_key_parameter=public_key_parameter,
-        status_publisher_function=status_function,
-        runtime_reconciler_function=reconciler_function,
     )
 
 
@@ -80,7 +73,7 @@ async def load_ingress_runtime_settings(
     settings: IngressBootstrapSettings,
     reader: ParameterReader,
 ) -> IngressRuntimeSettings:
-    """Resolve only the two versioned parameters required by signed ingress."""
+    """Resolve the two SecureStrings once during Lambda initialization."""
 
     runtime_json, public_key = await asyncio.gather(
         reader.get_parameter(settings.runtime_config_parameter),
@@ -90,19 +83,14 @@ async def load_ingress_runtime_settings(
     match = _RUNTIME_PARAMETER.fullmatch(settings.runtime_config_parameter)
     if match is None or match.group("version") != config_version:
         raise StartupConfigurationError
+    if re.fullmatch(r"[0-9a-f]{64}", public_key) is None:
+        raise StartupConfigurationError
     return IngressRuntimeSettings(discord=runtime, public_key_hex=public_key)
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
     value = environ[name].strip()
     if not value:
-        raise ValueError
-    return value
-
-
-def _function_name(environ: Mapping[str, str], name: str) -> str:
-    value = _required(environ, name)
-    if _LAMBDA_FUNCTION_NAME.fullmatch(value) is None:
         raise ValueError
     return value
 

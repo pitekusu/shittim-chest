@@ -328,6 +328,18 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must make both image builds reproducible with the Unix epoch"
         )
+    bundle_checksum_conversion = (
+        "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w 0)"
+    )
+    if (
+        text.count(bundle_checksum_conversion) != 2
+        or text.count('"ParameterKey=LambdaBundleCodeSha256,ParameterValue=${bundle_code_sha256}"')
+        != 1
+        or text.count('--expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"') != 2
+    ):
+        raise WorkflowPolicyError(
+            "Release must bind the exact Lambda bundle checksum to the published version"
+        )
     if (
         text.count("PYTHONDONTWRITEBYTECODE") != 1
         or '  PYTHONDONTWRITEBYTECODE: "1"' not in text[: text.index("\njobs:")]
@@ -335,9 +347,13 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release pytest must inherit PYTHONDONTWRITEBYTECODE=1 from workflow env"
         )
-    if text.count("outputs: type=docker,rewrite-timestamp=true") != 2:
+    reproducible_docker_exporter = (
+        "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+        "compression-level=6,force-compression=true"
+    )
+    if text.count(reproducible_docker_exporter) != 2:
         raise WorkflowPolicyError(
-            "Release must use the CI-identical Docker exporter for both loaded images"
+            "Release must use the CI-identical deterministic Docker exporter for both images"
         )
     if "outputs: type=registry" in text:
         raise WorkflowPolicyError(
@@ -491,13 +507,17 @@ def _validate_release(directory: Path) -> None:
             raise WorkflowPolicyError(
                 "Release production and break-glass builds must share the immutable image context"
             )
-    if production_build_block.count("no-cache-filters: runtime-base") != 1:
+        if "BUILDKIT_MULTI_PLATFORM" in block:
+            raise WorkflowPolicyError(
+                "Release Docker image exports must not request a manifest-list result"
+            )
+    if production_build_block.count("no-cache-filters: builder,runtime-base") != 1:
         raise WorkflowPolicyError(
-            "Release production build must regenerate the cache-sensitive runtime stage"
+            "Release production build must regenerate the builder snapshot and final runtime stage"
         )
-    if break_glass_build_block.count("no-cache-filters: break-glass") != 1:
+    if break_glass_build_block.count("no-cache-filters: builder,break-glass") != 1:
         raise WorkflowPolicyError(
-            "Release break-glass build must regenerate the cache-sensitive final stage"
+            "Release break-glass build must regenerate the builder snapshot and final stage"
         )
     immutable_context_region = text[image_checkout_index:build_index]
     forbidden_context_gate = re.compile(
@@ -534,6 +554,37 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError("Release change set recording is incomplete") from error
     if not create_change_set_index < record_change_set_index < poll_change_set_index:
         raise WorkflowPolicyError("Release must record each change set before polling it")
+    prepare_block = _workflow_step_block(text, "Prepare immutable CloudFormation change sets")
+    failure_markers = (
+        '"${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json"',
+        '"${RUNNER_TEMP}/${artifact}.change-set-failure.json"',
+        'status_reason: ((.StatusReason // "") | scrub)',
+        "jq --compact-output .",
+        "reason=$(jq --raw-output .status_reason",
+    )
+    if any(marker not in prepare_block for marker in failure_markers):
+        raise WorkflowPolicyError(
+            "Release must retain a bounded Change Set failure reason before cleanup"
+        )
+    failed_status_index = prepare_block.index('if [ "${status}" = "FAILED" ]')
+    evidence_index = prepare_block.index(
+        '"${RUNNER_TEMP}/${artifact}.change-set-failure.json"',
+        failed_status_index,
+    )
+    exit_index = prepare_block.index("*) exit 1 ;;", failed_status_index)
+    if not failed_status_index < evidence_index < exit_index:
+        raise WorkflowPolicyError("Release must record Change Set failure evidence before exiting")
+    failure_upload = _workflow_step_block(text, "Retain bounded Change Set failure evidence")
+    required_failure_upload = (
+        "failure()",
+        "steps.prepare_changes.outcome == 'failure'",
+        "*.change-set-failure.json",
+        "if-no-files-found: error",
+    )
+    if any(marker not in failure_upload for marker in required_failure_upload):
+        raise WorkflowPolicyError(
+            "Release must upload bounded Change Set failure evidence before cleanup"
+        )
     if (
         text.count('change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"')
         != 4
@@ -819,21 +870,39 @@ def _validate_ci_container_risk(directory: Path) -> None:
         raise WorkflowPolicyError(
             "CI must make production, fault, and break-glass image builds reproducible"
         )
-    if text.count("outputs: type=docker,rewrite-timestamp=true") != 3:
+    reproducible_docker_exporter = (
+        "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+        "compression-level=6,force-compression=true"
+    )
+    if text.count(reproducible_docker_exporter) != 3:
         raise WorkflowPolicyError(
-            "CI must rewrite file timestamps for all three loaded image exports"
+            "CI must deterministically compress all three timestamp-normalized image exports"
         )
     production_build_block = _workflow_step_block(text, "Build and load the production image")
+    fault_build_block = _workflow_step_block(text, "Build and load the CI-only fault image")
     break_glass_build_block = _workflow_step_block(
         text, "Build and load the break-glass image for risk validation"
     )
-    if production_build_block.count("no-cache-filters: runtime-base") != 1:
+    for block in (production_build_block, fault_build_block, break_glass_build_block):
+        if "BUILDKIT_MULTI_PLATFORM" in block:
+            raise WorkflowPolicyError(
+                "CI Docker image exports must not request a manifest-list result"
+            )
+    rootfs_evidence = (
+        "production-image-rootfs-diffids.json",
+        "break-glass-image-rootfs-diffids.json",
+    )
+    if any(text.count(name) != 2 for name in rootfs_evidence):
         raise WorkflowPolicyError(
-            "CI production build must regenerate the cache-sensitive runtime stage"
+            "CI must record and retain both risk-bound image rootfs diff ID lists"
         )
-    if break_glass_build_block.count("no-cache-filters: break-glass") != 1:
+    if production_build_block.count("no-cache-filters: builder,runtime-base") != 1:
         raise WorkflowPolicyError(
-            "CI break-glass build must regenerate the cache-sensitive final stage"
+            "CI production build must regenerate the builder snapshot and final runtime stage"
+        )
+    if break_glass_build_block.count("no-cache-filters: builder,break-glass") != 1:
+        raise WorkflowPolicyError(
+            "CI break-glass build must regenerate the builder snapshot and final stage"
         )
     try:
         buildx_index = text.index("name: Set up Docker Buildx")

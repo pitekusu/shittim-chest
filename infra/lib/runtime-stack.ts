@@ -3,6 +3,7 @@ import {
   CfnOutput,
   CfnParameter,
   Duration,
+  Fn,
   RemovalPolicy,
   Stack,
   StackProps,
@@ -27,6 +28,7 @@ const CONFIG_VERSION_PATTERN = "^v[0-9]{4}$";
 const LAMBDA_BUNDLE_BUCKET_PATTERN = "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$";
 const LAMBDA_BUNDLE_KEY_PATTERN =
   "^lambda/shittim-chest/[0-9a-f]{64}/shittim-chest-lambda-arm64\\.zip$";
+const LAMBDA_BUNDLE_CODE_SHA256_PATTERN = "^[A-Za-z0-9+/]{43}=$";
 const PARAMETER_ROOT = "/shittim-chest/production";
 const DISCORD_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/public-key`;
 const MODERATOR_TOKEN_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/token`;
@@ -35,6 +37,9 @@ const RUNTIME_SERVICE_NAME = "shittim-chest-production";
 const NORMAL_TASK_DEFINITION_FAMILY = "shittim-chest-production-normal";
 const BREAK_GLASS_TASK_DEFINITION_FAMILY = "shittim-chest-production-break-glass";
 const RECONCILER_SCHEDULE_NAME = "shittim-chest-production-runtime-reconciler";
+const DISCORD_STATUS_PUBLISHER_FUNCTION_NAME =
+  "shittim-chest-production-discord-status-publisher";
+const DISCORD_INGRESS_ALIAS_NAME = "live";
 const DISCORD_INGRESS_HANDLER =
   "shittim_chest.lambda_handlers.discord_ingress.lambda_handler";
 const DISCORD_STATUS_HANDLER =
@@ -50,7 +55,6 @@ const HEARTBEAT_TMPFS = containerPolicy.heartbeat_tmpfs;
 const DEPLOYMENT_LOCK_PARTITION = "CONTROL#DEPLOYMENT";
 const INGRESS_READABLE_PARTITION_PATTERNS = [
   "CONTROL#INGRESS",
-  "CONTROL#RUNTIME",
   "DEBATE#*",
   "INGRESS_OPERATION#*",
   "INGRESS_SEMANTIC_OPERATION#*",
@@ -136,11 +140,18 @@ interface RuntimeParameters {
   readonly secrets: Record<string, ecs.Secret>;
 }
 
+interface ApplicationLambdaBundle {
+  readonly code: lambda.CfnParametersCode;
+  readonly codeSha256: string;
+  readonly objectKey: string;
+}
+
 export class RuntimeStack extends Stack {
   public readonly applicationLogGroup: logs.LogGroup;
   public readonly breakGlassLogGroup: logs.LogGroup;
   public readonly breakGlassTaskDefinition: ecs.FargateTaskDefinition;
   public readonly cluster: ecs.Cluster;
+  public readonly discordIngressAlias: lambda.Alias;
   public readonly discordIngressFunction: lambda.Function;
   public readonly discordStatusPublisherFunction: lambda.Function;
   public readonly interactionsApi: apigatewayv2.HttpApi;
@@ -253,6 +264,19 @@ export class RuntimeStack extends Stack {
     );
     this.grantApplicationData(normalTaskRole, props.debateTable);
     this.grantApplicationData(breakGlassTaskRole, props.debateTable);
+    const statusPublisherArn = this.formatArn({
+      resource: "function",
+      resourceName: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
+      service: "lambda",
+    });
+    for (const role of [normalTaskRole, breakGlassTaskRole]) {
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ["lambda:InvokeFunction"],
+          resources: [statusPublisherArn],
+        }),
+      );
+    }
     this.grantBreakGlassAccess(breakGlassTaskRole);
 
     const parameters = this.runtimeParameters(configVersion.valueAsString);
@@ -305,14 +329,14 @@ export class RuntimeStack extends Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    const sharedLambdaCode = this.applicationLambdaCode();
+    const sharedLambdaBundle = this.applicationLambdaCode();
     const runtimeServiceArn = this.formatArn({
       resource: "service",
       resourceName: `${RUNTIME_CLUSTER_NAME}/${RUNTIME_SERVICE_NAME}`,
       service: "ecs",
     });
     this.imageAdmissionFunction = this.createApplicationFunction({
-      code: sharedLambdaCode,
+      code: sharedLambdaBundle.code,
       environment: {
         SHITTIM_ECR_REPOSITORY_NAME: props.imageRepository.repositoryName,
         SHITTIM_ECR_REPOSITORY_URI: props.imageRepository.repositoryUri,
@@ -333,13 +357,13 @@ export class RuntimeStack extends Stack {
     );
     const runtimeConfigParameter = `${PARAMETER_ROOT}/runtime/${configVersion.valueAsString}`;
     this.discordStatusPublisherFunction = this.createApplicationFunction({
-      code: sharedLambdaCode,
+      code: sharedLambdaBundle.code,
       environment: {
         SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
         SHITTIM_MODERATOR_TOKEN_PARAMETER: MODERATOR_TOKEN_PARAMETER,
         SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
       },
-      functionName: "shittim-chest-production-discord-status-publisher",
+      functionName: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
       handler: DISCORD_STATUS_HANDLER,
       id: "DiscordStatusPublisherFunction",
       memorySize: 256,
@@ -347,7 +371,7 @@ export class RuntimeStack extends Stack {
       timeout: Duration.seconds(120),
     });
     this.runtimeReconcilerFunction = this.createApplicationFunction({
-      code: sharedLambdaCode,
+      code: sharedLambdaBundle.code,
       environment: {
         SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
         SHITTIM_ECS_CLUSTER: this.cluster.clusterName,
@@ -363,24 +387,44 @@ export class RuntimeStack extends Stack {
       timeout: Duration.seconds(55),
     });
     this.discordIngressFunction = this.createApplicationFunction({
-      code: sharedLambdaCode,
+      code: sharedLambdaBundle.code,
       environment: {
         SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER: DISCORD_PUBLIC_KEY_PARAMETER,
         SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
         SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
-        SHITTIM_RUNTIME_RECONCILER_FUNCTION:
-          this.runtimeReconcilerFunction.functionName,
-        SHITTIM_STATUS_PUBLISHER_FUNCTION:
-          this.discordStatusPublisherFunction.functionName,
       },
       functionName: "shittim-chest-production-discord-ingress",
       handler: DISCORD_INGRESS_HANDLER,
       id: "DiscordIngressFunction",
       memorySize: 512,
       reservedConcurrency: 5,
-      // The application stops at 2.2s; 5s is only a final safety net for an
+      snapStart: lambda.SnapStartConf.ON_PUBLISHED_VERSIONS,
+      // The application stops at 2.0s; 5s is only a final safety net for an
       // SDK call unwinding after cancellation and must not define Discord UX.
       timeout: Duration.seconds(5),
+    });
+    const discordIngressVersion = new lambda.Version(
+      this,
+      "DiscordIngressVersion",
+      {
+        codeSha256: sharedLambdaBundle.codeSha256,
+        description: Fn.join("|", [
+          sharedLambdaBundle.objectKey,
+          runtimeConfigParameter,
+          DISCORD_PUBLIC_KEY_PARAMETER,
+        ]),
+        lambda: this.discordIngressFunction,
+        removalPolicy: RemovalPolicy.DESTROY,
+      },
+    );
+    Validations.of(this.discordIngressFunction).acknowledge({
+      id: "Construct-Annotations::@aws-cdk/aws-lambda:snapStartRequirePublish",
+      reason:
+        "DiscordIngressVersion publishes the checksum-bound version consumed by the live alias.",
+    });
+    this.discordIngressAlias = new lambda.Alias(this, "DiscordIngressAlias", {
+      aliasName: DISCORD_INGRESS_ALIAS_NAME,
+      version: discordIngressVersion,
     });
 
     this.grantApplicationLambdaAccess(props.debateTable, runtimeConfigParameter);
@@ -394,14 +438,14 @@ export class RuntimeStack extends Stack {
     });
 
     this.interactionsApi = this.createDiscordInteractionsApi(
-      this.discordIngressFunction,
+      this.discordIngressAlias,
     );
     this.runtimeReconcilerSchedule = this.createRuntimeReconcilerSchedule(
       this.runtimeReconcilerFunction,
     );
   }
 
-  private applicationLambdaCode(): lambda.CfnParametersCode {
+  private applicationLambdaCode(): ApplicationLambdaBundle {
     const bundleBucket = new CfnParameter(this, "LambdaBundleBucketName", {
       allowedPattern: LAMBDA_BUNDLE_BUCKET_PATTERN,
       description: "S3 bucket containing the verified shared Python Lambda bundle",
@@ -412,10 +456,19 @@ export class RuntimeStack extends Stack {
       description: "Content-addressed key for the verified shared Python Lambda bundle",
       type: "String",
     });
-    return lambda.Code.fromCfnParameters({
-      bucketNameParam: bundleBucket,
-      objectKeyParam: bundleKey,
+    const bundleCodeSha256 = new CfnParameter(this, "LambdaBundleCodeSha256", {
+      allowedPattern: LAMBDA_BUNDLE_CODE_SHA256_PATTERN,
+      description: "Base64 SHA-256 checksum of the verified shared Python Lambda bundle",
+      type: "String",
     });
+    return {
+      code: lambda.Code.fromCfnParameters({
+        bucketNameParam: bundleBucket,
+        objectKeyParam: bundleKey,
+      }),
+      codeSha256: bundleCodeSha256.valueAsString,
+      objectKey: bundleKey.valueAsString,
+    };
   }
 
   private createApplicationFunction(options: {
@@ -426,6 +479,7 @@ export class RuntimeStack extends Stack {
     readonly id: string;
     readonly memorySize: number;
     readonly reservedConcurrency: number;
+    readonly snapStart?: lambda.SnapStartConf;
     readonly timeout: Duration;
   }): lambda.Function {
     const logGroup = new logs.LogGroup(this, `${options.id}LogGroup`, {
@@ -453,6 +507,7 @@ export class RuntimeStack extends Stack {
       reservedConcurrentExecutions: options.reservedConcurrency,
       role,
       runtime: lambda.Runtime.PYTHON_3_14,
+      snapStart: options.snapStart,
       timeout: options.timeout,
       tracing: lambda.Tracing.DISABLED,
     });
@@ -500,11 +555,12 @@ export class RuntimeStack extends Stack {
       RECONCILER_READABLE_PARTITION_PATTERNS,
     );
 
+    this.grantParameterRead(this.discordIngressFunction, runtimeConfigParameter);
     this.grantParameterRead(
       this.discordIngressFunction,
-      runtimeConfigParameter,
+      DISCORD_PUBLIC_KEY_PARAMETER,
     );
-    this.grantParameterRead(this.discordIngressFunction, DISCORD_PUBLIC_KEY_PARAMETER);
+
     this.grantParameterRead(
       this.discordStatusPublisherFunction,
       runtimeConfigParameter,
@@ -514,15 +570,6 @@ export class RuntimeStack extends Stack {
       MODERATOR_TOKEN_PARAMETER,
     );
 
-    this.discordIngressFunction.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["lambda:InvokeFunction"],
-        resources: [
-          this.discordStatusPublisherFunction.functionArn,
-          this.runtimeReconcilerFunction.functionArn,
-        ],
-      }),
-    );
     this.runtimeReconcilerFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["lambda:InvokeFunction"],
@@ -1062,6 +1109,7 @@ export class RuntimeStack extends Stack {
         SHITTIM_DYNAMODB_TABLE: "shittim-chest-production",
         SHITTIM_ENVIRONMENT: "production",
         SHITTIM_LOG_LEVEL: "INFO",
+        SHITTIM_STATUS_PUBLISHER_FUNCTION: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
       },
       healthCheck: {
         command: ["CMD", "python", "-m", "shittim_chest.healthcheck"],

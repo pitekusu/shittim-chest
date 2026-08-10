@@ -21,7 +21,16 @@ from shittim_chest.application.discord import (
     PanelOperation,
     PanelOperationKind,
 )
-from shittim_chest.application.models import DebateSnapshot, LeaseGrant, TerminalDeliveryPlan
+from shittim_chest.application.models import (
+    DebateSnapshot,
+    DeliveryAbandonReason,
+    GenerationCheckpoint,
+    GenerationStatus,
+    LeaseGrant,
+    PhaseDeliveryPlan,
+    PhaseDeliveryStatus,
+    TerminalDeliveryPlan,
+)
 from shittim_chest.application.scale_to_zero import (
     IngressKind,
     IngressOperationResult,
@@ -160,11 +169,25 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         snapshot.state.failed_from_phase.value if snapshot.state.failed_from_phase else None,
     )
     _put_optional(attempt_meta, "error_code", snapshot.error_code)
+    if snapshot.generation_checkpoints:
+        attempt_meta["generation_checkpoints"] = [
+            _serialize_generation_checkpoint(checkpoint)
+            for checkpoint in snapshot.generation_checkpoints
+        ]
     terminal_delivery = snapshot.terminal_delivery
     if terminal_delivery is not None:
+        legacy_target = terminal_delivery.target_phase
+        legacy_completed_at = terminal_delivery.completed_at
+        if (
+            isinstance(terminal_delivery, PhaseDeliveryPlan)
+            and terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
+            and snapshot.state.phase.is_terminal
+        ):
+            legacy_target = snapshot.state.phase
+            legacy_completed_at = terminal_delivery.settled_at
         attempt_meta.update(
             {
-                "terminal_delivery_target": terminal_delivery.target_phase.value,
+                "terminal_delivery_target": legacy_target.value,
                 "terminal_delivery_operation_ids": list(terminal_delivery.operation_ids),
                 "terminal_delivery_content_hashes": list(terminal_delivery.content_hashes),
                 "terminal_delivery_staged_at": _timestamp(terminal_delivery.staged_at),
@@ -173,8 +196,27 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         _put_optional(
             attempt_meta,
             "terminal_delivery_completed_at",
-            _optional_timestamp(terminal_delivery.completed_at),
+            _optional_timestamp(legacy_completed_at),
         )
+        if isinstance(terminal_delivery, PhaseDeliveryPlan):
+            attempt_meta.update(
+                {
+                    "terminal_delivery_plan_id": terminal_delivery.plan_id,
+                    "terminal_delivery_source": terminal_delivery.source_phase.value,
+                    "terminal_delivery_sequences": list(terminal_delivery.delivery_sequences),
+                    "terminal_delivery_deadline_at": _timestamp(terminal_delivery.deadline_at),
+                    "terminal_delivery_plan_status": terminal_delivery.status.value,
+                }
+            )
+            _put_optional(
+                attempt_meta,
+                "terminal_delivery_abandon_reason",
+                (
+                    terminal_delivery.abandon_reason.value
+                    if terminal_delivery.abandon_reason is not None
+                    else None
+                ),
+            )
     _put_optional(
         attempt_meta,
         "panel_refresh_required_at",
@@ -243,6 +285,8 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         attempt_meta["gsi2sk"] = f"{_timestamp(snapshot.state.updated_at)}#{debate_id}#{attempt_id}"
 
     items = [debate_meta, attempt_meta]
+    if isinstance(terminal_delivery, PhaseDeliveryPlan):
+        items.append(_serialize_phase_delivery_plan(common, attempt_id, terminal_delivery))
     if snapshot.evidence is not None:
         items.append(
             {
@@ -382,6 +426,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             _text(decision_item, "decision"),
             _string_tuple(decision_item, "actions"),
             _string_tuple(decision_item, "caveats"),
+            _optional_text(decision_item, "victory_message"),
         )
     escalation_item = _optional_one(items, "escalation_assessment", attempt_id=attempt_id)
     escalation_assessment = None
@@ -399,6 +444,8 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             executed_policy_id=_optional_text(escalation_item, "executed_policy_id"),
             execution_count=_integer(escalation_item, "execution_count"),
         )
+    generation_checkpoints = _deserialize_generation_checkpoints(attempt_meta)
+
     terminal_fields = frozenset(
         {
             "terminal_delivery_target",
@@ -409,23 +456,98 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
     )
     present_terminal_fields = terminal_fields.intersection(attempt_meta)
     completed_field_present = "terminal_delivery_completed_at" in attempt_meta
+    pointer_fields = frozenset(
+        {
+            "terminal_delivery_plan_id",
+            "terminal_delivery_source",
+            "terminal_delivery_sequences",
+            "terminal_delivery_deadline_at",
+            "terminal_delivery_plan_status",
+        }
+    )
+    present_pointer_fields = pointer_fields.intersection(attempt_meta)
     if present_terminal_fields and present_terminal_fields != terminal_fields:
         raise PersistenceFormatError("terminal delivery fields are incomplete")
     if completed_field_present and present_terminal_fields != terminal_fields:
         raise PersistenceFormatError("terminal delivery completion has no staged plan")
+    if present_pointer_fields and present_pointer_fields != pointer_fields:
+        raise PersistenceFormatError("phase delivery plan pointer is incomplete")
+    if present_pointer_fields and present_terminal_fields != terminal_fields:
+        raise PersistenceFormatError("phase delivery plan pointer has no staged plan")
+    if (
+        "terminal_delivery_abandon_reason" in attempt_meta
+        and present_pointer_fields != pointer_fields
+    ):
+        raise PersistenceFormatError("phase delivery abandonment has no plan pointer")
 
-    terminal_delivery = None
+    terminal_delivery: TerminalDeliveryPlan | PhaseDeliveryPlan | None = None
     if present_terminal_fields:
-        terminal_delivery = TerminalDeliveryPlan(
-            target_phase=DebatePhase(_text(attempt_meta, "terminal_delivery_target")),
-            operation_ids=_string_tuple(attempt_meta, "terminal_delivery_operation_ids"),
-            content_hashes=_string_tuple(attempt_meta, "terminal_delivery_content_hashes"),
-            staged_at=_datetime(attempt_meta, "terminal_delivery_staged_at"),
-            completed_at=_optional_datetime(
-                attempt_meta,
-                "terminal_delivery_completed_at",
-            ),
-        )
+        if not present_pointer_fields:
+            terminal_delivery = TerminalDeliveryPlan(
+                target_phase=DebatePhase(_text(attempt_meta, "terminal_delivery_target")),
+                operation_ids=_string_tuple(attempt_meta, "terminal_delivery_operation_ids"),
+                content_hashes=_string_tuple(attempt_meta, "terminal_delivery_content_hashes"),
+                staged_at=_datetime(attempt_meta, "terminal_delivery_staged_at"),
+                completed_at=_optional_datetime(
+                    attempt_meta,
+                    "terminal_delivery_completed_at",
+                ),
+            )
+        else:
+            plan_id = _text(attempt_meta, "terminal_delivery_plan_id")
+            matching = tuple(
+                item
+                for item in _many(items, "phase_delivery_plan", attempt_id=attempt_id)
+                if _text(item, "plan_id") == plan_id
+            )
+            if len(matching) != 1:
+                raise PersistenceFormatError("phase delivery plan pointer is unresolved")
+            terminal_delivery = _deserialize_phase_delivery_plan(matching[0])
+            if (
+                terminal_delivery.operation_ids
+                != _string_tuple(attempt_meta, "terminal_delivery_operation_ids")
+                or terminal_delivery.content_hashes
+                != _string_tuple(attempt_meta, "terminal_delivery_content_hashes")
+                or terminal_delivery.staged_at
+                != _datetime(attempt_meta, "terminal_delivery_staged_at")
+                or terminal_delivery.source_phase
+                is not DebatePhase(_text(attempt_meta, "terminal_delivery_source"))
+                or terminal_delivery.delivery_sequences
+                != _integer_tuple(attempt_meta, "terminal_delivery_sequences")
+                or terminal_delivery.deadline_at
+                != _datetime(attempt_meta, "terminal_delivery_deadline_at")
+                or terminal_delivery.status
+                is not PhaseDeliveryStatus(_text(attempt_meta, "terminal_delivery_plan_status"))
+                or terminal_delivery.abandon_reason
+                != (
+                    None
+                    if "terminal_delivery_abandon_reason" not in attempt_meta
+                    else DeliveryAbandonReason(
+                        _text(attempt_meta, "terminal_delivery_abandon_reason")
+                    )
+                )
+            ):
+                raise PersistenceFormatError("phase delivery plan pointer conflicts with attempt")
+            projected_target = (
+                state.phase
+                if terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
+                and state.phase.is_terminal
+                else terminal_delivery.target_phase
+            )
+            projected_completed_at = (
+                terminal_delivery.settled_at
+                if terminal_delivery.status is PhaseDeliveryStatus.ABANDONED
+                and state.phase.is_terminal
+                else terminal_delivery.completed_at
+            )
+            if projected_target is not DebatePhase(
+                _text(attempt_meta, "terminal_delivery_target")
+            ) or projected_completed_at != _optional_datetime(
+                attempt_meta, "terminal_delivery_completed_at"
+            ):
+                raise PersistenceFormatError(
+                    "phase delivery plan projection conflicts with attempt"
+                )
     return DebateSnapshot(
         state=state,
         question=_text(debate_meta, "question"),
@@ -480,9 +602,197 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         votes=votes,
         final_decision=decision,
         escalation_assessment=escalation_assessment,
+        generation_checkpoints=generation_checkpoints,
         error_code=_optional_text(attempt_meta, "error_code"),
         terminal_delivery=terminal_delivery,
     )
+
+
+_GENERATION_REQUIRED_FIELDS = frozenset(
+    {
+        "record_schema_version",
+        "phase",
+        "participant",
+        "status",
+        "logical_attempt",
+        "planned_at",
+    }
+)
+_GENERATION_OPTIONAL_FIELDS = frozenset(
+    {
+        "claim_owner",
+        "claim_slot",
+        "claim_fencing_token",
+        "claimed_at",
+        "settled_at",
+        "error_code",
+    }
+)
+
+
+def _serialize_generation_checkpoint(
+    checkpoint: GenerationCheckpoint,
+) -> dict[str, DynamoValue]:
+    item: dict[str, DynamoValue] = {
+        "record_schema_version": checkpoint.record_schema_version,
+        "phase": checkpoint.phase.value,
+        "participant": checkpoint.participant.value,
+        "status": checkpoint.status.value,
+        "logical_attempt": checkpoint.logical_attempt,
+        "planned_at": _timestamp(checkpoint.planned_at),
+    }
+    _put_optional(item, "claim_owner", checkpoint.claim_owner)
+    _put_optional(item, "claim_slot", checkpoint.claim_slot)
+    _put_optional(item, "claim_fencing_token", checkpoint.claim_fencing_token)
+    _put_optional(item, "claimed_at", _optional_timestamp(checkpoint.claimed_at))
+    _put_optional(item, "settled_at", _optional_timestamp(checkpoint.settled_at))
+    _put_optional(item, "error_code", checkpoint.error_code)
+    return item
+
+
+def _deserialize_generation_checkpoints(
+    attempt_meta: Mapping[str, DynamoValue],
+) -> tuple[GenerationCheckpoint, ...]:
+    unexpected_generation_fields = {
+        field
+        for field in attempt_meta
+        if field.startswith("generation_") and field != "generation_checkpoints"
+    }
+    if unexpected_generation_fields:
+        raise PersistenceFormatError("generation checkpoint schema is unsupported")
+    value = attempt_meta.get("generation_checkpoints")
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise PersistenceFormatError("generation checkpoints must be a list")
+    checkpoints: list[GenerationCheckpoint] = []
+    for raw in value:
+        if not isinstance(raw, dict) or not all(isinstance(key, str) for key in raw):
+            raise PersistenceFormatError("generation checkpoint must be a string-keyed map")
+        item = raw
+        fields = frozenset(item)
+        if not _GENERATION_REQUIRED_FIELDS.issubset(fields):
+            raise PersistenceFormatError("generation checkpoint fields are incomplete")
+        if not fields.issubset(_GENERATION_REQUIRED_FIELDS | _GENERATION_OPTIONAL_FIELDS):
+            raise PersistenceFormatError("generation checkpoint contains unknown fields")
+        try:
+            checkpoints.append(
+                GenerationCheckpoint(
+                    phase=DebatePhase(_text(item, "phase")),
+                    participant=ParticipantSlot(_text(item, "participant")),
+                    status=GenerationStatus(_text(item, "status")),
+                    logical_attempt=_integer(item, "logical_attempt"),
+                    planned_at=_datetime(item, "planned_at"),
+                    claim_owner=_optional_text(item, "claim_owner"),
+                    claim_slot=_optional_integer(item, "claim_slot"),
+                    claim_fencing_token=_optional_integer(
+                        item,
+                        "claim_fencing_token",
+                    ),
+                    claimed_at=_optional_datetime(item, "claimed_at"),
+                    settled_at=_optional_datetime(item, "settled_at"),
+                    error_code=_optional_text(item, "error_code"),
+                    record_schema_version=_integer(item, "record_schema_version"),
+                )
+            )
+        except (TypeError, ValueError) as error:
+            raise PersistenceFormatError("invalid generation checkpoint") from error
+    keys = tuple((checkpoint.phase, checkpoint.participant) for checkpoint in checkpoints)
+    if len(keys) != len(set(keys)):
+        raise PersistenceFormatError("generation checkpoint identity is duplicated")
+    return tuple(checkpoints)
+
+
+def _serialize_phase_delivery_plan(
+    common: DynamoItem,
+    attempt_id: str,
+    plan: PhaseDeliveryPlan,
+) -> DynamoItem:
+    item: DynamoItem = {
+        **common,
+        "SK": f"ATTEMPT#{attempt_id}#DELIVERY#{plan.plan_id}",
+        "record_type": "phase_delivery_plan",
+        "record_schema_version": plan.record_schema_version,
+        "attempt_id": attempt_id,
+        "plan_id": plan.plan_id,
+        "source_phase": plan.source_phase.value,
+        "target_phase": plan.target_phase.value,
+        "status": plan.status.value,
+        "operation_ids": list(plan.operation_ids),
+        "content_hashes": list(plan.content_hashes),
+        "delivery_sequences": list(plan.delivery_sequences),
+        "staged_at": _timestamp(plan.staged_at),
+        "deadline_at": _timestamp(plan.deadline_at),
+    }
+    _put_optional(item, "settled_at", _optional_timestamp(plan.settled_at))
+    _put_optional(
+        item,
+        "abandon_reason",
+        plan.abandon_reason.value if plan.abandon_reason is not None else None,
+    )
+    return item
+
+
+def _deserialize_phase_delivery_plan(item: Mapping[str, DynamoValue]) -> PhaseDeliveryPlan:
+    required_fields = frozenset(
+        {
+            "PK",
+            "SK",
+            "schema_version",
+            "record_type",
+            "record_schema_version",
+            "debate_id",
+            "attempt_id",
+            "plan_id",
+            "source_phase",
+            "target_phase",
+            "status",
+            "operation_ids",
+            "content_hashes",
+            "delivery_sequences",
+            "staged_at",
+            "deadline_at",
+            "created_at",
+            "updated_at",
+        }
+    )
+    optional_fields = frozenset({"settled_at", "abandon_reason"})
+    fields = frozenset(item)
+    if not required_fields.issubset(fields):
+        raise PersistenceFormatError("phase delivery plan fields are incomplete")
+    if not fields.issubset(required_fields | optional_fields):
+        raise PersistenceFormatError("phase delivery plan contains unknown fields")
+    debate_id = _text(item, "debate_id")
+    attempt_id = _text(item, "attempt_id")
+    plan_id = _text(item, "plan_id")
+    if (
+        _text(item, "PK") != f"DEBATE#{debate_id}"
+        or _text(item, "SK") != f"ATTEMPT#{attempt_id}#DELIVERY#{plan_id}"
+    ):
+        raise PersistenceFormatError("phase delivery plan key conflicts with its identity")
+    if _text(item, "record_type") != "phase_delivery_plan":
+        raise PersistenceFormatError("record is not a phase delivery plan")
+    try:
+        return PhaseDeliveryPlan(
+            plan_id=plan_id,
+            source_phase=DebatePhase(_text(item, "source_phase")),
+            target_phase=DebatePhase(_text(item, "target_phase")),
+            operation_ids=_string_tuple(item, "operation_ids"),
+            content_hashes=_string_tuple(item, "content_hashes"),
+            delivery_sequences=_integer_tuple(item, "delivery_sequences"),
+            staged_at=_datetime(item, "staged_at"),
+            deadline_at=_datetime(item, "deadline_at"),
+            status=PhaseDeliveryStatus(_text(item, "status")),
+            settled_at=_optional_datetime(item, "settled_at"),
+            abandon_reason=(
+                None
+                if "abandon_reason" not in item
+                else DeliveryAbandonReason(_text(item, "abandon_reason"))
+            ),
+            record_schema_version=_integer(item, "record_schema_version"),
+        )
+    except (TypeError, ValueError) as error:
+        raise PersistenceFormatError("invalid phase delivery plan") from error
 
 
 def serialize_outbox(operation: OutboxOperation) -> DynamoItem:
@@ -494,6 +804,7 @@ def serialize_outbox(operation: OutboxOperation) -> DynamoItem:
         "SK": f"ATTEMPT#{attempt_id}#OUTBOX#{operation.operation_id}",
         "record_type": "outbox",
         "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": operation.record_schema_version,
         "debate_id": str(operation.debate_id),
         "attempt_id": attempt_id,
         "operation_id": operation.operation_id,
@@ -505,7 +816,9 @@ def serialize_outbox(operation: OutboxOperation) -> DynamoItem:
         "chunk_sequence": operation.chunk_sequence,
         "status": operation.status.value,
         "created_at": _timestamp(operation.created_at),
-        "updated_at": _timestamp(operation.sent_at or operation.created_at),
+        "updated_at": _timestamp(
+            operation.sent_at or operation.abandoned_at or operation.created_at
+        ),
         "delivery_attempt": operation.delivery_attempt,
     }
     _put_optional(item, "claim_owner", operation.claim_owner)
@@ -513,7 +826,68 @@ def serialize_outbox(operation: OutboxOperation) -> DynamoItem:
     _put_optional(item, "next_retry_at", _optional_timestamp(operation.next_retry_at))
     _put_optional(item, "message_id", operation.message_id)
     _put_optional(item, "sent_at", _optional_timestamp(operation.sent_at))
+    if operation.record_schema_version == 2:
+        if operation.phase is None or operation.delivery_sequence is None:
+            raise PersistenceFormatError("outbox v2 fields disappeared during serialization")
+        item.update(
+            {
+                "phase": operation.phase.value,
+                "plan_id": operation.plan_id,
+                "delivery_sequence": operation.delivery_sequence,
+                "deadline_at": _optional_timestamp(operation.deadline_at),
+            }
+        )
+    _put_optional(item, "abandoned_at", _optional_timestamp(operation.abandoned_at))
+    _put_optional(
+        item,
+        "abandon_reason",
+        operation.abandon_reason.value if operation.abandon_reason is not None else None,
+    )
     return _validated_item(item)
+
+
+_OUTBOX_V1_REQUIRED_FIELDS = frozenset(
+    {
+        "PK",
+        "SK",
+        "record_type",
+        "schema_version",
+        "debate_id",
+        "attempt_id",
+        "operation_id",
+        "bot_slot",
+        "thread_id",
+        "content",
+        "content_hash",
+        "nonce",
+        "chunk_sequence",
+        "status",
+        "created_at",
+        "updated_at",
+        "delivery_attempt",
+    }
+)
+_OUTBOX_DELIVERY_OPTIONAL_FIELDS = frozenset(
+    {
+        "claim_owner",
+        "claim_expiry",
+        "next_retry_at",
+        "message_id",
+        "sent_at",
+    }
+)
+_OUTBOX_V1_OPTIONAL_FIELDS = _OUTBOX_DELIVERY_OPTIONAL_FIELDS | {"record_schema_version"}
+_OUTBOX_V2_REQUIRED_FIELDS = _OUTBOX_V1_REQUIRED_FIELDS | {
+    "record_schema_version",
+    "phase",
+    "plan_id",
+    "delivery_sequence",
+    "deadline_at",
+}
+_OUTBOX_V2_OPTIONAL_FIELDS = _OUTBOX_DELIVERY_OPTIONAL_FIELDS | {
+    "abandoned_at",
+    "abandon_reason",
+}
 
 
 def deserialize_outbox(raw_item: Mapping[str, DynamoValue]) -> OutboxOperation:
@@ -522,25 +896,63 @@ def deserialize_outbox(raw_item: Mapping[str, DynamoValue]) -> OutboxOperation:
     item = migrate_item(raw_item)
     if _text(item, "record_type") != "outbox":
         raise PersistenceFormatError("record is not an outbox operation")
-    return OutboxOperation(
-        operation_id=_text(item, "operation_id"),
-        debate_id=DebateId.parse(_text(item, "debate_id")),
-        attempt_id=AttemptId.parse(_text(item, "attempt_id")),
-        bot_slot=DiscordBotSlot(_text(item, "bot_slot")),
-        thread_id=_text(item, "thread_id"),
-        content=_text(item, "content"),
-        content_hash=_text(item, "content_hash"),
-        nonce=_text(item, "nonce"),
-        chunk_sequence=_integer(item, "chunk_sequence"),
-        status=OutboxStatus(_text(item, "status")),
-        created_at=_datetime(item, "created_at"),
-        claim_owner=_optional_text(item, "claim_owner"),
-        claim_expires_at=_optional_datetime(item, "claim_expiry"),
-        delivery_attempt=_integer(item, "delivery_attempt"),
-        next_retry_at=_optional_datetime(item, "next_retry_at"),
-        message_id=_optional_text(item, "message_id"),
-        sent_at=_optional_datetime(item, "sent_at"),
+    record_schema_version = (
+        1 if "record_schema_version" not in item else _integer(item, "record_schema_version")
     )
+    if record_schema_version not in {1, 2}:
+        raise PersistenceFormatError("invalid outbox operation")
+    required_fields = (
+        _OUTBOX_V2_REQUIRED_FIELDS if record_schema_version == 2 else _OUTBOX_V1_REQUIRED_FIELDS
+    )
+    optional_fields = (
+        _OUTBOX_V2_OPTIONAL_FIELDS if record_schema_version == 2 else _OUTBOX_V1_OPTIONAL_FIELDS
+    )
+    fields = frozenset(item)
+    if required_fields - fields or fields - required_fields - optional_fields:
+        raise PersistenceFormatError("invalid outbox operation fields")
+    debate_id_text = _text(item, "debate_id")
+    attempt_id_text = _text(item, "attempt_id")
+    operation_id = _text(item, "operation_id")
+    if (
+        _text(item, "PK") != f"DEBATE#{debate_id_text}"
+        or _text(item, "SK") != f"ATTEMPT#{attempt_id_text}#OUTBOX#{operation_id}"
+    ):
+        raise PersistenceFormatError("outbox key conflicts with its identity")
+    try:
+        return OutboxOperation(
+            operation_id=operation_id,
+            debate_id=DebateId.parse(debate_id_text),
+            attempt_id=AttemptId.parse(attempt_id_text),
+            bot_slot=DiscordBotSlot(_text(item, "bot_slot")),
+            thread_id=_text(item, "thread_id"),
+            content=_text(item, "content"),
+            content_hash=_text(item, "content_hash"),
+            nonce=_text(item, "nonce"),
+            chunk_sequence=_integer(item, "chunk_sequence"),
+            status=OutboxStatus(_text(item, "status")),
+            created_at=_datetime(item, "created_at"),
+            claim_owner=_optional_text(item, "claim_owner"),
+            claim_expires_at=_optional_datetime(item, "claim_expiry"),
+            delivery_attempt=_integer(item, "delivery_attempt"),
+            next_retry_at=_optional_datetime(item, "next_retry_at"),
+            message_id=_optional_text(item, "message_id"),
+            sent_at=_optional_datetime(item, "sent_at"),
+            record_schema_version=record_schema_version,
+            phase=(DebatePhase(_text(item, "phase")) if record_schema_version == 2 else None),
+            plan_id=(_text(item, "plan_id") if record_schema_version == 2 else None),
+            delivery_sequence=(
+                _integer(item, "delivery_sequence") if record_schema_version == 2 else None
+            ),
+            deadline_at=(_datetime(item, "deadline_at") if record_schema_version == 2 else None),
+            abandoned_at=_optional_datetime(item, "abandoned_at"),
+            abandon_reason=(
+                None
+                if "abandon_reason" not in item
+                else DeliveryAbandonReason(_text(item, "abandon_reason"))
+            ),
+        )
+    except (TypeError, ValueError) as error:
+        raise PersistenceFormatError("invalid outbox operation") from error
 
 
 def serialize_panel_operation(operation: PanelOperation) -> DynamoItem:
@@ -1267,7 +1679,7 @@ def _serialize_decision(
     attempt_id: str,
     value: FinalDecision,
 ) -> DynamoItem:
-    return {
+    item: DynamoItem = {
         **common,
         "SK": f"ATTEMPT#{attempt_id}#DECISION",
         "record_type": "decision",
@@ -1277,6 +1689,8 @@ def _serialize_decision(
         "actions": list(value.actions),
         "caveats": list(value.caveats),
     }
+    _put_optional(item, "victory_message", value.victory_message)
+    return item
 
 
 def _serialize_escalation(
@@ -1489,6 +1903,15 @@ def _string_tuple(item: Mapping[str, DynamoValue], field: str) -> tuple[str, ...
     if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
         raise PersistenceFormatError(f"{field} must be a list of strings")
     return tuple(cast(list[str], value))
+
+
+def _integer_tuple(item: Mapping[str, DynamoValue], field: str) -> tuple[int, ...]:
+    value = item.get(field)
+    if not isinstance(value, list) or any(
+        isinstance(entry, bool) or not isinstance(entry, int) for entry in value
+    ):
+        raise PersistenceFormatError(f"{field} must be a list of integers")
+    return tuple(cast(list[int], value))
 
 
 def _optional_attempt(item: Mapping[str, DynamoValue], field: str) -> AttemptId | None:

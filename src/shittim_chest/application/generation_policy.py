@@ -18,6 +18,7 @@ class GenerationPolicyId(StrEnum):
 class ReasoningEffort(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
+    HIGH = "high"
 
 
 @unique
@@ -62,10 +63,10 @@ def _policy(
         policy_id=policy_id,
         model=model,
         reasoning_mode=reasoning_mode,
-        initial_opinion=PhaseBudget(ReasoningEffort.MEDIUM, 1_200),
-        final_proposal=PhaseBudget(ReasoningEffort.MEDIUM, 1_600),
-        vote=PhaseBudget(ReasoningEffort.LOW, 800),
-        decision=PhaseBudget(ReasoningEffort.MEDIUM, 1_200),
+        initial_opinion=PhaseBudget(ReasoningEffort.HIGH, 1_200),
+        final_proposal=PhaseBudget(ReasoningEffort.HIGH, 1_600),
+        vote=PhaseBudget(ReasoningEffort.MEDIUM, 800),
+        decision=PhaseBudget(ReasoningEffort.HIGH, 1_200),
     )
 
 

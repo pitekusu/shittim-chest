@@ -11,6 +11,19 @@ class ApplicationError(Exception):
     code: ClassVar[str]
 
 
+class GenerationProviderError(RuntimeError):
+    """Content-free provider failure visible to generation orchestration."""
+
+    __slots__ = ("code", "retryable")
+
+    def __init__(self, code: str, message: str, *, retryable: bool) -> None:
+        if not code.strip():
+            raise ValueError("generation provider error code must not be empty")
+        self.code = code
+        self.retryable = retryable
+        super().__init__(message)
+
+
 class RuntimeNotReady(ApplicationError):
     """Raised when all required Discord identities are not ready."""
 
@@ -51,3 +64,16 @@ class OutboxRecoveryFailed(ApplicationError):
             raise ValueError("delivery code must not be empty")
         self.delivery_code = delivery_code
         super().__init__("a persisted Discord delivery could not be recovered")
+
+
+class OutboxRecoveryAbandoned(ApplicationError):
+    """Raised when bounded delivery must converge through abandonment."""
+
+    code = "outbox_recovery_abandoned"
+
+    def __init__(self, reason: str, delivery_code: str | None = None) -> None:
+        if not reason.strip():
+            raise ValueError("outbox abandonment reason must not be empty")
+        self.reason = reason
+        self.delivery_code = delivery_code
+        super().__init__("persisted Discord delivery reached its bounded stop condition")

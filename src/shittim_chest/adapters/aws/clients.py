@@ -22,10 +22,13 @@ if TYPE_CHECKING:
 DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS = 3.0
 INGRESS_CONNECT_TIMEOUT_SECONDS = 0.1
 INGRESS_READ_TIMEOUT_SECONDS = 0.3
-# Cold SSM, semantic probe, authorization, enqueue, race classification,
-# and canonical replay bundle are the longest serial pre-response path.
-INGRESS_MAX_SERIAL_SDK_ROUNDS = 6
-INGRESS_RESPONSE_MARGIN_SECONDS = 0.4
+# A new command uses one durable enqueue. Conflict classification may use two
+# more bounded reads before the gate rejects additional SDK work.
+INGRESS_MAX_SERIAL_SDK_ROUNDS = 3
+# Reserve API Gateway and Discord transit outside handler timing. SnapStart
+# restores are classified in content-free timing telemetry so the 2.0s handler
+# budget can be tuned from one bounded live acceptance run.
+INGRESS_RESPONSE_MARGIN_SECONDS = 0.6
 INGRESS_TOTAL_MAX_ATTEMPTS = 1
 STATUS_CONNECT_TIMEOUT_SECONDS = 1.0
 STATUS_READ_TIMEOUT_SECONDS = 2.0
@@ -174,10 +177,14 @@ def create_lambda_client(*, region_name: str) -> LambdaClient:
 
 
 def create_ssm_client(*, region_name: str) -> SSMClient:
-    """Create one SSM client to reuse for an ingress Lambda execution environment."""
+    """Create a one-shot SSM client without retaining boto3's default session."""
 
     _require_region(region_name)
-    return boto3.client("ssm", region_name=region_name, config=ingress_sdk_config())
+    return boto3.Session().client(
+        "ssm",
+        region_name=region_name,
+        config=ingress_sdk_config(),
+    )
 
 
 def create_status_dynamodb_client(*, region_name: str) -> DynamoDBClient:
