@@ -365,6 +365,35 @@ def test_image_builds_require_forced_canonical_compression(
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    ("workflow", "step_name"),
+    [
+        ("ci.yml", "Build and load the production image"),
+        ("ci.yml", "Build and load the CI-only fault image"),
+        ("ci.yml", "Build and load the break-glass image for risk validation"),
+        (RELEASE_WORKFLOW, "Build and load the production image once"),
+        (RELEASE_WORKFLOW, "Build and load the isolated break-glass image once"),
+    ],
+)
+def test_image_builds_require_deterministic_buildkit_platform_output(
+    tmp_path: Path,
+    workflow: str,
+    step_name: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    text = path.read_text(encoding="utf-8")
+    start = text.index(f"name: {step_name}")
+    end = text.find("\n      - name:", start + 1)
+    assert end != -1
+    block = text[start:end]
+    unsafe = block.replace("BUILDKIT_MULTI_PLATFORM=1", "BUILDKIT_MULTI_PLATFORM=0", 1)
+    path.write_text(text[:start] + unsafe + text[end:], encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="deterministic BuildKit platform"):
+        validate_notification_workflows(directory)
+
+
 @pytest.mark.parametrize("filters", ["builder,runtime-base", "builder,break-glass"])
 def test_ci_regenerates_cache_sensitive_final_image_stages(
     tmp_path: Path,
