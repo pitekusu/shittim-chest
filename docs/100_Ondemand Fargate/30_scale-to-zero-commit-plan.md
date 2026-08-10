@@ -23,9 +23,9 @@ related:
 
 ## 0. 文書の位置付け
 
-この文書は、[[10_scale-to-zero-goal]]を長時間実行するときのcommit、push、Draft PR、中断、再開手順の正本である。
+この文書は、[[10_scale-to-zero-goal]]を長時間実行するときのcommit、push、通常PR、中断、再開手順の正本である。
 
-使用量上限、セッション終了、ツール障害、CI障害、作業環境切替が起きても、GitHub上の最新push済みcommitとDraft PRから安全に再開できる状態を維持する。
+使用量上限、セッション終了、ツール障害、CI障害、作業環境切替が起きても、GitHub上の最新push済みcommitと通常PRから安全に再開できる状態を維持する。
 
 ---
 
@@ -40,8 +40,8 @@ related:
 - 各機能の試験を原則として同じcommitへ含める
 - push済み履歴を安易に書き換えない
 - force pushを原則使用しない
-- 最初の実質的commit後にDraft PRを作成する
-- Draft PRのチェックリストを進捗の正本とする
+- 最初の実質的commit後に通常PRを作成する
+- 通常PRのチェックリストを進捗の正本とする
 - 各commitでsecurity invariantを維持する
 
 各commitは最低限、次を満たす。
@@ -66,7 +66,7 @@ related:
 3. 専用branchを作成する
 4. baselineの主要検査を実行する
 5. 既存mainの失敗を記録する
-6. Draft PR用チェックリストを準備する
+6. 通常PR用チェックリストを準備する
 
 branch名は既存規約に従う。規約がない場合:
 
@@ -244,7 +244,7 @@ feat(discord): verify and parse HTTP interactions
 feat(ingress): persist interactions before runtime wake
 ```
 
-完了後、直ちにpushする。このpush後、Draft PRがなければ作成する。
+完了後、直ちにpushする。このpush後、通常PRがなければ作成する。
 
 ---
 
@@ -578,7 +578,7 @@ commit後:
 2. message確認
 3. worktree確認
 4. remote push確認
-5. Draft PR反映確認
+5. 通常PR反映確認
 
 ---
 
@@ -599,9 +599,9 @@ push不能時は作業を無制限に続けず、現在commit hash、未push com
 
 ---
 
-## 6. Draft PR進捗管理
+## 6. 通常PR進捗管理
 
-最初の実質的commit後にDraft PRを作成する。PR本文へ次を置く。
+最初の実質的commit後に通常PRを作成する。PR本文へ次を置く。
 
 ```text
 - [ ] 共通ModelとPort
@@ -644,7 +644,7 @@ push不能時は作業を無制限に続けず、現在commit hash、未push com
 3. 最小試験
 4. checkpoint commit
 5. push
-6. Draft PRへ再開情報
+6. 通常PRへ再開情報
 
 通常の論理commitとして成立しない場合のみ許可:
 
@@ -668,7 +668,7 @@ checkpointがbuild不能なら明示する。再開後は無理な履歴改変�
 
 ## 8. 再開時の手順
 
-1. Draft PRを読む
+1. 通常PRを読む
 2. 最新PRコメントを読む
 3. remote branchをfetch
 4. 最新commit hash確認
@@ -735,7 +735,7 @@ push済みworkstreamを理由なく再実装しない。mainが進んでいる�
 
 - worktree clean
 - 全commit remote push済み
-- Draft PRまたはReview Ready PRが存在
+- 通常PRが存在
 - PR checklist最新
 - required CI結果記録済み
 - 未解決事項記載済み

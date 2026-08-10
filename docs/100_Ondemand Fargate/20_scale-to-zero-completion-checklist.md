@@ -24,7 +24,7 @@ related:
 
 この文書は[[10_scale-to-zero-goal]]の完了判定の正本である。
 
-CodexはDraft PR本文へ本チェックリストを転記するか、各節へ証跡リンクを記録すること。実行していない試験を完了扱いにしない。実環境でのみ確認可能な項目は「デプロイ後確認」へ分離する。
+Codexは通常PR本文へ本チェックリストを転記するか、各節へ証跡リンクを記録すること。実行していない試験を完了扱いにしない。実環境でのみ確認可能な項目は「デプロイ後確認」へ分離する。
 
 ---
 
@@ -41,8 +41,8 @@ CodexはDraft PR本文へ本チェックリストを転記するか、各節へ�
 - [ ] CDK Stateful/Runtime Stackを確認した
 - [ ] GitHub Actionsと既存Discord通知を確認した
 - [ ] branch protectionとrequired checksを確認した
-- [ ] 3文書の矛盾・曖昧さをDraft PRへ記録した
-- [ ] 現行リポジトリとの差異をDraft PRへ記録した
+- [ ] 3文書の矛盾・曖昧さを通常PRへ記録した
+- [ ] 現行リポジトリとの差異を通常PRへ記録した
 
 証跡:
 
@@ -80,7 +80,7 @@ Discord Application変更なし:
 ## 3. GitHubと中断耐性
 
 - [ ] 専用branchを作成した
-- [ ] 最初の実質的commit後にDraft PRを作成した
+- [ ] 最初の実質的commit後に通常PRを作成した
 - [ ] 論理単位ごとにcommitした
 - [ ] 各論理commit後にpushした
 - [ ] 未push commitを長時間蓄積しなかった
