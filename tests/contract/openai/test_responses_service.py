@@ -153,7 +153,12 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
             response_id="resp_3",
         ),
         response_with(
-            {"decision": "decision", "actions": ["action"], "caveats": ["caveat"]},
+            {
+                "victory_message": "persona victory message",
+                "decision": "decision",
+                "actions": ["action"],
+                "caveats": ["caveat"],
+            },
             response_id="resp_4",
         ),
     ]
@@ -217,6 +222,7 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     assert proposal == FinalProposal(ParticipantSlot.PARTICIPANT_A, "title", "revised")
     assert vote.candidate is ParticipantSlot.PARTICIPANT_B
     assert decision.decision == "decision"
+    assert decision.victory_message == "persona victory message"
     assert decision.winner is ParticipantSlot.PARTICIPANT_A
     assert [record.operation for record in observer.usages] == [
         "initial_opinion",
@@ -247,6 +253,8 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
         {"effort": "medium"},
         {"effort": "high"},
     ]
+    assert "persona for participant-a" in server.requests[-1]["instructions"]
+    assert "victory_message" in server.requests[-1]["instructions"]
 
 
 @pytest.mark.asyncio

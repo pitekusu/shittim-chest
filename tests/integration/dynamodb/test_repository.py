@@ -21,6 +21,7 @@ from shittim_chest.adapters.dynamodb import (
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
+from shittim_chest.adapters.dynamodb.serializer import serialize_outbox, serialize_snapshot
 from shittim_chest.application import (
     DebateSnapshot,
     DeliveryAbandonReason,
@@ -62,6 +63,20 @@ from shittim_chest.domain import (
 )
 
 NOW = datetime(2026, 7, 17, 2, 0, tzinfo=UTC)
+DISPLAY_NAMES = {
+    ParticipantSlot.PARTICIPANT_A: "Generic A",
+    ParticipantSlot.PARTICIPANT_B: "Generic B",
+    ParticipantSlot.PARTICIPANT_C: "Generic C",
+}
+
+
+def votes_for_winner(winner: ParticipantSlot) -> tuple[Vote, ...]:
+    others = tuple(participant for participant in ParticipantSlot if participant is not winner)
+    return (
+        Vote(winner, others[0], 3, 3, 3, "winner vote"),
+        Vote(others[0], winner, 5, 5, 5, "support one"),
+        Vote(others[1], winner, 4, 4, 4, "support two"),
+    )
 
 
 def new_snapshot(*, offset: int = 0) -> DebateSnapshot:
@@ -152,6 +167,7 @@ async def finalize_terminal_delivery(
     operation_id: str | None = None,
     ingress_claim: IngressClaimFence | None = None,
     persisted_bot_slot_override: DiscordBotSlot | None = None,
+    previous_terminal_shape: bool = False,
     legacy_terminal_plan: bool = False,
     dynamodb_client: DynamoDBClient | None = None,
     dynamodb_table: str | None = None,
@@ -163,6 +179,9 @@ async def finalize_terminal_delivery(
         target_phase=target_phase,
         created_at=staged_at,
         error_code=error_code,
+        participant_display_names=(
+            DISPLAY_NAMES if target_phase is DebatePhase.COMPLETED else None
+        ),
     )
     plan = PhaseDeliveryPlan(
         plan_id=operations[0].plan_id or f"terminal-{target_phase.value}",
@@ -191,7 +210,69 @@ async def finalize_terminal_delivery(
         operation_id=operation_id,
         ingress_claim=ingress_claim,
     )
-    if persisted_bot_slot_override is not None:
+    if previous_terminal_shape:
+        if persisted_bot_slot_override is None or dynamodb_client is None or dynamodb_table is None:
+            raise AssertionError("previous terminal shape requires a persisted owner and table")
+        previous_operations = tuple(
+            replace(
+                operation,
+                operation_id=f"terminal-{target_phase.value}-{index:04d}",
+                bot_slot=persisted_bot_slot_override,
+                chunk_sequence=index,
+                delivery_sequence=300 + index,
+            )
+            for index, operation in enumerate(operations[1:])
+        )
+        previous_plan = replace(
+            plan,
+            operation_ids=tuple(operation.operation_id for operation in previous_operations),
+            content_hashes=tuple(operation.content_hash for operation in previous_operations),
+            delivery_sequences=tuple(
+                operation.delivery_sequence
+                for operation in previous_operations
+                if operation.delivery_sequence is not None
+            ),
+        )
+        for operation in operations:
+            dynamodb_client.delete_item(
+                TableName=dynamodb_table,
+                Key=marshal_item(
+                    {
+                        "PK": f"DEBATE#{persisted.state.debate_id}",
+                        "SK": (
+                            f"ATTEMPT#{persisted.state.attempt_id}#OUTBOX#{operation.operation_id}"
+                        ),
+                    }
+                ),
+            )
+        persisted = replace(persisted, terminal_delivery=previous_plan)
+        for item in serialize_snapshot(persisted):
+            dynamodb_client.put_item(
+                TableName=dynamodb_table,
+                Item=marshal_item(item),
+            )
+        for operation in previous_operations:
+            dynamodb_client.put_item(
+                TableName=dynamodb_table,
+                Item=marshal_item(serialize_outbox(operation)),
+            )
+        activity_delta = len(previous_operations) - len(operations)
+        if activity_delta:
+            await asyncio.to_thread(
+                outbox._transact,
+                [
+                    outbox_activity_action(
+                        table_name=dynamodb_table,
+                        pending_delta=activity_delta,
+                        claimed_delta=0,
+                        at=staged_at,
+                    )
+                ],
+                f"previous-terminal-shape-{persisted.state.attempt_id}",
+            )
+        operations = previous_operations
+        plan = previous_plan
+    elif persisted_bot_slot_override is not None:
         if dynamodb_client is None or dynamodb_table is None:
             raise AssertionError("persisted owner override requires a DynamoDB table")
         for operation in operations:
@@ -714,14 +795,15 @@ async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
     (
         "winner",
         "persisted_bot_slot_override",
+        "previous_terminal_shape",
         "legacy_terminal_plan",
         "finalization_succeeds",
     ),
     (
-        *((winner, None, False, True) for winner in ParticipantSlot),
-        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, False, True),
-        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, True),
-        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.PARTICIPANT_B, False, False),
+        *((winner, None, False, False, True) for winner in ParticipantSlot),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, False, True),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, True, True),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.PARTICIPANT_B, False, False, False),
     ),
     ids=(
         "new-winner-a",
@@ -737,6 +819,7 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     dynamodb_table: str,
     winner: ParticipantSlot,
     persisted_bot_slot_override: DiscordBotSlot | None,
+    previous_terminal_shape: bool,
     legacy_terminal_plan: bool,
     finalization_succeeds: bool,
 ) -> None:
@@ -787,6 +870,7 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
                 actions=("fixture action",),
                 caveats=("fixture caveat",),
             ),
+            votes=votes_for_winner(winner),
         ),
     )
 
@@ -798,6 +882,7 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
         staged_at=NOW + timedelta(seconds=1),
         terminal_at=NOW + timedelta(seconds=2),
         persisted_bot_slot_override=persisted_bot_slot_override,
+        previous_terminal_shape=previous_terminal_shape,
         legacy_terminal_plan=legacy_terminal_plan,
         dynamodb_client=dynamodb_client,
         dynamodb_table=dynamodb_table,
