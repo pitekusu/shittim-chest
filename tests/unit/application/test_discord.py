@@ -28,6 +28,7 @@ from shittim_chest.application import (
     prepare_initial_opinion_outbox_operations,
     prepare_outbox_operations,
     prepare_terminal_outbox_operations,
+    prepare_vote_outbox_operations,
     sanitize_discord_model_text,
     split_discord_message,
 )
@@ -40,6 +41,7 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    Vote,
 )
 
 NOW = datetime(2026, 7, 17, tzinfo=UTC)
@@ -47,6 +49,11 @@ GUILD_ID = "101"
 CHANNEL_ID = "102"
 THREAD_ID = "103"
 MESSAGE_ID = "104"
+PARTICIPANT_DISPLAY_NAMES = {
+    ParticipantSlot.PARTICIPANT_A: "Generic A",
+    ParticipantSlot.PARTICIPANT_B: "Generic B",
+    ParticipantSlot.PARTICIPANT_C: "Generic C",
+}
 
 
 def identities() -> tuple[DiscordIdentityConfig, ...]:
@@ -107,6 +114,32 @@ def terminal_snapshot() -> DebateSnapshot:
             ("@everyone action",),
             ("careful",),
         ),
+        votes=(
+            Vote(
+                ParticipantSlot.PARTICIPANT_A,
+                ParticipantSlot.PARTICIPANT_B,
+                5,
+                5,
+                5,
+                "support b",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_B,
+                ParticipantSlot.PARTICIPANT_A,
+                3,
+                3,
+                3,
+                "support a",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_C,
+                ParticipantSlot.PARTICIPANT_B,
+                4,
+                4,
+                4,
+                "support b again",
+            ),
+        ),
     )
 
 
@@ -162,6 +195,43 @@ def final_proposal_snapshot() -> DebateSnapshot:
                 f"proposal @everyone {participant.value}",
             )
             for participant in ParticipantSlot
+        ),
+    )
+
+
+def vote_snapshot() -> DebateSnapshot:
+    snapshot = final_proposal_snapshot()
+    return replace(
+        snapshot,
+        state=snapshot.state.transition_to(
+            DebatePhase.SELECTING_WINNER,
+            at=NOW + timedelta(seconds=5),
+        ),
+        votes=(
+            Vote(
+                ParticipantSlot.PARTICIPANT_A,
+                ParticipantSlot.PARTICIPANT_B,
+                3,
+                4,
+                5,
+                "reason *@everyone* a",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_B,
+                ParticipantSlot.PARTICIPANT_C,
+                3,
+                4,
+                5,
+                "reason *@everyone* b",
+            ),
+            Vote(
+                ParticipantSlot.PARTICIPANT_C,
+                ParticipantSlot.PARTICIPANT_A,
+                3,
+                4,
+                5,
+                "reason *@everyone* c",
+            ),
         ),
     )
 
@@ -400,6 +470,78 @@ def test_prepare_final_proposals_rejects_wrong_phase_and_oversized_output() -> N
         )
 
 
+def test_prepare_votes_binds_three_bots_reserved_order_and_stable_nonces() -> None:
+    snapshot = vote_snapshot()
+
+    operations = prepare_vote_outbox_operations(
+        snapshot=snapshot,
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+        created_at=NOW,
+    )
+    replay = prepare_vote_outbox_operations(
+        snapshot=snapshot,
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+        created_at=NOW,
+    )
+
+    assert operations == replay
+    assert tuple(operation.bot_slot for operation in operations) == (
+        DiscordBotSlot.PARTICIPANT_A,
+        DiscordBotSlot.PARTICIPANT_B,
+        DiscordBotSlot.PARTICIPANT_C,
+    )
+    assert tuple(operation.delivery_sequence for operation in operations) == (200, 208, 216)
+    assert all(operation.phase is DebatePhase.GENERATING_DECISION for operation in operations)
+    assert all(operation.plan_id == "votes" for operation in operations)
+    assert len({operation.nonce for operation in operations}) == 3
+    assert all(len(operation.nonce) == 22 for operation in operations)
+    assert all("**投票先**" in operation.content for operation in operations)
+    assert "Generic B" in operations[0].content
+    assert "Generic C" in operations[1].content
+    assert "Generic A" in operations[2].content
+    assert all("participant-" not in operation.content for operation in operations)
+    assert all("@everyone" in operation.content for operation in operations)
+    assert all("\\*" in operation.content for operation in operations)
+
+
+def test_prepare_votes_rejects_wrong_phase_and_incomplete_ballot() -> None:
+    snapshot = vote_snapshot()
+    with pytest.raises(ValueError, match="generation phase"):
+        prepare_vote_outbox_operations(
+            snapshot=replace(
+                snapshot,
+                state=snapshot.state.transition_to(
+                    DebatePhase.GENERATING_DECISION,
+                    at=NOW + timedelta(seconds=6),
+                ),
+            ),
+            participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+            created_at=NOW,
+        )
+    with pytest.raises(ValueError, match="bound Discord thread"):
+        prepare_vote_outbox_operations(
+            snapshot=replace(snapshot, thread_id=None),
+            participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+            created_at=NOW,
+        )
+    with pytest.raises(ValueError, match="each participant exactly once"):
+        prepare_vote_outbox_operations(
+            snapshot=replace(snapshot, votes=snapshot.votes[:2]),
+            participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+            created_at=NOW,
+        )
+
+    with pytest.raises(ValueError, match="display name exactly once"):
+        prepare_vote_outbox_operations(
+            snapshot=snapshot,
+            participant_display_names={
+                ParticipantSlot.PARTICIPANT_A: "Generic A",
+                ParticipantSlot.PARTICIPANT_B: "Generic B",
+            },
+            created_at=NOW,
+        )
+
+
 def test_outbox_and_panel_contracts_reject_invalid_external_identifiers_and_states() -> None:
     prepared = outbox()
     claimed = replace(
@@ -476,6 +618,7 @@ def test_terminal_v2_operations_reserve_global_ranges_and_unique_nonces() -> Non
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW + timedelta(seconds=7),
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
     )
     failed = prepare_terminal_outbox_operations(
         snapshot=source,
@@ -496,10 +639,12 @@ def test_terminal_v2_operations_reserve_global_ranges_and_unique_nonces() -> Non
     assert all(
         operation.record_schema_version == 2 for operation in (*completed, *failed, *cancelled)
     )
-    assert "**最終決定**" in completed[0].content
-    assert "> first \\*line\\*" in completed[0].content
-    assert "> second" in completed[0].content
-    assert "> - @everyone action" in completed[0].content
+    assert "**投票結果**" in completed[0].content
+    completed_decision = "\n".join(operation.content for operation in completed[1:])
+    assert "**最終決定**" in completed_decision
+    assert "> first \\*line\\*" in completed_decision
+    assert "> second" in completed_decision
+    assert "> - @everyone action" in completed_decision
 
 
 def test_model_display_sanitizer_normalizes_escapes_and_rejects_controls() -> None:
@@ -665,11 +810,12 @@ def test_terminal_renderer_preserves_quotes_and_escapes_across_chunk_boundaries(
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW + timedelta(seconds=7),
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
     )
 
     assert len(operations) > 1
     assert all(len(operation.content) <= 2_000 for operation in operations)
-    for operation in operations:
+    for operation in operations[1:]:
         body = operation.content.split("\n", 1)[1]
         for line in body.splitlines():
             if "word" in line or "action" in line or "a" * 100 in line or "\\*" in line:
@@ -699,7 +845,8 @@ def test_terminal_renderer_preserves_intentional_blank_quoted_lines() -> None:
         snapshot=source,
         target_phase=DebatePhase.COMPLETED,
         created_at=NOW + timedelta(seconds=7),
-    )[0]
+        participant_display_names=PARTICIPANT_DISPLAY_NAMES,
+    )[1]
 
     assert "> first\n>\n> third" in operation.content
     with pytest.raises(ValueError, match="must not be empty"):

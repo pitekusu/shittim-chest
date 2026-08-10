@@ -21,6 +21,7 @@ from shittim_chest.adapters.dynamodb import (
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
+from shittim_chest.adapters.dynamodb.serializer import serialize_outbox, serialize_snapshot
 from shittim_chest.application import (
     DebateSnapshot,
     DeliveryAbandonReason,
@@ -38,6 +39,7 @@ from shittim_chest.application import (
     prepare_final_proposal_outbox_operations,
     prepare_initial_opinion_outbox_operations,
     prepare_terminal_outbox_operations,
+    prepare_vote_outbox_operations,
 )
 from shittim_chest.application.ports import (
     RepositoryBusy,
@@ -57,9 +59,24 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    Vote,
 )
 
 NOW = datetime(2026, 7, 17, 2, 0, tzinfo=UTC)
+DISPLAY_NAMES = {
+    ParticipantSlot.PARTICIPANT_A: "Generic A",
+    ParticipantSlot.PARTICIPANT_B: "Generic B",
+    ParticipantSlot.PARTICIPANT_C: "Generic C",
+}
+
+
+def votes_for_winner(winner: ParticipantSlot) -> tuple[Vote, ...]:
+    others = tuple(participant for participant in ParticipantSlot if participant is not winner)
+    return (
+        Vote(winner, others[0], 3, 3, 3, "winner vote"),
+        Vote(others[0], winner, 5, 5, 5, "support one"),
+        Vote(others[1], winner, 4, 4, 4, "support two"),
+    )
 
 
 def new_snapshot(*, offset: int = 0) -> DebateSnapshot:
@@ -149,6 +166,11 @@ async def finalize_terminal_delivery(
     error_code: str | None = None,
     operation_id: str | None = None,
     ingress_claim: IngressClaimFence | None = None,
+    persisted_bot_slot_override: DiscordBotSlot | None = None,
+    previous_terminal_shape: bool = False,
+    legacy_terminal_plan: bool = False,
+    dynamodb_client: DynamoDBClient | None = None,
+    dynamodb_table: str | None = None,
 ) -> DebateSnapshot:
     """Drive a bound attempt through the required durable terminal delivery path."""
 
@@ -157,6 +179,9 @@ async def finalize_terminal_delivery(
         target_phase=target_phase,
         created_at=staged_at,
         error_code=error_code,
+        participant_display_names=(
+            DISPLAY_NAMES if target_phase is DebatePhase.COMPLETED else None
+        ),
     )
     plan = PhaseDeliveryPlan(
         plan_id=operations[0].plan_id or f"terminal-{target_phase.value}",
@@ -185,6 +210,87 @@ async def finalize_terminal_delivery(
         operation_id=operation_id,
         ingress_claim=ingress_claim,
     )
+    if previous_terminal_shape:
+        if persisted_bot_slot_override is None or dynamodb_client is None or dynamodb_table is None:
+            raise AssertionError("previous terminal shape requires a persisted owner and table")
+        previous_operations = tuple(
+            replace(
+                operation,
+                operation_id=f"terminal-{target_phase.value}-{index:04d}",
+                bot_slot=persisted_bot_slot_override,
+                chunk_sequence=index,
+                delivery_sequence=300 + index,
+            )
+            for index, operation in enumerate(operations[1:])
+        )
+        previous_plan = replace(
+            plan,
+            operation_ids=tuple(operation.operation_id for operation in previous_operations),
+            content_hashes=tuple(operation.content_hash for operation in previous_operations),
+            delivery_sequences=tuple(
+                operation.delivery_sequence
+                for operation in previous_operations
+                if operation.delivery_sequence is not None
+            ),
+        )
+        for operation in operations:
+            dynamodb_client.delete_item(
+                TableName=dynamodb_table,
+                Key=marshal_item(
+                    {
+                        "PK": f"DEBATE#{persisted.state.debate_id}",
+                        "SK": (
+                            f"ATTEMPT#{persisted.state.attempt_id}#OUTBOX#{operation.operation_id}"
+                        ),
+                    }
+                ),
+            )
+        persisted = replace(persisted, terminal_delivery=previous_plan)
+        for item in serialize_snapshot(persisted):
+            dynamodb_client.put_item(
+                TableName=dynamodb_table,
+                Item=marshal_item(item),
+            )
+        for operation in previous_operations:
+            dynamodb_client.put_item(
+                TableName=dynamodb_table,
+                Item=marshal_item(serialize_outbox(operation)),
+            )
+        activity_delta = len(previous_operations) - len(operations)
+        if activity_delta:
+            await asyncio.to_thread(
+                outbox._transact,
+                [
+                    outbox_activity_action(
+                        table_name=dynamodb_table,
+                        pending_delta=activity_delta,
+                        claimed_delta=0,
+                        at=staged_at,
+                    )
+                ],
+                f"previous-terminal-shape-{persisted.state.attempt_id}",
+            )
+        operations = previous_operations
+        plan = previous_plan
+    elif persisted_bot_slot_override is not None:
+        if dynamodb_client is None or dynamodb_table is None:
+            raise AssertionError("persisted owner override requires a DynamoDB table")
+        for operation in operations:
+            dynamodb_client.update_item(
+                TableName=dynamodb_table,
+                Key=marshal_item(
+                    {
+                        "PK": f"DEBATE#{persisted.state.debate_id}",
+                        "SK": (
+                            f"ATTEMPT#{persisted.state.attempt_id}#OUTBOX#{operation.operation_id}"
+                        ),
+                    }
+                ),
+                UpdateExpression="SET bot_slot=:bot_slot",
+                ExpressionAttributeValues=marshal_item(
+                    {":bot_slot": persisted_bot_slot_override.value}
+                ),
+            )
     for index, operation in enumerate(operations):
         claim_at = staged_at + timedelta(microseconds=(index * 2) + 1)
         claimed = await outbox.claim(
@@ -200,10 +306,43 @@ async def finalize_terminal_delivery(
             message_id=str(10_000 + index),
             at=claim_at + timedelta(microseconds=1),
         )
+    if legacy_terminal_plan:
+        if dynamodb_client is None or dynamodb_table is None:
+            raise AssertionError("legacy plan conversion requires a DynamoDB table")
+        dynamodb_client.update_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(
+                {
+                    "PK": f"DEBATE#{persisted.state.debate_id}",
+                    "SK": f"ATTEMPT#{persisted.state.attempt_id}#META",
+                }
+            ),
+            UpdateExpression=(
+                "REMOVE terminal_delivery_plan_id, terminal_delivery_source, "
+                "terminal_delivery_sequences, terminal_delivery_deadline_at, "
+                "terminal_delivery_plan_status"
+            ),
+        )
+        dynamodb_client.delete_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(
+                {
+                    "PK": f"DEBATE#{persisted.state.debate_id}",
+                    "SK": f"ATTEMPT#{persisted.state.attempt_id}#DELIVERY#{plan.plan_id}",
+                }
+            ),
+        )
+        reloaded = await debates.get(persisted.state.debate_id)
+        if reloaded is None:
+            raise AssertionError("legacy plan conversion removed the debate")
+        persisted = reloaded
+    persisted_plan = persisted.terminal_delivery
+    if persisted_plan is None:
+        raise AssertionError("terminal delivery plan disappeared")
     terminal = replace(
         persisted,
         state=persisted.state.transition_to(target_phase, at=terminal_at),
-        terminal_delivery=plan.complete(at=terminal_at),
+        terminal_delivery=persisted_plan.complete(at=terminal_at),
     )
     return await debates.finalize_terminal(expected=persisted, updated=terminal)
 
@@ -471,9 +610,218 @@ async def test_final_proposal_delivery_stages_and_finalizes_in_its_reserved_rang
 
 
 @pytest.mark.asyncio
+async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await debates.create(
+        new_snapshot(offset=40),
+        operation_id="vote-accept",
+        lease_owner="worker-1",
+    )
+    bound = await debates.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            starter_message_id="501",
+            thread_id="502",
+            control_panel_message_id="503",
+        ),
+    )
+    preparing = await debates.replace(
+        expected=bound,
+        updated=replace(
+            bound,
+            state=bound.state.transition_to(
+                DebatePhase.PREPARING_EVIDENCE,
+                at=NOW + timedelta(seconds=41),
+            ),
+        ),
+    )
+    collecting_initial = await debates.replace(
+        expected=preparing,
+        updated=replace(
+            preparing,
+            state=preparing.state.transition_to(
+                DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                at=NOW + timedelta(seconds=42),
+            ),
+            initial_opinions=tuple(
+                InitialOpinion(participant, "summary", "proposal")
+                for participant in ParticipantSlot
+            ),
+        ),
+    )
+    discussing = await debates.replace(
+        expected=collecting_initial,
+        updated=replace(
+            collecting_initial,
+            state=collecting_initial.state.transition_to(
+                DebatePhase.DISCUSSING,
+                at=NOW + timedelta(seconds=43),
+            ),
+        ),
+    )
+    collecting_final = await debates.replace(
+        expected=discussing,
+        updated=replace(
+            discussing,
+            state=discussing.state.transition_to(
+                DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                at=NOW + timedelta(seconds=44),
+            ),
+            final_proposals=tuple(
+                FinalProposal(participant, "title", "proposal") for participant in ParticipantSlot
+            ),
+        ),
+    )
+    selecting = await debates.replace(
+        expected=collecting_final,
+        updated=replace(
+            collecting_final,
+            state=collecting_final.state.transition_to(
+                DebatePhase.SELECTING_WINNER,
+                at=NOW + timedelta(seconds=45),
+            ),
+            votes=(
+                Vote(
+                    ParticipantSlot.PARTICIPANT_A,
+                    ParticipantSlot.PARTICIPANT_B,
+                    3,
+                    4,
+                    5,
+                    "reason-a",
+                ),
+                Vote(
+                    ParticipantSlot.PARTICIPANT_B,
+                    ParticipantSlot.PARTICIPANT_C,
+                    3,
+                    4,
+                    5,
+                    "reason-b",
+                ),
+                Vote(
+                    ParticipantSlot.PARTICIPANT_C,
+                    ParticipantSlot.PARTICIPANT_A,
+                    3,
+                    4,
+                    5,
+                    "reason-c",
+                ),
+            ),
+        ),
+    )
+    staged_at = NOW + timedelta(seconds=46)
+    operations = prepare_vote_outbox_operations(
+        snapshot=selecting,
+        participant_display_names={
+            ParticipantSlot.PARTICIPANT_A: "Generic A",
+            ParticipantSlot.PARTICIPANT_B: "Generic B",
+            ParticipantSlot.PARTICIPANT_C: "Generic C",
+        },
+        created_at=staged_at,
+    )
+    assert tuple(operation.delivery_sequence for operation in operations) == (200, 208, 216)
+    plan = PhaseDeliveryPlan(
+        plan_id="votes",
+        source_phase=DebatePhase.SELECTING_WINNER,
+        target_phase=DebatePhase.GENERATING_DECISION,
+        operation_ids=tuple(operation.operation_id for operation in operations),
+        content_hashes=tuple(operation.content_hash for operation in operations),
+        delivery_sequences=tuple(
+            operation.delivery_sequence
+            for operation in operations
+            if operation.delivery_sequence is not None
+        ),
+        staged_at=staged_at,
+        deadline_at=staged_at + timedelta(minutes=15),
+    )
+    staged = await debates.stage_terminal_delivery(
+        expected=selecting,
+        staged=replace(
+            selecting,
+            state=replace(selecting.state, updated_at=staged_at),
+            terminal_delivery=plan,
+        ),
+        operations=operations,
+    )
+    for index, operation in enumerate(operations):
+        claimed = await outbox.claim(
+            expected=staged,
+            operation_id=operation.operation_id,
+            claim_owner="vote-publisher",
+            at=staged_at + timedelta(seconds=index + 1),
+        )
+        assert claimed is not None
+        await outbox.mark_sent(
+            expected=staged,
+            operation=claimed,
+            message_id=str(600 + index),
+            at=staged_at + timedelta(seconds=index + 1, microseconds=1),
+        )
+    finalized_at = NOW + timedelta(seconds=51)
+    finalized = await debates.finalize_phase_delivery(
+        expected=staged,
+        updated=replace(
+            staged,
+            state=staged.state.transition_to(
+                DebatePhase.GENERATING_DECISION,
+                at=finalized_at,
+            ),
+            terminal_delivery=None,
+        ),
+    )
+    assert finalized.state.phase is DebatePhase.GENERATING_DECISION
+    assert finalized.terminal_delivery is None
+    assert finalized.lease == staged.lease
+    assert await outbox.activity() == OutboxActivity()
+    plan_response = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": f"DEBATE#{staged.state.debate_id}",
+                "SK": f"ATTEMPT#{staged.state.attempt_id}#DELIVERY#votes",
+            }
+        ),
+        ConsistentRead=True,
+    )
+    assert unmarshal_item(plan_response["Item"])["status"] == "delivered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "winner",
+        "persisted_bot_slot_override",
+        "previous_terminal_shape",
+        "legacy_terminal_plan",
+        "finalization_succeeds",
+    ),
+    (
+        *((winner, None, False, False, True) for winner in ParticipantSlot),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, False, True),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, True, True),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.PARTICIPANT_B, False, False, False),
+    ),
+    ids=(
+        "new-winner-a",
+        "new-winner-b",
+        "new-winner-c",
+        "pre-upgrade-phase-plan-moderator",
+        "legacy-terminal-plan-moderator",
+        "non-winner-participant-rejected",
+    ),
+)
 async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,
+    winner: ParticipantSlot,
+    persisted_bot_slot_override: DiscordBotSlot | None,
+    previous_terminal_shape: bool,
+    legacy_terminal_plan: bool,
+    finalization_succeeds: bool,
 ) -> None:
     debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
     ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
@@ -517,22 +865,33 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
             thread_id="102",
             control_panel_message_id="103",
             final_decision=FinalDecision(
-                winner=ParticipantSlot.PARTICIPANT_A,
+                winner=winner,
                 decision="fixture decision",
                 actions=("fixture action",),
                 caveats=("fixture caveat",),
             ),
+            votes=votes_for_winner(winner),
         ),
     )
 
-    completed = await finalize_terminal_delivery(
+    terminal_delivery = finalize_terminal_delivery(
         debates=debates,
         outbox=outbox,
         expected=bound,
         target_phase=DebatePhase.COMPLETED,
         staged_at=NOW + timedelta(seconds=1),
         terminal_at=NOW + timedelta(seconds=2),
+        persisted_bot_slot_override=persisted_bot_slot_override,
+        previous_terminal_shape=previous_terminal_shape,
+        legacy_terminal_plan=legacy_terminal_plan,
+        dynamodb_client=dynamodb_client,
+        dynamodb_table=dynamodb_table,
     )
+    if not finalization_succeeds:
+        with pytest.raises(RepositoryConflict, match="invalid Bot owner"):
+            await terminal_delivery
+        return
+    completed = await terminal_delivery
 
     assert completed.state.phase is DebatePhase.COMPLETED
     replay = await ingress.get_replay(accepted_request)

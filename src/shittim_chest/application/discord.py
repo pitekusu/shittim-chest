@@ -6,24 +6,36 @@ import base64
 import hashlib
 import re
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
 from uuid import RFC_4122, UUID
 
 from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason
-from shittim_chest.domain import PARTICIPANTS, AttemptId, DebateId, DebatePhase
+from shittim_chest.domain import (
+    PARTICIPANTS,
+    AttemptId,
+    DebateId,
+    DebatePhase,
+    ParticipantSlot,
+    select_winner,
+)
 
 DISCORD_MESSAGE_LIMIT = 2_000
 DISCORD_CUSTOM_ID_LIMIT = 100
 DISCORD_NONCE_LIMIT = 25
 OUTBOX_CLAIM_SECONDS = 60
 MAX_TERMINAL_OUTBOX_CHUNKS = 20
+MAX_COMPLETED_RESULT_CHUNKS = 1
+MAX_COMPLETED_DECISION_CHUNKS = MAX_TERMINAL_OUTBOX_CHUNKS - MAX_COMPLETED_RESULT_CHUNKS
 MAX_INITIAL_OPINION_CHUNKS = 8
 MAX_FINAL_PROPOSAL_CHUNKS = 8
+MAX_VOTE_CHUNKS = 8
 MAX_OUTBOX_DELIVERY_ATTEMPTS = 3
 INITIAL_OPINION_DELIVERY_SEQUENCE_START = 0
 FINAL_PROPOSAL_DELIVERY_SEQUENCE_START = 100
+VOTE_DELIVERY_SEQUENCE_START = 200
 COMPLETED_DELIVERY_SEQUENCE_START = 300
 FAILED_DELIVERY_SEQUENCE_START = 900
 CANCELLED_DELIVERY_SEQUENCE_START = 910
@@ -498,6 +510,7 @@ def prepare_terminal_outbox_operations(
     target_phase: DebatePhase,
     created_at: datetime,
     error_code: str | None = None,
+    participant_display_names: Mapping[ParticipantSlot, str] | None = None,
 ) -> tuple[OutboxOperation, ...]:
     """Build deterministic required delivery for one terminal outcome."""
 
@@ -508,6 +521,77 @@ def prepare_terminal_outbox_operations(
         raise ValueError("terminal delivery requires a bound Discord thread")
     content = _terminal_content(snapshot, target_phase=target_phase, error_code=error_code)
     chunks = split_discord_message(content)
+    if target_phase is DebatePhase.COMPLETED:
+        decision = snapshot.final_decision
+        if decision is None:  # pragma: no cover - content validation above is authoritative
+            raise ValueError("completed delivery requires a final decision")
+        if participant_display_names is None:
+            raise ValueError("completed delivery requires participant display names")
+        display_names = dict(participant_display_names)
+        if set(display_names) != set(PARTICIPANTS):
+            raise ValueError(
+                "completed delivery requires each participant display name exactly once"
+            )
+        voting_result = select_winner(snapshot.votes)
+        if decision.winner is not voting_result.winner:
+            raise ValueError("completed delivery winner conflicts with the durable ballot")
+        result_content = _completed_result_content(
+            snapshot,
+            participant_display_names=display_names,
+        )
+        result_chunks = split_discord_message(result_content)
+        if len(result_chunks) != MAX_COMPLETED_RESULT_CHUNKS:
+            raise ValueError("completed result announcement must fit in one Discord message")
+        if len(chunks) > MAX_COMPLETED_DECISION_CHUNKS:
+            raise ValueError("completed decision exceeds the bounded chunk count")
+        plan_id = "terminal-completed"
+        winner_bot_slot = DiscordBotSlot(decision.winner.value)
+        result_operations = prepare_outbox_operations(
+            operation_prefix="terminal-completed-result",
+            debate_id=snapshot.state.debate_id,
+            attempt_id=snapshot.state.attempt_id,
+            bot_slot=DiscordBotSlot.MODERATOR,
+            thread_id=snapshot.thread_id,
+            content=result_content,
+            nonce_sources=(
+                _derived_uuid7(
+                    snapshot.state.attempt_id,
+                    phase=target_phase,
+                    bot_slot=DiscordBotSlot.MODERATOR,
+                    sequence=0,
+                ),
+            ),
+            created_at=created_at,
+            record_schema_version=2,
+            phase=target_phase,
+            plan_id=plan_id,
+            delivery_sequence_start=COMPLETED_DELIVERY_SEQUENCE_START,
+        )
+        decision_operations = prepare_outbox_operations(
+            operation_prefix="terminal-completed-decision",
+            debate_id=snapshot.state.debate_id,
+            attempt_id=snapshot.state.attempt_id,
+            bot_slot=winner_bot_slot,
+            thread_id=snapshot.thread_id,
+            content=content,
+            nonce_sources=tuple(
+                _derived_uuid7(
+                    snapshot.state.attempt_id,
+                    phase=target_phase,
+                    bot_slot=winner_bot_slot,
+                    sequence=sequence,
+                )
+                for sequence in range(len(chunks))
+            ),
+            created_at=created_at,
+            record_schema_version=2,
+            phase=target_phase,
+            plan_id=plan_id,
+            delivery_sequence_start=(
+                COMPLETED_DELIVERY_SEQUENCE_START + MAX_COMPLETED_RESULT_CHUNKS
+            ),
+        )
+        return (*result_operations, *decision_operations)
     if len(chunks) > MAX_TERMINAL_OUTBOX_CHUNKS:
         raise ValueError("terminal delivery exceeds the bounded chunk count")
     if (
@@ -524,11 +608,12 @@ def prepare_terminal_outbox_operations(
     }.get(target_phase)
     if delivery_sequence_start is None:
         raise ValueError("terminal delivery target must be completed, failed, or cancelled")
+    bot_slot = DiscordBotSlot.MODERATOR
     nonce_sources = tuple(
         _derived_uuid7(
             snapshot.state.attempt_id,
             phase=target_phase,
-            bot_slot=DiscordBotSlot.MODERATOR,
+            bot_slot=bot_slot,
             sequence=sequence,
         )
         for sequence in range(len(chunks))
@@ -537,7 +622,7 @@ def prepare_terminal_outbox_operations(
         operation_prefix=operation_prefix,
         debate_id=snapshot.state.debate_id,
         attempt_id=snapshot.state.attempt_id,
-        bot_slot=DiscordBotSlot.MODERATOR,
+        bot_slot=bot_slot,
         thread_id=snapshot.thread_id,
         content=content,
         nonce_sources=nonce_sources,
@@ -675,6 +760,71 @@ def prepare_final_proposal_outbox_operations(
     return tuple(operations)
 
 
+def prepare_vote_outbox_operations(
+    *,
+    snapshot: DebateSnapshot,
+    participant_display_names: Mapping[ParticipantSlot, str],
+    created_at: datetime,
+) -> tuple[OutboxOperation, ...]:
+    """Build the ordered participant-owned delivery for one complete ballot."""
+
+    _require_utc(created_at, label="vote delivery creation timestamp")
+    if snapshot.state.phase is not DebatePhase.SELECTING_WINNER:
+        raise ValueError("votes can only be delivered from their generation phase")
+    if snapshot.thread_id is None:
+        raise ValueError("vote delivery requires a bound Discord thread")
+    votes = {vote.voter: vote for vote in snapshot.votes}
+    if len(votes) != len(PARTICIPANTS) or set(votes) != set(PARTICIPANTS):
+        raise ValueError("vote delivery requires each participant exactly once")
+    display_names = dict(participant_display_names)
+    if set(display_names) != set(PARTICIPANTS):
+        raise ValueError("vote delivery requires each participant display name exactly once")
+
+    plan_id = "votes"
+    operations: list[OutboxOperation] = []
+    for participant_index, participant in enumerate(PARTICIPANTS):
+        vote = votes[participant]
+        bot_slot = DiscordBotSlot(participant.value)
+        content = "\n".join(
+            (
+                "**投票**",
+                "**投票先**",
+                _quoted_model_text(display_names[vote.candidate]),
+                "**理由**",
+                _quoted_model_text(vote.reason),
+            )
+        )
+        chunks = split_discord_message(content)
+        if len(chunks) > MAX_VOTE_CHUNKS:
+            raise ValueError("one vote exceeds its reserved delivery sequence range")
+        sequence_start = VOTE_DELIVERY_SEQUENCE_START + participant_index * MAX_VOTE_CHUNKS
+        operations.extend(
+            prepare_outbox_operations(
+                operation_prefix=f"vote-{participant.value}",
+                debate_id=snapshot.state.debate_id,
+                attempt_id=snapshot.state.attempt_id,
+                bot_slot=bot_slot,
+                thread_id=snapshot.thread_id,
+                content=content,
+                nonce_sources=tuple(
+                    _derived_uuid7(
+                        snapshot.state.attempt_id,
+                        phase=DebatePhase.SELECTING_WINNER,
+                        bot_slot=bot_slot,
+                        sequence=sequence,
+                    )
+                    for sequence in range(len(chunks))
+                ),
+                created_at=created_at,
+                record_schema_version=2,
+                phase=DebatePhase.GENERATING_DECISION,
+                plan_id=plan_id,
+                delivery_sequence_start=sequence_start,
+            )
+        )
+    return tuple(operations)
+
+
 def _terminal_content(
     snapshot: DebateSnapshot,
     *,
@@ -686,7 +836,16 @@ def _terminal_content(
         decision = snapshot.final_decision
         if decision is None or error_code is not None:
             raise ValueError("completed delivery requires a decision without an error")
-        sections = ["**最終決定**", _quoted_model_text(decision.decision)]
+        sections = []
+        if decision.victory_message is not None:
+            sections.extend(
+                (
+                    "**勝利の言葉**",
+                    _quoted_model_text(decision.victory_message),
+                    "",
+                )
+            )
+        sections.extend(("**最終決定**", _quoted_model_text(decision.decision)))
         if decision.actions:
             sections.extend(
                 (
@@ -720,6 +879,40 @@ def _terminal_content(
             raise ValueError("cancelled delivery cannot contain an error code")
         return "\n".join(("**討論を中止しました**", "", disclaimer))
     raise ValueError("terminal delivery target must be completed, failed, or cancelled")
+
+
+def _completed_result_content(
+    snapshot: DebateSnapshot,
+    *,
+    participant_display_names: Mapping[ParticipantSlot, str],
+) -> str:
+    """Render the moderator-owned ballot result before the winner speaks."""
+
+    voting_result = select_winner(snapshot.votes)
+    vote_counts = {
+        participant: sum(vote.candidate is participant for vote in voting_result.votes)
+        for participant in PARTICIPANTS
+    }
+    highest_count = max(vote_counts.values())
+    leaders = tuple(
+        participant for participant in PARTICIPANTS if vote_counts[participant] == highest_count
+    )
+    display_names = {
+        participant: sanitize_discord_model_text(participant_display_names[participant])
+        for participant in PARTICIPANTS
+    }
+    sections = [
+        "**投票結果**",
+        *(
+            f"- {display_names[participant]}: {vote_counts[participant]}票"
+            for participant in PARTICIPANTS
+        ),
+        "**勝者**",
+        f"> {display_names[voting_result.winner]} ({vote_counts[voting_result.winner]}票)",
+    ]
+    if len(leaders) > 1:
+        sections.append("同票のため、規定の評価基準で勝者を決定しました。")
+    return "\n".join(sections)
 
 
 def _derived_uuid7(

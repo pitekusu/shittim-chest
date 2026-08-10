@@ -48,10 +48,14 @@ from shittim_chest.application.discord import (
     FAILED_DELIVERY_SEQUENCE_START,
     FINAL_PROPOSAL_DELIVERY_SEQUENCE_START,
     INITIAL_OPINION_DELIVERY_SEQUENCE_START,
+    MAX_COMPLETED_DECISION_CHUNKS,
+    MAX_COMPLETED_RESULT_CHUNKS,
     MAX_FINAL_PROPOSAL_CHUNKS,
     MAX_INITIAL_OPINION_CHUNKS,
     MAX_TERMINAL_NOTICE_CHUNKS,
     MAX_TERMINAL_OUTBOX_CHUNKS,
+    MAX_VOTE_CHUNKS,
+    VOTE_DELIVERY_SEQUENCE_START,
     DiscordBotSlot,
     OutboxOperation,
     OutboxStatus,
@@ -901,6 +905,10 @@ class DynamoDbDebateRepository:
             PhaseDeliveryStatus.STAGED,
             PhaseDeliveryStatus.TERMINATING,
         }:
+            terminal_identities = self._persisted_terminal_delivery_identities(
+                expected,
+                delivery,
+            )
             delivery_sequences = (
                 tuple(range(len(delivery.operation_ids)))
                 if isinstance(delivery, TerminalDeliveryPlan)
@@ -913,18 +921,23 @@ class DynamoDbDebateRepository:
                     operation_id=operation_id,
                     content_hash=content_hash,
                     chunk_sequence=chunk_sequence,
-                    bot_slot=DiscordBotSlot.MODERATOR,
+                    bot_slot=bot_slot,
                     delivery_phase=delivery.target_phase,
                     plan_id=(delivery.plan_id if isinstance(delivery, PhaseDeliveryPlan) else None),
                     delivery_sequence=delivery_sequence,
                 )
-                for chunk_sequence, (operation_id, content_hash, delivery_sequence) in enumerate(
+                for (operation_id, content_hash, delivery_sequence), (
+                    bot_slot,
+                    chunk_sequence,
+                ) in zip(
                     zip(
                         delivery.operation_ids,
                         delivery.content_hashes,
                         delivery_sequences,
                         strict=True,
-                    )
+                    ),
+                    terminal_identities,
+                    strict=True,
                 )
             )
             action_kinds.extend(
@@ -998,6 +1011,108 @@ class DynamoDbDebateRepository:
                 return current
             raise
         return persisted
+
+    def _persisted_terminal_delivery_identities(
+        self,
+        expected: DebateSnapshot,
+        delivery: TerminalDeliveryPlan | PhaseDeliveryPlan,
+    ) -> tuple[tuple[DiscordBotSlot, int], ...]:
+        """Validate new mixed ownership while retaining prior terminal plans."""
+
+        operation_ids = set(delivery.operation_ids)
+        matching_operation_items = tuple(
+            item
+            for item in self._query_partition(
+                f"DEBATE#{expected.state.debate_id}",
+                consistent=True,
+            )
+            if item.get("record_type") == "outbox"
+            and item.get("attempt_id") == str(expected.state.attempt_id)
+            and item.get("operation_id") in operation_ids
+        )
+        operation_items = {_text(item, "operation_id"): item for item in matching_operation_items}
+        if (
+            len(matching_operation_items) != len(operation_ids)
+            or set(operation_items) != operation_ids
+        ):
+            raise RepositoryConflict("terminal delivery outbox is incomplete")
+        persisted_operations = tuple(
+            deserialize_outbox(operation_items[operation_id])
+            for operation_id in delivery.operation_ids
+        )
+        if (
+            delivery.target_phase is DebatePhase.COMPLETED
+            and isinstance(delivery, PhaseDeliveryPlan)
+            and any(
+                operation_id.startswith("terminal-completed-result-")
+                or operation_id.startswith("terminal-completed-decision-")
+                for operation_id in delivery.operation_ids
+            )
+        ):
+            identities = tuple(
+                _completed_terminal_operation_identity(
+                    expected,
+                    operation_id=operation.operation_id,
+                    delivery_sequence=delivery_sequence,
+                )
+                for operation, delivery_sequence in zip(
+                    persisted_operations,
+                    delivery.delivery_sequences,
+                    strict=True,
+                )
+            )
+            if any(
+                operation.bot_slot is not bot_slot or operation.chunk_sequence != chunk_sequence
+                for operation, (bot_slot, chunk_sequence) in zip(
+                    persisted_operations,
+                    identities,
+                    strict=True,
+                )
+            ):
+                raise RepositoryConflict("completed delivery outbox has an invalid Bot owner")
+            result_sequences = tuple(
+                chunk_sequence
+                for bot_slot, chunk_sequence in identities
+                if bot_slot is DiscordBotSlot.MODERATOR
+            )
+            decision_sequences = tuple(
+                chunk_sequence
+                for bot_slot, chunk_sequence in identities
+                if bot_slot is not DiscordBotSlot.MODERATOR
+            )
+            if (
+                result_sequences != (0,)
+                or not decision_sequences
+                or decision_sequences != tuple(range(len(decision_sequences)))
+            ):
+                raise RepositoryConflict("completed delivery outbox sequence is invalid")
+            return identities
+
+        expected_operation_ids = tuple(
+            f"terminal-{delivery.target_phase.value}-{sequence:04d}"
+            for sequence in range(len(delivery.operation_ids))
+        )
+        if delivery.operation_ids != expected_operation_ids or any(
+            operation.chunk_sequence != sequence
+            for sequence, operation in enumerate(persisted_operations)
+        ):
+            raise RepositoryConflict("legacy terminal delivery identity is invalid")
+        bot_slots = {operation.bot_slot for operation in persisted_operations}
+        if len(bot_slots) != 1:
+            raise RepositoryConflict("legacy terminal delivery outbox has mixed Bot owners")
+        persisted_bot_slot = next(iter(bot_slots))
+        expected_bot_slot = _terminal_delivery_bot_slot(
+            expected,
+            target_phase=delivery.target_phase,
+        )
+        allowed_bot_slots = {expected_bot_slot}
+        if delivery.target_phase is DebatePhase.COMPLETED:
+            allowed_bot_slots.add(DiscordBotSlot.MODERATOR)
+        if persisted_bot_slot not in allowed_bot_slots:
+            raise RepositoryConflict("terminal delivery outbox has an invalid Bot owner")
+        return tuple(
+            (persisted_bot_slot, sequence) for sequence in range(len(persisted_operations))
+        )
 
     def _finalize_phase_delivery(
         self,
@@ -3242,11 +3357,24 @@ def _require_terminal_stage(
         and plan.source_phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
         and plan.target_phase is DebatePhase.SELECTING_WINNER
     )
-    participant_phase_delivery = initial_opinion_delivery or final_proposal_delivery
+    vote_delivery = (
+        isinstance(plan, PhaseDeliveryPlan)
+        and plan.plan_id == "votes"
+        and plan.source_phase is DebatePhase.SELECTING_WINNER
+        and plan.target_phase is DebatePhase.GENERATING_DECISION
+    )
+    participant_phase_delivery = (
+        initial_opinion_delivery or final_proposal_delivery or vote_delivery
+    )
+    participant_chunk_limit = (
+        MAX_INITIAL_OPINION_CHUNKS
+        if initial_opinion_delivery
+        else MAX_FINAL_PROPOSAL_CHUNKS
+        if final_proposal_delivery
+        else MAX_VOTE_CHUNKS
+    )
     operation_limit = (
-        3 * (MAX_INITIAL_OPINION_CHUNKS if initial_opinion_delivery else MAX_FINAL_PROPOSAL_CHUNKS)
-        if participant_phase_delivery
-        else MAX_TERMINAL_OUTBOX_CHUNKS
+        3 * participant_chunk_limit if participant_phase_delivery else MAX_TERMINAL_OUTBOX_CHUNKS
     )
     if not operations or len(operations) > operation_limit:
         raise RepositoryConflict("delivery operation count is outside its bounds")
@@ -3266,6 +3394,8 @@ def _require_terminal_stage(
         DiscordBotSlot.PARTICIPANT_B: [],
         DiscordBotSlot.PARTICIPANT_C: [],
     }
+    completed_result_chunk_sequences: list[int] = []
+    completed_decision_chunk_sequences: list[int] = []
     for sequence, operation in enumerate(operations):
         if participant_phase_delivery:
             if operation.delivery_sequence is None:
@@ -3280,6 +3410,20 @@ def _require_terminal_stage(
             expected_phase = plan.target_phase
             expected_delivery_sequence = operation.delivery_sequence
             participant_chunk_sequences[expected_bot_slot].append(expected_chunk_sequence)
+        elif plan.target_phase is DebatePhase.COMPLETED:
+            if operation.delivery_sequence is None or not isinstance(plan, PhaseDeliveryPlan):
+                raise RepositoryConflict("completed delivery requires its durable sequence")
+            expected_bot_slot, expected_chunk_sequence = _completed_terminal_operation_identity(
+                staged,
+                operation_id=operation.operation_id,
+                delivery_sequence=operation.delivery_sequence,
+            )
+            expected_phase = plan.target_phase
+            expected_delivery_sequence = operation.delivery_sequence
+            if expected_bot_slot is DiscordBotSlot.MODERATOR:
+                completed_result_chunk_sequences.append(expected_chunk_sequence)
+            else:
+                completed_decision_chunk_sequences.append(expected_chunk_sequence)
         else:
             delivery_sequence_start = {
                 DebatePhase.COMPLETED: COMPLETED_DELIVERY_SEQUENCE_START,
@@ -3288,7 +3432,10 @@ def _require_terminal_stage(
             }.get(plan.target_phase)
             if delivery_sequence_start is None:
                 raise RepositoryConflict("terminal delivery target has no sequence range")
-            expected_bot_slot = DiscordBotSlot.MODERATOR
+            expected_bot_slot = _terminal_delivery_bot_slot(
+                staged,
+                target_phase=plan.target_phase,
+            )
             expected_chunk_sequence = sequence
             expected_phase = plan.target_phase
             expected_delivery_sequence = delivery_sequence_start + sequence
@@ -3299,6 +3446,7 @@ def _require_terminal_stage(
             or operation.thread_id != expected.thread_id
             or (
                 not participant_phase_delivery
+                and plan.target_phase is not DebatePhase.COMPLETED
                 and operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
             )
             or operation.chunk_sequence != expected_chunk_sequence
@@ -3322,9 +3470,6 @@ def _require_terminal_stage(
             raise RepositoryConflict("delivery operation violates its attempt fence")
         nonces.add(operation.nonce)
         expected_delivery_sequences.append(expected_delivery_sequence)
-    participant_chunk_limit = (
-        MAX_INITIAL_OPINION_CHUNKS if initial_opinion_delivery else MAX_FINAL_PROPOSAL_CHUNKS
-    )
     if participant_phase_delivery and any(
         not sequences
         or len(sequences) > participant_chunk_limit
@@ -3332,6 +3477,14 @@ def _require_terminal_stage(
         for sequences in participant_chunk_sequences.values()
     ):
         raise RepositoryConflict("participant phase delivery requires bounded output from each Bot")
+    if plan.target_phase is DebatePhase.COMPLETED and (
+        completed_result_chunk_sequences != [0]
+        or not completed_decision_chunk_sequences
+        or len(completed_decision_chunk_sequences) > MAX_COMPLETED_DECISION_CHUNKS
+        or completed_decision_chunk_sequences
+        != list(range(len(completed_decision_chunk_sequences)))
+    ):
+        raise RepositoryConflict("completed delivery requires one result and bounded winner output")
     if isinstance(plan, PhaseDeliveryPlan) and plan.delivery_sequences != tuple(
         expected_delivery_sequences
     ):
@@ -3419,6 +3572,14 @@ def _participant_phase_operation_identity(
         operation_prefix = "final-proposal"
         delivery_sequence_start = FINAL_PROPOSAL_DELIVERY_SEQUENCE_START
         chunk_limit = MAX_FINAL_PROPOSAL_CHUNKS
+    elif (
+        plan.plan_id == "votes"
+        and plan.source_phase is DebatePhase.SELECTING_WINNER
+        and plan.target_phase is DebatePhase.GENERATING_DECISION
+    ):
+        operation_prefix = "vote"
+        delivery_sequence_start = VOTE_DELIVERY_SEQUENCE_START
+        chunk_limit = MAX_VOTE_CHUNKS
     else:
         raise RepositoryConflict("phase delivery is not a participant output plan")
     if not (
@@ -3438,6 +3599,55 @@ def _participant_phase_operation_identity(
     if operation_id != f"{operation_prefix}-{bot_slot.value}-{chunk_sequence:04d}":
         raise RepositoryConflict("participant phase operation identity is invalid")
     return bot_slot, chunk_sequence
+
+
+def _terminal_delivery_bot_slot(
+    snapshot: DebateSnapshot,
+    *,
+    target_phase: DebatePhase,
+) -> DiscordBotSlot:
+    """Return the durable Bot owner for one terminal outcome."""
+
+    if target_phase is DebatePhase.COMPLETED:
+        decision = snapshot.final_decision
+        if decision is None:
+            raise RepositoryConflict("completed terminal delivery has no durable winner")
+        return DiscordBotSlot(decision.winner.value)
+    if target_phase in {DebatePhase.FAILED, DebatePhase.CANCELLED}:
+        return DiscordBotSlot.MODERATOR
+    raise RepositoryConflict("terminal delivery target has no Bot owner")
+
+
+def _completed_terminal_operation_identity(
+    snapshot: DebateSnapshot,
+    *,
+    operation_id: str,
+    delivery_sequence: int,
+) -> tuple[DiscordBotSlot, int]:
+    """Validate the moderator result followed by the winner's decision."""
+
+    winner_bot_slot = _terminal_delivery_bot_slot(
+        snapshot,
+        target_phase=DebatePhase.COMPLETED,
+    )
+    result_start = COMPLETED_DELIVERY_SEQUENCE_START
+    decision_start = result_start + MAX_COMPLETED_RESULT_CHUNKS
+    if operation_id == "terminal-completed-result-0000":
+        if delivery_sequence != result_start:
+            raise RepositoryConflict("completed result delivery sequence is invalid")
+        return DiscordBotSlot.MODERATOR, 0
+    if operation_id.startswith("terminal-completed-decision-"):
+        sequence_text = operation_id.removeprefix("terminal-completed-decision-")
+        if len(sequence_text) != 4 or not sequence_text.isascii() or not sequence_text.isdigit():
+            raise RepositoryConflict("completed decision operation identity is invalid")
+        chunk_sequence = int(sequence_text)
+        if (
+            chunk_sequence >= MAX_COMPLETED_DECISION_CHUNKS
+            or delivery_sequence != decision_start + chunk_sequence
+        ):
+            raise RepositoryConflict("completed decision delivery sequence is invalid")
+        return winner_bot_slot, chunk_sequence
+    raise RepositoryConflict("completed terminal operation identity is invalid")
 
 
 def _put_new_outbox(

@@ -23,6 +23,11 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.participant_prompts()[ParticipantSlot.PARTICIPANT_B] == (
         "Generic private prompt for participant-b."
     )
+    assert config.participant_display_names() == {
+        ParticipantSlot.PARTICIPANT_A: "Generic participant-a",
+        ParticipantSlot.PARTICIPANT_B: "Generic participant-b",
+        ParticipantSlot.PARTICIPANT_C: "Generic participant-c",
+    }
     rendered = repr(config)
     assert "openai-key-placeholder" not in rendered
     assert "token-moderator-placeholder" not in rendered
@@ -73,6 +78,29 @@ def test_load_bootstrap_config_redacts_invalid_private_values() -> None:
 
     assert private_marker not in str(captured.value)
     assert private_marker not in repr(captured.value)
+
+
+def test_load_bootstrap_config_rejects_renderer_incompatible_display_name() -> None:
+    environment = _valid_environment()
+    persona = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"])
+    persona["display_name"] = "Generic\u200dA"
+    environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"] = json.dumps(persona)
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        load_bootstrap_config(environment)
+
+    assert str(captured.value) == "startup_configuration_invalid"
+
+
+def test_load_bootstrap_config_does_not_apply_vote_renderer_to_moderator_name() -> None:
+    environment = _valid_environment()
+    persona = json.loads(environment["SHITTIM_PERSONA_MODERATOR_JSON"])
+    persona["display_name"] = "Generic\u200dModerator"
+    environment["SHITTIM_PERSONA_MODERATOR_JSON"] = json.dumps(persona)
+
+    config = load_bootstrap_config(environment)
+
+    assert config.personas[DiscordBotSlot.MODERATOR].display_name == "Generic\u200dModerator"
 
 
 def test_load_bootstrap_config_requires_one_matching_version_for_all_payloads() -> None:

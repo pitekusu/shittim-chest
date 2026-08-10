@@ -121,7 +121,7 @@ python tools/sync_docs.py --check --source "$SHITTIM_DOCS_SOURCE"
 - Use authenticated `gh` for GitHub writes.
 - Before a write, run `gh auth status` and verify `gh api user --jq '.login'` is the intended
   account without displaying or storing a token.
-- Use the sequence branch → commit → Draft PR.
+- Use the sequence branch → commit → ready-for-review PR. Create PRs as normal PRs, never as drafts.
 - Never push directly to `main`.
 - Merge through a PR with squash merge only.
 - Confirm required checks and CodeQL before merge.

@@ -211,6 +211,13 @@ def test_content_models_reject_unknown_participant_slots(model: str) -> None:
             FinalDecision(unknown, "decision", (), ())
 
 
+def test_final_decision_validates_optional_victory_message() -> None:
+    with pytest.raises(ValueError, match="victory message must not be empty"):
+        FinalDecision(ParticipantSlot.PARTICIPANT_A, "decision", (), (), " ")
+    with pytest.raises(ValueError, match="at most 500"):
+        FinalDecision(ParticipantSlot.PARTICIPANT_A, "decision", (), (), "x" * 501)
+
+
 def test_all_derangement_ballots_are_valid_circular_ties() -> None:
     for candidates in permutations(PARTICIPANTS):
         if all(

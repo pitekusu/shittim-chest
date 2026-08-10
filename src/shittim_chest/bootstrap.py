@@ -247,6 +247,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         repository=repository,
         candidate_orderer=SecureCandidateOrderer(),
         outbox_recovery=recovery,
+        participant_display_names=config.participant_display_names(),
         lease_owner=owner_id,
     )
     interactions = DiscordInteractionController(

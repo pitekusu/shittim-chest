@@ -26,6 +26,7 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    Vote,
 )
 
 NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
@@ -155,6 +156,64 @@ def test_final_proposal_checkpoint_and_output_must_settle_together() -> None:
             state=collecting_state,
             lease=lease,
             final_proposals=(FinalProposal(ParticipantSlot.PARTICIPANT_A, "title", "proposal"),),
+            generation_checkpoints=(planned,),
+        )
+
+
+def test_vote_checkpoint_and_output_must_settle_together() -> None:
+    source = snapshot()
+    selecting_state = (
+        source.state.transition_to(
+            DebatePhase.PREPARING_EVIDENCE,
+            at=NOW + timedelta(seconds=1),
+        )
+        .transition_to(
+            DebatePhase.COLLECTING_INITIAL_OPINIONS,
+            at=NOW + timedelta(seconds=2),
+        )
+        .transition_to(DebatePhase.DISCUSSING, at=NOW + timedelta(seconds=3))
+        .transition_to(
+            DebatePhase.COLLECTING_FINAL_PROPOSALS,
+            at=NOW + timedelta(seconds=4),
+        )
+        .transition_to(DebatePhase.SELECTING_WINNER, at=NOW + timedelta(seconds=5))
+    )
+    lease = LeaseGrant(
+        owner_id="worker",
+        slot=0,
+        fencing_token=1,
+        expires_at=NOW + timedelta(minutes=1),
+    )
+    planned = GenerationCheckpoint.planned(
+        phase=DebatePhase.SELECTING_WINNER,
+        participant=ParticipantSlot.PARTICIPANT_A,
+        at=NOW + timedelta(seconds=5),
+    )
+    completed = planned.claim(lease=lease, at=NOW + timedelta(seconds=6)).complete(
+        lease=lease,
+        at=NOW + timedelta(seconds=7),
+    )
+    vote = Vote(
+        ParticipantSlot.PARTICIPANT_A,
+        ParticipantSlot.PARTICIPANT_B,
+        3,
+        4,
+        5,
+        "reason",
+    )
+    with pytest.raises(ValueError, match="requires its durable output"):
+        replace(
+            source,
+            state=selecting_state,
+            lease=lease,
+            generation_checkpoints=(completed,),
+        )
+    with pytest.raises(ValueError, match="requires its completed generation checkpoint"):
+        replace(
+            source,
+            state=selecting_state,
+            lease=lease,
+            votes=(vote,),
             generation_checkpoints=(planned,),
         )
 
