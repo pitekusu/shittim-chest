@@ -26,6 +26,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 COPY README.md LICENSE ./
 COPY src ./src
 COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py
+COPY tools/transfer_tree_deterministically.py /tmp/transfer_tree_deterministically.py
 
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-editable \
@@ -34,13 +35,18 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 FROM dhi.io/python:3.14.6-debian13@sha256:7fa71fa6509c110456742c8505dfea44f0b4656018123b3eaf4f33f71ae902b7 AS runtime-base
 
-ENV PATH="/app/.venv/bin:${PATH}" \
+ARG SOURCE_DATE_EPOCH
+
+ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+    PATH="/app/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv
+RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro \
+    --mount=type=bind,from=builder,source=/tmp/transfer_tree_deterministically.py,target=/tmp/transfer_tree_deterministically.py,ro \
+    ["/usr/bin/python3.14", "/tmp/transfer_tree_deterministically.py", "--uid", "65532", "--gid", "65532", "/tmp/source-venv", "/app/.venv"]
 
 USER 65532:65532
 

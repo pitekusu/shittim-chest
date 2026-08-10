@@ -268,10 +268,11 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         "ARG SOURCE_DATE_EPOCH=0",
         "ARG SOURCE_DATE_EPOCH",
         "ARG SOURCE_DATE_EPOCH",
+        "ARG SOURCE_DATE_EPOCH",
     ]:
         raise ValueError(
             "Dockerfile must default SOURCE_DATE_EPOCH globally and consume it in the builder "
-            "and break-glass stages"
+            "and both risk-bound final stages"
         )
     first_from = text.index("FROM ")
     if text.index("ARG SOURCE_DATE_EPOCH=0") > first_from:
@@ -293,6 +294,10 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError(
             "Dockerfile builder must canonicalize installed wheel RECORD ordering and venv mtimes"
         )
+    if (
+        "COPY tools/transfer_tree_deterministically.py /tmp/transfer_tree_deterministically.py"
+    ) not in builder_text:
+        raise ValueError("Dockerfile builder must include the deterministic tree transfer helper")
     if stages[3] != ("production", "runtime-base"):
         raise ValueError("production stage must derive from runtime-base")
     if stages[4] != ("fault-test", "production"):
@@ -301,9 +306,20 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("break-glass tooling stage must reuse the builder image pin")
     if stages[6] != ("break-glass", "break-glass-tools"):
         raise ValueError("break-glass final stage must derive from the tooling stage")
-    venv_copy = "COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv"
-    if text.count(venv_copy) != 1:
-        raise ValueError("production stage must use one final-stage non-linked venv copy")
+    production_start = text.index("FROM runtime-base AS production")
+    runtime_text = text[runtime_start:production_start]
+    production_venv_transfer = (
+        'ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}"',
+        "RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro",
+        "--mount=type=bind,from=builder,source=/tmp/transfer_tree_deterministically.py,"
+        "target=/tmp/transfer_tree_deterministically.py,ro",
+        '["/usr/bin/python3.14", "/tmp/transfer_tree_deterministically.py", "--uid", "65532", '
+        '"--gid", "65532", "/tmp/source-venv", "/app/.venv"]',
+    )
+    if any(marker not in runtime_text for marker in production_venv_transfer):
+        raise ValueError("production stage must transfer the venv without volatile source metadata")
+    if "COPY --from=builder" in runtime_text:
+        raise ValueError("production stage must not COPY the venv directly from builder")
     break_glass_tools_start = text.index(f"FROM {builder_reference} AS break-glass-tools")
     break_glass_start = text.index("FROM break-glass-tools AS break-glass")
     break_glass_tools_text = text[break_glass_tools_start:break_glass_start]
@@ -335,13 +351,14 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
 
 
 def validate_dockerignore(dockerignore: Path) -> None:
-    """Require the RECORD canonicalizer and exclude generated source bytecode."""
+    """Require build helpers and exclude generated source bytecode."""
 
     rules = dockerignore.read_text(encoding="utf-8").splitlines()
     required_rules = [
         "!tools/",
         "tools/*",
         "!tools/canonicalize_wheel_records.py",
+        "!tools/transfer_tree_deterministically.py",
     ]
     positions: list[int] = []
     for rule in required_rules:
@@ -349,12 +366,10 @@ def validate_dockerignore(dockerignore: Path) -> None:
             positions.append(rules.index(rule))
         except ValueError as error:
             raise ValueError(
-                ".dockerignore must include only the wheel RECORD canonicalizer from tools/"
+                ".dockerignore must include only the container build helpers from tools/"
             ) from error
     if positions != sorted(positions):
-        raise ValueError(
-            ".dockerignore wheel RECORD canonicalizer rules must be in effective order"
-        )
+        raise ValueError(".dockerignore container build helper rules must be in effective order")
     try:
         source_include_position = rules.index("!src/**")
         bytecode_positions = [
