@@ -227,7 +227,7 @@ DynamoDB Localでは最大24-operation phaseと最大20-chunk terminalを実際�
 - PR-C: ballot close前write 0、close後の3票公開
 - PR-D: 保存済みwinnerと最終投稿Botの一致
 
-各回、panel、channel Status、DynamoDB、Outbox activity、ECS 0／0／0を確認する。winner全組合せ、multi-chunk、障害注入はlocal／contract試験で行い、live OpenAI試験を不必要に増やさない。
+各回、panel、channel Status、DynamoDB、Outbox activityを確認する。ECS `0/0/0`は[[10_scale-to-zero-goal]]の運用受入であり、本表示計画の機能受入とは分離する。Runtime停止を改めて確認するかは変更scopeと利用者判断で決め、本表示計画の完了条件には含めない。winner全組合せ、multi-chunk、障害注入はlocal／contract試験で行い、live OpenAI試験を不必要に増やさない。
 
 ## 5. 文書と境界
 
