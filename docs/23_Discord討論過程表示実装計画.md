@@ -172,6 +172,8 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - prompt、model、決定生成内容は変更しない。
 - local実装では、Pythonが確定して永続化した`FinalDecision.winner`を対応するparticipant Bot slotへ変換し、最終決定生成前のDiscord delivery preflightとCOMPLETED Outboxの両方へ同じslotを使用する。FAILED／CANCELLED Outboxのmoderator所有、delivery sequence、生成checkpoint、winner計算、prompt、model、決定本文は変更しない。
 - focused application test 114件で、winner a／b／cそれぞれのBot割当、通常討論での保存済みwinnerと最終Outbox所有者の一致、winner Botのpreflight失敗時にOpenAIを呼ばないこと、FAILED／CANCELLEDのmoderator所有、nonceとterminal deliveryの既存契約を確認した。
+- reviewでDynamoDB repositoryのstaging検証とterminal finalization検証に残っていたmoderator固定を確認し、両方を同じ永続winner導出へ統一した。digest固定DynamoDB Localのrepository integration test 32件で、winner a／b／cとFAILED／CANCELLEDの所有契約を確認した。
+- canonical CI run `31363534102`では、config digest baseline不一致以外のrequired checkとCodeQL 3言語が成功した。同一測定のartifactからproduction config digest `sha256:182095007d503e6cb69a8843f422f0b3af5c224b6f0a50c4a01ec3126c2272cc`、break-glass config digest `sha256:51574f989effece91a13e243ba217963042e017a079cebdff58140095ecada8a`を取得して両baselineを一括更新した。両SBOMはcanonical validatorで有効、verified VEXは存在し、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
 
 各PRをmerge後、manager承認を得て個別にProduction Releaseし、live確認後に次PRへ進む。部分表示期間は意図した段階投入として計画書と進捗記録に明記する。
 
