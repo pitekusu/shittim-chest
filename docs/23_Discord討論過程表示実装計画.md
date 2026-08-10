@@ -163,12 +163,15 @@ Discordが返したcontentまたはhistory上のcontentが保存済みcontentと
 - 是正PRは`#175`。canonical CI run `31351020310`では両targetのbaseline不一致だけが失敗し、他のrequired checkとCodeQL 3言語は成功した。同一測定のartifactからproduction config digest `sha256:8ac98dbbf0f18c7042d6c037d7752827d4bde5b3998be856aa61f21d28cda95b`、break-glass config digest `sha256:4ce52288b35eebb3bfd574e30c21a97588a0effb8de23c7310774cb4c230bf74`を取得し、両baselineを一括更新した。両SBOMとapplication RECORDはcanonical validatorで有効、fixable High／Criticalは0であり、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
 - reviewで、rendererが拒否するUnicodeを`PersonaConfig`が受理すると投票生成後まで失敗が遅延する問題を確認した。startup configurationとapplication constructorの両方で同じrenderer validatorを実行する修正後、canonical CI run `31351759019`の同一測定からproduction config digest `sha256:978abc75cc516a90f27795d27a7de8a7715d53ee3f77a0181663b5512e61c47e`、break-glass config digest `sha256:f2d3164e72688de9a063ad635ea19c3bb615f7f5089d79f94fb477edb72ac175`へ両baselineを一括更新した。両SBOMとapplication RECORDは有効で、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
 - 追加reviewで、同じrenderer制約を投票表示に使わないmoderator名へ適用する過剰制限を確認し、startup validationをparticipant 3件だけへ限定した。canonical CI run `31352357991`の同一測定からproduction config digest `sha256:2e658a8b4679b22a18274356228ea52ea2f37876b66c200ec269e50fe5be6b2f`、break-glass config digest `sha256:96446a61a825a6e97b66ac0b8fbe1c42b88efd07fd40a67667eb65db756baab4`へ両baselineを一括更新した。両SBOMとapplication RECORDは有効で、risk validatorはproduction `vendor_vex=15`／local acceptance 0、break-glass `vendor_vex=33`／local acceptance 0で成功した。
+- main SHA `b0f3c098137979eee78a06e105cd4e202d0b5099`のProduction Release run `31357100609`は成功した。live acceptanceでは3票が正しい投票者Botと候補表示名で各1回・固定順に表示され、投票delivery sequence 200／208／216が各delivery attempt 1でSENTとなり、討論がエラーなくCOMPLETEDへ収束した。scale-to-zeroは利用者側で確認するため、この記録ではCodexによる確認済みとは扱わない。
 
 ### PR-D: 採択者による最終発表
 
 - COMPLETEDの最終決定Outboxだけを保存済みwinnerのBotへ割り当てる。
 - FAILED／CANCELLEDなどsystem通知はmoderatorのままにする。
 - prompt、model、決定生成内容は変更しない。
+- local実装では、Pythonが確定して永続化した`FinalDecision.winner`を対応するparticipant Bot slotへ変換し、最終決定生成前のDiscord delivery preflightとCOMPLETED Outboxの両方へ同じslotを使用する。FAILED／CANCELLED Outboxのmoderator所有、delivery sequence、生成checkpoint、winner計算、prompt、model、決定本文は変更しない。
+- focused application test 114件で、winner a／b／cそれぞれのBot割当、通常討論での保存済みwinnerと最終Outbox所有者の一致、winner Botのpreflight失敗時にOpenAIを呼ばないこと、FAILED／CANCELLEDのmoderator所有、nonceとterminal deliveryの既存契約を確認した。
 
 各PRをmerge後、manager承認を得て個別にProduction Releaseし、live確認後に次PRへ進む。部分表示期間は意図した段階投入として計画書と進捗記録に明記する。
 

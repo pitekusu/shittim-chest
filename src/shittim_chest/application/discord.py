@@ -533,11 +533,17 @@ def prepare_terminal_outbox_operations(
     }.get(target_phase)
     if delivery_sequence_start is None:
         raise ValueError("terminal delivery target must be completed, failed, or cancelled")
+    bot_slot = DiscordBotSlot.MODERATOR
+    if target_phase is DebatePhase.COMPLETED:
+        decision = snapshot.final_decision
+        if decision is None:  # pragma: no cover - content validation above is authoritative
+            raise ValueError("completed delivery requires a final decision")
+        bot_slot = DiscordBotSlot(decision.winner.value)
     nonce_sources = tuple(
         _derived_uuid7(
             snapshot.state.attempt_id,
             phase=target_phase,
-            bot_slot=DiscordBotSlot.MODERATOR,
+            bot_slot=bot_slot,
             sequence=sequence,
         )
         for sequence in range(len(chunks))
@@ -546,7 +552,7 @@ def prepare_terminal_outbox_operations(
         operation_prefix=operation_prefix,
         debate_id=snapshot.state.debate_id,
         attempt_id=snapshot.state.attempt_id,
-        bot_slot=DiscordBotSlot.MODERATOR,
+        bot_slot=bot_slot,
         thread_id=snapshot.thread_id,
         content=content,
         nonce_sources=nonce_sources,

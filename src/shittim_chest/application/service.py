@@ -1240,8 +1240,9 @@ class DebateApplication:
             )
             return
         thread_id = snapshot.thread_id
+        winner_bot_slot = DiscordBotSlot(voting_result.winner.value)
         delivery_ready = thread_id is not None and await self._discord.delivery_target_is_ready(
-            bot_slot=DiscordBotSlot.MODERATOR,
+            bot_slot=winner_bot_slot,
             guild_id=snapshot.guild_id,
             thread_id=thread_id,
         )

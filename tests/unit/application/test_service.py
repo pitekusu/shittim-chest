@@ -491,6 +491,15 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     )
     assert len(orderer.calls) == 3
     assert all(voter not in candidates for voter, candidates in orderer.calls)
+    completed_operations = tuple(
+        operation
+        for operation in repository.terminal_operations.values()
+        if operation.plan_id == "terminal-completed"
+    )
+    assert completed_operations
+    assert all(
+        operation.bot_slot is DiscordBotSlot.PARTICIPANT_B for operation in completed_operations
+    )
     assert MetricEvent.COMPLETED in {event for event, _ in metrics.events}
     assert [item.state.phase for item in repository.history[accepted.debate_id]] == [
         DebatePhase.ACCEPTED,
@@ -2254,7 +2263,7 @@ async def test_known_generation_provider_failure_records_one_logical_call(
 
 
 @pytest.mark.asyncio
-async def test_delivery_preflight_failure_stops_before_the_provider_call(
+async def test_winner_delivery_preflight_failure_stops_before_the_provider_call(
     dependencies: tuple[
         FakeClock,
         FakeIds,
@@ -2269,7 +2278,7 @@ async def test_delivery_preflight_failure_stops_before_the_provider_call(
     discord = dependencies[3]
     openai = dependencies[5]
     repository = dependencies[6]
-    discord.delivery_ready_by_slot[DiscordBotSlot.MODERATOR] = False
+    discord.delivery_ready_results = [True] * 9 + [False]
     app = make_application(dependencies)
     accepted = await accept_bound_debate(app)
 
@@ -2296,7 +2305,7 @@ async def test_delivery_preflight_failure_stops_before_the_provider_call(
         (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
         (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
         (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
-        (DiscordBotSlot.MODERATOR, "guild", "102"),
+        (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
     ]
 
 
