@@ -156,11 +156,13 @@ async def test_process_client_close_is_concurrent_bounded_and_idempotent() -> No
     supervisor = _BlockingCloser(asyncio.Event())
     openai_client = _AsyncCloser()
     dynamodb_client = _SyncCloser()
+    lambda_client = _SyncCloser()
     runtime = ProductionRuntime(
         lifecycle=cast(Any, object()),
         supervisor=cast(Any, supervisor),
         openai_client=cast(Any, openai_client),
         dynamodb_client=cast(Any, dynamodb_client),
+        lambda_client=cast(Any, lambda_client),
         telemetry=cast(Any, _Telemetry()),
         client_close_timeout_seconds=0.01,
     )
@@ -172,6 +174,7 @@ async def test_process_client_close_is_concurrent_bounded_and_idempotent() -> No
     assert supervisor.calls == 1
     assert openai_client.calls == 1
     assert dynamodb_client.calls == 1
+    assert lambda_client.calls == 1
     assert [
         task
         for task in asyncio.all_tasks()
@@ -187,6 +190,7 @@ async def test_blocked_synchronous_client_close_cannot_extend_exit_budget() -> N
         supervisor=cast(Any, _AsyncCloser()),
         openai_client=cast(Any, _AsyncCloser()),
         dynamodb_client=cast(Any, dynamodb_client),
+        lambda_client=cast(Any, _SyncCloser()),
         telemetry=cast(Any, _Telemetry()),
         client_close_timeout_seconds=0.02,
     )
@@ -208,6 +212,7 @@ async def test_process_client_close_does_not_swallow_cancellation() -> None:
         supervisor=cast(Any, cancelled),
         openai_client=cast(Any, _AsyncCloser()),
         dynamodb_client=cast(Any, _SyncCloser()),
+        lambda_client=cast(Any, _SyncCloser()),
         telemetry=cast(Any, _Telemetry()),
     )
 
@@ -225,6 +230,7 @@ async def test_process_client_close_reports_non_cancellation_failures() -> None:
         supervisor=cast(Any, failing),
         openai_client=cast(Any, _AsyncCloser()),
         dynamodb_client=cast(Any, _SyncCloser()),
+        lambda_client=cast(Any, _SyncCloser()),
         telemetry=cast(Any, _Telemetry()),
     )
 
@@ -246,6 +252,7 @@ def test_process_client_close_rejects_non_positive_timeout() -> None:
             supervisor=cast(Any, object()),
             openai_client=cast(Any, object()),
             dynamodb_client=cast(Any, object()),
+            lambda_client=cast(Any, object()),
             telemetry=cast(Any, object()),
             client_close_timeout_seconds=0,
         )
@@ -256,6 +263,7 @@ def _environment() -> dict[str, str]:
         "SHITTIM_ENVIRONMENT": "production",
         "AWS_REGION": "ap-northeast-1",
         "SHITTIM_DYNAMODB_TABLE": "local-table",
+        "SHITTIM_STATUS_PUBLISHER_FUNCTION": "shittim-status-publisher",
         "OPENAI_API_KEY": "openai-key-placeholder",
         "DISCORD_TOKEN_MODERATOR": "token-moderator-placeholder",
         "DISCORD_TOKEN_PARTICIPANT_A": "token-a-placeholder",

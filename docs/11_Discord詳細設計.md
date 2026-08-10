@@ -63,10 +63,10 @@ STEP-06Cではcommandを設定済みGuildへだけlocal登録し、schema hash�
 2. header名をcase-insensitiveに一意化し、`X-Signature-Ed25519`、`X-Signature-Timestamp`、変更していないraw body bytesを使う。JSON parseより先にEd25519署名と現在UTCから前後5分以内のtimestampを検証し、欠落・重複・不正hex・長さ・署名・過去/未来replayを401で拒否する。
 3. 署名検証後だけUTF-8 JSONをparseし、duplicate key、非有限数、未知Interactionをfail closedとする。`PING`はDynamoDB、Lambda invoke、ECSへ触れず即時`PONG` (`{"type":1}`) を返す。
 4. `APPLICATION_COMMAND`と`MESSAGE_COMPONENT`をSDK非依存の型付きinputへ変換し、moderator Application ID、Guild、channel/thread、allowlist、question、component context、`requester_id`認可を検証する。
-5. queue counter 20件上限、Ingress Request、active pointer、operation result、公開Status publicationをDynamoDB transactionで先に永続化する。永続化不明な場合は成功応答を返さない。
-6. 永続化後だけStatus PublisherとRuntime Reconcilerをbest-effortで起動し、即時のInteraction callback type 4を`flags=64`、`allowed_mentions.parse=[]`で返す。停止中/起動中は起動中、READY/BUSYは受付済み、上限時は20件混雑を表示する。
+5. queue counter 20件上限、Ingress Request、active pointer、operation result、初期状態`PENDING`の公開Status publicationをDynamoDB transactionで先に永続化する。永続化不明な場合は成功応答を返さない。
+6. 永続化後は追加のSSM取得、Runtime State参照、Lambda Invokeを行わず、即時のInteraction callback type 4を`flags=64`、`allowed_mentions.parse=[]`で返す。Runtime状態判定、Status配送、wakeは既存の1分Runtime Reconcilerが非同期に収束させる。
 
-DiscordのInteraction tokenは初回callbackに必要なhandler-scopeの一時値とし、domain/application model、DynamoDB、queue、Status publication、logへ渡さない。HTTP handlerはDiscord Gateway、discord.py client、participant token、OpenAIを初期化しない。Lambda入口から永続受付を終えるsoft deadlineは2.2秒とし、新しいAWS SDK callをその0.1秒前に閉じ、Discordの3秒初回応答までの余白を確保する。
+DiscordのInteraction tokenは初回callbackに必要なhandler-scopeの一時値とし、domain/application model、DynamoDB、queue、Status publication、logへ渡さない。HTTP handlerはDiscord Gateway、discord.py client、participant token、OpenAIを初期化しない。Runtime Configとmoderator Public KeyはLambda初期化時にexactなSSM SecureString 2件だけを取得・検証し、SDK clientやcredentialを保持せずtoken-free値だけを暗号化されたSnapStart snapshotへ固定する。request中にSSMを呼ばない。Lambda入口からdurable受付を終えるsoft deadlineは2.0秒とし、新しいAWS SDK callをその0.1秒前に閉じる。active SDK callに最大0.4秒、API Gateway／Discord transitに0.6秒を予約する。署名・境界検証、application準備、durable受付、応答生成の時間とwarm／SnapStart restore区分だけをcontent-free telemetryへ記録し、質問、token、署名、Discord IDは記録しない。署名検証後のdeadlineまたはprovider失敗はcontent-freeなephemeral type 4で返し、状態が表示されない場合だけ再実行するよう案内する。
 
 ### 5.2 Runtime処理と公開Status
 
@@ -96,7 +96,7 @@ panelはphase、active elapsed、recovery状態、開始者を表示する。com
 - outboxへprivate runtimeでApplication IDへ解決するgeneric Bot slot、nonce、content hash、chunk sequenceを保存してから送信する。DynamoDB型をapplication層へ置き、Discord adapterとDynamoDB adapterを相互依存させない。
 - nonceはUUIDv7の16 byteをpaddingなしbase64urlへ変換した22文字とする。RESTで対応する投稿は`enforce_nonce=true`を使用し、送信後にmessage IDを保存する。
 - Discordのnonce重複抑止は直近数分に限定される。長時間停止後やDiscord send成功・DB更新失敗時はnonce、content hash、chunk sequence、thread履歴で照合する。exactly-onceは主張せず、outboxとreconciliationによる表示上の重複抑止を保証する。
-- 429はdiscord.pyと`Retry-After`へ従い、application側で同じrequestを独自retryしない。4 clientは`max_ratelimit_timeout=30`で生成し、値が異なるclientをpublisherがfail closedで拒否する。
+- 429はdiscord.pyと`Retry-After`へ従い、application側で同じrequestを独自retryしない。4 clientは`max_ratelimit_timeout=300`で生成し、値が異なるclientをpublisherがfail closedで拒否する。discord.py 2.7.1はresetまでの時間がこの値を超えると、bucketに残数があってもHTTP送信前に`RateLimited`を発生させるため、Discordのthread-createが返す300秒windowを下回る値へ戻してはならない。実際のapplication操作はingress context 45秒、panel refresh 30秒、outbox delivery 45秒の各timeoutで有界化する。
 
 STEP-06Bはdiscord.py 2.7.1の公開`Thread.send()`を使用する。22文字nonceを渡すと同versionの`handle_message_parameters()`が`enforce_nonce=true`を設定することをcontract testで固定する。`AllowedMentions.none()`のpayloadは`{"parse":[]}`でなければならない。publisherはexactly 4つのdistinct client、expected leased snapshot、attempt内operation IDを受け、永続recordの`get → claim → send/reconcile → mark_sent`だけを実行する。
 

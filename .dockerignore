@@ -6,6 +6,7 @@
 !tools/
 tools/*
 !tools/canonicalize_wheel_records.py
+!tools/transfer_tree_deterministically.py
 !src/
 !src/**
 !tests/

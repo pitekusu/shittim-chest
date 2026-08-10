@@ -7,12 +7,15 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
-from shittim_chest.application.discord import OutboxOperation
+from shittim_chest.application.discord import DiscordBotSlot, OutboxOperation, OutboxStatus
 from shittim_chest.application.models import (
     AcceptDebateRequest,
     DebateSnapshot,
+    DeliveryAbandonReason,
     LeaseGrant,
     MetricEvent,
+    PhaseDeliveryPlan,
+    PhaseDeliveryStatus,
 )
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.application.scale_to_zero import IngressClaimFence
@@ -67,6 +70,10 @@ class FakeMetrics:
 class FakeDiscord:
     ready: bool = True
     allowed: bool = True
+    delivery_ready: bool = True
+    delivery_ready_by_slot: dict[DiscordBotSlot, bool] = field(default_factory=dict)
+    delivery_ready_results: list[bool] = field(default_factory=list)
+    delivery_checks: list[tuple[DiscordBotSlot, str, str]] = field(default_factory=list)
 
     async def all_identities_ready(self) -> bool:
         return self.ready
@@ -74,6 +81,18 @@ class FakeDiscord:
     async def request_is_allowed(self, request: AcceptDebateRequest) -> bool:
         del request
         return self.allowed
+
+    async def delivery_target_is_ready(
+        self,
+        *,
+        bot_slot: DiscordBotSlot,
+        guild_id: str,
+        thread_id: str,
+    ) -> bool:
+        self.delivery_checks.append((bot_slot, guild_id, thread_id))
+        if self.delivery_ready_results:
+            return self.delivery_ready_results.pop(0)
+        return self.delivery_ready_by_slot.get(bot_slot, self.delivery_ready)
 
 
 @dataclass(slots=True)
@@ -117,6 +136,7 @@ class FakeOutboxRecovery:
     calls: list[DebateSnapshot] = field(default_factory=list)
     error: Exception | None = None
     delay: float = 0.0
+    termination_complete: bool = True
 
     async def drain(self, *, expected: DebateSnapshot) -> None:
         self.calls.append(expected)
@@ -125,6 +145,10 @@ class FakeOutboxRecovery:
         if self.error is not None:
             raise self.error
 
+    async def terminate(self, *, expected: DebateSnapshot) -> bool:
+        self.calls.append(expected)
+        return self.termination_complete
+
 
 class FakeOpenAI:
     def __init__(self) -> None:
@@ -132,6 +156,14 @@ class FakeOpenAI:
         self.proposal_calls: list[ParticipantSlot] = []
         self.vote_calls: list[tuple[ParticipantSlot, tuple[ParticipantSlot, ...]]] = []
         self.decision_calls: list[ParticipantSlot] = []
+        self.decision_errors: list[BaseException] = []
+        self.initial_errors: dict[ParticipantSlot, BaseException] = {}
+        self.initial_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
+        self.proposal_errors: dict[ParticipantSlot, BaseException] = {}
+        self.proposal_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
+        self.vote_errors: dict[ParticipantSlot, BaseException] = {}
+        self.vote_voter_override: dict[ParticipantSlot, ParticipantSlot] = {}
+        self.decision_delay = 0.0
         self.fail_initial_for: ParticipantSlot | None = None
         self.block_initial = False
         self.cancelled_initial: set[ParticipantSlot] = set()
@@ -145,6 +177,9 @@ class FakeOpenAI:
     ) -> InitialOpinion:
         del question, evidence
         self.initial_calls.append(participant)
+        initial_error = self.initial_errors.get(participant)
+        if initial_error is not None:
+            raise initial_error
         if participant is self.fail_initial_for:
             await asyncio.sleep(0)
             raise RuntimeError("generated failure")
@@ -153,7 +188,11 @@ class FakeOpenAI:
                 await asyncio.Event().wait()
             finally:
                 self.cancelled_initial.add(participant)
-        return InitialOpinion(participant, "summary", "proposal")
+        return InitialOpinion(
+            self.initial_participant_override.get(participant, participant),
+            "summary",
+            "proposal",
+        )
 
     async def generate_final_proposal(
         self,
@@ -165,7 +204,14 @@ class FakeOpenAI:
     ) -> FinalProposal:
         del question, evidence, initial_opinions
         self.proposal_calls.append(participant)
-        return FinalProposal(participant, f"title-{participant.value}", "proposal")
+        proposal_error = self.proposal_errors.get(participant)
+        if proposal_error is not None:
+            raise proposal_error
+        return FinalProposal(
+            self.proposal_participant_override.get(participant, participant),
+            f"title-{participant.value}",
+            "proposal",
+        )
 
     async def cast_vote(
         self,
@@ -178,12 +224,15 @@ class FakeOpenAI:
         del question, evidence
         candidate_slots = tuple(candidate.participant for candidate in candidates)
         self.vote_calls.append((voter, candidate_slots))
+        vote_error = self.vote_errors.get(voter)
+        if vote_error is not None:
+            raise vote_error
         choice = {
             ParticipantSlot.PARTICIPANT_A: ParticipantSlot.PARTICIPANT_C,
             ParticipantSlot.PARTICIPANT_B: ParticipantSlot.PARTICIPANT_A,
             ParticipantSlot.PARTICIPANT_C: ParticipantSlot.PARTICIPANT_B,
         }[voter]
-        return Vote(voter, choice, 3, 3, 3, "reason")
+        return Vote(self.vote_voter_override.get(voter, voter), choice, 3, 3, 3, "reason")
 
     async def generate_decision(
         self,
@@ -195,7 +244,17 @@ class FakeOpenAI:
     ) -> FinalDecision:
         del question, evidence, proposals
         self.decision_calls.append(voting_result.winner)
-        return FinalDecision(voting_result.winner, "decision", ("action",), ())
+        if self.decision_delay:
+            await asyncio.sleep(self.decision_delay)
+        if self.decision_errors:
+            raise self.decision_errors.pop(0)
+        return FinalDecision(
+            voting_result.winner,
+            "decision",
+            ("action",),
+            (),
+            "persona victory message",
+        )
 
 
 class FakeRepository:
@@ -210,6 +269,7 @@ class FakeRepository:
         self.terminal_operations: dict[str, OutboxOperation] = {}
         self.terminal_stages: list[DebateSnapshot] = []
         self.terminal_finalizations: list[DebateSnapshot] = []
+        self.phase_delivery_finalizations: list[DebateSnapshot] = []
         self.terminal_finalize_errors: list[RepositoryConflict] = []
 
     async def get_operation_result(
@@ -332,6 +392,90 @@ class FakeRepository:
                 and result.state.attempt_id == persisted.state.attempt_id
             ):
                 self.operations[operation_id] = persisted
+        return persisted
+
+    async def finalize_phase_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        updated: DebateSnapshot,
+    ) -> DebateSnapshot:
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
+            raise RepositoryConflict
+        persisted = replace(updated, lease=current.lease)
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        self.phase_delivery_finalizations.append(persisted)
+        return persisted
+
+    async def terminate_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        plan = expected.terminal_delivery
+        if (
+            current is None
+            or not _same_snapshot_version(current, expected)
+            or not isinstance(plan, PhaseDeliveryPlan)
+        ):
+            raise RepositoryConflict
+        persisted = replace(
+            expected,
+            state=replace(expected.state, updated_at=at),
+            terminal_delivery=plan.terminate(reason=reason),
+        )
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        return persisted
+
+    async def abandon_terminal_delivery(
+        self,
+        *,
+        expected: DebateSnapshot,
+        at: datetime,
+        reason: DeliveryAbandonReason,
+    ) -> DebateSnapshot:
+        debate_id = expected.state.debate_id
+        current = self.current.get(debate_id)
+        plan = expected.terminal_delivery
+        if (
+            current is None
+            or not _same_snapshot_version(current, expected)
+            or not isinstance(plan, PhaseDeliveryPlan)
+            or plan.status
+            not in {
+                PhaseDeliveryStatus.STAGED,
+                PhaseDeliveryStatus.TERMINATING,
+            }
+        ):
+            raise RepositoryConflict
+        persisted = replace(
+            expected,
+            state=replace(expected.state, updated_at=at),
+            terminal_delivery=plan.abandon(at=at, reason=reason),
+        )
+        self.current[debate_id] = persisted
+        self.history[debate_id].append(persisted)
+        for operation_id in plan.operation_ids:
+            operation = self.terminal_operations[operation_id]
+            if operation.status is OutboxStatus.SENT:
+                continue
+            self.terminal_operations[operation_id] = replace(
+                operation,
+                status=OutboxStatus.ABANDONED,
+                claim_owner=None,
+                claim_expires_at=None,
+                next_retry_at=None,
+                abandoned_at=at,
+                abandon_reason=reason,
+            )
         return persisted
 
     async def create_retry(

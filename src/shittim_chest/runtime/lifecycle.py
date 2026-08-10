@@ -118,6 +118,23 @@ class RuntimeAdmissionGateway:
 
         return await self._delegate.request_is_allowed(request)
 
+    async def delivery_target_is_ready(
+        self,
+        *,
+        bot_slot: DiscordBotSlot,
+        guild_id: str,
+        thread_id: str,
+    ) -> bool:
+        """Preserve the delegate's fail-closed delivery preflight."""
+
+        if not self._accepting:
+            return False
+        return await self._delegate.delivery_target_is_ready(
+            bot_slot=bot_slot,
+            guild_id=guild_id,
+            thread_id=thread_id,
+        )
+
 
 class UnixSignalHandlers:
     """Register event-loop-safe SIGINT and SIGTERM callbacks on Unix."""

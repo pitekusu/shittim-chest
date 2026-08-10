@@ -446,8 +446,8 @@ jobs:
           context: ${{ env.RELEASE_IMAGE_CONTEXT }}
           file: ${{ env.RELEASE_IMAGE_CONTEXT }}/Dockerfile
           target: production
-          no-cache-filters: runtime-base
-          outputs: type=docker,rewrite-timestamp=true
+          no-cache-filters: builder,runtime-base
+          outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
           tags: ${{ vars.ECR_REPOSITORY_URI }}:release-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=container-arm64-production
           cache-to: type=gha,mode=max,scope=container-arm64-production,ignore-error=true
@@ -460,8 +460,8 @@ jobs:
           context: ${{ env.RELEASE_IMAGE_CONTEXT }}
           file: ${{ env.RELEASE_IMAGE_CONTEXT }}/Dockerfile
           target: break-glass
-          no-cache-filters: break-glass
-          outputs: type=docker,rewrite-timestamp=true
+          no-cache-filters: builder,break-glass
+          outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
           tags: ${{ vars.ECR_REPOSITORY_URI }}:break-glass-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=container-arm64-break-glass
           cache-to: type=gha,mode=max,scope=container-arm64-break-glass,ignore-error=true
@@ -806,6 +806,9 @@ jobs:
         run: |
           [[ "${RUNTIME_CONFIG_VERSION}" =~ ^v[0-9]{4}$ ]]
           bundle_key=$(jq --raw-output .key "${RUNNER_TEMP}/lambda-bundle.json")
+          bundle_hash=$(jq --raw-output .sha256 "${RUNNER_TEMP}/lambda-bundle.json")
+          bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
+          [[ "${bundle_code_sha256}" =~ ^[A-Za-z0-9+/]{43}=$ ]]
           change_set_name="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           jq --null-input '{}' > "${RUNNER_TEMP}/change-sets.json"
           prepare_change_set() {
@@ -869,9 +872,30 @@ jobs:
                 break
               fi
               if [ "${status}" = "FAILED" ]; then
-                reason=$(aws cloudformation describe-change-set \
-                  --region "${region}" --change-set-name "${arn}" \
-                  --query StatusReason --output text)
+                aws cloudformation describe-change-set \
+                  --region "${region}" --change-set-name "${arn}" --output json \
+                  > "${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json"
+                jq --arg artifact "${artifact}" --arg stack "${stack}" '
+                  def scrub:
+                    gsub("[0-9]{12}"; "<account>") |
+                    gsub("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}";
+                      "<redacted-email>") |
+                    gsub("https?://[^ ]+"; "<redacted-url>");
+                  {
+                    schema_version: 1,
+                    artifact: $artifact,
+                    stack: $stack,
+                    status: (.Status // "unknown"),
+                    execution_status: (.ExecutionStatus // "unknown"),
+                    status_reason: ((.StatusReason // "") | scrub)
+                  }
+                ' "${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json" \
+                  > "${RUNNER_TEMP}/${artifact}.change-set-failure.json"
+                rm "${RUNNER_TEMP}/${artifact}.failed-change-set.raw.json"
+                jq --compact-output . \
+                  "${RUNNER_TEMP}/${artifact}.change-set-failure.json" >&2
+                reason=$(jq --raw-output .status_reason \
+                  "${RUNNER_TEMP}/${artifact}.change-set-failure.json")
                 case "${reason}" in
                   *"didn't contain changes"*) break ;;
                   *) exit 1 ;;
@@ -893,7 +917,8 @@ jobs:
               "ParameterKey=BreakGlassImageDigest,ParameterValue=${BREAK_GLASS_DIGEST}" \
               "ParameterKey=RuntimeConfigVersion,ParameterValue=${RUNTIME_CONFIG_VERSION}" \
               "ParameterKey=LambdaBundleBucketName,ParameterValue=${ASSET_BUCKET}" \
-              "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}"
+              "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}" \
+              "ParameterKey=LambdaBundleCodeSha256,ParameterValue=${bundle_code_sha256}"
           prepare_change_set ShittimChest-Prod-Operations "${AWS_REGION}" \
             "${TOKYO_EXECUTION_ROLE}" \
             --parameters \
@@ -918,7 +943,8 @@ jobs:
             --expected-parameter "BreakGlassImageDigest=${BREAK_GLASS_DIGEST}" \
             --expected-parameter "RuntimeConfigVersion=${RUNTIME_CONFIG_VERSION}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
-            --expected-parameter "LambdaBundleObjectKey=${bundle_key}"
+            --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
+            --expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"
           validate_change_set ShittimChest-Prod-Operations Operations \
             --expected-noecho-parameter OperatorNotificationEmail
           validate_change_set ShittimChest-Prod-CostGovernance CostGovernance \
@@ -1020,6 +1046,14 @@ jobs:
             ${{ runner.temp }}/change-sets.json
             ${{ runner.temp }}/template-hashes.json
             ${{ runner.temp }}/lambda-bundle.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain bounded Change Set failure evidence
+        if: ${{ failure() && steps.prepare_changes.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-release-plan-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/*.change-set-failure.json
           if-no-files-found: error
           retention-days: 90
       - name: Remove this failed plan's unexecuted change sets
@@ -1325,6 +1359,9 @@ jobs:
           normal_digest=$(jq --raw-output .images.normal.digest "${manifest}")
           break_glass_digest=$(jq --raw-output .images.break_glass.digest "${manifest}")
           bundle_key=$(jq --raw-output .lambda_bundle.key "${manifest}")
+          bundle_hash=$(jq --raw-output .lambda_bundle.sha256 "${manifest}")
+          bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
+          [[ "${bundle_code_sha256}" =~ ^[A-Za-z0-9+/]{43}=$ ]]
           validate_change_set() {
             local stack="$1" region="$2" artifact="$3" arn
             shift 3
@@ -1342,7 +1379,8 @@ jobs:
             --expected-parameter "BreakGlassImageDigest=${break_glass_digest}" \
             --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
-            --expected-parameter "LambdaBundleObjectKey=${bundle_key}"
+            --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
+            --expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"
           validate_change_set ShittimChest-Prod-Operations "${AWS_REGION}" Operations \
             --expected-noecho-parameter OperatorNotificationEmail
           validate_change_set ShittimChest-Prod-CostGovernance "${COST_REGION}" \

@@ -2,40 +2,27 @@
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import suppress
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, replace
 from enum import StrEnum, unique
 
 from shittim_chest.application.discord import DiscordBotSlot, DiscordRuntimeConfig
 from shittim_chest.application.discord_http import DiscordHttpOperation
 from shittim_chest.application.ports import (
-    Clock,
     DebateLookup,
     IngressRepository,
-    ReconciliationTriggerUnavailable,
-    RepositoryConflict,
     RepositoryIdentityConflict,
     RepositoryQueueFull,
-    RepositoryUnavailable,
-    RuntimeReconciliationTrigger,
-    RuntimeStateRepository,
-    StatusPublicationTrigger,
-    StatusTriggerUnavailable,
 )
 from shittim_chest.application.scale_to_zero import (
-    EnqueuedIngress,
     IngressKind,
     IngressRequest,
     IngressStatus,
-    RuntimeStatus,
+    StatusMessageState,
 )
 from shittim_chest.domain import DebatePhase
 
 GUILD_TEXT_CHANNEL = 0
 GUILD_PUBLIC_THREAD = 11
-POST_PERSISTENCE_ACCELERATOR_BUDGET = timedelta(milliseconds=1500)
 
 
 @unique
@@ -44,6 +31,7 @@ class IngressOutcome(StrEnum):
 
     STARTING = "starting"
     ACCEPTED = "accepted"
+    PENDING = "pending"
     RETRY_STARTING = "retry_starting"
     RETRY_ACCEPTED = "retry_accepted"
     CANCEL_STARTING = "cancel_starting"
@@ -64,37 +52,25 @@ class IngressAcceptance:
 
 
 class DiscordIngressApplication:
-    """Validate, persist, then best-effort accelerate one signed operation."""
+    """Validate and durably persist one signed operation before responding."""
 
     __slots__ = (
-        "_clock",
         "_debates",
         "_ingress",
         "_moderator_application_id",
-        "_reconciler_trigger",
         "_runtime",
-        "_runtime_state",
-        "_status_trigger",
     )
 
     def __init__(
         self,
         *,
         runtime_config: DiscordRuntimeConfig,
-        clock: Clock,
         ingress: IngressRepository,
-        runtime_state: RuntimeStateRepository,
-        status_trigger: StatusPublicationTrigger,
-        reconciler_trigger: RuntimeReconciliationTrigger,
         debates: DebateLookup,
     ) -> None:
         self._runtime = runtime_config
-        self._clock = clock
         self._moderator_application_id = runtime_config.application_id_for(DiscordBotSlot.MODERATOR)
         self._ingress = ingress
-        self._runtime_state = runtime_state
-        self._status_trigger = status_trigger
-        self._reconciler_trigger = reconciler_trigger
         self._debates = debates
 
     async def accept(self, operation: DiscordHttpOperation) -> IngressAcceptance:
@@ -115,6 +91,11 @@ class DiscordIngressApplication:
             and not await self._component_is_authorized(operation)
         ):
             return IngressAcceptance(IngressOutcome.NOT_ALLOWED)
+        if replay is None:
+            request = replace(
+                request,
+                status_message_state=StatusMessageState.PENDING,
+            )
         try:
             enqueued = replay or await self._ingress.enqueue(request)
         except RepositoryQueueFull:
@@ -122,12 +103,10 @@ class DiscordIngressApplication:
         except RepositoryIdentityConflict:
             return IngressAcceptance(IngressOutcome.NOT_ALLOWED)
 
-        runtime_status = await self._accelerate(enqueued, at=operation.received_at)
         return IngressAcceptance(
             _outcome_for_status(
                 enqueued.request.status,
                 kind=enqueued.request.kind,
-                runtime_status=runtime_status,
             ),
             created=enqueued.created,
         )
@@ -173,43 +152,6 @@ class DiscordIngressApplication:
         if operation.kind is IngressKind.CANCEL:
             return not snapshot.phase.is_terminal
         return False
-
-    async def _accelerate(
-        self,
-        enqueued: EnqueuedIngress,
-        *,
-        at: datetime,
-    ) -> RuntimeStatus | None:
-        request = enqueued.request
-        if not self._has_accelerator_budget(at):
-            return None
-        if not request.status.counts_toward_queue_limit:
-            await self._kick_status(request.interaction_id)
-            return None
-        runtime_status, _, _ = await asyncio.gather(
-            self._read_runtime_status(),
-            self._kick_status(request.interaction_id),
-            self._kick_reconciler(request.interaction_id),
-        )
-        return runtime_status
-
-    async def _read_runtime_status(self) -> RuntimeStatus | None:
-        try:
-            state = await self._runtime_state.get()
-        except RepositoryConflict, RepositoryUnavailable:
-            return None
-        return None if state is None else state.status
-
-    async def _kick_status(self, interaction_id: str) -> None:
-        with suppress(StatusTriggerUnavailable):
-            await self._status_trigger.request_publication(interaction_id)
-
-    async def _kick_reconciler(self, interaction_id: str) -> None:
-        with suppress(ReconciliationTriggerUnavailable):
-            await self._reconciler_trigger.request_reconciliation(interaction_id)
-
-    def _has_accelerator_budget(self, received_at: datetime) -> bool:
-        return self._clock.now() - received_at < POST_PERSISTENCE_ACCELERATOR_BUDGET
 
 
 def _request_from_operation(operation: DiscordHttpOperation) -> IngressRequest:
@@ -263,15 +205,13 @@ def _outcome_for_status(
     status: IngressStatus,
     *,
     kind: IngressKind,
-    runtime_status: RuntimeStatus | None,
 ) -> IngressOutcome:
     if status in {IngressStatus.PENDING, IngressStatus.CLAIMED, IngressStatus.RETRYING}:
-        ready = runtime_status in {RuntimeStatus.READY, RuntimeStatus.BUSY}
         if kind is IngressKind.RETRY:
-            return IngressOutcome.RETRY_ACCEPTED if ready else IngressOutcome.RETRY_STARTING
+            return IngressOutcome.RETRY_ACCEPTED
         if kind is IngressKind.CANCEL:
-            return IngressOutcome.CANCEL_ACCEPTED if ready else IngressOutcome.CANCEL_STARTING
-        return IngressOutcome.ACCEPTED if ready else IngressOutcome.STARTING
+            return IngressOutcome.CANCEL_ACCEPTED
+        return IngressOutcome.PENDING
     if status is IngressStatus.ACCEPTED:
         if kind is IngressKind.RETRY:
             return IngressOutcome.RETRY_ACCEPTED
@@ -290,7 +230,6 @@ def _outcome_for_status(
 __all__ = (
     "GUILD_PUBLIC_THREAD",
     "GUILD_TEXT_CHANNEL",
-    "POST_PERSISTENCE_ACCELERATOR_BUDGET",
     "DiscordIngressApplication",
     "IngressAcceptance",
     "IngressOutcome",

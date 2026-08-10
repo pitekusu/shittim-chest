@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,43 @@ def test_canonicalize_rejects_invalid_records(tmp_path: Path, rows: list[list[st
 def test_canonicalize_requires_at_least_one_record(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="contains no wheel RECORD"):
         canonicalize_wheel_records(tmp_path)
+
+
+def test_canonicalize_normalizes_complete_venv_tree_mtimes(tmp_path: Path) -> None:
+    record = _record(
+        tmp_path,
+        "example-1.0",
+        [["example.py", "sha256=aaa", "1"]],
+    )
+    package = record.parents[1] / "example"
+    package.mkdir()
+    module = package / "module.py"
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+    link = package / "module-link.py"
+    link.symlink_to("module.py")
+    for index, path in enumerate((tmp_path, *tmp_path.rglob("*")), start=1):
+        metadata = path.lstat()
+        os.utime(
+            path,
+            ns=(metadata.st_atime_ns, index * 1_000_000_000),
+            follow_symlinks=False,
+        )
+
+    assert canonicalize_wheel_records(tmp_path, source_date_epoch=7) == 1
+    assert all(
+        path.lstat().st_mtime_ns == 7_000_000_000 for path in (tmp_path, *tmp_path.rglob("*"))
+    )
+    assert canonicalize_wheel_records(tmp_path, check=True, source_date_epoch=7) == 1
+
+
+def test_check_rejects_noncanonical_venv_mtime(tmp_path: Path) -> None:
+    record = _record(
+        tmp_path,
+        "example-1.0",
+        [["example.py", "sha256=aaa", "1"]],
+    )
+    canonicalize_wheel_records(tmp_path)
+    os.utime(record, ns=(record.stat().st_atime_ns, 1_000_000_000))
+
+    with pytest.raises(ValueError, match="non-canonical virtual environment timestamps"):
+        canonicalize_wheel_records(tmp_path, check=True)

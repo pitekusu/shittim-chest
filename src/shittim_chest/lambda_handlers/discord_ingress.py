@@ -5,37 +5,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Final, cast
+from typing import Final, Literal, cast
 
-from shittim_chest.adapters.aws import (
-    IngressSdkCancellationGate,
-    LambdaRuntimeReconciliationTrigger,
-    LambdaStatusPublicationTrigger,
-    SsmParameterReader,
-    activate_ingress_sdk_cancellation_gate,
-    create_ingress_dynamodb_client,
-    create_lambda_client,
-    create_ssm_client,
-)
 from shittim_chest.adapters.aws.clients import (
     DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS,
     INGRESS_CONNECT_TIMEOUT_SECONDS,
     INGRESS_READ_TIMEOUT_SECONDS,
     INGRESS_RESPONSE_MARGIN_SECONDS,
+    IngressSdkCancellationGate,
+    activate_ingress_sdk_cancellation_gate,
+    create_ingress_dynamodb_client,
+    create_ssm_client,
 )
+from shittim_chest.adapters.aws.ssm import SsmParameterReader
 from shittim_chest.adapters.discord_http import (
     DiscordHttpBoundary,
     DiscordRequestVerifier,
     ingress_response,
     ingress_unavailable_response,
+    verified_ingress_unavailable_response,
 )
-from shittim_chest.adapters.dynamodb import (
-    DynamoDbDebateAuthorizationLookup,
-    DynamoDbIngressRepository,
-    DynamoDbRuntimeStateRepository,
-)
+from shittim_chest.adapters.dynamodb.debate_lookup import DynamoDbDebateAuthorizationLookup
+from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.application.discord_http import DiscordHttpOperation
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
@@ -59,11 +54,12 @@ from shittim_chest.runtime.primitives import SystemClock
 
 LOGGER = logging.getLogger(__name__)
 
-# Stop durable acceptance at 2.2s from Lambda entry. A currently active AWS SDK
-# call may take up to 0.4s to unwind, leaving 0.4s for API Gateway/Discord before
-# Discord's 3.0s initial-response deadline. Stop admitting new SDK calls 0.1s
-# before cancellation to absorb event-loop scheduling jitter. The Lambda hard
-# timeout remains 5s.
+# Stop durable acceptance at 2.0s from Lambda entry. A currently active AWS SDK
+# call may take up to 0.4s to unwind, reserving 0.6s for API Gateway and Discord
+# before the 3.0s initial-response deadline. SnapStart restore and warm handler
+# timings are measured separately. Stop
+# admitting new SDK calls 0.1s before cancellation to absorb scheduling jitter.
+# The Lambda hard timeout remains 5s.
 DISCORD_INGRESS_MAX_ACTIVE_SDK_CALL_SECONDS: Final = (
     INGRESS_CONNECT_TIMEOUT_SECONDS + INGRESS_READ_TIMEOUT_SECONDS
 )
@@ -75,12 +71,83 @@ DISCORD_INGRESS_SOFT_DEADLINE_SECONDS: Final = (
     - DISCORD_INGRESS_RESPONSE_MARGIN_SECONDS
 )
 
+_IngressTimingStage = Literal[
+    "boundary",
+    "application_prepare",
+    "durable_acceptance",
+    "response_build",
+]
+
+
+class _IngressStageTimings:
+    """Content-free stage durations for one Discord ingress invocation."""
+
+    __slots__ = (
+        "_clock_ns",
+        "_started_ns",
+        "application_prepare_ms",
+        "boundary_ms",
+        "durable_acceptance_ms",
+        "response_build_ms",
+    )
+
+    def __init__(
+        self,
+        *,
+        started_ns: int,
+        clock_ns: Callable[[], int] | None = None,
+    ) -> None:
+        self._started_ns = started_ns
+        self._clock_ns = time.monotonic_ns if clock_ns is None else clock_ns
+        self.boundary_ms = -1
+        self.application_prepare_ms = -1
+        self.durable_acceptance_ms = -1
+        self.response_build_ms = -1
+
+    @contextmanager
+    def measure(self, stage: _IngressTimingStage) -> Iterator[None]:
+        """Record one stage even when that stage raises."""
+
+        started_ns = self._clock_ns()
+        try:
+            yield
+        finally:
+            duration_ms = max(0, (self._clock_ns() - started_ns) // 1_000_000)
+            setattr(self, f"{stage}_ms", duration_ms)
+
+    def total_ms(self) -> int:
+        """Return elapsed handler time without request-dependent content."""
+
+        return max(0, (self._clock_ns() - self._started_ns) // 1_000_000)
+
+
+@contextmanager
+def _measure_stage(
+    timings: _IngressStageTimings | None,
+    stage: _IngressTimingStage,
+) -> Iterator[None]:
+    if timings is None:
+        yield
+        return
+    with timings.measure(stage):
+        yield
+
 
 class DiscordIngressDeadlineExceeded(TimeoutError):
     """Content-free signal that the initial-response safety budget expired."""
 
     def __init__(self) -> None:
         super().__init__("discord_ingress_deadline_exceeded")
+
+
+class DiscordVerifiedIngressFailure(RuntimeError):
+    """Content-free failure after Discord authentication has succeeded."""
+
+    __slots__ = ("category",)
+
+    def __init__(self, category: str) -> None:
+        super().__init__("discord_verified_ingress_failed")
+        self.category = category
 
 
 class DiscordIngressLambda:
@@ -112,37 +179,48 @@ class DiscordIngressLambda:
         event: Mapping[str, object],
         *,
         received_at: datetime | None = None,
+        timings: _IngressStageTimings | None = None,
     ) -> dict[str, object]:
         """Return one API Gateway v2 response without retaining the request payload."""
 
         entry_at = self._clock.now() if received_at is None else received_at
-        reception = self._boundary.receive(event, now=entry_at)
+        with _measure_stage(timings, "boundary"):
+            reception = self._boundary.receive(event, now=entry_at)
         if reception.response is not None:
-            return reception.response.as_event()
+            with _measure_stage(timings, "response_build"):
+                return reception.response.as_event()
         operation = reception.interaction
         if not isinstance(operation, DiscordHttpOperation):
             raise AssertionError("verified Discord reception has no result")
-        remaining_seconds = self._remaining_seconds(entry_at)
-        if remaining_seconds <= 0:
-            raise DiscordIngressDeadlineExceeded
-        # Client construction is intentionally synchronous and local. Keep it
-        # outside the event loop so it cannot postpone asyncio's timeout callback,
-        # then remeasure the entry budget before any SDK request can start.
-        application = self._application()
-        remaining_seconds = self._remaining_seconds(entry_at)
-        if remaining_seconds <= 0:
-            raise DiscordIngressDeadlineExceeded
-        gate = IngressSdkCancellationGate()
-        with activate_ingress_sdk_cancellation_gate(gate):
-            result = asyncio.run(
-                self._accept(
-                    application,
-                    operation,
-                    gate=gate,
-                    timeout_seconds=remaining_seconds,
+        try:
+            remaining_seconds = self._remaining_seconds(entry_at)
+            if remaining_seconds <= 0:
+                raise DiscordIngressDeadlineExceeded
+            # Client construction is intentionally synchronous and local. Keep it
+            # outside the event loop so it cannot postpone asyncio's timeout callback,
+            # then remeasure the entry budget before any SDK request can start.
+            with _measure_stage(timings, "application_prepare"):
+                application = self._application()
+            remaining_seconds = self._remaining_seconds(entry_at)
+            if remaining_seconds <= 0:
+                raise DiscordIngressDeadlineExceeded
+            gate = IngressSdkCancellationGate()
+            with (
+                activate_ingress_sdk_cancellation_gate(gate),
+                _measure_stage(timings, "durable_acceptance"),
+            ):
+                result = asyncio.run(
+                    self._accept(
+                        application,
+                        operation,
+                        gate=gate,
+                        timeout_seconds=remaining_seconds,
+                    )
                 )
-            )
-        return ingress_response(result.outcome).as_event()
+        except Exception as error:
+            raise DiscordVerifiedIngressFailure(_failure_category(error)) from None
+        with _measure_stage(timings, "response_build"):
+            return ingress_response(result.outcome).as_event()
 
     def _remaining_seconds(self, entry_at: datetime) -> float:
         elapsed_seconds = max(0.0, (self._clock.now() - entry_at).total_seconds())
@@ -177,31 +255,70 @@ class DiscordIngressLambda:
 
 
 _handler: DiscordIngressLambda | None = None
+_first_invocation = True
 
 
 def lambda_handler(event: object, context: object) -> dict[str, object]:
     """AWS entrypoint with entry-time budgeting and content-free failure telemetry."""
 
+    started_ns = time.monotonic_ns()
+    timings = _IngressStageTimings(started_ns=started_ns)
+    invocation_kind = _consume_invocation_kind(os.environ)
     received_at = SystemClock().now()
     request_id = _request_id(context)
-    if not isinstance(event, Mapping) or any(not isinstance(key, str) for key in event):
-        LOGGER.error(
-            "discord_ingress_failure category=invalid_event request_id=%s",
-            request_id,
-        )
-        return ingress_unavailable_response().as_event()
     try:
+        if not isinstance(event, Mapping) or any(not isinstance(key, str) for key in event):
+            LOGGER.error(
+                "discord_ingress_failure category=invalid_event request_id=%s",
+                request_id,
+            )
+            with timings.measure("response_build"):
+                return ingress_unavailable_response().as_event()
         return _get_handler().handle(
             cast(Mapping[str, object], event),
             received_at=received_at,
+            timings=timings,
         )
+    except DiscordVerifiedIngressFailure as error:
+        LOGGER.error(
+            "discord_ingress_failure category=%s request_id=%s",
+            error.category,
+            request_id,
+        )
+        with timings.measure("response_build"):
+            return verified_ingress_unavailable_response().as_event()
     except Exception as error:
         LOGGER.error(
             "discord_ingress_failure category=%s request_id=%s",
             _failure_category(error),
             request_id,
         )
-        return ingress_unavailable_response().as_event()
+        with timings.measure("response_build"):
+            return ingress_unavailable_response().as_event()
+    finally:
+        LOGGER.info(
+            "discord_ingress_timing invocation_kind=%s duration_ms=%d "
+            "boundary_ms=%d application_prepare_ms=%d durable_acceptance_ms=%d "
+            "response_build_ms=%d",
+            invocation_kind,
+            timings.total_ms(),
+            timings.boundary_ms,
+            timings.application_prepare_ms,
+            timings.durable_acceptance_ms,
+            timings.response_build_ms,
+        )
+
+
+def _consume_invocation_kind(environ: Mapping[str, str]) -> str:
+    """Classify one restore/cold boundary without retaining request data."""
+
+    global _first_invocation
+    if not _first_invocation:
+        return "warm"
+    _first_invocation = False
+    if environ.get("AWS_LAMBDA_INITIALIZATION_TYPE") == "snap-start":
+        return "restore"
+    return "cold"
 
 
 def _get_handler() -> DiscordIngressLambda:
@@ -236,29 +353,15 @@ def _lazy_application(
         if cached is not None:
             return cached
         dynamodb = create_ingress_dynamodb_client(region_name=settings.aws_region)
-        lambda_client = create_lambda_client(region_name=settings.aws_region)
         cached = DiscordIngressApplication(
             runtime_config=runtime.discord,
-            clock=SystemClock(),
             ingress=DynamoDbIngressRepository(
-                client=dynamodb,
-                table_name=settings.table_name,
-            ),
-            runtime_state=DynamoDbRuntimeStateRepository(
                 client=dynamodb,
                 table_name=settings.table_name,
             ),
             debates=DynamoDbDebateAuthorizationLookup(
                 client=dynamodb,
                 table_name=settings.table_name,
-            ),
-            status_trigger=LambdaStatusPublicationTrigger(
-                client=lambda_client,
-                function_name=settings.status_publisher_function,
-            ),
-            reconciler_trigger=LambdaRuntimeReconciliationTrigger(
-                client=lambda_client,
-                function_name=settings.runtime_reconciler_function,
             ),
         )
         return cached
@@ -285,6 +388,17 @@ def _failure_category(error: Exception) -> str:
     return "internal_error"
 
 
+def _initialize_for_lambda(environ: Mapping[str, str]) -> None:
+    """Resolve immutable SecureStrings during init so requests never call SSM."""
+
+    global _handler
+    if environ.get("AWS_LAMBDA_FUNCTION_NAME") and _handler is None:
+        _handler = _build_handler(environ)
+
+
+_initialize_for_lambda(os.environ)
+
+
 __all__ = (
     "DISCORD_INGRESS_MAX_ACTIVE_SDK_CALL_SECONDS",
     "DISCORD_INGRESS_RESPONSE_MARGIN_SECONDS",
@@ -293,5 +407,6 @@ __all__ = (
     "DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS",
     "DiscordIngressDeadlineExceeded",
     "DiscordIngressLambda",
+    "DiscordVerifiedIngressFailure",
     "lambda_handler",
 )

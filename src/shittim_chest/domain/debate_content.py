@@ -197,10 +197,15 @@ class FinalDecision:
     decision: str
     actions: tuple[str, ...]
     caveats: tuple[str, ...]
+    victory_message: str | None = None
 
     def __post_init__(self) -> None:
         _require_participant(self.winner)
         _require_text(self.decision, label="decision")
+        if self.victory_message is not None:
+            _require_text(self.victory_message, label="victory message")
+            if len(self.victory_message) > 500:
+                raise ValueError("victory message must be at most 500 characters")
 
 
 def select_winner(votes: Iterable[Vote]) -> VotingResult:

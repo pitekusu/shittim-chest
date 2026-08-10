@@ -39,7 +39,13 @@ from shittim_chest.application.models import (
     LeaseGrant,
     MetricEvent,
 )
-from shittim_chest.application.scale_to_zero import IngressKind, IngressRequest, IngressStatus
+from shittim_chest.application.ports import StatusTriggerUnavailable
+from shittim_chest.application.scale_to_zero import (
+    IngressKind,
+    IngressRequest,
+    IngressStatus,
+    StatusMessageState,
+)
 from shittim_chest.application.status_publication import status_publication_marker
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
 
@@ -204,6 +210,11 @@ class FailingApplication(FakeApplication):
         raise RuntimeError("sensitive exception text must not be logged")
 
 
+class TerminalApplication(FakeApplication):
+    async def run_debate(self, debate_id: DebateId) -> None:
+        self.run_calls.append(debate_id)
+
+
 @dataclass(slots=True)
 class BlockingSnapshotApplication(FakeApplication):
     snapshot_started: asyncio.Event = field(default_factory=asyncio.Event)
@@ -234,6 +245,20 @@ class FakeMetrics:
         self.events.append((event, debate_id))
 
 
+@dataclass(slots=True)
+class FakeStatusTrigger:
+    calls: list[str] = field(default_factory=list)
+
+    async def request_publication(self, interaction_id: str) -> None:
+        self.calls.append(interaction_id)
+
+
+class FailingStatusTrigger(FakeStatusTrigger):
+    async def request_publication(self, interaction_id: str) -> None:
+        self.calls.append(interaction_id)
+        raise StatusTriggerUnavailable
+
+
 @dataclass(frozen=True, slots=True)
 class FakeClock:
     value: datetime = NOW
@@ -248,6 +273,7 @@ def runtime(
     client_set: dict[DiscordBotSlot, discord.Client] | None = None,
     now: datetime = NOW,
     metrics: FakeMetrics | None = None,
+    status_trigger: FakeStatusTrigger | None = None,
 ) -> DiscordIngressRuntime:
     return DiscordIngressRuntime(
         clients=clients() if client_set is None else client_set,
@@ -255,6 +281,7 @@ def runtime(
         panel_refresh=application,
         clock=FakeClock(now),
         metrics=metrics or FakeMetrics(),
+        status_trigger=status_trigger or FakeStatusTrigger(),
         claim_owner="runtime-1",
     )
 
@@ -619,6 +646,52 @@ async def test_activate_does_not_start_after_shutdown_begins_during_snapshot_loa
 
 
 @pytest.mark.asyncio
+async def test_notify_accepted_kicks_only_the_exact_interaction() -> None:
+    current = snapshot(bound=True)
+    application = FakeApplication(current)
+    trigger = FakeStatusTrigger()
+    ingress_runtime = runtime(application, status_trigger=trigger)
+    claimed = claimed_request(current)
+    accepted = replace(
+        claimed,
+        status=IngressStatus.ACCEPTED,
+        status_message_state=StatusMessageState.ACCEPTED,
+        updated_at=NOW + timedelta(seconds=2),
+        claim_owner=None,
+        claim_expires_at=None,
+        accepted_debate_id=current.state.debate_id,
+        accepted_attempt_id=current.state.attempt_id,
+    )
+
+    await ingress_runtime.notify_accepted(accepted)
+
+    assert trigger.calls == [accepted.interaction_id]
+
+
+@pytest.mark.asyncio
+async def test_notify_accepted_keeps_durable_fallback_when_status_kick_fails() -> None:
+    current = snapshot(bound=True)
+    application = FakeApplication(current)
+    trigger = FailingStatusTrigger()
+    ingress_runtime = runtime(application, status_trigger=trigger)
+    claimed = claimed_request(current)
+    accepted = replace(
+        claimed,
+        status=IngressStatus.ACCEPTED,
+        status_message_state=StatusMessageState.ACCEPTED,
+        updated_at=NOW + timedelta(seconds=2),
+        claim_owner=None,
+        claim_expires_at=None,
+        accepted_debate_id=current.state.debate_id,
+        accepted_attempt_id=current.state.attempt_id,
+    )
+
+    await ingress_runtime.notify_accepted(accepted)
+
+    assert trigger.calls == [accepted.interaction_id]
+
+
+@pytest.mark.asyncio
 async def test_recovery_keeps_claim_but_does_not_start_after_shutdown_begins() -> None:
     current = replace(
         snapshot(bound=True),
@@ -679,6 +752,54 @@ async def test_recovery_completes_terminal_panel_without_restarting_debate() -> 
     assert application.run_calls == []
     assert application.panel_claim_calls == 2
     assert application.panel_events == ["claim", "edit", "complete", "empty"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_debate_kicks_only_its_origin_status_publication() -> None:
+    active = snapshot(bound=True)
+    terminal_at = NOW + timedelta(seconds=1)
+    interaction_id = "123456789" + "012345678"
+    terminal = replace(
+        active,
+        state=active.state.transition_to(DebatePhase.CANCELLED, at=terminal_at),
+        origin_ingress_interaction_id=interaction_id,
+    )
+    application = TerminalApplication(terminal)
+    trigger = FakeStatusTrigger()
+    ingress_runtime = runtime(
+        application,
+        now=terminal_at,
+        status_trigger=trigger,
+    )
+
+    await ingress_runtime._run_and_refresh(terminal.state.debate_id)
+
+    assert trigger.calls == [interaction_id]
+    assert application.run_calls == [terminal.state.debate_id]
+
+
+@pytest.mark.asyncio
+async def test_terminal_debate_keeps_durable_fallback_when_status_kick_fails() -> None:
+    active = snapshot(bound=True)
+    terminal_at = NOW + timedelta(seconds=1)
+    interaction_id = "123456789" + "012345678"
+    terminal = replace(
+        active,
+        state=active.state.transition_to(DebatePhase.CANCELLED, at=terminal_at),
+        origin_ingress_interaction_id=interaction_id,
+    )
+    application = TerminalApplication(terminal)
+    trigger = FailingStatusTrigger()
+    ingress_runtime = runtime(
+        application,
+        now=terminal_at,
+        status_trigger=trigger,
+    )
+
+    await ingress_runtime._run_and_refresh(terminal.state.debate_id)
+
+    assert trigger.calls == [interaction_id]
+    assert application.run_calls == [terminal.state.debate_id]
 
 
 @pytest.mark.asyncio

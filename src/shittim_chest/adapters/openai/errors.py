@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from shittim_chest.application.errors import GenerationProviderError
 
-class OpenAIAdapterError(RuntimeError):
+
+class OpenAIAdapterError(GenerationProviderError):
     """Base class for an OpenAI boundary failure."""
 
-    __slots__ = ("code", "diagnostic_context", "diagnostic_kind", "retryable")
+    __slots__ = ("diagnostic_context", "diagnostic_kind")
 
     code: str
     diagnostic_context: str | None
@@ -22,11 +24,9 @@ class OpenAIAdapterError(RuntimeError):
         diagnostic_context: str | None = None,
         diagnostic_kind: str | None = None,
     ) -> None:
-        self.code = code
         self.diagnostic_context = diagnostic_context
         self.diagnostic_kind = diagnostic_kind
-        self.retryable = retryable
-        super().__init__(message)
+        super().__init__(code, message, retryable=retryable)
 
 
 class OpenAIRefusal(OpenAIAdapterError):

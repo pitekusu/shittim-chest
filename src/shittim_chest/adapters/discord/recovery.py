@@ -7,14 +7,19 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from shittim_chest.adapters.discord.errors import DiscordAdapterError
-from shittim_chest.application.discord import OutboxOperation
-from shittim_chest.application.errors import OutboxRecoveryFailed
-from shittim_chest.application.models import DebateSnapshot, MetricEvent
+from shittim_chest.application.discord import (
+    MAX_OUTBOX_DELIVERY_ATTEMPTS,
+    DiscordErrorCode,
+    OutboxOperation,
+)
+from shittim_chest.application.errors import OutboxRecoveryAbandoned, OutboxRecoveryFailed
+from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason, MetricEvent
 from shittim_chest.application.ports import (
     Clock,
     DiscordOutboxRepository,
     DiscordPublisher,
     Metrics,
+    RepositoryConflict,
 )
 
 DEFAULT_OUTBOX_POLL_SECONDS = 1.0
@@ -57,7 +62,19 @@ class DiscordOutboxRecovery:
                 return
 
             operation = pending[0]
-            delay = _availability_delay(operation, self._clock.now())
+            now = self._clock.now()
+            claim_delay = _claim_availability_delay(operation, now)
+            if claim_delay > 0:
+                await self._sleep(claim_delay)
+                continue
+            if operation.record_schema_version == 2:
+                if operation.deadline_at is None or operation.deadline_at <= now:
+                    raise OutboxRecoveryAbandoned(DeliveryAbandonReason.DEADLINE_EXCEEDED.value)
+                if operation.delivery_attempt >= MAX_OUTBOX_DELIVERY_ATTEMPTS:
+                    raise OutboxRecoveryAbandoned(DeliveryAbandonReason.ATTEMPTS_EXHAUSTED.value)
+            delay = _availability_delay(operation, now)
+            if operation.deadline_at is not None:
+                delay = min(delay, max(0.0, (operation.deadline_at - now).total_seconds()))
             if delay > 0:
                 await self._sleep(delay)
                 continue
@@ -71,7 +88,14 @@ class DiscordOutboxRecovery:
                 raise
             except DiscordAdapterError as error:
                 if not error.retryable:
-                    raise OutboxRecoveryFailed(error.code) from error
+                    if operation.record_schema_version == 1:
+                        raise OutboxRecoveryFailed(error.code) from error
+                    reason = (
+                        DeliveryAbandonReason.CONTENT_CONFLICT
+                        if error.code == DiscordErrorCode.OUTBOX_CONFLICT.value
+                        else DeliveryAbandonReason.NON_RETRYABLE
+                    )
+                    raise OutboxRecoveryAbandoned(reason.value, error.code) from error
                 self._metrics.increment(
                     MetricEvent.OUTBOX_RETRY_SCHEDULED,
                     debate_id=expected.state.debate_id,
@@ -85,6 +109,45 @@ class DiscordOutboxRecovery:
                 MetricEvent.OUTBOX_RECOVERED,
                 debate_id=expected.state.debate_id,
             )
+
+    async def terminate(self, *, expected: DebateSnapshot) -> bool:
+        """Reconcile accepted POSTs without starting any new Discord write."""
+
+        while True:
+            pending = await self._outbox.list_pending(
+                debate_id=expected.state.debate_id,
+                attempt_id=expected.state.attempt_id,
+            )
+            if not pending:
+                return True
+            operation = pending[0]
+            now = self._clock.now()
+            claim_expires_at = operation.claim_expires_at
+            if claim_expires_at is not None and claim_expires_at >= now:
+                await self._sleep((claim_expires_at + _EXPIRY_EPSILON - now).total_seconds())
+                continue
+            try:
+                sent = await self._publisher.reconcile_persisted(
+                    expected=expected,
+                    operation_id=operation.operation_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except DiscordAdapterError, RepositoryConflict:
+                return False
+            if sent is None:
+                return False
+            self._metrics.increment(
+                MetricEvent.OUTBOX_RECOVERED,
+                debate_id=expected.state.debate_id,
+            )
+
+
+def _claim_availability_delay(operation: OutboxOperation, now: datetime) -> float:
+    claim_expires_at = operation.claim_expires_at
+    if claim_expires_at is None or claim_expires_at < now:
+        return 0.0
+    return (claim_expires_at + _EXPIRY_EPSILON - now).total_seconds()
 
 
 def _availability_delay(operation: OutboxOperation, now: datetime) -> float:

@@ -15,6 +15,7 @@ from shittim_chest.application import (
     DiscordBotSlot,
     DiscordIdentityConfig,
     DiscordRuntimeConfig,
+    sanitize_discord_model_text,
 )
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
@@ -103,6 +104,7 @@ class BootstrapConfig:
     environment: str
     aws_region: str
     table_name: str
+    status_publisher_function: str
     log_level: str
     runtime: DiscordRuntimeConfig
     config_version: str
@@ -117,6 +119,16 @@ class BootstrapConfig:
         return MappingProxyType(
             {
                 participant: self.personas[DiscordBotSlot(participant.value)].system_prompt
+                for participant in PARTICIPANTS
+            }
+        )
+
+    def participant_display_names(self) -> Mapping[ParticipantSlot, str]:
+        """Map stable participant slots to their validated public display names."""
+
+        return MappingProxyType(
+            {
+                participant: self.personas[DiscordBotSlot(participant.value)].display_name
                 for participant in PARTICIPANTS
             }
         )
@@ -154,6 +166,12 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         table_name = _required(environ, "SHITTIM_DYNAMODB_TABLE")
         if re.fullmatch(r"[A-Za-z0-9_.-]{3,255}", table_name) is None:
             raise ValueError("invalid DynamoDB table name")
+        status_publisher_function = _required(
+            environ,
+            "SHITTIM_STATUS_PUBLISHER_FUNCTION",
+        )
+        if re.fullmatch(r"[A-Za-z0-9-_]{1,64}", status_publisher_function) is None:
+            raise ValueError("invalid status publisher function name")
         log_level = environ.get("SHITTIM_LOG_LEVEL", "INFO").strip().upper()
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("unsupported log level")
@@ -167,6 +185,8 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         }
         if any(persona.slot is not slot for slot, persona in personas.items()):
             raise ValueError("persona slot mismatch")
+        for participant in PARTICIPANTS:
+            sanitize_discord_model_text(personas[DiscordBotSlot(participant.value)].display_name)
         versions = {runtime_version} | {persona.config_version for persona in personas.values()}
         if len(versions) != 1:
             raise ValueError("configuration version mismatch")
@@ -187,6 +207,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             environment=environment,
             aws_region=aws_region,
             table_name=table_name,
+            status_publisher_function=status_publisher_function,
             log_level=log_level,
             runtime=runtime,
             config_version=runtime_version,

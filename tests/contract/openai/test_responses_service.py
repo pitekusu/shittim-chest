@@ -153,7 +153,12 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
             response_id="resp_3",
         ),
         response_with(
-            {"decision": "decision", "actions": ["action"], "caveats": ["caveat"]},
+            {
+                "victory_message": "persona victory message",
+                "decision": "decision",
+                "actions": ["action"],
+                "caveats": ["caveat"],
+            },
             response_id="resp_4",
         ),
     ]
@@ -217,6 +222,7 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     assert proposal == FinalProposal(ParticipantSlot.PARTICIPANT_A, "title", "revised")
     assert vote.candidate is ParticipantSlot.PARTICIPANT_B
     assert decision.decision == "decision"
+    assert decision.victory_message == "persona victory message"
     assert decision.winner is ParticipantSlot.PARTICIPANT_A
     assert [record.operation for record in observer.usages] == [
         "initial_opinion",
@@ -241,8 +247,14 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
         assert "previous_response_id" not in request
         assert "OpenAI-Beta" not in headers
         assert "test-key" not in json.dumps(request)
-    assert server.requests[2]["reasoning"] == {"effort": "low"}
-    assert server.requests[0]["reasoning"] == {"effort": "medium"}
+    assert [request["reasoning"] for request in server.requests] == [
+        {"effort": "high"},
+        {"effort": "high"},
+        {"effort": "medium"},
+        {"effort": "high"},
+    ]
+    assert "persona for participant-a" in server.requests[-1]["instructions"]
+    assert "victory_message" in server.requests[-1]["instructions"]
 
 
 @pytest.mark.asyncio
@@ -564,8 +576,8 @@ def test_config_and_persona_prompts_fail_closed() -> None:
 @pytest.mark.parametrize(
     ("policy", "expected_model", "expected_reasoning"),
     [
-        (TERRA_STANDARD, "gpt-5.6-terra", {"effort": "medium"}),
-        (LUNA_PRO, "gpt-5.6-luna", {"effort": "medium", "mode": "pro"}),
+        (TERRA_STANDARD, "gpt-5.6-terra", {"effort": "high"}),
+        (LUNA_PRO, "gpt-5.6-luna", {"effort": "high", "mode": "pro"}),
     ],
 )
 async def test_comparison_policies_have_explicit_request_shapes(

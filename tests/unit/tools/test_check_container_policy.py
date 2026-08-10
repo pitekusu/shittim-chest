@@ -137,7 +137,10 @@ def test_dockerfile_requires_canonical_wheel_records(tmp_path: Path) -> None:
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(
         DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(
-            "python /tmp/canonicalize_wheel_records.py /app/.venv",
+            (
+                "python /tmp/canonicalize_wheel_records.py \\\n"
+                '        --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv'
+            ),
             "true",
             1,
         ),
@@ -148,19 +151,59 @@ def test_dockerfile_requires_canonical_wheel_records(tmp_path: Path) -> None:
         validate_dockerfile(policy, dockerfile)
 
 
-def test_dockerfile_requires_linked_venv_layers(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "COPY tools/transfer_tree_deterministically.py /tmp/transfer_tree_deterministically.py",
+        'ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \\\n    PATH="/app/.venv/bin:${PATH}"',
+        "target=/tmp/source-venv,ro",
+        "source=/tmp/transfer_tree_deterministically.py,"
+        "target=/tmp/transfer_tree_deterministically.py,ro",
+        '["/usr/bin/python3.14", "/tmp/transfer_tree_deterministically.py", "--uid", "65532", '
+        '"--gid", "65532", "/tmp/source-venv", "/app/.venv"]',
+    ],
+)
+def test_dockerfile_requires_deterministic_production_venv_transfer(
+    tmp_path: Path,
+    marker: str,
+) -> None:
     policy = load_container_policy(DEFAULT_POLICY_PATH)
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(
-        DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(
-            "COPY --link --from=builder --chown=65532:65532 /app/.venv /app/.venv",
-            "COPY --from=builder --chown=65532:65532 /app/.venv /app/.venv",
-            1,
-        ),
+        DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(marker, "unsafe", 1),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="independent linked venv layers"):
+    with pytest.raises(ValueError, match=r"deterministic tree transfer helper|volatile source"):
+        validate_dockerfile(policy, dockerfile)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        (
+            "RUN --mount=type=bind,from=builder,source=/app/.venv,"
+            "target=/tmp/source-venv,ro \\\n"
+            "    mkdir -p /app/.venv"
+        ),
+        "--sort=name",
+        '--mtime="@${SOURCE_DATE_EPOCH}"',
+        "--owner=65532 --group=65532 --numeric-owner --format=gnu .",
+        "--numeric-owner --delay-directory-restore",
+    ],
+)
+def test_dockerfile_requires_deterministic_break_glass_venv_transfer(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    policy = load_container_policy(DEFAULT_POLICY_PATH)
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        DEFAULT_DOCKERFILE_PATH.read_text(encoding="utf-8").replace(marker, "unsafe", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="deterministic tar stream"):
         validate_dockerfile(policy, dockerfile)
 
 
@@ -212,6 +255,7 @@ def test_dockerfile_requires_volatile_apt_state_cleanup(
         "!tools/",
         "tools/*",
         "!tools/canonicalize_wheel_records.py",
+        "!tools/transfer_tree_deterministically.py",
     ],
 )
 def test_dockerignore_requires_canonicalizer_in_build_context(
@@ -223,7 +267,7 @@ def test_dockerignore_requires_canonicalizer_in_build_context(
     rules.remove(missing_rule)
     dockerignore.write_text("\n".join(rules) + "\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="must include only the wheel RECORD canonicalizer"):
+    with pytest.raises(ValueError, match="must include only the container build helpers"):
         validate_dockerignore(dockerignore)
 
 
@@ -231,7 +275,8 @@ def test_dockerignore_requires_canonicalizer_rules_in_effective_order(tmp_path: 
     dockerignore = tmp_path / ".dockerignore"
     rules = DEFAULT_DOCKERIGNORE_PATH.read_text(encoding="utf-8").splitlines()
     tools_index = rules.index("!tools/")
-    rules[tools_index : tools_index + 3] = [
+    rules[tools_index : tools_index + 4] = [
+        "!tools/transfer_tree_deterministically.py",
         "!tools/canonicalize_wheel_records.py",
         "tools/*",
         "!tools/",

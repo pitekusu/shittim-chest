@@ -567,6 +567,54 @@ def _sent_outbox(**fields: object) -> DynamoItem:
     return _legacy_record("outbox", **values)
 
 
+def _abandoned_outbox(**fields: object) -> DynamoItem:
+    values: dict[str, object] = {
+        "record_schema_version": 2,
+        "status": "abandoned",
+        "phase": "completed",
+        "plan_id": "terminal-completed",
+        "delivery_sequence": 300,
+        "deadline_at": "2026-07-28T04:15:00.000000Z",
+        "content_hash": "a" * 64,
+        "abandoned_at": LEGACY_CREATED_AT,
+        "abandon_reason": "cancelled",
+    }
+    values.update(fields)
+    return _legacy_record("outbox", **values)
+
+
+def _phase_delivery_plan(
+    *,
+    status: str,
+    **fields: object,
+) -> DynamoItem:
+    settled = status in {"delivered", "abandoned"}
+    values: dict[str, object] = {
+        "PK": "DEBATE#debate-id",
+        "SK": "ATTEMPT#attempt-id#DELIVERY#terminal-completed",
+        "record_schema_version": 2,
+        "debate_id": "debate-id",
+        "attempt_id": "attempt-id",
+        "plan_id": "terminal-completed",
+        "source_phase": "generating_decision",
+        "target_phase": "completed",
+        "status": status,
+        "operation_ids": ["terminal-completed-0000"],
+        "content_hashes": ["a" * 64],
+        "delivery_sequences": [300],
+        "staged_at": "2026-07-28T04:00:06.000000Z",
+        "deadline_at": "2026-07-28T04:15:06.000000Z",
+        "created_at": "2026-07-28T04:00:06.000000Z",
+        "updated_at": ("2026-07-28T04:01:06.000000Z" if settled else "2026-07-28T04:00:06.000000Z"),
+    }
+    if settled:
+        values["settled_at"] = "2026-07-28T04:01:06.000000Z"
+    if status in {"terminating", "abandoned"}:
+        values["abandon_reason"] = "cancelled"
+    values.update(fields)
+    return _legacy_record("phase_delivery_plan", **values)
+
+
 def _terminal_ingress_request(
     status: str = "completed",
     **fields: object,
@@ -920,6 +968,102 @@ def test_legacy_statusless_records_are_explicitly_inactive(item: DynamoItem) -> 
 def test_legacy_unknown_schema_status_or_required_field_fails_closed(item: DynamoItem) -> None:
     with pytest.raises(ControlRecordInitializationError):
         control_records._legacy_item_is_active(item)
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        _sent_outbox(record_schema_version=3),
+        _abandoned_outbox(abandon_reason="future_reason"),
+        _phase_delivery_plan(status="abandoned", abandon_reason="future_reason"),
+        _phase_delivery_plan(status="delivered", abandon_reason="cancelled"),
+        _phase_delivery_plan(status="terminating", abandon_reason="future_reason"),
+    ],
+)
+def test_versioned_delivery_history_rejects_unknown_schema_or_reason(
+    item: DynamoItem,
+) -> None:
+    with pytest.raises(ControlRecordInitializationError):
+        control_records._legacy_item_is_active(item)
+
+
+def test_generation_checkpoint_collection_rejects_unknown_settled_schema() -> None:
+    item = _legacy_record(
+        "attempt_meta",
+        phase="completed",
+        recovery_state="none",
+        generation_checkpoints=[
+            {
+                "record_schema_version": 2,
+                "phase": "generating_decision",
+                "participant": "participant-a",
+                "status": "completed",
+                "logical_attempt": 1,
+                "planned_at": LEGACY_CREATED_AT,
+                "claim_owner": "worker",
+                "claim_slot": 0,
+                "claim_fencing_token": 1,
+                "claimed_at": LEGACY_CREATED_AT,
+                "settled_at": LEGACY_CREATED_AT,
+            }
+        ],
+        terminal_delivery_target="completed",
+        terminal_delivery_operation_ids=["operation-id"],
+        terminal_delivery_content_hashes=["a" * 64],
+        terminal_delivery_staged_at=LEGACY_CREATED_AT,
+        terminal_delivery_completed_at=LEGACY_CREATED_AT,
+    )
+
+    with pytest.raises(ControlRecordInitializationError, match="generation checkpoint"):
+        control_records._legacy_item_is_active(item)
+
+
+@pytest.mark.parametrize("status", ["planned", "in_flight"])
+def test_terminal_attempt_with_unsettled_generation_remains_active(status: str) -> None:
+    checkpoint: DynamoItem = {
+        "record_schema_version": 1,
+        "phase": "generating_decision",
+        "participant": "participant-a",
+        "status": status,
+        "logical_attempt": 0 if status == "planned" else 1,
+        "planned_at": LEGACY_CREATED_AT,
+    }
+    if status == "in_flight":
+        checkpoint.update(
+            {
+                "claim_owner": "worker",
+                "claim_slot": 0,
+                "claim_fencing_token": 1,
+                "claimed_at": LEGACY_CREATED_AT,
+            }
+        )
+    item = _legacy_record(
+        "attempt_meta",
+        phase="completed",
+        recovery_state="none",
+        generation_checkpoints=[checkpoint],
+        terminal_delivery_target="completed",
+        terminal_delivery_operation_ids=["operation-id"],
+        terminal_delivery_content_hashes=["a" * 64],
+        terminal_delivery_staged_at=LEGACY_CREATED_AT,
+        terminal_delivery_completed_at=LEGACY_CREATED_AT,
+    )
+
+    assert control_records._legacy_item_is_active(item)
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        _phase_delivery_plan(status="delivered"),
+        _phase_delivery_plan(status="abandoned"),
+        _abandoned_outbox(),
+    ],
+)
+def test_versioned_delivery_history_with_known_terminal_schema_is_inactive(
+    item: DynamoItem,
+) -> None:
+    assert not control_records._legacy_item_is_active(item)
 
 
 @pytest.mark.parametrize(

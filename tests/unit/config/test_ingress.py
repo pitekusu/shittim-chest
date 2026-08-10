@@ -11,19 +11,6 @@ from shittim_chest.config.ingress import (
 from shittim_chest.config.models import StartupConfigurationError
 
 
-def environment() -> dict[str, str]:
-    return {
-        "AWS_REGION": "ap-northeast-1",
-        "SHITTIM_DYNAMODB_TABLE": "test-table",
-        "SHITTIM_RUNTIME_CONFIG_PARAMETER": ("/shittim-chest/production/runtime/v0001"),
-        "SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER": (
-            "/shittim-chest/production/discord/moderator/public-key"
-        ),
-        "SHITTIM_STATUS_PUBLISHER_FUNCTION": "test-status-publisher",
-        "SHITTIM_RUNTIME_RECONCILER_FUNCTION": "test-runtime-reconciler",
-    }
-
-
 def runtime_json(*, version: str = "v0001") -> str:
     return json.dumps(
         {
@@ -41,36 +28,43 @@ def runtime_json(*, version: str = "v0001") -> str:
     )
 
 
-class FakeReader:
-    def __init__(self, values: dict[str, str]) -> None:
-        self.values = values
-        self.names: list[str] = []
+def environment() -> dict[str, str]:
+    return {
+        "AWS_REGION": "ap-northeast-1",
+        "SHITTIM_DYNAMODB_TABLE": "test-table",
+        "SHITTIM_RUNTIME_CONFIG_PARAMETER": "/shittim-chest/production/runtime/v0001",
+        "SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER": (
+            "/shittim-chest/production/discord/moderator/public-key"
+        ),
+    }
 
-    async def get_parameter(self, name: str, *, with_decryption: bool = True) -> str:
-        assert with_decryption
-        self.names.append(name)
-        return self.values[name]
+
+def test_loads_only_versioned_parameter_names_before_snapshot() -> None:
+    settings = load_ingress_bootstrap_settings(environment())
+
+    assert settings.runtime_config_parameter.endswith("/runtime/v0001")
+    assert settings.discord_public_key_parameter.endswith("/moderator/public-key")
 
 
 @pytest.mark.asyncio
-async def test_loads_only_runtime_and_public_key_parameters() -> None:
-    settings = load_ingress_bootstrap_settings(environment())
-    reader = FakeReader(
-        {
-            settings.runtime_config_parameter: runtime_json(),
-            settings.discord_public_key_parameter: "ab" * 32,
-        }
+async def test_resolves_and_validates_secure_strings_before_snapshot() -> None:
+    class Reader:
+        async def get_parameter(self, name: str, *, with_decryption: bool = True) -> str:
+            assert with_decryption
+            if name.endswith("/runtime/v0001"):
+                return runtime_json()
+            if name.endswith("/moderator/public-key"):
+                return "ab" * 32
+            raise AssertionError("unexpected parameter")
+
+    runtime = await load_ingress_runtime_settings(
+        load_ingress_bootstrap_settings(environment()),
+        Reader(),
     )
 
-    resolved = await load_ingress_runtime_settings(settings, reader)
-
-    assert resolved.discord.guild_id == "101"
-    assert resolved.public_key_hex == "ab" * 32
-    assert "abab" not in repr(resolved)
-    assert set(reader.names) == {
-        settings.runtime_config_parameter,
-        settings.discord_public_key_parameter,
-    }
+    assert runtime.discord.guild_id == "101"
+    assert runtime.public_key_hex == "ab" * 32
+    assert "abab" not in repr(runtime)
 
 
 @pytest.mark.parametrize(
@@ -78,11 +72,9 @@ async def test_loads_only_runtime_and_public_key_parameters() -> None:
     [
         ("AWS_REGION", "us-east-1"),
         ("SHITTIM_DYNAMODB_TABLE", "bad table"),
-        ("SHITTIM_RUNTIME_CONFIG_PARAMETER", "/runtime/latest"),
-        ("SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER", "/another/public-key"),
-        ("SHITTIM_RUNTIME_RECONCILER_FUNCTION", ""),
-        ("SHITTIM_STATUS_PUBLISHER_FUNCTION", "arn:aws:lambda:ap-northeast-1:123:function:x"),
-        ("SHITTIM_STATUS_PUBLISHER_FUNCTION", "x" * 65),
+        ("SHITTIM_RUNTIME_CONFIG_PARAMETER", "/wrong/runtime/v0001"),
+        ("SHITTIM_RUNTIME_CONFIG_PARAMETER", "/shittim-chest/production/runtime/latest"),
+        ("SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER", "/wrong/public-key"),
     ],
 )
 def test_invalid_environment_fails_without_value_echo(name: str, value: str) -> None:
@@ -97,14 +89,14 @@ def test_invalid_environment_fails_without_value_echo(name: str, value: str) -> 
 
 
 @pytest.mark.asyncio
-async def test_runtime_payload_version_must_match_parameter_path() -> None:
-    settings = load_ingress_bootstrap_settings(environment())
-    reader = FakeReader(
-        {
-            settings.runtime_config_parameter: runtime_json(version="v0002"),
-            settings.discord_public_key_parameter: "ab" * 32,
-        }
-    )
+async def test_runtime_payload_version_must_match_parameter_version() -> None:
+    class Reader:
+        async def get_parameter(self, name: str, *, with_decryption: bool = True) -> str:
+            del with_decryption
+            return "ab" * 32 if name.endswith("public-key") else runtime_json(version="v0002")
 
     with pytest.raises(StartupConfigurationError):
-        await load_ingress_runtime_settings(settings, reader)
+        await load_ingress_runtime_settings(
+            load_ingress_bootstrap_settings(environment()),
+            Reader(),
+        )

@@ -175,8 +175,10 @@ def test_release_requires_ci_identical_docker_exporters(tmp_path: Path) -> None:
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "outputs: type=docker,rewrite-timestamp=true",
-            "outputs: type=registry,rewrite-timestamp=true",
+            "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+            "compression-level=6,force-compression=true",
+            "outputs: type=registry,rewrite-timestamp=true,compression=gzip,"
+            "compression-level=6,force-compression=true",
             1,
         ),
         encoding="utf-8",
@@ -331,54 +333,149 @@ def test_ci_requires_loaded_image_file_timestamp_rewrite(tmp_path: Path) -> None
     path = directory / "ci.yml"
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "outputs: type=docker,rewrite-timestamp=true",
+            "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
+            "compression-level=6,force-compression=true",
             "load: true",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="rewrite file timestamps"):
+    with pytest.raises(WorkflowPolicyError, match="deterministically compress"):
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+@pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
+def test_image_builds_require_forced_canonical_compression(
+    tmp_path: Path,
+    workflow: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            ",force-compression=true",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"deterministic|deterministically"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    ("workflow", "step_name"),
+    [
+        ("ci.yml", "Build and load the production image"),
+        ("ci.yml", "Build and load the CI-only fault image"),
+        ("ci.yml", "Build and load the break-glass image for risk validation"),
+        (RELEASE_WORKFLOW, "Build and load the production image once"),
+        (RELEASE_WORKFLOW, "Build and load the isolated break-glass image once"),
+    ],
+)
+def test_docker_image_builds_reject_manifest_list_output(
+    tmp_path: Path,
+    workflow: str,
+    step_name: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    text = path.read_text(encoding="utf-8")
+    start = text.index(f"name: {step_name}")
+    end = text.find("\n      - name:", start + 1)
+    assert end != -1
+    block = text[start:end]
+    unsafe = block.replace(
+        "          target:",
+        "          build-args: |\n            BUILDKIT_MULTI_PLATFORM=1\n          target:",
+        1,
+    )
+    path.write_text(text[:start] + unsafe + text[end:], encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="manifest-list"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "production-image-rootfs-diffids.json",
+        "break-glass-image-rootfs-diffids.json",
+    ],
+)
+def test_ci_requires_rootfs_diff_id_evidence(tmp_path: Path, name: str) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / "ci.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(name, "missing-rootfs-evidence.json"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="rootfs diff ID"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("filters", ["builder,runtime-base", "builder,break-glass"])
 def test_ci_regenerates_cache_sensitive_final_image_stages(
     tmp_path: Path,
-    stage: str,
+    filters: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"          no-cache-filters: {stage}\n",
+            f"          no-cache-filters: {filters}\n",
             "",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="cache-sensitive"):
+    with pytest.raises(WorkflowPolicyError, match=r"builder snapshot|final"):
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+@pytest.mark.parametrize("filters", ["builder,runtime-base", "builder,break-glass"])
 def test_release_regenerates_cache_sensitive_final_image_stages(
     tmp_path: Path,
-    stage: str,
+    filters: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"          no-cache-filters: {stage}\n",
+            f"          no-cache-filters: {filters}\n",
             "",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="cache-sensitive"):
+    with pytest.raises(WorkflowPolicyError, match=r"builder snapshot|final"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
+@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+def test_risk_bound_images_reject_cached_builder_snapshots(
+    tmp_path: Path,
+    workflow: str,
+    stage: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f"          no-cache-filters: builder,{stage}\n",
+            f"          no-cache-filters: {stage}\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="builder snapshot"):
         validate_notification_workflows(directory)
 
 
@@ -443,6 +540,29 @@ def test_release_requires_the_fail_fast_image_evidence_waiter(tmp_path: Path) ->
     )
 
     with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        '"ParameterKey=LambdaBundleCodeSha256,ParameterValue=${bundle_code_sha256}"',
+        '--expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"',
+        "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w 0)",
+    ],
+)
+def test_release_binds_lambda_version_to_exact_bundle_checksum(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact Lambda bundle checksum"):
         validate_notification_workflows(directory)
 
 
@@ -849,6 +969,35 @@ def test_release_diagnostic_failure_does_not_replace_deploy_failure(
     )
 
     with pytest.raises(WorkflowPolicyError, match=r"diagnostic failure|DescribeEvents call shape"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            'status_reason: ((.StatusReason // "") | scrub)',
+            'status_reason: "discarded"',
+        ),
+        (
+            "steps.prepare_changes.outcome == 'failure'",
+            "steps.prepare_changes.outcome == 'success'",
+        ),
+    ),
+)
+def test_release_retains_change_set_failure_reason_before_cleanup(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(old, new, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="Change Set failure"):
         validate_notification_workflows(directory)
 
 

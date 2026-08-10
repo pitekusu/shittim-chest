@@ -8,6 +8,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
+import discord.http
 import pytest
 
 from shittim_chest.adapters.discord import (
@@ -74,7 +75,28 @@ def test_client_builder_uses_guilds_only_safe_mentions_and_bounded_rate_limits()
         assert cast(Any, client.allowed_mentions).to_dict() == {"parse": []}
         assert client.http.http_trace is not None
         assert len(client.http.http_trace.on_request_end) == 1
-        assert client.http.max_ratelimit_timeout == 30.0
+        assert client.http.max_ratelimit_timeout == 300.0
+
+
+@pytest.mark.asyncio
+async def test_client_rate_limit_ceiling_allows_a_300_second_bucket_with_capacity() -> None:
+    ratelimit = discord.http.Ratelimit(300.0)
+    ratelimit.update(
+        cast(
+            Any,
+            SimpleNamespace(
+                headers={
+                    "X-Ratelimit-Limit": "50",
+                    "X-Ratelimit-Remaining": "49",
+                    "X-Ratelimit-Reset-After": "300.0",
+                }
+            ),
+        )
+    )
+
+    await ratelimit.acquire()
+
+    assert ratelimit.remaining == 48
 
 
 @pytest.mark.asyncio
@@ -88,6 +110,68 @@ async def test_gateway_closes_acceptance_when_one_identity_is_not_ready() -> Non
 
     cast(Any, clients[DiscordBotSlot.PARTICIPANT_B]).is_ready.return_value = False
     assert not await gateway.all_identities_ready()
+
+
+@pytest.mark.asyncio
+async def test_gateway_preflights_exact_thread_permissions_without_a_write() -> None:
+    clients = mocked_clients()
+    moderator = cast(Any, clients[DiscordBotSlot.MODERATOR])
+    member = SimpleNamespace(id=moderator.user.id)
+    guild = SimpleNamespace(id=101, me=member)
+    permissions = SimpleNamespace(
+        view_channel=True,
+        send_messages_in_threads=True,
+        read_message_history=True,
+    )
+    thread = MagicMock(spec=discord.Thread)
+    thread.guild = guild
+    thread.archived = False
+    thread.locked = False
+    thread.permissions_for.return_value = permissions
+    moderator.get_channel.return_value = thread
+    gateway = DiscordPyGateway(clients=clients, config=config())
+
+    assert await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
+    moderator.fetch_channel.assert_not_awaited()
+    thread.permissions_for.assert_called_once_with(member)
+
+    permissions.send_messages_in_threads = False
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
+    permissions.send_messages_in_threads = True
+    thread.archived = True
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_preflight_fails_closed_for_unknown_or_wrong_guild_thread() -> None:
+    clients = mocked_clients()
+    moderator = cast(Any, clients[DiscordBotSlot.MODERATOR])
+    moderator.get_channel.return_value = None
+    moderator.fetch_channel.return_value = None
+    gateway = DiscordPyGateway(clients=clients, config=config())
+
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="not-a-snowflake",
+    )
+    assert not await gateway.delivery_target_is_ready(
+        bot_slot=DiscordBotSlot.MODERATOR,
+        guild_id="101",
+        thread_id="102",
+    )
 
 
 @pytest.mark.asyncio

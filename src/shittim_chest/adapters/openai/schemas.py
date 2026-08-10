@@ -45,6 +45,7 @@ class VoteOutputV1(StrictOutput):
 class DecisionOutputV1(StrictOutput):
     """Final wording constrained to the mechanically selected winner."""
 
+    victory_message: str = Field(min_length=1, max_length=500)
     decision: str = Field(min_length=1, max_length=2_000)
     actions: tuple[ShortListItem, ...] = Field(max_length=10)
     caveats: tuple[ShortListItem, ...] = Field(max_length=10)

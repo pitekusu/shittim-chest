@@ -257,6 +257,7 @@ class FakeContext:
     preflighted: list[str] = field(default_factory=list)
     prepared: list[str] = field(default_factory=list)
     activated: list[str] = field(default_factory=list)
+    accepted_notifications: list[str] = field(default_factory=list)
     timeline: list[str] | None = None
 
     async def preflight(self, request: IngressRequest) -> None:
@@ -292,6 +293,12 @@ class FakeContext:
             self.timeline.append(f"activate:{request.interaction_id}")
         if self.activation_error is not None:
             raise self.activation_error
+
+    async def notify_accepted(self, request: IngressRequest) -> None:
+        assert request.status is IngressStatus.ACCEPTED
+        self.accepted_notifications.append(request.interaction_id)
+        if self.timeline is not None:
+            self.timeline.append(f"notify_accepted:{request.interaction_id}")
 
 
 @dataclass(slots=True)
@@ -476,6 +483,7 @@ async def test_context_and_task_order_is_apply_prepare_accept_busy_activate() ->
         "apply:first",
         "prepare:first",
         "mark_accepted:first",
+        "notify_accepted:first",
         "mark_busy",
         "activate:first",
     ]
@@ -506,6 +514,7 @@ async def test_control_context_is_preflighted_before_command_mutation(
         f"apply:{kind.value}",
         f"prepare:{kind.value}",
         f"mark_accepted:{kind.value}",
+        f"notify_accepted:{kind.value}",
         f"activate:{kind.value}",
     ]
 

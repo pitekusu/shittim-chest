@@ -59,7 +59,7 @@ Cost Anomaly Detectionは`AWS::CE::AnomalyMonitor`を作成せず、deploy時必
 - Fargateは`awsvpc`、`AssignPublicIp=ENABLED`、routeは`0.0.0.0/0 -> IGW`。
 - Security Groupはingress ruleなし。egressはTCP 443を許可する。
 - ALB、NAT instance、DNS64、NAT64、Service Connectは作成しない。
-- Discordからの公開ingressはAPI Gateway HTTP APIで受け、DiscordIngress Lambdaへ直接統合する。3 LambdaはVPC外に配置し、LambdaのためのNAT GatewayやVPC endpointを追加しない。
+- Discordからの公開ingressはAPI Gateway HTTP APIで受け、DiscordIngress Lambdaの固定`live` aliasへ統合する。IngressだけにSnapStartを適用し、実測したcontent-addressed Lambda ZIPのSHA-256、Lambda bundle key、versioned Runtime Config path、moderator Public Key pathへ束縛したpublished versionをaliasから参照する。CloudFormationはSecureStringをLambda Environmentへdynamic referenceで解決しない。IngressはLambda初期化時にexactなSSM SecureString 2件を取得・検証し、SDK clientやcredentialを破棄してtoken-free値だけを暗号化されたsnapshotへ固定するため、request中のSSM readは0件となる。Public Key rotation時はRuntime Config versionをbumpして新versionをreleaseする。`$LATEST`、Provisioned Concurrency、EFSは使用しない。3 LambdaはVPC外に配置し、LambdaのためのNAT GatewayやVPC endpointを追加しない。
 - ECS taskのSecurity Groupはinboundを持たず、HTTP APIからECSへの直接routeも作成しない。Ingress Request、status更新要求、runtime control recordは既存DynamoDB tableを介して連携する。
 - VPC Flow Logsはno-ingress・TCP 443 outboundのみの単一task MVPでは費用対効果が低いため作成しない。セキュリティincidentの調査でnetwork visibility不足が実証された場合はADRで再評価する。
 - Discord/OpenAIがAAAAを公式supportし、24時間canaryを満たし、IPv6-only移行時にbreak-glass ECS Execを廃止する判断が完了するまでIPv6-onlyへ移行しない。
@@ -152,7 +152,7 @@ STEP-09Bではtask definitionがdigest URI以外を拒否するassertionを追�
 - Execution role: 対象ECR repositoryのpull、application CloudWatch Logs、task definitionが参照する各Parameterの`ssm:GetParameters`だけ。ECRの`GetAuthorizationToken`以外はresourceを限定し、AWS-managed encryptionのためKMS decryptは付与しない。
 - 平常Task role: 実装が使用する対象DynamoDB table/indexの`ConditionCheckItem`、`GetItem`、`PutItem`、`UpdateItem`、`Query`だけ。EMFはstdoutの`awslogs`経由であり`cloudwatch:PutMetricData`は付与しない。secret読取、`ssmmessages`、Exec log group書込権限を持たない。
 - Break-glass Task role: 平常権限に加え4つの`ssmmessages` actionと専用Exec log group書込だけを一時的に許可する。
-- DiscordIngress Lambda role: 既存tableのIngress Request、idempotency、queue counter、runtime wakeに必要な読取とtransactionだけを許可する。ECS更新、Discord Bot token、参加者Bot token、OpenAI API keyへの権限は持たない。
+- DiscordIngress Lambda role: 既存tableのIngress Request、idempotency、queue counter、公開Status publicationのdurable受付に必要な読取とtransactionに加え、Lambda初期化時だけversioned Runtime Configとmoderator Public Keyのexact ARNへ`ssm:GetParameter`を許可する。`lambda:InvokeFunction`、Runtime State参照、ECS更新、Discord Bot token、参加者Bot token、OpenAI API keyへの権限は持たない。
 - DiscordStatusPublisher Lambda role: status更新recordの読取・条件付き完了とmoderator Bot tokenの取得だけを許可する。参加者Bot token、OpenAI API key、ECS更新権限は持たない。
 - RuntimeReconciler Lambda role: runtime control recordの読取・条件付き更新と、対象ECS Serviceの`DescribeServices`、`UpdateService`だけを許可する。secret取得権限は持たない。
 - Image Admission Lambda role: `DescribeServiceRevisions`は固定service/revision ARNへ限定する。`ecs:DescribeTaskDefinition`はAWS公式Service Authorization Referenceでresource-level permissionをsupportしないため独立statementの`Resource: "*"`とし、取得対象はrevisionが返したexact task definition ARN、応答は同ARN・`application` container・固定repository・release image digestへapplication側で限定する。

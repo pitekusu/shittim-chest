@@ -64,7 +64,7 @@ Codexは、コード編集を開始する前にこの文書を最後まで読み
 2. `30_scale-to-zero-commit-plan.md`
    - commit単位
    - push規則
-   - Draft PR
+   - 通常PR
    - 中断時checkpoint
    - 再開手順
    - サブエージェント運用
@@ -88,7 +88,7 @@ Codexは、コード編集を開始する前にこの文書を最後まで読み
 6. `30_scale-to-zero-commit-plan.md`
 
 現在のリポジトリと本文書が食い違う場合、既存の安全性・整合性・認可・冪等性を弱めて本文書へ合わせてはならない。
-コードと設計書を調査し、最小かつ安全な変更案を採用し、差異と判断理由をDraft PRへ記録すること。
+コードと設計書を調査し、最小かつ安全な変更案を採用し、差異と判断理由を通常PRへ記録すること。
 
 ---
 
@@ -110,7 +110,7 @@ Obsidian Vault内の次の3文書を実装仕様として全文確認してく�
 - 30_scale-to-zero-commit-plan.md
 - 20_scale-to-zero-completion-checklist.md
 
-3文書を最後まで読んだ後、コード編集前に次をDraft PRの計画へ転記してください。
+3文書を最後まで読んだ後、コード編集前に次を通常PRの計画へ転記してください。
 
 1. 絶対に変更してはならない不変条件
 2. 許可される外部操作
@@ -127,7 +127,7 @@ Obsidian Vault内の次の3文書を実装仕様として全文確認してく�
 30_scale-to-zero-commit-plan.mdをcommit・中断復旧の正本、
 20_scale-to-zero-completion-checklist.mdを完了判定の正本として扱ってください。
 
-各論理commitの直後にpushし、最初の実質的commit後にDraft PRを作成してください。
+各論理commitの直後にpushし、最初の実質的commit後に通常PRを作成してください。
 AWSまたはDiscord Applicationへwriteする操作は実行しないでください。
 GitHub上の変更と、既存機構によるDiscordへのCI・PR通知は許可します。
 ```
@@ -214,7 +214,7 @@ Goal作成後、そのまま同じGoalへ通常メッセージとして送る前
 - 作業branch作成
 - commit
 - push
-- Draft PR作成
+- 通常PR作成
 - PR本文更新
 - PR comment
 - label、assignee、milestone
@@ -238,7 +238,7 @@ PRのmergeは必須条件ではない。
 + cdk-nag成功
 + cdk synth成功
 + template静的検査成功
-+ Draft PRまたはReview Ready PR作成
++ 通常PR作成
 + required CI成功
 + AWS未デプロイ
 + Discord Application未変更
@@ -293,7 +293,7 @@ PRのmergeは必須条件ではない。
 41. GitHub Environment
 42. branch protectionとrequired checks
 
-調査結果として、Draft PRまたは作業計画へ次を記録する。
+調査結果として、通常PRまたは作業計画へ次を記録する。
 
 - 既存の物理Bot identity数
 - control Botの役割
@@ -423,7 +423,7 @@ GitHubに関する変更と操作は許可する。
 - branch作成
 - commit
 - push
-- Draft PR作成
+- 通常PR作成
 - PR更新
 - PR本文編集
 - PR comment
@@ -2240,7 +2240,7 @@ PR eventでdeployment jobが起動してはならない。
 
 ## 26.3 PR
 
-最初の実質的commit後にDraft PRを作成する。
+最初の実質的commit後に通常PRを作成する。
 
 PR本文：
 
@@ -2834,7 +2834,7 @@ Stateful dataを破壊するrollbackを既定にしない。
 42. rollback plan
 43. branch作成
 44. commit/push
-45. Draft PR
+45. 通常PR
 46. required CI成功
 47. Discord CI/PR通知
 48. AWS未デプロイ
