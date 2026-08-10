@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from pathlib import Path
 
 import pytest
-from tools.transfer_tree_deterministically import (
-    transfer_tree_deterministically,
-    write_deterministic_tar,
-)
+from tools.transfer_tree_deterministically import transfer_tree_deterministically
 
 
 def _source_tree(root: Path) -> Path:
@@ -24,39 +22,58 @@ def _source_tree(root: Path) -> Path:
     return source
 
 
-def _archive_digest(source: Path, archive: Path) -> str:
-    write_deterministic_tar(
-        source,
-        archive,
-        source_date_epoch=7,
-        uid=os.getuid(),
-        gid=os.getgid(),
-    )
-    return hashlib.sha256(archive.read_bytes()).hexdigest()
+def _set_distinct_atimes(source: Path, *, start: int) -> None:
+    for index, path in enumerate((source, *source.rglob("*")), start=start):
+        metadata = path.lstat()
+        os.utime(
+            path,
+            ns=(index * 1_000_000_000, metadata.st_mtime_ns),
+            follow_symlinks=False,
+        )
 
 
-def test_tar_is_identical_when_source_atimes_differ(tmp_path: Path) -> None:
+def _snapshot(root: Path) -> list[tuple[str, int, int, str]]:
+    result: list[tuple[str, int, int, str]] = []
+    for path in sorted((root, *root.rglob("*")), key=lambda item: item.as_posix()):
+        metadata = path.lstat()
+        if stat.S_ISREG(metadata.st_mode):
+            payload = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif stat.S_ISLNK(metadata.st_mode):
+            payload = path.readlink().as_posix()
+        else:
+            payload = "directory"
+        result.append(
+            (
+                path.relative_to(root).as_posix(),
+                stat.S_IMODE(metadata.st_mode),
+                metadata.st_mtime_ns,
+                payload,
+            )
+        )
+    return result
+
+
+def test_transfer_is_identical_when_source_atimes_differ(tmp_path: Path) -> None:
     first = _source_tree(tmp_path / "first")
     second = _source_tree(tmp_path / "second")
-    for index, path in enumerate((first, *first.rglob("*")), start=1):
-        metadata = path.lstat()
-        os.utime(
-            path,
-            ns=(index * 1_000_000_000, metadata.st_mtime_ns),
-            follow_symlinks=False,
-        )
-    for index, path in enumerate((second, *second.rglob("*")), start=101):
-        metadata = path.lstat()
-        os.utime(
-            path,
-            ns=(index * 1_000_000_000, metadata.st_mtime_ns),
-            follow_symlinks=False,
+    _set_distinct_atimes(first, start=1)
+    _set_distinct_atimes(second, start=101)
+    first_destination = tmp_path / "first-destination"
+    second_destination = tmp_path / "second-destination"
+
+    for source, destination in (
+        (first, first_destination),
+        (second, second_destination),
+    ):
+        transfer_tree_deterministically(
+            source,
+            destination,
+            source_date_epoch=7,
+            uid=os.getuid(),
+            gid=os.getgid(),
         )
 
-    assert _archive_digest(first, tmp_path / "first.tar") == _archive_digest(
-        second,
-        tmp_path / "second.tar",
-    )
+    assert _snapshot(first_destination) == _snapshot(second_destination)
 
 
 def test_transfer_preserves_content_modes_and_symlinks(tmp_path: Path) -> None:
@@ -98,15 +115,14 @@ def test_transfer_rejects_existing_destination(tmp_path: Path) -> None:
         )
 
 
-def test_tar_rejects_unsupported_file_type(tmp_path: Path) -> None:
+def test_transfer_rejects_unsupported_file_type(tmp_path: Path) -> None:
     source = _source_tree(tmp_path)
-    fifo = source / "fifo"
-    os.mkfifo(fifo)
+    os.mkfifo(source / "fifo")
 
     with pytest.raises(ValueError, match="unsupported file type"):
-        write_deterministic_tar(
+        transfer_tree_deterministically(
             source,
-            tmp_path / "tree.tar",
+            tmp_path / "destination",
             source_date_epoch=0,
             uid=os.getuid(),
             gid=os.getgid(),

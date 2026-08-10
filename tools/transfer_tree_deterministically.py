@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import stat
 import sys
-import tarfile
-import tempfile
 from pathlib import Path
 
 
@@ -24,38 +23,11 @@ def _tree_paths(source: Path) -> list[Path]:
     return sorted(paths, key=lambda path: path.relative_to(source).as_posix())
 
 
-def write_deterministic_tar(
-    source: Path,
-    archive: Path,
-    *,
-    source_date_epoch: int,
-    uid: int,
-    gid: int,
-) -> int:
-    """Write a GNU tar stream with stable order, timestamps, and ownership."""
-
-    if source_date_epoch < 0:
-        raise ValueError("SOURCE_DATE_EPOCH must be a non-negative integer")
-    if uid < 0 or gid < 0:
-        raise ValueError("uid and gid must be non-negative integers")
-    paths = _tree_paths(source)
-    with tarfile.open(archive, mode="w", format=tarfile.GNU_FORMAT, dereference=False) as output:
-        for path in paths:
-            relative = path.relative_to(source)
-            archive_name = "." if not relative.parts else f"./{relative.as_posix()}"
-            member = output.gettarinfo(str(path), arcname=archive_name)
-            member.uid = uid
-            member.gid = gid
-            member.uname = ""
-            member.gname = ""
-            member.mtime = source_date_epoch
-            member.pax_headers = {}
-            if member.isreg():
-                with path.open("rb") as contents:
-                    output.addfile(member, contents)
-            else:
-                output.addfile(member)
-    return len(paths)
+def _destination_path(source: Path, destination: Path, path: Path) -> Path:
+    relative = path.relative_to(source)
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError(f"source contains an unsafe relative path: {path}")
+    return destination.joinpath(*relative.parts)
 
 
 def transfer_tree_deterministically(
@@ -66,37 +38,32 @@ def transfer_tree_deterministically(
     uid: int,
     gid: int,
 ) -> int:
-    """Transfer a tree through a deterministic tar archive."""
+    """Copy content while setting destination ownership and times explicitly."""
 
+    if source_date_epoch < 0:
+        raise ValueError("SOURCE_DATE_EPOCH must be a non-negative integer")
+    if uid < 0 or gid < 0:
+        raise ValueError("uid and gid must be non-negative integers")
     if destination.exists() or destination.is_symlink():
         raise ValueError(f"destination must not already exist: {destination}")
     if not destination.parent.is_dir():
         raise ValueError(f"destination parent must exist: {destination.parent}")
 
-    archive_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix="deterministic-tree-", suffix=".tar", delete=False
-        ) as archive:
-            archive_path = Path(archive.name)
-        count = write_deterministic_tar(
-            source,
-            archive_path,
-            source_date_epoch=source_date_epoch,
-            uid=uid,
-            gid=gid,
-        )
-        destination.mkdir()
-        with tarfile.open(archive_path, mode="r:") as input_archive:
-            # The private archive is synthesized above from a validated tree.
-            input_archive.extractall(  # noqa: S202
-                destination,
-                numeric_owner=True,
-                filter="fully_trusted",
-            )
-    finally:
-        if archive_path is not None:
-            archive_path.unlink(missing_ok=True)
+    paths = _tree_paths(source)
+    source_mode = stat.S_IMODE(source.lstat().st_mode)
+    destination.mkdir(mode=source_mode)
+    for path in paths[1:]:
+        target = _destination_path(source, destination, path)
+        metadata = path.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if stat.S_ISDIR(metadata.st_mode):
+            target.mkdir(mode=mode)
+        elif stat.S_ISLNK(metadata.st_mode):
+            target.symlink_to(path.readlink())
+        else:
+            with path.open("rb") as source_file, target.open("xb") as target_file:
+                shutil.copyfileobj(source_file, target_file)
+            target.chmod(mode, follow_symlinks=False)
 
     expected_time_ns = source_date_epoch * 1_000_000_000
     destination_paths = [destination, *destination.rglob("*")]
@@ -107,7 +74,7 @@ def transfer_tree_deterministically(
             ns=(expected_time_ns, expected_time_ns),
             follow_symlinks=False,
         )
-    return count
+    return len(paths)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -134,7 +101,7 @@ def main() -> int:
             uid=args.uid,
             gid=args.gid,
         )
-    except (OSError, tarfile.TarError, ValueError) as error:
+    except (OSError, ValueError) as error:
         print(f"deterministic tree transfer failed: {error}", file=sys.stderr)
         return 1
     print(f"filesystem entries transferred: {count}")

@@ -44,7 +44,7 @@ Public GitHub Freeのrepository rulesetを`main`へ適用する。
 
 Docker build cacheは性能最適化であり、依存関係の正本ではない。`uv.lock`、`--frozen`、digest固定base imageを再現性境界とし、cache missまたはcache evictionでも同一gateを通るimageを再構築できなければならない。`UV_NO_CACHE=1`は使用せず、uv cacheはbuild mountの寿命へ限定する。
 
-risk-bound imageのvenv transferは通常の`COPY --from=builder`を使用しない。productionはruntime imageのPythonとbuild-timeだけmountするhelperで、break-glassはGNU tar streamで、いずれもbuilderのread-only venvからpath順、`SOURCE_DATE_EPOCH`、numeric owner/groupを固定して最終stageへ展開する。BuildKitのCOPYが保持するsource metadataのうち、同一内容でも変動し得るatimeをimage identityへ含めない。
+risk-bound imageのvenv transferは通常の`COPY --from=builder`を使用しない。productionはruntime imageのPythonとbuild-timeだけmountするhelperで検証済みpathの内容を直接copyし、break-glassはGNU tar streamを使う。いずれもbuilderのread-only venvからpath順、`SOURCE_DATE_EPOCH`、numeric owner/groupを固定して最終stageへ展開する。BuildKitのCOPYが保持するsource metadataのうち、同一内容でも変動し得るatimeをimage identityへ含めない。
 
 Docker exporterはcache hitとcache missで既存の圧縮blobと新規圧縮blobを使い分けてはならない。CIのproduction、fault-test、break-glassとReleaseのproduction、break-glassは、`type=docker`と`rewrite-timestamp=true`に加え、`compression=gzip`、`compression-level=6`、`force-compression=true`を共通のexporter条件とする。risk-bound imageでは`builder`とdeterministic venv transferを行う最終stageをともにstage限定no-cacheへ含める。圧縮前の同一`diff_id`を持つ過去builder snapshotから異なるgzip blob/configを再materializeする経路を禁止する。
 
