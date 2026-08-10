@@ -78,12 +78,6 @@ class PersonaConfigPayload(_StrictModel):
             raise ValueError("text must not be blank")
         return value
 
-    @field_validator("display_name")
-    @classmethod
-    def _require_renderer_compatible_display_name(cls, value: str) -> str:
-        sanitize_discord_model_text(value)
-        return value
-
     @field_validator("system_prompt")
     @classmethod
     def _limit_prompt_bytes(cls, value: str) -> str:
@@ -191,6 +185,8 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         }
         if any(persona.slot is not slot for slot, persona in personas.items()):
             raise ValueError("persona slot mismatch")
+        for participant in PARTICIPANTS:
+            sanitize_discord_model_text(personas[DiscordBotSlot(participant.value)].display_name)
         versions = {runtime_version} | {persona.config_version for persona in personas.values()}
         if len(versions) != 1:
             raise ValueError("configuration version mismatch")

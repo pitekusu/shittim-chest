@@ -92,6 +92,17 @@ def test_load_bootstrap_config_rejects_renderer_incompatible_display_name() -> N
     assert str(captured.value) == "startup_configuration_invalid"
 
 
+def test_load_bootstrap_config_does_not_apply_vote_renderer_to_moderator_name() -> None:
+    environment = _valid_environment()
+    persona = json.loads(environment["SHITTIM_PERSONA_MODERATOR_JSON"])
+    persona["display_name"] = "Generic\u200dModerator"
+    environment["SHITTIM_PERSONA_MODERATOR_JSON"] = json.dumps(persona)
+
+    config = load_bootstrap_config(environment)
+
+    assert config.personas[DiscordBotSlot.MODERATOR].display_name == "Generic\u200dModerator"
+
+
 def test_load_bootstrap_config_requires_one_matching_version_for_all_payloads() -> None:
     environment = _valid_environment()
     persona = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_C_JSON"])
