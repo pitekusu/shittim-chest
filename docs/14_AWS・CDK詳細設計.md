@@ -26,7 +26,7 @@ updated: 2026-07-30
 
 L2 constructを優先し、L1/escape hatchはADRで理由を残す。construct IDとlogical IDは初回deploy後に変更しない。`cdk.context.json`をcommitし、`cdk-nag`の`AwsSolutionsChecks`と`cdk synth --strict`を必須とする。
 
-STEP-09Aでは最新Active LTSのNode.js 24.18.0、TypeScript 7.0.2、CDK CLI 2.1132.0、`aws-cdk-lib` 2.261.0、constructs 10.7.0、cdk-nag 3.0.1、Vitest 4.1.10を完全固定し、`package-lock.json`を正本とする。Node.js 26はCurrentでありLTS化前のため採用しない。CDK推奨feature flagを`cdk.json`へ全て明示し、将来のdefault変更でtemplateが暗黙変化しないようにする。cdk-nag 3は旧Aspect APIではなくCDK `Validations` pluginとして登録する。
+STEP-09A初期導入時は最新Active LTSのNode.js 24.18.0、TypeScript 7.0.2、CDK CLI 2.1132.0、`aws-cdk-lib` 2.261.0、constructs 10.7.0、cdk-nag 3.0.1、Vitest 4.1.10を完全固定した。2026-08-10のdependency保守で、bundle済み`brace-expansion`の監査指摘を3件から1件へ削減するため`aws-cdk-lib`を2.263.0へ更新し、CDK validation APIとの互換性維持のためcdk-nagを3.0.2へ更新した。現在の完全なversion集合は`package-lock.json`を正本とする。Node.js 26はCurrentでありLTS化前のため採用しない。CDK推奨feature flagを`cdk.json`へ全て明示し、将来のdefault変更でtemplateが暗黙変化しないようにする。cdk-nag 3は旧Aspect APIではなくCDK `Validations` pluginとして登録する。
 
 STEP-09Aの`StatefulStack`は次を実装する。
 

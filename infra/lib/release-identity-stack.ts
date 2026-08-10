@@ -221,26 +221,20 @@ export class ReleaseIdentityStack extends Stack {
       "AwsSolutions-IAM5[Resource::*]",
       ...this.stackWildcardAcknowledgments(RELEASE_STACK_NAMES),
     ]);
-    // CDK 2.261 rejects a validation ID containing the S3 ARN's `:::` even
-    // though AwsSolutions emits that exact granular ID. Record the same
-    // evidence metadata directly until the validation ID parser supports it.
-    this.planRole.node.addMetadata(
-      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
-      {
-        [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
-          "The plan role can write only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
-        [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/templates/shittim-chest/*]`]:
-          "The plan role can write only content-addressed oversized CloudFormation templates in the account's fixed CDK asset bucket.",
-        ...Object.fromEntries(
-          [TOKYO_REGION, COST_REGION].flatMap((region) =>
-            this.cdkAssetObjectKeys().map((key) => [
-              `AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${region}/${key}]`,
-              "The plan role can read or upload only an exact 64-character content-addressed single-part CDK JSON or ZIP asset; it cannot delete any bootstrap asset.",
-            ]),
-          ),
+    this.acknowledgeRoleWildcardEvidence(this.planRole, {
+      [`AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
+        "The plan role can write only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
+      [`AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/templates/shittim-chest/*]`]:
+        "The plan role can write only content-addressed oversized CloudFormation templates in the account's fixed CDK asset bucket.",
+      ...Object.fromEntries(
+        [TOKYO_REGION, COST_REGION].flatMap((region) =>
+          this.cdkAssetObjectKeys().map((key) => [
+            `AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${region}/${key}]`,
+            "The plan role can read or upload only an exact 64-character content-addressed single-part CDK JSON or ZIP asset; it cannot delete any bootstrap asset.",
+          ]),
         ),
-      },
-    );
+      ),
+    });
   }
 
   private grantDeployPermissions(props: ReleaseIdentityStackProps): void {
@@ -350,13 +344,10 @@ export class ReleaseIdentityStack extends Stack {
       ...this.changeSetWildcardAcknowledgments(),
       ...this.stackWildcardAcknowledgments(RELEASE_STACK_NAMES),
     ]);
-    this.deployRole.node.addMetadata(
-      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
-      {
-        [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
-          "The deploy role can read only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
-      },
-    );
+    this.acknowledgeRoleWildcardEvidence(this.deployRole, {
+      [`AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
+        "The deploy role can read only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
+    });
   }
 
   private grantDriftPermissions(): void {
@@ -441,5 +432,15 @@ export class ReleaseIdentityStack extends Stack {
           "The wildcard is limited by a named production resource, aws:ResourceAccount, or an AWS API that does not support resource-level permissions.",
       });
     }
+  }
+
+  private acknowledgeRoleWildcardEvidence(
+    role: iam.Role,
+    acknowledgments: Record<string, string>,
+  ): void {
+    // CDK validation IDs cannot represent an S3 ARN containing `:::`.
+    // cdk-nag reads the same acknowledged-rules metadata directly, preserving
+    // the exact granular finding ID and evidence without broad suppression.
+    role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, acknowledgments);
   }
 }
