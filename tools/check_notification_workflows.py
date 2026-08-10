@@ -507,9 +507,9 @@ def _validate_release(directory: Path) -> None:
             raise WorkflowPolicyError(
                 "Release production and break-glass builds must share the immutable image context"
             )
-        if block.count("BUILDKIT_MULTI_PLATFORM=1") != 1:
+        if "BUILDKIT_MULTI_PLATFORM" in block:
             raise WorkflowPolicyError(
-                "Release image builds must request deterministic BuildKit platform output"
+                "Release Docker image exports must not request a manifest-list result"
             )
     if production_build_block.count("no-cache-filters: builder,runtime-base") != 1:
         raise WorkflowPolicyError(
@@ -884,10 +884,18 @@ def _validate_ci_container_risk(directory: Path) -> None:
         text, "Build and load the break-glass image for risk validation"
     )
     for block in (production_build_block, fault_build_block, break_glass_build_block):
-        if block.count("BUILDKIT_MULTI_PLATFORM=1") != 1:
+        if "BUILDKIT_MULTI_PLATFORM" in block:
             raise WorkflowPolicyError(
-                "CI image builds must request deterministic BuildKit platform output"
+                "CI Docker image exports must not request a manifest-list result"
             )
+    rootfs_evidence = (
+        "production-image-rootfs-diffids.json",
+        "break-glass-image-rootfs-diffids.json",
+    )
+    if any(text.count(name) != 2 for name in rootfs_evidence):
+        raise WorkflowPolicyError(
+            "CI must record and retain both risk-bound image rootfs diff ID lists"
+        )
     if production_build_block.count("no-cache-filters: builder,runtime-base") != 1:
         raise WorkflowPolicyError(
             "CI production build must regenerate the builder snapshot and final runtime stage"

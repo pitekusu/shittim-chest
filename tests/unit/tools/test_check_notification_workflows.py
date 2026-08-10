@@ -375,7 +375,7 @@ def test_image_builds_require_forced_canonical_compression(
         (RELEASE_WORKFLOW, "Build and load the isolated break-glass image once"),
     ],
 )
-def test_image_builds_require_deterministic_buildkit_platform_output(
+def test_docker_image_builds_reject_manifest_list_output(
     tmp_path: Path,
     workflow: str,
     step_name: str,
@@ -387,10 +387,33 @@ def test_image_builds_require_deterministic_buildkit_platform_output(
     end = text.find("\n      - name:", start + 1)
     assert end != -1
     block = text[start:end]
-    unsafe = block.replace("BUILDKIT_MULTI_PLATFORM=1", "BUILDKIT_MULTI_PLATFORM=0", 1)
+    unsafe = block.replace(
+        "          target:",
+        "          build-args: |\n            BUILDKIT_MULTI_PLATFORM=1\n          target:",
+        1,
+    )
     path.write_text(text[:start] + unsafe + text[end:], encoding="utf-8")
 
-    with pytest.raises(WorkflowPolicyError, match="deterministic BuildKit platform"):
+    with pytest.raises(WorkflowPolicyError, match="manifest-list"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "production-image-rootfs-diffids.json",
+        "break-glass-image-rootfs-diffids.json",
+    ],
+)
+def test_ci_requires_rootfs_diff_id_evidence(tmp_path: Path, name: str) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / "ci.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(name, "missing-rootfs-evidence.json"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="rootfs diff ID"):
         validate_notification_workflows(directory)
 
 

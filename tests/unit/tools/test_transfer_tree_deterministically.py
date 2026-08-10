@@ -13,8 +13,11 @@ from tools.transfer_tree_deterministically import transfer_tree_deterministicall
 
 def _source_tree(root: Path) -> Path:
     source = root / "source"
+    source.mkdir(parents=True)
+    source.chmod(0o750)
     package = source / "lib" / "python3.14" / "site-packages" / "example"
     package.mkdir(parents=True)
+    package.chmod(0o775)
     module = package / "module.py"
     module.write_text("VALUE = 1\n", encoding="utf-8")
     module.chmod(0o640)
@@ -74,6 +77,39 @@ def test_transfer_is_identical_when_source_atimes_differ(tmp_path: Path) -> None
         )
 
     assert _snapshot(first_destination) == _snapshot(second_destination)
+
+
+def test_transfer_is_identical_under_different_process_umasks(tmp_path: Path) -> None:
+    source = _source_tree(tmp_path / "source-root")
+    destinations = (tmp_path / "restrictive", tmp_path / "permissive")
+    original_umask = os.umask(0o077)
+    try:
+        transfer_tree_deterministically(
+            source,
+            destinations[0],
+            source_date_epoch=7,
+            uid=os.getuid(),
+            gid=os.getgid(),
+        )
+        os.umask(0o002)
+        transfer_tree_deterministically(
+            source,
+            destinations[1],
+            source_date_epoch=7,
+            uid=os.getuid(),
+            gid=os.getgid(),
+        )
+    finally:
+        os.umask(original_umask)
+
+    assert _snapshot(destinations[0]) == _snapshot(destinations[1])
+    assert stat.S_IMODE(destinations[0].stat().st_mode) == 0o750
+    assert (
+        stat.S_IMODE(
+            (destinations[0] / "lib" / "python3.14" / "site-packages" / "example").stat().st_mode
+        )
+        == 0o775
+    )
 
 
 def test_transfer_preserves_content_modes_and_symlinks(tmp_path: Path) -> None:

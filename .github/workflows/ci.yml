@@ -322,8 +322,6 @@ jobs:
         with:
           context: .
           target: production
-          build-args: |
-            BUILDKIT_MULTI_PLATFORM=1
           no-cache-filters: builder,runtime-base
           tags: shittim-chest:step-08b-arm64
           outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
@@ -341,6 +339,11 @@ jobs:
           printf '%s\n' "${IMAGE_CONFIG_DIGEST}" \
             > "${RUNNER_TEMP}/production-image-config-digest.txt"
           printf '%s\n' "${IMAGE_DIGEST}" > "${RUNNER_TEMP}/image-manifest-digest.txt"
+          docker image inspect shittim-chest:step-08b-arm64 \
+            --format '{{json .RootFS.Layers}}' \
+            | tee "${RUNNER_TEMP}/production-image-rootfs-diffids.json" \
+            | jq --exit-status \
+              'type == "array" and length > 0 and all(.[]; test("^sha256:[0-9a-f]{64}$"))'
           docker image inspect shittim-chest:step-08b-arm64 --format '{{.Size}}' \
             > "${RUNNER_TEMP}/image-size-bytes.txt"
       - name: Build and load the CI-only fault image
@@ -350,8 +353,6 @@ jobs:
         with:
           context: .
           target: fault-test
-          build-args: |
-            BUILDKIT_MULTI_PLATFORM=1
           tags: shittim-chest:step-08b-fault-arm64
           outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
       - name: Validate image security and inject termination faults
@@ -368,8 +369,6 @@ jobs:
         with:
           context: .
           target: break-glass
-          build-args: |
-            BUILDKIT_MULTI_PLATFORM=1
           no-cache-filters: builder,break-glass
           tags: shittim-chest:step-10-break-glass-arm64
           outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
@@ -383,6 +382,11 @@ jobs:
             "${IMAGE_CONFIG_DIGEST}"
           printf '%s\n' "${IMAGE_CONFIG_DIGEST}" \
             > "${RUNNER_TEMP}/break-glass-image-config-digest.txt"
+          docker image inspect shittim-chest:step-10-break-glass-arm64 \
+            --format '{{json .RootFS.Layers}}' \
+            | tee "${RUNNER_TEMP}/break-glass-image-rootfs-diffids.json" \
+            | jq --exit-status \
+              'type == "array" and length > 0 and all(.[]; test("^sha256:[0-9a-f]{64}$"))'
       - name: Install pinned Syft
         run: |
           syft_version=$(jq --raw-output '.tools.syft.version' .github/tool-versions.json)
@@ -470,6 +474,8 @@ jobs:
             ${{ runner.temp }}/image-manifest-digest.txt
             ${{ runner.temp }}/production-image-config-digest.txt
             ${{ runner.temp }}/break-glass-image-config-digest.txt
+            ${{ runner.temp }}/production-image-rootfs-diffids.json
+            ${{ runner.temp }}/break-glass-image-rootfs-diffids.json
             ${{ runner.temp }}/image-size-bytes.txt
             ${{ runner.temp }}/dhi-python-runtime.openvex.json
             ${{ runner.temp }}/dhi-python-builder.openvex.json

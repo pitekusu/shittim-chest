@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import stat
@@ -30,6 +31,54 @@ def _destination_path(source: Path, destination: Path, path: Path) -> Path:
     return destination.joinpath(*relative.parts)
 
 
+def _canonical_tree_digest(root: Path) -> str:
+    """Hash the filesystem attributes that can affect an OCI layer diff ID."""
+
+    digest = hashlib.sha256()
+    for path in _tree_paths(root):
+        metadata = path.lstat()
+        relative = path.relative_to(root).as_posix()
+        if stat.S_ISREG(metadata.st_mode):
+            entry_type = b"file"
+        elif stat.S_ISDIR(metadata.st_mode):
+            entry_type = b"directory"
+        else:
+            entry_type = b"symlink"
+        fields = [
+            relative.encode("utf-8"),
+            entry_type,
+            f"{stat.S_IMODE(metadata.st_mode):04o}".encode("ascii"),
+            str(metadata.st_uid).encode("ascii"),
+            str(metadata.st_gid).encode("ascii"),
+            str(metadata.st_mtime_ns).encode("ascii"),
+        ]
+        if stat.S_ISREG(metadata.st_mode):
+            fields.append(str(metadata.st_size).encode("ascii"))
+        for field in fields:
+            digest.update(len(field).to_bytes(8, "big"))
+            digest.update(field)
+        if stat.S_ISREG(metadata.st_mode):
+            with path.open("rb") as contents:
+                for chunk in iter(lambda: contents.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        elif stat.S_ISLNK(metadata.st_mode):
+            target = os.fsencode(path.readlink())
+            digest.update(len(target).to_bytes(8, "big"))
+            digest.update(target)
+    return digest.hexdigest()
+
+
+def _canonicalize_destination_times(root: Path, source_date_epoch: int) -> None:
+    expected_time_ns = source_date_epoch * 1_000_000_000
+    destination_paths = [root, *root.rglob("*")]
+    for path in sorted(destination_paths, key=lambda item: len(item.parts), reverse=True):
+        os.utime(
+            path,
+            ns=(expected_time_ns, expected_time_ns),
+            follow_symlinks=False,
+        )
+
+
 def transfer_tree_deterministically(
     source: Path,
     destination: Path,
@@ -52,12 +101,16 @@ def transfer_tree_deterministically(
     paths = _tree_paths(source)
     source_mode = stat.S_IMODE(source.lstat().st_mode)
     destination.mkdir(mode=source_mode)
+    destination.chmod(source_mode, follow_symlinks=False)
     for path in paths[1:]:
         target = _destination_path(source, destination, path)
         metadata = path.lstat()
         mode = stat.S_IMODE(metadata.st_mode)
         if stat.S_ISDIR(metadata.st_mode):
             target.mkdir(mode=mode)
+            # mkdir applies the process umask. Restore the source mode explicitly
+            # so BuildKit worker configuration cannot alter the resulting layer.
+            target.chmod(mode, follow_symlinks=False)
         elif stat.S_ISLNK(metadata.st_mode):
             target.symlink_to(path.readlink())
         else:
@@ -65,15 +118,10 @@ def transfer_tree_deterministically(
                 shutil.copyfileobj(source_file, target_file)
             target.chmod(mode, follow_symlinks=False)
 
-    expected_time_ns = source_date_epoch * 1_000_000_000
     destination_paths = [destination, *destination.rglob("*")]
     for path in sorted(destination_paths, key=lambda item: len(item.parts), reverse=True):
         os.chown(path, uid, gid, follow_symlinks=False)
-        os.utime(
-            path,
-            ns=(expected_time_ns, expected_time_ns),
-            follow_symlinks=False,
-        )
+    _canonicalize_destination_times(destination, source_date_epoch)
     return len(paths)
 
 
@@ -101,10 +149,14 @@ def main() -> int:
             uid=args.uid,
             gid=args.gid,
         )
+        tree_digest = _canonical_tree_digest(args.destination)
+        # Reading regular files for the diagnostic digest can update atime.
+        _canonicalize_destination_times(args.destination, args.source_date_epoch)
     except (OSError, ValueError) as error:
         print(f"deterministic tree transfer failed: {error}", file=sys.stderr)
         return 1
     print(f"filesystem entries transferred: {count}")
+    print(f"filesystem tree sha256: {tree_digest}")
     return 0
 
 
