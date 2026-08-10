@@ -109,6 +109,7 @@ def make_application(
     phase_timeout: float = 60.0,
     lease_renewal: float = 20.0,
     outbox_recovery: FakeOutboxRecovery | None = None,
+    participant_display_names: dict[ParticipantSlot, str] | None = None,
     lease_owner: str = "worker-1",
     terminal_delivery_conflict_retry_seconds: float = 0.0,
 ) -> DebateApplication:
@@ -123,12 +124,44 @@ def make_application(
         repository=repository,
         candidate_orderer=orderer,
         outbox_recovery=outbox_recovery or FakeOutboxRecovery(),
+        participant_display_names=(
+            {
+                ParticipantSlot.PARTICIPANT_A: "Generic A",
+                ParticipantSlot.PARTICIPANT_B: "Generic B",
+                ParticipantSlot.PARTICIPANT_C: "Generic C",
+            }
+            if participant_display_names is None
+            else participant_display_names
+        ),
         lease_owner=lease_owner,
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
         lease_renewal_seconds=lease_renewal,
         terminal_delivery_conflict_retry_seconds=terminal_delivery_conflict_retry_seconds,
     )
+
+
+def test_application_rejects_renderer_incompatible_participant_display_name(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    with pytest.raises(ValueError, match="forbidden Unicode"):
+        make_application(
+            dependencies,
+            participant_display_names={
+                ParticipantSlot.PARTICIPANT_A: "Generic\u200dA",
+                ParticipantSlot.PARTICIPANT_B: "Generic B",
+                ParticipantSlot.PARTICIPANT_C: "Generic C",
+            },
+        )
 
 
 def request(*, requester_id: str = "requester") -> AcceptDebateRequest:

@@ -579,6 +579,11 @@ async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
     staged_at = NOW + timedelta(seconds=46)
     operations = prepare_vote_outbox_operations(
         snapshot=selecting,
+        participant_display_names={
+            ParticipantSlot.PARTICIPANT_A: "Generic A",
+            ParticipantSlot.PARTICIPANT_B: "Generic B",
+            ParticipantSlot.PARTICIPANT_C: "Generic C",
+        },
         created_at=staged_at,
     )
     assert tuple(operation.delivery_sequence for operation in operations) == (200, 208, 216)

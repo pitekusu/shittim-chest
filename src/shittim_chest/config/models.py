@@ -15,6 +15,7 @@ from shittim_chest.application import (
     DiscordBotSlot,
     DiscordIdentityConfig,
     DiscordRuntimeConfig,
+    sanitize_discord_model_text,
 )
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
@@ -122,6 +123,16 @@ class BootstrapConfig:
             }
         )
 
+    def participant_display_names(self) -> Mapping[ParticipantSlot, str]:
+        """Map stable participant slots to their validated public display names."""
+
+        return MappingProxyType(
+            {
+                participant: self.personas[DiscordBotSlot(participant.value)].display_name
+                for participant in PARTICIPANTS
+            }
+        )
+
 
 def parse_discord_runtime_config(raw_json: str) -> tuple[DiscordRuntimeConfig, str]:
     """Validate the token-free shared runtime parameter for ECS or Lambda."""
@@ -174,6 +185,8 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         }
         if any(persona.slot is not slot for slot, persona in personas.items()):
             raise ValueError("persona slot mismatch")
+        for participant in PARTICIPANTS:
+            sanitize_discord_model_text(personas[DiscordBotSlot(participant.value)].display_name)
         versions = {runtime_version} | {persona.config_version for persona in personas.values()}
         if len(versions) != 1:
             raise ValueError("configuration version mismatch")

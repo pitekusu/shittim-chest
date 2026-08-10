@@ -6,13 +6,20 @@ import base64
 import hashlib
 import re
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
 from uuid import RFC_4122, UUID
 
 from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason
-from shittim_chest.domain import PARTICIPANTS, AttemptId, DebateId, DebatePhase
+from shittim_chest.domain import (
+    PARTICIPANTS,
+    AttemptId,
+    DebateId,
+    DebatePhase,
+    ParticipantSlot,
+)
 
 DISCORD_MESSAGE_LIMIT = 2_000
 DISCORD_CUSTOM_ID_LIMIT = 100
@@ -680,6 +687,7 @@ def prepare_final_proposal_outbox_operations(
 def prepare_vote_outbox_operations(
     *,
     snapshot: DebateSnapshot,
+    participant_display_names: Mapping[ParticipantSlot, str],
     created_at: datetime,
 ) -> tuple[OutboxOperation, ...]:
     """Build the ordered participant-owned delivery for one complete ballot."""
@@ -692,6 +700,9 @@ def prepare_vote_outbox_operations(
     votes = {vote.voter: vote for vote in snapshot.votes}
     if len(votes) != len(PARTICIPANTS) or set(votes) != set(PARTICIPANTS):
         raise ValueError("vote delivery requires each participant exactly once")
+    display_names = dict(participant_display_names)
+    if set(display_names) != set(PARTICIPANTS):
+        raise ValueError("vote delivery requires each participant display name exactly once")
 
     plan_id = "votes"
     operations: list[OutboxOperation] = []
@@ -702,7 +713,7 @@ def prepare_vote_outbox_operations(
             (
                 "**投票**",
                 "**投票先**",
-                _quoted_model_text(vote.candidate.value),
+                _quoted_model_text(display_names[vote.candidate]),
                 "**理由**",
                 _quoted_model_text(vote.reason),
             )
