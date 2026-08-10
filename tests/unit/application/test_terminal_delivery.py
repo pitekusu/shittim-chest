@@ -68,9 +68,13 @@ def snapshot(
     )
 
 
-def final_decision(*, decision: str = "フルーツを添えたパンケーキ") -> FinalDecision:
+def final_decision(
+    *,
+    winner: ParticipantSlot = ParticipantSlot.PARTICIPANT_B,
+    decision: str = "フルーツを添えたパンケーキ",
+) -> FinalDecision:
     return FinalDecision(
-        winner=ParticipantSlot.PARTICIPANT_B,
+        winner=winner,
         decision=decision,
         actions=("薄力粉と卵を混ぜる", "いちごを添える"),
         caveats=("甘さは好みで調整する",),
@@ -130,6 +134,29 @@ def test_failed_and_cancelled_delivery_have_safe_terminal_content() -> None:
     assert "**討論を中止しました**" in cancelled_content
     assert AI_DISCLAIMER in failed_content
     assert AI_DISCLAIMER in cancelled_content
+    assert all(operation.bot_slot is DiscordBotSlot.MODERATOR for operation in failed)
+    assert all(operation.bot_slot is DiscordBotSlot.MODERATOR for operation in cancelled)
+
+
+@pytest.mark.parametrize(
+    ("winner", "expected_bot_slot"),
+    (
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.PARTICIPANT_A),
+        (ParticipantSlot.PARTICIPANT_B, DiscordBotSlot.PARTICIPANT_B),
+        (ParticipantSlot.PARTICIPANT_C, DiscordBotSlot.PARTICIPANT_C),
+    ),
+)
+def test_completed_delivery_is_owned_by_the_persisted_winner(
+    winner: ParticipantSlot,
+    expected_bot_slot: DiscordBotSlot,
+) -> None:
+    operations = prepare_terminal_outbox_operations(
+        snapshot=snapshot(final_decision=final_decision(winner=winner)),
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW,
+    )
+
+    assert all(operation.bot_slot is expected_bot_slot for operation in operations)
 
 
 def test_terminal_operations_are_replay_stable_and_use_unique_uuid7_nonces() -> None:
@@ -153,7 +180,7 @@ def test_terminal_operations_are_replay_stable_and_use_unique_uuid7_nonces() -> 
     assert first == replay
     assert len({operation.nonce for operation in first}) == len(first)
     assert all(nonce.version == 7 and nonce.variant == RFC_4122 for nonce in decoded_nonces)
-    assert all(operation.bot_slot is DiscordBotSlot.MODERATOR for operation in first)
+    assert all(operation.bot_slot is DiscordBotSlot.PARTICIPANT_B for operation in first)
     assert all(operation.status is OutboxStatus.PREPARED for operation in first)
 
 
