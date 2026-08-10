@@ -365,43 +365,65 @@ def test_image_builds_require_forced_canonical_compression(
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+@pytest.mark.parametrize("filters", ["builder,runtime-base", "builder,break-glass"])
 def test_ci_regenerates_cache_sensitive_final_image_stages(
     tmp_path: Path,
-    stage: str,
+    filters: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"          no-cache-filters: {stage}\n",
+            f"          no-cache-filters: {filters}\n",
             "",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="cache-sensitive"):
+    with pytest.raises(WorkflowPolicyError, match=r"builder snapshot|final"):
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+@pytest.mark.parametrize("filters", ["builder,runtime-base", "builder,break-glass"])
 def test_release_regenerates_cache_sensitive_final_image_stages(
     tmp_path: Path,
-    stage: str,
+    filters: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"          no-cache-filters: {stage}\n",
+            f"          no-cache-filters: {filters}\n",
             "",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="cache-sensitive"):
+    with pytest.raises(WorkflowPolicyError, match=r"builder snapshot|final"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
+@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
+def test_risk_bound_images_reject_cached_builder_snapshots(
+    tmp_path: Path,
+    workflow: str,
+    stage: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f"          no-cache-filters: builder,{stage}\n",
+            f"          no-cache-filters: {stage}\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="builder snapshot"):
         validate_notification_workflows(directory)
 
 

@@ -446,7 +446,7 @@ jobs:
           context: ${{ env.RELEASE_IMAGE_CONTEXT }}
           file: ${{ env.RELEASE_IMAGE_CONTEXT }}/Dockerfile
           target: production
-          no-cache-filters: runtime-base
+          no-cache-filters: builder,runtime-base
           outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
           tags: ${{ vars.ECR_REPOSITORY_URI }}:release-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=container-arm64-production
@@ -460,7 +460,7 @@ jobs:
           context: ${{ env.RELEASE_IMAGE_CONTEXT }}
           file: ${{ env.RELEASE_IMAGE_CONTEXT }}/Dockerfile
           target: break-glass
-          no-cache-filters: break-glass
+          no-cache-filters: builder,break-glass
           outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
           tags: ${{ vars.ECR_REPOSITORY_URI }}:break-glass-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=container-arm64-break-glass
