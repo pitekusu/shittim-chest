@@ -89,6 +89,8 @@ class ContentFreeTelemetry:
             ("evidence_source_count", record.evidence_source_count),
             ("title_fallback_count", record.title_fallback_count),
             ("title_fallback_kinds", record.title_fallback_kinds),
+            ("retry_count", record.retry_count),
+            ("prior_incomplete_reason", record.prior_incomplete_reason),
         ):
             if value is not None:
                 fields[name] = value

@@ -53,6 +53,10 @@ from shittim_chest.adapters.openai.schemas import FarewellOutputV1
 from shittim_chest.application.farewell import FarewellTimeContext, prepare_farewell_content
 from shittim_chest.domain import ParticipantSlot
 
+_INITIAL_MAX_OUTPUT_TOKENS = 4_000
+_RETRY_MAX_OUTPUT_TOKENS = 8_000
+_MAX_OUTPUT_TOKENS_REASON = "max_output_tokens"
+
 
 @dataclass(slots=True)
 class OpenAIFarewellGenerator:
@@ -74,40 +78,27 @@ class OpenAIFarewellGenerator:
 
         operation = "farewell_generation"
         started = monotonic()
+        retry_count = 0
+        prior_incomplete_reason: str | None = None
         try:
-            async with self.limiter.slot():
-                response = await self.client.responses.parse(
-                    model=self.config.model,
-                    instructions=farewell_instructions(self.personas.for_participant(participant)),
-                    input=farewell_input(
-                        local_datetime=time_context.local_datetime,
-                        period=time_context.period,
-                        season=time_context.season,
-                    ),
-                    text_format=FarewellOutputV1,
-                    include=["web_search_call.action.sources"],
-                    max_output_tokens=600,
-                    reasoning={"effort": "medium"},
-                    store=False,
-                    tools=[
-                        {
-                            "type": "web_search",
-                            "search_context_size": "medium",
-                            "user_location": {
-                                "type": "approximate",
-                                "country": "JP",
-                                "city": "Tokyo",
-                                "region": "Tokyo",
-                                "timezone": "Asia/Tokyo",
-                            },
-                        }
-                    ],
-                    tool_choice="required",
-                    max_tool_calls=4,
-                    parallel_tool_calls=False,
-                    truncation="disabled",
+            response = await self._request(
+                participant=participant,
+                time_context=time_context,
+                max_output_tokens=_INITIAL_MAX_OUTPUT_TOKENS,
+            )
+            try:
+                parsed = _extract_parsed(response)
+            except OpenAIIncompleteResponse as error:
+                if not _retryable_incomplete(error):
+                    raise
+                retry_count = 1
+                prior_incomplete_reason = error.diagnostic_kind
+                response = await self._request(
+                    participant=participant,
+                    time_context=time_context,
+                    max_output_tokens=_RETRY_MAX_OUTPUT_TOKENS,
                 )
-            parsed = _extract_parsed(response)
+                parsed = _extract_parsed(response)
             source_urls, citation_urls = _extract_urls(response)
             weather_url = _validated_url(parsed.weather_source_url)
             news_url = _validated_url(parsed.news_source_url)
@@ -142,8 +133,56 @@ class OpenAIFarewellGenerator:
             )
             self._record_failure(operation, failure, started)
             raise failure from error
-        self._record_usage(operation, response, len(source_urls), len(citation_urls), started)
+        self._record_usage(
+            operation,
+            response,
+            len(source_urls),
+            len(citation_urls),
+            started,
+            retry_count=retry_count,
+            prior_incomplete_reason=prior_incomplete_reason,
+        )
         return content
+
+    async def _request(
+        self,
+        *,
+        participant: ParticipantSlot,
+        time_context: FarewellTimeContext,
+        max_output_tokens: int,
+    ) -> ParsedResponse[FarewellOutputV1]:
+        async with self.limiter.slot():
+            return await self.client.responses.parse(
+                model=self.config.model,
+                instructions=farewell_instructions(self.personas.for_participant(participant)),
+                input=farewell_input(
+                    local_datetime=time_context.local_datetime,
+                    period=time_context.period,
+                    season=time_context.season,
+                ),
+                text_format=FarewellOutputV1,
+                include=["web_search_call.action.sources"],
+                max_output_tokens=max_output_tokens,
+                reasoning={"effort": "medium"},
+                store=False,
+                tools=[
+                    {
+                        "type": "web_search",
+                        "search_context_size": "medium",
+                        "user_location": {
+                            "type": "approximate",
+                            "country": "JP",
+                            "city": "Tokyo",
+                            "region": "Tokyo",
+                            "timezone": "Asia/Tokyo",
+                        },
+                    }
+                ],
+                tool_choice="required",
+                max_tool_calls=4,
+                parallel_tool_calls=False,
+                truncation="disabled",
+            )
 
     def _record_usage(
         self,
@@ -152,6 +191,9 @@ class OpenAIFarewellGenerator:
         source_count: int,
         citation_count: int,
         started: float,
+        *,
+        retry_count: int,
+        prior_incomplete_reason: str | None,
     ) -> None:
         usage = response.usage
         self.recorder.record_usage(
@@ -174,6 +216,8 @@ class OpenAIFarewellGenerator:
                 web_search_source_rejected_count=0,
                 url_citation_count=citation_count,
                 evidence_source_count=2,
+                retry_count=retry_count,
+                prior_incomplete_reason=prior_incomplete_reason,
             )
         )
 
@@ -189,6 +233,8 @@ class OpenAIFarewellGenerator:
                 code=error.code,
                 policy_id=self.config.policy.policy_id.value,
                 latency_ms=max(0, round((monotonic() - started) * 1_000)),
+                diagnostic_context=error.diagnostic_context,
+                diagnostic_kind=error.diagnostic_kind,
             )
         )
 
@@ -197,11 +243,25 @@ def _extract_parsed(
     response: ParsedResponse[FarewellOutputV1],
 ) -> FarewellOutputV1:
     if response.status != "completed":
-        raise OpenAIIncompleteResponse()
+        reason = response.status
+        if response.status == "incomplete":
+            reason = (
+                response.incomplete_details.reason
+                if response.incomplete_details is not None
+                and response.incomplete_details.reason is not None
+                else "missing"
+            )
+        raise OpenAIIncompleteResponse(
+            diagnostic_context="response_status",
+            diagnostic_kind=reason,
+        )
     for output in response.output:
         if isinstance(output, ResponseOutputMessage):
             if output.status != "completed":
-                raise OpenAIIncompleteResponse()
+                raise OpenAIIncompleteResponse(
+                    diagnostic_context="message_status",
+                    diagnostic_kind=output.status,
+                )
             for content in output.content:
                 if isinstance(content, ResponseOutputRefusal):
                     raise OpenAIRefusal()
@@ -222,7 +282,10 @@ def _extract_urls(
     for output in response.output:
         if isinstance(output, ResponseFunctionWebSearch):
             if output.status != "completed":
-                raise OpenAIIncompleteResponse()
+                raise OpenAIIncompleteResponse(
+                    diagnostic_context="web_search_status",
+                    diagnostic_kind=output.status,
+                )
             action = output.action
             if isinstance(action, (ActionOpenPage, ActionFind)):
                 continue
@@ -254,6 +317,13 @@ def _extract_urls(
         else:
             raise OpenAIInvalidOutput()
     return source_urls, citation_urls
+
+
+def _retryable_incomplete(error: OpenAIIncompleteResponse) -> bool:
+    return (
+        error.diagnostic_context == "response_status"
+        and error.diagnostic_kind == _MAX_OUTPUT_TOKENS_REASON
+    )
 
 
 def _validated_url(value: object) -> str:

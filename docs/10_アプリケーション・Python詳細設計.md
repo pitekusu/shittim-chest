@@ -153,7 +153,7 @@ Attemptの`COMPLETED`/`FAILED`/`CANCELLED`だけでは完全終了とみなさ�
 
 `idle_since`は最初の完全終了時に一度だけ固定し、`stop_eligible_at=idle_since+30分`とする。Reconcilerは1分周期でactivityとgenerationを再確認し、不変の場合だけ`STOPPING`と`desiredCount=0`へ収束させる。STOPPING中の新規Requestはgenerationを進め、古い停止操作を無効化して`STARTING`/`desiredCount=1`へ戻す。正常なSTOPPING ownerだけがcleanup後に`STOPPED`へ遷移し、それ以外の予期せぬ終了は後続task用の新しい`STARTING`世代を残す。
 
-Runtimeは`stop_eligible_at`の2分前から、同じIDLE generationにつき最大1回だけ帰宅挨拶を先行生成してprocess memoryへ保持する。新規request、generation変更、IDLE解除、生成完了時点の期限超過では候補を破棄する。SIGTERM後は新規workとdrainerを停止してcheckpointを保存した後、Discord clientを閉じる前にRuntime Stateを再取得し、同じgenerationが`STOPPING`、`stopping_at >= stop_eligible_at`、かつ期限到達済みの場合だけ候補を1回consumeして送信する。生成・送信・照合の失敗は安定codeだけを記録して無視し、通常の90秒以内shutdownとscale-to-zeroを継続する。
+Runtimeは`stop_eligible_at`の2分前から、同じIDLE generationにつき最大1回だけ帰宅挨拶のlogical generationを開始してprocess memoryへ保持する。Responses APIのtop-level未完了理由が`max_output_tokens`の場合だけ、より大きい上限で追加1回を許可し、それ以外の未完了は再requestしない。新規request、generation変更、IDLE解除、生成完了時点の期限超過では候補を破棄する。SIGTERM後は新規workとdrainerを停止してcheckpointを保存した後、Discord clientを閉じる前にRuntime Stateを再取得し、同じgenerationが`STOPPING`、`stopping_at >= stop_eligible_at`、かつ期限到達済みの場合だけ候補を1回consumeして送信する。生成・送信・照合の失敗は安定codeだけを記録して無視し、通常の90秒以内shutdownとscale-to-zeroを継続する。
 
 ## 8. 設定と起動validation
 

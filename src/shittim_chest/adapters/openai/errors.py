@@ -39,8 +39,19 @@ class OpenAIRefusal(OpenAIAdapterError):
 class OpenAIIncompleteResponse(OpenAIAdapterError):
     """The provider stopped before producing a complete structured output."""
 
-    def __init__(self) -> None:
-        super().__init__("openai_incomplete", "the model response was incomplete", retryable=False)
+    def __init__(
+        self,
+        *,
+        diagnostic_context: str | None = None,
+        diagnostic_kind: str | None = None,
+    ) -> None:
+        super().__init__(
+            "openai_incomplete",
+            "the model response was incomplete",
+            retryable=False,
+            diagnostic_context=diagnostic_context,
+            diagnostic_kind=diagnostic_kind,
+        )
 
 
 class OpenAIInvalidOutput(OpenAIAdapterError):
