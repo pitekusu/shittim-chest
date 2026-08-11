@@ -22,6 +22,10 @@ def _source_tree(root: Path) -> Path:
     module.write_text("VALUE = 1\n", encoding="utf-8")
     module.chmod(0o640)
     (package / "module-link.py").symlink_to("module.py")
+    executable = source / "bin" / "example"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o710)
     return source
 
 
@@ -103,16 +107,16 @@ def test_transfer_is_identical_under_different_process_umasks(tmp_path: Path) ->
         os.umask(original_umask)
 
     assert _snapshot(destinations[0]) == _snapshot(destinations[1])
-    assert stat.S_IMODE(destinations[0].stat().st_mode) == 0o750
+    assert stat.S_IMODE(destinations[0].stat().st_mode) == 0o755
     assert (
         stat.S_IMODE(
             (destinations[0] / "lib" / "python3.14" / "site-packages" / "example").stat().st_mode
         )
-        == 0o775
+        == 0o755
     )
 
 
-def test_transfer_preserves_content_modes_and_symlinks(tmp_path: Path) -> None:
+def test_transfer_canonicalizes_modes_and_preserves_content_and_symlinks(tmp_path: Path) -> None:
     source = _source_tree(tmp_path)
     destination = tmp_path / "destination"
 
@@ -126,14 +130,41 @@ def test_transfer_preserves_content_modes_and_symlinks(tmp_path: Path) -> None:
 
     module = destination / "lib" / "python3.14" / "site-packages" / "example" / "module.py"
     link = module.with_name("module-link.py")
+    executable = destination / "bin" / "example"
     assert count == len([source, *source.rglob("*")])
     assert module.read_text(encoding="utf-8") == "VALUE = 1\n"
-    assert module.stat().st_mode & 0o777 == 0o640
+    assert module.stat().st_mode & 0o777 == 0o644
+    assert executable.stat().st_mode & 0o777 == 0o755
     assert link.is_symlink()
     assert link.readlink() == Path("module.py")
     assert all(
         path.lstat().st_mtime_ns == 7_000_000_000 for path in (destination, *destination.rglob("*"))
     )
+
+
+def test_transfer_is_identical_when_source_modes_differ(tmp_path: Path) -> None:
+    first = _source_tree(tmp_path / "first")
+    second = _source_tree(tmp_path / "second")
+    first.chmod(0o700)
+    second.chmod(0o775)
+    (first / "lib" / "python3.14" / "site-packages" / "example").chmod(0o700)
+    (second / "lib" / "python3.14" / "site-packages" / "example").chmod(0o775)
+    (first / "lib" / "python3.14" / "site-packages" / "example" / "module.py").chmod(0o600)
+    (second / "lib" / "python3.14" / "site-packages" / "example" / "module.py").chmod(0o664)
+    (first / "bin" / "example").chmod(0o700)
+    (second / "bin" / "example").chmod(0o775)
+    destinations = (tmp_path / "first-destination", tmp_path / "second-destination")
+
+    for source, destination in zip((first, second), destinations, strict=True):
+        transfer_tree_deterministically(
+            source,
+            destination,
+            source_date_epoch=7,
+            uid=os.getuid(),
+            gid=os.getgid(),
+        )
+
+    assert _snapshot(destinations[0]) == _snapshot(destinations[1])
 
 
 def test_transfer_rejects_existing_destination(tmp_path: Path) -> None:

@@ -11,6 +11,10 @@ import stat
 import sys
 from pathlib import Path
 
+_CANONICAL_DIRECTORY_MODE = 0o755
+_CANONICAL_EXECUTABLE_MODE = 0o755
+_CANONICAL_REGULAR_FILE_MODE = 0o644
+
 
 def _tree_paths(source: Path) -> list[Path]:
     metadata = source.lstat()
@@ -29,6 +33,18 @@ def _destination_path(source: Path, destination: Path, path: Path) -> Path:
     if any(part in {"", ".", ".."} for part in relative.parts):
         raise ValueError(f"source contains an unsafe relative path: {path}")
     return destination.joinpath(*relative.parts)
+
+
+def _canonical_mode(metadata: os.stat_result) -> int:
+    """Return a stable mode without inheriting builder umask differences."""
+
+    if stat.S_ISDIR(metadata.st_mode):
+        return _CANONICAL_DIRECTORY_MODE
+    if stat.S_ISREG(metadata.st_mode):
+        if stat.S_IMODE(metadata.st_mode) & 0o111:
+            return _CANONICAL_EXECUTABLE_MODE
+        return _CANONICAL_REGULAR_FILE_MODE
+    raise ValueError("canonical modes are defined only for directories and regular files")
 
 
 def _canonical_tree_digest(root: Path) -> str:
@@ -99,24 +115,23 @@ def transfer_tree_deterministically(
         raise ValueError(f"destination parent must exist: {destination.parent}")
 
     paths = _tree_paths(source)
-    source_mode = stat.S_IMODE(source.lstat().st_mode)
-    destination.mkdir(mode=source_mode)
-    destination.chmod(source_mode, follow_symlinks=False)
+    destination_mode = _canonical_mode(source.lstat())
+    destination.mkdir(mode=destination_mode)
+    destination.chmod(destination_mode, follow_symlinks=False)
     for path in paths[1:]:
         target = _destination_path(source, destination, path)
         metadata = path.lstat()
-        mode = stat.S_IMODE(metadata.st_mode)
         if stat.S_ISDIR(metadata.st_mode):
+            mode = _canonical_mode(metadata)
             target.mkdir(mode=mode)
-            # mkdir applies the process umask. Restore the source mode explicitly
-            # so BuildKit worker configuration cannot alter the resulting layer.
+            # mkdir applies the process umask. Restore the canonical mode explicitly.
             target.chmod(mode, follow_symlinks=False)
         elif stat.S_ISLNK(metadata.st_mode):
             target.symlink_to(path.readlink())
         else:
             with path.open("rb") as source_file, target.open("xb") as target_file:
                 shutil.copyfileobj(source_file, target_file)
-            target.chmod(mode, follow_symlinks=False)
+            target.chmod(_canonical_mode(metadata), follow_symlinks=False)
 
     destination_paths = [destination, *destination.rglob("*")]
     for path in sorted(destination_paths, key=lambda item: len(item.parts), reverse=True):
