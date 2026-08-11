@@ -183,6 +183,36 @@ async def test_normal_idle_stopping_delivers_exactly_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_missed_external_work_interval_discards_stale_candidate() -> None:
+    state = idle_state()
+    clock = Clock(NOW + timedelta(minutes=28))
+    repository = Repository(state)
+    generator = Generator()
+    sender = Sender()
+    telemetry = Telemetry()
+    service = coordinator(
+        clock=clock,
+        repository=repository,
+        generator=generator,
+        sender=sender,
+        telemetry=telemetry,
+    )
+    await service.prepare_once()
+
+    ready = state.leave_idle_for_external_work(at=clock.current + timedelta(seconds=1))
+    new_idle = ready.begin_idle(at=clock.current + timedelta(seconds=2))
+    new_deadline = new_idle.stop_eligible_at
+    assert new_deadline is not None
+    repository.state = new_idle.begin_idle_stop(at=new_deadline)
+    clock.current = new_deadline
+
+    await service.prepare_once()
+    await service.deliver_before_shutdown()
+
+    assert sender.calls == []
+
+
+@pytest.mark.asyncio
 async def test_generation_or_delivery_failure_is_best_effort_and_not_retried() -> None:
     state = idle_state()
     clock = Clock(NOW + timedelta(minutes=28))

@@ -100,7 +100,11 @@ class IdleFarewellCoordinator:
             )
             return self._poll_seconds
         if state is not None and state.status is RuntimeStatus.STOPPING:
-            if self._candidate is not None and self._candidate.generation == state.generation:
+            if (
+                self._candidate is not None
+                and self._candidate.generation == state.generation
+                and self._candidate.stop_eligible_at == state.stop_eligible_at
+            ):
                 return self._poll_seconds
             self._candidate = None
             return self._poll_seconds
@@ -220,6 +224,7 @@ def _eligible_for_delivery(
         state is not None
         and state.status is RuntimeStatus.STOPPING
         and state.generation == candidate.generation
+        and state.stop_eligible_at == candidate.stop_eligible_at
         and state.stopping_at is not None
         and state.stopping_at >= candidate.stop_eligible_at
         and now >= candidate.stop_eligible_at
