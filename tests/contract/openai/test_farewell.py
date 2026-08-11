@@ -14,6 +14,7 @@ from openai.types.responses.response import Response
 from shittim_chest.adapters.openai import (
     OpenAIFailureRecord,
     OpenAIFarewellGenerator,
+    OpenAIIncompleteResponse,
     OpenAIInvalidOutput,
     OpenAIRequestLimiter,
     OpenAIUsageRecord,
@@ -44,7 +45,7 @@ class Observer:
         self.failures.append(record)
 
 
-def response(*, cite_news: bool = True) -> SimpleNamespace:
+def response(*, cite_news: bool = True, status: str = "completed") -> SimpleNamespace:
     annotations = [
         {
             "type": "url_citation",
@@ -117,7 +118,7 @@ def response(*, cite_news: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
         id=typed.id,
         model=typed.model,
-        status=typed.status,
+        status=status,
         output=typed.output,
         usage=typed.usage,
         output_parsed=FarewellOutputV1(
@@ -192,3 +193,17 @@ async def test_missing_weather_or_news_citation_fails_closed() -> None:
         )
 
     assert [failure.code for failure in observer.failures] == ["openai_invalid_output"]
+
+
+@pytest.mark.parametrize("status", ["cancelled", "failed", "in_progress", "incomplete", "queued"])
+@pytest.mark.asyncio
+async def test_non_completed_response_status_fails_closed(status: str) -> None:
+    service, _, observer = service_for(response(status=status))
+
+    with pytest.raises(OpenAIIncompleteResponse):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]

@@ -194,7 +194,7 @@ class OpenAIFarewellGenerator:
 def _extract_parsed(
     response: ParsedResponse[FarewellOutputV1],
 ) -> FarewellOutputV1:
-    if response.status == "incomplete":
+    if response.status != "completed":
         raise OpenAIIncompleteResponse()
     for output in response.output:
         if isinstance(output, ResponseOutputMessage):
