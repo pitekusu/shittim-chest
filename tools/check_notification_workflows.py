@@ -232,7 +232,7 @@ def _validate_release(directory: Path) -> None:
         "tools/wait_release_image_evidence.sh",
         "vars.AWS_RELEASE_PLAN_ROLE_ARN",
         "vars.AWS_RELEASE_DEPLOY_ROLE_ARN",
-        "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6",
+        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
         "create-storage-record: false",
         "target: production",
         "target: break-glass",
@@ -803,7 +803,7 @@ def _validate_release_referrer_delta(text: str) -> None:
 
 
 def _validate_release_attestation_summary(text: str) -> None:
-    action = "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
+    action = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"
     attestation_steps = (
         ("Attest normal image provenance", "attest_normal_provenance"),
         ("Attest normal image SBOM", "attest_normal_sbom"),
