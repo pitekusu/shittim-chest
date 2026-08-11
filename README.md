@@ -1,44 +1,35 @@
 # The Shittim Chest
 
 [![CI](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/ci.yml)
-[![Release Tool Versions](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml/badge.svg)](https://github.com/pitekusu/shittim-chest/actions/workflows/tool-versions.yml)
-[![Dependency Graph](https://img.shields.io/badge/GitHub-Dependency%20Graph-181717?logo=github)](https://github.com/pitekusu/shittim-chest/network/dependencies)
+[![Production Release](https://github.com/pitekusu/shittim-chest/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/pitekusu/shittim-chest/actions/workflows/release.yml)
+[![Infrastructure Drift](https://github.com/pitekusu/shittim-chest/actions/workflows/drift.yml/badge.svg?branch=main)](https://github.com/pitekusu/shittim-chest/actions/workflows/drift.yml)
+[![License: MIT](https://img.shields.io/badge/Source-MIT-blue.svg)](LICENSE-SCOPE.md)
 
-Discord multi-agent debate bot. One moderator Bot coordinates three participant
-personas, shared evidence, revised proposals, anonymous voting, and a
-**mechanically calculated** result via `/shittim`.
+Production Discord multi-agent deliberation bot. One moderator Bot coordinates
+three private-configured personas, shared web evidence, initial opinions,
+revised proposals, anonymous voting, and a **Python-calculated** result via
+`/shittim`. The winning persona then presents the final decision in its own
+voice.
 
 Japanese name: **シッテムの箱** (`shittim_chest`).
 
 ## Status
 
-Design is complete under [`docs/`](docs/). The merged `main` baseline includes
-the application core, OpenAI + Web search, signed Discord HTTP Interaction
-ingress, DynamoDB **schema v7** / control-record **manifest v2**, ARM64 container
-gates, and Stateful/Runtime CDK with On-Demand scale-to-zero. The
-current STEP-10-A slice adds immutable GitHub OIDC roles, a
-plan/Environment-deploy release workflow, signed normal and break-glass images,
-OCI attestations, a canonical release manifest, fenced change-set execution,
-read-only drift detection, and ECS `PRE_SCALE_UP` image admission. Nothing in
-this repository is connected to a real Discord Application endpoint. AWS is
-bootstrapped in both target Regions, and the protected Stateful and
-ReleaseIdentity foundations are deployed; Runtime, Operations, CostGovernance,
-and the first release remain pending.
+The service is deployed and live in its single private production Guild.
+Stateful, Runtime, Operations, and CostGovernance stacks are maintained through
+the attested Production Release workflow. Signed Discord HTTP Interactions are
+accepted durably while the ARM64 On-Demand Fargate service is at
+`desiredCount=0`; the runtime converges `0 → 1 → 0` around queued work.
 
-| Implemented locally / on merged main | Not done |
+| Area | Current state |
 |---|---|
-| Domain, voting, Protocols, use cases | Private runtime/notification values and first release |
-| DynamoDB adapter, leases, outbox | Real Discord Applications / live tokens |
-| OpenAI Responses API, router, Evidence | Paid OpenAI in CI |
-| Signed HTTP ingress + `/shittim` + panel | Runtime/Operations/CostGovernance deploy |
-| Lifecycle, SIGTERM/SIGKILL recovery tests | |
-| Container + native ARM64 CI | |
-| Scale-to-zero control plane + 3 Lambda boundaries | |
-| STEP-09C-A EMF metrics foundation | |
-| STEP-09C-B alarms/dashboard/EventBridge | |
-| STEP-09C-C Budget/CAD templates | |
-| STEP-10-A release supply chain + image admission | |
-| GitHub → Discord Forum notifications (STEP-02D) | |
+| Discord | Signed HTTP ingress, `/shittim`, public thread, control panel, status convergence, and four Bot identities are live |
+| Deliberation | Initial opinions, revised proposals, anonymous ballots, moderator vote tally, and winner-persona final presentation are live |
+| OpenAI | Responses API with Structured Outputs and optional web evidence; production is fixed to Luna standard |
+| Persistence | DynamoDB schema v7, fenced leases, durable FIFO ingress, checkpoints, and ordered Outbox v2 |
+| Runtime | ARM64 On-Demand Fargate scale-to-zero, normally `0/0/0`, with at most one task |
+| Supply chain | DHI images, SBOM, VEX, Grype, signatures, attestations, image admission, and immutable CloudFormation Change Sets |
+| Operations | CloudWatch alarms/dashboard, EventBridge notifications, SNS email, cost budgets, drift detection, and GitHub → Discord notifications |
 
 Production generation is fixed to **Luna standard** (no runtime escalation).
 Responses API Multi-agent beta is intentionally unused; Python owns orchestration.
@@ -88,17 +79,17 @@ uv run --frozen python tools/configure_production_inputs.py --check
   recovery continues until the 15-minute terminal deadline. Scale-down becomes
   eligible 30 minutes after the last debate is *fully* complete, including
   required outbox/status work.
-- The deployment guard retains its read-only diagnostic workflow. STEP-10-A's
+- The deployment guard retains its read-only diagnostic workflow. The
   production deploy job additionally acquires and releases the exact fenced
   DynamoDB lock around attested CloudFormation change-set execution and smoke
   checks.
 
-## Stack (design and locally verified templates)
+## Production stack
 
 - **Python 3.14.6** / **uv** (locked), discord.py, OpenAI Responses API, boto3
 - **DynamoDB** (on-demand, PITR), **ECS On-Demand Fargate** ARM64 zero-to-one
   singleton (Tokyo)
-- **CDK** TypeScript (Stateful + ReleaseIdentity deployed; remaining stacks synth-only)
+- **CDK** TypeScript (Stateful, Runtime, Operations, CostGovernance, and ReleaseIdentity deployed)
 - **CloudWatch** metric/composite alarms and dashboard, **EventBridge** abnormal
   ECS task-stop notifications, and one TLS-only **SNS** operator topic
 - `us-east-1` **CostGovernance** CDK stack with Project/account Budgets and an
