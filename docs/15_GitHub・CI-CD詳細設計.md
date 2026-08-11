@@ -116,7 +116,7 @@ deployment admissionのbreak-glassはECS Exec用break-glass task revisionと別�
 
 ### Drift job
 
-`drift.yml`は毎週と手動で実行する。main subject限定のread-only roleを使用し、drift時は同一labelのIssueを更新して自動修復しない。
+`drift.yml`は毎週火曜日12:17 JSTと手動で実行する。main subject限定のread-only roleを使用し、drift時は同一labelのIssueを更新して自動修復しない。roleは固定5 stackの`DetectStackDrift`／`DetectStackResourceDrift`、unscopedの`BatchDescribeTypeConfigurations`／status read、および現行templateのCloudFormation resource provider schemaにあるread handler権限だけを持つ。`iam:PassRole`、`kms:Decrypt`、`s3:GetObject`などtemplateが使用しないconditional／data-plane権限は付与せず、resource typeまたは対象property追加時はprovider schemaを再監査する。
 
 ## 5. OIDC
 
