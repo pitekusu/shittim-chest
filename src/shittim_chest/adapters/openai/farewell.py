@@ -198,7 +198,7 @@ def _extract_parsed(
         raise OpenAIIncompleteResponse()
     for output in response.output:
         if isinstance(output, ResponseOutputMessage):
-            if output.status == "incomplete":
+            if output.status != "completed":
                 raise OpenAIIncompleteResponse()
             if any(content.type == "refusal" for content in output.content):
                 raise OpenAIRefusal()

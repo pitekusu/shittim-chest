@@ -50,6 +50,7 @@ def response(
     cite_news: bool = True,
     status: str = "completed",
     search_status: str = "completed",
+    message_status: str = "completed",
 ) -> SimpleNamespace:
     annotations = [
         {
@@ -97,7 +98,7 @@ def response(
                 {
                     "id": "msg_1",
                     "type": "message",
-                    "status": "completed",
+                    "status": message_status,
                     "role": "assistant",
                     "content": [
                         {
@@ -218,6 +219,22 @@ async def test_non_completed_response_status_fails_closed(status: str) -> None:
 @pytest.mark.asyncio
 async def test_non_completed_web_search_status_fails_closed(search_status: str) -> None:
     service, _, observer = service_for(response(search_status=search_status))
+
+    with pytest.raises(OpenAIIncompleteResponse):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+
+
+@pytest.mark.parametrize("message_status", ["in_progress", "incomplete"])
+@pytest.mark.asyncio
+async def test_non_completed_output_message_status_fails_closed(
+    message_status: str,
+) -> None:
+    service, _, observer = service_for(response(message_status=message_status))
 
     with pytest.raises(OpenAIIncompleteResponse):
         await service.generate(
