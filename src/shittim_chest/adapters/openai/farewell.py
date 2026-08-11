@@ -86,6 +86,7 @@ class OpenAIFarewellGenerator:
                 time_context=time_context,
                 max_output_tokens=_INITIAL_MAX_OUTPUT_TOKENS,
             )
+            responses = [response]
             try:
                 parsed = _extract_parsed(response)
             except OpenAIIncompleteResponse as error:
@@ -98,6 +99,7 @@ class OpenAIFarewellGenerator:
                     time_context=time_context,
                     max_output_tokens=_RETRY_MAX_OUTPUT_TOKENS,
                 )
+                responses.append(response)
                 parsed = _extract_parsed(response)
             source_urls, citation_urls = _extract_urls(response)
             weather_url = _validated_url(parsed.weather_source_url)
@@ -135,7 +137,7 @@ class OpenAIFarewellGenerator:
             raise failure from error
         self._record_usage(
             operation,
-            response,
+            tuple(responses),
             len(source_urls),
             len(citation_urls),
             started,
@@ -187,7 +189,7 @@ class OpenAIFarewellGenerator:
     def _record_usage(
         self,
         operation: str,
-        response: ParsedResponse[FarewellOutputV1],
+        responses: tuple[ParsedResponse[FarewellOutputV1], ...],
         source_count: int,
         citation_count: int,
         started: float,
@@ -195,7 +197,8 @@ class OpenAIFarewellGenerator:
         retry_count: int,
         prior_incomplete_reason: str | None,
     ) -> None:
-        usage = response.usage
+        response = responses[-1]
+        usages = tuple(candidate.usage for candidate in responses if candidate.usage is not None)
         self.recorder.record_usage(
             OpenAIUsageRecord(
                 operation=operation,
@@ -204,13 +207,13 @@ class OpenAIFarewellGenerator:
                 policy_id=self.config.policy.policy_id.value,
                 reasoning_mode=self.config.policy.reasoning_mode.value,
                 latency_ms=max(0, round((monotonic() - started) * 1_000)),
-                input_tokens=usage.input_tokens if usage is not None else 0,
-                output_tokens=usage.output_tokens if usage is not None else 0,
-                cached_input_tokens=(
-                    usage.input_tokens_details.cached_tokens if usage is not None else 0
+                input_tokens=sum(usage.input_tokens for usage in usages),
+                output_tokens=sum(usage.output_tokens for usage in usages),
+                cached_input_tokens=sum(
+                    usage.input_tokens_details.cached_tokens for usage in usages
                 ),
-                reasoning_tokens=(
-                    usage.output_tokens_details.reasoning_tokens if usage is not None else 0
+                reasoning_tokens=sum(
+                    usage.output_tokens_details.reasoning_tokens for usage in usages
                 ),
                 web_search_source_count=source_count,
                 web_search_source_rejected_count=0,
@@ -218,6 +221,7 @@ class OpenAIFarewellGenerator:
                 evidence_source_count=2,
                 retry_count=retry_count,
                 prior_incomplete_reason=prior_incomplete_reason,
+                prior_response_id=responses[0].id if retry_count else None,
             )
         )
 

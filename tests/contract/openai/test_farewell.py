@@ -54,6 +54,11 @@ def response(
     additional_output: dict[str, object] | None = None,
     additional_message_content: object | None = None,
     incomplete_reason: str | None = None,
+    response_id: str = "resp_farewell",
+    input_tokens: int = 20,
+    output_tokens: int = 10,
+    cached_input_tokens: int = 0,
+    reasoning_tokens: int = 2,
 ) -> SimpleNamespace:
     annotations = [
         {
@@ -109,7 +114,7 @@ def response(
     )
     typed = Response.model_validate(
         {
-            "id": "resp_farewell",
+            "id": response_id,
             "object": "response",
             "created_at": 1_786_448_400,
             "status": "completed",
@@ -122,11 +127,14 @@ def response(
             "tool_choice": "required",
             "tools": [{"type": "web_search", "search_context_size": "medium"}],
             "usage": {
-                "input_tokens": 20,
-                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
-                "output_tokens": 10,
-                "output_tokens_details": {"reasoning_tokens": 2},
-                "total_tokens": 30,
+                "input_tokens": input_tokens,
+                "input_tokens_details": {
+                    "cached_tokens": cached_input_tokens,
+                    "cache_write_tokens": 0,
+                },
+                "output_tokens": output_tokens,
+                "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
+                "total_tokens": input_tokens + output_tokens,
             },
         }
     )
@@ -295,8 +303,22 @@ async def test_non_completed_response_status_fails_closed(status: str) -> None:
 async def test_max_output_tokens_incomplete_retries_once_with_larger_budget() -> None:
     service, parse, observer = service_for(response())
     parse.side_effect = [
-        response(status="incomplete", incomplete_reason="max_output_tokens"),
-        response(),
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        response(
+            response_id="resp_completed",
+            input_tokens=29,
+            output_tokens=19,
+            cached_input_tokens=7,
+            reasoning_tokens=11,
+        ),
     ]
 
     content = await service.generate(
@@ -310,6 +332,12 @@ async def test_max_output_tokens_incomplete_retries_once_with_larger_budget() ->
     assert observer.failures == []
     assert observer.usages[0].retry_count == 1
     assert observer.usages[0].prior_incomplete_reason == "max_output_tokens"
+    assert observer.usages[0].response_id == "resp_completed"
+    assert observer.usages[0].prior_response_id == "resp_incomplete"
+    assert observer.usages[0].input_tokens == 52
+    assert observer.usages[0].output_tokens == 36
+    assert observer.usages[0].cached_input_tokens == 12
+    assert observer.usages[0].reasoning_tokens == 24
 
 
 @pytest.mark.asyncio

@@ -112,7 +112,7 @@ Structured Outputの天気・ニュースURLは、`web_search_call.action.source
 - 医療、法律、金融、政治、選挙、緊急事態、自傷を含む高risk category専用の事前拒否は設けず通常質問と同じflowで扱う。providerのrefusal/policy blockを迂回せず、prompt上も正答・診断・法的判断・投資判断を保証させない。仲間内限定運用ではCOMPLETED／FAILED／CANCELLEDへ固定のAI免責文を表示しない。
 - user IDはraw値をOpenAIへ送らず、必要時は安定したprivacy-preserving safety identifierを使用する。
 - `store=false`はResponses application stateを保存しない指定であり、既定のabuse monitoring logはuser contentを含み最大30日保持され得る。Zero Data Retentionを本番条件にはせず、このdata flowを利用者向け説明と運用文書へ明記する。
-- input/output/cached/reasoning token、latency、response ID、model ID、cache hitをmetricsへ記録する。本文はlogへ出さない。
+- input/output/cached/reasoning token、latency、response ID、model ID、cache hitをmetricsへ記録する。帰宅挨拶を`max_output_tokens`で再requestした場合は両requestのtoken使用量を合算し、最終response IDと先行response IDを区別して記録する。本文はlogへ出さない。
 - explicit prompt cachingは評価setで費用削減を確認してから有効化し、無条件には使わない。
 
 ## 8. 公式資料確認記録
