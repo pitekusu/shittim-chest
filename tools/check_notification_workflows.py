@@ -14,6 +14,9 @@ DEPLOY_GUARD_WORKFLOW = "production-deploy-guard.yml"
 RELEASE_WORKFLOW = "release.yml"
 DRIFT_WORKFLOW = "drift.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
+PINNED_BUILDX_VERSION = "v0.35.0"
+PINNED_BUILDKIT_DIGEST = "sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
+PINNED_BUILDKIT_IMAGE = f"moby/buildkit:v0.31.2@{PINNED_BUILDKIT_DIGEST}"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
 AWS_OR_DEPLOY_CAPABILITY = re.compile(
@@ -38,6 +41,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
 
     _validate_permission_syntax(directory)
     _validate_consistent_action_pins(directory)
+    _validate_pinned_container_builder(directory)
     target_files: list[Path] = []
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
         text = path.read_text(encoding="utf-8")
@@ -98,6 +102,24 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_workflow_run_allowlist(directory)
     _validate_vulnerability_alerts_permission(directory)
     return 1
+
+
+def _validate_pinned_container_builder(directory: Path) -> None:
+    expected = (
+        f"          version: {PINNED_BUILDX_VERSION}\n"
+        "          driver-opts: |\n"
+        f"            image={PINNED_BUILDKIT_IMAGE}"
+    )
+    for workflow, step_name in (
+        ("ci.yml", "Set up Docker Buildx"),
+        (RELEASE_WORKFLOW, "Set up Buildx"),
+    ):
+        text = (directory / workflow).read_text(encoding="utf-8")
+        block = _workflow_step_block(text, step_name)
+        if block.count(expected) != 1:
+            raise WorkflowPolicyError(
+                f"{workflow} must pin the approved Buildx client and BuildKit image digest"
+            )
 
 
 def _contains_untrusted_run_expression(text: str) -> bool:
