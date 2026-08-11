@@ -35,6 +35,72 @@ const DRIFT_STACK_NAMES = [
   ...RELEASE_STACK_NAMES,
   "ShittimChest-Prod-ReleaseIdentity",
 ] as const;
+// Read-handler permissions from the current CloudFormation resource provider schemas
+// used by the five production stacks. Conditional permissions for properties absent
+// from the synthesized templates (s3:GetObject, kms:Decrypt/DescribeKey, iam:PassRole)
+// remain intentionally excluded so this role cannot read payloads or pass roles.
+const DRIFT_RESOURCE_READ_ACTIONS = [
+  "apigateway:GET",
+  "ce:GetAnomalySubscriptions",
+  "ce:ListTagsForResource",
+  "cloudwatch:DescribeAlarms",
+  "cloudwatch:GetDashboard",
+  "cloudwatch:ListTagsForResource",
+  "dynamodb:DescribeContinuousBackups",
+  "dynamodb:DescribeContributorInsights",
+  "dynamodb:DescribeKinesisStreamingDestination",
+  "dynamodb:DescribeTable",
+  "dynamodb:DescribeTimeToLive",
+  "dynamodb:GetResourcePolicy",
+  "dynamodb:ListTagsOfResource",
+  "ec2:DescribeInternetGateways",
+  "ec2:DescribeNetworkAcls",
+  "ec2:DescribeRouteTables",
+  "ec2:DescribeSecurityGroups",
+  "ec2:DescribeSubnets",
+  "ec2:DescribeVpcAttribute",
+  "ec2:DescribeVpcEncryptionControls",
+  "ec2:DescribeVpcs",
+  "ec2:DescribeVpnGateways",
+  "ecr:DescribeRepositories",
+  "ecr:GetLifecyclePolicy",
+  "ecr:GetRegistryScanningConfiguration",
+  "ecr:GetRepositoryPolicy",
+  "ecr:GetSigningConfiguration",
+  "ecr:ListTagsForResource",
+  "ecs:DescribeClusters",
+  "ecs:DescribeServices",
+  "ecs:DescribeTaskDefinition",
+  "events:DescribeRule",
+  "events:ListTagsForResource",
+  "events:ListTargetsByRule",
+  "iam:GetRole",
+  "iam:GetRolePolicy",
+  "iam:ListAttachedRolePolicies",
+  "iam:ListRolePolicies",
+  "lambda:GetAlias",
+  "lambda:GetFunction",
+  "lambda:GetFunctionCodeSigningConfig",
+  "lambda:GetFunctionConfiguration",
+  "lambda:GetFunctionEventInvokeConfig",
+  "lambda:GetFunctionRecursionConfig",
+  "lambda:GetFunctionScalingConfig",
+  "lambda:GetPolicy",
+  "lambda:GetProvisionedConcurrencyConfig",
+  "lambda:GetRuntimeManagementConfig",
+  "logs:DescribeIndexPolicies",
+  "logs:DescribeLogGroups",
+  "logs:DescribeResourcePolicies",
+  "logs:GetDataProtectionPolicy",
+  "logs:ListTagsForResource",
+  "scheduler:GetSchedule",
+  "signer:GetSigningProfile",
+  "sns:GetDataProtectionPolicy",
+  "sns:GetSubscriptionAttributes",
+  "sns:GetTopicAttributes",
+  "sns:ListSubscriptionsByTopic",
+  "sns:ListTagsForResource",
+] as const;
 
 export interface ReleaseIdentityStackProps extends StackProps {
   readonly debateTable: dynamodb.ITable;
@@ -362,7 +428,11 @@ export class ReleaseIdentityStack extends Stack {
   private grantDriftPermissions(): void {
     this.driftRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["cloudformation:DescribeStacks", "cloudformation:DetectStackDrift"],
+        actions: [
+          "cloudformation:DescribeStacks",
+          "cloudformation:DetectStackDrift",
+          "cloudformation:DetectStackResourceDrift",
+        ],
         conditions: {
           StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
         },
@@ -371,7 +441,16 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.driftRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["cloudformation:DescribeStackDriftDetectionStatus"],
+        actions: [
+          "cloudformation:BatchDescribeTypeConfigurations",
+          "cloudformation:DescribeStackDriftDetectionStatus",
+        ],
+        resources: ["*"],
+      }),
+    );
+    this.driftRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [...DRIFT_RESOURCE_READ_ACTIONS],
         resources: ["*"],
       }),
     );

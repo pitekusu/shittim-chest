@@ -102,6 +102,20 @@ describe("ReleaseIdentityStack", () => {
         (statement: { Action?: string | string[] }) =>
           [statement.Action].flat().includes("ecs:DescribeTaskDefinition"),
       );
+    const driftPolicy = policies.find((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes("ReleaseDriftRole"),
+    );
+    const driftStatements = driftPolicy?.Properties.PolicyDocument.Statement as Array<{
+      Action?: string | string[];
+      Condition?: unknown;
+      Resource?: string | string[];
+    }>;
+    const driftActions = driftStatements.flatMap((statement) =>
+      [statement.Action].flat(),
+    );
+    const stackDriftStatement = driftStatements.find((statement) =>
+      [statement.Action].flat().includes("cloudformation:DetectStackDrift"),
+    );
 
     expect(plan).toContain("ecr:PutImage");
     expect(plan).toContain("ecr:BatchGetImage");
@@ -157,10 +171,29 @@ describe("ReleaseIdentityStack", () => {
     expect(deploy).not.toContain("ecr:PutImage");
     expect(deploy).not.toContain("sts:AssumeRole");
     expect(deploy).not.toContain("cloudformation:GetTemplate");
-    expect(drift).toContain("cloudformation:DetectStackDrift");
+    expect(stackDriftStatement?.Action).toEqual([
+      "cloudformation:DescribeStacks",
+      "cloudformation:DetectStackDrift",
+      "cloudformation:DetectStackResourceDrift",
+    ]);
+    expect(JSON.stringify(stackDriftStatement?.Resource)).toContain(
+      "stack/ShittimChest-Prod-Stateful/*",
+    );
+    expect(driftActions).toContain("cloudformation:BatchDescribeTypeConfigurations");
+    expect(driftActions).toContain("cloudformation:DescribeStackDriftDetectionStatus");
+    expect(driftActions).toContain("dynamodb:DescribeTable");
+    expect(driftActions).toContain("ec2:DescribeVpcs");
+    expect(driftActions).toContain("ecs:DescribeServices");
+    expect(driftActions).toContain("lambda:GetFunction");
+    expect(driftActions).not.toContain("iam:PassRole");
+    expect(driftActions).not.toContain("kms:Decrypt");
+    expect(driftActions).not.toContain("s3:GetObject");
     expect(drift).toContain("ShittimChest-Prod-ReleaseIdentity");
     expect(drift).not.toContain("cloudformation:ExecuteChangeSet");
-    expect(drift).not.toContain("dynamodb:");
+    expect(drift).not.toContain("dynamodb:GetItem");
+    expect(drift).not.toContain("dynamodb:Scan");
+    expect(drift).not.toContain("dynamodb:Query");
+    expect(drift).not.toContain("dynamodb:PutItem");
     expect(drift).not.toContain("sts:AssumeRole");
     expect(JSON.stringify(template.toJSON())).not.toContain("AdministratorAccess");
     expect(JSON.stringify(template.toJSON())).not.toContain("PowerUserAccess");
