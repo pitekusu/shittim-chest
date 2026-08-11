@@ -99,6 +99,11 @@ class IdleFarewellCoordinator:
                 reason=_error_code(error, fallback="farewell_state_unavailable"),
             )
             return self._poll_seconds
+        if state is not None and state.status is RuntimeStatus.STOPPING:
+            if self._candidate is not None and self._candidate.generation == state.generation:
+                return self._poll_seconds
+            self._candidate = None
+            return self._poll_seconds
         if state is None or state.status is not RuntimeStatus.IDLE:
             self._candidate = None
             return self._poll_seconds

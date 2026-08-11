@@ -174,6 +174,7 @@ async def test_normal_idle_stopping_delivers_exactly_once() -> None:
 
     repository.state = state.begin_idle_stop(at=deadline)
     clock.current = deadline
+    await service.prepare_once()
     await service.deliver_before_shutdown()
     await service.deliver_before_shutdown()
 
