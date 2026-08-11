@@ -29,6 +29,7 @@ def config() -> DiscordRuntimeConfig:
     return DiscordRuntimeConfig(
         guild_id="101",
         allowed_channel_ids=frozenset({"102"}),
+        farewell_channel_id="102",
         identities=tuple(
             DiscordIdentityConfig(slot, str(201 + index))
             for index, slot in enumerate(DISCORD_BOT_SLOTS)

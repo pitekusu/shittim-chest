@@ -35,10 +35,11 @@ TOKEN = "local-moderator-value"  # noqa: S105 - offline fixture value.
 RUNTIME_PARAMETER = "/shittim-chest/production/runtime/v0001"
 RUNTIME_JSON = json.dumps(
     {
-        "schema_version": "1",
+        "schema_version": "2",
         "config_version": "v0001",
         "guild_id": "100",
         "allowed_channel_ids": ["101"],
+        "farewell_channel_id": "101",
         "identities": [
             {"slot": "moderator", "application_id": "200"},
             {"slot": "participant-a", "application_id": "201"},

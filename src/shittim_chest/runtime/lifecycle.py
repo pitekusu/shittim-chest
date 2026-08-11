@@ -73,6 +73,12 @@ class _RuntimeInstanceLifecycle(Protocol):
     async def mark_shutdown_complete(self) -> object: ...
 
 
+class _FarewellLifecycle(Protocol):
+    async def run(self, stop: asyncio.Event) -> None: ...
+
+    async def deliver_before_shutdown(self) -> None: ...
+
+
 class _SignalHandlers(Protocol):
     def install(self, callback: Callable[[], None]) -> None: ...
 
@@ -189,6 +195,7 @@ class RuntimeLifecycle:
         runtime_instance: _RuntimeInstanceLifecycle,
         tokens: Mapping[DiscordBotSlot, str],
         previous_command_schema_hash: str | None,
+        farewell: _FarewellLifecycle | None = None,
         signal_handlers: _SignalHandlers | None = None,
         readiness_poll_seconds: float = DEFAULT_READINESS_POLL_SECONDS,
         disconnect_grace_seconds: float = DEFAULT_DISCONNECT_GRACE_SECONDS,
@@ -207,6 +214,7 @@ class RuntimeLifecycle:
         self._drain_gate = drain_gate
         self._drainer = drainer
         self._runtime_instance = runtime_instance
+        self._farewell = farewell
         self._tokens = dict(tokens)
         self._previous_command_schema_hash = previous_command_schema_hash
         self._signal_handlers = signal_handlers or UnixSignalHandlers()
@@ -216,6 +224,8 @@ class RuntimeLifecycle:
         self._shutdown_requested = asyncio.Event()
         self._drain_stop: asyncio.Event | None = None
         self._drain_task: asyncio.Task[None] | None = None
+        self._farewell_stop: asyncio.Event | None = None
+        self._farewell_task: asyncio.Task[None] | None = None
         self._running = False
 
     @property
@@ -237,6 +247,10 @@ class RuntimeLifecycle:
             self._drain_stop.set()
         if self._drain_task is not None and not self._drain_task.done():
             self._drain_task.cancel()
+        if self._farewell_stop is not None:
+            self._farewell_stop.set()
+        if self._farewell_task is not None and not self._farewell_task.done():
+            self._farewell_task.cancel()
         self._shutdown_requested.set()
 
     async def run(self) -> None:
@@ -266,6 +280,12 @@ class RuntimeLifecycle:
                 await supervisor_task
                 raise RuntimeError("Discord client supervisor stopped unexpectedly")
             self._drain_gate.mark_supervisor_started()
+            if self._farewell is not None:
+                self._farewell_stop = asyncio.Event()
+                self._farewell_task = asyncio.create_task(
+                    self._farewell.run(self._farewell_stop),
+                    name="runtime:idle-farewell",
+                )
             readiness_task = asyncio.create_task(
                 self._monitor_readiness(),
                 name="runtime:discord-readiness",
@@ -472,6 +492,24 @@ class RuntimeLifecycle:
                     await self._checkpoint_for_outage()
                 except Exception as error:
                     errors.append(error)
+                farewell_task = self._farewell_task
+                self._farewell_task = None
+                if self._farewell_stop is not None:
+                    self._farewell_stop.set()
+                self._farewell_stop = None
+                if farewell_task is not None:
+                    if not farewell_task.done():
+                        farewell_task.cancel()
+                    await _await_cancelled(farewell_task, label="an idle farewell monitor")
+                if self._farewell is not None:
+                    try:
+                        await self._farewell.deliver_before_shutdown()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as error:
+                        # Farewell is explicitly best-effort and must never hold
+                        # the normal scale-to-zero cleanup path open.
+                        del error
                 try:
                     await self._ingress_runtime.close()
                 except Exception as error:
@@ -501,7 +539,13 @@ class RuntimeLifecycle:
                 if errors:
                     raise ExceptionGroup("runtime shutdown failed", errors)
         except TimeoutError as error:
-            for task in (readiness_task, self._drain_task, supervisor_task, shutdown_waiter):
+            for task in (
+                readiness_task,
+                self._drain_task,
+                self._farewell_task,
+                supervisor_task,
+                shutdown_waiter,
+            ):
                 if task is not None and not task.done():
                     task.cancel()
             raise RuntimeShutdownTimeout(

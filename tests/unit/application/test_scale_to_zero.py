@@ -264,8 +264,12 @@ def test_durable_work_resume_and_stop_operations_preserve_typed_fences() -> None
     stopping = idle.begin_idle_stop(at=idle.stop_eligible_at)
     assert stopping.status is RuntimeStatus.STOPPING
     assert stopping.desired_count == 0
+    assert stopping.idle_since == idle.idle_since
+    assert stopping.stop_eligible_at == idle.stop_eligible_at
 
     cancelled_start = resumed.begin_unneeded_start_stop(
         at=resumed.updated_at + timedelta(seconds=1)
     )
     assert cancelled_start.status is RuntimeStatus.STOPPING
+    assert cancelled_start.idle_since is None
+    assert cancelled_start.stop_eligible_at is None

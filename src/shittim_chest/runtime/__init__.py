@@ -1,5 +1,6 @@
 """Process lifecycle coordination for the Discord debate runtime."""
 
+from shittim_chest.runtime.farewell import IdleFarewellCoordinator
 from shittim_chest.runtime.lifecycle import (
     RuntimeAdmissionGateway,
     RuntimeLifecycle,
@@ -22,6 +23,7 @@ from shittim_chest.runtime.primitives import (
 __all__ = (
     "CloudWatchEmfMetrics",
     "ContentFreeTelemetry",
+    "IdleFarewellCoordinator",
     "OperationalMetric",
     "OperationalMetricService",
     "RuntimeAdmissionGateway",

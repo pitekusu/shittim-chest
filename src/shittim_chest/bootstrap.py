@@ -23,6 +23,7 @@ from shittim_chest.adapters.aws import (
 )
 from shittim_chest.adapters.discord import (
     DiscordClientSupervisor,
+    DiscordFarewellSender,
     DiscordInteractionController,
     DiscordOutboxRecovery,
     DiscordPyGateway,
@@ -39,6 +40,7 @@ from shittim_chest.adapters.dynamodb import (
 )
 from shittim_chest.adapters.openai import (
     OpenAIAdapterConfig,
+    OpenAIFarewellGenerator,
     OpenAIRequestLimiter,
     OpenAIResponsesService,
     OpenAIWebEvidenceService,
@@ -52,6 +54,7 @@ from shittim_chest.config import BootstrapConfig, load_bootstrap_config
 from shittim_chest.runtime import (
     CloudWatchEmfMetrics,
     ContentFreeTelemetry,
+    IdleFarewellCoordinator,
     RuntimeAdmissionGateway,
     RuntimeLifecycle,
     RuntimeMetricsReporter,
@@ -224,6 +227,22 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         config=openai_config,
         recorder=telemetry,
     )
+    farewell = IdleFarewellCoordinator(
+        clock=clock,
+        runtime_state=runtime_state_repository,
+        generator=OpenAIFarewellGenerator(
+            client=openai_client,
+            personas=prompts,
+            limiter=limiter,
+            config=openai_config,
+            recorder=telemetry,
+        ),
+        sender=DiscordFarewellSender(
+            clients=clients,
+            config=config.runtime,
+        ),
+        telemetry=telemetry,
+    )
 
     publisher = DiscordPyPublisher(
         clients=clients,
@@ -290,6 +309,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         runtime_instance=runtime_instance,
         tokens=config.discord_tokens,
         previous_command_schema_hash=config.previous_command_schema_hash,
+        farewell=farewell,
     )
     return ProductionRuntime(
         lifecycle=lifecycle,

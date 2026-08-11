@@ -12,6 +12,10 @@ from shittim_chest.adapters.discord.errors import (
     DiscordThreadUnavailable,
     DiscordUnavailable,
 )
+from shittim_chest.adapters.discord.farewell import (
+    DiscordFarewellSender,
+    FarewellDeliveryError,
+)
 from shittim_chest.adapters.discord.gateway import (
     DiscordClientSupervisor,
     DiscordPyGateway,
@@ -30,6 +34,7 @@ __all__ = (
     "DiscordClientSupervisor",
     "DiscordDeliveryConflict",
     "DiscordDeliveryRejected",
+    "DiscordFarewellSender",
     "DiscordIdentityUnavailable",
     "DiscordInteractionController",
     "DiscordOutboxNotFound",
@@ -42,6 +47,7 @@ __all__ = (
     "DiscordThreadLocked",
     "DiscordThreadUnavailable",
     "DiscordUnavailable",
+    "FarewellDeliveryError",
     "build_discord_clients",
     "create_discord_status_http_client",
 )

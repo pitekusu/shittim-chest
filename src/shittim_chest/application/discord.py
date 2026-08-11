@@ -113,6 +113,7 @@ class DiscordRuntimeConfig:
 
     guild_id: str
     allowed_channel_ids: frozenset[str]
+    farewell_channel_id: str
     identities: tuple[DiscordIdentityConfig, ...]
     schema_version: str
 
@@ -123,6 +124,9 @@ class DiscordRuntimeConfig:
             raise ValueError("allowed channel IDs must not be empty")
         for channel_id in self.allowed_channel_ids:
             _require_snowflake(channel_id, label="channel ID")
+        _require_snowflake(self.farewell_channel_id, label="farewell channel ID")
+        if self.farewell_channel_id not in self.allowed_channel_ids:
+            raise ValueError("farewell channel ID must be in the allowed channel set")
         slots = tuple(identity.slot for identity in self.identities)
         if len(slots) != len(DISCORD_BOT_SLOTS) or set(slots) != set(DISCORD_BOT_SLOTS):
             raise ValueError("runtime config must contain each Discord Bot slot exactly once")

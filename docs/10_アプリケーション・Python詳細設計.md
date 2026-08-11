@@ -153,13 +153,15 @@ Attemptの`COMPLETED`/`FAILED`/`CANCELLED`だけでは完全終了とみなさ�
 
 `idle_since`は最初の完全終了時に一度だけ固定し、`stop_eligible_at=idle_since+30分`とする。Reconcilerは1分周期でactivityとgenerationを再確認し、不変の場合だけ`STOPPING`と`desiredCount=0`へ収束させる。STOPPING中の新規Requestはgenerationを進め、古い停止操作を無効化して`STARTING`/`desiredCount=1`へ戻す。正常なSTOPPING ownerだけがcleanup後に`STOPPED`へ遷移し、それ以外の予期せぬ終了は後続task用の新しい`STARTING`世代を残す。
 
+Runtimeは`stop_eligible_at`の2分前から、同じIDLE generationにつき最大1回だけ帰宅挨拶を先行生成してprocess memoryへ保持する。新規request、generation変更、IDLE解除、生成完了時点の期限超過では候補を破棄する。SIGTERM後は新規workとdrainerを停止してcheckpointを保存した後、Discord clientを閉じる前にRuntime Stateを再取得し、同じgenerationが`STOPPING`、`stopping_at >= stop_eligible_at`、かつ期限到達済みの場合だけ候補を1回consumeして送信する。生成・送信・照合の失敗は安定codeだけを記録して無視し、通常の90秒以内shutdownとscale-to-zeroを継続する。
+
 ## 8. 設定と起動validation
 
 ECSが環境変数へ注入する値は`SHITTIM_ENVIRONMENT=production`、`AWS_REGION=ap-northeast-1`、`SHITTIM_DYNAMODB_TABLE`、`SHITTIM_LOG_LEVEL`、任意の直前command schema hash、version付きruntime/persona JSON、OpenAI key、4つのDiscord tokenとする。runtimeからmodelを選択させず、本番Policyはコード上のLuna standardへ固定する。SDK clientを1つも作る前にPydantic strict modelで全値を一括検証し、欠落、未知field、`schema_version`/`config_version`不一致、slot欠落、重複Application ID/token、空allowlist、不正snowflake、promptのUTF-8 3,500 bytes超過があれば安定code `startup_configuration_invalid`で終了する。credential、display name、prompt、元validation messageを標準出力・log・例外へ含めない。
 
 Lambdaは必要最小限の別設定を読み、DiscordIngressにはmoderator ApplicationのPublic Key、Guild/channel allowlist、table名、Status/Reconciler function名を注入する。Public KeyはBot tokenではない。Status Publisherだけが公開Status message用moderator tokenを必要とし、Ingress LambdaはInteraction tokenをhandler scopeから出さず、どのLambdaもOpenAI keyやpersona promptを読まない。
 
-`RuntimeConfig`はGuild ID、allowed channel IDs、4 Application IDを保持する。`PersonaConfig`のslotは`moderator`、`participant-a`、`participant-b`、`participant-c`だけを許可し、display nameとsystem promptを保持する。公開sourceにはschemaと汎用sampleだけを置き、本番値をfileへfallbackしない。
+`RuntimeConfig` schema v2はGuild ID、allowed channel IDs、4 Application ID、allowed channel内の必須`farewell_channel_id`を保持する。`PersonaConfig`のslotは`moderator`、`participant-a`、`participant-b`、`participant-c`だけを許可し、display nameとsystem promptを保持する。公開sourceにはschemaと汎用sampleだけを置き、本番値をfileへfallbackしない。
 
 `bootstrap.py`だけがproduction具体依存を組み立てる。processごとにDynamoDB client 1つ、`AsyncOpenAI` 1つ、共有Semaphore 1つ、Discord client 4つ、衝突しないlease owner IDを生成し、repository、publisher、recovery、application、interaction controller、lifecycleへ注入する。`ProductionRuntime.aclose()`はDiscord、OpenAI、DynamoDBの順に全所有clientを冪等にcloseする。`python -m shittim_chest`は設定errorとruntime errorを本文なしの安定codeで終了し、通常の終了は0、設定不正は2、runtime failureは1とする。`.env.example`は変数名とgeneric placeholderだけを公開し、本番IDやsecretを保持しない。
 

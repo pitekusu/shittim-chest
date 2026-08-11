@@ -14,10 +14,11 @@ from shittim_chest.config.models import StartupConfigurationError
 def runtime_json(*, version: str = "v0001") -> str:
     return json.dumps(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "config_version": version,
             "guild_id": "101",
             "allowed_channel_ids": ["102"],
+            "farewell_channel_id": "102",
             "identities": [
                 {"slot": "moderator", "application_id": "201"},
                 {"slot": "participant-a", "application_id": "202"},

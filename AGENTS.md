@@ -35,6 +35,11 @@ authoritative documents and code, not a duplicate specification.
   safety state, and completed external writes, then use the failure handoff in section 8.
 - After failure, do not rerun, redispatch, fix, commit, perform non-rollback AWS writes, call
   Discord/OpenAI, or start the next step unless explicitly authorized.
+- The two-phase image-baseline measurement in section 6 is the sole exception: when the initial
+  `grype` failure is only the expected config-digest mismatch and that run proves both images'
+  SBOM, VEX, and risk gates, update both baselines from that run and continue through the final
+  required CI without requesting another authorization. Stop on any other failure, missing or
+  inconsistent evidence, residual risk, or a second digest change.
 - Stop failure investigation once the direct cause and safe state are established.
 - If the repository is dirty, protect the user's changes and stop without editing.
 

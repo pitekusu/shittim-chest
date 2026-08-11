@@ -90,7 +90,13 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 - 決定事項promptはwinning proposalの意味変更、新情報追加、他案への差替えを禁止する。
 - 同じ1回の決定事項requestで、winnerのprivate personaに基づく一人称の`victory_message`も生成する。仲間内向けに驚き、歓喜、感謝、勝者らしい高揚感を大げさかつ熱烈に表し、固定文句や共通templateにはしない。winner、最終決定、実行案、注意点はPythonで確定した入力から変更しない。
 
-## 6.1 品質観測・昇格不採用
+### 6.1 帰宅挨拶
+
+正常な30分IDLE停止に備える帰宅挨拶は、participant 3人から選択済みのprivate personaを使い、停止予定2分前に1 logical Responses API requestで生成する。`web_search`を`tool_choice=required`、`max_tool_calls=4`、`store=false`で使用し、user locationを`JP`／`Tokyo`／`Tokyo`／`Asia/Tokyo`へ固定する。PythonがJSTの現在日時、時間帯、季節を決め、modelは東京の天気と人格が好みそうな当日の楽しいニュースを反映した1行60〜160文字を返す。
+
+Structured Outputの天気・ニュースURLは、`web_search_call.action.sources`とURL citationの両方に存在する異なるHTTP(S) URLでなければ失敗とする。Discord本文にはURL、見出し、引用一覧、固定AI免責文を含めず、source URL、本文、persona、channel IDはlogへ出さない。記録するのはsource種別・件数、成功失敗理由、既存allowlist内のtoken／latency metadataだけとする。生成失敗は通常停止を妨げない。
+
+### 6.2 品質観測・昇格不採用
 
 本番の全生成phaseは`PRODUCTION_POLICY=luna_standard`へ固定する。`terra_standard`と`luna_pro`はSTEP-05C.1B評価の再現にだけ残し、本番bootstrap、runtime設定、Discord操作から選択できない。投票後の`escalation-shadow-v1`は1対1対1、勝者へのいずれかの軸2以下、勝者への全軸平均3未満を観測用に保存できるが、常に`executed=false`とし、追加request、再実行、Policy切替を行わない。
 

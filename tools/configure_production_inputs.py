@@ -21,11 +21,13 @@ from typing import TYPE_CHECKING
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from pydantic import ValidationError
 
 from shittim_chest.adapters.discord_http import DiscordPublicKeyError, DiscordRequestVerifier
 from shittim_chest.application import DiscordBotSlot
 from shittim_chest.config.models import (
     PersonaConfigPayload,
+    RuntimeConfigPayloadV1,
     StartupConfigurationError,
     parse_discord_runtime_config,
 )
@@ -48,7 +50,8 @@ MAX_PRIVATE_SOURCE_BYTES = 256 * 1_024
 APPLY_CONFIRMATION = "y"
 PRIVATE_SOURCE_ENV = "SHITTIM_PRIVATE_CONFIG_SOURCE"
 PRIVATE_SOURCE_POINTER = Path(__file__).resolve().parents[1] / ".env.private-config"
-DEFAULT_CONFIG_VERSION = "v0002"
+DEFAULT_CONFIG_VERSION = "v0003"
+MIGRATION_SOURCE_VERSION = "v0002"
 _PERSONA_HEADING_PATTERN = re.compile(r"## PersonaConfig (?P<version>v[0-9]{4})\Z")
 _PERSONA_SECTION_PATTERN = re.compile(
     r"### (?P<slot>participant-[abc]): (?P<display_name>[^\r\n]+)\Z"
@@ -111,12 +114,68 @@ def existing_parameters(client: SSMClient, targets: frozenset[str]) -> frozenset
     return frozenset(found)
 
 
+def load_previous_version_inputs(
+    client: SSMClient,
+    *,
+    source_version: str,
+    target_version: str,
+) -> tuple[str, Mapping[DiscordBotSlot, str]]:
+    """Read exactly the prior versioned config and rewrite only its version fields."""
+
+    _validate_config_version(source_version)
+    _validate_config_version(target_version)
+    names = (
+        f"{PARAMETER_ROOT}/runtime/{source_version}",
+        *(f"{PARAMETER_ROOT}/personas/{source_version}/{slot.value}" for slot in DiscordBotSlot),
+    )
+    response = client.get_parameters(Names=list(names), WithDecryption=True)
+    if response.get("InvalidParameters"):
+        raise SetupError("previous_config_incomplete")
+    values: dict[str, str] = {}
+    for parameter in response.get("Parameters", []):
+        name = parameter.get("Name")
+        value = parameter.get("Value")
+        if (
+            name not in names
+            or name in values
+            or parameter.get("Type") != "SecureString"
+            or not isinstance(value, str)
+        ):
+            raise SetupError("previous_config_invalid")
+        values[name] = value
+    if set(values) != set(names):
+        raise SetupError("previous_config_incomplete")
+    runtime_name = f"{PARAMETER_ROOT}/runtime/{source_version}"
+    try:
+        runtime = RuntimeConfigPayloadV1.model_validate_json(values[runtime_name])
+        if runtime.config_version != source_version:
+            raise SetupError("saved_runtime_config_mismatch")
+        personas: dict[DiscordBotSlot, str] = {}
+        for slot in DiscordBotSlot:
+            name = f"{PARAMETER_ROOT}/personas/{source_version}/{slot.value}"
+            payload = PersonaConfigPayload.model_validate_json(values[name])
+            if payload.slot is not slot or payload.config_version != source_version:
+                raise SetupError("saved_persona_config_mismatch")
+            personas[slot] = json.dumps(
+                {
+                    **payload.model_dump(mode="json"),
+                    "config_version": target_version,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+    except ValidationError:
+        raise SetupError("previous_config_invalid") from None
+    return values[runtime_name], MappingProxyType(personas)
+
+
 def collect_pending_setup(
     *,
     config_version: str,
     missing_parameters: frozenset[str],
     github_email_missing: bool,
     secret_reader: SecretReader = getpass.getpass,
+    saved_runtime: str | None = None,
     saved_personas: Mapping[DiscordBotSlot, str] | None = None,
 ) -> PendingSetup:
     """Collect and validate only missing values through hidden terminal prompts."""
@@ -131,7 +190,11 @@ def collect_pending_setup(
 
     runtime_name = f"{PARAMETER_ROOT}/runtime/{config_version}"
     if runtime_name in missing_parameters:
-        values[runtime_name] = _runtime_json(config_version, secret_reader)
+        values[runtime_name] = (
+            _migrated_runtime_json(config_version, saved_runtime, secret_reader)
+            if saved_runtime is not None
+            else _runtime_json(config_version, secret_reader)
+        )
 
     public_key_name = f"{PARAMETER_ROOT}/discord/moderator/public-key"
     if public_key_name in missing_parameters:
@@ -333,12 +396,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SetupError("interactive_terminal_required")
 
         missing = names - existing
+        saved_runtime: str | None = None
         saved_personas: Mapping[DiscordBotSlot, str] = {}
         persona_names = {
             f"{PARAMETER_ROOT}/personas/{args.config_version}/{slot.value}"
             for slot in DiscordBotSlot
         }
-        if missing & persona_names:
+        versioned_names = persona_names | {f"{PARAMETER_ROOT}/runtime/{args.config_version}"}
+        if args.config_version == DEFAULT_CONFIG_VERSION and missing & versioned_names:
+            saved_runtime, saved_personas = load_previous_version_inputs(
+                client,
+                source_version=MIGRATION_SOURCE_VERSION,
+                target_version=args.config_version,
+            )
+            print("保存済みのv0002設定を検証してv0003へ再利用します。")
+        elif missing & persona_names:
             source = private_config_source()
             if source is not None:
                 saved_personas = load_saved_personas(source, args.config_version)
@@ -348,6 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config_version=args.config_version,
             missing_parameters=missing,
             github_email_missing=email_missing,
+            saved_runtime=saved_runtime,
             saved_personas=saved_personas,
         )
         if pending.github_email is None and not pending.parameters:
@@ -396,18 +469,53 @@ def _runtime_json(config_version: str, secret_reader: SecretReader) -> str:
         }
         for slot in DiscordBotSlot
     ]
+    farewell_channel_id = _required_secret(secret_reader, "帰宅挨拶を送るChannel ID")
     value = json.dumps(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "config_version": config_version,
             "guild_id": guild_id,
             "allowed_channel_ids": channel_ids,
+            "farewell_channel_id": farewell_channel_id,
             "identities": identities,
         },
         ensure_ascii=False,
         separators=(",", ":"),
     )
     parse_discord_runtime_config(value)
+    return value
+
+
+def _migrated_runtime_json(
+    config_version: str,
+    saved_runtime: str,
+    secret_reader: SecretReader,
+) -> str:
+    """Add only the new channel while retaining validated v0002 identifiers."""
+
+    try:
+        previous = RuntimeConfigPayloadV1.model_validate_json(saved_runtime)
+    except ValidationError:
+        raise SetupError("saved_runtime_config_invalid") from None
+    if previous.config_version != MIGRATION_SOURCE_VERSION:
+        raise SetupError("saved_runtime_config_mismatch")
+    farewell_channel_id = _required_secret(secret_reader, "帰宅挨拶を送るChannel ID")
+    value = json.dumps(
+        {
+            "schema_version": "2",
+            "config_version": config_version,
+            "guild_id": previous.guild_id,
+            "allowed_channel_ids": previous.allowed_channel_ids,
+            "farewell_channel_id": farewell_channel_id,
+            "identities": [identity.model_dump(mode="json") for identity in previous.identities],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    try:
+        parse_discord_runtime_config(value)
+    except StartupConfigurationError:
+        raise SetupError("farewell_channel_not_allowed") from None
     return value
 
 

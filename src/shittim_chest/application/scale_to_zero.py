@@ -1026,8 +1026,11 @@ class RuntimeState:
             raise ValueError("stop eligibility must be exactly thirty minutes after idle")
         if self.status is RuntimeStatus.IDLE and self.idle_since is None:
             raise ValueError("IDLE state requires fixed idle timestamps")
-        if self.status is not RuntimeStatus.IDLE and self.idle_since is not None:
-            raise ValueError("only IDLE state may retain idle timestamps")
+        if (
+            self.status not in {RuntimeStatus.IDLE, RuntimeStatus.STOPPING}
+            and self.idle_since is not None
+        ):
+            raise ValueError("only IDLE or STOPPING state may retain idle timestamps")
         if self.status is RuntimeStatus.STOPPING and self.stopping_at is None:
             raise ValueError("STOPPING state requires a stopping timestamp")
         if self.status is RuntimeStatus.STOPPED:
@@ -1259,6 +1262,9 @@ class RuntimeState:
         elif next_status is RuntimeStatus.STOPPING:
             values["desired_count"] = 0
             values["stopping_at"] = at
+            if self.status is RuntimeStatus.IDLE:
+                values["idle_since"] = self.idle_since
+                values["stop_eligible_at"] = self.stop_eligible_at
         elif next_status is RuntimeStatus.STOPPED:
             values["desired_count"] = 0
             values["stopped_at"] = at

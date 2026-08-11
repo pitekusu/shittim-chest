@@ -11,6 +11,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIUnavailable,
 )
 from shittim_chest.adapters.openai.evidence import OpenAIWebEvidenceService
+from shittim_chest.adapters.openai.farewell import OpenAIFarewellGenerator
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     NullOpenAIUsageRecorder,
@@ -27,6 +28,7 @@ __all__ = (
     "OpenAIAdapterError",
     "OpenAIConfigurationError",
     "OpenAIFailureRecord",
+    "OpenAIFarewellGenerator",
     "OpenAIIncompleteResponse",
     "OpenAIInvalidOutput",
     "OpenAIRateLimited",
