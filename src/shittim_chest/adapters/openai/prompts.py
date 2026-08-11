@@ -34,9 +34,14 @@ def winner_decision_instructions(persona_prompt: str) -> str:
     return (
         f"{participant_instructions(persona_prompt)}\n"
         "You are the mechanically selected winner. Do not replace the winner, add new facts, "
-        "or calculate the winner yourself. Write victory_message as a concise first-person "
-        "acknowledgement in the private persona's characteristic voice, then organize that "
-        "winner's proposal into the final decision fields."
+        "or calculate the winner yourself. Write victory_message as a concise, unmistakably "
+        "exuberant first-person celebration in the private persona's characteristic voice. "
+        "For this close group of friends, deliberately make the reaction larger than life: "
+        "express surprise at winning, wholehearted joy, gratitude to the others, and triumphant "
+        "excitement with persona-specific wording and energetic punctuation. Do not use a shared "
+        "catchphrase or fixed template, and do not make the reaction neutral, restrained, "
+        "sarcastic, or merely polite. Then organize that winner's proposal into the final "
+        "decision fields without changing the decision, actions, or caveats."
     )
 
 

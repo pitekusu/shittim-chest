@@ -30,7 +30,7 @@ from shittim_chest.domain import (
 )
 
 NOW = datetime(2026, 7, 27, 1, 0, tzinfo=UTC)
-AI_DISCLAIMER = "AI生成であり、正確性や専門的判断を保証するものではありません。"
+AI_DISCLAIMER = "この出力はAI生成であり、正確性や専門的判断を保証するものではありません。"
 DISPLAY_NAMES = {
     ParticipantSlot.PARTICIPANT_A: "アロナ",
     ParticipantSlot.PARTICIPANT_B: "プラナ",
@@ -113,7 +113,7 @@ def plan_from_operations(
     )
 
 
-def test_completed_delivery_contains_decision_actions_caveats_and_disclaimer() -> None:
+def test_completed_delivery_contains_decision_actions_and_caveats_without_disclaimer() -> None:
     source = snapshot(final_decision=final_decision())
 
     operations = prepare_terminal_outbox_operations(
@@ -136,7 +136,7 @@ def test_completed_delivery_contains_decision_actions_caveats_and_disclaimer() -
     assert "フルーツを添えたパンケーキ" in decision_content
     assert "- 薄力粉と卵を混ぜる" in decision_content
     assert "- 甘さは好みで調整する" in decision_content
-    assert AI_DISCLAIMER in decision_content
+    assert AI_DISCLAIMER not in decision_content
 
 
 def test_completed_delivery_explains_a_tied_ballot_before_the_winner_speaks() -> None:
@@ -202,7 +202,7 @@ def test_legacy_completed_delivery_without_victory_message_keeps_the_decision() 
     assert "フルーツを添えたパンケーキ" in decision_content
 
 
-def test_failed_and_cancelled_delivery_have_safe_terminal_content() -> None:
+def test_failed_and_cancelled_delivery_have_concise_terminal_content() -> None:
     failed = prepare_terminal_outbox_operations(
         snapshot=snapshot(),
         target_phase=DebatePhase.FAILED,
@@ -221,8 +221,8 @@ def test_failed_and_cancelled_delivery_have_safe_terminal_content() -> None:
     assert "`OPENAI_TIMEOUT`" in failed_content
     assert "再試行は操作パネルから行えます。" in failed_content
     assert "**討論を中止しました**" in cancelled_content
-    assert AI_DISCLAIMER in failed_content
-    assert AI_DISCLAIMER in cancelled_content
+    assert AI_DISCLAIMER not in failed_content
+    assert AI_DISCLAIMER not in cancelled_content
     assert all(operation.bot_slot is DiscordBotSlot.MODERATOR for operation in failed)
     assert all(operation.bot_slot is DiscordBotSlot.MODERATOR for operation in cancelled)
 

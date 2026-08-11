@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-07-28
+updated: 2026-08-11
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -43,7 +43,7 @@ HTTP Interactionから受け取ったInteraction tokenはOpenAIへ送らず、Dy
 | `OpinionOutputV1` | `summary`, `proposal` |
 | `FinalProposalOutputV1` | `title`, `proposal` |
 | `VoteOutputV1` | `candidate_id`, `accuracy_score`, `usefulness_score`, `safety_score`, `reason` |
-| `DecisionOutputV1` | `decision`, `actions`, `caveats` |
+| `DecisionOutputV1` | `victory_message`, `decision`, `actions`, `caveats` |
 
 Pydanticでfield、length、score範囲、candidate IDをstrictに検証し、未知fieldを拒否した後、domain invariantで自己投票、重複、未知IDを拒否する。`refusal`、`incomplete`、`output_parsed is None`は別error codeへ変換する。
 
@@ -88,6 +88,7 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 - 1対1対1は各投票の3軸合計、正確性、安全性、実用性、`participant-b > participant-a > participant-c`の安定順で決定する。この順序はruntime display nameと無関係とする。
 - winner判定はPythonだけで行う。
 - 決定事項promptはwinning proposalの意味変更、新情報追加、他案への差替えを禁止する。
+- 同じ1回の決定事項requestで、winnerのprivate personaに基づく一人称の`victory_message`も生成する。仲間内向けに驚き、歓喜、感謝、勝者らしい高揚感を大げさかつ熱烈に表し、固定文句や共通templateにはしない。winner、最終決定、実行案、注意点はPythonで確定した入力から変更しない。
 
 ## 6.1 品質観測・昇格不採用
 
@@ -102,7 +103,7 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 ## 7. Safety・privacy・cost
 
 - provider refusalを尊重し、別promptで回避しない。
-- 医療、法律、金融、政治、選挙、緊急事態、自傷を含む高risk category専用の事前拒否は設けず通常質問と同じflowで扱う。ただしproviderのrefusal/policy blockを迂回せず、共通終了表示で正答・診断・法的判断・投資判断を保証しないことを明記する。
+- 医療、法律、金融、政治、選挙、緊急事態、自傷を含む高risk category専用の事前拒否は設けず通常質問と同じflowで扱う。providerのrefusal/policy blockを迂回せず、prompt上も正答・診断・法的判断・投資判断を保証させない。仲間内限定運用ではCOMPLETED／FAILED／CANCELLEDへ固定のAI免責文を表示しない。
 - user IDはraw値をOpenAIへ送らず、必要時は安定したprivacy-preserving safety identifierを使用する。
 - `store=false`はResponses application stateを保存しない指定であり、既定のabuse monitoring logはuser contentを含み最大30日保持され得る。Zero Data Retentionを本番条件にはせず、このdata flowを利用者向け説明と運用文書へ明記する。
 - input/output/cached/reasoning token、latency、response ID、model ID、cache hitをmetricsへ記録する。本文はlogへ出さない。
