@@ -56,6 +56,7 @@ def test_content_is_one_line_bounded_and_discord_sanitized() -> None:
         "a" * 161,
         "a" * 59 + "\n続き",
         "a" * 60 + " https://example.test",
+        "a" * 60 + " weather.example.com/tokyo",
         "a" * 60 + " この出力はAI生成です",
         "a" * 60 + "\u200d",
     ],

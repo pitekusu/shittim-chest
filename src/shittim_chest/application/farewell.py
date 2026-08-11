@@ -17,7 +17,11 @@ FAREWELL_MAX_CHARACTERS = 160
 FAREWELL_GENERATION_LEAD = timedelta(minutes=2)
 TOKYO_TIMEZONE = ZoneInfo("Asia/Tokyo")
 
-_URL_PATTERN = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
+_URL_PATTERN = re.compile(
+    r"(?:https?://|www\.|(?<![A-Za-z0-9@_-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}"
+    r"[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?::[0-9]{1,5})?(?:[/#?][^\s]*)?)",
+    re.IGNORECASE,
+)
 _DISCLAIMER_FRAGMENTS = (
     "AI生成",
     "正確性や専門的判断",

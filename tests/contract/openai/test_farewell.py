@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -52,6 +52,7 @@ def response(
     search_status: str = "completed",
     message_status: str = "completed",
     additional_output: dict[str, object] | None = None,
+    additional_message_content: object | None = None,
 ) -> SimpleNamespace:
     annotations = [
         {
@@ -89,19 +90,20 @@ def response(
     ]
     if additional_output is not None:
         output.append(additional_output)
+    message_content: list[object] = [
+        {
+            "type": "output_text",
+            "text": "{}",
+            "annotations": annotations,
+        }
+    ]
     output.append(
         {
             "id": "msg_1",
             "type": "message",
             "status": message_status,
             "role": "assistant",
-            "content": [
-                {
-                    "type": "output_text",
-                    "text": "{}",
-                    "annotations": annotations,
-                }
-            ],
+            "content": message_content,
         }
     )
     typed = Response.model_validate(
@@ -127,6 +129,10 @@ def response(
             },
         }
     )
+    if additional_message_content is not None:
+        message_output = typed.output[-1]
+        assert message_output.type == "message"
+        cast(Any, message_output.content).append(additional_message_content)
     return SimpleNamespace(
         id=typed.id,
         model=typed.model,
@@ -235,6 +241,21 @@ async def test_unexpected_output_union_member_fails_closed() -> None:
                 "status": "completed",
             }
         )
+    )
+
+    with pytest.raises(OpenAIInvalidOutput):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert [failure.code for failure in observer.failures] == ["openai_invalid_output"]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_output_message_content_fails_closed() -> None:
+    service, _, observer = service_for(
+        response(additional_message_content=SimpleNamespace(type="future_content"))
     )
 
     with pytest.raises(OpenAIInvalidOutput):

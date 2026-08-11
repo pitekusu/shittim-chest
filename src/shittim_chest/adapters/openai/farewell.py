@@ -26,6 +26,7 @@ from openai.types.responses.response_function_web_search import (
     ResponseFunctionWebSearch,
 )
 from openai.types.responses.response_output_message import ResponseOutputMessage
+from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from openai.types.responses.response_output_text import AnnotationURLCitation, ResponseOutputText
 from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from pydantic import ValidationError
@@ -201,8 +202,11 @@ def _extract_parsed(
         if isinstance(output, ResponseOutputMessage):
             if output.status != "completed":
                 raise OpenAIIncompleteResponse()
-            if any(content.type == "refusal" for content in output.content):
-                raise OpenAIRefusal()
+            for content in output.content:
+                if isinstance(content, ResponseOutputRefusal):
+                    raise OpenAIRefusal()
+                if not isinstance(content, ResponseOutputText):
+                    raise OpenAIInvalidOutput()
     if response.output_parsed is None:
         raise OpenAIInvalidOutput()
     return response.output_parsed
@@ -235,8 +239,10 @@ def _extract_urls(
             if not isinstance(output.content, list):
                 raise OpenAIInvalidOutput()
             for content in output.content:
-                if not isinstance(content, ResponseOutputText):
+                if isinstance(content, ResponseOutputRefusal):
                     continue
+                if not isinstance(content, ResponseOutputText):
+                    raise OpenAIInvalidOutput()
                 if not isinstance(content.annotations, list):
                     raise OpenAIInvalidOutput()
                 for annotation in content.annotations:
