@@ -831,7 +831,6 @@ def _terminal_content(
     target_phase: DebatePhase,
     error_code: str | None,
 ) -> str:
-    disclaimer = "この出力はAI生成であり、正確性や専門的判断を保証するものではありません。"
     if target_phase is DebatePhase.COMPLETED:
         decision = snapshot.final_decision
         if decision is None or error_code is not None:
@@ -860,7 +859,6 @@ def _terminal_content(
                     *(_quoted_model_text(caveat, bullet=True) for caveat in decision.caveats),
                 )
             )
-        sections.extend(("", disclaimer))
         return "\n".join(sections)
     if target_phase is DebatePhase.FAILED:
         if error_code is None or _TERMINAL_ERROR_CODE_PATTERN.fullmatch(error_code) is None:
@@ -870,14 +868,12 @@ def _terminal_content(
                 "**討論を完了できませんでした**",
                 f"エラーコード: `{error_code}`",
                 "再試行は操作パネルから行えます。",
-                "",
-                disclaimer,
             )
         )
     if target_phase is DebatePhase.CANCELLED:
         if error_code is not None:
             raise ValueError("cancelled delivery cannot contain an error code")
-        return "\n".join(("**討論を中止しました**", "", disclaimer))
+        return "**討論を中止しました**"
     raise ValueError("terminal delivery target must be completed, failed, or cancelled")
 
 

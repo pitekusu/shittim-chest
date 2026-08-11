@@ -255,6 +255,15 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     ]
     assert "persona for participant-a" in server.requests[-1]["instructions"]
     assert "victory_message" in server.requests[-1]["instructions"]
+    assert "unmistakably exuberant first-person celebration" in server.requests[-1]["instructions"]
+    assert "surprise at winning" in server.requests[-1]["instructions"]
+    assert "wholehearted joy" in server.requests[-1]["instructions"]
+    assert "gratitude to the others" in server.requests[-1]["instructions"]
+    assert "triumphant excitement" in server.requests[-1]["instructions"]
+    assert (
+        "Do not use a shared catchphrase or fixed template" in server.requests[-1]["instructions"]
+    )
+    assert len(server.requests) == 4
 
 
 @pytest.mark.asyncio
