@@ -260,6 +260,24 @@ class FakeRuntimeInstance:
 
 
 @dataclass(slots=True)
+class FakeFarewell:
+    events: list[str]
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    delivery_failure: Exception | None = None
+
+    async def run(self, stop: asyncio.Event) -> None:
+        self.events.append("farewell_monitor_started")
+        self.started.set()
+        await stop.wait()
+        self.events.append("farewell_monitor_stopped")
+
+    async def deliver_before_shutdown(self) -> None:
+        self.events.append("farewell_delivery_checked")
+        if self.delivery_failure is not None:
+            raise self.delivery_failure
+
+
+@dataclass(slots=True)
 class FakeSignalHandlers:
     callback: Callable[[], None] | None = None
     install_calls: int = 0
@@ -301,6 +319,7 @@ class LifecycleFakes:
     gate: FakeDrainGate
     drainer: FakeDrainer
     runtime_instance: FakeRuntimeInstance
+    farewell: FakeFarewell | None
     signals: FakeSignalHandlers
     events: list[str]
 
@@ -336,6 +355,7 @@ def lifecycle(
     gate: FakeDrainGate | None = None,
     drainer: FakeDrainer | None = None,
     runtime_instance: FakeRuntimeInstance | None = None,
+    farewell: FakeFarewell | None = None,
     signal_handlers: FakeSignalHandlers | None = None,
     disconnect_grace_seconds: float = 0.02,
     shutdown_timeout_seconds: float = 0.2,
@@ -354,6 +374,8 @@ def lifecycle(
     current_gate.events = events
     current_drainer.events = events
     current_runtime_instance.events = events
+    if farewell is not None:
+        farewell.events = events
     admission = RecordingAdmissionGateway(gateway, events)
     runtime = RuntimeLifecycle(
         admission=admission,
@@ -365,6 +387,7 @@ def lifecycle(
         runtime_instance=current_runtime_instance,
         tokens=tokens(),
         previous_command_schema_hash="previous-schema",
+        farewell=farewell,
         signal_handlers=current_signals,
         readiness_poll_seconds=0.005,
         disconnect_grace_seconds=disconnect_grace_seconds,
@@ -379,6 +402,7 @@ def lifecycle(
         gate=current_gate,
         drainer=current_drainer,
         runtime_instance=current_runtime_instance,
+        farewell=farewell,
         signals=current_signals,
         events=events,
     )
@@ -633,6 +657,40 @@ async def test_shutdown_closes_gates_before_drain_checkpoint_and_components() ->
     assert values.interactions.close_calls == 1
     assert values.runtime_instance.shutdown_calls == 1
     assert values.signals.uninstall_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_farewell_is_checked_after_checkpoint_and_before_discord_close() -> None:
+    farewell = FakeFarewell([])
+    values = lifecycle(gateway=FakeDiscordGateway(ready=True), farewell=farewell)
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: farewell.started.is_set() and values.admission.is_accepting)
+
+    values.runtime.request_shutdown()
+    await runtime_task
+
+    assert_order(
+        values.events,
+        "ingress_checkpointed",
+        "farewell_delivery_checked",
+        "interactions_closed",
+        "supervisor_stopped",
+        "runtime_shutdown_complete",
+    )
+
+
+@pytest.mark.asyncio
+async def test_farewell_failure_does_not_prevent_normal_shutdown() -> None:
+    farewell = FakeFarewell([], delivery_failure=RuntimeError("private Discord detail"))
+    values = lifecycle(gateway=FakeDiscordGateway(ready=True), farewell=farewell)
+    runtime_task = asyncio.create_task(values.runtime.run())
+    await wait_until(lambda: farewell.started.is_set() and values.admission.is_accepting)
+
+    values.runtime.request_shutdown()
+    await runtime_task
+
+    assert values.runtime_instance.shutdown_calls == 1
+    assert values.interactions.close_calls == 1
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,6 @@ from shittim_chest.application import (
 )
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
-CONFIG_SCHEMA_VERSION = "1"
 PRODUCTION_ENVIRONMENT = "production"
 DEFAULT_AWS_REGION = "ap-northeast-1"
 
@@ -57,6 +56,17 @@ class DiscordIdentityPayload(_StrictModel):
 
 
 class RuntimeConfigPayload(_StrictModel):
+    schema_version: Literal["2"]
+    config_version: str = Field(pattern=r"^v[0-9]{4}$")
+    guild_id: str
+    allowed_channel_ids: tuple[str, ...] = Field(min_length=1)
+    farewell_channel_id: str
+    identities: tuple[DiscordIdentityPayload, ...] = Field(min_length=4, max_length=4)
+
+
+class RuntimeConfigPayloadV1(_StrictModel):
+    """Read-only migration schema for the previous private runtime config."""
+
     schema_version: Literal["1"]
     config_version: str = Field(pattern=r"^v[0-9]{4}$")
     guild_id: str
@@ -142,6 +152,7 @@ def parse_discord_runtime_config(raw_json: str) -> tuple[DiscordRuntimeConfig, s
         runtime = DiscordRuntimeConfig(
             guild_id=payload.guild_id,
             allowed_channel_ids=frozenset(payload.allowed_channel_ids),
+            farewell_channel_id=payload.farewell_channel_id,
             identities=tuple(
                 DiscordIdentityConfig(slot=item.slot, application_id=item.application_id)
                 for item in payload.identities

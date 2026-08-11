@@ -67,10 +67,11 @@ async def test_runtime_parameter_version_must_match_its_payload() -> None:
             del name, with_decryption
             return json.dumps(
                 {
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "config_version": "v0002",
                     "guild_id": "101",
                     "allowed_channel_ids": ["102"],
+                    "farewell_channel_id": "102",
                     "identities": [
                         {"slot": "moderator", "application_id": "200"},
                         {"slot": "participant-a", "application_id": "201"},

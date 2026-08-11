@@ -26,6 +26,7 @@ STEP-06Aは`moderator`、`participant-a`、`participant-b`、`participant-c`を`
 
 - version付き`RuntimeConfig.guild_id`だけを許可する。
 - `RuntimeConfig.allowed_channel_ids`は非空の通常テキストchannel ID集合とし、未設定時はfail closedする。
+- `RuntimeConfig.farewell_channel_id`はallowlistに含まれる単一の通常テキストchannelとし、thread、別Guild、権限不足はfail closedする。
 - thread内でSlash Commandを直接開始せず、allowlist対象channelの起点messageからPublic Threadを作成する。
 - 必要permissionは`View Channel`、`Send Messages`、`Create Public Threads`、`Send Messages in Threads`、`Read Message History`。不要なAdministrator権限を付けない。
 
@@ -105,6 +106,8 @@ STEP-06Bはdiscord.py 2.7.1の公開`Thread.send()`を使用する。22文字non
 HTTP ingressからRuntimeがstarter message、thread、panelを準備する経路でも、discord.pyの`RateLimited.retry_after`またはHTTP 429の`Retry-After`をcontent-freeな秒数としてapplication境界へ渡す。Ingress Requestは固定5秒より長いprovider指定値を`next_attempt_at`へ保存し、その時刻より前に再claimしない。構造化logはerror code、delivery attempt、実際のretry delay、delay source、およびallowlist済みの`discord_operation`を記録する。rate-limitの直接原因を再試験する間は、同じoperationに対する成功応答と429応答から`X-RateLimit-Scope`、`X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset-After`を厳格なenum／数値へ変換して記録し、`X-RateLimit-Bucket`は同一bucketの相関に必要なSHA-256だけを記録する。欠落headerは`null`、不正値はallowlist済みheader名だけで区別し、raw header値、response body、質問、token、URL、Discord IDは記録しない。
 
 HTTP ingressの`STARTING`応答は、既存taskのIDLE再開を新規ECS起動と誤表示しないよう「依頼を受け付け、処理開始を準備中」と表示する。同期応答時点では将来のDiscord `Retry-After`を取得できないため、推定待ち時間は通常約1分以内、連続実行時はDiscord制限により約5分かかる場合があるという静的な目安とし、保証値または固定rate limitとして扱わない。
+
+帰宅挨拶はdurable debate Outboxを使わない限定例外とする。正常な30分IDLE停止時だけ、選択済みparticipant Botが通常テキストチャンネルへ`AllowedMentions.none()`、embed抑止、決定的22文字nonce付きで1件送信し、channel、author、content、nonceを応答で照合する。application側の再送とhistory reconciliationは行わず、候補は送信前にconsumeするためat-most-onceとする。失敗は挨拶を省略してDiscord client closeとRuntime停止を続ける。
 
 STEP-07Bの`DiscordOutboxRecovery`はlease取得済みattemptの全未送信operationを強整合Queryで取得し、`chunk_sequence`とoperation IDの保存済み順序で1件ずつpublisherへ渡す。`next_retry_at`未来値と未失効claimはその永続時刻までasync待機し、pollによるbusy loopを行わない。retryable provider errorはpublisherが保存したscheduleを再読込みし、同じHTTP requestを直接retryしない。非retryable errorは安定Discord codeを保持してattemptをFAILEDへする。shutdown cancellationは再送出し、送信途中recordを次回のclaim/reconciliationへ残す。
 

@@ -75,6 +75,7 @@ def complete_secret_input() -> list[str]:
         "105",
         "106",
         "107",
+        "102",
         "ab" * 32,
         "moderator-token",
         "participant-a-token",
@@ -94,6 +95,21 @@ def complete_secret_input() -> list[str]:
         "Participant C prompt",
         ".",
     ]
+
+
+def previous_runtime_json() -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "config_version": "v0002",
+            "guild_id": "101",
+            "allowed_channel_ids": ["102", "103"],
+            "identities": [
+                {"slot": slot.value, "application_id": str(201 + index)}
+                for index, slot in enumerate(DiscordBotSlot)
+            ],
+        }
+    )
 
 
 def test_parameter_names_are_the_exact_eleven_secure_string_paths() -> None:
@@ -127,10 +143,11 @@ def test_collects_and_validates_every_missing_value_without_repr_leak() -> None:
 
     runtime = json.loads(pending.parameters["/shittim-chest/production/runtime/v0001"])
     assert runtime == {
-        "schema_version": "1",
+        "schema_version": "2",
         "config_version": "v0001",
         "guild_id": "101",
         "allowed_channel_ids": ["102", "103"],
+        "farewell_channel_id": "102",
         "identities": [
             {"slot": slot.value, "application_id": str(100 + index)}
             for index, slot in enumerate(DiscordBotSlot, start=4)
@@ -195,6 +212,82 @@ def test_saved_personas_replace_all_persona_prompts() -> None:
     assert set(pending.parameters) == set(missing)
 
 
+def test_v0003_migration_reuses_v0002_runtime_and_personas_with_one_input() -> None:
+    sdk = client()
+    source_names = [
+        f"{setup.PARAMETER_ROOT}/runtime/v0002",
+        *(f"{setup.PARAMETER_ROOT}/personas/v0002/{slot.value}" for slot in DiscordBotSlot),
+    ]
+    saved = setup._personas_from_operator_markdown(SAVED_PERSONAS, "v0002")
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_parameters",
+            {
+                "Parameters": [
+                    {
+                        "Name": source_names[0],
+                        "Type": "SecureString",
+                        "Value": previous_runtime_json(),
+                    },
+                    *(
+                        {
+                            "Name": f"{setup.PARAMETER_ROOT}/personas/v0002/{slot.value}",
+                            "Type": "SecureString",
+                            "Value": saved[slot],
+                        }
+                        for slot in DiscordBotSlot
+                    ),
+                ],
+            },
+            {"Names": source_names, "WithDecryption": True},
+        )
+        runtime, personas = setup.load_previous_version_inputs(
+            sdk,
+            source_version="v0002",
+            target_version="v0003",
+        )
+
+    missing = frozenset(
+        {
+            f"{setup.PARAMETER_ROOT}/runtime/v0003",
+            *(f"{setup.PARAMETER_ROOT}/personas/v0003/{slot.value}" for slot in DiscordBotSlot),
+        }
+    )
+    pending = setup.collect_pending_setup(
+        config_version="v0003",
+        missing_parameters=missing,
+        github_email_missing=False,
+        secret_reader=secret_reader(["102"]),
+        saved_runtime=runtime,
+        saved_personas=personas,
+    )
+
+    migrated = json.loads(pending.parameters[f"{setup.PARAMETER_ROOT}/runtime/v0003"])
+    assert migrated["schema_version"] == "2"
+    assert migrated["config_version"] == "v0003"
+    assert migrated["farewell_channel_id"] == "102"
+    assert migrated["guild_id"] == "101"
+    assert migrated["identities"][0]["application_id"] == "201"
+    assert all(
+        json.loads(value)["config_version"] == "v0003"
+        for name, value in pending.parameters.items()
+        if "/personas/" in name
+    )
+
+
+def test_v0003_migration_rejects_farewell_channel_outside_allowlist() -> None:
+    with pytest.raises(setup.SetupError) as caught:
+        setup.collect_pending_setup(
+            config_version="v0003",
+            missing_parameters=frozenset({f"{setup.PARAMETER_ROOT}/runtime/v0003"}),
+            github_email_missing=False,
+            secret_reader=secret_reader(["999"]),
+            saved_runtime=previous_runtime_json(),
+        )
+
+    assert caught.value.code == "farewell_channel_not_allowed"
+
+
 def test_private_source_pointer_is_local_only_and_absolute(tmp_path: Path) -> None:
     source = tmp_path / "private.md"
     source.write_text(SAVED_PERSONAS, encoding="utf-8")
@@ -220,8 +313,8 @@ def test_invalid_saved_persona_source_fails_with_content_free_code(tmp_path: Pat
     assert "Alpha prompt" not in str(caught.value)
 
 
-def test_parser_defaults_to_saved_persona_version() -> None:
-    assert setup._parser().parse_args([]).config_version == "v0002"
+def test_parser_defaults_to_new_runtime_version() -> None:
+    assert setup._parser().parse_args([]).config_version == "v0003"
 
 
 @pytest.mark.parametrize(

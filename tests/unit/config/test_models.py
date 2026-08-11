@@ -19,6 +19,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.config_version == "v0001"
     assert config.runtime.guild_id == "101"
     assert config.runtime.allowed_channel_ids == frozenset({"201", "202"})
+    assert config.runtime.farewell_channel_id == "201"
     assert config.discord_tokens[DiscordBotSlot.MODERATOR] == "token-moderator-placeholder"
     assert config.participant_prompts()[ParticipantSlot.PARTICIPANT_B] == (
         "Generic private prompt for participant-b."
@@ -113,6 +114,28 @@ def test_load_bootstrap_config_requires_one_matching_version_for_all_payloads() 
         load_bootstrap_config(environment)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"schema_version": "1"},
+        {"farewell_channel_id": "999"},
+        {"farewell_channel_id": None},
+    ],
+)
+def test_runtime_config_v2_requires_an_allowed_farewell_channel(
+    mutation: dict[str, object],
+) -> None:
+    environment = _valid_environment()
+    runtime = json.loads(environment["SHITTIM_RUNTIME_CONFIG_JSON"])
+    runtime.update(mutation)
+    if mutation.get("farewell_channel_id", object()) is None:
+        runtime.pop("farewell_channel_id", None)
+    environment["SHITTIM_RUNTIME_CONFIG_JSON"] = json.dumps(runtime)
+
+    with pytest.raises(StartupConfigurationError):
+        load_bootstrap_config(environment)
+
+
 def _valid_environment() -> dict[str, str]:
     environment = {
         "SHITTIM_ENVIRONMENT": "production",
@@ -128,10 +151,11 @@ def _valid_environment() -> dict[str, str]:
         "SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH": "a" * 64,
         "SHITTIM_RUNTIME_CONFIG_JSON": json.dumps(
             {
-                "schema_version": "1",
+                "schema_version": "2",
                 "config_version": "v0001",
                 "guild_id": "101",
                 "allowed_channel_ids": ["201", "202"],
+                "farewell_channel_id": "201",
                 "identities": [
                     {"slot": "moderator", "application_id": "301"},
                     {"slot": "participant-a", "application_id": "302"},

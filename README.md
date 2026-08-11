@@ -27,7 +27,7 @@ accepted durably while the ARM64 On-Demand Fargate service is at
 | Deliberation | Initial opinions, revised proposals, anonymous ballots, moderator vote tally, and winner-persona final presentation are live |
 | OpenAI | Responses API with Structured Outputs and optional web evidence; production is fixed to Luna standard |
 | Persistence | DynamoDB schema v7, fenced leases, durable FIFO ingress, checkpoints, and ordered Outbox v2 |
-| Runtime | ARM64 On-Demand Fargate scale-to-zero, normally `0/0/0`, with at most one task |
+| Runtime | ARM64 On-Demand Fargate scale-to-zero, normally `0/0/0`, with at most one task and a best-effort participant farewell before normal idle shutdown |
 | Supply chain | DHI images, SBOM, VEX, Grype, signatures, attestations, image admission, and immutable CloudFormation Change Sets |
 | Operations | CloudWatch alarms/dashboard, EventBridge notifications, SNS email, cost budgets, drift detection, and GitHub → Discord notifications |
 
@@ -50,12 +50,13 @@ GitHub Actions secrets and SSM Parameter Store after confirmation:
 uv run --frozen python tools/configure_production_inputs.py
 ```
 
-When the local-only `SHITTIM_PRIVATE_CONFIG_SOURCE` pointer is configured, the
-command validates and reuses its saved `PersonaConfig v0002`; those four persona
-values are not requested again. The pointer and source stay ignored and are never
-copied into the repository.
+For the v0003 migration, the command validates and reuses the existing v0002
+RuntimeConfig and four PersonaConfig values without displaying them, then asks only
+for the allowlisted farewell channel. The local-only pointer and private values stay
+ignored and are never copied into the repository.
 
-It does not read, decrypt, overwrite, print, or save existing secret values.
+Outside the bounded v0002-to-v0003 migration read, it does not retrieve existing
+secret values. It never overwrites, prints, or saves them.
 Readiness can be checked without entering values:
 
 ```sh

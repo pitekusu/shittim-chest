@@ -240,6 +240,7 @@ def test_runtime_config_requires_one_distinct_identity_per_slot_and_nonempty_all
     config = DiscordRuntimeConfig(
         guild_id=GUILD_ID,
         allowed_channel_ids=frozenset({CHANNEL_ID}),
+        farewell_channel_id=CHANNEL_ID,
         identities=identities(),
         schema_version="runtime-v1",
     )
@@ -262,6 +263,8 @@ def test_runtime_config_requires_one_distinct_identity_per_slot_and_nonempty_all
         replace(config, guild_id="guild")
     with pytest.raises(ValueError, match="schema version"):
         replace(config, schema_version=" ")
+    with pytest.raises(ValueError, match="farewell channel ID"):
+        replace(config, farewell_channel_id="999")
 
 
 def test_nonce_digest_and_panel_custom_id_have_stable_external_shapes() -> None:
