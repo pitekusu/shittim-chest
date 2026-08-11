@@ -163,4 +163,4 @@ STEP-07Bの`DiscordOutboxRecovery`はlease取得済みattemptの全未送信oper
 - STEP-07A（完了、PR `#33`、merge commit `0f386f5`）: process signal、fail-closed受付gate、起動時`resume_recoverable`、60秒Gateway切断checkpoint、再接続resume、90秒graceful shutdown。
 - STEP-07B（完了、PR `#34`、merge commit `04bbda0`）: pending全件取得、永続retry/claim待機、順序drain、lease heartbeat、nonretryable error/fencing/cancellation処理。
 - STEP-07C（local実装済み）: strictなprivate runtime/persona設定からexactly 4 clientを生成し、共通gateway、READY gate、interaction controller、lifecycleへ注入するproduction composition。実process SIGTERM/SIGKILLをoffline検証済み。
-- Scale-to-Zero（local/CI実装済み）: API Gateway v2 raw request復元、Ed25519/timestamp/replay検証、PING即時応答、token非永続化、耐久Status publication、稼働中だけのGatewayとIngress drainをofflineで検証済み。実Interactions Endpointの登録、実Bot token、Discord通信、AWS deploy/smokeは未実施。
+- Scale-to-Zero（実装・production live検証済み）: API Gateway v2 raw request復元、Ed25519/timestamp/replay検証、PING即時応答、token非永続化、耐久Status publication、稼働中だけのGatewayとIngress drainを実装した。Interactions Endpoint、4 Bot、`/shittim`、4 Stack、ECS `0→1→0`、討論完了とStatus収束はProduction Releaseと段階live acceptanceで検証済みである。
