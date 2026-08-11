@@ -27,6 +27,7 @@ from openai.types.responses.response_function_web_search import (
 )
 from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_output_text import AnnotationURLCitation, ResponseOutputText
+from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from pydantic import ValidationError
 
 from shittim_chest.adapters.openai.config import OpenAIAdapterConfig, PersonaPrompts
@@ -242,6 +243,10 @@ def _extract_urls(
                     if not isinstance(annotation, AnnotationURLCitation):
                         raise OpenAIInvalidOutput()
                     citation_urls.add(_validated_url(annotation.url))
+        elif isinstance(output, ResponseReasoningItem):
+            continue
+        else:
+            raise OpenAIInvalidOutput()
     return source_urls, citation_urls
 
 

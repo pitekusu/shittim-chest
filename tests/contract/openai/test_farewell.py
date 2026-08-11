@@ -51,6 +51,7 @@ def response(
     status: str = "completed",
     search_status: str = "completed",
     message_status: str = "completed",
+    additional_output: dict[str, object] | None = None,
 ) -> SimpleNamespace:
     annotations = [
         {
@@ -71,6 +72,38 @@ def response(
                 "url": NEWS_URL,
             }
         )
+    output: list[dict[str, object]] = [
+        {
+            "id": "ws_1",
+            "type": "web_search_call",
+            "status": search_status,
+            "action": {
+                "type": "search",
+                "query": "東京 今日 天気 楽しいニュース",
+                "sources": [
+                    {"type": "url", "url": WEATHER_URL},
+                    {"type": "url", "url": NEWS_URL},
+                ],
+            },
+        }
+    ]
+    if additional_output is not None:
+        output.append(additional_output)
+    output.append(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "status": message_status,
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "{}",
+                    "annotations": annotations,
+                }
+            ],
+        }
+    )
     typed = Response.model_validate(
         {
             "id": "resp_farewell",
@@ -81,34 +114,7 @@ def response(
             "error": None,
             "incomplete_details": None,
             "model": "gpt-5.6-luna",
-            "output": [
-                {
-                    "id": "ws_1",
-                    "type": "web_search_call",
-                    "status": search_status,
-                    "action": {
-                        "type": "search",
-                        "query": "東京 今日 天気 楽しいニュース",
-                        "sources": [
-                            {"type": "url", "url": WEATHER_URL},
-                            {"type": "url", "url": NEWS_URL},
-                        ],
-                    },
-                },
-                {
-                    "id": "msg_1",
-                    "type": "message",
-                    "status": message_status,
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": "{}",
-                            "annotations": annotations,
-                        }
-                    ],
-                },
-            ],
+            "output": output,
             "parallel_tool_calls": False,
             "tool_choice": "required",
             "tools": [{"type": "web_search", "search_context_size": "medium"}],
@@ -191,6 +197,45 @@ async def test_request_requires_tokyo_web_search_and_returns_only_display_text()
 @pytest.mark.asyncio
 async def test_missing_weather_or_news_citation_fails_closed() -> None:
     service, _, observer = service_for(response(cite_news=False))
+
+    with pytest.raises(OpenAIInvalidOutput):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert [failure.code for failure in observer.failures] == ["openai_invalid_output"]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_output_is_allowed() -> None:
+    service, _, observer = service_for(
+        response(additional_output={"id": "rs_1", "type": "reasoning", "summary": []})
+    )
+
+    content = await service.generate(
+        participant=ParticipantSlot.PARTICIPANT_A,
+        time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+    )
+
+    assert content
+    assert observer.failures == []
+
+
+@pytest.mark.asyncio
+async def test_unexpected_output_union_member_fails_closed() -> None:
+    service, _, observer = service_for(
+        response(
+            additional_output={
+                "id": "fc_1",
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "unexpected",
+                "arguments": "{}",
+                "status": "completed",
+            }
+        )
+    )
 
     with pytest.raises(OpenAIInvalidOutput):
         await service.generate(
