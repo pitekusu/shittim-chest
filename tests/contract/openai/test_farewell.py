@@ -45,7 +45,12 @@ class Observer:
         self.failures.append(record)
 
 
-def response(*, cite_news: bool = True, status: str = "completed") -> SimpleNamespace:
+def response(
+    *,
+    cite_news: bool = True,
+    status: str = "completed",
+    search_status: str = "completed",
+) -> SimpleNamespace:
     annotations = [
         {
             "type": "url_citation",
@@ -79,7 +84,7 @@ def response(*, cite_news: bool = True, status: str = "completed") -> SimpleName
                 {
                     "id": "ws_1",
                     "type": "web_search_call",
-                    "status": "completed",
+                    "status": search_status,
                     "action": {
                         "type": "search",
                         "query": "東京 今日 天気 楽しいニュース",
@@ -199,6 +204,20 @@ async def test_missing_weather_or_news_citation_fails_closed() -> None:
 @pytest.mark.asyncio
 async def test_non_completed_response_status_fails_closed(status: str) -> None:
     service, _, observer = service_for(response(status=status))
+
+    with pytest.raises(OpenAIIncompleteResponse):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+
+
+@pytest.mark.parametrize("search_status", ["failed", "in_progress", "searching"])
+@pytest.mark.asyncio
+async def test_non_completed_web_search_status_fails_closed(search_status: str) -> None:
+    service, _, observer = service_for(response(search_status=search_status))
 
     with pytest.raises(OpenAIIncompleteResponse):
         await service.generate(

@@ -216,6 +216,8 @@ def _extract_urls(
         raise OpenAIInvalidOutput()
     for output in response.output:
         if isinstance(output, ResponseFunctionWebSearch):
+            if output.status != "completed":
+                raise OpenAIIncompleteResponse()
             action = output.action
             if isinstance(action, (ActionOpenPage, ActionFind)):
                 continue
