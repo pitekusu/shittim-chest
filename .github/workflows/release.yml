@@ -640,7 +640,7 @@ jobs:
           done
       - name: Attest normal image provenance
         id: attest_normal_provenance
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.normal_digest }}
@@ -649,7 +649,7 @@ jobs:
           show-summary: false
       - name: Attest normal image SBOM
         id: attest_normal_sbom
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.normal_digest }}
@@ -659,7 +659,7 @@ jobs:
           show-summary: false
       - name: Attest normal image vulnerability assessment
         id: attest_normal_vulnerability
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.normal_digest }}
@@ -670,7 +670,7 @@ jobs:
           show-summary: false
       - name: Attest break-glass image provenance
         id: attest_break_glass_provenance
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.break_glass_digest }}
@@ -679,7 +679,7 @@ jobs:
           show-summary: false
       - name: Attest break-glass image SBOM
         id: attest_break_glass_sbom
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.break_glass_digest }}
@@ -689,7 +689,7 @@ jobs:
           show-summary: false
       - name: Attest break-glass vulnerability assessment
         id: attest_break_glass_vulnerability
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ vars.ECR_REPOSITORY_URI }}
           subject-digest: ${{ steps.push-images.outputs.break_glass_digest }}
@@ -978,7 +978,7 @@ jobs:
             --output "${RUNNER_TEMP}/release-manifest.json"
       - name: Attest the release manifest
         id: attest_release_manifest
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ runner.temp }}/release-manifest.json
           show-summary: false
