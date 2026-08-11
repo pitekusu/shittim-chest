@@ -166,7 +166,7 @@ AWS role作成前にGitHub-hosted runnerの診断jobで実際の`sub`、`aud`、
 
 ## 9. 実装状態
 
-Repository visibility、community metadata、ruleset、Environment、managed security setting、immutable OIDC subject、両RegionのCDK bootstrap、Stateful、ReleaseIdentity、versioned SSM metadataは構成済みである。Scale-to-Zero application/CDK、diagnostic-only `Production Deploy Guard`、実release workflowのplan/Environment deploy、deployment lock、asset/manifest/change set/admission/drift boundaryは実装済みである。初回Runtime attemptは未publish provider ZIPによりrollbackし、原因と再発防止を実装した。hardening IAMのReleaseIdentity先行更新、失敗Runtime/空LogGroup cleanup、Runtime/Operations/CostGovernanceの成功deploy、Discord Application endpoint切替と実受入は未実施であり、local/CI合格と同義にしない。
+Repository visibility、community metadata、ruleset、Environment、managed security setting、immutable OIDC subject、両RegionのCDK bootstrap、Stateful、ReleaseIdentity、versioned SSM metadataは構成済みである。Scale-to-Zero application/CDK、diagnostic-only `Production Deploy Guard`、実release workflowのplan/Environment deploy、deployment lock、asset/manifest/change set/admission/drift boundaryは実装済みである。初回Runtime attemptの未publish provider ZIPによるrollback後、原因と再発防止を実装し、hardening IAMのReleaseIdentity先行更新、失敗Runtime/空LogGroup cleanup、Runtime/Operations/CostGovernanceのdeploy、Discord Application endpoint切替と実受入まで完了した。local/CI合格とlive受入の証拠は引き続き区別する。
 
 ## 10. 公式資料確認記録
 
