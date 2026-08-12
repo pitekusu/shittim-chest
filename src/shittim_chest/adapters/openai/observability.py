@@ -29,6 +29,9 @@ class OpenAIUsageRecord:
     evidence_source_count: int | None = None
     title_fallback_count: int | None = None
     title_fallback_kinds: str | None = None
+    retry_count: int | None = None
+    prior_incomplete_reason: str | None = None
+    prior_response_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

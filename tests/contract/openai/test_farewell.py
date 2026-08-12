@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI
 from openai.types.responses.response import Response
 
 from shittim_chest.adapters.openai import (
@@ -17,6 +19,7 @@ from shittim_chest.adapters.openai import (
     OpenAIIncompleteResponse,
     OpenAIInvalidOutput,
     OpenAIRequestLimiter,
+    OpenAIUnavailable,
     OpenAIUsageRecord,
     PersonaPrompts,
 )
@@ -53,6 +56,12 @@ def response(
     message_status: str = "completed",
     additional_output: dict[str, object] | None = None,
     additional_message_content: object | None = None,
+    incomplete_reason: str | None = None,
+    response_id: str = "resp_farewell",
+    input_tokens: int = 20,
+    output_tokens: int = 10,
+    cached_input_tokens: int = 0,
+    reasoning_tokens: int = 2,
 ) -> SimpleNamespace:
     annotations = [
         {
@@ -108,7 +117,7 @@ def response(
     )
     typed = Response.model_validate(
         {
-            "id": "resp_farewell",
+            "id": response_id,
             "object": "response",
             "created_at": 1_786_448_400,
             "status": "completed",
@@ -121,11 +130,14 @@ def response(
             "tool_choice": "required",
             "tools": [{"type": "web_search", "search_context_size": "medium"}],
             "usage": {
-                "input_tokens": 20,
-                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
-                "output_tokens": 10,
-                "output_tokens_details": {"reasoning_tokens": 2},
-                "total_tokens": 30,
+                "input_tokens": input_tokens,
+                "input_tokens_details": {
+                    "cached_tokens": cached_input_tokens,
+                    "cache_write_tokens": 0,
+                },
+                "output_tokens": output_tokens,
+                "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
+                "total_tokens": input_tokens + output_tokens,
             },
         }
     )
@@ -137,6 +149,9 @@ def response(
         id=typed.id,
         model=typed.model,
         status=status,
+        incomplete_details=(
+            SimpleNamespace(reason=incomplete_reason) if incomplete_reason is not None else None
+        ),
         output=typed.output,
         usage=typed.usage,
         output_parsed=FarewellOutputV1(
@@ -181,6 +196,7 @@ async def test_request_requires_tokyo_web_search_and_returns_only_display_text()
     assert request["tool_choice"] == "required"
     assert request["max_tool_calls"] == 4
     assert request["include"] == ["web_search_call.action.sources"]
+    assert request["max_output_tokens"] == 4_000
     assert request["reasoning"] == {"effort": "medium"}
     assert request["tools"] == [
         {
@@ -198,6 +214,8 @@ async def test_request_requires_tokyo_web_search_and_returns_only_display_text()
     assert observer.usages[0].web_search_source_count == 2
     assert observer.usages[0].url_citation_count == 2
     assert "private prompt" not in repr(observer.usages)
+    assert observer.usages[0].retry_count == 0
+    assert observer.usages[0].prior_incomplete_reason is None
 
 
 @pytest.mark.asyncio
@@ -270,7 +288,7 @@ async def test_unexpected_output_message_content_fails_closed() -> None:
 @pytest.mark.parametrize("status", ["cancelled", "failed", "in_progress", "incomplete", "queued"])
 @pytest.mark.asyncio
 async def test_non_completed_response_status_fails_closed(status: str) -> None:
-    service, _, observer = service_for(response(status=status))
+    service, parse, observer = service_for(response(status=status))
 
     with pytest.raises(OpenAIIncompleteResponse):
         await service.generate(
@@ -279,6 +297,242 @@ async def test_non_completed_response_status_fails_closed(status: str) -> None:
         )
 
     assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+    assert parse.await_count == 1
+    assert observer.failures[0].diagnostic_context == "response_status"
+    assert observer.failures[0].diagnostic_kind == ("missing" if status == "incomplete" else status)
+
+
+@pytest.mark.asyncio
+async def test_max_output_tokens_incomplete_retries_once_with_larger_budget() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        response(
+            response_id="resp_completed",
+            input_tokens=29,
+            output_tokens=19,
+            cached_input_tokens=7,
+            reasoning_tokens=11,
+        ),
+    ]
+
+    content = await service.generate(
+        participant=ParticipantSlot.PARTICIPANT_C,
+        time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+    )
+
+    assert content
+    assert parse.await_count == 2
+    assert [call.kwargs["max_output_tokens"] for call in parse.await_args_list] == [4_000, 8_000]
+    assert observer.failures == []
+    assert observer.usages[0].retry_count == 1
+    assert observer.usages[0].prior_incomplete_reason == "max_output_tokens"
+    assert observer.usages[0].response_id == "resp_completed"
+    assert observer.usages[0].prior_response_id == "resp_incomplete"
+    assert observer.usages[0].input_tokens == 52
+    assert observer.usages[0].output_tokens == 36
+    assert observer.usages[0].cached_input_tokens == 12
+    assert observer.usages[0].reasoning_tokens == 24
+
+
+@pytest.mark.asyncio
+async def test_content_filter_incomplete_is_not_retried() -> None:
+    service, parse, observer = service_for(
+        response(status="incomplete", incomplete_reason="content_filter")
+    )
+
+    with pytest.raises(OpenAIIncompleteResponse):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert parse.await_count == 1
+    assert observer.failures[0].diagnostic_context == "response_status"
+    assert observer.failures[0].diagnostic_kind == "content_filter"
+
+
+@pytest.mark.asyncio
+async def test_repeated_max_output_tokens_incomplete_stops_after_one_retry() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_retry_incomplete",
+            input_tokens=29,
+            output_tokens=19,
+            cached_input_tokens=7,
+            reasoning_tokens=11,
+        ),
+    ]
+
+    with pytest.raises(OpenAIIncompleteResponse):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert parse.await_count == 2
+    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+    assert observer.failures[0].diagnostic_context == "response_status"
+    assert observer.failures[0].diagnostic_kind == "max_output_tokens"
+    assert len(observer.usages) == 1
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_retry_incomplete"
+    assert usage.prior_response_id == "resp_first_incomplete"
+    assert usage.retry_count == 1
+    assert usage.prior_incomplete_reason == "max_output_tokens"
+    assert usage.input_tokens == 52
+    assert usage.output_tokens == 36
+    assert usage.cached_input_tokens == 12
+    assert usage.reasoning_tokens == 24
+    assert usage.web_search_source_count is None
+    assert usage.url_citation_count is None
+    assert usage.evidence_source_count is None
+
+
+@pytest.mark.asyncio
+async def test_retry_web_search_failure_records_both_attempts_usage() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        response(
+            search_status="failed",
+            response_id="resp_retry_invalid_search",
+            input_tokens=29,
+            output_tokens=19,
+            cached_input_tokens=7,
+            reasoning_tokens=11,
+        ),
+    ]
+
+    with pytest.raises(OpenAIIncompleteResponse):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert parse.await_count == 2
+    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+    assert observer.failures[0].diagnostic_context == "web_search_status"
+    assert observer.failures[0].diagnostic_kind == "failed"
+    assert len(observer.usages) == 1
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_retry_invalid_search"
+    assert usage.prior_response_id == "resp_first_incomplete"
+    assert usage.retry_count == 1
+    assert usage.prior_incomplete_reason == "max_output_tokens"
+    assert usage.input_tokens == 52
+    assert usage.output_tokens == 36
+    assert usage.cached_input_tokens == 12
+    assert usage.reasoning_tokens == 24
+    assert usage.web_search_source_count is None
+    assert usage.url_citation_count is None
+    assert usage.evidence_source_count is None
+
+
+@pytest.mark.asyncio
+async def test_retry_request_timeout_records_first_attempt_usage() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        APITimeoutError(httpx.Request("POST", "https://api.openai.com/v1/responses")),
+    ]
+
+    with pytest.raises(OpenAIUnavailable):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert parse.await_count == 2
+    assert [failure.code for failure in observer.failures] == ["openai_unavailable"]
+    assert len(observer.usages) == 1
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_first_incomplete"
+    assert usage.prior_response_id is None
+    assert usage.retry_count == 1
+    assert usage.prior_incomplete_reason == "max_output_tokens"
+    assert usage.input_tokens == 23
+    assert usage.output_tokens == 17
+    assert usage.cached_input_tokens == 5
+    assert usage.reasoning_tokens == 13
+    assert usage.web_search_source_count is None
+    assert usage.url_citation_count is None
+    assert usage.evidence_source_count is None
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_records_first_attempt_usage_without_failure() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        asyncio.CancelledError(),
+    ]
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert parse.await_count == 2
+    assert observer.failures == []
+    assert len(observer.usages) == 1
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_first_incomplete"
+    assert usage.prior_response_id is None
+    assert usage.retry_count == 1
+    assert usage.prior_incomplete_reason == "max_output_tokens"
+    assert usage.input_tokens == 23
+    assert usage.output_tokens == 17
+    assert usage.cached_input_tokens == 5
+    assert usage.reasoning_tokens == 13
+    assert usage.web_search_source_count is None
+    assert usage.url_citation_count is None
+    assert usage.evidence_source_count is None
 
 
 @pytest.mark.parametrize("search_status", ["failed", "in_progress", "searching"])
@@ -293,6 +547,8 @@ async def test_non_completed_web_search_status_fails_closed(search_status: str) 
         )
 
     assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+    assert observer.failures[0].diagnostic_context == "web_search_status"
+    assert observer.failures[0].diagnostic_kind == search_status
 
 
 @pytest.mark.parametrize("message_status", ["in_progress", "incomplete"])
@@ -309,3 +565,5 @@ async def test_non_completed_output_message_status_fails_closed(
         )
 
     assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+    assert observer.failures[0].diagnostic_context == "message_status"
+    assert observer.failures[0].diagnostic_kind == message_status

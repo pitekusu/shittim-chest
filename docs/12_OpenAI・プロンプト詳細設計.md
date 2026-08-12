@@ -92,7 +92,7 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 
 ### 6.1 帰宅挨拶
 
-正常な30分IDLE停止に備える帰宅挨拶は、participant 3人から選択済みのprivate personaを使い、停止予定2分前に1 logical Responses API requestで生成する。`web_search`を`tool_choice=required`、`max_tool_calls=4`、`store=false`で使用し、user locationを`JP`／`Tokyo`／`Tokyo`／`Asia/Tokyo`へ固定する。PythonがJSTの現在日時、時間帯、季節を決め、modelは東京の天気と人格が好みそうな当日の楽しいニュースを反映した1行60〜160文字を返す。
+正常な30分IDLE停止に備える帰宅挨拶は、participant 3人から選択済みのprivate personaを使い、停止予定2分前に1 logical generationとして生成する。通常は1 Responses API requestとし、top-level responseが`incomplete`かつ`incomplete_details.reason=max_output_tokens`の場合だけ、増加したtoken上限で1回だけ再requestする。`content_filter`、未知reason、message／Web search itemの未完了は再requestせずfail closedとする。`web_search`を`tool_choice=required`、`max_tool_calls=4`、`store=false`で使用し、user locationを`JP`／`Tokyo`／`Tokyo`／`Asia/Tokyo`へ固定する。PythonがJSTの現在日時、時間帯、季節を決め、modelは東京の天気と人格が好みそうな当日の楽しいニュースを反映した1行60〜160文字を返す。
 
 Structured Outputの天気・ニュースURLは、`web_search_call.action.sources`とURL citationの両方に存在する異なるHTTP(S) URLでなければ失敗とする。Discord本文にはURL、見出し、引用一覧、固定AI免責文を含めず、source URL、本文、persona、channel IDはlogへ出さない。記録するのはsource種別・件数、成功失敗理由、既存allowlist内のtoken／latency metadataだけとする。生成失敗は通常停止を妨げない。
 
@@ -112,7 +112,7 @@ Structured Outputの天気・ニュースURLは、`web_search_call.action.source
 - 医療、法律、金融、政治、選挙、緊急事態、自傷を含む高risk category専用の事前拒否は設けず通常質問と同じflowで扱う。providerのrefusal/policy blockを迂回せず、prompt上も正答・診断・法的判断・投資判断を保証させない。仲間内限定運用ではCOMPLETED／FAILED／CANCELLEDへ固定のAI免責文を表示しない。
 - user IDはraw値をOpenAIへ送らず、必要時は安定したprivacy-preserving safety identifierを使用する。
 - `store=false`はResponses application stateを保存しない指定であり、既定のabuse monitoring logはuser contentを含み最大30日保持され得る。Zero Data Retentionを本番条件にはせず、このdata flowを利用者向け説明と運用文書へ明記する。
-- input/output/cached/reasoning token、latency、response ID、model ID、cache hitをmetricsへ記録する。本文はlogへ出さない。
+- input/output/cached/reasoning token、latency、response ID、model ID、cache hitをmetricsへ記録する。帰宅挨拶を`max_output_tokens`で再requestした場合は両requestのtoken使用量を合算し、最終response IDと先行response IDを区別して記録する。本文はlogへ出さない。
 - explicit prompt cachingは評価setで費用削減を確認してから有効化し、無条件には使わない。
 
 ## 8. 公式資料確認記録

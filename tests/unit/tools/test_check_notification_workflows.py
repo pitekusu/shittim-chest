@@ -46,6 +46,51 @@ def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
     assert validate_notification_workflows(_workflow_directory(tmp_path)) == 1
 
 
+@pytest.mark.parametrize(
+    ("workflow", "old", "new"),
+    [
+        ("ci.yml", "version: v0.35.0", "version: latest"),
+        (
+            RELEASE_WORKFLOW,
+            "image=moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec",
+            "image=moby/buildkit:buildx-stable-1",
+        ),
+    ],
+)
+def test_container_builds_require_pinned_buildx_and_buildkit(
+    tmp_path: Path,
+    workflow: str,
+    old: str,
+    new: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    path.write_text(path.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="Buildx client and BuildKit image digest"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
+def test_container_builds_reject_an_extra_buildx_setup(
+    tmp_path: Path,
+    workflow: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    text = path.read_text(encoding="utf-8")
+    extra_step = (
+        "      - name: Replace the active builder\n"
+        "        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c\n"
+        "        with:\n"
+        "          version: latest\n"
+    )
+    path.write_text(f"{text.rstrip()}\n{extra_step}", encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="Buildx client and BuildKit image digest"):
+        validate_notification_workflows(directory)
+
+
 def test_release_requires_pre_attestation_referrer_baselines(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

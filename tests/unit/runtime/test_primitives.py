@@ -58,6 +58,9 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
                 evidence_source_count=2,
                 title_fallback_count=1,
                 title_fallback_kinds="missing",
+                retry_count=1,
+                prior_incomplete_reason="max_output_tokens",
+                prior_response_id="response-incomplete",
             )
         )
         subject.record_failure(
@@ -87,6 +90,9 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
     assert payloads[1]["evidence_source_count"] == 2
     assert payloads[1]["title_fallback_count"] == 1
     assert payloads[1]["title_fallback_kinds"] == "missing"
+    assert payloads[1]["retry_count"] == 1
+    assert payloads[1]["prior_incomplete_reason"] == "max_output_tokens"
+    assert payloads[1]["prior_response_id"] == "response-incomplete"
     assert payloads[2]["diagnostic_context"] == "url_citation_url"
     assert payloads[2]["diagnostic_kind"] == "object"
     encoded = json.dumps(payloads)
