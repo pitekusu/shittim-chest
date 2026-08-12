@@ -56,6 +56,14 @@ from shittim_chest.domain import ParticipantSlot
 _INITIAL_MAX_OUTPUT_TOKENS = 4_000
 _RETRY_MAX_OUTPUT_TOKENS = 8_000
 _MAX_OUTPUT_TOKENS_REASON = "max_output_tokens"
+_WEATHER_REALTIME_FEED = "oai-weather"
+
+
+@dataclass(frozen=True, slots=True)
+class _FarewellSources:
+    source_urls: frozenset[str]
+    citation_urls: frozenset[str]
+    realtime_feeds: frozenset[str]
 
 
 @dataclass(slots=True)
@@ -84,6 +92,8 @@ class OpenAIFarewellGenerator:
         source_count: int | None = None
         citation_count: int | None = None
         evidence_source_count: int | None = None
+        realtime_feed_count: int | None = None
+        realtime_feed_kinds: str | None = None
 
         def record_retry_usage() -> None:
             if retry_count == 1 and responses:
@@ -96,6 +106,8 @@ class OpenAIFarewellGenerator:
                     retry_count=retry_count,
                     prior_incomplete_reason=prior_incomplete_reason,
                     evidence_source_count=evidence_source_count,
+                    realtime_feed_count=realtime_feed_count,
+                    realtime_feed_kinds=realtime_feed_kinds,
                 )
 
         def record_failure(error: OpenAIAdapterError) -> None:
@@ -123,14 +135,27 @@ class OpenAIFarewellGenerator:
                 )
                 responses.append(response)
                 parsed = _extract_parsed(response)
-            source_urls, citation_urls = _extract_urls(response)
-            source_count = len(source_urls)
-            citation_count = len(citation_urls)
+            sources = _extract_sources(response)
+            source_count = len(sources.source_urls) + len(sources.realtime_feeds)
+            citation_count = len(sources.citation_urls)
+            realtime_feed_count = len(sources.realtime_feeds)
+            realtime_feed_kinds = ",".join(sorted(sources.realtime_feeds)) or None
             weather_url = _validated_url(parsed.weather_source_url)
             news_url = _validated_url(parsed.news_source_url)
-            required = {weather_url, news_url}
-            if len(required) != 2 or not required.issubset(source_urls & citation_urls):
-                raise OpenAIInvalidOutput()
+            corroborated_urls = sources.source_urls & sources.citation_urls
+            if news_url not in corroborated_urls:
+                raise OpenAIInvalidOutput(
+                    diagnostic_context="farewell_evidence",
+                    diagnostic_kind="news_url_uncorroborated",
+                )
+            if (
+                weather_url not in corroborated_urls
+                and _WEATHER_REALTIME_FEED not in sources.realtime_feeds
+            ):
+                raise OpenAIInvalidOutput(
+                    diagnostic_context="farewell_evidence",
+                    diagnostic_kind="weather_source_uncorroborated",
+                )
             evidence_source_count = 2
             content = prepare_farewell_content(parsed.message)
         except asyncio.CancelledError:
@@ -164,11 +189,14 @@ class OpenAIFarewellGenerator:
         self._record_usage(
             operation,
             tuple(responses),
-            len(source_urls),
-            len(citation_urls),
+            source_count,
+            citation_count,
             started,
             retry_count=retry_count,
             prior_incomplete_reason=prior_incomplete_reason,
+            evidence_source_count=evidence_source_count,
+            realtime_feed_count=realtime_feed_count,
+            realtime_feed_kinds=realtime_feed_kinds,
         )
         return content
 
@@ -223,6 +251,8 @@ class OpenAIFarewellGenerator:
         retry_count: int,
         prior_incomplete_reason: str | None,
         evidence_source_count: int | None = 2,
+        realtime_feed_count: int | None = None,
+        realtime_feed_kinds: str | None = None,
     ) -> None:
         response = responses[-1]
         usages = tuple(candidate.usage for candidate in responses if candidate.usage is not None)
@@ -244,6 +274,8 @@ class OpenAIFarewellGenerator:
                 ),
                 web_search_source_count=source_count,
                 web_search_source_rejected_count=0,
+                realtime_feed_count=realtime_feed_count,
+                realtime_feed_kinds=realtime_feed_kinds,
                 url_citation_count=citation_count,
                 evidence_source_count=evidence_source_count,
                 retry_count=retry_count,
@@ -303,11 +335,12 @@ def _extract_parsed(
     return response.output_parsed
 
 
-def _extract_urls(
+def _extract_sources(
     response: ParsedResponse[FarewellOutputV1],
-) -> tuple[set[str], set[str]]:
+) -> _FarewellSources:
     source_urls: set[str] = set()
     citation_urls: set[str] = set()
+    realtime_feeds: set[str] = set()
     if not isinstance(response.output, list):
         raise OpenAIInvalidOutput()
     for output in response.output:
@@ -324,11 +357,34 @@ def _extract_urls(
                 raise OpenAIInvalidOutput()
             for source in action.sources:
                 if not isinstance(source, ActionSearchSource):
-                    raise OpenAIInvalidOutput()
+                    raise OpenAIInvalidOutput(
+                        diagnostic_context="web_search_source",
+                        diagnostic_kind="unexpected_type",
+                    )
                 if source.type == "url":
+                    if source.model_extra:
+                        raise OpenAIInvalidOutput(
+                            diagnostic_context="web_search_source",
+                            diagnostic_kind="unexpected_url_fields",
+                        )
                     source_urls.add(_validated_url(source.url))
-                elif source.type != "api":
-                    raise OpenAIInvalidOutput()
+                    continue
+                if source.type != "api":
+                    raise OpenAIInvalidOutput(
+                        diagnostic_context="web_search_source",
+                        diagnostic_kind="unknown_source_type",
+                    )
+                extras = source.model_extra or {}
+                if (
+                    set(extras) != {"name"}
+                    or extras.get("name") != _WEATHER_REALTIME_FEED
+                    or getattr(source, "url", None) is not None
+                ):
+                    raise OpenAIInvalidOutput(
+                        diagnostic_context="web_search_source",
+                        diagnostic_kind="unknown_realtime_feed",
+                    )
+                realtime_feeds.add(_WEATHER_REALTIME_FEED)
         elif isinstance(output, ResponseOutputMessage):
             if not isinstance(output.content, list):
                 raise OpenAIInvalidOutput()
@@ -347,7 +403,11 @@ def _extract_urls(
             continue
         else:
             raise OpenAIInvalidOutput()
-    return source_urls, citation_urls
+    return _FarewellSources(
+        source_urls=frozenset(source_urls),
+        citation_urls=frozenset(citation_urls),
+        realtime_feeds=frozenset(realtime_feeds),
+    )
 
 
 def _retryable_incomplete(error: OpenAIIncompleteResponse) -> bool:

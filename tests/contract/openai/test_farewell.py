@@ -12,6 +12,7 @@ import httpx
 import pytest
 from openai import APITimeoutError, AsyncOpenAI
 from openai.types.responses.response import Response
+from openai.types.responses.response_function_web_search import ActionSearchSource
 
 from shittim_chest.adapters.openai import (
     OpenAIFailureRecord,
@@ -51,6 +52,7 @@ class Observer:
 def response(
     *,
     cite_news: bool = True,
+    weather_realtime_feed: str | None = None,
     status: str = "completed",
     search_status: str = "completed",
     message_status: str = "completed",
@@ -63,15 +65,24 @@ def response(
     cached_input_tokens: int = 0,
     reasoning_tokens: int = 2,
 ) -> SimpleNamespace:
-    annotations = [
-        {
-            "type": "url_citation",
-            "start_index": 0,
-            "end_index": 5,
-            "title": "Tokyo weather",
-            "url": WEATHER_URL,
-        }
-    ]
+    annotations: list[dict[str, object]] = []
+    sources: list[dict[str, object]] = []
+    if weather_realtime_feed is None:
+        annotations.append(
+            {
+                "type": "url_citation",
+                "start_index": 0,
+                "end_index": 5,
+                "title": "Tokyo weather",
+                "url": WEATHER_URL,
+            }
+        )
+        sources.append({"type": "url", "url": WEATHER_URL})
+    else:
+        # The pinned SDK has not added the provider's ``type=api`` source to its
+        # generated schema yet. Build the otherwise-real response first, then
+        # reproduce the object returned by its permissive runtime parser.
+        sources.append({"type": "url", "url": WEATHER_URL})
     if cite_news:
         annotations.append(
             {
@@ -90,10 +101,7 @@ def response(
             "action": {
                 "type": "search",
                 "query": "東京 今日 天気 楽しいニュース",
-                "sources": [
-                    {"type": "url", "url": WEATHER_URL},
-                    {"type": "url", "url": NEWS_URL},
-                ],
+                "sources": [*sources, {"type": "url", "url": NEWS_URL}],
             },
         }
     ]
@@ -141,6 +149,20 @@ def response(
             },
         }
     )
+    if weather_realtime_feed is not None:
+        search_output = typed.output[0]
+        assert search_output.type == "web_search_call"
+        object.__setattr__(
+            search_output.action,
+            "sources",
+            [
+                ActionSearchSource.model_construct(
+                    type="api",
+                    name=weather_realtime_feed,
+                ),
+                ActionSearchSource(type="url", url=NEWS_URL),
+            ],
+        )
     if additional_message_content is not None:
         message_output = typed.output[-1]
         assert message_output.type == "message"
@@ -229,6 +251,57 @@ async def test_missing_weather_or_news_citation_fails_closed() -> None:
         )
 
     assert [failure.code for failure in observer.failures] == ["openai_invalid_output"]
+    assert observer.failures[0].diagnostic_context == "farewell_evidence"
+    assert observer.failures[0].diagnostic_kind == "news_url_uncorroborated"
+
+
+@pytest.mark.asyncio
+async def test_builtin_weather_feed_and_cited_news_are_accepted() -> None:
+    service, _, observer = service_for(response(weather_realtime_feed="oai-weather"))
+
+    content = await service.generate(
+        participant=ParticipantSlot.PARTICIPANT_A,
+        time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+    )
+
+    assert content
+    assert observer.failures == []
+    usage = observer.usages[0]
+    assert usage.web_search_source_count == 2
+    assert usage.url_citation_count == 1
+    assert usage.evidence_source_count == 2
+    assert usage.realtime_feed_count == 1
+    assert usage.realtime_feed_kinds == "oai-weather"
+
+
+@pytest.mark.asyncio
+async def test_builtin_weather_feed_does_not_relax_news_citation() -> None:
+    service, _, observer = service_for(
+        response(cite_news=False, weather_realtime_feed="oai-weather")
+    )
+
+    with pytest.raises(OpenAIInvalidOutput):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert observer.failures[0].diagnostic_context == "farewell_evidence"
+    assert observer.failures[0].diagnostic_kind == "news_url_uncorroborated"
+
+
+@pytest.mark.asyncio
+async def test_unknown_realtime_feed_fails_closed() -> None:
+    service, _, observer = service_for(response(weather_realtime_feed="oai-finance"))
+
+    with pytest.raises(OpenAIInvalidOutput):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert observer.failures[0].diagnostic_context == "web_search_source"
+    assert observer.failures[0].diagnostic_kind == "unknown_realtime_feed"
 
 
 @pytest.mark.asyncio
