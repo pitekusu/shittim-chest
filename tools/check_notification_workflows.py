@@ -249,7 +249,20 @@ def _validate_release(directory: Path) -> None:
         "tools/check_container_risk_acceptance.py",
         "--image-config-digest-file",
         "--config-digest-only",
-        "Require CI-identical image configs before push",
+        "Resolve the successful same-SHA main CI run",
+        "gh api --paginate --slurp",
+        ".head_sha == $sha",
+        '.path == ".github/workflows/ci.yml"',
+        '.conclusion == "success"',
+        "Download the same-SHA CI image evidence",
+        "name: image-sbom-arm64-${{ github.sha }}",
+        "github-token: ${{ github.token }}",
+        "run-id: ${{ steps.main-ci.outputs.run_id }}",
+        "Require same-SHA CI image configs before push",
+        "main-ci-image/production-image-config-digest.txt",
+        "main-ci-image/break-glass-image-config-digest.txt",
+        'test "${NORMAL_CONFIG_DIGEST}" = "${ci_normal_config}"',
+        'test "${BREAK_GLASS_CONFIG_DIGEST}" = "${ci_break_glass_config}"',
         "Push the prevalidated images once",
         "docker image inspect",
         "docker image push --quiet",
@@ -416,13 +429,17 @@ def _validate_release(directory: Path) -> None:
             "name: Prepare pinned vulnerability data before image push"
         )
         build_index = text.index("name: Build and load the production image once")
-        config_preflight_index = text.index("name: Require CI-identical image configs before push")
+        ci_run_index = text.index("name: Resolve the successful same-SHA main CI run")
+        ci_evidence_index = text.index("name: Download the same-SHA CI image evidence")
+        config_preflight_index = text.index("name: Require same-SHA CI image configs before push")
         push_index = text.index("name: Push the prevalidated images once")
         change_set_index = text.index("name: Prepare immutable CloudFormation change sets")
     except ValueError as error:
         raise WorkflowPolicyError("Release CDK asset publication steps are incomplete") from error
     if not (
-        synth_index
+        ci_run_index
+        < ci_evidence_index
+        < synth_index
         < publish_index
         < tool_install_index
         < notation_install_index

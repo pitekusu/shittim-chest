@@ -35,11 +35,6 @@ authoritative documents and code, not a duplicate specification.
   safety state, and completed external writes, then use the failure handoff in section 8.
 - After failure, do not rerun, redispatch, fix, commit, perform non-rollback AWS writes, call
   Discord/OpenAI, or start the next step unless explicitly authorized.
-- The two-phase image-baseline measurement in section 6 is the sole exception: when the initial
-  `grype` failure is only the expected config-digest mismatch and that run proves both images'
-  SBOM, VEX, and risk gates, update both baselines from that run and continue through the final
-  required CI without requesting another authorization. Stop on any other failure, missing or
-  inconsistent evidence, residual risk, or a second digest change.
 - Stop failure investigation once the direct cause and safe state are established.
 - If the repository is dirty, protect the user's changes and stop without editing.
 
@@ -92,18 +87,18 @@ status note.
 - Unknown DynamoDB schemas fail closed.
 - Unknown provider responses, IAM ambiguity, and incomplete pagination fail closed.
 - Production images are digest-pinned.
-- When Dockerfile, base image, dependency, or build-process changes alter an image config digest,
-  measure both production and break-glass targets under canonical CI-identical build conditions.
-- Even if only one target changes, update both config digest baselines from the same measurement
-  in the same PR.
-- Never update only one baseline, infer from a manifest digest, reuse another exporter's result,
-  or transcribe a value from an earlier run.
-- Before updating baselines, confirm each image's SBOM, VEX, risk gate, and config digest mapping.
-- The CI-only `fault-test` image is not a baseline target.
+- Canonical CI measures and retains both production and break-glass config digests with their
+  SBOM, VEX, and risk-gate evidence; PR checks do not compare them with a static policy baseline.
+- A local risk acceptance remains bound to the exact measured config digest of each scoped image.
+- Production Release must compare both rebuilt configs with the successful same-main-SHA CI
+  artifact before either image is pushed.
+- Never infer a config digest from a manifest digest, reuse another exporter's result, or
+  transcribe a value from an earlier SHA or run.
+- The CI-only `fault-test` image is not a same-SHA Release comparison target.
 
 Service-specific limits, image reproducibility rules, alarm and budget configuration, and
 release details belong in the references in section 3.
-For measurement details, the baseline file, and validation workflow, use `docs/15_*`,
+For measurement and validation details, use `docs/15_*`,
 `docs/18_*`, `security/container-risk-acceptance.json`, and the existing CI workflow.
 
 ## 5. Source and documentation rules

@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "maximum_validity_days", "acceptances"],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 4 },
     "maximum_validity_days": { "const": 90 },
     "acceptances": {
       "type": "array",
