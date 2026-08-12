@@ -321,6 +321,38 @@ def test_release_checks_both_config_digests_before_push(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_release_downloads_image_evidence_from_the_same_sha_ci_run(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "run-id: ${{ steps.main-ci.outputs.run_id }}",
+            "run-id: ${{ github.run_id }}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="required policy marker"):
+        validate_notification_workflows(directory)
+
+
+def test_release_rejects_a_config_that_differs_from_same_sha_ci(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'test "${NORMAL_CONFIG_DIGEST}" = "${ci_normal_config}"',
+            'test "${NORMAL_CONFIG_DIGEST}" != "${ci_normal_config}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="required policy marker"):
+        validate_notification_workflows(directory)
+
+
 def test_release_attests_only_registry_confirmed_manifest_digests(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

@@ -105,6 +105,45 @@ jobs:
              .repository_owner_id == "12059348" and
              .ref == "refs/heads/main"' \
             "${RUNNER_TEMP}/oidc-claims.json" >/dev/null
+      - name: Resolve the successful same-SHA main CI run
+        id: main-ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha=${GITHUB_SHA}&per_page=100" \
+            > "${RUNNER_TEMP}/main-ci-runs.json"
+          jq --exit-status --arg repository "${GITHUB_REPOSITORY}" \
+            --arg sha "${GITHUB_SHA}" '
+              [.[].workflow_runs[] | select(
+                .head_sha == $sha and
+                .head_branch == "main" and
+                .event == "push" and
+                .status == "completed" and
+                .conclusion == "success" and
+                .repository.full_name == $repository and
+                .path == ".github/workflows/ci.yml"
+              )] as $runs |
+              ($runs | length) == 1 and ($runs[0].id | type == "number")
+            ' "${RUNNER_TEMP}/main-ci-runs.json" >/dev/null
+          ci_run_id=$(jq --exit-status --raw-output --arg sha "${GITHUB_SHA}" '
+            [.[].workflow_runs[] | select(
+              .head_sha == $sha and
+              .head_branch == "main" and
+              .event == "push" and
+              .status == "completed" and
+              .conclusion == "success" and
+              .path == ".github/workflows/ci.yml"
+            )][0].id
+          ' "${RUNNER_TEMP}/main-ci-runs.json")
+          echo "run_id=${ci_run_id}" >> "${GITHUB_OUTPUT}"
+      - name: Download the same-SHA CI image evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-sbom-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/main-ci-image
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.main-ci.outputs.run_id }}
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -469,7 +508,7 @@ jobs:
           tags: ${{ vars.ECR_REPOSITORY_URI }}:break-glass-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=container-arm64-break-glass
           cache-to: type=gha,mode=max,scope=container-arm64-break-glass,ignore-error=true
-      - name: Require CI-identical image configs before push
+      - name: Require same-SHA CI image configs before push
         env:
           BREAK_GLASS_CONFIG_DIGEST: ${{ steps.build-break-glass.outputs.imageid }}
           NORMAL_CONFIG_DIGEST: ${{ steps.build-normal.outputs.imageid }}
@@ -478,6 +517,14 @@ jobs:
           [[ "${NORMAL_CONFIG_DIGEST}" =~ ${digest_pattern} ]]
           [[ "${BREAK_GLASS_CONFIG_DIGEST}" =~ ${digest_pattern} ]]
           test "${NORMAL_CONFIG_DIGEST}" != "${BREAK_GLASS_CONFIG_DIGEST}"
+          ci_normal_config=$(cat \
+            "${RUNNER_TEMP}/main-ci-image/production-image-config-digest.txt")
+          ci_break_glass_config=$(cat \
+            "${RUNNER_TEMP}/main-ci-image/break-glass-image-config-digest.txt")
+          [[ "${ci_normal_config}" =~ ${digest_pattern} ]]
+          [[ "${ci_break_glass_config}" =~ ${digest_pattern} ]]
+          test "${NORMAL_CONFIG_DIGEST}" = "${ci_normal_config}"
+          test "${BREAK_GLASS_CONFIG_DIGEST}" = "${ci_break_glass_config}"
           printf '%s\n' "${NORMAL_CONFIG_DIGEST}" > "${RUNNER_TEMP}/normal.config-digest"
           printf '%s\n' "${BREAK_GLASS_CONFIG_DIGEST}" \
             > "${RUNNER_TEMP}/break-glass.config-digest"

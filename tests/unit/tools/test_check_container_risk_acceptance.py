@@ -26,19 +26,12 @@ def _write_policy(
     path: Path,
     acceptances: list[dict[str, object]],
     *,
-    image_config_digests: dict[str, object] | None = None,
-    schema_version: int = 3,
+    schema_version: int = 4,
     extra_root: dict[str, object] | None = None,
 ) -> Path:
-    if image_config_digests is None:
-        image_config_digests = {
-            "production": DIGEST,
-            "break-glass": BREAK_GLASS_DIGEST,
-        }
     root: dict[str, object] = {
         "schema_version": schema_version,
         "maximum_validity_days": 90,
-        "image_config_digests": image_config_digests,
         "acceptances": acceptances,
     }
     if extra_root is not None:
@@ -98,7 +91,7 @@ def test_config_digest_preflight_accepts_the_exact_loaded_image(tmp_path: Path) 
     )
 
 
-def test_schema_v3_empty_policy_accepts_exact_production_baseline(tmp_path: Path) -> None:
+def test_schema_v4_empty_policy_accepts_any_valid_production_digest(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 
     assert (
@@ -112,61 +105,42 @@ def test_schema_v3_empty_policy_accepts_exact_production_baseline(tmp_path: Path
     )
 
 
-def test_empty_policy_rejects_wrong_production_digest(tmp_path: Path) -> None:
+def test_empty_policy_has_no_static_production_digest_baseline(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 
-    with pytest.raises(ValueError, match="policy baseline"):
+    assert (
         validate_config_digest_bindings(
             policy,
             image_kind="production",
             image_config_digest=OTHER_DIGEST,
             today=TODAY,
         )
+        == 0
+    )
 
 
-def test_empty_policy_rejects_wrong_break_glass_digest(tmp_path: Path) -> None:
+def test_empty_policy_has_no_static_break_glass_digest_baseline(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 
-    with pytest.raises(ValueError, match="policy baseline"):
+    assert (
         validate_config_digest_bindings(
             policy,
             image_kind="break-glass",
             image_config_digest=OTHER_DIGEST,
             today=TODAY,
         )
+        == 0
+    )
 
 
-@pytest.mark.parametrize(
-    ("image_config_digests", "message"),
-    [
-        ({"production": DIGEST}, "missing"),
-        ({"break-glass": BREAK_GLASS_DIGEST}, "missing"),
-        (
-            {
-                "production": DIGEST,
-                "break-glass": BREAK_GLASS_DIGEST,
-                "unknown": OTHER_DIGEST,
-            },
-            "extra",
-        ),
-        (
-            {"production": "sha256:not-a-digest", "break-glass": BREAK_GLASS_DIGEST},
-            "invalid",
-        ),
-    ],
-)
-def test_policy_image_config_baselines_fail_closed(
-    tmp_path: Path,
-    image_config_digests: dict[str, object],
-    message: str,
-) -> None:
+def test_policy_rejects_removed_static_baseline_field(tmp_path: Path) -> None:
     policy = _write_policy(
         tmp_path / "policy.json",
         [],
-        image_config_digests=image_config_digests,
+        extra_root={"image_config_digests": {"production": DIGEST}},
     )
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="unexpected root fields"):
         validate_config_digest_bindings(
             policy,
             image_kind="production",
@@ -188,7 +162,7 @@ def test_policy_rejects_extra_root_field(tmp_path: Path) -> None:
 
 
 def test_policy_rejects_legacy_schema(tmp_path: Path) -> None:
-    policy = _write_policy(tmp_path / "policy.json", [], schema_version=2)
+    policy = _write_policy(tmp_path / "policy.json", [], schema_version=3)
 
     with pytest.raises(ValueError, match="version"):
         validate_config_digest_bindings(
@@ -226,40 +200,17 @@ def test_config_digest_preflight_rejects_expired_policy_before_push(tmp_path: Pa
         )
 
 
-def test_acceptance_digest_must_match_policy_baseline(tmp_path: Path) -> None:
-    policy = _write_policy(
-        tmp_path / "policy.json",
-        [
-            _acceptance(
-                image_config_digests={
-                    "production": DIGEST,
-                    "break-glass": OTHER_DIGEST,
-                }
-            )
-        ],
-    )
-
-    with pytest.raises(ValueError, match="does not match policy baseline"):
-        validate_config_digest_bindings(
-            policy,
-            image_kind="production",
-            image_config_digest=DIGEST,
-            today=TODAY,
-        )
-
-
-def test_full_validation_checks_policy_baseline_before_empty_acceptances(tmp_path: Path) -> None:
+def test_full_validation_with_empty_acceptances_has_no_static_baseline(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 
-    with pytest.raises(ValueError, match="policy baseline"):
-        validate_acceptances(
-            policy,
-            findings=(),
-            vendor_suppressions=frozenset(),
-            image_kind="production",
-            image_config_digest=OTHER_DIGEST,
-            today=TODAY,
-        )
+    assert validate_acceptances(
+        policy,
+        findings=(),
+        vendor_suppressions=frozenset(),
+        image_kind="production",
+        image_config_digest=OTHER_DIGEST,
+        today=TODAY,
+    ) == (0, 0)
 
 
 @pytest.mark.parametrize(
