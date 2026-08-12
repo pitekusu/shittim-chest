@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
@@ -480,6 +481,45 @@ async def test_retry_request_timeout_records_first_attempt_usage() -> None:
 
     assert parse.await_count == 2
     assert [failure.code for failure in observer.failures] == ["openai_unavailable"]
+    assert len(observer.usages) == 1
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_first_incomplete"
+    assert usage.prior_response_id is None
+    assert usage.retry_count == 1
+    assert usage.prior_incomplete_reason == "max_output_tokens"
+    assert usage.input_tokens == 23
+    assert usage.output_tokens == 17
+    assert usage.cached_input_tokens == 5
+    assert usage.reasoning_tokens == 13
+    assert usage.web_search_source_count is None
+    assert usage.url_citation_count is None
+    assert usage.evidence_source_count is None
+
+
+@pytest.mark.asyncio
+async def test_retry_cancellation_records_first_attempt_usage_without_failure() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        asyncio.CancelledError(),
+    ]
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert parse.await_count == 2
+    assert observer.failures == []
     assert len(observer.usages) == 1
     usage = observer.usages[0]
     assert usage.response_id == "resp_first_incomplete"

@@ -85,7 +85,7 @@ class OpenAIFarewellGenerator:
         citation_count: int | None = None
         evidence_source_count: int | None = None
 
-        def record_failure(error: OpenAIAdapterError) -> None:
+        def record_retry_usage() -> None:
             if retry_count == 1 and responses:
                 self._record_usage(
                     operation,
@@ -97,6 +97,9 @@ class OpenAIFarewellGenerator:
                     prior_incomplete_reason=prior_incomplete_reason,
                     evidence_source_count=evidence_source_count,
                 )
+
+        def record_failure(error: OpenAIAdapterError) -> None:
+            record_retry_usage()
             self._record_failure(operation, error, started)
 
         try:
@@ -131,6 +134,7 @@ class OpenAIFarewellGenerator:
             evidence_source_count = 2
             content = prepare_farewell_content(parsed.message)
         except asyncio.CancelledError:
+            record_retry_usage()
             raise
         except OpenAIAdapterError as error:
             record_failure(error)
