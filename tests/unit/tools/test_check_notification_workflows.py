@@ -341,6 +341,24 @@ def test_release_checks_both_config_digests_before_push(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_release_gates_both_rebuilt_images_on_fixable_high_findings(
+    tmp_path: Path,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "              --only-fixed \\\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="fixable High/Critical"):
+        validate_notification_workflows(directory)
+
+
 def test_release_rejects_cross_run_same_sha_config_comparison(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

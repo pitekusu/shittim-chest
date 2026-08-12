@@ -578,7 +578,9 @@ jobs:
       - name: Apply signed vendor VEX and the time-bounded risk policy
         env:
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
+          GRYPE_DB_AUTO_UPDATE: "false"
         run: |
+          fixable_status=0
           for mode in normal break-glass
           do
             "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
@@ -586,7 +588,16 @@ jobs:
             "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
               --vex "${RUNNER_TEMP}/${mode}.openvex.json" \
               --output "json=${RUNNER_TEMP}/${mode}.vex-grype.json"
+            "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
+              --name "${mode}-image-actionable" \
+              --only-fixed \
+              --fail-on high || fixable_status=$?
           done
+          if [ "${fixable_status}" -ne 0 ]
+          then
+            echo "Fixable High/Critical in a rebuilt release image blocks deployment." >&2
+            exit "${fixable_status}"
+          fi
           printf '%s\n' "${NORMAL_DIGEST}" > "${RUNNER_TEMP}/normal.digest"
           printf '%s\n' "${BREAK_GLASS_DIGEST}" > "${RUNNER_TEMP}/break-glass.digest"
           for mode in normal break-glass

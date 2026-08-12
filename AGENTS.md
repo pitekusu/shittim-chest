@@ -90,8 +90,9 @@ status note.
 - Canonical CI measures and retains both production and break-glass config digests with their
   SBOM, VEX, and risk-gate evidence; PR checks do not compare them with a static policy baseline.
 - A local risk acceptance remains bound to the exact measured config digest of each scoped image.
-- Production Release validates both rebuilt config digests and their target-specific risk policy
-  before push, but does not require cross-run equality with a CI artifact.
+- Production Release validates both rebuilt config digests and applies the fixable High/Critical
+  plus target-specific residual-risk gates before deployment, but does not require cross-run
+  equality with a CI artifact.
 - Never infer a config digest from a manifest digest, reuse another exporter's result, or
   transcribe a value from an earlier SHA or run.
 - The CI-only `fault-test` image is not a Production Release or risk-acceptance target.

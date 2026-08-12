@@ -406,6 +406,22 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError("Release must reuse the exact main CI image cache scopes")
     if text.count("--config-digest-only") != 2:
         raise WorkflowPolicyError("Release must validate both local configs before either push")
+    release_risk_block = _workflow_step_block(
+        text, "Apply signed vendor VEX and the time-bounded risk policy"
+    )
+    required_fixable_gate = (
+        'GRYPE_DB_AUTO_UPDATE: "false"',
+        "for mode in normal break-glass",
+        '--name "${mode}-image-actionable"',
+        "--only-fixed",
+        "--fail-on high || fixable_status=$?",
+        'if [ "${fixable_status}" -ne 0 ]',
+        'exit "${fixable_status}"',
+    )
+    if any(marker not in release_risk_block for marker in required_fixable_gate):
+        raise WorkflowPolicyError(
+            "Release must gate both rebuilt images on fixable High/Critical findings"
+        )
     if text.count("docker image push --quiet") != 2:
         raise WorkflowPolicyError("Release must push each prevalidated loaded image exactly once")
     if re.search(r"steps\.build-(?:normal|break-glass)\.outputs\.digest", text):
