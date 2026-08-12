@@ -406,6 +406,54 @@ async def test_repeated_max_output_tokens_incomplete_stops_after_one_retry() -> 
     assert usage.evidence_source_count is None
 
 
+@pytest.mark.asyncio
+async def test_retry_web_search_failure_records_both_attempts_usage() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        response(
+            search_status="failed",
+            response_id="resp_retry_invalid_search",
+            input_tokens=29,
+            output_tokens=19,
+            cached_input_tokens=7,
+            reasoning_tokens=11,
+        ),
+    ]
+
+    with pytest.raises(OpenAIIncompleteResponse):
+        await service.generate(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+        )
+
+    assert parse.await_count == 2
+    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+    assert observer.failures[0].diagnostic_context == "web_search_status"
+    assert observer.failures[0].diagnostic_kind == "failed"
+    assert len(observer.usages) == 1
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_retry_invalid_search"
+    assert usage.prior_response_id == "resp_first_incomplete"
+    assert usage.retry_count == 1
+    assert usage.prior_incomplete_reason == "max_output_tokens"
+    assert usage.input_tokens == 52
+    assert usage.output_tokens == 36
+    assert usage.cached_input_tokens == 12
+    assert usage.reasoning_tokens == 24
+    assert usage.web_search_source_count is None
+    assert usage.url_citation_count is None
+    assert usage.evidence_source_count is None
+
+
 @pytest.mark.parametrize("search_status", ["failed", "in_progress", "searching"])
 @pytest.mark.asyncio
 async def test_non_completed_web_search_status_fails_closed(search_status: str) -> None:

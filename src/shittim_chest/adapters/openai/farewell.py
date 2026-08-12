@@ -80,13 +80,32 @@ class OpenAIFarewellGenerator:
         started = monotonic()
         retry_count = 0
         prior_incomplete_reason: str | None = None
+        responses: list[ParsedResponse[FarewellOutputV1]] = []
+        source_count: int | None = None
+        citation_count: int | None = None
+        evidence_source_count: int | None = None
+
+        def record_failure(error: OpenAIAdapterError) -> None:
+            if retry_count == 1 and len(responses) == 2:
+                self._record_usage(
+                    operation,
+                    tuple(responses),
+                    source_count,
+                    citation_count,
+                    started,
+                    retry_count=retry_count,
+                    prior_incomplete_reason=prior_incomplete_reason,
+                    evidence_source_count=evidence_source_count,
+                )
+            self._record_failure(operation, error, started)
+
         try:
             response = await self._request(
                 participant=participant,
                 time_context=time_context,
                 max_output_tokens=_INITIAL_MAX_OUTPUT_TOKENS,
             )
-            responses = [response]
+            responses.append(response)
             try:
                 parsed = _extract_parsed(response)
             except OpenAIIncompleteResponse as error:
@@ -100,53 +119,43 @@ class OpenAIFarewellGenerator:
                     max_output_tokens=_RETRY_MAX_OUTPUT_TOKENS,
                 )
                 responses.append(response)
-                try:
-                    parsed = _extract_parsed(response)
-                except OpenAIIncompleteResponse:
-                    self._record_usage(
-                        operation,
-                        tuple(responses),
-                        None,
-                        None,
-                        started,
-                        retry_count=retry_count,
-                        prior_incomplete_reason=prior_incomplete_reason,
-                        evidence_source_count=None,
-                    )
-                    raise
+                parsed = _extract_parsed(response)
             source_urls, citation_urls = _extract_urls(response)
+            source_count = len(source_urls)
+            citation_count = len(citation_urls)
             weather_url = _validated_url(parsed.weather_source_url)
             news_url = _validated_url(parsed.news_source_url)
             required = {weather_url, news_url}
             if len(required) != 2 or not required.issubset(source_urls & citation_urls):
                 raise OpenAIInvalidOutput()
+            evidence_source_count = 2
             content = prepare_farewell_content(parsed.message)
         except asyncio.CancelledError:
             raise
         except OpenAIAdapterError as error:
-            self._record_failure(operation, error, started)
+            record_failure(error)
             raise
         except (ValidationError, TypeError, ValueError) as error:
             invalid = OpenAIInvalidOutput()
-            self._record_failure(operation, invalid, started)
+            record_failure(invalid)
             raise invalid from error
         except RateLimitError as error:
             failure = OpenAIRateLimited()
-            self._record_failure(operation, failure, started)
+            record_failure(failure)
             raise failure from error
         except (AuthenticationError, PermissionDeniedError, NotFoundError) as error:
             failure = OpenAIConfigurationError()
-            self._record_failure(operation, failure, started)
+            record_failure(failure)
             raise failure from error
         except (APIConnectionError, APITimeoutError) as error:
             failure = OpenAIUnavailable()
-            self._record_failure(operation, failure, started)
+            record_failure(failure)
             raise failure from error
         except APIStatusError as error:
             failure: OpenAIAdapterError = (
                 OpenAIUnavailable() if error.status_code >= 500 else OpenAIConfigurationError()
             )
-            self._record_failure(operation, failure, started)
+            record_failure(failure)
             raise failure from error
         self._record_usage(
             operation,
