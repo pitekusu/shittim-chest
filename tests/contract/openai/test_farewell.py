@@ -359,8 +359,27 @@ async def test_content_filter_incomplete_is_not_retried() -> None:
 
 @pytest.mark.asyncio
 async def test_repeated_max_output_tokens_incomplete_stops_after_one_retry() -> None:
-    incomplete = response(status="incomplete", incomplete_reason="max_output_tokens")
-    service, parse, observer = service_for(incomplete)
+    service, parse, observer = service_for(response())
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first_incomplete",
+            input_tokens=23,
+            output_tokens=17,
+            cached_input_tokens=5,
+            reasoning_tokens=13,
+        ),
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_retry_incomplete",
+            input_tokens=29,
+            output_tokens=19,
+            cached_input_tokens=7,
+            reasoning_tokens=11,
+        ),
+    ]
 
     with pytest.raises(OpenAIIncompleteResponse):
         await service.generate(
@@ -372,6 +391,19 @@ async def test_repeated_max_output_tokens_incomplete_stops_after_one_retry() -> 
     assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
     assert observer.failures[0].diagnostic_context == "response_status"
     assert observer.failures[0].diagnostic_kind == "max_output_tokens"
+    assert len(observer.usages) == 1
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_retry_incomplete"
+    assert usage.prior_response_id == "resp_first_incomplete"
+    assert usage.retry_count == 1
+    assert usage.prior_incomplete_reason == "max_output_tokens"
+    assert usage.input_tokens == 52
+    assert usage.output_tokens == 36
+    assert usage.cached_input_tokens == 12
+    assert usage.reasoning_tokens == 24
+    assert usage.web_search_source_count is None
+    assert usage.url_citation_count is None
+    assert usage.evidence_source_count is None
 
 
 @pytest.mark.parametrize("search_status", ["failed", "in_progress", "searching"])

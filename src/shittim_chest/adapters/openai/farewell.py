@@ -100,7 +100,20 @@ class OpenAIFarewellGenerator:
                     max_output_tokens=_RETRY_MAX_OUTPUT_TOKENS,
                 )
                 responses.append(response)
-                parsed = _extract_parsed(response)
+                try:
+                    parsed = _extract_parsed(response)
+                except OpenAIIncompleteResponse:
+                    self._record_usage(
+                        operation,
+                        tuple(responses),
+                        None,
+                        None,
+                        started,
+                        retry_count=retry_count,
+                        prior_incomplete_reason=prior_incomplete_reason,
+                        evidence_source_count=None,
+                    )
+                    raise
             source_urls, citation_urls = _extract_urls(response)
             weather_url = _validated_url(parsed.weather_source_url)
             news_url = _validated_url(parsed.news_source_url)
@@ -190,12 +203,13 @@ class OpenAIFarewellGenerator:
         self,
         operation: str,
         responses: tuple[ParsedResponse[FarewellOutputV1], ...],
-        source_count: int,
-        citation_count: int,
+        source_count: int | None,
+        citation_count: int | None,
         started: float,
         *,
         retry_count: int,
         prior_incomplete_reason: str | None,
+        evidence_source_count: int | None = 2,
     ) -> None:
         response = responses[-1]
         usages = tuple(candidate.usage for candidate in responses if candidate.usage is not None)
@@ -218,7 +232,7 @@ class OpenAIFarewellGenerator:
                 web_search_source_count=source_count,
                 web_search_source_rejected_count=0,
                 url_citation_count=citation_count,
-                evidence_source_count=2,
+                evidence_source_count=evidence_source_count,
                 retry_count=retry_count,
                 prior_incomplete_reason=prior_incomplete_reason,
                 prior_response_id=responses[0].id if retry_count else None,
