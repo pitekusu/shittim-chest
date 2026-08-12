@@ -3,7 +3,7 @@
   "maximum_validity_days": 90,
   "image_config_digests": {
     "production": "sha256:01d980f18de8ef67b7bbc49b5c7da36802d3b1f0964707c43ab1b0e11d5941f4",
-    "break-glass": "sha256:467bd97c4fc8a17853240fc42a2ff0d61641e04656a0b5555599ac0a872b0fe2"
+    "break-glass": "sha256:08264ee3dfc9b9a952b9b3d783822179997b8e0f3aea15200b66eea876a5bea3"
   },
   "acceptances": []
 }
