@@ -90,11 +90,11 @@ status note.
 - Canonical CI measures and retains both production and break-glass config digests with their
   SBOM, VEX, and risk-gate evidence; PR checks do not compare them with a static policy baseline.
 - A local risk acceptance remains bound to the exact measured config digest of each scoped image.
-- Production Release must compare both rebuilt configs with the successful same-main-SHA CI
-  artifact before either image is pushed.
+- Production Release validates both rebuilt config digests and their target-specific risk policy
+  before push, but does not require cross-run equality with a CI artifact.
 - Never infer a config digest from a manifest digest, reuse another exporter's result, or
   transcribe a value from an earlier SHA or run.
-- The CI-only `fault-test` image is not a same-SHA Release comparison target.
+- The CI-only `fault-test` image is not a Production Release or risk-acceptance target.
 
 Service-specific limits, image reproducibility rules, alarm and budget configuration, and
 release details belong in the references in section 3.
@@ -125,11 +125,9 @@ python tools/sync_docs.py --check --source "$SHITTIM_DOCS_SOURCE"
 - Never push directly to `main`.
 - Merge through a PR with squash merge only.
 - Confirm required checks and CodeQL before merge.
-- Before merging a PR that changes the image build context, reread the two-phase image baseline
-  gate in `docs/15_*`. Treat an initial `grype` failure caused only by the expected config-digest
-  baseline mismatch as the measurement phase: use that run's artifacts to verify both images and
-  update both baselines in the same PR, then require a new required-CI run. Never rerun the failed
-  job or merge with the old baseline.
+- Before merging a PR that changes the image build context, use the canonical CI artifact to
+  confirm both images' config digests, SBOMs, VEX, and risk-gate results. Do not introduce a static
+  policy baseline or a cross-run digest-equality gate.
 - Prefer `gh run watch <run-id> --exit-status --interval 60` for a GitHub Actions run.
 - Use `gh pr checks <pr> --watch --interval 60` when the whole PR check set must be monitored.
 - Use one watcher per run; do not add a second watcher or a custom duplicate polling loop.
