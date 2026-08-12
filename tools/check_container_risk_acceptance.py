@@ -39,7 +39,7 @@ REQUIRED_ACCEPTANCE_FIELDS: Final = frozenset(
 )
 IMAGE_KINDS: Final = frozenset({"production", "break-glass"})
 REQUIRED_POLICY_FIELDS: Final = frozenset(
-    {"schema_version", "maximum_validity_days", "image_config_digests", "acceptances"}
+    {"schema_version", "maximum_validity_days", "acceptances"}
 )
 TEXT_FIELDS: Final = (
     "justification",
@@ -165,32 +165,16 @@ def _validate_image_scope(image_kind: str, image_config_digest: str) -> None:
         raise ValueError("image config digest must be sha256:<64 lowercase hex>")
 
 
-def _policy_config_digests(root: dict[str, object]) -> dict[str, str]:
-    config_digests = _object(root.get("image_config_digests"), "image_config_digests")
-    missing = sorted(IMAGE_KINDS - set(config_digests))
-    extra = sorted(set(config_digests) - IMAGE_KINDS)
-    if missing or extra:
-        raise ValueError(f"image_config_digests fields invalid: missing={missing}, extra={extra}")
-    validated: dict[str, str] = {}
-    for image_kind in sorted(IMAGE_KINDS):
-        digest = config_digests[image_kind]
-        if not isinstance(digest, str) or DIGEST_PATTERN.fullmatch(digest) is None:
-            raise ValueError(f"image_config_digests.{image_kind} is invalid")
-        validated[image_kind] = digest
-    return validated
-
-
-def _load_policy(policy_path: Path) -> tuple[dict[str, str], list[object]]:
+def _load_policy(policy_path: Path) -> list[object]:
     root = _object(_read_json(policy_path, "risk acceptance policy"), "risk policy")
     if set(root) != REQUIRED_POLICY_FIELDS:
         raise ValueError("risk acceptance policy has unexpected root fields")
-    if root["schema_version"] != 3 or root["maximum_validity_days"] != 90:
+    if root["schema_version"] != 4 or root["maximum_validity_days"] != 90:
         raise ValueError("risk acceptance policy version or maximum validity is unsupported")
-    config_digests = _policy_config_digests(root)
     raw_acceptances = root["acceptances"]
     if not isinstance(raw_acceptances, list):
         raise ValueError("acceptances must be an array")
-    return config_digests, cast(list[object], raw_acceptances)
+    return cast(list[object], raw_acceptances)
 
 
 def _acceptance_record(value: object, label: str) -> dict[str, object]:
@@ -250,43 +234,18 @@ def _register_acceptance_scopes(
         seen.add(scoped_key)
 
 
-def _validate_policy_baseline(
-    policy_config_digests: dict[str, str], *, image_kind: str, image_config_digest: str
-) -> None:
-    if policy_config_digests[image_kind] != image_config_digest:
-        raise ValueError("policy baseline config digest does not match the tested image")
-
-
-def _validate_acceptance_baselines(
-    config_digests: dict[str, object],
-    policy_config_digests: dict[str, str],
-    label: str,
-) -> None:
-    for scoped_kind, scoped_digest in config_digests.items():
-        if scoped_digest != policy_config_digests[scoped_kind]:
-            raise ValueError(
-                f"{label}.image_config_digests.{scoped_kind} does not match policy baseline"
-            )
-
-
 def validate_config_digest_bindings(
     policy_path: Path, *, image_kind: str, image_config_digest: str, today: dt.date
 ) -> int:
-    """Fail before push on stale policy metadata or a changed local image config."""
+    """Fail before push on stale acceptance metadata or a changed scoped image."""
 
     _validate_image_scope(image_kind, image_config_digest)
-    policy_config_digests, raw_acceptances = _load_policy(policy_path)
-    _validate_policy_baseline(
-        policy_config_digests,
-        image_kind=image_kind,
-        image_config_digest=image_config_digest,
-    )
+    raw_acceptances = _load_policy(policy_path)
     bound = 0
     seen: set[tuple[str, FindingKey]] = set()
     for index, value in enumerate(raw_acceptances):
         label = f"acceptances[{index}]"
         key, config_digests = _validated_acceptance(value, label, today)
-        _validate_acceptance_baselines(config_digests, policy_config_digests, label)
         _register_acceptance_scopes(seen, key, config_digests)
         record_config_digest = config_digests.get(image_kind)
         if record_config_digest is None:
@@ -309,12 +268,7 @@ def validate_acceptances(
     """Validate records and require coverage for every unfixable High/Critical."""
 
     _validate_image_scope(image_kind, image_config_digest)
-    policy_config_digests, raw_acceptances = _load_policy(policy_path)
-    _validate_policy_baseline(
-        policy_config_digests,
-        image_kind=image_kind,
-        image_config_digest=image_config_digest,
-    )
+    raw_acceptances = _load_policy(policy_path)
 
     tracked = {
         finding.key
@@ -326,7 +280,6 @@ def validate_acceptances(
     for index, value in enumerate(raw_acceptances):
         label = f"acceptances[{index}]"
         key, config_digests = _validated_acceptance(value, label, today)
-        _validate_acceptance_baselines(config_digests, policy_config_digests, label)
         _register_acceptance_scopes(seen, key, config_digests)
         record_config_digest = config_digests.get(image_kind)
         if record_config_digest is not None and record_config_digest != image_config_digest:
