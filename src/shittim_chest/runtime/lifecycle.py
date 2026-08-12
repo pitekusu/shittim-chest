@@ -76,8 +76,6 @@ class _RuntimeInstanceLifecycle(Protocol):
 class _FarewellLifecycle(Protocol):
     async def run(self, stop: asyncio.Event) -> None: ...
 
-    async def deliver_before_shutdown(self) -> None: ...
-
 
 class _SignalHandlers(Protocol):
     def install(self, callback: Callable[[], None]) -> None: ...
@@ -501,15 +499,6 @@ class RuntimeLifecycle:
                     if not farewell_task.done():
                         farewell_task.cancel()
                     await _await_cancelled(farewell_task, label="an idle farewell monitor")
-                if self._farewell is not None:
-                    try:
-                        await self._farewell.deliver_before_shutdown()
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as error:
-                        # Farewell is explicitly best-effort and must never hold
-                        # the normal scale-to-zero cleanup path open.
-                        del error
                 try:
                     await self._ingress_runtime.close()
                 except Exception as error:

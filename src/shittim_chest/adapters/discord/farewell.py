@@ -50,7 +50,7 @@ class DiscordFarewellSender:
         content: str,
         nonce: str,
     ) -> None:
-        """Post once, verify the acknowledgement, and never retry application-side."""
+        """Post once and classify whether the coordinator may retry this nonce."""
 
         client = self._clients[DiscordBotSlot(participant.value)]
         try:
@@ -71,7 +71,11 @@ class DiscordFarewellSender:
             raise FarewellDeliveryError("farewell_permission_denied") from error
         except discord.NotFound as error:
             raise FarewellDeliveryError("farewell_channel_unavailable") from error
-        except (discord.HTTPException, OSError) as error:
+        except discord.HTTPException as error:
+            if error.status != 429 and error.status < 500:
+                raise FarewellDeliveryError("farewell_delivery_rejected") from error
+            raise FarewellDeliveryError("farewell_discord_unavailable") from error
+        except OSError as error:
             raise FarewellDeliveryError("farewell_discord_unavailable") from error
 
     async def _resolve_channel(self, client: discord.Client) -> discord.TextChannel:

@@ -92,9 +92,9 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 
 ### 6.1 帰宅挨拶
 
-正常な30分IDLE停止に備える帰宅挨拶は、participant 3人から選択済みのprivate personaを使い、停止予定2分前に1 logical generationとして生成する。通常は1 Responses API requestとし、top-level responseが`incomplete`かつ`incomplete_details.reason=max_output_tokens`の場合だけ、増加したtoken上限で1回だけ再requestする。`content_filter`、未知reason、message／Web search itemの未完了は再requestせずfail closedとする。`web_search`を`tool_choice=required`、`max_tool_calls=4`、`store=false`で使用し、user locationを`JP`／`Tokyo`／`Tokyo`／`Asia/Tokyo`へ固定する。PythonがJSTの現在日時、時間帯、季節を決め、modelは東京の天気と人格が好みそうな当日の楽しいニュースを反映した1行60〜160文字を返す。
+正常な30分IDLE停止に備える帰宅挨拶は、participant 3人から選択済みのprivate personaを使い、停止予定5分前に1 logical generationとして生成する。application-level Responses requestは最大2回、処理全体は120秒とする。transport、timeout、429、5xx、response／message／Web search未完了、citation不足、Structured Output不正は1回だけ再requestし、authentication、permission、refusal、content filterは再requestしない。`web_search`を`tool_choice=required`、`max_tool_calls=4`、`store=false`で使用し、user locationを`JP`／`Tokyo`／`Tokyo`／`Asia/Tokyo`へ固定する。PythonがJSTの現在日時、時間帯、季節を決め、modelは東京の天気と人格が好みそうな当日の楽しいニュースを反映した日本語1行・約100文字を目標に返す。
 
-Structured OutputのニュースURLは、`web_search_call.action.sources`とURL citationの両方に存在するHTTP(S) URLでなければ失敗とする。天気は同じURL照合、またはexact shapeを検証した公式real-time feed `oai-weather`の存在を証拠とする。未知provider、余分なfield、不正URLはfail closedとし、`oai-weather`が存在してもニュースURLのsource／citation照合は緩和しない。Discord本文にはURL、見出し、引用一覧、固定AI免責文を含めず、source URL、本文、persona、channel IDはlogへ出さない。記録するのはsource種別・件数、成功失敗理由、allowlist済みfeed種別、既存allowlist内のtoken／latency metadataだけとする。生成失敗は通常停止を妨げない。
+帰宅挨拶のStructured Outputは`message`だけを持つ。completed Web searchと、認証情報を含まない有効なHTTP(S) `url_citation`が1件以上あれば受理し、annotation順の最初のcitationを`参考リンク:`として本文へ付ける。`action.sources`は件数と既知`oai-weather` feedの補助観測だけに用い、citationとの一致、天気／ニュース別分類、未知source typeや余分fieldの拒否は行わない。本文は空でなければ改行・連続空白を1行へ正規化し、Discord 2,000文字以内へ収める。60〜160文字制限、本文URL、固定免責文による拒否は行わない。source URL、本文、query、persona、channel IDはlogへ出さず、response ID、試行数、citation件数、既知feed件数、安定した失敗段階・理由だけを記録する。生成失敗は通常停止を妨げない。
 
 ### 6.2 品質観測・昇格不採用
 
@@ -112,7 +112,7 @@ Structured OutputのニュースURLは、`web_search_call.action.sources`とURL 
 - 医療、法律、金融、政治、選挙、緊急事態、自傷を含む高risk category専用の事前拒否は設けず通常質問と同じflowで扱う。providerのrefusal/policy blockを迂回せず、prompt上も正答・診断・法的判断・投資判断を保証させない。仲間内限定運用ではCOMPLETED／FAILED／CANCELLEDへ固定のAI免責文を表示しない。
 - user IDはraw値をOpenAIへ送らず、必要時は安定したprivacy-preserving safety identifierを使用する。
 - `store=false`はResponses application stateを保存しない指定であり、既定のabuse monitoring logはuser contentを含み最大30日保持され得る。Zero Data Retentionを本番条件にはせず、このdata flowを利用者向け説明と運用文書へ明記する。
-- input/output/cached/reasoning token、latency、response ID、model ID、cache hitをmetricsへ記録する。帰宅挨拶を`max_output_tokens`で再requestした場合は両requestのtoken使用量を合算し、最終response IDと先行response IDを区別して記録する。本文はlogへ出さない。
+- input/output/cached/reasoning token、latency、response ID、model ID、cache hitをmetricsへ記録する。帰宅挨拶を再requestした場合は取得済みresponseのtoken使用量を合算し、最終response ID、先行response ID、application attempt数、先行失敗理由を区別して記録する。本文はlogへ出さない。
 - explicit prompt cachingは評価setで費用削減を確認してから有効化し、無条件には使わない。
 
 ## 8. 公式資料確認記録

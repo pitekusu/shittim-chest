@@ -90,6 +90,8 @@ class ContentFreeTelemetry:
             ("title_fallback_count", record.title_fallback_count),
             ("title_fallback_kinds", record.title_fallback_kinds),
             ("retry_count", record.retry_count),
+            ("attempt_count", record.attempt_count),
+            ("prior_failure_reason", record.prior_failure_reason),
             ("prior_incomplete_reason", record.prior_incomplete_reason),
             ("prior_response_id", record.prior_response_id),
         ):
@@ -108,6 +110,15 @@ class ContentFreeTelemetry:
             fields["diagnostic_context"] = record.diagnostic_context
         if record.diagnostic_kind is not None:
             fields["diagnostic_kind"] = record.diagnostic_kind
+        for name, value in (
+            ("response_id", record.response_id),
+            ("attempt_count", record.attempt_count),
+            ("web_search_source_count", record.web_search_source_count),
+            ("realtime_feed_count", record.realtime_feed_count),
+            ("url_citation_count", record.url_citation_count),
+        ):
+            if value is not None:
+                fields[name] = value
         self._emit("openai_request_failed", **fields)
 
     def runtime_event(self, event: str, **fields: str | int) -> None:

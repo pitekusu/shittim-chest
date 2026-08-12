@@ -57,9 +57,7 @@ class EvidenceDigestOutputV1(StrictOutput):
     summary: str = Field(min_length=1, max_length=2_000)
 
 
-class FarewellOutputV1(StrictOutput):
-    """Short greeting plus the two source URLs used to ground it."""
+class FarewellOutputV2(StrictOutput):
+    """One display message; citations are read from provider annotations."""
 
-    message: str = Field(min_length=1, max_length=500)
-    weather_source_url: str = Field(min_length=1, max_length=2_000)
-    news_source_url: str = Field(min_length=1, max_length=2_000)
+    message: str = Field(min_length=1, max_length=2_000)

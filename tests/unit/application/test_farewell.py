@@ -35,35 +35,42 @@ def test_time_context_uses_tokyo_period_and_season(
     assert context.local_datetime.endswith("+09:00")
 
 
-def test_content_is_one_line_bounded_and_discord_sanitized() -> None:
-    raw = (
-        "東京の夏らしい晴れ空でしたね!今日の宇宙ニュースにもわくわくしました。"
-        "みんなと話せて最高です、それでは楽しい夜を。また元気に会いましょう!"
+def test_content_collapses_whitespace_and_appends_the_citation() -> None:
+    content = prepare_farewell_content(
+        "短い挨拶です。\r\n URLや **Markdown** も本文では拒否しません。",
+        "https://example.test/source",
     )
 
-    content = prepare_farewell_content(raw)
-
-    assert "\n" not in content
-    assert "https://" not in content
-    assert "AI生成" not in content
-    assert "\\!" in content
+    assert content == (
+        "短い挨拶です。 URLや **Markdown** も本文では拒否しません。"
+        "\n参考リンク: https://example.test/source"
+    )
 
 
 @pytest.mark.parametrize(
     "value",
     [
-        "短すぎます。",
+        "短い挨拶です。",
         "a" * 161,
-        "a" * 59 + "\n続き",
-        "a" * 60 + " https://example.test",
-        "a" * 60 + " weather.example.com/tokyo",
-        "a" * 60 + " この出力はAI生成です",
-        "a" * 60 + "\u200d",
+        "本文にも https://example.test が入っています。",
+        "この出力はAI生成です。",
     ],
 )
-def test_content_rejects_unsafe_or_out_of_contract_values(value: str) -> None:
+def test_content_accepts_values_previously_rejected_for_display_quality(value: str) -> None:
+    content = prepare_farewell_content(value, "https://example.test/source")
+
+    assert content.endswith("\n参考リンク: https://example.test/source")
+
+
+def test_content_is_truncated_only_to_the_discord_message_limit() -> None:
+    content = prepare_farewell_content("a" * 2_000, "https://example.test/source")
+
+    assert len(content) == 2_000
+
+
+def test_empty_content_is_rejected() -> None:
     with pytest.raises(ValueError):
-        prepare_farewell_content(value)
+        prepare_farewell_content(" \r\n ", "https://example.test/source")
 
 
 def test_nonce_is_deterministic_short_and_identity_specific() -> None:

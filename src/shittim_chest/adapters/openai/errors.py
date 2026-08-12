@@ -32,8 +32,19 @@ class OpenAIAdapterError(GenerationProviderError):
 class OpenAIRefusal(OpenAIAdapterError):
     """The provider explicitly refused to generate the requested output."""
 
-    def __init__(self) -> None:
-        super().__init__("openai_refusal", "the model refused the request", retryable=False)
+    def __init__(
+        self,
+        *,
+        diagnostic_context: str | None = None,
+        diagnostic_kind: str | None = None,
+    ) -> None:
+        super().__init__(
+            "openai_refusal",
+            "the model refused the request",
+            retryable=False,
+            diagnostic_context=diagnostic_context,
+            diagnostic_kind=diagnostic_kind,
+        )
 
 
 class OpenAIIncompleteResponse(OpenAIAdapterError):
@@ -75,23 +86,52 @@ class OpenAIInvalidOutput(OpenAIAdapterError):
 class OpenAIRateLimited(OpenAIAdapterError):
     """The SDK exhausted its bounded retry policy after rate limiting."""
 
-    def __init__(self) -> None:
-        super().__init__("openai_rate_limited", "OpenAI rate limit exceeded", retryable=True)
+    def __init__(
+        self,
+        *,
+        diagnostic_context: str | None = None,
+        diagnostic_kind: str | None = None,
+    ) -> None:
+        super().__init__(
+            "openai_rate_limited",
+            "OpenAI rate limit exceeded",
+            retryable=True,
+            diagnostic_context=diagnostic_context,
+            diagnostic_kind=diagnostic_kind,
+        )
 
 
 class OpenAIUnavailable(OpenAIAdapterError):
     """The SDK exhausted retries for a transient transport or server failure."""
 
-    def __init__(self) -> None:
-        super().__init__("openai_unavailable", "OpenAI is temporarily unavailable", retryable=True)
+    def __init__(
+        self,
+        *,
+        diagnostic_context: str | None = None,
+        diagnostic_kind: str | None = None,
+    ) -> None:
+        super().__init__(
+            "openai_unavailable",
+            "OpenAI is temporarily unavailable",
+            retryable=True,
+            diagnostic_context=diagnostic_context,
+            diagnostic_kind=diagnostic_kind,
+        )
 
 
 class OpenAIConfigurationError(OpenAIAdapterError):
     """Authentication, authorization, or model configuration is invalid."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        diagnostic_context: str | None = None,
+        diagnostic_kind: str | None = None,
+    ) -> None:
         super().__init__(
             "openai_configuration",
             "OpenAI authentication or model configuration failed",
             retryable=False,
+            diagnostic_context=diagnostic_context,
+            diagnostic_kind=diagnostic_kind,
         )
