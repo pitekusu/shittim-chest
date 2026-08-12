@@ -86,7 +86,7 @@ class OpenAIFarewellGenerator:
         evidence_source_count: int | None = None
 
         def record_failure(error: OpenAIAdapterError) -> None:
-            if retry_count == 1 and len(responses) == 2:
+            if retry_count == 1 and responses:
                 self._record_usage(
                     operation,
                     tuple(responses),
@@ -244,7 +244,7 @@ class OpenAIFarewellGenerator:
                 evidence_source_count=evidence_source_count,
                 retry_count=retry_count,
                 prior_incomplete_reason=prior_incomplete_reason,
-                prior_response_id=responses[0].id if retry_count else None,
+                prior_response_id=responses[0].id if len(responses) > 1 else None,
             )
         )
 
