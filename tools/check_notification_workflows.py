@@ -116,7 +116,11 @@ def _validate_pinned_container_builder(directory: Path) -> None:
     ):
         text = (directory / workflow).read_text(encoding="utf-8")
         block = _workflow_step_block(text, step_name)
-        if block.count(expected) != 1:
+        if (
+            text.count("uses: docker/setup-buildx-action@") != 1
+            or block.count("uses: docker/setup-buildx-action@") != 1
+            or block.count(expected) != 1
+        ):
             raise WorkflowPolicyError(
                 f"{workflow} must pin the approved Buildx client and BuildKit image digest"
             )

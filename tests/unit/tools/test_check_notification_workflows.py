@@ -71,6 +71,26 @@ def test_container_builds_require_pinned_buildx_and_buildkit(
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
+def test_container_builds_reject_an_extra_buildx_setup(
+    tmp_path: Path,
+    workflow: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow
+    text = path.read_text(encoding="utf-8")
+    extra_step = (
+        "      - name: Replace the active builder\n"
+        "        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c\n"
+        "        with:\n"
+        "          version: latest\n"
+    )
+    path.write_text(f"{text.rstrip()}\n{extra_step}", encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="Buildx client and BuildKit image digest"):
+        validate_notification_workflows(directory)
+
+
 def test_release_requires_pre_attestation_referrer_baselines(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
