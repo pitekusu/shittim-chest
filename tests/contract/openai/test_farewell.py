@@ -209,6 +209,9 @@ async def test_request_uses_message_only_schema_and_first_citation() -> None:
     assert request["reasoning"] == {"effort": "medium"}
     assert "180 to 300 characters" in request["instructions"]
     assert "must include one concrete mention of today's Tokyo weather" in request["instructions"]
+    assert "one news item" in request["instructions"]
+    assert "from today that this persona would naturally like" in request["instructions"]
+    assert "enjoyable news" not in request["instructions"]
     assert request["tools"][0]["user_location"] == {
         "type": "approximate",
         "country": "JP",
