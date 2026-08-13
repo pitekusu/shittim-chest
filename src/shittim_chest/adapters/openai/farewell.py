@@ -88,6 +88,18 @@ class OpenAIFarewellGenerator:
         prior_failure_reason: str | None = None
         last_error: OpenAIAdapterError | None = None
 
+        def record_acquired_usage() -> None:
+            if not responses:
+                return
+            self._record_usage(
+                operation,
+                tuple(responses),
+                last_evidence,
+                started,
+                attempt_count=attempts,
+                prior_failure_reason=prior_failure_reason,
+            )
+
         try:
             async with asyncio.timeout(_TOTAL_TIMEOUT_SECONDS):
                 for attempts in range(1, _MAX_APPLICATION_ATTEMPTS + 1):
@@ -133,6 +145,7 @@ class OpenAIFarewellGenerator:
                     )
                     return content
         except asyncio.CancelledError:
+            record_acquired_usage()
             raise
         except TimeoutError:
             last_error = OpenAIUnavailable(
@@ -144,6 +157,7 @@ class OpenAIFarewellGenerator:
             diagnostic_context="farewell_request",
             diagnostic_kind="unknown",
         )
+        record_acquired_usage()
         self._record_failure(
             operation,
             failure,
@@ -231,7 +245,7 @@ class OpenAIFarewellGenerator:
                 retry_count=attempt_count - 1,
                 attempt_count=attempt_count,
                 prior_failure_reason=prior_failure_reason,
-                prior_response_id=responses[0].id if len(responses) > 1 else None,
+                prior_response_id=responses[0].id if attempt_count > 1 else None,
             )
         )
 

@@ -286,6 +286,34 @@ async def test_transport_failure_never_uses_a_third_application_request() -> Non
 
 
 @pytest.mark.asyncio
+async def test_failed_retry_preserves_usage_from_the_preceding_response() -> None:
+    service, parse, observer = service_for(response())
+    timeout = APITimeoutError(httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first",
+        ),
+        timeout,
+    ]
+
+    with pytest.raises(OpenAIUnavailable):
+        await generate(service)
+
+    assert parse.await_count == 2
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_first"
+    assert usage.prior_response_id == "resp_first"
+    assert usage.attempt_count == 2
+    assert usage.retry_count == 1
+    assert usage.prior_failure_reason == "max_output_tokens"
+    assert usage.input_tokens == 20
+    assert usage.output_tokens == 10
+    assert observer.failures[0].attempt_count == 2
+
+
+@pytest.mark.asyncio
 async def test_authentication_failure_is_not_retried() -> None:
     service, parse, observer = service_for(response())
     request = httpx.Request("POST", "https://api.openai.com/v1/responses")
