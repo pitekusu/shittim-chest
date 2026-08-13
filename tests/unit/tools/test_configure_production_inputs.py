@@ -112,6 +112,22 @@ def previous_runtime_json() -> str:
     )
 
 
+def current_runtime_json() -> str:
+    return json.dumps(
+        {
+            "schema_version": "2",
+            "config_version": "v0003",
+            "guild_id": "101",
+            "allowed_channel_ids": ["102", "103"],
+            "farewell_channel_id": "102",
+            "identities": [
+                {"slot": slot.value, "application_id": str(201 + index)}
+                for index, slot in enumerate(DiscordBotSlot)
+            ],
+        }
+    )
+
+
 def test_parameter_names_are_the_exact_eleven_secure_string_paths() -> None:
     assert setup.parameter_names("v0001") == (
         "/shittim-chest/production/openai/api-key",
@@ -288,6 +304,65 @@ def test_v0003_migration_rejects_farewell_channel_outside_allowlist() -> None:
     assert caught.value.code == "farewell_channel_not_allowed"
 
 
+def test_v0004_migration_preserves_the_complete_v0003_runtime_without_prompting() -> None:
+    def unexpected_prompt(_prompt: str) -> str:
+        raise AssertionError("schema v2 migration must not ask for an existing value")
+
+    pending = setup.collect_pending_setup(
+        config_version="v0004",
+        missing_parameters=frozenset({f"{setup.PARAMETER_ROOT}/runtime/v0004"}),
+        github_email_missing=False,
+        secret_reader=unexpected_prompt,
+        saved_runtime=current_runtime_json(),
+    )
+
+    migrated = json.loads(pending.parameters[f"{setup.PARAMETER_ROOT}/runtime/v0004"])
+    assert migrated == {
+        **json.loads(current_runtime_json()),
+        "config_version": "v0004",
+    }
+
+
+def test_v0004_loader_accepts_v0003_schema_v2_and_rebinds_persona_versions() -> None:
+    sdk = client()
+    source_names = [
+        f"{setup.PARAMETER_ROOT}/runtime/v0003",
+        *(f"{setup.PARAMETER_ROOT}/personas/v0003/{slot.value}" for slot in DiscordBotSlot),
+    ]
+    source = SAVED_PERSONAS.replace("v0002", "v0003")
+    saved = setup._personas_from_operator_markdown(source, "v0003")
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_parameters",
+            {
+                "Parameters": [
+                    {
+                        "Name": source_names[0],
+                        "Type": "SecureString",
+                        "Value": current_runtime_json(),
+                    },
+                    *(
+                        {
+                            "Name": f"{setup.PARAMETER_ROOT}/personas/v0003/{slot.value}",
+                            "Type": "SecureString",
+                            "Value": saved[slot],
+                        }
+                        for slot in DiscordBotSlot
+                    ),
+                ]
+            },
+            {"Names": source_names, "WithDecryption": True},
+        )
+        runtime, personas = setup.load_previous_version_inputs(
+            sdk,
+            source_version="v0003",
+            target_version="v0004",
+        )
+
+    assert runtime == current_runtime_json()
+    assert all(json.loads(value)["config_version"] == "v0004" for value in personas.values())
+
+
 def test_private_source_pointer_is_local_only_and_absolute(tmp_path: Path) -> None:
     source = tmp_path / "private.md"
     source.write_text(SAVED_PERSONAS, encoding="utf-8")
@@ -314,7 +389,7 @@ def test_invalid_saved_persona_source_fails_with_content_free_code(tmp_path: Pat
 
 
 def test_parser_defaults_to_new_runtime_version() -> None:
-    assert setup._parser().parse_args([]).config_version == "v0003"
+    assert setup._parser().parse_args([]).config_version == "v0004"
 
 
 @pytest.mark.parametrize(

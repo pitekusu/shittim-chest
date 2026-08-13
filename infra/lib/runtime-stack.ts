@@ -176,7 +176,7 @@ export class RuntimeStack extends Stack {
     );
     const configVersion = new CfnParameter(this, "RuntimeConfigVersion", {
       allowedPattern: CONFIG_VERSION_PATTERN,
-      default: "v0003",
+      default: "v0004",
       description: "Versioned private runtime and persona configuration path",
       type: "String",
     });

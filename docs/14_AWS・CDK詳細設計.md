@@ -171,11 +171,11 @@ SecureString値はCloudFormation/CDKで作成せず、operatorが事前登録し
 /shittim-chest/production/discord/participant-a/token
 /shittim-chest/production/discord/participant-b/token
 /shittim-chest/production/discord/participant-c/token
-/shittim-chest/production/runtime/v0003
-/shittim-chest/production/personas/v0003/moderator
-/shittim-chest/production/personas/v0003/participant-a
-/shittim-chest/production/personas/v0003/participant-b
-/shittim-chest/production/personas/v0003/participant-c
+/shittim-chest/production/runtime/v0004
+/shittim-chest/production/personas/v0004/moderator
+/shittim-chest/production/personas/v0004/participant-a
+/shittim-chest/production/personas/v0004/participant-b
+/shittim-chest/production/personas/v0004/participant-c
 ```
 
 operatorはAWS Consoleで11件を個別作成せず、repository rootから次の1 commandを実行する。
@@ -184,7 +184,7 @@ operatorはAWS Consoleで11件を個別作成せず、repository rootから次�
 uv run --frozen python tools/configure_production_inputs.py
 ```
 
-toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示せず照合し、不足値だけを順に非表示入力する。v0003作成時はexactなv0002 RuntimeConfigと4 PersonaConfigだけを一度復号してschema／slot／versionをfail closedに検証し、値を表示・保存せず、利用者には帰宅挨拶channel IDだけを入力させてv0003を再構成する。local-onlyの`SHITTIM_PRIVATE_CONFIG_SOURCE` pointerを用いる新規構成経路も維持し、pointer、source path、persona本文を出力・公開mirrorへ複製しない。確認後にGitHub Actions secretとSSM Standard `SecureString`を作成し、既存target pathは上書きしない。`--check`はGitHub secret名とSSM metadataの設定数だけを返す。GitHub secretは標準入力、SSM値はboto3 API request bodyで渡し、process argumentへ秘密値を含めない。
+toolはGitHubのrelease role ARNとactive AWS identityのaccountを値を表示せず照合し、不足値だけを順に非表示入力する。v0004作成時はexactなv0003 RuntimeConfigと4 PersonaConfigだけを一度復号してschema／slot／versionをfail closedに検証し、RuntimeConfigの識別子を表示せずv0004へ移行する。4 personaはlocal-onlyの`SHITTIM_PRIVATE_CONFIG_SOURCE`が指すv0004非公開正本から検証し、既存v0003の本文を上書きしない。pointer、source path、persona本文を出力・公開mirrorへ複製しない。確認後にGitHub Actions secretとSSM Standard `SecureString`を作成し、既存target pathは上書きしない。`--check`はGitHub secret名とSSM metadataの設定数だけを返す。GitHub secretは標準入力、SSM値はboto3 API request bodyで渡し、process argumentへ秘密値を含めない。
 
 `RuntimeConfig` schema v2は`config_version`、Guild ID、非空channel allowlist、そのallowlist内の帰宅挨拶channel ID、4 Application IDを保持する。`PersonaConfig` schema v1は同version、slot、display name、system promptを保持し、1 parameterをUTF-8 3,500 bytes以下に制限する。既存pathを上書きせず新version pathを作り、task definition更新後にstop-before-start deployを行う。帰宅挨拶のための新resource・IAM権限は追加せず、既存ECS taskのDiscord／OpenAI接続境界を使う。token/API keyをCDK context、GitHub secret、CloudFormation output、Obsidianへ保存しない。
 
