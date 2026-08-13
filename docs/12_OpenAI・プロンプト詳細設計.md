@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: decided
 created: 2026-07-16
-updated: 2026-08-11
+updated: 2026-08-13
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -29,8 +29,8 @@ HTTP Interactionから受け取ったInteraction tokenはOpenAIへ送らず、Dy
 | Phase | reasoning | `max_output_tokens` | application文字上限 | request deadline |
 |---|---|---:|---:|---:|
 | Evidence整理 | medium | 1,200 | 4,000 | 60秒 |
-| 初回意見 | high | 1,200 | 1,600 | 60秒 |
-| 最終案 | high | 1,600 | 2,000 | 60秒 |
+| 初回意見 | high | 2,400 | 1,600 | 60秒 |
+| 最終案 | high | 4,000 | 2,000 | 60秒 |
 | 投票 | medium | 800 | 理由500 | 45秒 |
 | 決定事項 | high | 1,200 | 2,000 | 60秒 |
 
@@ -45,7 +45,9 @@ HTTP Interactionから受け取ったInteraction tokenはOpenAIへ送らず、Dy
 | `VoteOutputV1` | `candidate_id`, `accuracy_score`, `usefulness_score`, `safety_score`, `reason` |
 | `DecisionOutputV1` | `victory_message`, `decision`, `actions`, `caveats` |
 
-Pydanticでfield、length、score範囲、candidate IDをstrictに検証し、未知fieldを拒否した後、domain invariantで自己投票、重複、未知IDを拒否する。`refusal`、`incomplete`、`output_parsed is None`は別error codeへ変換する。
+Pydanticでfield、length、score範囲、candidate IDをstrictに検証し、未知fieldを拒否した後、domain invariantで自己投票、重複、未知IDを拒否する。`refusal`、`incomplete`、`output_parsed is None`は別error codeへ変換する。`incomplete`時は本文を記録せず、response ID、response／message status、`incomplete_details.reason`、model、reasoning mode、設定したtoken上限、利用可能なinput／output／cached／reasoning token数をcontent-free telemetryへ記録する。
+
+FAILED attemptをRetryする場合、失敗phaseで既にtransaction保存済みのparticipant outputは新attemptへ再利用し、provider call 0回のCOMPLETED checkpointとして新attempt時刻へ結び直す。未生成participantだけをPLANNEDとし、保存済みoutputを再生成せず処理を継続する。これにより一部の最終案だけが成功した`openai_incomplete`後も、Retryが同じactive phaseで停止しない。
 
 STEP-05Aでは現行domainとDynamoDB schemaに1対1で保存できるfieldだけをschemaに含めた。STEP-05Bで`EvidenceDigestOutputV1.summary`、検索要否、検索状態、Responses API response ID、source metadataをdomain型とDynamoDB schema v3へ同時に追加した。旧設計の`assumptions`、`risks`、`rationale`、`tradeoffs`は引き続き出力させて破棄せず、必要な場合は別sliceで保存先から設計する。
 

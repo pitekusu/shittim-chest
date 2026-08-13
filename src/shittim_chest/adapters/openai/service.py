@@ -192,6 +192,7 @@ class OpenAIResponsesService:
         settings: PhaseSettings,
     ) -> _OutputT:
         started = monotonic()
+        response: ParsedResponse[_OutputT] | None = None
         try:
             async with self.limiter.slot():
                 reasoning: Reasoning = {"effort": settings.reasoning_effort.value}
@@ -214,29 +215,59 @@ class OpenAIResponsesService:
         except asyncio.CancelledError:
             raise
         except OpenAIAdapterError as error:
-            self._record_failure(operation, error, started)
+            self._record_failure(operation, error, started, response=response, settings=settings)
             raise
         except ValidationError as error:
             invalid_output = OpenAIInvalidOutput()
-            self._record_failure(operation, invalid_output, started)
+            self._record_failure(
+                operation,
+                invalid_output,
+                started,
+                response=response,
+                settings=settings,
+            )
             raise invalid_output from error
         except RateLimitError as error:
             rate_limited = OpenAIRateLimited()
-            self._record_failure(operation, rate_limited, started)
+            self._record_failure(
+                operation,
+                rate_limited,
+                started,
+                response=response,
+                settings=settings,
+            )
             raise rate_limited from error
         except (AuthenticationError, PermissionDeniedError, NotFoundError) as error:
             configuration_error = OpenAIConfigurationError()
-            self._record_failure(operation, configuration_error, started)
+            self._record_failure(
+                operation,
+                configuration_error,
+                started,
+                response=response,
+                settings=settings,
+            )
             raise configuration_error from error
         except (APIConnectionError, APITimeoutError) as error:
             unavailable = OpenAIUnavailable()
-            self._record_failure(operation, unavailable, started)
+            self._record_failure(
+                operation,
+                unavailable,
+                started,
+                response=response,
+                settings=settings,
+            )
             raise unavailable from error
         except APIStatusError as error:
             status_error: OpenAIAdapterError = (
                 OpenAIUnavailable() if error.status_code >= 500 else OpenAIConfigurationError()
             )
-            self._record_failure(operation, status_error, started)
+            self._record_failure(
+                operation,
+                status_error,
+                started,
+                response=response,
+                settings=settings,
+            )
             raise status_error from error
         self._record_usage(operation, response, started)
         return parsed
@@ -267,30 +298,62 @@ class OpenAIResponsesService:
             )
         )
 
-    def _record_failure(
+    def _record_failure[OutputT: BaseModel](
         self,
         operation: str,
         error: OpenAIAdapterError,
         started: float,
+        *,
+        response: ParsedResponse[OutputT] | None,
+        settings: PhaseSettings,
     ) -> None:
+        usage = response.usage if response is not None else None
         self.recorder.record_failure(
             OpenAIFailureRecord(
                 operation=operation,
                 code=error.code,
                 policy_id=self.config.policy.policy_id.value,
                 latency_ms=_elapsed_ms(started),
+                diagnostic_context=error.diagnostic_context,
+                diagnostic_kind=error.diagnostic_kind,
+                response_id=response.id if response is not None else None,
+                model=str(response.model) if response is not None else self.config.model,
+                reasoning_mode=self.config.policy.reasoning_mode.value,
+                max_output_tokens=settings.max_output_tokens,
+                input_tokens=usage.input_tokens if usage is not None else None,
+                output_tokens=usage.output_tokens if usage is not None else None,
+                cached_input_tokens=(
+                    usage.input_tokens_details.cached_tokens if usage is not None else None
+                ),
+                reasoning_tokens=(
+                    usage.output_tokens_details.reasoning_tokens if usage is not None else None
+                ),
             )
         )
 
 
 def _extract_parsed[OutputT: BaseModel](response: ParsedResponse[OutputT]) -> OutputT:
-    if response.status == "incomplete":
-        raise OpenAIIncompleteResponse()
+    if response.status != "completed":
+        reason = response.status
+        if response.status == "incomplete":
+            reason = (
+                response.incomplete_details.reason
+                if response.incomplete_details is not None
+                and response.incomplete_details.reason is not None
+                else "missing"
+            )
+        raise OpenAIIncompleteResponse(
+            diagnostic_context="response_status",
+            diagnostic_kind=reason,
+        )
     for output in response.output:
         if output.type != "message":
             continue
-        if output.status == "incomplete":
-            raise OpenAIIncompleteResponse()
+        if output.status != "completed":
+            raise OpenAIIncompleteResponse(
+                diagnostic_context="message_status",
+                diagnostic_kind=output.status,
+            )
         for content in output.content:
             if content.type == "refusal":
                 raise OpenAIRefusal()

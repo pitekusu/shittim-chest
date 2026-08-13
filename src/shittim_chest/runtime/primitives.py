@@ -112,6 +112,13 @@ class ContentFreeTelemetry:
             fields["diagnostic_kind"] = record.diagnostic_kind
         for name, value in (
             ("response_id", record.response_id),
+            ("model", record.model),
+            ("reasoning_mode", record.reasoning_mode),
+            ("max_output_tokens", record.max_output_tokens),
+            ("input_tokens", record.input_tokens),
+            ("output_tokens", record.output_tokens),
+            ("cached_input_tokens", record.cached_input_tokens),
+            ("reasoning_tokens", record.reasoning_tokens),
             ("attempt_count", record.attempt_count),
             ("web_search_source_count", record.web_search_source_count),
             ("realtime_feed_count", record.realtime_feed_count),
