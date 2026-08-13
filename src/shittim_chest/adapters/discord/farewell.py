@@ -49,6 +49,7 @@ class DiscordFarewellSender:
         participant: ParticipantSlot,
         content: str,
         nonce: str,
+        reconcile: bool = False,
     ) -> None:
         """Post once and classify whether the coordinator may retry this nonce."""
 
@@ -56,6 +57,13 @@ class DiscordFarewellSender:
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 channel = await self._resolve_channel(client)
+                if reconcile and await self._reconcile_existing(
+                    client,
+                    channel,
+                    content=content,
+                    nonce=nonce,
+                ):
+                    return
                 message = await channel.send(
                     content,
                     nonce=nonce,
@@ -104,6 +112,21 @@ class DiscordFarewellSender:
         ):
             raise FarewellDeliveryError("farewell_permission_denied")
         return channel
+
+    async def _reconcile_existing(
+        self,
+        client: discord.Client,
+        channel: discord.TextChannel,
+        *,
+        content: str,
+        nonce: str,
+    ) -> bool:
+        async for message in channel.history(limit=20):
+            if str(message.nonce) != nonce:
+                continue
+            self._verify_message(client, message, content=content, nonce=nonce)
+            return True
+        return False
 
     def _verify_message(
         self,

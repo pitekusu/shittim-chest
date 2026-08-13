@@ -53,11 +53,20 @@ class Generator:
 @dataclass(slots=True)
 class Sender:
     calls: list[tuple[ParticipantSlot, str, str]] = field(default_factory=list)
+    reconciliation_calls: list[bool] = field(default_factory=list)
     failures: list[Exception] = field(default_factory=list)
     after_send: Callable[[], None] | None = None
 
-    async def send(self, *, participant: ParticipantSlot, content: str, nonce: str) -> None:
+    async def send(
+        self,
+        *,
+        participant: ParticipantSlot,
+        content: str,
+        nonce: str,
+        reconcile: bool = False,
+    ) -> None:
         self.calls.append((participant, content, nonce))
+        self.reconciliation_calls.append(reconcile)
         if self.after_send is not None:
             self.after_send()
         if self.failures:
@@ -183,6 +192,7 @@ async def test_transient_delivery_failure_retries_once_with_the_same_nonce() -> 
 
     assert len(sender.calls) == 2
     assert sender.calls[0][2] == sender.calls[1][2]
+    assert sender.reconciliation_calls == [False, True]
     assert telemetry.events[-1] == (
         "farewell_delivery_completed",
         {"delivery_attempt_count": 2},

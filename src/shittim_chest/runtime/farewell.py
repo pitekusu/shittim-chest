@@ -49,6 +49,7 @@ class _FarewellSender(Protocol):
         participant: ParticipantSlot,
         content: str,
         nonce: str,
+        reconcile: bool = False,
     ) -> None: ...
 
 
@@ -170,6 +171,7 @@ class IdleFarewellCoordinator:
                             participant=participant,
                             content=content,
                             nonce=nonce,
+                            reconcile=attempts > 1,
                         )
                     except asyncio.CancelledError:
                         raise
