@@ -63,8 +63,8 @@ def _policy(
         policy_id=policy_id,
         model=model,
         reasoning_mode=reasoning_mode,
-        initial_opinion=PhaseBudget(ReasoningEffort.HIGH, 1_200),
-        final_proposal=PhaseBudget(ReasoningEffort.HIGH, 1_600),
+        initial_opinion=PhaseBudget(ReasoningEffort.HIGH, 2_400),
+        final_proposal=PhaseBudget(ReasoningEffort.HIGH, 4_000),
         vote=PhaseBudget(ReasoningEffort.MEDIUM, 800),
         decision=PhaseBudget(ReasoningEffort.HIGH, 1_200),
     )

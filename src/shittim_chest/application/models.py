@@ -288,8 +288,12 @@ class GenerationCheckpoint:
             if self.settled_at is not None or self.error_code is not None:
                 raise ValueError("in-flight generation cannot be settled")
         elif self.status is GenerationStatus.COMPLETED:
-            if self.logical_attempt not in {1, 2} or self.settled_at is None:
-                raise ValueError("completed generation requires a settled claim")
+            if self.settled_at is None:
+                raise ValueError("completed generation requires a settlement")
+            if self.logical_attempt == 0 and any(value is not None for value in claim_values):
+                raise ValueError("reused generation cannot contain a provider claim")
+            if self.logical_attempt > 0 and self.claim_owner is None:
+                raise ValueError("called completed generation requires its provider claim")
             if self.error_code is not None:
                 raise ValueError("completed generation cannot contain an error")
         elif self.status is GenerationStatus.FAILED:
@@ -316,6 +320,25 @@ class GenerationCheckpoint:
             status=GenerationStatus.PLANNED,
             logical_attempt=0,
             planned_at=at,
+        )
+
+    @classmethod
+    def reused(
+        cls,
+        *,
+        phase: DebatePhase,
+        participant: ParticipantSlot,
+        at: datetime,
+    ) -> GenerationCheckpoint:
+        """Bind one already durable output to a retry without another provider call."""
+
+        return cls(
+            phase=phase,
+            participant=participant,
+            status=GenerationStatus.COMPLETED,
+            logical_attempt=0,
+            planned_at=at,
+            settled_at=at,
         )
 
     def claim(self, *, lease: LeaseGrant, at: datetime) -> GenerationCheckpoint:

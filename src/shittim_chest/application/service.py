@@ -585,7 +585,11 @@ class DebateApplication:
             lease=None,
             error_code=None,
             final_decision=None,
-            generation_checkpoints=(),
+            generation_checkpoints=_retry_generation_checkpoints(
+                failed,
+                phase=retry_state.phase,
+                at=now,
+            ),
             terminal_delivery=None,
         )
         persisted = await self._repository.create_retry(
@@ -2441,6 +2445,44 @@ def _generation_checkpoints_with(
             (*retained, updated),
             key=lambda checkpoint: (checkpoint.phase.value, checkpoint.participant.value),
         )
+    )
+
+
+def _retry_generation_checkpoints(
+    failed: DebateSnapshot,
+    *,
+    phase: DebatePhase,
+    at: datetime,
+) -> tuple[GenerationCheckpoint, ...]:
+    """Rebuild only the failed phase while reusing its already durable outputs."""
+
+    completed_participants: tuple[ParticipantSlot, ...]
+    if phase is DebatePhase.COLLECTING_INITIAL_OPINIONS:
+        completed_participants = tuple(opinion.participant for opinion in failed.initial_opinions)
+    elif phase is DebatePhase.COLLECTING_FINAL_PROPOSALS:
+        completed_participants = tuple(proposal.participant for proposal in failed.final_proposals)
+    elif phase is DebatePhase.SELECTING_WINNER:
+        completed_participants = tuple(vote.voter for vote in failed.votes)
+    else:
+        return ()
+    if len(completed_participants) != len(set(completed_participants)):
+        raise RepositoryConflict("retry generation output participant is duplicated")
+    completed = frozenset(completed_participants)
+    return tuple(
+        (
+            GenerationCheckpoint.reused(
+                phase=phase,
+                participant=participant,
+                at=at,
+            )
+            if participant in completed
+            else GenerationCheckpoint.planned(
+                phase=phase,
+                participant=participant,
+                at=at,
+            )
+        )
+        for participant in PARTICIPANTS
     )
 
 

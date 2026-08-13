@@ -311,6 +311,25 @@ def test_generation_checkpoint_collection_is_strict_and_v7_absence_is_compatible
         deserialize_snapshot(malformed)
 
 
+def test_reused_generation_checkpoints_round_trip_without_provider_claims() -> None:
+    source = snapshot()
+    checkpoints = tuple(
+        GenerationCheckpoint.reused(
+            phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+            participant=participant,
+            at=source.state.updated_at,
+        )
+        for participant in PARTICIPANTS
+    )
+    versioned = replace(source, generation_checkpoints=checkpoints)
+
+    restored = deserialize_snapshot(serialize_snapshot(versioned))
+
+    assert restored == versioned
+    assert all(checkpoint.logical_attempt == 0 for checkpoint in restored.generation_checkpoints)
+    assert all(checkpoint.claim_owner is None for checkpoint in restored.generation_checkpoints)
+
+
 def test_phase_delivery_pointer_matches_the_complete_plan() -> None:
     source = snapshot()
     staged_at = source.state.updated_at + timedelta(seconds=1)

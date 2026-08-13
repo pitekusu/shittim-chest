@@ -369,6 +369,24 @@ def test_generation_checkpoint_allows_only_two_successor_fenced_calls() -> None:
     assert completed.logical_attempt == 2
 
 
+def test_generation_checkpoint_can_bind_a_reused_output_without_a_provider_call() -> None:
+    checkpoint = GenerationCheckpoint.reused(
+        phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+        participant=ParticipantSlot.PARTICIPANT_C,
+        at=NOW,
+    )
+
+    assert checkpoint.status is GenerationStatus.COMPLETED
+    assert checkpoint.logical_attempt == 0
+    assert checkpoint.claim_owner is None
+    assert checkpoint.settled_at == NOW
+    with pytest.raises(ValueError, match="not claimable"):
+        checkpoint.claim(
+            lease=LeaseGrant("worker", 0, 1, NOW + timedelta(minutes=1)),
+            at=NOW + timedelta(seconds=1),
+        )
+
+
 def test_generation_checkpoint_exhausts_without_a_third_provider_call() -> None:
     first_lease = LeaseGrant("worker-1", 0, 1, NOW + timedelta(minutes=1))
     second_lease = LeaseGrant("worker-2", 1, 2, NOW + timedelta(minutes=2))
@@ -467,7 +485,7 @@ def test_generation_checkpoint_rejects_malformed_persisted_states() -> None:
             },
             "cannot be settled",
         ),
-        ({"status": GenerationStatus.COMPLETED, "logical_attempt": 1}, "settled claim"),
+        ({"status": GenerationStatus.COMPLETED, "logical_attempt": 1}, "settlement"),
         (
             {
                 **claimed,

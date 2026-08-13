@@ -47,6 +47,13 @@ class OpenAIFailureRecord:
     diagnostic_context: str | None = None
     diagnostic_kind: str | None = None
     response_id: str | None = None
+    model: str | None = None
+    reasoning_mode: str | None = None
+    max_output_tokens: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
     attempt_count: int | None = None
     web_search_source_count: int | None = None
     realtime_feed_count: int | None = None

@@ -1836,6 +1836,64 @@ async def test_failed_attempt_retry_preserves_source_and_reuses_completed_artifa
 
 
 @pytest.mark.asyncio
+async def test_retry_reuses_partial_final_proposals_and_generates_only_the_missing_output(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.proposal_errors[ParticipantSlot.PARTICIPANT_A] = GenerationProviderError(
+        "openai_incomplete",
+        "content-free provider failure",
+        retryable=False,
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = repository.current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert {proposal.participant for proposal in failed.final_proposals} == {
+        ParticipantSlot.PARTICIPANT_B,
+        ParticipantSlot.PARTICIPANT_C,
+    }
+    del openai.proposal_errors[ParticipantSlot.PARTICIPANT_A]
+
+    await app.retry_debate(
+        RetryDebateCommand(accepted.debate_id, "requester", "retry-partial-proposals")
+    )
+
+    retried = repository.current[accepted.debate_id]
+    checkpoints = {
+        checkpoint.participant: checkpoint
+        for checkpoint in retried.generation_checkpoints
+        if checkpoint.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+    }
+    assert checkpoints[ParticipantSlot.PARTICIPANT_A].status is GenerationStatus.PLANNED
+    assert checkpoints[ParticipantSlot.PARTICIPANT_B].status is GenerationStatus.COMPLETED
+    assert checkpoints[ParticipantSlot.PARTICIPANT_C].status is GenerationStatus.COMPLETED
+    assert checkpoints[ParticipantSlot.PARTICIPANT_B].logical_attempt == 0
+    assert checkpoints[ParticipantSlot.PARTICIPANT_C].logical_attempt == 0
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = repository.current[accepted.debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert openai.proposal_calls.count(ParticipantSlot.PARTICIPANT_A) == 2
+    assert openai.proposal_calls.count(ParticipantSlot.PARTICIPANT_B) == 1
+    assert openai.proposal_calls.count(ParticipantSlot.PARTICIPANT_C) == 1
+
+
+@pytest.mark.asyncio
 async def test_retry_operation_is_idempotent(
     dependencies: tuple[
         FakeClock,

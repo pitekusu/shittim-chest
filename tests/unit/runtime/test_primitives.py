@@ -74,6 +74,13 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
                 diagnostic_context="url_citation_url",
                 diagnostic_kind="object",
                 response_id="response-failed",
+                model="model-placeholder",
+                reasoning_mode="standard",
+                max_output_tokens=4_000,
+                input_tokens=100,
+                output_tokens=40,
+                cached_input_tokens=20,
+                reasoning_tokens=10,
                 attempt_count=2,
                 web_search_source_count=3,
                 realtime_feed_count=1,
@@ -105,6 +112,13 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
     assert payloads[2]["diagnostic_context"] == "url_citation_url"
     assert payloads[2]["diagnostic_kind"] == "object"
     assert payloads[2]["response_id"] == "response-failed"
+    assert payloads[2]["model"] == "model-placeholder"
+    assert payloads[2]["reasoning_mode"] == "standard"
+    assert payloads[2]["max_output_tokens"] == 4_000
+    assert payloads[2]["input_tokens"] == 100
+    assert payloads[2]["output_tokens"] == 40
+    assert payloads[2]["cached_input_tokens"] == 20
+    assert payloads[2]["reasoning_tokens"] == 10
     assert payloads[2]["attempt_count"] == 2
     assert payloads[2]["web_search_source_count"] == 3
     assert payloads[2]["realtime_feed_count"] == 1

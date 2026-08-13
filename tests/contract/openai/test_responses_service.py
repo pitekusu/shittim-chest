@@ -253,6 +253,12 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
         {"effort": "medium"},
         {"effort": "high"},
     ]
+    assert [request["max_output_tokens"] for request in server.requests] == [
+        2_400,
+        4_000,
+        800,
+        1_200,
+    ]
     assert "persona for participant-a" in server.requests[-1]["instructions"]
     assert "victory_message" in server.requests[-1]["instructions"]
     assert "unmistakably exuberant first-person celebration" in server.requests[-1]["instructions"]
@@ -316,6 +322,17 @@ async def test_incomplete_and_missing_parsed_output_are_distinct() -> None:
         "openai_incomplete",
         "openai_invalid_output",
     ]
+    failure = observer.failures[0]
+    assert failure.diagnostic_context == "response_status"
+    assert failure.diagnostic_kind == "max_output_tokens"
+    assert failure.response_id == "resp_test"
+    assert failure.model == "gpt-5.6-luna"
+    assert failure.reasoning_mode == "standard"
+    assert failure.max_output_tokens == 2_400
+    assert failure.input_tokens == 100
+    assert failure.output_tokens == 30
+    assert failure.cached_input_tokens == 20
+    assert failure.reasoning_tokens == 10
 
 
 @pytest.mark.asyncio
