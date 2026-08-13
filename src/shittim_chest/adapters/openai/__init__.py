@@ -1,6 +1,10 @@
 """OpenAI Responses API adapter with strict structured-output boundaries."""
 
-from shittim_chest.adapters.openai.config import OpenAIAdapterConfig, PersonaPrompts
+from shittim_chest.adapters.openai.config import (
+    OpenAIAdapterConfig,
+    ParticipantProfile,
+    ParticipantProfiles,
+)
 from shittim_chest.adapters.openai.errors import (
     OpenAIAdapterError,
     OpenAIConfigurationError,
@@ -20,7 +24,6 @@ from shittim_chest.adapters.openai.observability import (
     OpenAIUsageRecorder,
 )
 from shittim_chest.adapters.openai.service import OpenAIResponsesService, create_openai_client
-from shittim_chest.application.errors import RequiredEvidenceUnavailable
 
 __all__ = (
     "NullOpenAIUsageRecorder",
@@ -39,7 +42,7 @@ __all__ = (
     "OpenAIUsageRecord",
     "OpenAIUsageRecorder",
     "OpenAIWebEvidenceService",
-    "PersonaPrompts",
-    "RequiredEvidenceUnavailable",
+    "ParticipantProfile",
+    "ParticipantProfiles",
     "create_openai_client",
 )

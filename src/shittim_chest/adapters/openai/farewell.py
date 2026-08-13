@@ -24,7 +24,7 @@ from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from openai.types.responses.response_output_text import AnnotationURLCitation, ResponseOutputText
 from pydantic import ValidationError
 
-from shittim_chest.adapters.openai.config import OpenAIAdapterConfig, PersonaPrompts
+from shittim_chest.adapters.openai.config import OpenAIAdapterConfig, ParticipantProfiles
 from shittim_chest.adapters.openai.errors import (
     OpenAIAdapterError,
     OpenAIConfigurationError,
@@ -66,7 +66,7 @@ class OpenAIFarewellGenerator:
     """Generate one cited greeting with one bounded application-level retry."""
 
     client: AsyncOpenAI
-    personas: PersonaPrompts
+    profiles: ParticipantProfiles
     limiter: OpenAIRequestLimiter
     config: OpenAIAdapterConfig = field(default_factory=OpenAIAdapterConfig)
     recorder: OpenAIUsageRecorder = field(default_factory=NullOpenAIUsageRecorder)
@@ -178,7 +178,9 @@ class OpenAIFarewellGenerator:
         async with self.limiter.slot():
             return await self.client.responses.parse(
                 model=self.config.model,
-                instructions=farewell_instructions(self.personas.for_participant(participant)),
+                instructions=farewell_instructions(
+                    self.profiles.for_participant(participant).system_prompt
+                ),
                 input=farewell_input(
                     local_datetime=time_context.local_datetime,
                     period=time_context.period,

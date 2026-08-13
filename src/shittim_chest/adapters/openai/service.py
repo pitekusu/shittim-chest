@@ -24,7 +24,7 @@ from pydantic import BaseModel, ValidationError
 
 from shittim_chest.adapters.openai.config import (
     OpenAIAdapterConfig,
-    PersonaPrompts,
+    ParticipantProfiles,
     PhaseSettings,
 )
 from shittim_chest.adapters.openai.errors import (
@@ -49,6 +49,7 @@ from shittim_chest.adapters.openai.prompts import (
     final_proposal_instructions,
     initial_opinion_input,
     participant_instructions,
+    private_participant_instructions,
     vote_input,
     winner_decision_instructions,
 )
@@ -95,7 +96,7 @@ class OpenAIResponsesService:
     """Generate domain models through stable, non-beta Responses API calls."""
 
     client: AsyncOpenAI
-    personas: PersonaPrompts
+    profiles: ParticipantProfiles
     limiter: OpenAIRequestLimiter
     config: OpenAIAdapterConfig = field(default_factory=OpenAIAdapterConfig)
     recorder: OpenAIUsageRecorder = field(default_factory=NullOpenAIUsageRecorder)
@@ -110,7 +111,7 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="initial_opinion",
             schema=OpinionOutputV1,
-            instructions=participant_instructions(self.personas.for_participant(participant)),
+            instructions=participant_instructions(self.profiles, participant),
             input_text=initial_opinion_input(question, evidence),
             settings=self.config.initial_opinion,
         )
@@ -127,7 +128,7 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="final_proposal",
             schema=FinalProposalOutputV1,
-            instructions=final_proposal_instructions(self.personas.for_participant(participant)),
+            instructions=final_proposal_instructions(self.profiles, participant),
             input_text=final_proposal_input(question, evidence, initial_opinions),
             settings=self.config.final_proposal,
         )
@@ -144,7 +145,9 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="vote",
             schema=VoteOutputV1,
-            instructions=participant_instructions(self.personas.for_participant(voter)),
+            instructions=private_participant_instructions(
+                self.profiles.for_participant(voter).system_prompt
+            ),
             input_text=vote_input(question, evidence, candidates),
             settings=self.config.vote,
         )
@@ -168,9 +171,7 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="decision",
             schema=DecisionOutputV1,
-            instructions=winner_decision_instructions(
-                self.personas.for_participant(voting_result.winner)
-            ),
+            instructions=winner_decision_instructions(self.profiles, voting_result.winner),
             input_text=decision_input(question, evidence, proposals, voting_result),
             settings=self.config.decision,
         )

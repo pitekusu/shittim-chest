@@ -24,7 +24,8 @@ from shittim_chest.adapters.openai import (
     OpenAIResponsesService,
     OpenAIUnavailable,
     OpenAIUsageRecord,
-    PersonaPrompts,
+    ParticipantProfile,
+    ParticipantProfiles,
     create_openai_client,
 )
 from shittim_chest.application import (
@@ -71,8 +72,16 @@ class ResponseServer:
         return httpx.Response(status_code, json=body, request=request)
 
 
-def personas() -> PersonaPrompts:
-    return PersonaPrompts({slot: f"persona for {slot.value}" for slot in PARTICIPANTS})
+def profiles() -> ParticipantProfiles:
+    return ParticipantProfiles(
+        {
+            slot: ParticipantProfile(
+                display_name=f"Display {slot.value}",
+                system_prompt=f"persona for {slot.value}",
+            )
+            for slot in PARTICIPANTS
+        }
+    )
 
 
 def response_with(output: dict[str, object], *, response_id: str = "resp_test") -> dict[str, Any]:
@@ -126,7 +135,7 @@ async def service_for(
     return (
         OpenAIResponsesService(
             client,
-            personas(),
+            profiles(),
             OpenAIRequestLimiter(),
             config=config or OpenAIAdapterConfig(),
             recorder=observer,
@@ -269,6 +278,19 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     assert (
         "Do not use a shared catchphrase or fixed template" in server.requests[-1]["instructions"]
     )
+    for request_index in (0, 1, 3):
+        instructions = server.requests[request_index]["instructions"]
+        assert instructions.count("<participant_roster_json>") == 1
+        assert "<current_participant_slot>participant-a</current_participant_slot>" in instructions
+        for slot in PARTICIPANTS:
+            assert instructions.count(f"Display {slot.value}") == 1
+            assert instructions.count(f"persona for {slot.value}") == 1
+    vote_instructions = server.requests[2]["instructions"]
+    assert "<participant_roster_json>" not in vote_instructions
+    assert "persona for participant-a" in vote_instructions
+    assert "Display participant-a" not in vote_instructions
+    assert "persona for participant-b" not in vote_instructions
+    assert "persona for participant-c" not in vote_instructions
     assert len(server.requests) == 4
 
 
@@ -457,7 +479,7 @@ async def test_transport_errors_are_retryable_unavailable_failures(
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(failing_handler))
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=0)
     observer = RecordingObserver()
-    service = OpenAIResponsesService(client, personas(), OpenAIRequestLimiter(), recorder=observer)
+    service = OpenAIResponsesService(client, profiles(), OpenAIRequestLimiter(), recorder=observer)
     try:
         with pytest.raises(OpenAIUnavailable) as raised:
             await service.generate_initial_opinion(
@@ -500,7 +522,7 @@ async def test_process_concurrency_never_exceeds_configured_limit() -> None:
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(blocking_handler))
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=0)
-    service = OpenAIResponsesService(client, personas(), OpenAIRequestLimiter())
+    service = OpenAIResponsesService(client, profiles(), OpenAIRequestLimiter())
     try:
         async with asyncio.TaskGroup() as group:
             for _ in range(7):
@@ -535,7 +557,7 @@ async def test_cancellation_is_rethrown_without_failure_telemetry() -> None:
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(blocking_handler))
     client = AsyncOpenAI(api_key="test-key", http_client=http_client, max_retries=0)
     observer = RecordingObserver()
-    service = OpenAIResponsesService(client, personas(), OpenAIRequestLimiter(), recorder=observer)
+    service = OpenAIResponsesService(client, profiles(), OpenAIRequestLimiter(), recorder=observer)
     task = asyncio.create_task(
         service.generate_initial_opinion(
             participant=ParticipantSlot.PARTICIPANT_A,
@@ -584,13 +606,37 @@ async def test_domain_rejects_self_vote_after_schema_parsing() -> None:
     assert raised.value.code == "self_vote"
 
 
-def test_config_and_persona_prompts_fail_closed() -> None:
+def test_config_and_participant_profiles_fail_closed() -> None:
     with pytest.raises(ValueError, match="exactly"):
-        PersonaPrompts({ParticipantSlot.PARTICIPANT_A: "only one"})
+        ParticipantProfiles(
+            {
+                ParticipantSlot.PARTICIPANT_A: ParticipantProfile(
+                    display_name="A",
+                    system_prompt="only one",
+                )
+            }
+        )
     with pytest.raises(ValueError, match="3,500"):
-        PersonaPrompts({slot: "あ" * 1_167 for slot in PARTICIPANTS})
+        ParticipantProfiles(
+            {
+                slot: ParticipantProfile(
+                    display_name=slot.value,
+                    system_prompt="あ" * 1_167,
+                )
+                for slot in PARTICIPANTS
+            }
+        )
     with pytest.raises(ValueError, match="empty"):
-        PersonaPrompts({slot: " " for slot in PARTICIPANTS})
+        ParticipantProfile(display_name="A", system_prompt=" ")
+    with pytest.raises(ValueError, match="display name"):
+        ParticipantProfile(display_name=" ", system_prompt="persona")
+    with pytest.raises(ValueError, match="distinct"):
+        ParticipantProfiles(
+            {
+                slot: ParticipantProfile(display_name="same", system_prompt=slot.value)
+                for slot in PARTICIPANTS
+            }
+        )
     with pytest.raises(ValueError, match="concurrency"):
         OpenAIAdapterConfig(max_concurrency=7)
     with pytest.raises(ValueError, match="model"):

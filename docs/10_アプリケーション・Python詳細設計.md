@@ -59,7 +59,7 @@ tools/
 | `DebateErrorCode` | user向け表示と再試行可否を分離した安定code |
 | `BotIdentity` | private runtime config由来のapplication ID、slot、表示名、role |
 | `PersonaSpec` | slot、config version、schema version、prompt hash。prompt本文は保持しない |
-| `EvidenceBundle` | immutable。要約、`none/optional/required`、router rules version/reason、検索状態、response ID、source URL/title/canonical metadata、UTC取得時刻、metadata SHA-256を含む |
+| `EvidenceBundle` | immutable。要約、検索要否・状態、agentic search version/reason、response ID、source URL/title/canonical metadata、UTC取得時刻、metadata SHA-256を含む。旧recordの`required`値もdeserialize可能とする |
 | `OutboxOperation` | operation ID、generic Bot slot、22文字nonce、content hash、claim/retry/chunk状態 |
 | `DiscordHttpOperation` | 署名検証後のcommand/componentをSDK型とInteraction tokenから切り離したimmutable input |
 | `IngressRequest` / `IngressClaimFence` | 最大20件FIFOの耐久操作と、owner・claim expiry・delivery attemptに結び付くPII非保持のwrite fence |
@@ -80,7 +80,7 @@ async def retry_debate(command: RetryDebateCommand) -> AcceptedRetry: ...
 async def resume_recoverable() -> None: ...
 ```
 
-Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`DiscordOutboxRepository`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は質問ごとに最大1つのResponses requestでimmutableな共通Evidenceを準備し、`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher.publish_persisted`はexpected leased `DebateSnapshot`とattempt内operation IDを受け、永続化・claim済みoutbox operation以外を投稿してはならない。既に`SENT`なら同じrecord、claim不能なら`None`、成功または履歴照合成功なら`SENT` recordを返す。必須Evidence取得不能は`required_evidence_unavailable`としてFAILEDへ保存し、任意取得不能は`optional_unavailable`を保存して続行する。
+Protocolは`Clock`、`IdGenerator`、`Metrics`、`DiscordGateway`、`DiscordPublisher`、`DiscordOutboxRepository`、`EvidenceService`、`CandidateOrderer`、`OpenAIService`、`DebateRepository`とする。`EvidenceService`は全質問で最大1つのResponses requestを行い、modelが必要時だけWeb searchを選択してimmutableな共通Evidenceを準備する。既知のprovider・validation・citation障害は`optional_unavailable`の空Evidenceへ変換して討論を続け、未分類のprogram障害だけを伝播する。`CandidateOrderer`は投票者ごとの候補順random化を注入可能にする。`DiscordPublisher.publish_persisted`はexpected leased `DebateSnapshot`とattempt内operation IDを受け、永続化・claim済みoutbox operation以外を投稿してはならない。既に`SENT`なら同じrecord、claim不能なら`None`、成功または履歴照合成功なら`SENT` recordを返す。
 
 Scale-to-Zero用に`IngressRepository`、`StatusPublicationRepository`、`RuntimeStateRepository`、`RuntimeActivityInspector`、`EcsRuntimeControl`、`StatusPublicationTrigger`、`RuntimeReconciliationTrigger`、`ParameterReader`、`DebateLookup`をProtocol境界とする。`DiscordIngressApplication.accept()`は署名検証済みの`DiscordHttpOperation`を検証・永続化してからStatus/Reconcilerをbest-effortで起動する。`IngressDrainer`はRuntime READY/BUSYとrecovery完了をgateにFIFO claimを既存accept/retry/cancel use caseへ接続する。`RuntimeReconciler`は3分・15分deadline、lost wake、desired count、30分IDLEを収束させる。Lambda、boto3、API Gateway eventはこれらのProtocolの外側に限定する。
 
@@ -162,6 +162,8 @@ ECSが環境変数へ注入する値は`SHITTIM_ENVIRONMENT=production`、`AWS_R
 Lambdaは必要最小限の別設定を読み、DiscordIngressにはmoderator ApplicationのPublic Key、Guild/channel allowlist、table名、Status/Reconciler function名を注入する。Public KeyはBot tokenではない。Status Publisherだけが公開Status message用moderator tokenを必要とし、Ingress LambdaはInteraction tokenをhandler scopeから出さず、どのLambdaもOpenAI keyやpersona promptを読まない。
 
 `RuntimeConfig` schema v2はGuild ID、allowed channel IDs、4 Application ID、allowed channel内の必須`farewell_channel_id`を保持する。`PersonaConfig`のslotは`moderator`、`participant-a`、`participant-b`、`participant-c`だけを許可し、display nameとsystem promptを保持する。公開sourceにはschemaと汎用sampleだけを置き、本番値をfileへfallbackしない。
+
+production compositionは3 participantの`PersonaConfig`から、slot、display name、system promptを持つimmutableな`ParticipantProfiles`を構築する。slot過不足、空・重複display name、空・3,500 UTF-8 bytes超過promptはOpenAI request前に拒否する。初回意見・最終案・winner発表だけがこの共通名簿を受け、匿名投票と帰宅挨拶は選択された本人のpromptだけを受け取る。
 
 `bootstrap.py`だけがproduction具体依存を組み立てる。processごとにDynamoDB client 1つ、`AsyncOpenAI` 1つ、共有Semaphore 1つ、Discord client 4つ、衝突しないlease owner IDを生成し、repository、publisher、recovery、application、interaction controller、lifecycleへ注入する。`ProductionRuntime.aclose()`はDiscord、OpenAI、DynamoDBの順に全所有clientを冪等にcloseする。`python -m shittim_chest`は設定errorとruntime errorを本文なしの安定codeで終了し、通常の終了は0、設定不正は2、runtime failureは1とする。`.env.example`は変数名とgeneric placeholderだけを公開し、本番IDやsecretを保持しない。
 

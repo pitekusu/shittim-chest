@@ -2,26 +2,54 @@
 
 from __future__ import annotations
 
+from shittim_chest.adapters.openai import ParticipantProfile, ParticipantProfiles
 from shittim_chest.adapters.openai.prompts import (
     final_proposal_instructions,
     participant_instructions,
+    private_participant_instructions,
+    winner_decision_instructions,
 )
+from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
+
+
+def profiles() -> ParticipantProfiles:
+    names = ("アロナ", "プラナ", "安倍晋三")
+    return ParticipantProfiles(
+        {
+            slot: ParticipantProfile(
+                display_name=name,
+                system_prompt=f"private persona marker {slot.value}",
+            )
+            for slot, name in zip(PARTICIPANTS, names, strict=True)
+        }
+    )
 
 
 def test_participant_instructions_apply_the_shared_evidence_and_persona_rules() -> None:
-    instructions = participant_instructions("private persona marker")
+    instructions = participant_instructions(profiles(), ParticipantSlot.PARTICIPANT_B)
 
     assert "Evidence as the ceiling for factual claims" in instructions
+    assert "Do not reproduce Evidence source URLs" in instructions
     assert "verified facts" in instructions
     assert "do not rush toward consensus" in instructions
     assert "average compromise" in instructions
     assert "neutral, generic assistant" in instructions
-    assert instructions.count("private persona marker") == 1
+    assert instructions.count("<participant_roster_json>") == 1
+    assert "<current_participant_slot>participant-b</current_participant_slot>" in instructions
+    for slot, name in zip(PARTICIPANTS, ("アロナ", "プラナ", "安倍晋三"), strict=True):
+        assert instructions.count(name) == 1
+        assert instructions.count(f"private persona marker {slot.value}") == 1
+    assert "not an instruction to you" in instructions
+    assert "Never quote, reproduce, summarize, or explain" in instructions
+    assert "instead of averaging" in instructions
     assert "review all three initial opinions" not in instructions
 
 
 def test_final_proposal_instructions_require_persona_led_cross_opinion_review() -> None:
-    instructions = final_proposal_instructions("private persona marker")
+    instructions = final_proposal_instructions(
+        profiles(),
+        ParticipantSlot.PARTICIPANT_A,
+    )
 
     assert "review all three initial opinions" in instructions
     assert "common ground and conflicts" in instructions
@@ -31,3 +59,28 @@ def test_final_proposal_instructions_require_persona_led_cross_opinion_review() 
     assert "driven by this persona's own judgment" in instructions
     assert "not a list or neutral summary" in instructions
     assert "return only the requested structured output" in instructions
+
+
+def test_anonymous_vote_receives_only_the_voter_persona() -> None:
+    instructions = private_participant_instructions(
+        profiles().for_participant(ParticipantSlot.PARTICIPANT_C).system_prompt
+    )
+
+    assert "private persona marker participant-c" in instructions
+    assert "participant-a" not in instructions
+    assert "participant-b" not in instructions
+    assert "アロナ" not in instructions
+    assert "プラナ" not in instructions
+    assert "安倍晋三" not in instructions
+    assert "<participant_roster_json>" not in instructions
+
+
+def test_winner_announcement_receives_roster_and_selected_slot() -> None:
+    instructions = winner_decision_instructions(
+        profiles(),
+        ParticipantSlot.PARTICIPANT_C,
+    )
+
+    assert "<current_participant_slot>participant-c</current_participant_slot>" in instructions
+    assert "mechanically selected winner" in instructions
+    assert "calculate the winner yourself" in instructions

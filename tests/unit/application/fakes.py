@@ -156,6 +156,7 @@ class FakeOpenAI:
         self.proposal_calls: list[ParticipantSlot] = []
         self.vote_calls: list[tuple[ParticipantSlot, tuple[ParticipantSlot, ...]]] = []
         self.decision_calls: list[ParticipantSlot] = []
+        self.evidence_calls: list[EvidenceBundle] = []
         self.decision_errors: list[BaseException] = []
         self.initial_errors: dict[ParticipantSlot, BaseException] = {}
         self.initial_participant_override: dict[ParticipantSlot, ParticipantSlot] = {}
@@ -175,7 +176,8 @@ class FakeOpenAI:
         question: str,
         evidence: EvidenceBundle,
     ) -> InitialOpinion:
-        del question, evidence
+        del question
+        self.evidence_calls.append(evidence)
         self.initial_calls.append(participant)
         initial_error = self.initial_errors.get(participant)
         if initial_error is not None:
@@ -202,7 +204,8 @@ class FakeOpenAI:
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
     ) -> FinalProposal:
-        del question, evidence, initial_opinions
+        del question, initial_opinions
+        self.evidence_calls.append(evidence)
         self.proposal_calls.append(participant)
         proposal_error = self.proposal_errors.get(participant)
         if proposal_error is not None:
@@ -221,7 +224,8 @@ class FakeOpenAI:
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
     ) -> Vote:
-        del question, evidence
+        del question
+        self.evidence_calls.append(evidence)
         candidate_slots = tuple(candidate.participant for candidate in candidates)
         self.vote_calls.append((voter, candidate_slots))
         vote_error = self.vote_errors.get(voter)
@@ -242,7 +246,8 @@ class FakeOpenAI:
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
     ) -> FinalDecision:
-        del question, evidence, proposals
+        del question, proposals
+        self.evidence_calls.append(evidence)
         self.decision_calls.append(voting_result.winner)
         if self.decision_delay:
             await asyncio.sleep(self.decision_delay)

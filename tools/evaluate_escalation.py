@@ -22,7 +22,8 @@ from shittim_chest.adapters.openai import (
     OpenAIRequestLimiter,
     OpenAIResponsesService,
     OpenAIUsageRecord,
-    PersonaPrompts,
+    ParticipantProfile,
+    ParticipantProfiles,
     create_openai_client,
 )
 from shittim_chest.adapters.openai.errors import OpenAIAdapterError
@@ -195,14 +196,22 @@ async def evaluate(
     cases = load_cases(args.fixture, limit=args.limit)
     limiter = OpenAIRequestLimiter()
     client = create_openai_client(api_key=api_key)
-    personas = PersonaPrompts({slot: _generic_persona(slot) for slot in PARTICIPANTS})
+    profiles = ParticipantProfiles(
+        {
+            slot: ParticipantProfile(
+                display_name=slot.value,
+                system_prompt=_generic_persona(slot),
+            )
+            for slot in PARTICIPANTS
+        }
+    )
     runners: dict[str, tuple[OpenAIResponsesService, UsageCollector]] = {}
     for policy in (TERRA_STANDARD, LUNA_PRO):
         recorder = UsageCollector()
         runners[policy.policy_id.value] = (
             OpenAIResponsesService(
                 client,
-                personas,
+                profiles,
                 limiter,
                 config=OpenAIAdapterConfig(policy=policy),
                 recorder=recorder,

@@ -50,11 +50,13 @@ from shittim_chest.domain import (
     DebatePhase,
     DebateState,
     EvidenceBundle,
+    EvidenceSearchStatus,
     FinalDecision,
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
     RecoveryState,
+    SearchRequirement,
     Vote,
 )
 from tests.unit.application.fakes import (
@@ -467,6 +469,13 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
 ) -> None:
     app = make_application(dependencies)
     _, _, metrics, _, evidence, openai, repository, orderer = dependencies
+    evidence.bundle = EvidenceBundle(
+        required_search_satisfied=False,
+        search_requirement=SearchRequirement.OPTIONAL,
+        search_status=EvidenceSearchStatus.OPTIONAL_UNAVAILABLE,
+        router_rules_version="agentic-search-v1",
+        routing_reason="agentic_search_unavailable",
+    )
 
     accepted = await accept_bound_debate(app)
     await app.run_debate(accepted.debate_id)
@@ -480,6 +489,8 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert completed.escalation_assessment.split_vote is True
     assert completed.escalation_assessment.executed is False
     assert evidence.calls == ["What should we eat?"]
+    assert len(openai.evidence_calls) == 10
+    assert all(bundle is evidence.bundle for bundle in openai.evidence_calls)
     assert set(openai.initial_calls) == set(ParticipantSlot)
     assert set(openai.proposal_calls) == set(ParticipantSlot)
     assert len(openai.vote_calls) == 3
