@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal
+from unicodedata import normalize
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -200,7 +201,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         for participant in PARTICIPANTS:
             display_name = personas[DiscordBotSlot(participant.value)].display_name
             sanitize_discord_model_text(display_name)
-            participant_names.append(display_name.strip().casefold())
+            participant_names.append(normalize("NFC", display_name.strip()).casefold())
         if len(set(participant_names)) != len(PARTICIPANTS):
             raise ValueError("participant display names must be distinct")
         versions = {runtime_version} | {persona.config_version for persona in personas.values()}

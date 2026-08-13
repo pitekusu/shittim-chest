@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from unicodedata import normalize
 
 from shittim_chest.application.generation_policy import (
     PRODUCTION_POLICY,
@@ -56,7 +57,7 @@ class ParticipantProfile:
     system_prompt: str = field(repr=False)
 
     def __post_init__(self) -> None:
-        display_name = self.display_name.strip()
+        display_name = normalize("NFC", self.display_name.strip())
         if not display_name:
             raise ValueError("participant display name must not be empty")
         if not self.system_prompt.strip():
@@ -76,7 +77,9 @@ class ParticipantProfiles:
         copied = dict(self.values)
         if set(copied) != set(PARTICIPANTS):
             raise ValueError("profiles must contain exactly the three participant slots")
-        normalized_names = [profile.display_name.strip().casefold() for profile in copied.values()]
+        normalized_names = [
+            normalize("NFC", profile.display_name.strip()).casefold() for profile in copied.values()
+        ]
         if len(set(normalized_names)) != len(PARTICIPANTS):
             raise ValueError("participant display names must be distinct")
         object.__setattr__(self, "values", MappingProxyType(copied))

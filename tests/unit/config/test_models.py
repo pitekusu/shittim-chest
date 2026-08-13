@@ -93,6 +93,21 @@ def test_load_bootstrap_config_rejects_renderer_incompatible_display_name() -> N
     assert str(captured.value) == "startup_configuration_invalid"
 
 
+def test_load_bootstrap_config_rejects_canonically_equivalent_participant_names() -> None:
+    environment = _valid_environment()
+    participant_a = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"])
+    participant_b = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_B_JSON"])
+    participant_a["display_name"] = "\u00e9"
+    participant_b["display_name"] = "e\u0301"
+    environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"] = json.dumps(participant_a)
+    environment["SHITTIM_PERSONA_PARTICIPANT_B_JSON"] = json.dumps(participant_b)
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        load_bootstrap_config(environment)
+
+    assert str(captured.value) == "startup_configuration_invalid"
+
+
 def test_load_bootstrap_config_does_not_apply_vote_renderer_to_moderator_name() -> None:
     environment = _valid_environment()
     persona = json.loads(environment["SHITTIM_PERSONA_MODERATOR_JSON"])

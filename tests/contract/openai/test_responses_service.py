@@ -637,6 +637,23 @@ def test_config_and_participant_profiles_fail_closed() -> None:
                 for slot in PARTICIPANTS
             }
         )
+    with pytest.raises(ValueError, match="distinct"):
+        ParticipantProfiles(
+            {
+                ParticipantSlot.PARTICIPANT_A: ParticipantProfile(
+                    display_name="\u00e9",
+                    system_prompt="a",
+                ),
+                ParticipantSlot.PARTICIPANT_B: ParticipantProfile(
+                    display_name="e\u0301",
+                    system_prompt="b",
+                ),
+                ParticipantSlot.PARTICIPANT_C: ParticipantProfile(
+                    display_name="c",
+                    system_prompt="c",
+                ),
+            }
+        )
     with pytest.raises(ValueError, match="concurrency"):
         OpenAIAdapterConfig(max_concurrency=7)
     with pytest.raises(ValueError, match="model"):
