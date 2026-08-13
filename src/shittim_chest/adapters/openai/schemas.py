@@ -51,10 +51,10 @@ class DecisionOutputV1(StrictOutput):
     caveats: tuple[ShortListItem, ...] = Field(max_length=10)
 
 
-class EvidenceDigestOutputV1(StrictOutput):
-    """One concise, source-backed digest shared with every participant."""
+class EvidenceDigestOutputV2(StrictOutput):
+    """An optional digest; empty means the model chose not to search."""
 
-    summary: str = Field(min_length=1, max_length=2_000)
+    summary: str = Field(max_length=2_000)
 
 
 class FarewellOutputV2(StrictOutput):

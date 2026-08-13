@@ -44,13 +44,15 @@ from shittim_chest.adapters.openai import (
     OpenAIRequestLimiter,
     OpenAIResponsesService,
     OpenAIWebEvidenceService,
-    PersonaPrompts,
+    ParticipantProfile,
+    ParticipantProfiles,
     create_openai_client,
 )
 from shittim_chest.application import DebateApplication, IngressCommandAdapter
 from shittim_chest.application.ingress_drain import IngressDrainer, RuntimeIngressDrainGate
 from shittim_chest.application.runtime_instance import RuntimeInstanceState
 from shittim_chest.config import BootstrapConfig, load_bootstrap_config
+from shittim_chest.domain import PARTICIPANTS
 from shittim_chest.runtime import (
     CloudWatchEmfMetrics,
     ContentFreeTelemetry,
@@ -213,10 +215,20 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
     openai_config = OpenAIAdapterConfig()
     limiter = OpenAIRequestLimiter(max_concurrency=openai_config.max_concurrency)
     openai_client = create_openai_client(api_key=config.openai_api_key)
-    prompts = PersonaPrompts(config.participant_prompts())
+    participant_prompts = config.participant_prompts()
+    participant_display_names = config.participant_display_names()
+    profiles = ParticipantProfiles(
+        {
+            participant: ParticipantProfile(
+                display_name=participant_display_names[participant],
+                system_prompt=participant_prompts[participant],
+            )
+            for participant in PARTICIPANTS
+        }
+    )
     openai_service = OpenAIResponsesService(
         client=openai_client,
-        personas=prompts,
+        profiles=profiles,
         limiter=limiter,
         config=openai_config,
         recorder=telemetry,
@@ -232,7 +244,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         runtime_state=runtime_state_repository,
         generator=OpenAIFarewellGenerator(
             client=openai_client,
-            personas=prompts,
+            profiles=profiles,
             limiter=limiter,
             config=openai_config,
             recorder=telemetry,
@@ -266,7 +278,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         repository=repository,
         candidate_orderer=SecureCandidateOrderer(),
         outbox_recovery=recovery,
-        participant_display_names=config.participant_display_names(),
+        participant_display_names=participant_display_names,
         lease_owner=owner_id,
     )
     interactions = DiscordInteractionController(

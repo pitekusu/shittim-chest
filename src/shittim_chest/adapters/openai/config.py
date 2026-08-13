@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
+from unicodedata import normalize
 
 from shittim_chest.application.generation_policy import (
     PRODUCTION_POLICY,
@@ -49,24 +50,42 @@ class OpenAIAdapterConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class PersonaPrompts:
-    """Private persona instructions keyed by stable public participant slots."""
+class ParticipantProfile:
+    """One private participant identity supplied by validated runtime configuration."""
 
-    values: Mapping[ParticipantSlot, str]
+    display_name: str = field(repr=False)
+    system_prompt: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        display_name = normalize("NFC", self.display_name.strip())
+        if not display_name:
+            raise ValueError("participant display name must not be empty")
+        if not self.system_prompt.strip():
+            raise ValueError("participant system prompt must not be empty")
+        if len(self.system_prompt.encode("utf-8")) > 3_500:
+            raise ValueError("participant system prompt exceeds 3,500 UTF-8 bytes")
+        object.__setattr__(self, "display_name", display_name)
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantProfiles:
+    """Private names and persona instructions for exactly three participants."""
+
+    values: Mapping[ParticipantSlot, ParticipantProfile] = field(repr=False)
 
     def __post_init__(self) -> None:
         copied = dict(self.values)
         if set(copied) != set(PARTICIPANTS):
-            raise ValueError("persona prompts must contain exactly the three participant slots")
-        for slot, prompt in copied.items():
-            if not prompt.strip():
-                raise ValueError(f"persona prompt must not be empty: {slot.value}")
-            if len(prompt.encode("utf-8")) > 3_500:
-                raise ValueError(f"persona prompt exceeds 3,500 UTF-8 bytes: {slot.value}")
+            raise ValueError("profiles must contain exactly the three participant slots")
+        normalized_names = [
+            normalize("NFC", profile.display_name.strip()).casefold() for profile in copied.values()
+        ]
+        if len(set(normalized_names)) != len(PARTICIPANTS):
+            raise ValueError("participant display names must be distinct")
         object.__setattr__(self, "values", MappingProxyType(copied))
 
-    def for_participant(self, participant: ParticipantSlot) -> str:
-        """Return the private prompt for one stable participant slot."""
+    def for_participant(self, participant: ParticipantSlot) -> ParticipantProfile:
+        """Return one private profile for a stable participant slot."""
 
         try:
             return self.values[participant]

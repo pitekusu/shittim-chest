@@ -16,7 +16,7 @@ from shittim_chest.bootstrap import (
     RuntimeClientCloseTimeout,
     build_production_runtime,
 )
-from shittim_chest.config import load_bootstrap_config
+from shittim_chest.config import StartupConfigurationError, load_bootstrap_config
 from shittim_chest.runtime.lifecycle import DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
 
 
@@ -243,6 +243,16 @@ async def test_process_client_close_reports_non_cancellation_failures() -> None:
 def test_default_exit_budget_stays_below_fargate_stop_timeout() -> None:
     assert DEFAULT_SHUTDOWN_TIMEOUT_SECONDS + DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS == 110
     assert DEFAULT_SHUTDOWN_TIMEOUT_SECONDS + DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS < 120
+
+
+def test_duplicate_participant_names_fail_before_client_construction() -> None:
+    environment = _environment()
+    duplicate = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_B_JSON"])
+    original = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"])
+    duplicate["display_name"] = original["display_name"]
+    environment["SHITTIM_PERSONA_PARTICIPANT_B_JSON"] = json.dumps(duplicate)
+    with pytest.raises(StartupConfigurationError):
+        load_bootstrap_config(environment)
 
 
 def test_process_client_close_rejects_non_positive_timeout() -> None:

@@ -196,8 +196,13 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         }
         if any(persona.slot is not slot for slot, persona in personas.items()):
             raise ValueError("persona slot mismatch")
+        participant_names: list[str] = []
         for participant in PARTICIPANTS:
-            sanitize_discord_model_text(personas[DiscordBotSlot(participant.value)].display_name)
+            display_name = personas[DiscordBotSlot(participant.value)].display_name
+            normalized_display_name = sanitize_discord_model_text(display_name)
+            participant_names.append(normalized_display_name.strip().casefold())
+        if len(set(participant_names)) != len(PARTICIPANTS):
+            raise ValueError("participant display names must be distinct")
         versions = {runtime_version} | {persona.config_version for persona in personas.values()}
         if len(versions) != 1:
             raise ValueError("configuration version mismatch")

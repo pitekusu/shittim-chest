@@ -24,7 +24,8 @@ from shittim_chest.adapters.openai import (
     OpenAIRequestLimiter,
     OpenAIUnavailable,
     OpenAIUsageRecord,
-    PersonaPrompts,
+    ParticipantProfile,
+    ParticipantProfiles,
 )
 from shittim_chest.adapters.openai.schemas import FarewellOutputV2
 from shittim_chest.application.farewell import FarewellTimeContext
@@ -171,11 +172,19 @@ def service_for(value: object) -> tuple[OpenAIFarewellGenerator, AsyncMock, Obse
     parse = AsyncMock(return_value=value)
     client = cast(AsyncOpenAI, SimpleNamespace(responses=SimpleNamespace(parse=parse)))
     observer = Observer()
-    prompts = PersonaPrompts({slot: f"private prompt {slot.value}" for slot in PARTICIPANTS})
+    profiles = ParticipantProfiles(
+        {
+            slot: ParticipantProfile(
+                display_name=f"Display {slot.value}",
+                system_prompt=f"private prompt {slot.value}",
+            )
+            for slot in PARTICIPANTS
+        }
+    )
     return (
         OpenAIFarewellGenerator(
             client=client,
-            personas=prompts,
+            profiles=profiles,
             limiter=OpenAIRequestLimiter(),
             recorder=observer,
         ),
@@ -212,6 +221,10 @@ async def test_request_uses_message_only_schema_and_first_citation() -> None:
     assert "one news item" in request["instructions"]
     assert "from today that this persona would naturally like" in request["instructions"]
     assert "enjoyable news" not in request["instructions"]
+    assert "private prompt participant-b" in request["instructions"]
+    assert "private prompt participant-a" not in request["instructions"]
+    assert "private prompt participant-c" not in request["instructions"]
+    assert "Display participant-b" not in request["instructions"]
     assert request["tools"][0]["user_location"] == {
         "type": "approximate",
         "country": "JP",
