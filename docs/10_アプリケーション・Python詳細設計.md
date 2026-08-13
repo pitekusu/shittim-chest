@@ -157,7 +157,7 @@ Runtimeは`stop_eligible_at`の5分前から、同じIDLE generationにつき最
 
 ## 8. 設定と起動validation
 
-ECSが環境変数へ注入する値は`SHITTIM_ENVIRONMENT=production`、`AWS_REGION=ap-northeast-1`、`SHITTIM_DYNAMODB_TABLE`、`SHITTIM_LOG_LEVEL`、任意の直前command schema hash、version付きruntime/persona JSON、OpenAI key、4つのDiscord tokenとする。runtimeからmodelを選択させず、本番Policyはコード上のLuna standardへ固定する。SDK clientを1つも作る前にPydantic strict modelで全値を一括検証し、欠落、未知field、`schema_version`/`config_version`不一致、slot欠落、重複Application ID/token、空allowlist、不正snowflake、promptのUTF-8 3,500 bytes超過があれば安定code `startup_configuration_invalid`で終了する。credential、display name、prompt、元validation messageを標準出力・log・例外へ含めない。
+ECSが環境変数へ注入する値は`SHITTIM_ENVIRONMENT=production`、`AWS_REGION=ap-northeast-1`、`SHITTIM_DYNAMODB_TABLE`、`SHITTIM_LOG_LEVEL`、任意の直前command schema hash、version付きruntime/persona JSON、OpenAI key、4つのDiscord tokenとする。runtimeからmodelを選択させず、本番Policyはコード上のLuna standardへ固定する。SDK clientを1つも作る前にPydantic strict modelで全値を一括検証し、欠落、未知field、`schema_version`/`config_version`不一致、slot欠落、重複Application ID/token、participant display nameの空・重複、空allowlist、不正snowflake、promptのUTF-8 3,500 bytes超過があれば安定code `startup_configuration_invalid`で終了する。credential、display name、prompt、元validation messageを標準出力・log・例外へ含めない。
 
 Lambdaは必要最小限の別設定を読み、DiscordIngressにはmoderator ApplicationのPublic Key、Guild/channel allowlist、table名、Status/Reconciler function名を注入する。Public KeyはBot tokenではない。Status Publisherだけが公開Status message用moderator tokenを必要とし、Ingress LambdaはInteraction tokenをhandler scopeから出さず、どのLambdaもOpenAI keyやpersona promptを読まない。
 
