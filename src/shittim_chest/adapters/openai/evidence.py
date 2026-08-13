@@ -393,8 +393,14 @@ def _validated_output(
                 diagnostic_context="message_status",
                 diagnostic_kind=output.status,
             )
-        if any(isinstance(content, ResponseOutputRefusal) for content in output.content):
-            raise OpenAIRefusal()
+        for content in output.content:
+            if isinstance(content, ResponseOutputRefusal):
+                raise OpenAIRefusal()
+            if not isinstance(content, ResponseOutputText):
+                raise OpenAIInvalidOutput(
+                    diagnostic_context=_SourceDiagnosticContext.MESSAGE_CONTENT.value,
+                    diagnostic_kind=_DiagnosticKind.OTHER.value,
+                )
     if not message_seen:
         raise OpenAIIncompleteResponse(
             diagnostic_context="message_status",

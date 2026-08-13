@@ -93,12 +93,23 @@ def test_load_bootstrap_config_rejects_renderer_incompatible_display_name() -> N
     assert str(captured.value) == "startup_configuration_invalid"
 
 
-def test_load_bootstrap_config_rejects_canonically_equivalent_participant_names() -> None:
+@pytest.mark.parametrize(
+    ("first_name", "second_name"),
+    [
+        ("\u00e9", "e\u0301"),
+        ("A\tB", "A B"),
+        ("A\rB", "A\nB"),
+    ],
+)
+def test_load_bootstrap_config_rejects_display_equivalent_participant_names(
+    first_name: str,
+    second_name: str,
+) -> None:
     environment = _valid_environment()
     participant_a = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"])
     participant_b = json.loads(environment["SHITTIM_PERSONA_PARTICIPANT_B_JSON"])
-    participant_a["display_name"] = "\u00e9"
-    participant_b["display_name"] = "e\u0301"
+    participant_a["display_name"] = first_name
+    participant_b["display_name"] = second_name
     environment["SHITTIM_PERSONA_PARTICIPANT_A_JSON"] = json.dumps(participant_a)
     environment["SHITTIM_PERSONA_PARTICIPANT_B_JSON"] = json.dumps(participant_b)
 
