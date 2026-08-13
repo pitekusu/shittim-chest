@@ -46,6 +46,7 @@ from shittim_chest.adapters.openai.observability import (
 from shittim_chest.adapters.openai.prompts import (
     decision_input,
     final_proposal_input,
+    final_proposal_instructions,
     initial_opinion_input,
     participant_instructions,
     vote_input,
@@ -126,7 +127,7 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="final_proposal",
             schema=FinalProposalOutputV1,
-            instructions=participant_instructions(self.personas.for_participant(participant)),
+            instructions=final_proposal_instructions(self.personas.for_participant(participant)),
             input_text=final_proposal_input(question, evidence, initial_opinions),
             settings=self.config.final_proposal,
         )

@@ -50,12 +50,12 @@ GitHub Actions secrets and SSM Parameter Store after confirmation:
 uv run --frozen python tools/configure_production_inputs.py
 ```
 
-For the v0003 migration, the command validates and reuses the existing v0002
-RuntimeConfig and four PersonaConfig values without displaying them, then asks only
-for the allowlisted farewell channel. The local-only pointer and private values stay
-ignored and are never copied into the repository.
+For the v0004 migration, the command validates the existing v0003 RuntimeConfig and
+four PersonaConfig values without displaying them. It advances the RuntimeConfig and
+loads the replacement v0004 personas from the local-only private source. The pointer
+and private values stay ignored and are never copied into the repository.
 
-Outside the bounded v0002-to-v0003 migration read, it does not retrieve existing
+Outside the bounded v0003-to-v0004 migration read, it does not retrieve existing
 secret values. It never overwrites, prints, or saves them.
 Readiness can be checked without entering values:
 

@@ -53,7 +53,7 @@ describe("RuntimeStack", () => {
     });
     expect(parameters.RuntimeConfigVersion).toMatchObject({
       AllowedPattern: "^v[0-9]{4}$",
-      Default: "v0003",
+      Default: "v0004",
     });
     expect(parameters.LambdaBundleBucketName).toMatchObject({
       AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",

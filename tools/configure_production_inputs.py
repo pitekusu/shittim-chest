@@ -27,6 +27,7 @@ from shittim_chest.adapters.discord_http import DiscordPublicKeyError, DiscordRe
 from shittim_chest.application import DiscordBotSlot
 from shittim_chest.config.models import (
     PersonaConfigPayload,
+    RuntimeConfigPayload,
     RuntimeConfigPayloadV1,
     StartupConfigurationError,
     parse_discord_runtime_config,
@@ -50,8 +51,8 @@ MAX_PRIVATE_SOURCE_BYTES = 256 * 1_024
 APPLY_CONFIRMATION = "y"
 PRIVATE_SOURCE_ENV = "SHITTIM_PRIVATE_CONFIG_SOURCE"
 PRIVATE_SOURCE_POINTER = Path(__file__).resolve().parents[1] / ".env.private-config"
-DEFAULT_CONFIG_VERSION = "v0003"
-MIGRATION_SOURCE_VERSION = "v0002"
+DEFAULT_CONFIG_VERSION = "v0004"
+MIGRATION_SOURCE_VERSION = "v0003"
 _PERSONA_HEADING_PATTERN = re.compile(r"## PersonaConfig (?P<version>v[0-9]{4})\Z")
 _PERSONA_SECTION_PATTERN = re.compile(
     r"### (?P<slot>participant-[abc]): (?P<display_name>[^\r\n]+)\Z"
@@ -147,8 +148,15 @@ def load_previous_version_inputs(
         raise SetupError("previous_config_incomplete")
     runtime_name = f"{PARAMETER_ROOT}/runtime/{source_version}"
     try:
-        runtime = RuntimeConfigPayloadV1.model_validate_json(values[runtime_name])
-        if runtime.config_version != source_version:
+        try:
+            runtime_version = RuntimeConfigPayload.model_validate_json(
+                values[runtime_name]
+            ).config_version
+        except ValidationError:
+            runtime_version = RuntimeConfigPayloadV1.model_validate_json(
+                values[runtime_name]
+            ).config_version
+        if runtime_version != source_version:
             raise SetupError("saved_runtime_config_mismatch")
         personas: dict[DiscordBotSlot, str] = {}
         for slot in DiscordBotSlot:
@@ -404,12 +412,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         versioned_names = persona_names | {f"{PARAMETER_ROOT}/runtime/{args.config_version}"}
         if args.config_version == DEFAULT_CONFIG_VERSION and missing & versioned_names:
-            saved_runtime, saved_personas = load_previous_version_inputs(
+            saved_runtime, previous_personas = load_previous_version_inputs(
                 client,
                 source_version=MIGRATION_SOURCE_VERSION,
                 target_version=args.config_version,
             )
-            print("保存済みのv0002設定を検証してv0003へ再利用します。")
+            saved_personas = previous_personas
+            if missing & persona_names:
+                source = private_config_source()
+                if source is None:
+                    raise SetupError("private_config_source_required")
+                saved_personas = load_saved_personas(source, args.config_version)
+            print(
+                f"保存済みの{MIGRATION_SOURCE_VERSION} RuntimeConfigと"
+                f"非公開正本の{args.config_version} PersonaConfigを検証して再利用します。"
+            )
         elif missing & persona_names:
             source = private_config_source()
             if source is not None:
@@ -491,32 +508,50 @@ def _migrated_runtime_json(
     saved_runtime: str,
     secret_reader: SecretReader,
 ) -> str:
-    """Add only the new channel while retaining validated v0002 identifiers."""
+    """Advance one validated RuntimeConfig version without exposing identifiers."""
 
+    expected_source_version = _previous_config_version(config_version)
     try:
-        previous = RuntimeConfigPayloadV1.model_validate_json(saved_runtime)
+        current = RuntimeConfigPayload.model_validate_json(saved_runtime)
     except ValidationError:
-        raise SetupError("saved_runtime_config_invalid") from None
-    if previous.config_version != MIGRATION_SOURCE_VERSION:
-        raise SetupError("saved_runtime_config_mismatch")
-    farewell_channel_id = _required_secret(secret_reader, "帰宅挨拶を送るChannel ID")
-    value = json.dumps(
-        {
+        try:
+            legacy = RuntimeConfigPayloadV1.model_validate_json(saved_runtime)
+        except ValidationError:
+            raise SetupError("saved_runtime_config_invalid") from None
+        if legacy.config_version != expected_source_version:
+            raise SetupError("saved_runtime_config_mismatch") from None
+        payload = {
             "schema_version": "2",
             "config_version": config_version,
-            "guild_id": previous.guild_id,
-            "allowed_channel_ids": previous.allowed_channel_ids,
-            "farewell_channel_id": farewell_channel_id,
-            "identities": [identity.model_dump(mode="json") for identity in previous.identities],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+            "guild_id": legacy.guild_id,
+            "allowed_channel_ids": legacy.allowed_channel_ids,
+            "farewell_channel_id": _required_secret(
+                secret_reader,
+                "帰宅挨拶を送るChannel ID",
+            ),
+            "identities": [identity.model_dump(mode="json") for identity in legacy.identities],
+        }
+    else:
+        if current.config_version != expected_source_version:
+            raise SetupError("saved_runtime_config_mismatch")
+        payload = {
+            **current.model_dump(mode="json"),
+            "config_version": config_version,
+        }
+    value = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     try:
         parse_discord_runtime_config(value)
     except StartupConfigurationError:
         raise SetupError("farewell_channel_not_allowed") from None
     return value
+
+
+def _previous_config_version(config_version: str) -> str:
+    _validate_config_version(config_version)
+    number = int(config_version[1:])
+    if number <= 0:
+        raise SetupError("config_version_invalid")
+    return f"v{number - 1:04d}"
 
 
 def _persona_json(

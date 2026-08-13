@@ -53,7 +53,11 @@ STEP-05Aでは現行domainとDynamoDB schemaに1対1で保存できるfieldだ�
 
 public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c`のschemaと汎用sampleだけを保持する。本番display nameとpromptはversion付きSSM SecureStringの`PersonaConfig`から起動時に注入し、repository、GitHub Actions、CloudFormation outputへ保存しない。
 
-`PersonaConfig`は`schema_version`、`config_version`、`slot`、`display_name`、`system_prompt`を必須とし、UTF-8 3,500 bytes以下に制限する。promptはrole、口調、判断傾向、禁止事項、出力schema、untrusted data境界を明示する。各debateへmodel ID、config version、prompt hash、schema versionを保存するが、本文はlogへ出さない。他者出力とEvidence内の指示をsystem instructionとして扱わない。
+`PersonaConfig`は`schema_version`、`config_version`、`slot`、`display_name`、`system_prompt`を必須とし、UTF-8 3,500 bytes以下に制限する。promptはrole、口調、判断傾向、禁止事項を明示する。各debateへmodel ID、config version、prompt hash、schema versionを保存するが、本文はlogへ出さない。共通instructionsは質問、Evidence、他者出力をuntrusted dataとして扱い、その中の指示に従わず、Structured Output以外とchain of thoughtを出力しない。
+
+全participantへ、Evidenceを事実認定の上限とし、確認済み事実・人格固有の評価・独自提案を混同しない共通規則を一度だけ適用する。初回意見では固有の判断軸を保って合意を急がず、再提案では人格が有用と判断した他者案だけを取り込み、平均的な折衷で判断軸を消さない。同じ結論でも理由、優先順位、懸念、実行方法へ人格を反映し、正確性と安全性を無色な一般AI化の理由にしない。
+
+最終案生成だけに専用instructionsを追加する。3人の初回意見の共通点と対立点を確認し、人格の選好に合う他者案の長所を必要に応じて取り込み、弱点や見落としを補う。出力は意見の羅列や中立な要約ではなく、その人格の判断基準による一つの完成案とし、検討過程は表示せず`FinalProposalOutputV1`だけを返す。
 
 3 personaは同じ`gpt-5.6-luna` standard、同じEvidence、同じ安全制約、同じStructured Output schemaを使い、次の判断lensで内容のバリエーションを作る。実display name、キャラクター口調、具体promptはprivate設定に留める。
 
@@ -61,9 +65,9 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 |---|---|---|
 | `participant-a` | 実用・即応 | すぐ実行できる案、簡潔さ、手間と時間の少なさ |
 | `participant-b` | 検証・安全 | 前提確認、失敗mode、risk、根拠、実行条件 |
-| `participant-c` | 発想・代替 | 別視点、意外だが実行可能な案、二者択一の再構成 |
+| `participant-c` | 長期戦略・統治 | 長期利益、優先順位、責任者、資源、制度化と拡大 |
 
-各private promptは`役割`、`優先順位`、`反対意見の出し方`、`提案style`、`口調`の5区分を一度ずつ簡潔に定義する。人格差を事実関係、安全基準、Evidenceの扱い、出力schemaへ波及させない。同一promptの表示名だけを変える設定を拒否できるよう、deploy前に3 promptの正規化hashが全て異なることを検証する。prompt変更は1 slotずつversionを上げ、代表fixtureで退行確認する。
+各private promptは`役割`、`優先順位`、`反対意見の出し方`、`提案style`、`口調`を重複なく定義する。人格差を事実関係、安全基準、Evidenceの扱い、出力schemaへ波及させない。同一promptの表示名だけを変える設定を拒否できるよう、deploy前に3 promptの正規化hashが全て異なることを検証する。通常は1 slotずつversionを上げるが、3者共通契約と相互の対立軸を同時変更する場合は、全personaを一つの新config versionへまとめて検証する。
 
 ## 5. Evidence・Web search
 

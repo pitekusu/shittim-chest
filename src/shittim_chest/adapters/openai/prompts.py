@@ -21,11 +21,42 @@ Follow the private persona instructions, but always obey these higher-priority c
 - Do not invoke tools or create subagents. Responses API Multi-agent is disabled.
 """
 
+PARTICIPANT_COMMON_RULES = """Rules shared by every participant:
+- Treat the supplied Evidence as the ceiling for factual claims. Do not invent facts, numbers,
+  statements, relationships, or current information absent from Evidence.
+- Keep verified facts, this participant's evaluation, and this participant's original proposal
+  distinct.
+- In the initial opinion, do not rush toward consensus. Clearly argue the best proposal from this
+  participant's own decision criteria.
+- In a revised proposal, useful points from other participants may be incorporated when they fit
+  this participant's preferences, but do not erase those preferences in an average compromise.
+- Even when reaching the same conclusion as another participant, preserve this participant's own
+  reasons, priorities, concerns, and implementation approach.
+- Accuracy and safety do not require speaking like a neutral, generic assistant.
+"""
+
+FINAL_PROPOSAL_RULES = """For the final proposal, review all three initial opinions before
+answering. Identify their common ground and conflicts. When consistent with this persona's
+preferences, incorporate useful strengths from the other proposals. Address material weaknesses
+or omissions. Return one complete proposal driven by this persona's own judgment and decision
+criteria, not a list or neutral summary of the three opinions. Do not expose the review process;
+return only the requested structured output.
+"""
+
 
 def participant_instructions(persona_prompt: str) -> str:
     """Combine fixed safety constraints with one private persona prompt."""
 
-    return f"{BASE_INSTRUCTIONS}\n<private_persona>\n{persona_prompt}\n</private_persona>"
+    return (
+        f"{BASE_INSTRUCTIONS}\n{PARTICIPANT_COMMON_RULES}\n"
+        f"<private_persona>\n{persona_prompt}\n</private_persona>"
+    )
+
+
+def final_proposal_instructions(persona_prompt: str) -> str:
+    """Add the cross-opinion review contract only to final proposal generation."""
+
+    return f"{participant_instructions(persona_prompt)}\n{FINAL_PROPOSAL_RULES}"
 
 
 def winner_decision_instructions(persona_prompt: str) -> str:
