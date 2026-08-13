@@ -92,7 +92,7 @@ public sourceは`moderator`、`participant-a`、`participant-b`、`participant-c
 
 ### 6.1 帰宅挨拶
 
-正常な30分IDLE停止に備える帰宅挨拶は、participant 3人から選択済みのprivate personaを使い、停止予定5分前に1 logical generationとして生成する。application-level Responses requestは最大2回、処理全体は120秒とする。transport、timeout、429、5xx、response／message／Web search未完了、citation不足、Structured Output不正は1回だけ再requestし、authentication、permission、refusal、content filterは再requestしない。`web_search`を`tool_choice=required`、`max_tool_calls=4`、`store=false`で使用し、user locationを`JP`／`Tokyo`／`Tokyo`／`Asia/Tokyo`へ固定する。PythonがJSTの現在日時、時間帯、季節を決め、modelは東京の天気と人格が好みそうな当日の楽しいニュースを反映した日本語1行・約100文字を目標に返す。
+正常な30分IDLE停止に備える帰宅挨拶は、participant 3人から選択済みのprivate personaを使い、停止予定5分前に1 logical generationとして生成する。application-level Responses requestは最大2回、処理全体は120秒とする。transport、timeout、429、5xx、response／message／Web search未完了、citation不足、Structured Output不正は1回だけ再requestし、authentication、permission、refusal、content filterは再requestしない。`web_search`を`tool_choice=required`、`max_tool_calls=4`、`store=false`で使用し、user locationを`JP`／`Tokyo`／`Tokyo`／`Asia/Tokyo`へ固定する。PythonがJSTの現在日時、時間帯、季節を決め、modelは東京の天気への具体的な言及を1つ必ず含め、人格が好みそうな当日の楽しいニュースも反映した日本語1行・180〜300文字を目標に返す。
 
 帰宅挨拶のStructured Outputは`message`だけを持つ。completed Web searchと、認証情報を含まない有効なHTTP(S) `url_citation`が1件以上あれば受理し、annotation順の最初のcitationを`参考リンク:`として本文へ付ける。`action.sources`は件数と既知`oai-weather` feedの補助観測だけに用い、citationとの一致、天気／ニュース別分類、未知source typeや余分fieldの拒否は行わない。本文は空でなければ改行・連続空白を1行へ正規化し、Discord 2,000文字以内へ収める。60〜160文字制限、本文URL、固定免責文による拒否は行わない。source URL、本文、query、persona、channel IDはlogへ出さず、response ID、試行数、citation件数、既知feed件数、安定した失敗段階・理由だけを記録する。生成失敗は通常停止を妨げない。
 
