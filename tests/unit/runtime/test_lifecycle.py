@@ -263,18 +263,12 @@ class FakeRuntimeInstance:
 class FakeFarewell:
     events: list[str]
     started: asyncio.Event = field(default_factory=asyncio.Event)
-    delivery_failure: Exception | None = None
 
     async def run(self, stop: asyncio.Event) -> None:
         self.events.append("farewell_monitor_started")
         self.started.set()
         await stop.wait()
         self.events.append("farewell_monitor_stopped")
-
-    async def deliver_before_shutdown(self) -> None:
-        self.events.append("farewell_delivery_checked")
-        if self.delivery_failure is not None:
-            raise self.delivery_failure
 
 
 @dataclass(slots=True)
@@ -660,7 +654,7 @@ async def test_shutdown_closes_gates_before_drain_checkpoint_and_components() ->
 
 
 @pytest.mark.asyncio
-async def test_farewell_is_checked_after_checkpoint_and_before_discord_close() -> None:
+async def test_shutdown_cancels_farewell_monitor_without_a_delivery_hook() -> None:
     farewell = FakeFarewell([])
     values = lifecycle(gateway=FakeDiscordGateway(ready=True), farewell=farewell)
     runtime_task = asyncio.create_task(values.runtime.run())
@@ -669,28 +663,10 @@ async def test_farewell_is_checked_after_checkpoint_and_before_discord_close() -
     values.runtime.request_shutdown()
     await runtime_task
 
-    assert_order(
-        values.events,
-        "ingress_checkpointed",
-        "farewell_delivery_checked",
-        "interactions_closed",
-        "supervisor_stopped",
-        "runtime_shutdown_complete",
-    )
-
-
-@pytest.mark.asyncio
-async def test_farewell_failure_does_not_prevent_normal_shutdown() -> None:
-    farewell = FakeFarewell([], delivery_failure=RuntimeError("private Discord detail"))
-    values = lifecycle(gateway=FakeDiscordGateway(ready=True), farewell=farewell)
-    runtime_task = asyncio.create_task(values.runtime.run())
-    await wait_until(lambda: farewell.started.is_set() and values.admission.is_accepting)
-
-    values.runtime.request_shutdown()
-    await runtime_task
-
+    assert "farewell_monitor_started" in values.events
+    assert "farewell_delivery_checked" not in values.events
+    assert_order(values.events, "ingress_checkpointed", "interactions_closed")
     assert values.runtime_instance.shutdown_calls == 1
-    assert values.interactions.close_calls == 1
 
 
 @pytest.mark.asyncio

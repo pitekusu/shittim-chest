@@ -1,40 +1,39 @@
-"""Contract tests for the source-backed farewell Responses request."""
+"""Contract tests for the availability-first farewell Responses request."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from openai import APITimeoutError, AsyncOpenAI
+from openai import APITimeoutError, AsyncOpenAI, AuthenticationError
 from openai.types.responses.response import Response
 from openai.types.responses.response_function_web_search import ActionSearchSource
 
 from shittim_chest.adapters.openai import (
+    OpenAIConfigurationError,
     OpenAIFailureRecord,
     OpenAIFarewellGenerator,
     OpenAIIncompleteResponse,
     OpenAIInvalidOutput,
+    OpenAIRefusal,
     OpenAIRequestLimiter,
     OpenAIUnavailable,
     OpenAIUsageRecord,
     PersonaPrompts,
 )
-from shittim_chest.adapters.openai.schemas import FarewellOutputV1
+from shittim_chest.adapters.openai.schemas import FarewellOutputV2
 from shittim_chest.application.farewell import FarewellTimeContext
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
 WEATHER_URL = "https://weather.example.test/tokyo"
 NEWS_URL = "https://news.example.test/fun"
-MESSAGE = (
-    "東京の夏空と今日の楽しい科学ニュースに元気をもらいました。"
-    "みんなと過ごせて本当にうれしいです!それでは素敵な夜を、"
-    "また元気に集まりましょう!"
-)
+OTHER_URL = "https://sources.example.test/different"
+MESSAGE = "東京は夏らしい夜ですね。今日の科学ニュースも楽しかったです。また集まりましょう!"
 
 
 @dataclass(slots=True)
@@ -51,76 +50,58 @@ class Observer:
 
 def response(
     *,
-    cite_news: bool = True,
-    weather_realtime_feed: str | None = None,
+    citations: tuple[str, ...] = (NEWS_URL,),
+    source_urls: tuple[str, ...] = (WEATHER_URL,),
     status: str = "completed",
     search_status: str = "completed",
     message_status: str = "completed",
-    additional_output: dict[str, object] | None = None,
-    additional_message_content: object | None = None,
     incomplete_reason: str | None = None,
     response_id: str = "resp_farewell",
-    input_tokens: int = 20,
-    output_tokens: int = 10,
-    cached_input_tokens: int = 0,
-    reasoning_tokens: int = 2,
+    message: str = MESSAGE,
+    refusal: bool = False,
+    additional_output: dict[str, object] | None = None,
+    weather_realtime_feed: str | None = None,
+    unknown_source: bool = False,
+    include_search: bool = True,
 ) -> SimpleNamespace:
-    annotations: list[dict[str, object]] = []
-    sources: list[dict[str, object]] = []
-    if weather_realtime_feed is None:
-        annotations.append(
-            {
-                "type": "url_citation",
-                "start_index": 0,
-                "end_index": 5,
-                "title": "Tokyo weather",
-                "url": WEATHER_URL,
-            }
-        )
-        sources.append({"type": "url", "url": WEATHER_URL})
-    else:
-        # The pinned SDK has not added the provider's ``type=api`` source to its
-        # generated schema yet. Build the otherwise-real response first, then
-        # reproduce the object returned by its permissive runtime parser.
-        sources.append({"type": "url", "url": WEATHER_URL})
-    if cite_news:
-        annotations.append(
-            {
-                "type": "url_citation",
-                "start_index": 6,
-                "end_index": 10,
-                "title": "Fun news",
-                "url": NEWS_URL,
-            }
-        )
-    output: list[dict[str, object]] = [
+    annotations = [
         {
-            "id": "ws_1",
-            "type": "web_search_call",
-            "status": search_status,
-            "action": {
-                "type": "search",
-                "query": "東京 今日 天気 楽しいニュース",
-                "sources": [*sources, {"type": "url", "url": NEWS_URL}],
-            },
+            "type": "url_citation",
+            "start_index": 0,
+            "end_index": 5,
+            "title": "Source",
+            "url": url,
         }
+        for url in citations
     ]
+    output: list[dict[str, object]] = []
+    if include_search:
+        output.append(
+            {
+                "id": "ws_1",
+                "type": "web_search_call",
+                "status": search_status,
+                "action": {
+                    "type": "search",
+                    "query": "東京 今日 天気 楽しいニュース",
+                    "sources": [{"type": "url", "url": url} for url in source_urls],
+                },
+            }
+        )
     if additional_output is not None:
         output.append(additional_output)
-    message_content: list[object] = [
-        {
-            "type": "output_text",
-            "text": "{}",
-            "annotations": annotations,
-        }
-    ]
+    content: list[dict[str, object]]
+    if refusal:
+        content = [{"type": "refusal", "refusal": "declined"}]
+    else:
+        content = [{"type": "output_text", "text": "{}", "annotations": annotations}]
     output.append(
         {
             "id": "msg_1",
             "type": "message",
             "status": message_status,
             "role": "assistant",
-            "content": message_content,
+            "content": content,
         }
     )
     typed = Response.model_validate(
@@ -138,35 +119,41 @@ def response(
             "tool_choice": "required",
             "tools": [{"type": "web_search", "search_context_size": "medium"}],
             "usage": {
-                "input_tokens": input_tokens,
-                "input_tokens_details": {
-                    "cached_tokens": cached_input_tokens,
-                    "cache_write_tokens": 0,
-                },
-                "output_tokens": output_tokens,
-                "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
-                "total_tokens": input_tokens + output_tokens,
+                "input_tokens": 20,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens": 10,
+                "output_tokens_details": {"reasoning_tokens": 2},
+                "total_tokens": 30,
             },
         }
     )
-    if weather_realtime_feed is not None:
+    if include_search and (weather_realtime_feed is not None or unknown_source):
         search_output = typed.output[0]
         assert search_output.type == "web_search_call"
-        object.__setattr__(
-            search_output.action,
-            "sources",
-            [
+        sources: list[ActionSearchSource] = []
+        if weather_realtime_feed is not None:
+            sources.append(
                 ActionSearchSource.model_construct(
                     type="api",
                     name=weather_realtime_feed,
-                ),
-                ActionSearchSource(type="url", url=NEWS_URL),
-            ],
-        )
-    if additional_message_content is not None:
-        message_output = typed.output[-1]
-        assert message_output.type == "message"
-        cast(Any, message_output.content).append(additional_message_content)
+                )
+            )
+        if unknown_source:
+            sources.append(
+                ActionSearchSource.model_construct(
+                    type="future-source",
+                    future_field="ignored",
+                )
+            )
+            sources.append(
+                ActionSearchSource.model_construct(
+                    type="url",
+                    url=OTHER_URL,
+                    future_field="ignored",
+                )
+            )
+        sources.extend(ActionSearchSource(type="url", url=url) for url in source_urls)
+        object.__setattr__(search_output.action, "sources", sources)
     return SimpleNamespace(
         id=typed.id,
         model=typed.model,
@@ -176,11 +163,7 @@ def response(
         ),
         output=typed.output,
         usage=typed.usage,
-        output_parsed=FarewellOutputV1(
-            message=MESSAGE,
-            weather_source_url=WEATHER_URL,
-            news_source_url=NEWS_URL,
-        ),
+        output_parsed=FarewellOutputV2(message=message),
     )
 
 
@@ -201,442 +184,267 @@ def service_for(value: object) -> tuple[OpenAIFarewellGenerator, AsyncMock, Obse
     )
 
 
-@pytest.mark.asyncio
-async def test_request_requires_tokyo_web_search_and_returns_only_display_text() -> None:
-    service, parse, observer = service_for(response())
-
-    content = await service.generate(
+async def generate(service: OpenAIFarewellGenerator) -> str:
+    return await service.generate(
         participant=ParticipantSlot.PARTICIPANT_B,
         time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
     )
 
-    assert content
-    assert WEATHER_URL not in content
+
+@pytest.mark.asyncio
+async def test_request_uses_message_only_schema_and_first_citation() -> None:
+    service, parse, observer = service_for(response(citations=(NEWS_URL, OTHER_URL)))
+
+    content = await generate(service)
+
+    assert content == f"{MESSAGE}\n参考リンク: {NEWS_URL}"
     assert parse.await_args is not None
     request = parse.await_args.kwargs
     assert request["store"] is False
     assert request["tool_choice"] == "required"
     assert request["max_tool_calls"] == 4
+    assert request["text_format"] is FarewellOutputV2
+    assert set(FarewellOutputV2.model_fields) == {"message"}
     assert request["include"] == ["web_search_call.action.sources"]
-    assert request["max_output_tokens"] == 4_000
     assert request["reasoning"] == {"effort": "medium"}
-    assert request["tools"] == [
-        {
-            "type": "web_search",
-            "search_context_size": "medium",
-            "user_location": {
-                "type": "approximate",
-                "country": "JP",
-                "city": "Tokyo",
-                "region": "Tokyo",
-                "timezone": "Asia/Tokyo",
-            },
-        }
-    ]
-    assert observer.usages[0].web_search_source_count == 2
-    assert observer.usages[0].url_citation_count == 2
-    assert "private prompt" not in repr(observer.usages)
-    assert observer.usages[0].retry_count == 0
-    assert observer.usages[0].prior_incomplete_reason is None
-
-
-@pytest.mark.asyncio
-async def test_missing_weather_or_news_citation_fails_closed() -> None:
-    service, _, observer = service_for(response(cite_news=False))
-
-    with pytest.raises(OpenAIInvalidOutput):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_A,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
-
-    assert [failure.code for failure in observer.failures] == ["openai_invalid_output"]
-    assert observer.failures[0].diagnostic_context == "farewell_evidence"
-    assert observer.failures[0].diagnostic_kind == "news_url_uncorroborated"
-
-
-@pytest.mark.asyncio
-async def test_builtin_weather_feed_and_cited_news_are_accepted() -> None:
-    service, _, observer = service_for(response(weather_realtime_feed="oai-weather"))
-
-    content = await service.generate(
-        participant=ParticipantSlot.PARTICIPANT_A,
-        time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-    )
-
-    assert content
-    assert observer.failures == []
+    assert request["tools"][0]["user_location"] == {
+        "type": "approximate",
+        "country": "JP",
+        "city": "Tokyo",
+        "region": "Tokyo",
+        "timezone": "Asia/Tokyo",
+    }
     usage = observer.usages[0]
-    assert usage.web_search_source_count == 2
-    assert usage.url_citation_count == 1
-    assert usage.evidence_source_count == 2
-    assert usage.realtime_feed_count == 1
-    assert usage.realtime_feed_kinds == "oai-weather"
+    assert usage.url_citation_count == 2
+    assert usage.evidence_source_count == 1
+    assert usage.attempt_count == 1
 
 
 @pytest.mark.asyncio
-async def test_builtin_weather_feed_does_not_relax_news_citation() -> None:
-    service, _, observer = service_for(
-        response(cite_news=False, weather_realtime_feed="oai-weather")
-    )
+async def test_one_citation_succeeds_without_weather_feed_or_source_match() -> None:
+    service, _, observer = service_for(response(citations=(NEWS_URL,), source_urls=(OTHER_URL,)))
 
-    with pytest.raises(OpenAIInvalidOutput):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_A,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
+    content = await generate(service)
 
-    assert observer.failures[0].diagnostic_context == "farewell_evidence"
-    assert observer.failures[0].diagnostic_kind == "news_url_uncorroborated"
-
-
-@pytest.mark.asyncio
-async def test_unknown_realtime_feed_fails_closed() -> None:
-    service, _, observer = service_for(response(weather_realtime_feed="oai-finance"))
-
-    with pytest.raises(OpenAIInvalidOutput):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_A,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
-
-    assert observer.failures[0].diagnostic_context == "web_search_source"
-    assert observer.failures[0].diagnostic_kind == "unknown_realtime_feed"
-
-
-@pytest.mark.asyncio
-async def test_reasoning_output_is_allowed() -> None:
-    service, _, observer = service_for(
-        response(additional_output={"id": "rs_1", "type": "reasoning", "summary": []})
-    )
-
-    content = await service.generate(
-        participant=ParticipantSlot.PARTICIPANT_A,
-        time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-    )
-
-    assert content
+    assert content.endswith(NEWS_URL)
     assert observer.failures == []
+    assert observer.usages[0].realtime_feed_count == 0
 
 
 @pytest.mark.asyncio
-async def test_unexpected_output_union_member_fails_closed() -> None:
+async def test_unknown_source_and_extra_shape_are_ignored_when_citation_is_valid() -> None:
     service, _, observer = service_for(
         response(
-            additional_output={
-                "id": "fc_1",
-                "type": "function_call",
-                "call_id": "call_1",
-                "name": "unexpected",
-                "arguments": "{}",
-                "status": "completed",
-            }
+            unknown_source=True,
+            weather_realtime_feed="oai-weather",
+            citations=(NEWS_URL,),
         )
     )
 
-    with pytest.raises(OpenAIInvalidOutput):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_A,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
+    content = await generate(service)
 
-    assert [failure.code for failure in observer.failures] == ["openai_invalid_output"]
+    assert content.endswith(NEWS_URL)
+    assert observer.failures == []
+    assert observer.usages[0].realtime_feed_count == 1
 
 
 @pytest.mark.asyncio
-async def test_unexpected_output_message_content_fails_closed() -> None:
-    service, _, observer = service_for(
-        response(additional_message_content=SimpleNamespace(type="future_content"))
+async def test_zero_citations_retries_once_then_records_safe_failure_metadata() -> None:
+    service, parse, observer = service_for(response(citations=()))
+    parse.side_effect = [
+        response(citations=(), response_id="resp_first"),
+        response(citations=(), response_id="resp_second"),
+    ]
+
+    with pytest.raises(OpenAIInvalidOutput):
+        await generate(service)
+
+    assert parse.await_count == 2
+    assert [call.kwargs["max_output_tokens"] for call in parse.await_args_list] == [
+        4_000,
+        8_000,
+    ]
+    failure = observer.failures[0]
+    assert failure.response_id == "resp_second"
+    assert failure.attempt_count == 2
+    assert failure.url_citation_count == 0
+    assert failure.diagnostic_context == "farewell_citation"
+    assert NEWS_URL not in repr(observer.failures)
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_never_uses_a_third_application_request() -> None:
+    service, parse, observer = service_for(response())
+    timeout = APITimeoutError(httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    parse.side_effect = [timeout, timeout, response()]
+
+    with pytest.raises(OpenAIUnavailable):
+        await generate(service)
+
+    assert parse.await_count == 2
+    assert observer.failures[0].attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_retry_preserves_usage_from_the_preceding_response() -> None:
+    service, parse, observer = service_for(response())
+    timeout = APITimeoutError(httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    parse.side_effect = [
+        response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            response_id="resp_first",
+        ),
+        timeout,
+    ]
+
+    with pytest.raises(OpenAIUnavailable):
+        await generate(service)
+
+    assert parse.await_count == 2
+    usage = observer.usages[0]
+    assert usage.response_id == "resp_first"
+    assert usage.prior_response_id == "resp_first"
+    assert usage.attempt_count == 2
+    assert usage.retry_count == 1
+    assert usage.prior_failure_reason == "max_output_tokens"
+    assert usage.input_tokens == 20
+    assert usage.output_tokens == 10
+    assert observer.failures[0].attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_authentication_failure_is_not_retried() -> None:
+    service, parse, observer = service_for(response())
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    parse.side_effect = AuthenticationError(
+        "unauthorized",
+        response=httpx.Response(401, request=request),
+        body=None,
     )
 
-    with pytest.raises(OpenAIInvalidOutput):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_A,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
+    with pytest.raises(OpenAIConfigurationError):
+        await generate(service)
 
-    assert [failure.code for failure in observer.failures] == ["openai_invalid_output"]
+    assert parse.await_count == 1
+    assert observer.failures[0].diagnostic_kind == "authentication"
 
 
-@pytest.mark.parametrize("status", ["cancelled", "failed", "in_progress", "incomplete", "queued"])
 @pytest.mark.asyncio
-async def test_non_completed_response_status_fails_closed(status: str) -> None:
-    service, parse, observer = service_for(response(status=status))
+async def test_refusal_is_not_retried() -> None:
+    service, parse, observer = service_for(response(refusal=True, include_search=False))
+
+    with pytest.raises(OpenAIRefusal):
+        await generate(service)
+
+    assert parse.await_count == 1
+    assert observer.failures[0].code == "openai_refusal"
+
+
+@pytest.mark.asyncio
+async def test_content_filter_is_not_retried() -> None:
+    service, parse, observer = service_for(
+        response(
+            status="incomplete",
+            incomplete_reason="content_filter",
+            include_search=False,
+        )
+    )
 
     with pytest.raises(OpenAIIncompleteResponse):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
+        await generate(service)
 
-    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
     assert parse.await_count == 1
-    assert observer.failures[0].diagnostic_context == "response_status"
-    assert observer.failures[0].diagnostic_kind == ("missing" if status == "incomplete" else status)
+    assert observer.failures[0].diagnostic_kind == "content_filter"
 
 
 @pytest.mark.asyncio
-async def test_max_output_tokens_incomplete_retries_once_with_larger_budget() -> None:
+async def test_incomplete_response_retries_once_and_can_succeed() -> None:
     service, parse, observer = service_for(response())
     parse.side_effect = [
         response(
             status="incomplete",
             incomplete_reason="max_output_tokens",
             response_id="resp_incomplete",
-            input_tokens=23,
-            output_tokens=17,
-            cached_input_tokens=5,
-            reasoning_tokens=13,
         ),
-        response(
-            response_id="resp_completed",
-            input_tokens=29,
-            output_tokens=19,
-            cached_input_tokens=7,
-            reasoning_tokens=11,
-        ),
+        response(response_id="resp_completed"),
     ]
 
-    content = await service.generate(
-        participant=ParticipantSlot.PARTICIPANT_C,
-        time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-    )
+    content = await generate(service)
 
-    assert content
+    assert content.endswith(NEWS_URL)
     assert parse.await_count == 2
-    assert [call.kwargs["max_output_tokens"] for call in parse.await_args_list] == [4_000, 8_000]
-    assert observer.failures == []
-    assert observer.usages[0].retry_count == 1
-    assert observer.usages[0].prior_incomplete_reason == "max_output_tokens"
-    assert observer.usages[0].response_id == "resp_completed"
-    assert observer.usages[0].prior_response_id == "resp_incomplete"
-    assert observer.usages[0].input_tokens == 52
-    assert observer.usages[0].output_tokens == 36
-    assert observer.usages[0].cached_input_tokens == 12
-    assert observer.usages[0].reasoning_tokens == 24
-
-
-@pytest.mark.asyncio
-async def test_content_filter_incomplete_is_not_retried() -> None:
-    service, parse, observer = service_for(
-        response(status="incomplete", incomplete_reason="content_filter")
-    )
-
-    with pytest.raises(OpenAIIncompleteResponse):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
-
-    assert parse.await_count == 1
-    assert observer.failures[0].diagnostic_context == "response_status"
-    assert observer.failures[0].diagnostic_kind == "content_filter"
-
-
-@pytest.mark.asyncio
-async def test_repeated_max_output_tokens_incomplete_stops_after_one_retry() -> None:
-    service, parse, observer = service_for(response())
-    parse.side_effect = [
-        response(
-            status="incomplete",
-            incomplete_reason="max_output_tokens",
-            response_id="resp_first_incomplete",
-            input_tokens=23,
-            output_tokens=17,
-            cached_input_tokens=5,
-            reasoning_tokens=13,
-        ),
-        response(
-            status="incomplete",
-            incomplete_reason="max_output_tokens",
-            response_id="resp_retry_incomplete",
-            input_tokens=29,
-            output_tokens=19,
-            cached_input_tokens=7,
-            reasoning_tokens=11,
-        ),
-    ]
-
-    with pytest.raises(OpenAIIncompleteResponse):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
-
-    assert parse.await_count == 2
-    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
-    assert observer.failures[0].diagnostic_context == "response_status"
-    assert observer.failures[0].diagnostic_kind == "max_output_tokens"
-    assert len(observer.usages) == 1
     usage = observer.usages[0]
-    assert usage.response_id == "resp_retry_incomplete"
-    assert usage.prior_response_id == "resp_first_incomplete"
+    assert usage.attempt_count == 2
     assert usage.retry_count == 1
-    assert usage.prior_incomplete_reason == "max_output_tokens"
-    assert usage.input_tokens == 52
-    assert usage.output_tokens == 36
-    assert usage.cached_input_tokens == 12
-    assert usage.reasoning_tokens == 24
-    assert usage.web_search_source_count is None
-    assert usage.url_citation_count is None
-    assert usage.evidence_source_count is None
-
-
-@pytest.mark.asyncio
-async def test_retry_web_search_failure_records_both_attempts_usage() -> None:
-    service, parse, observer = service_for(response())
-    parse.side_effect = [
-        response(
-            status="incomplete",
-            incomplete_reason="max_output_tokens",
-            response_id="resp_first_incomplete",
-            input_tokens=23,
-            output_tokens=17,
-            cached_input_tokens=5,
-            reasoning_tokens=13,
-        ),
-        response(
-            search_status="failed",
-            response_id="resp_retry_invalid_search",
-            input_tokens=29,
-            output_tokens=19,
-            cached_input_tokens=7,
-            reasoning_tokens=11,
-        ),
-    ]
-
-    with pytest.raises(OpenAIIncompleteResponse):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
-
-    assert parse.await_count == 2
-    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
-    assert observer.failures[0].diagnostic_context == "web_search_status"
-    assert observer.failures[0].diagnostic_kind == "failed"
-    assert len(observer.usages) == 1
-    usage = observer.usages[0]
-    assert usage.response_id == "resp_retry_invalid_search"
-    assert usage.prior_response_id == "resp_first_incomplete"
-    assert usage.retry_count == 1
-    assert usage.prior_incomplete_reason == "max_output_tokens"
-    assert usage.input_tokens == 52
-    assert usage.output_tokens == 36
-    assert usage.cached_input_tokens == 12
-    assert usage.reasoning_tokens == 24
-    assert usage.web_search_source_count is None
-    assert usage.url_citation_count is None
-    assert usage.evidence_source_count is None
-
-
-@pytest.mark.asyncio
-async def test_retry_request_timeout_records_first_attempt_usage() -> None:
-    service, parse, observer = service_for(response())
-    parse.side_effect = [
-        response(
-            status="incomplete",
-            incomplete_reason="max_output_tokens",
-            response_id="resp_first_incomplete",
-            input_tokens=23,
-            output_tokens=17,
-            cached_input_tokens=5,
-            reasoning_tokens=13,
-        ),
-        APITimeoutError(httpx.Request("POST", "https://api.openai.com/v1/responses")),
-    ]
-
-    with pytest.raises(OpenAIUnavailable):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
-
-    assert parse.await_count == 2
-    assert [failure.code for failure in observer.failures] == ["openai_unavailable"]
-    assert len(observer.usages) == 1
-    usage = observer.usages[0]
-    assert usage.response_id == "resp_first_incomplete"
-    assert usage.prior_response_id is None
-    assert usage.retry_count == 1
-    assert usage.prior_incomplete_reason == "max_output_tokens"
-    assert usage.input_tokens == 23
-    assert usage.output_tokens == 17
-    assert usage.cached_input_tokens == 5
-    assert usage.reasoning_tokens == 13
-    assert usage.web_search_source_count is None
-    assert usage.url_citation_count is None
-    assert usage.evidence_source_count is None
-
-
-@pytest.mark.asyncio
-async def test_retry_cancellation_records_first_attempt_usage_without_failure() -> None:
-    service, parse, observer = service_for(response())
-    parse.side_effect = [
-        response(
-            status="incomplete",
-            incomplete_reason="max_output_tokens",
-            response_id="resp_first_incomplete",
-            input_tokens=23,
-            output_tokens=17,
-            cached_input_tokens=5,
-            reasoning_tokens=13,
-        ),
-        asyncio.CancelledError(),
-    ]
-
-    with pytest.raises(asyncio.CancelledError):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
-
-    assert parse.await_count == 2
-    assert observer.failures == []
-    assert len(observer.usages) == 1
-    usage = observer.usages[0]
-    assert usage.response_id == "resp_first_incomplete"
-    assert usage.prior_response_id is None
-    assert usage.retry_count == 1
-    assert usage.prior_incomplete_reason == "max_output_tokens"
-    assert usage.input_tokens == 23
-    assert usage.output_tokens == 17
-    assert usage.cached_input_tokens == 5
-    assert usage.reasoning_tokens == 13
-    assert usage.web_search_source_count is None
-    assert usage.url_citation_count is None
-    assert usage.evidence_source_count is None
+    assert usage.prior_failure_reason == "max_output_tokens"
+    assert usage.prior_response_id == "resp_incomplete"
 
 
 @pytest.mark.parametrize("search_status", ["failed", "in_progress", "searching"])
 @pytest.mark.asyncio
-async def test_non_completed_web_search_status_fails_closed(search_status: str) -> None:
-    service, _, observer = service_for(response(search_status=search_status))
+async def test_non_completed_web_search_retries_once_then_fails(search_status: str) -> None:
+    service, parse, observer = service_for(response(search_status=search_status))
 
     with pytest.raises(OpenAIIncompleteResponse):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
-        )
+        await generate(service)
 
-    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
+    assert parse.await_count == 2
     assert observer.failures[0].diagnostic_context == "web_search_status"
-    assert observer.failures[0].diagnostic_kind == search_status
 
 
-@pytest.mark.parametrize("message_status", ["in_progress", "incomplete"])
 @pytest.mark.asyncio
-async def test_non_completed_output_message_status_fails_closed(
-    message_status: str,
-) -> None:
-    service, _, observer = service_for(response(message_status=message_status))
-
-    with pytest.raises(OpenAIIncompleteResponse):
-        await service.generate(
-            participant=ParticipantSlot.PARTICIPANT_C,
-            time_context=FarewellTimeContext("2026-08-11T21:00+09:00", "夜", "夏"),
+async def test_unknown_output_union_member_does_not_block_valid_citation() -> None:
+    service, _, observer = service_for(
+        response(
+            additional_output={
+                "id": "fc_1",
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "future_output",
+                "arguments": "{}",
+                "status": "completed",
+            }
         )
+    )
 
-    assert [failure.code for failure in observer.failures] == ["openai_incomplete"]
-    assert observer.failures[0].diagnostic_context == "message_status"
-    assert observer.failures[0].diagnostic_kind == message_status
+    content = await generate(service)
+
+    assert content.endswith(NEWS_URL)
+    assert observer.failures == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_citation_is_ignored_and_causes_one_bounded_retry() -> None:
+    credentialed_url = "https://user:pass" + "@" + "example.test/private"
+    service, parse, observer = service_for(response(citations=(credentialed_url,)))
+
+    with pytest.raises(OpenAIInvalidOutput):
+        await generate(service)
+
+    assert parse.await_count == 2
+    assert observer.failures[0].url_citation_count == 0
+
+
+@pytest.mark.asyncio
+async def test_structured_output_validation_failure_retries_once() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = [ValueError("provider shape"), response()]
+
+    content = await generate(service)
+
+    assert content.endswith(NEWS_URL)
+    assert parse.await_count == 2
+    assert observer.usages[0].attempt_count == 2
+    assert "provider shape" not in repr(observer.usages)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_generation_is_not_recorded_as_a_failure() -> None:
+    service, parse, observer = service_for(response())
+    parse.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await generate(service)
+
+    assert observer.failures == []

@@ -19,6 +19,11 @@ from shittim_chest.application import (
 from shittim_chest.domain import ParticipantSlot
 
 
+async def history(*messages: discord.Message):
+    for message in messages:
+        yield message
+
+
 def config() -> DiscordRuntimeConfig:
     return DiscordRuntimeConfig(
         guild_id="101",
@@ -62,6 +67,7 @@ async def test_selected_participant_posts_once_to_normal_channel_and_verifies_ac
     message.author = selected.user
     message.content = "みんな、また楽しく話そうね!" * 5
     message.nonce = "A" * 22
+    channel.history.return_value = history()
     channel.send = AsyncMock(return_value=message)
     sender = DiscordFarewellSender(clients=bot_clients, config=config())
 
@@ -77,6 +83,7 @@ async def test_selected_participant_posts_once_to_normal_channel_and_verifies_ac
     assert kwargs["nonce"] == "A" * 22
     assert kwargs["allowed_mentions"].to_dict() == {"parse": []}
     assert kwargs["suppress_embeds"] is True
+    channel.history.assert_not_called()
     for slot, client in bot_clients.items():
         if slot is not DiscordBotSlot.PARTICIPANT_B:
             cast(Any, client).get_channel.assert_not_called()
@@ -97,3 +104,83 @@ async def test_thread_or_missing_permission_is_rejected_without_a_post() -> None
         )
 
     selected.get_channel.return_value.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_code"),
+    [
+        (429, "farewell_discord_unavailable"),
+        (503, "farewell_discord_unavailable"),
+        (400, "farewell_delivery_rejected"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_http_failures_are_classified_for_bounded_retry(
+    status: int,
+    expected_code: str,
+) -> None:
+    bot_clients = clients()
+    selected = cast(Any, bot_clients[DiscordBotSlot.PARTICIPANT_C])
+    member = SimpleNamespace(id=selected.user.id)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 103
+    channel.guild = SimpleNamespace(id=101, me=member)
+    channel.permissions_for.return_value = SimpleNamespace(
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+    )
+    selected.get_channel.return_value = channel
+    channel.history.return_value = history()
+    response = cast(Any, SimpleNamespace(status=status, reason="test status"))
+    channel.send = AsyncMock(side_effect=discord.HTTPException(response, "test"))
+    sender = DiscordFarewellSender(clients=bot_clients, config=config())
+
+    with pytest.raises(FarewellDeliveryError) as captured:
+        await sender.send(
+            participant=ParticipantSlot.PARTICIPANT_C,
+            content="挨拶\n参考リンク: https://example.test/source",
+            nonce="C" * 22,
+        )
+
+    assert captured.value.code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_retry_reconciles_an_ambiguous_first_post_without_duplicate() -> None:
+    bot_clients = clients()
+    selected = cast(Any, bot_clients[DiscordBotSlot.PARTICIPANT_A])
+    member = SimpleNamespace(id=selected.user.id)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 103
+    channel.guild = SimpleNamespace(id=101, me=member)
+    channel.permissions_for.return_value = SimpleNamespace(
+        view_channel=True,
+        send_messages=True,
+        read_message_history=True,
+    )
+    selected.get_channel.return_value = channel
+    message = MagicMock(spec=discord.Message)
+    message.channel = channel
+    message.author = selected.user
+    message.content = "挨拶\n参考リンク: https://example.test/source"
+    message.nonce = "D" * 22
+    channel.history.return_value = history(message)
+    channel.send = AsyncMock(side_effect=TimeoutError())
+    sender = DiscordFarewellSender(clients=bot_clients, config=config())
+
+    with pytest.raises(FarewellDeliveryError, match="farewell_delivery_timeout"):
+        await sender.send(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            content=message.content,
+            nonce=message.nonce,
+        )
+
+    await sender.send(
+        participant=ParticipantSlot.PARTICIPANT_A,
+        content=message.content,
+        nonce=message.nonce,
+        reconcile=True,
+    )
+
+    channel.send.assert_awaited_once()

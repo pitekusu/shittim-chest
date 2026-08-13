@@ -30,6 +30,8 @@ class OpenAIUsageRecord:
     title_fallback_count: int | None = None
     title_fallback_kinds: str | None = None
     retry_count: int | None = None
+    attempt_count: int | None = None
+    prior_failure_reason: str | None = None
     prior_incomplete_reason: str | None = None
     prior_response_id: str | None = None
 
@@ -44,6 +46,11 @@ class OpenAIFailureRecord:
     latency_ms: int
     diagnostic_context: str | None = None
     diagnostic_kind: str | None = None
+    response_id: str | None = None
+    attempt_count: int | None = None
+    web_search_source_count: int | None = None
+    realtime_feed_count: int | None = None
+    url_citation_count: int | None = None
 
 
 class OpenAIUsageRecorder(Protocol):

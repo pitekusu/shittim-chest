@@ -59,18 +59,25 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
                 title_fallback_count=1,
                 title_fallback_kinds="missing",
                 retry_count=1,
+                attempt_count=2,
+                prior_failure_reason="rate_limited",
                 prior_incomplete_reason="max_output_tokens",
                 prior_response_id="response-incomplete",
             )
         )
         subject.record_failure(
             OpenAIFailureRecord(
-                "vote",
-                "rate_limited",
-                "policy",
-                8,
-                "url_citation_url",
-                "object",
+                operation="vote",
+                code="rate_limited",
+                policy_id="policy",
+                latency_ms=8,
+                diagnostic_context="url_citation_url",
+                diagnostic_kind="object",
+                response_id="response-failed",
+                attempt_count=2,
+                web_search_source_count=3,
+                realtime_feed_count=1,
+                url_citation_count=0,
             )
         )
 
@@ -91,10 +98,17 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
     assert payloads[1]["title_fallback_count"] == 1
     assert payloads[1]["title_fallback_kinds"] == "missing"
     assert payloads[1]["retry_count"] == 1
+    assert payloads[1]["attempt_count"] == 2
+    assert payloads[1]["prior_failure_reason"] == "rate_limited"
     assert payloads[1]["prior_incomplete_reason"] == "max_output_tokens"
     assert payloads[1]["prior_response_id"] == "response-incomplete"
     assert payloads[2]["diagnostic_context"] == "url_citation_url"
     assert payloads[2]["diagnostic_kind"] == "object"
+    assert payloads[2]["response_id"] == "response-failed"
+    assert payloads[2]["attempt_count"] == 2
+    assert payloads[2]["web_search_source_count"] == 3
+    assert payloads[2]["realtime_feed_count"] == 1
+    assert payloads[2]["url_citation_count"] == 0
     encoded = json.dumps(payloads)
     assert "question" not in encoded
     assert "prompt" not in encoded

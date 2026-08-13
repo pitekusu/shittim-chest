@@ -49,13 +49,21 @@ class DiscordFarewellSender:
         participant: ParticipantSlot,
         content: str,
         nonce: str,
+        reconcile: bool = False,
     ) -> None:
-        """Post once, verify the acknowledgement, and never retry application-side."""
+        """Post once and classify whether the coordinator may retry this nonce."""
 
         client = self._clients[DiscordBotSlot(participant.value)]
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 channel = await self._resolve_channel(client)
+                if reconcile and await self._reconcile_existing(
+                    client,
+                    channel,
+                    content=content,
+                    nonce=nonce,
+                ):
+                    return
                 message = await channel.send(
                     content,
                     nonce=nonce,
@@ -71,7 +79,11 @@ class DiscordFarewellSender:
             raise FarewellDeliveryError("farewell_permission_denied") from error
         except discord.NotFound as error:
             raise FarewellDeliveryError("farewell_channel_unavailable") from error
-        except (discord.HTTPException, OSError) as error:
+        except discord.HTTPException as error:
+            if error.status != 429 and error.status < 500:
+                raise FarewellDeliveryError("farewell_delivery_rejected") from error
+            raise FarewellDeliveryError("farewell_discord_unavailable") from error
+        except OSError as error:
             raise FarewellDeliveryError("farewell_discord_unavailable") from error
 
     async def _resolve_channel(self, client: discord.Client) -> discord.TextChannel:
@@ -100,6 +112,21 @@ class DiscordFarewellSender:
         ):
             raise FarewellDeliveryError("farewell_permission_denied")
         return channel
+
+    async def _reconcile_existing(
+        self,
+        client: discord.Client,
+        channel: discord.TextChannel,
+        *,
+        content: str,
+        nonce: str,
+    ) -> bool:
+        async for message in channel.history(limit=20):
+            if str(message.nonce) != nonce:
+                continue
+            self._verify_message(client, message, content=content, nonce=nonce)
+            return True
+        return False
 
     def _verify_message(
         self,

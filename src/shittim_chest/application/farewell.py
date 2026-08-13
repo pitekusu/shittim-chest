@@ -4,29 +4,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from shittim_chest.application.discord import sanitize_discord_model_text
 from shittim_chest.domain import ParticipantSlot
 
-FAREWELL_MIN_CHARACTERS = 60
-FAREWELL_MAX_CHARACTERS = 160
-FAREWELL_GENERATION_LEAD = timedelta(minutes=2)
+DISCORD_MESSAGE_LIMIT = 2_000
+FAREWELL_GENERATION_LEAD = timedelta(minutes=5)
 TOKYO_TIMEZONE = ZoneInfo("Asia/Tokyo")
-
-_URL_PATTERN = re.compile(
-    r"(?:https?://|www\.|(?<![A-Za-z0-9@_-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}"
-    r"[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?::[0-9]{1,5})?(?:[/#?][^\s]*)?)",
-    re.IGNORECASE,
-)
-_DISCLAIMER_FRAGMENTS = (
-    "AI生成",
-    "正確性や専門的判断",
-    "専門的判断を保証",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,26 +22,6 @@ class FarewellTimeContext:
     local_datetime: str
     period: str
     season: str
-
-
-@dataclass(frozen=True, slots=True)
-class FarewellCandidate:
-    """One process-memory-only farewell bound to an IDLE generation."""
-
-    generation: int
-    stop_eligible_at: datetime
-    participant: ParticipantSlot
-    content: str = field(repr=False)
-    nonce: str
-
-    def __post_init__(self) -> None:
-        if isinstance(self.generation, bool) or self.generation < 1:
-            raise ValueError("farewell generation must be positive")
-        _require_utc(self.stop_eligible_at)
-        if re.fullmatch(r"[A-Za-z0-9_-]{22}", self.nonce) is None:
-            raise ValueError("farewell nonce must be 22 base64url characters")
-        if not self.content.strip():
-            raise ValueError("farewell content must not be empty")
 
 
 def farewell_time_context(now: datetime) -> FarewellTimeContext:
@@ -86,19 +52,17 @@ def farewell_time_context(now: datetime) -> FarewellTimeContext:
     )
 
 
-def prepare_farewell_content(value: str) -> str:
-    """Validate the short one-line contract and escape Discord formatting."""
+def prepare_farewell_content(message: str, citation_url: str) -> str:
+    """Render one available greeting plus its first provider citation."""
 
-    normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if "\n" in normalized:
-        raise ValueError("farewell content must be one line")
-    if not FAREWELL_MIN_CHARACTERS <= len(normalized) <= FAREWELL_MAX_CHARACTERS:
-        raise ValueError("farewell content is outside the allowed length")
-    if _URL_PATTERN.search(normalized) is not None:
-        raise ValueError("farewell content must not expose source URLs")
-    if any(fragment in normalized for fragment in _DISCLAIMER_FRAGMENTS):
-        raise ValueError("farewell content must not contain a fixed disclaimer")
-    return sanitize_discord_model_text(normalized)
+    normalized = " ".join(message.split())
+    if not normalized:
+        raise ValueError("farewell content must not be empty")
+    reference = f"\n参考リンク: {citation_url}"
+    available = DISCORD_MESSAGE_LIMIT - len(reference)
+    if available < 1:
+        raise ValueError("farewell citation leaves no room for content")
+    return f"{normalized[:available].rstrip()}{reference}"
 
 
 def farewell_nonce(
@@ -124,10 +88,8 @@ def _require_utc(value: datetime) -> None:
 
 
 __all__ = (
+    "DISCORD_MESSAGE_LIMIT",
     "FAREWELL_GENERATION_LEAD",
-    "FAREWELL_MAX_CHARACTERS",
-    "FAREWELL_MIN_CHARACTERS",
-    "FarewellCandidate",
     "FarewellTimeContext",
     "farewell_nonce",
     "farewell_time_context",
