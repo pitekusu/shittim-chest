@@ -1,38 +1,24 @@
 # Design document mirror
 
-The 20 project documents in this directory are a public, one-way mirror of the
-operator's canonical Obsidian notes. They include requirements, design, and the
-append-only implementation/test evidence record. The local Vault path is
-intentionally not stored in this public repository.
+このdirectoryは、operatorが管理するpublic-safeなObsidian正本20文書の一方向mirrorです。
+要求、現行設計、運用、試験、1.0の検証状態を領域別に分けています。変更履歴の完全な
+複製ではなく、現在の契約を短時間で確認できることを目的とします。
 
-The three supplemental scale-to-zero authorities are mirrored under the exact
-relative directory `100_Ondemand Fargate/`:
+入口は[00_シッテムの箱_ドキュメント索引.md](00_シッテムの箱_ドキュメント索引.md)です。
+完了済みの是正計画とScale-to-Zero資料は、現行設計を重複させない短い完了記録として
+残しています。
 
-- `10_scale-to-zero-goal.md`: requirements and design authority
-- `30_scale-to-zero-commit-plan.md`: commit and interruption-recovery authority
-- `20_scale-to-zero-completion-checklist.md`: completion authority
-
-The synchronization tool validates the directory and these exact files,
-rejects unexpected entries and symlinks recursively, and mirrors all three
-without rewriting their bytes. Do not document the source's local absolute
-path.
-
-Do not edit the numbered design documents directly. Set the source path for the
-current shell, then synchronize from the repository root:
+番号付き文書を直接編集しないでください。正本を更新後、repository rootで同期します。
 
 ```sh
-export SHITTIM_DOCS_SOURCE="<path-to-public-obsidian-project-folder>"
+export SHITTIM_DOCS_SOURCE="<public-obsidian-project-folder>"
 python tools/sync_docs.py --write --source "$SHITTIM_DOCS_SOURCE"
 python tools/sync_docs.py --check --source "$SHITTIM_DOCS_SOURCE"
+uv run --frozen python -m tools.check_docs
 ```
 
-The synchronization tool requires the 17 approved root Markdown filenames and
-the exact nested directory with its three approved files (20 documents total).
-It rejects missing or unexpected entries, symlinks, representative credentials,
-Discord snowflakes, absolute home paths, and email addresses, and compares file
-bytes without rewriting Markdown formatting. Production identifiers and persona
-configuration belong in a separate non-mirrored operator source and versioned
-SSM parameters.
+同期toolは17個のroot文書と`100_Ondemand Fargate/`配下3文書をexact setとして扱い、
+symlink、余分なfile、代表的なcredential、Discord snowflake、email address、local home pathを
+拒否します。production identifierとprivate personaはmirror対象外です。
 
-The documents in this directory are not licensed under the repository's MIT
-License. See [LICENSE.md](LICENSE.md).
+文書はrepositoryのMIT License対象外です。[LICENSE.md](LICENSE.md)を参照してください。
