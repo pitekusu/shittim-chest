@@ -9,7 +9,9 @@ from tools.check_notification_workflows import (
     ALLOWED_TARGET_WORKFLOW,
     DEPLOY_GUARD_WORKFLOW,
     DRIFT_WORKFLOW,
+    RECORDS_BACKFILL_WORKFLOW,
     RECORDS_CI_WORKFLOW,
+    RECORDS_RELEASE_WORKFLOW,
     RELEASE_REQUIRED_MAIN_CHECKS,
     RELEASE_WORKFLOW,
     WORKFLOW_DIRECTORY,
@@ -38,6 +40,10 @@ def _workflow_directory(tmp_path: Path) -> Path:
     (directory / ci.name).write_bytes(ci.read_bytes())
     records_ci = WORKFLOW_DIRECTORY / RECORDS_CI_WORKFLOW
     (directory / records_ci.name).write_bytes(records_ci.read_bytes())
+    records_release = WORKFLOW_DIRECTORY / RECORDS_RELEASE_WORKFLOW
+    (directory / records_release.name).write_bytes(records_release.read_bytes())
+    records_backfill = WORKFLOW_DIRECTORY / RECORDS_BACKFILL_WORKFLOW
+    (directory / records_backfill.name).write_bytes(records_backfill.read_bytes())
     return directory
 
 
@@ -130,6 +136,22 @@ def test_records_ci_requires_a_frozen_python_dependency_audit(tmp_path: Path) ->
         validate_notification_workflows(directory)
 
 
+def test_records_ci_excludes_local_workspace_paths_from_hashed_audit(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_CI_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "--no-emit-local",
+            "--no-emit-project",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="audit the frozen Records Python lock"):
+        validate_notification_workflows(directory)
+
+
 def test_records_ci_requires_the_pinned_pnpm_vite_plus_toolchain(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_CI_WORKFLOW
@@ -159,6 +181,82 @@ def test_records_ci_rejects_the_non_allowlisted_vite_plus_action(tmp_path: Path)
     )
 
     with pytest.raises(WorkflowPolicyError, match="allowlisted GitHub-owned"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_production_approval(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("    environment: production\n", "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_complete_check_run_pagination(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "gh api --paginate --slurp",
+            "gh api",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_waits_for_the_attested_change_set_type(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "--query ChangeSetType --output text",
+            "--query Status --output text",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_backfill_rejects_unbounded_page_limit(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_BACKFILL_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '          test "${PAGE_LIMIT}" -le 100\n',
+            "          true\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="bounded and content-free"):
+        validate_notification_workflows(directory)
+
+
+def test_records_backfill_requires_every_candidate_to_be_validated(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_BACKFILL_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "             .validated == .candidates and\n",
+            "             .validated <= .candidates and\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="bounded and content-free"):
         validate_notification_workflows(directory)
 
 

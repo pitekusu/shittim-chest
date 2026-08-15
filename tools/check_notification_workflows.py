@@ -15,6 +15,8 @@ DEPLOY_GUARD_WORKFLOW = "production-deploy-guard.yml"
 RELEASE_WORKFLOW = "release.yml"
 DRIFT_WORKFLOW = "drift.yml"
 RECORDS_CI_WORKFLOW = "records-ci.yml"
+RECORDS_RELEASE_WORKFLOW = "records-release.yml"
+RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.35.0"
 PINNED_BUILDKIT_DIGEST = "sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
@@ -115,6 +117,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_release(directory)
     _validate_ci_container_risk(directory)
     _validate_ci_path_isolation(directory)
+    _validate_records_workflows(directory)
     _validate_drift(directory)
     _validate_aws_capability_boundary(directory)
     _validate_workflow_run_allowlist(directory)
@@ -227,7 +230,13 @@ def _validate_deploy_guard(directory: Path) -> None:
 
 
 def _validate_aws_capability_boundary(directory: Path) -> None:
-    approved = {DEPLOY_GUARD_WORKFLOW, RELEASE_WORKFLOW, DRIFT_WORKFLOW}
+    approved = {
+        DEPLOY_GUARD_WORKFLOW,
+        RELEASE_WORKFLOW,
+        DRIFT_WORKFLOW,
+        RECORDS_RELEASE_WORKFLOW,
+        RECORDS_BACKFILL_WORKFLOW,
+    }
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
         if path.name in approved:
             continue
@@ -1089,14 +1098,14 @@ def _validate_ci_path_isolation(directory: Path) -> None:
             )
 
     records_condition = "if: needs.records-changes.outputs.records == 'true'"
-    for job in ("records-python", "records-contract", "records-web"):
+    for job in ("records-python", "records-contract", "records-web", "records-infra"):
         block = _workflow_job_block(records_text, job)
         if block.count(records_condition) != 1:
             raise WorkflowPolicyError(f"Records CI {job} must use the canonical path decision")
 
     records_python = _workflow_job_block(records_text, "records-python")
     required_records_audit = (
-        "uv export --quiet --frozen --all-groups --no-emit-project --no-annotate",
+        "uv export --quiet --frozen --all-groups --no-emit-local --no-annotate",
         "records-audit-requirements.txt",
         "uv run --frozen pip-audit --strict --require-hashes",
     )
@@ -1130,21 +1139,96 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "- records-python",
         "- records-contract",
         "- records-web",
+        "- records-infra",
         "CHANGES_RESULT: ${{ needs.records-changes.result }}",
         "REQUIRED: ${{ needs.records-changes.outputs.records }}",
+        "INFRA_RESULT: ${{ needs.records-infra.result }}",
         'test "${CHANGES_RESULT}" = success',
         'elif [ "${REQUIRED}" = false ]',
         'test "${PYTHON_RESULT}" = success',
         'test "${CONTRACT_RESULT}" = success',
         'test "${WEB_RESULT}" = success',
+        'test "${INFRA_RESULT}" = success',
         'test "${PYTHON_RESULT}" = skipped',
         'test "${CONTRACT_RESULT}" = skipped',
         'test "${WEB_RESULT}" = skipped',
+        'test "${INFRA_RESULT}" = skipped',
     )
     if any(marker not in records_gate for marker in required_records_gate):
         raise WorkflowPolicyError(
             "Records CI must preserve one required result around all conditional Records jobs"
         )
+
+
+def _validate_records_workflows(directory: Path) -> None:
+    release_path = directory / RECORDS_RELEASE_WORKFLOW
+    backfill_path = directory / RECORDS_BACKFILL_WORKFLOW
+    if not release_path.is_file() or not backfill_path.is_file():
+        raise WorkflowPolicyError("Records release and backfill workflows are required")
+    release = release_path.read_text(encoding="utf-8")
+    backfill = backfill_path.read_text(encoding="utf-8")
+    _require_full_action_pins(release, "Records Release")
+    _require_full_action_pins(backfill, "Records Backfill")
+    if _top_level_triggers(release) != ("workflow_dispatch",):
+        raise WorkflowPolicyError("Records Release must use exactly workflow_dispatch")
+    if _top_level_triggers(backfill) != ("workflow_dispatch",):
+        raise WorkflowPolicyError("Records Backfill must use exactly workflow_dispatch")
+    if "secrets." in release or "secrets." in backfill:
+        raise WorkflowPolicyError("Records workflows must consume only pre-registered handles")
+
+    release_markers = (
+        "name: Records Release",
+        "group: production-release",
+        "runs-on: ubuntu-24.04-arm",
+        "source_stream_arn:",
+        "records-gate",
+        "gh api --paginate --slurp",
+        "npm run synth:records",
+        "tools/build_records_bundle.py",
+        "--format cyclonedx1.5",
+        "vars.AWS_RECORDS_PLAN_ROLE_ARN",
+        "vars.AWS_RECORDS_DEPLOY_ROLE_ARN",
+        "records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful",
+        "records-release-${{ github.run_id }}-${{ github.run_attempt }}-application",
+        "ShittimChest-Prod-RecordsStateful",
+        "ShittimChest-Prod-RecordsApplication",
+        'all(.[]; .Action != "Remove"',
+        '(.Replacement // "False") == "False"',
+        "uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4",
+        "environment: production",
+        "Execute only the attested Records Change Sets",
+        "--query ChangeSetType --output text",
+        'case "${change_set_type}" in',
+        "stack-create-complete",
+        "stack-update-complete",
+        "Clean up only unexecuted Records Change Sets",
+    )
+    if any(marker not in release for marker in release_markers):
+        raise WorkflowPolicyError("Records Release is missing its immutable plan/deploy boundary")
+    deploy_block = _workflow_job_block(release, "deploy")
+    if deploy_block.count("environment: production") != 1:
+        raise WorkflowPolicyError("Records deploy requires one production Environment approval")
+    if "docker build" in release or "docker push" in release:
+        raise WorkflowPolicyError("Records Release must not build or push a Fargate image")
+
+    backfill_markers = (
+        "name: Records Backfill",
+        "group: records-backfill",
+        "environment: production",
+        "vars.AWS_RECORDS_BACKFILL_ROLE_ARN",
+        'test "${MODE}" = dry-run || test "${MODE}" = apply',
+        'test "${PAGE_LIMIT}" -ge 1',
+        'test "${PAGE_LIMIT}" -le 100',
+        "lambda get-function-configuration",
+        "lambda invoke",
+        "shittim-chest-production-records-backfill",
+        'keys == ["candidates","complete","mode","projected","skipped","validated"]',
+        ".validated == .candidates",
+    )
+    if any(marker not in backfill for marker in backfill_markers):
+        raise WorkflowPolicyError("Records Backfill is not bounded and content-free")
+    if "for attempt" in backfill or "while " in backfill:
+        raise WorkflowPolicyError("Records Backfill may invoke only one bounded page per run")
 
 
 def _workflow_job_block(text: str, job_id: str) -> str:
