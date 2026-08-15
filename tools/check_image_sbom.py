@@ -14,7 +14,7 @@ from typing import Final, cast
 MAXIMUM_SBOM_BYTES: Final = 20 * 1024 * 1024
 PYPI_PURL_PREFIX: Final = "pkg:pypi/"
 DEBIAN_PURL_PREFIX: Final = "pkg:deb/debian/"
-PROJECT_VERSION: Final = "0.1.0"
+PROJECT_VERSION: Final = "1.0.0"
 FORBIDDEN_DEVELOPMENT_PACKAGES: Final = frozenset(
     {"hypothesis", "import-linter", "mypy", "pip-audit", "pytest", "ruff", "ty"}
 )
@@ -94,8 +94,8 @@ def validate_spdx_document(document: dict[str, object]) -> tuple[int, int]:
     if not debian_purls:
         raise ImageSbomError("image SBOM contains no Debian OS packages")
     expected_project_purl = f"pkg:pypi/shittim-chest@{PROJECT_VERSION}"
-    if not any(purl.startswith(expected_project_purl) for purl in python_purls):
-        raise ImageSbomError("image SBOM is missing shittim-chest 0.1.0")
+    if expected_project_purl not in python_purls:
+        raise ImageSbomError(f"image SBOM is missing shittim-chest {PROJECT_VERSION}")
     normalized_names = {
         re.sub(r"[-_.]+", "-", purl.removeprefix(PYPI_PURL_PREFIX).split("@", 1)[0]).lower()
         for purl in python_purls

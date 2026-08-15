@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -39,6 +39,9 @@ class FakeUseCases:
     )
     claims: list[IngressClaimFence | None] = field(default_factory=list)
     terminal_error_code: str | None = None
+    snapshot_debate_id: DebateId | None = None
+    snapshot_attempt_id: AttemptId | None = None
+    snapshot_phase: DebatePhase | None = None
     aborts: list[tuple[IngressKind, str]] = field(default_factory=list)
 
     async def accept_debate(
@@ -77,10 +80,12 @@ class FakeUseCases:
         assert debate_id == self.debate_id
         command = self.commands[-1]
         retry_of = command.expected_attempt_id if isinstance(command, RetryDebateCommand) else None
-        phase = DebatePhase.FAILED if self.terminal_error_code is not None else DebatePhase.ACCEPTED
+        phase = self.snapshot_phase or (
+            DebatePhase.FAILED if self.terminal_error_code is not None else DebatePhase.ACCEPTED
+        )
         state = DebateState(
-            debate_id=self.debate_id,
-            attempt_id=self.attempt_id,
+            debate_id=self.snapshot_debate_id or self.debate_id,
+            attempt_id=self.snapshot_attempt_id or self.attempt_id,
             phase=phase,
             recovery_state=RecoveryState.NONE,
             updated_at=NOW,
@@ -176,6 +181,23 @@ def test_new_debate_conversion_preserves_display_metadata_and_operation_id() -> 
 
 
 @pytest.mark.parametrize(
+    ("kind", "error_code", "message"),
+    [
+        (IngressKind.CANCEL, "failed", "only startable"),
+        (IngressKind.NEW_DEBATE, " ", "at most 100"),
+        (IngressKind.RETRY, "x" * 101, "at most 100"),
+    ],
+)
+def test_applied_ingress_rejects_invalid_terminal_error_binding(
+    kind: IngressKind,
+    error_code: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        AppliedIngressCommand(kind, DebateId.new(), AttemptId.new(), error_code)
+
+
+@pytest.mark.parametrize(
     ("kind", "command_type"),
     [
         (IngressKind.RETRY, RetryDebateCommand),
@@ -200,6 +222,37 @@ def test_control_conversion_uses_requester_id_and_never_display_names(
 def test_control_conversion_fails_closed_on_inconsistent_source_context() -> None:
     with pytest.raises(InvalidApplicationOperation, match="source context"):
         command_from_ingress(replace(control_request(IngressKind.CANCEL), channel_id="other"))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"parent_channel_id": None},
+        {"source_message_id": None},
+        {"source_thread_id": None},
+        {"status_channel_id": "other"},
+    ],
+)
+def test_control_conversion_rejects_each_incomplete_source_identity(
+    changes: dict[str, object],
+) -> None:
+    request = control_request(IngressKind.CANCEL)
+    for attribute, value in changes.items():
+        object.__setattr__(request, attribute, value)
+    with pytest.raises(InvalidApplicationOperation, match="source context"):
+        command_from_ingress(request)
+
+
+def test_command_conversion_rejects_missing_required_identity() -> None:
+    request = new_request()
+    object.__setattr__(request, "question", None)
+    with pytest.raises(InvalidApplicationOperation, match="missing its question"):
+        command_from_ingress(request)
+
+    request = control_request(IngressKind.RETRY)
+    object.__setattr__(request, "target_debate_id", None)
+    with pytest.raises(InvalidApplicationOperation, match="missing its target identity"):
+        command_from_ingress(request)
 
 
 @pytest.mark.asyncio
@@ -248,6 +301,35 @@ async def test_adapter_surfaces_persisted_pre_activation_failure_without_hiding_
         use_cases.attempt_id,
         "discord_context_invalid",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["debate", "attempt"])
+async def test_adapter_rejects_a_result_that_is_no_longer_current(mismatch: str) -> None:
+    use_cases = (
+        FakeUseCases(snapshot_debate_id=DebateId.new())
+        if mismatch == "debate"
+        else FakeUseCases(snapshot_attempt_id=AttemptId.new())
+    )
+
+    with pytest.raises(InvalidApplicationOperation, match="current attempt"):
+        await IngressCommandAdapter(use_cases).apply(
+            claimed(new_request()),
+            claim_owner="runtime-instance",
+            at=NOW,
+        )
+
+
+@pytest.mark.asyncio
+async def test_adapter_rejects_unexpected_terminal_replay() -> None:
+    use_cases = FakeUseCases(snapshot_phase=DebatePhase.COMPLETED)
+
+    with pytest.raises(InvalidApplicationOperation, match="unexpected terminal state"):
+        await IngressCommandAdapter(use_cases).apply(
+            claimed(new_request()),
+            claim_owner="runtime-instance",
+            at=NOW,
+        )
 
 
 @pytest.mark.asyncio
@@ -320,6 +402,11 @@ async def test_adapter_refuses_to_bypass_or_reuse_a_lost_claim(
     [
         (" ", NOW, "claim owner"),
         ("runtime-instance", NOW.replace(tzinfo=None), "timezone-aware UTC"),
+        (
+            "runtime-instance",
+            NOW.astimezone(timezone(timedelta(hours=9))),
+            "timezone-aware UTC",
+        ),
     ],
 )
 async def test_adapter_rejects_invalid_claim_validation_inputs(

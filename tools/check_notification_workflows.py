@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -17,6 +18,21 @@ WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.35.0"
 PINNED_BUILDKIT_DIGEST = "sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
 PINNED_BUILDKIT_IMAGE = f"moby/buildkit:v0.31.2@{PINNED_BUILDKIT_DIGEST}"
+RELEASE_REQUIRED_MAIN_CHECKS = frozenset(
+    {
+        "quality",
+        "tests",
+        "security",
+        "package",
+        "cdk",
+        "docs-public-safety",
+        "container-arm64",
+        "grype",
+        "Analyze (python)",
+        "Analyze (javascript-typescript)",
+        "Analyze (actions)",
+    }
+)
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
 AWS_OR_DEPLOY_CAPABILITY = re.compile(
@@ -220,6 +236,31 @@ def _validate_aws_capability_boundary(directory: Path) -> None:
             )
 
 
+def _validate_release_main_checks(text: str) -> None:
+    blocks = re.findall(
+        r"^ {10}for check in \\\n(?P<checks>.*?)^ {10}do\s*$",
+        text,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    if len(blocks) != 1:
+        raise WorkflowPolicyError(
+            "Release main check set must contain exactly 8 CI checks and 3 CodeQL analyses"
+        )
+    try:
+        checks = tuple(shlex.split(blocks[0].replace("\\\n", " ")))
+    except ValueError as error:
+        raise WorkflowPolicyError(
+            "Release main check set must contain exactly 8 CI checks and 3 CodeQL analyses"
+        ) from error
+    if (
+        len(checks) != len(RELEASE_REQUIRED_MAIN_CHECKS)
+        or frozenset(checks) != RELEASE_REQUIRED_MAIN_CHECKS
+    ):
+        raise WorkflowPolicyError(
+            "Release main check set must contain exactly 8 CI checks and 3 CodeQL analyses"
+        )
+
+
 def _validate_release(directory: Path) -> None:
     path = directory / RELEASE_WORKFLOW
     if not path.is_file():
@@ -241,6 +282,7 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release permissions are not the canonical plan/deploy/cleanup split"
         )
+    _validate_release_main_checks(text)
     required = (
         "name: Production Release",
         "group: production-release",

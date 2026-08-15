@@ -287,7 +287,7 @@ export class OperationsStack extends Stack {
       new cloudwatch.TextWidget({
         height: 2,
         markdown:
-          "# The Shittim Chest production\nTask count 0 and missing runtime health metrics are normal while STOPPED/IDLE. RuntimeStateCode: 0 unknown, 1 stopped, 2 starting, 3 ready, 4 busy, 5 idle, 6 stopping, 7 degraded.",
+          "# The Shittim Chest production\nTask count 0 and missing runtime health metrics are normal only while STOPPED. While IDLE, one task and all four Bots remain running. RuntimeStateCode: 0 unknown, 1 stopped, 2 starting, 3 ready, 4 busy, 5 idle, 6 stopping, 7 degraded.",
         width: 24,
       }),
       new cloudwatch.AlarmStatusWidget({

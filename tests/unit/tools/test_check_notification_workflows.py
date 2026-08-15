@@ -9,6 +9,7 @@ from tools.check_notification_workflows import (
     ALLOWED_TARGET_WORKFLOW,
     DEPLOY_GUARD_WORKFLOW,
     DRIFT_WORKFLOW,
+    RELEASE_REQUIRED_MAIN_CHECKS,
     RELEASE_WORKFLOW,
     WORKFLOW_DIRECTORY,
     WORKFLOW_RUN_NOTIFICATION,
@@ -196,6 +197,42 @@ def test_release_requires_the_locked_node_version(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkflowPolicyError, match="lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("check_name", sorted(RELEASE_REQUIRED_MAIN_CHECKS))
+def test_release_requires_every_main_check(
+    tmp_path: Path,
+    check_name: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    start = text.index("          for check in \\\n")
+    end = text.index("\n          do", start)
+    block = text[start:end]
+    token = f"'{check_name}'" if " " in check_name else check_name
+    changed = block.replace(token, "", 1)
+    assert changed != block
+    path.write_text(text[:start] + changed + text[end:], encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="exactly 8 CI checks and 3 CodeQL"):
+        validate_notification_workflows(directory)
+
+
+def test_release_rejects_an_extra_main_check(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "quality tests security package cdk docs-public-safety",
+            "quality tests security package cdk unexpected docs-public-safety",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exactly 8 CI checks and 3 CodeQL"):
         validate_notification_workflows(directory)
 
 

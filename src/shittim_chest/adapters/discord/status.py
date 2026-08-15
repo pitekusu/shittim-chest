@@ -28,7 +28,7 @@ from shittim_chest.application.status_publication import (
 DISCORD_API_BASE_URL = "https://discord.com/api/v10"
 DISCORD_STATUS_HISTORY_PAGE_SIZE = 100
 DISCORD_STATUS_HISTORY_MAX_PAGES = 10
-DISCORD_STATUS_USER_AGENT = "DiscordBot (https://github.com/pitekusu/shittim-chest, 0.1.0)"
+DISCORD_STATUS_USER_AGENT = "DiscordBot (https://github.com/pitekusu/shittim-chest, 1.0.0)"
 
 _SNOWFLAKE = re.compile(r"[0-9]{1,20}\Z")
 _PERMISSION_INTEGER = re.compile(r"(?:0|[1-9][0-9]*)\Z")

@@ -191,6 +191,11 @@ describe("OperationsStack", () => {
     expect(body).toContain("CPUUtilization");
     expect(body).toContain("MemoryUtilization");
     expect(body).toContain("AWS/DynamoDB");
+    expect(body).toContain(
+      "Task count 0 and missing runtime health metrics are normal only while STOPPED.",
+    );
+    expect(body).toContain("While IDLE, one task and all four Bots remain running.");
+    expect(body).not.toContain("normal while STOPPED/IDLE");
     expect(body).not.toContain("ContainerInsights");
   });
 

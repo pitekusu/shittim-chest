@@ -67,7 +67,9 @@ async def test_create_uses_bot_auth_nonce_dedup_and_no_mentions() -> None:
     assert request.method == "POST"
     assert request.url.path == f"/api/v10/channels/{CHANNEL_ID}/messages"
     assert request.headers["Authorization"] == f"Bot {TOKEN}"
-    assert request.headers["User-Agent"].startswith("DiscordBot (")
+    assert request.headers["User-Agent"] == (
+        "DiscordBot (https://github.com/pitekusu/shittim-chest, 1.0.0)"
+    )
     assert json.loads(request.content) == {
         "content": CONTENT,
         "nonce": NONCE,

@@ -30,12 +30,6 @@ class RuntimeNotReady(ApplicationError):
     code = "runtime_not_ready"
 
 
-class RequiredEvidenceUnavailable(ApplicationError):
-    """Raised when a current-fact question cannot obtain required evidence."""
-
-    code = "required_evidence_unavailable"
-
-
 class RequestNotAllowed(ApplicationError):
     """Raised when a request or actor is outside the configured policy."""
 

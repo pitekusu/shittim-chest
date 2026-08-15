@@ -26,7 +26,6 @@ from shittim_chest.application.errors import (
     OutboxRecoveryAbandoned,
     OutboxRecoveryFailed,
     RequestNotAllowed,
-    RequiredEvidenceUnavailable,
     RuntimeNotReady,
 )
 from shittim_chest.application.models import (
@@ -349,11 +348,6 @@ class DebateApplication:
             await self._fail_current(debate_id, error_code="phase_deadline_exceeded")
         except TimeoutError:
             await self._fail_current(debate_id, error_code="session_deadline_exceeded")
-        except RequiredEvidenceUnavailable:
-            await self._fail_current(
-                debate_id,
-                error_code=RequiredEvidenceUnavailable.code,
-            )
         except OutboxRecoveryFailed as error:
             await self._fail_current(debate_id, error_code=error.delivery_code)
         except Exception:
