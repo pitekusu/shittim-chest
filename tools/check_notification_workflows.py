@@ -1250,6 +1250,13 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Records Release must verify termination protection during and after deployment"
         )
+    stable_noop_statuses = (
+        "CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;"
+    )
+    if release.count(stable_noop_statuses) != 2:
+        raise WorkflowPolicyError(
+            "Records Release must preserve all stable statuses accepted by its no-op plan"
+        )
     if "docker build" in release or "docker push" in release:
         raise WorkflowPolicyError("Records Release must not build or push a Fargate image")
 

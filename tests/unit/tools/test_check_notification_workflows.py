@@ -391,6 +391,22 @@ def test_records_release_protects_noop_stacks(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_records_release_accepts_all_attested_stable_noop_statuses(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;",
+            "CREATE_COMPLETE|UPDATE_COMPLETE) ;;",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="all stable statuses"):
+        validate_notification_workflows(directory)
+
+
 def test_records_backfill_rejects_unbounded_page_limit(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_BACKFILL_WORKFLOW

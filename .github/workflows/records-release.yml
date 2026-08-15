@@ -438,7 +438,7 @@ jobs:
             status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
               --query 'Stacks[0].StackStatus' --output text)
             case "${status}" in
-              CREATE_COMPLETE|UPDATE_COMPLETE) ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;
               *) exit 1 ;;
             esac
             aws cloudformation update-termination-protection \
@@ -458,7 +458,7 @@ jobs:
             status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
               --query 'Stacks[0].StackStatus' --output text)
             case "${status}" in
-              CREATE_COMPLETE|UPDATE_COMPLETE) ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;
               *) exit 1 ;;
             esac
             aws cloudformation describe-stacks --stack-name "${stack}" --output json \
