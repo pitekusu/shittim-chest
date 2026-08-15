@@ -24,6 +24,17 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         {"$ref": "#/$defs/AuthenticatedSession"},
         {"$ref": "#/$defs/AnonymousSession"},
     ]
+    detail_properties = json_schema["$defs"]["RecordDetailResponse"]["properties"]
+    for collection_name, identity_field in (
+        ("participants", "slot"),
+        ("initialOpinions", "participant"),
+        ("finalProposals", "participant"),
+        ("votes", "voter"),
+    ):
+        assert {
+            constraint["contains"]["properties"][identity_field]["const"]
+            for constraint in detail_properties[collection_name]["allOf"]
+        } == {"participant-a", "participant-b", "participant-c"}
     openapi = json.loads(first["openapi.json"])
     assert openapi["info"]["title"] == "Shittim Chest Records API"
     assert set(openapi["paths"]) == {

@@ -4,6 +4,68 @@ import { describe, expect, it } from "vite-plus/test";
 import { App } from "./App";
 import { isRecordsApiResponse } from "./contracts";
 
+function recordDetail() {
+  const participants = [
+    ["participant-a", "参加者A", "cyan"],
+    ["participant-b", "参加者B", "pink"],
+    ["participant-c", "参加者C", "lavender"],
+  ].map(([slot, displayName, fallbackVariant]) => ({
+    slot,
+    displayName,
+    avatar: {
+      kind: "placeholder",
+      alt: `${displayName}のアバター`,
+      fallbackVariant,
+    },
+  }));
+  return {
+    schemaVersion: 1,
+    recordId: "record-example",
+    completedAt: "2026-08-15T06:00:00Z",
+    question: "休日の過ごし方を決める",
+    requester: {
+      displayName: "依頼者",
+      avatar: {
+        kind: "placeholder",
+        alt: "依頼者のアバター",
+        fallbackVariant: "cyan",
+      },
+    },
+    participants,
+    initialOpinions: participants.map(({ slot }) => ({
+      participant: slot,
+      summary: "要約",
+      proposal: "初回意見",
+    })),
+    finalProposals: participants.map(({ slot }) => ({
+      participant: slot,
+      title: "最終案",
+      proposal: "提案",
+    })),
+    votes: [
+      { voter: "participant-a", candidate: "participant-b", reason: "理由A" },
+      { voter: "participant-b", candidate: "participant-a", reason: "理由B" },
+      { voter: "participant-c", candidate: "participant-a", reason: "理由C" },
+    ],
+    result: {
+      winner: "participant-a",
+      voteCounts: [
+        { participant: "participant-a", count: 2 },
+        { participant: "participant-b", count: 1 },
+        { participant: "participant-c", count: 0 },
+      ],
+      tieBreakApplied: false,
+    },
+    finalDecision: {
+      winner: "participant-a",
+      victoryMessage: "勝利しました",
+      decision: "最終決定",
+      actions: ["実行する"],
+      caveats: ["注意する"],
+    },
+  };
+}
+
 describe("App", () => {
   it("uses the approved product display name", () => {
     render(<App />);
@@ -35,5 +97,30 @@ describe("App", () => {
 
     expect(isRecordsApiResponse(rankings)).toBe(true);
     expect(isRecordsApiResponse({ ...rankings, generatedAt: "not-a-date" })).toBe(false);
+  });
+
+  it("rejects incomplete participant collections and conflicting winners", () => {
+    const detail = recordDetail();
+    expect(isRecordsApiResponse(detail)).toBe(true);
+
+    const duplicateParticipant = structuredClone(detail);
+    duplicateParticipant.participants[2].slot = "participant-a";
+    expect(isRecordsApiResponse(duplicateParticipant)).toBe(false);
+
+    const duplicateInitialOpinion = structuredClone(detail);
+    duplicateInitialOpinion.initialOpinions[2].participant = "participant-a";
+    expect(isRecordsApiResponse(duplicateInitialOpinion)).toBe(false);
+
+    const duplicateFinalProposal = structuredClone(detail);
+    duplicateFinalProposal.finalProposals[2].participant = "participant-a";
+    expect(isRecordsApiResponse(duplicateFinalProposal)).toBe(false);
+
+    const duplicateVoter = structuredClone(detail);
+    duplicateVoter.votes[2].voter = "participant-a";
+    expect(isRecordsApiResponse(duplicateVoter)).toBe(false);
+
+    const conflictingWinner = structuredClone(detail);
+    conflictingWinner.finalDecision.winner = "participant-b";
+    expect(isRecordsApiResponse(conflictingWinner)).toBe(false);
   });
 });

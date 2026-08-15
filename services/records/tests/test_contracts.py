@@ -19,6 +19,69 @@ from shittim_records.contracts import (
 )
 
 
+def _record_detail_payload() -> dict[str, object]:
+    participants = tuple(
+        {
+            "slot": slot,
+            "displayName": name,
+            "avatar": {
+                "kind": "placeholder",
+                "alt": f"{name}のアバター",
+                "fallbackVariant": variant,
+            },
+        }
+        for slot, name, variant in (
+            ("participant-a", "参加者A", "cyan"),
+            ("participant-b", "参加者B", "pink"),
+            ("participant-c", "参加者C", "lavender"),
+        )
+    )
+    return {
+        "schemaVersion": 1,
+        "recordId": "record-example",
+        "completedAt": datetime(2026, 8, 15, tzinfo=UTC),
+        "question": "休日の過ごし方を決める",
+        "requester": {
+            "displayName": "依頼者",
+            "avatar": {
+                "kind": "placeholder",
+                "alt": "依頼者のアバター",
+                "fallbackVariant": "cyan",
+            },
+        },
+        "participants": participants,
+        "initialOpinions": tuple(
+            {"participant": slot, "summary": "要約", "proposal": "初回意見"}
+            for slot in ("participant-a", "participant-b", "participant-c")
+        ),
+        "finalProposals": tuple(
+            {"participant": slot, "title": "最終案", "proposal": "提案"}
+            for slot in ("participant-a", "participant-b", "participant-c")
+        ),
+        "votes": (
+            {"voter": "participant-a", "candidate": "participant-b", "reason": "理由A"},
+            {"voter": "participant-b", "candidate": "participant-a", "reason": "理由B"},
+            {"voter": "participant-c", "candidate": "participant-a", "reason": "理由C"},
+        ),
+        "result": {
+            "winner": "participant-a",
+            "voteCounts": (
+                {"participant": "participant-a", "count": 2},
+                {"participant": "participant-b", "count": 1},
+                {"participant": "participant-c", "count": 0},
+            ),
+            "tieBreakApplied": False,
+        },
+        "finalDecision": {
+            "winner": "participant-a",
+            "victoryMessage": "勝利しました",
+            "decision": "最終決定",
+            "actions": ("実行する",),
+            "caveats": ("注意する",),
+        },
+    }
+
+
 def test_public_contracts_use_camel_case_and_reject_unknown_fields() -> None:
     response = SessionResponse.model_validate(
         {
@@ -166,3 +229,38 @@ def test_public_timestamps_require_timezone_offsets(
     assert adapter.validate_python(aware) == aware
     with pytest.raises(ValidationError):
         adapter.validate_python(aware.replace(tzinfo=None))
+
+
+@pytest.mark.parametrize(
+    ("collection_name", "identity_field"),
+    [
+        ("participants", "slot"),
+        ("initialOpinions", "participant"),
+        ("finalProposals", "participant"),
+        ("votes", "voter"),
+    ],
+)
+def test_record_detail_requires_every_participant_slot_once(
+    collection_name: str,
+    identity_field: str,
+) -> None:
+    payload = _record_detail_payload()
+    collection = payload[collection_name]
+    assert isinstance(collection, tuple)
+    duplicate = collection[2]
+    assert isinstance(duplicate, dict)
+    duplicate[identity_field] = "participant-a"
+
+    with pytest.raises(ValidationError, match="every participant slot exactly once"):
+        RecordDetailResponse.model_validate(payload)
+
+
+def test_record_detail_requires_one_canonical_winner() -> None:
+    payload = _record_detail_payload()
+    assert RecordDetailResponse.model_validate(payload).result.winner == "participant-a"
+    final_decision = payload["finalDecision"]
+    assert isinstance(final_decision, dict)
+    final_decision["winner"] = "participant-b"
+
+    with pytest.raises(ValidationError, match="must identify the same winner"):
+        RecordDetailResponse.model_validate(payload)

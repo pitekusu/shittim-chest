@@ -461,6 +461,53 @@
           "$ref": "#/$defs/FinalDecisionView"
         },
         "finalProposals": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
           "maxItems": 3,
           "minItems": 3,
           "prefixItems": [
@@ -478,6 +525,53 @@
           "type": "array"
         },
         "initialOpinions": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
           "maxItems": 3,
           "minItems": 3,
           "prefixItems": [
@@ -495,6 +589,53 @@
           "type": "array"
         },
         "participants": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
           "maxItems": 3,
           "minItems": 3,
           "prefixItems": [
@@ -533,6 +674,53 @@
           "type": "integer"
         },
         "votes": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "voter": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "voter"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "voter": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "voter"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "voter": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "voter"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
           "maxItems": 3,
           "minItems": 3,
           "prefixItems": [
@@ -575,6 +763,53 @@
           "type": "string"
         },
         "participants": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
           "maxItems": 3,
           "minItems": 3,
           "prefixItems": [

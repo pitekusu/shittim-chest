@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, model_validator
 
 RECORDS_API_SCHEMA_VERSION = 1
 
@@ -14,6 +14,31 @@ CostStatus = Literal["partial", "final", "unavailable"]
 CostPeriod = Literal["today", "week", "month", "all"]
 
 NonEmptyText = Annotated[str, Field(min_length=1)]
+_ALL_PARTICIPANT_SLOTS = frozenset[ParticipantSlot](
+    {"participant-a", "participant-b", "participant-c"}
+)
+
+
+def _complete_slot_json_schema(field_name: str) -> dict[str, object]:
+    return {
+        "allOf": [
+            {
+                "contains": {
+                    "properties": {field_name: {"const": slot}},
+                    "required": [field_name],
+                    "type": "object",
+                },
+                "maxContains": 1,
+                "minContains": 1,
+            }
+            for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+        ]
+    }
+
+
+def _require_complete_slots(slots: tuple[ParticipantSlot, ...], field_name: str) -> None:
+    if frozenset(slots) != _ALL_PARTICIPANT_SLOTS:
+        raise ValueError(f"{field_name} must contain every participant slot exactly once")
 
 
 def _to_camel(value: str) -> str:
@@ -50,6 +75,12 @@ class ParticipantSummary(PublicModel):
     avatar: AvatarRef
 
 
+ParticipantCollection = Annotated[
+    tuple[ParticipantSummary, ParticipantSummary, ParticipantSummary],
+    Field(json_schema_extra=_complete_slot_json_schema("slot")),
+]
+
+
 class VoteCount(PublicModel):
     participant: ParticipantSlot
     count: Annotated[int, Field(ge=0, le=3)]
@@ -67,8 +98,13 @@ class RecordListItem(PublicModel):
     completed_at: AwareDatetime
     question_preview: NonEmptyText
     requester: RequesterSummary
-    participants: tuple[ParticipantSummary, ParticipantSummary, ParticipantSummary]
+    participants: ParticipantCollection
     result: RecordResultSummary
+
+    @model_validator(mode="after")
+    def require_complete_participants(self) -> RecordListItem:
+        _require_complete_slots(tuple(item.slot for item in self.participants), "participants")
+        return self
 
 
 class RecordListResponse(PublicModel):
@@ -83,16 +119,34 @@ class InitialOpinionView(PublicModel):
     proposal: NonEmptyText
 
 
+InitialOpinionCollection = Annotated[
+    tuple[InitialOpinionView, InitialOpinionView, InitialOpinionView],
+    Field(json_schema_extra=_complete_slot_json_schema("participant")),
+]
+
+
 class FinalProposalView(PublicModel):
     participant: ParticipantSlot
     title: NonEmptyText
     proposal: NonEmptyText
 
 
+FinalProposalCollection = Annotated[
+    tuple[FinalProposalView, FinalProposalView, FinalProposalView],
+    Field(json_schema_extra=_complete_slot_json_schema("participant")),
+]
+
+
 class VoteView(PublicModel):
     voter: ParticipantSlot
     candidate: ParticipantSlot
     reason: Annotated[str, Field(min_length=1, max_length=500)]
+
+
+VoteCollection = Annotated[
+    tuple[VoteView, VoteView, VoteView],
+    Field(json_schema_extra=_complete_slot_json_schema("voter")),
+]
 
 
 class FinalDecisionView(PublicModel):
@@ -109,12 +163,28 @@ class RecordDetailResponse(PublicModel):
     completed_at: AwareDatetime
     question: NonEmptyText
     requester: RequesterSummary
-    participants: tuple[ParticipantSummary, ParticipantSummary, ParticipantSummary]
-    initial_opinions: tuple[InitialOpinionView, InitialOpinionView, InitialOpinionView]
-    final_proposals: tuple[FinalProposalView, FinalProposalView, FinalProposalView]
-    votes: tuple[VoteView, VoteView, VoteView]
+    participants: ParticipantCollection
+    initial_opinions: InitialOpinionCollection
+    final_proposals: FinalProposalCollection
+    votes: VoteCollection
     result: RecordResultSummary
     final_decision: FinalDecisionView
+
+    @model_validator(mode="after")
+    def require_consistent_participants_and_winner(self) -> RecordDetailResponse:
+        _require_complete_slots(tuple(item.slot for item in self.participants), "participants")
+        _require_complete_slots(
+            tuple(item.participant for item in self.initial_opinions),
+            "initial_opinions",
+        )
+        _require_complete_slots(
+            tuple(item.participant for item in self.final_proposals),
+            "final_proposals",
+        )
+        _require_complete_slots(tuple(item.voter for item in self.votes), "votes")
+        if self.result.winner != self.final_decision.winner:
+            raise ValueError("result and final_decision must identify the same winner")
+        return self
 
 
 class SessionUser(PublicModel):
