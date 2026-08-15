@@ -31,6 +31,13 @@ const RELEASE_STACK_NAMES = [
   "ShittimChest-Prod-Operations",
   "ShittimChest-Prod-CostGovernance",
 ] as const;
+const RECORDS_STACK_NAMES = [
+  "ShittimChest-Prod-RecordsStateful",
+  "ShittimChest-Prod-RecordsApplication",
+  "ShittimChest-Prod-RecordsEdge",
+] as const;
+const RECORDS_CHANGE_SET_PATTERN = "records-release-*";
+const RECORDS_BACKFILL_FUNCTION_NAME = "shittim-chest-production-records-backfill";
 const DRIFT_STACK_NAMES = [
   ...RELEASE_STACK_NAMES,
   "ShittimChest-Prod-ReleaseIdentity",
@@ -113,6 +120,10 @@ export class ReleaseIdentityStack extends Stack {
   public readonly driftRole: iam.Role;
   public readonly oidcProvider: iam.IOpenIdConnectProvider;
   public readonly planRole: iam.Role;
+  public readonly recordsBackfillRole: iam.Role;
+  public readonly recordsDeployRole: iam.Role;
+  public readonly recordsDriftRole: iam.Role;
+  public readonly recordsPlanRole: iam.Role;
 
   public constructor(scope: Construct, id: string, props: ReleaseIdentityStackProps) {
     super(scope, id, props);
@@ -140,14 +151,48 @@ export class ReleaseIdentityStack extends Stack {
       MAIN_SUBJECT,
       "Detect CloudFormation drift without changing production resources",
     );
+    this.recordsPlanRole = this.githubRole(
+      "RecordsPlanRole",
+      "ShittimChest-Prod-GitHub-RecordsPlan",
+      MAIN_SUBJECT,
+      "Prepare immutable Records change sets from the fixed main branch",
+    );
+    this.recordsDeployRole = this.githubRole(
+      "RecordsDeployRole",
+      "ShittimChest-Prod-GitHub-RecordsDeploy",
+      DEPLOY_SUBJECT,
+      "Execute approved Records change sets after production approval",
+    );
+    this.recordsBackfillRole = this.githubRole(
+      "RecordsBackfillRole",
+      "ShittimChest-Prod-GitHub-RecordsBackfill",
+      DEPLOY_SUBJECT,
+      "Invoke only the approved Records backfill entry point",
+    );
+    this.recordsDriftRole = this.githubRole(
+      "RecordsDriftRole",
+      "ShittimChest-Prod-GitHub-RecordsDrift",
+      MAIN_SUBJECT,
+      "Detect drift in the Records stacks without reading source records",
+    );
 
     this.grantPlanPermissions(props);
     this.grantDeployPermissions(props);
     this.grantDriftPermissions();
+    this.grantRecordsPlanPermissions();
+    this.grantRecordsDeployPermissions();
+    this.grantRecordsBackfillPermissions();
+    this.grantRecordsDriftPermissions();
 
     new CfnOutput(this, "PlanRoleArn", { value: this.planRole.roleArn });
     new CfnOutput(this, "DeployRoleArn", { value: this.deployRole.roleArn });
     new CfnOutput(this, "DriftRoleArn", { value: this.driftRole.roleArn });
+    new CfnOutput(this, "RecordsPlanRoleArn", { value: this.recordsPlanRole.roleArn });
+    new CfnOutput(this, "RecordsDeployRoleArn", { value: this.recordsDeployRole.roleArn });
+    new CfnOutput(this, "RecordsBackfillRoleArn", {
+      value: this.recordsBackfillRole.roleArn,
+    });
+    new CfnOutput(this, "RecordsDriftRoleArn", { value: this.recordsDriftRole.roleArn });
   }
 
   private githubRole(
@@ -425,6 +470,146 @@ export class ReleaseIdentityStack extends Stack {
     );
   }
 
+  private grantRecordsPlanPermissions(): void {
+    this.recordsPlanRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cloudformation:CreateChangeSet",
+          "cloudformation:DeleteChangeSet",
+          "cloudformation:DescribeChangeSet",
+          "cloudformation:DescribeStackResources",
+          "cloudformation:DescribeStacks",
+          "cloudformation:ListChangeSets",
+        ],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+          StringLikeIfExists: {
+            "cloudformation:ChangeSetName": RECORDS_CHANGE_SET_PATTERN,
+          },
+        },
+        resources: this.stackArns(RECORDS_STACK_NAMES),
+      }),
+    );
+    this.recordsPlanRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["iam:PassRole"],
+        conditions: {
+          StringEquals: { "iam:PassedToService": "cloudformation.amazonaws.com" },
+        },
+        resources: [
+          `arn:aws:iam::${Aws.ACCOUNT_ID}:role/cdk-hnb659fds-cfn-exec-role-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`,
+        ],
+      }),
+    );
+    this.recordsPlanRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetBucketLocation"],
+        resources: [
+          `arn:aws:s3:::cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`,
+        ],
+      }),
+    );
+    this.recordsPlanRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:PutObject"],
+        resources: this.recordsAssetObjectArns(),
+      }),
+    );
+    this.acknowledgeRoleWildcards(this.recordsPlanRole, [
+      ...this.stackWildcardAcknowledgments(RECORDS_STACK_NAMES),
+    ]);
+    this.acknowledgeRecordsAssetWildcards(
+      this.recordsPlanRole,
+      "The Records plan role can read or upload only exact content-addressed CDK JSON or ZIP assets in Tokyo.",
+    );
+  }
+
+  private grantRecordsDeployPermissions(): void {
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cloudformation:DeleteChangeSet",
+          "cloudformation:DescribeChangeSet",
+          "cloudformation:DescribeStacks",
+          "cloudformation:ExecuteChangeSet",
+        ],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+          StringLikeIfExists: {
+            "cloudformation:ChangeSetName": RECORDS_CHANGE_SET_PATTERN,
+          },
+        },
+        resources: this.stackArns(RECORDS_STACK_NAMES),
+      }),
+    );
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["cloudformation:DescribeEvents"],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+        },
+        resources: [
+          ...this.stackArns(RECORDS_STACK_NAMES),
+          ...this.recordsChangeSetArns(),
+        ],
+      }),
+    );
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject"],
+        resources: this.recordsAssetObjectArns(),
+      }),
+    );
+    this.acknowledgeRoleWildcards(this.recordsDeployRole, [
+      ...this.stackWildcardAcknowledgments(RECORDS_STACK_NAMES),
+      ...this.recordsChangeSetWildcardAcknowledgments(),
+    ]);
+    this.acknowledgeRecordsAssetWildcards(
+      this.recordsDeployRole,
+      "The Records deploy role can read only exact content-addressed CDK JSON or ZIP assets in Tokyo.",
+    );
+  }
+
+  private grantRecordsBackfillPermissions(): void {
+    this.recordsBackfillRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["lambda:GetFunctionConfiguration", "lambda:InvokeFunction"],
+        resources: [
+          `arn:aws:lambda:${TOKYO_REGION}:${Aws.ACCOUNT_ID}:function:${RECORDS_BACKFILL_FUNCTION_NAME}`,
+        ],
+      }),
+    );
+  }
+
+  private grantRecordsDriftPermissions(): void {
+    this.recordsDriftRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cloudformation:DescribeStacks",
+          "cloudformation:DetectStackDrift",
+          "cloudformation:DetectStackResourceDrift",
+        ],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+        },
+        resources: this.stackArns(RECORDS_STACK_NAMES),
+      }),
+    );
+    this.recordsDriftRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cloudformation:BatchDescribeTypeConfigurations",
+          "cloudformation:DescribeStackDriftDetectionStatus",
+        ],
+        resources: ["*"],
+      }),
+    );
+    this.acknowledgeRoleWildcards(this.recordsDriftRole, [
+      "AwsSolutions-IAM5[Resource::*]",
+      ...this.stackWildcardAcknowledgments(RECORDS_STACK_NAMES),
+    ]);
+  }
+
   private grantDriftPermissions(): void {
     this.driftRole.addToPolicy(
       new iam.PolicyStatement({
@@ -487,6 +672,18 @@ export class ReleaseIdentityStack extends Stack {
     );
   }
 
+  private recordsChangeSetArns(): string[] {
+    return [
+      `arn:aws:cloudformation:${TOKYO_REGION}:*:changeSet/${RECORDS_CHANGE_SET_PATTERN}/*`,
+    ];
+  }
+
+  private recordsChangeSetWildcardAcknowledgments(): string[] {
+    return [
+      `AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${TOKYO_REGION}:*:changeSet/${RECORDS_CHANGE_SET_PATTERN}/*]`,
+    ];
+  }
+
   private cloudFormationExecutionRoleArns(): string[] {
     return [TOKYO_REGION, COST_REGION].map(
       (region) =>
@@ -510,6 +707,23 @@ export class ReleaseIdentityStack extends Stack {
       const bucketName = `cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${region}`;
       return this.cdkAssetObjectKeys().map((key) => `arn:aws:s3:::${bucketName}/${key}`);
     });
+  }
+
+  private recordsAssetObjectArns(): string[] {
+    const bucketName = `cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`;
+    return this.cdkAssetObjectKeys().map((key) => `arn:aws:s3:::${bucketName}/${key}`);
+  }
+
+  private acknowledgeRecordsAssetWildcards(role: iam.Role, reason: string): void {
+    role.node.addMetadata(
+      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+      Object.fromEntries(
+        this.cdkAssetObjectKeys().map((key) => [
+          `AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/${key}]`,
+          reason,
+        ]),
+      ),
+    );
   }
 
   private acknowledgeRoleWildcards(role: iam.Role, ids: string[]): void {

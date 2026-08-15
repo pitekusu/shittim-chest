@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-14
+updated: 2026-08-15
 ---
 
 # AWS・CDK詳細設計
@@ -17,7 +17,7 @@ workloadは単一accountの`ap-northeast-1`、account-globalなcost resourceだ�
 | Stack | Region | Ownership | Protection |
 |---|---|---|---|
 | Stateful | Tokyo | DynamoDB、ECR、Signer | termination protection、RETAIN |
-| ReleaseIdentity | Tokyo | GitHub OIDC plan／deploy／drift role | termination protection |
+| ReleaseIdentity | Tokyo | Runtime用とRecords用の分離されたGitHub OIDC role | termination protection |
 | Runtime | Tokyo | network、API、4 Lambda、ECS、retained admission log、scheduler | replaceable runtime |
 | Operations | Tokyo | metric filter、alarm、dashboard、SNS、EventBridge | replaceable monitoring |
 | CostGovernance | Virginia | Budgets、anomaly subscription | global cost control |
@@ -28,6 +28,8 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 ## 2. Stateful resources
 
 - DynamoDBはon-demand、PITR 35日、deletion protection、RETAINとする。
+- DebateTableは`NEW_IMAGE` Streamを公開し、Records Projectorは後続Stackで購読する。source tableの
+  key、index、retentionは変更しない。
 - ECRはimmutable tag、enhanced continuous scan、暗号化を有効にする。
 - lifecycleはtagged imageの最新3世代、untagged imageの最新3世代を残す。
 - AWS Signer／Notation用profileとECR referrerをrelease supply chainに用いる。
@@ -64,6 +66,9 @@ AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはc
   roleで独立statementの`Resource: "*"`を用いる。family、revision、container、digestはapplicationで
   exact validationする。
 - Release roleは固定stack／`release-*` Change Set、ECR repository、Signer、artifact bucketへ限定する。
+- Records plan／deploy／backfill／drift roleは既存Runtime Release roleから分離する。plan／driftは
+  immutable main subject、deploy／backfillは`production` Environment subjectだけを信頼し、
+  Records roleへsource DebateTableのread／write権限を付与しない。
 - GitHub runnerへlong-lived AWS keyを渡さず、immutable repository identityのOIDCだけを使う。
 
 ## 6. Private configuration

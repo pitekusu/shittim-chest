@@ -30,6 +30,7 @@ export class StatefulStack extends Stack {
         recoveryPeriodInDays: 35,
       },
       removalPolicy: RemovalPolicy.RETAIN,
+      stream: dynamodb.StreamViewType.NEW_IMAGE,
     });
 
     this.debateTable.addGlobalSecondaryIndex({

@@ -38,11 +38,11 @@ function synthesize(): {
 }
 
 describe("ReleaseIdentityStack", () => {
-  test("reuses the account GitHub provider for three responsibility-separated roles", () => {
+  test("reuses the account GitHub provider for responsibility-separated release roles", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::IAM::OIDCProvider", 0);
-    template.resourceCountIs("AWS::IAM::Role", 3);
+    template.resourceCountIs("AWS::IAM::Role", 7);
     expect(JSON.stringify(template.toJSON())).toContain(
       "oidc-provider/token.actions.githubusercontent.com",
     );
@@ -50,6 +50,10 @@ describe("ReleaseIdentityStack", () => {
       "ShittimChest-Prod-GitHub-ReleasePlan",
       "ShittimChest-Prod-GitHub-ReleaseDeploy",
       "ShittimChest-Prod-GitHub-ReleaseDrift",
+      "ShittimChest-Prod-GitHub-RecordsPlan",
+      "ShittimChest-Prod-GitHub-RecordsDeploy",
+      "ShittimChest-Prod-GitHub-RecordsBackfill",
+      "ShittimChest-Prod-GitHub-RecordsDrift",
     ]) {
       template.hasResourceProperties("AWS::IAM::Role", {
         RoleName: roleName,
@@ -75,6 +79,71 @@ describe("ReleaseIdentityStack", () => {
     );
     expect(trusts).not.toContain("StringLike");
     expect(trusts).not.toContain("repo:pitekusu/shittim-chest:");
+  });
+
+  test("binds Records planning and drift to main and writes to production approval", () => {
+    const { template } = synthesize();
+    const roles = Object.values(template.findResources("AWS::IAM::Role"));
+    const trustFor = (roleName: string) =>
+      JSON.stringify(
+        roles.find((role) => role.Properties.RoleName === roleName)?.Properties
+          .AssumeRolePolicyDocument,
+      );
+    const mainSubject =
+      "repo:pitekusu@12059348/shittim-chest@1302516701:ref:refs/heads/main";
+    const productionSubject =
+      "repo:pitekusu@12059348/shittim-chest@1302516701:environment:production";
+
+    for (const roleName of [
+      "ShittimChest-Prod-GitHub-RecordsPlan",
+      "ShittimChest-Prod-GitHub-RecordsDrift",
+    ]) {
+      expect(trustFor(roleName)).toContain(mainSubject);
+      expect(trustFor(roleName)).not.toContain(productionSubject);
+    }
+    for (const roleName of [
+      "ShittimChest-Prod-GitHub-RecordsDeploy",
+      "ShittimChest-Prod-GitHub-RecordsBackfill",
+    ]) {
+      expect(trustFor(roleName)).toContain(productionSubject);
+      expect(trustFor(roleName)).not.toContain(mainSubject);
+    }
+  });
+
+  test("keeps Records plan, deploy, backfill, and drift permissions separate", () => {
+    const { template } = synthesize();
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const policyFor = (role: string) =>
+      JSON.stringify(
+        policies.find((policy) =>
+          JSON.stringify(policy.Properties.Roles).includes(role),
+        ),
+      );
+    const plan = policyFor("RecordsPlanRole");
+    const deploy = policyFor("RecordsDeployRole");
+    const backfill = policyFor("RecordsBackfillRole");
+    const drift = policyFor("RecordsDriftRole");
+    const recordsPolicies = [plan, deploy, backfill, drift].join("\n");
+
+    expect(plan).toContain("cloudformation:CreateChangeSet");
+    expect(plan).toContain("iam:PassRole");
+    expect(plan).toContain("s3:PutObject");
+    expect(plan).not.toContain("cloudformation:ExecuteChangeSet");
+    expect(deploy).toContain("cloudformation:ExecuteChangeSet");
+    expect(deploy).toContain("cloudformation:DescribeEvents");
+    expect(deploy).not.toContain("cloudformation:CreateChangeSet");
+    expect(deploy).not.toContain("iam:PassRole");
+    expect(backfill).toContain("lambda:GetFunctionConfiguration");
+    expect(backfill).toContain("lambda:InvokeFunction");
+    expect(backfill).toContain("shittim-chest-production-records-backfill");
+    expect(backfill).not.toContain("cloudformation:");
+    expect(drift).toContain("cloudformation:DetectStackDrift");
+    expect(drift).not.toContain("cloudformation:ExecuteChangeSet");
+    expect(recordsPolicies).toContain("ShittimChest-Prod-RecordsStateful");
+    expect(recordsPolicies).toContain("ShittimChest-Prod-RecordsApplication");
+    expect(recordsPolicies).toContain("ShittimChest-Prod-RecordsEdge");
+    expect(recordsPolicies).toContain("records-release-*");
+    expect(recordsPolicies).not.toContain("dynamodb:");
   });
 
   test("keeps plan, deploy, and drift permissions distinct", () => {
