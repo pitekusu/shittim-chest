@@ -1,0 +1,98 @@
+name: Records Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-runを先に実行し、承認後だけapplyを選択する"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+      page_limit:
+        description: "1回にScanするsource item上限"
+        required: true
+        default: "100"
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: records-backfill
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  backfill:
+    name: backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Require immutable main inputs
+        env:
+          MODE: ${{ inputs.mode }}
+          PAGE_LIMIT: ${{ inputs.page_limit }}
+        run: |
+          test "${GITHUB_REF}" = refs/heads/main
+          test "${GITHUB_REPOSITORY}" = pitekusu/shittim-chest
+          test "${GITHUB_REPOSITORY_ID}" = "1302516701"
+          test "${MODE}" = dry-run || test "${MODE}" = apply
+          [[ "${PAGE_LIMIT}" =~ ^[0-9]+$ ]]
+          test "${PAGE_LIMIT}" -ge 1
+          test "${PAGE_LIMIT}" -le 100
+      - name: Check out the invoked main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Acquire Records backfill credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_RECORDS_BACKFILL_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: records-backfill-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 1200
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Invoke one bounded content-free Backfill page
+        env:
+          MODE: ${{ inputs.mode }}
+          PAGE_LIMIT: ${{ inputs.page_limit }}
+        run: |
+          jq --null-input --arg mode "${MODE}" --argjson page_limit "${PAGE_LIMIT}" \
+            '{mode:$mode,page_limit:$page_limit}' > "${RUNNER_TEMP}/payload.json"
+          aws lambda get-function-configuration \
+            --function-name shittim-chest-production-records-backfill \
+            --query '{State:State,LastUpdateStatus:LastUpdateStatus}' \
+            > "${RUNNER_TEMP}/function.json"
+          jq --exit-status \
+            '.State == "Active" and .LastUpdateStatus == "Successful"' \
+            "${RUNNER_TEMP}/function.json" >/dev/null
+          aws lambda invoke \
+            --function-name shittim-chest-production-records-backfill \
+            --cli-binary-format raw-in-base64-out \
+            --payload "fileb://${RUNNER_TEMP}/payload.json" \
+            "${RUNNER_TEMP}/response.json" > "${RUNNER_TEMP}/invoke.json"
+          jq --exit-status '.FunctionError == null' "${RUNNER_TEMP}/invoke.json" >/dev/null
+          jq --exit-status --arg mode "${MODE}" \
+            'keys == ["candidates","complete","mode","projected","skipped","validated"] and
+             .mode == $mode and
+             (.candidates|type) == "number" and
+             (.validated|type) == "number" and
+             (.projected|type) == "number" and
+             (.skipped|type) == "number" and
+             .validated == .candidates and
+             (.complete|type) == "boolean"' \
+            "${RUNNER_TEMP}/response.json" >/dev/null
+          jq '{mode,candidates,validated,projected,skipped,complete}' \
+            "${RUNNER_TEMP}/response.json" >> "${GITHUB_STEP_SUMMARY}"

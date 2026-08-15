@@ -12,7 +12,9 @@
     "audit:infra": "npm audit --audit-level=low --json | node infra/check-audit.mjs",
     "cdk": "cdk",
     "cdk:list": "cdk list",
+    "cdk:list:records": "cdk list --app 'node --import tsx infra/bin/shittim-records.ts'",
     "synth": "cdk synth --strict",
+    "synth:records": "cdk synth --strict --app 'node --import tsx infra/bin/shittim-records.ts'",
     "check:infra": "npm run build && npm run test:infra && npm run synth"
   },
   "dependencies": {

@@ -76,7 +76,7 @@ jobs:
           uv sync --frozen --all-groups
       - name: Audit locked Records Python dependencies
         run: |
-          uv export --quiet --frozen --all-groups --no-emit-project --no-annotate \
+          uv export --quiet --frozen --all-groups --no-emit-local --no-annotate \
             --output-file "${RUNNER_TEMP}/records-audit-requirements.txt"
           uv run --frozen pip-audit --strict --require-hashes \
             --requirement "${RUNNER_TEMP}/records-audit-requirements.txt"
@@ -148,6 +148,34 @@ jobs:
       - name: Audit Records web dependencies
         run: pnpm audit --audit-level=low
 
+  records-infra:
+    name: records-infra
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: records-changes
+    if: needs.records-changes.outputs.records == 'true'
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install locked CDK dependencies
+        run: npm ci --ignore-scripts
+      - name: Audit and test the Records infrastructure
+        run: |
+          npm run audit:infra
+          npm run build
+          npx vitest run \
+            infra/test/records-stateful-stack.test.ts \
+            infra/test/records-application-stack.test.ts \
+            --testTimeout=15000
+          npm run synth:records
+
   records-gate:
     name: records-gate
     runs-on: ubuntu-latest
@@ -158,6 +186,7 @@ jobs:
       - records-python
       - records-contract
       - records-web
+      - records-infra
     steps:
       - name: Preserve one required Records result
         env:
@@ -166,16 +195,19 @@ jobs:
           PYTHON_RESULT: ${{ needs.records-python.result }}
           CONTRACT_RESULT: ${{ needs.records-contract.result }}
           WEB_RESULT: ${{ needs.records-web.result }}
+          INFRA_RESULT: ${{ needs.records-infra.result }}
         run: |
           test "${CHANGES_RESULT}" = success
           if [ "${REQUIRED}" = true ]; then
             test "${PYTHON_RESULT}" = success
             test "${CONTRACT_RESULT}" = success
             test "${WEB_RESULT}" = success
+            test "${INFRA_RESULT}" = success
           elif [ "${REQUIRED}" = false ]; then
             test "${PYTHON_RESULT}" = skipped
             test "${CONTRACT_RESULT}" = skipped
             test "${WEB_RESULT}" = skipped
+            test "${INFRA_RESULT}" = skipped
             echo "Records inputs are unchanged."
           else
             echo "Records path classification did not publish an explicit result." >&2

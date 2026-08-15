@@ -1,0 +1,496 @@
+name: Records Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_stream_arn:
+        description: "M1で有効化済みのDebateTable Stream ARN"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  NODE_VERSION: "24.18.0"
+  PYTHON_VERSION: "3.14.6"
+  UV_VERSION: "0.11.29"
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    outputs:
+      artifact_name: ${{ steps.evidence.outputs.artifact_name }}
+    permissions:
+      attestations: write
+      checks: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Require the immutable main branch
+        env:
+          EXPECTED_REPOSITORY: pitekusu/shittim-chest
+          EXPECTED_REPOSITORY_ID: "1302516701"
+        run: |
+          test "${GITHUB_REF}" = refs/heads/main
+          test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_REPOSITORY_ID}" = "${EXPECTED_REPOSITORY_ID}"
+          test "${GITHUB_SHA}" = "${GITHUB_WORKFLOW_SHA}"
+      - name: Check out the trusted main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require successful main Records and CodeQL gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+            > "${RUNNER_TEMP}/checks.json"
+          for check in \
+            records-gate \
+            'Analyze (python)' \
+            'Analyze (javascript-typescript)' \
+            'Analyze (actions)'
+          do
+            jq --exit-status --arg check "${check}" \
+              '[.[].check_runs[]] | map(select(.name == $check)) | sort_by(.id) | last |
+               .conclusion == "success"' \
+              "${RUNNER_TEMP}/checks.json" >/dev/null
+          done
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: services/records/uv.lock
+      - name: Install pinned Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install frozen build environments
+        run: |
+          uv sync --project services/records --frozen --all-groups
+          npm ci --ignore-scripts
+      - name: Re-run Records release-critical gates
+        run: |
+          (
+            cd services/records
+            uv run --frozen ruff format --check .
+            uv run --frozen ruff check .
+            uv run --frozen ty check
+            uv run --frozen pytest
+          )
+          npm run build
+          npx vitest run \
+            infra/test/records-stateful-stack.test.ts \
+            infra/test/records-application-stack.test.ts \
+            --testTimeout=15000
+      - name: Build deterministic Records Lambda bundle and SBOM
+        id: bundle
+        run: |
+          stage="${RUNNER_TEMP}/records-lambda"
+          wheels="${RUNNER_TEMP}/records-wheels"
+          mkdir -p "${stage}" "${wheels}"
+          uv export --project services/records --frozen --no-dev --no-emit-local \
+            --no-annotate --output-file "${RUNNER_TEMP}/records-runtime.txt"
+          uv pip install --require-hashes --target "${stage}" \
+            --requirements "${RUNNER_TEMP}/records-runtime.txt"
+          uv build --wheel --out-dir "${wheels}"
+          uv build --project services/records --wheel --out-dir "${wheels}"
+          uv pip install --no-deps --target "${stage}" "${wheels}"/*.whl
+          uv export --project services/records --frozen --no-dev \
+            --format cyclonedx1.5 --output-file "${RUNNER_TEMP}/records-sbom.cdx.json"
+          uv run --frozen python tools/build_records_bundle.py \
+            --source "${stage}" --output "${RUNNER_TEMP}/records-lambda.zip"
+          bundle_hash=$(sha256sum "${RUNNER_TEMP}/records-lambda.zip" | cut -d' ' -f1)
+          echo "bundle_hash=${bundle_hash}" >> "${GITHUB_OUTPUT}"
+      - name: Validate Records plan handles
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
+          PLAN_ROLE_ARN: ${{ vars.AWS_RECORDS_PLAN_ROLE_ARN }}
+          SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
+        run: |
+          for value in "${ASSET_BUCKET}" "${EXECUTION_ROLE_ARN}" "${PLAN_ROLE_ARN}"
+          do
+            test -n "${value}"
+          done
+          [[ "${SOURCE_STREAM_ARN}" =~ ^arn:[^:]+:dynamodb:${AWS_REGION}:[0-9]{12}:table/shittim-chest-production/stream/.+$ ]]
+      - name: Acquire Records plan credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_RECORDS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: records-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 2700
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Verify Records deployment account and parameter metadata
+        env:
+          IDENTITY_PARAMETER_NAME: /shittim-chest/production/records/identity-hmac-key
+          PRESENTATION_PARAMETER_NAME: /shittim-chest/production/records/presentation/v0001
+          SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          stream_account=$(cut -d: -f5 <<< "${SOURCE_STREAM_ARN}")
+          test "${stream_account}" = "${account}"
+          for name in "${IDENTITY_PARAMETER_NAME}" "${PRESENTATION_PARAMETER_NAME}"
+          do
+            metadata=$(aws ssm describe-parameters \
+              --parameter-filters "Key=Name,Option=Equals,Values=${name}" \
+              --max-results 1 --output json)
+            jq --exit-status --arg name "${name}" \
+              '.Parameters | length == 1 and
+               .[0].Name == $name and .[0].Type == "SecureString"' \
+              <<< "${metadata}" >/dev/null
+          done
+      - name: Upload immutable bundle and synthesize standalone templates
+        id: assets
+        env:
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          BUNDLE_HASH: ${{ steps.bundle.outputs.bundle_hash }}
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          test "${ASSET_BUCKET}" = "cdk-hnb659fds-assets-${account}-${AWS_REGION}"
+          bundle_key="${BUNDLE_HASH}.zip"
+          upload=$(aws s3api put-object --bucket "${ASSET_BUCKET}" --key "${bundle_key}" \
+            --body "${RUNNER_TEMP}/records-lambda.zip" --output json)
+          bundle_version=$(jq --exit-status --raw-output .VersionId <<< "${upload}")
+          test -n "${bundle_version}"
+          CDK_DEFAULT_ACCOUNT="${account}" CDK_DEFAULT_REGION="${AWS_REGION}" \
+            npm run synth:records
+          for stack in RecordsStateful RecordsApplication
+          do
+            template="cdk.out/${stack}.template.json"
+            key=$(sha256sum "${template}" | cut -d' ' -f1).json
+            aws s3api put-object --bucket "${ASSET_BUCKET}" --key "${key}" \
+              --body "${template}" >/dev/null
+            echo "${stack} ${key}" >> "${RUNNER_TEMP}/template-assets.txt"
+          done
+          echo "bundle_key=${bundle_key}" >> "${GITHUB_OUTPUT}"
+          echo "bundle_version=${bundle_version}" >> "${GITHUB_OUTPUT}"
+      - name: Create and validate the two Records Change Sets
+        id: plan
+        env:
+          APPLICATION_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-application
+          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          BUNDLE_KEY: ${{ steps.assets.outputs.bundle_key }}
+          BUNDLE_VERSION: ${{ steps.assets.outputs.bundle_version }}
+          EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
+          SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
+          STATEFUL_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful
+        run: |
+          create_plan() {
+            local logical_name="$1" stack="$2" change_set="$3" template_key="$4"
+            local stack_status type arn status
+            shift 4
+            if aws cloudformation describe-stacks --stack-name "${stack}" \
+              > "${RUNNER_TEMP}/${logical_name}-stack.json" \
+              2> "${RUNNER_TEMP}/${logical_name}-stack.error"
+            then
+              stack_status=$(jq --exit-status --raw-output '.Stacks[0].StackStatus' \
+                "${RUNNER_TEMP}/${logical_name}-stack.json")
+            else
+              grep --quiet "does not exist" "${RUNNER_TEMP}/${logical_name}-stack.error"
+              stack_status=""
+            fi
+            case "${stack_status}" in
+              ""|REVIEW_IN_PROGRESS) type=CREATE ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE)
+                type=UPDATE
+                ;;
+              *) exit 1 ;;
+            esac
+            arn=$(aws cloudformation create-change-set \
+              --stack-name "${stack}" \
+              --change-set-name "${change_set}" \
+              --change-set-type "${type}" \
+              --description "Records ${GITHUB_SHA} run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" \
+              --template-url "https://${ASSET_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${template_key}" \
+              --role-arn "${EXECUTION_ROLE_ARN}" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --client-token "records-${logical_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              "$@" --query Id --output text)
+            for attempt in $(seq 1 60)
+            do
+              status=$(aws cloudformation describe-change-set \
+                --change-set-name "${arn}" --query Status --output text)
+              case "${status}" in
+                CREATE_COMPLETE|FAILED) break ;;
+              esac
+              test "${attempt}" -lt 60
+              sleep 5
+            done
+            aws cloudformation describe-change-set \
+              --change-set-name "${arn}" \
+              > "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json"
+            uv run --project services/records --frozen python \
+              tools/release_supply_chain.py validate-change-set \
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+              --expected-arn "${arn}" --expected-stack "${stack}"
+            if [ "${logical_name}" = application ]; then
+              uv run --project services/records --frozen python \
+                tools/release_supply_chain.py validate-change-set \
+                "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+                --expected-arn "${arn}" --expected-stack "${stack}" \
+                --expected-parameter "SourceDebateTableStreamArn=${SOURCE_STREAM_ARN}" \
+                --expected-parameter "RecordsBundleBucketName=${ASSET_BUCKET}" \
+                --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
+                --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}"
+            fi
+            uv run --project services/records --frozen python \
+              tools/records_release_manifest.py create-entry \
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+              --type "${type}" --expected-name "${change_set}" \
+              --expected-stack "${stack}" \
+              --output "${RUNNER_TEMP}/records-release-${logical_name}-plan.json"
+            jq --exit-status \
+              '[.Changes[].ResourceChange // empty] |
+               all(.[]; .Action != "Remove" and
+                        (.Replacement // "False") == "False")' \
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
+          }
+          stateful_key=$(awk '$1 == "RecordsStateful" {print $2}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          application_key=$(awk '$1 == "RecordsApplication" {print $2}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          create_plan stateful ShittimChest-Prod-RecordsStateful \
+            "${STATEFUL_CHANGE_SET}" "${stateful_key}"
+          create_plan application ShittimChest-Prod-RecordsApplication \
+            "${APPLICATION_CHANGE_SET}" "${application_key}" \
+            --parameters \
+              ParameterKey=SourceDebateTableStreamArn,ParameterValue="${SOURCE_STREAM_ARN}" \
+              ParameterKey=RecordsBundleBucketName,ParameterValue="${ASSET_BUCKET}" \
+              ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
+              ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"
+      - name: Record Records release evidence
+        id: evidence
+        env:
+          BUNDLE_HASH: ${{ steps.bundle.outputs.bundle_hash }}
+        run: |
+          artifact_name="records-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          uv run --project services/records --frozen python \
+            tools/records_release_manifest.py create-manifest \
+            --stateful-plan "${RUNNER_TEMP}/records-release-stateful-plan.json" \
+            --application-plan "${RUNNER_TEMP}/records-release-application-plan.json" \
+            --commit-sha "${GITHUB_SHA}" --bundle-sha256 "${BUNDLE_HASH}" \
+            --output "${RUNNER_TEMP}/records-release-manifest.json"
+          mkdir -p "${RUNNER_TEMP}/records-evidence"
+          cp "${RUNNER_TEMP}/records-release-manifest.json" \
+            "${RUNNER_TEMP}/records-sbom.cdx.json" \
+            "${RUNNER_TEMP}"/records-release-*.json \
+            "${RUNNER_TEMP}/records-evidence/"
+          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+      - name: Attest the Records release manifest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/records-release-manifest.json
+      - name: Upload Records plan evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.evidence.outputs.artifact_name }}
+          path: ${{ runner.temp }}/records-evidence
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove attested no-op Records Change Sets before approval
+        run: |
+          manifest="${RUNNER_TEMP}/records-release-manifest.json"
+          for logical_name in stateful application
+          do
+            executable=$(jq --exit-status --raw-output \
+              --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].executable' "${manifest}")
+            if [ "${executable}" = false ]; then
+              arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+                '.change_sets[$logical_name].arn' "${manifest}")
+              aws cloudformation delete-change-set --change-set-name "${arn}"
+              for attempt in $(seq 1 12)
+              do
+                if aws cloudformation describe-change-set --change-set-name "${arn}" \
+                  >/dev/null 2> "${RUNNER_TEMP}/${logical_name}-noop-cleanup.error"
+                then
+                  test "${attempt}" -lt 12
+                  sleep 5
+                  continue
+                fi
+                grep --quiet "does not exist" \
+                  "${RUNNER_TEMP}/${logical_name}-noop-cleanup.error"
+                break
+              done
+            fi
+          done
+      - name: Clean up unexecuted Change Sets after plan failure
+        if: failure()
+        continue-on-error: true
+        env:
+          APPLICATION_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-application
+          STATEFUL_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful
+        run: |
+          aws cloudformation delete-change-set \
+            --stack-name ShittimChest-Prod-RecordsApplication \
+            --change-set-name "${APPLICATION_CHANGE_SET}" 2>/dev/null || true
+          aws cloudformation delete-change-set \
+            --stack-name ShittimChest-Prod-RecordsStateful \
+            --change-set-name "${STATEFUL_CHANGE_SET}" 2>/dev/null || true
+
+  deploy:
+    name: deploy
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      attestations: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Download the attested Records plan evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.plan.outputs.artifact_name }}
+          path: ${{ runner.temp }}/records-evidence
+      - name: Check out the fixed Records release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned Python and uv for evidence validation
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: services/records/uv.lock
+      - name: Revalidate the Records plan attestation and fixed SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          gh attestation verify "${manifest}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_WORKFLOW_REF}"
+          uv run --project services/records --frozen python \
+            tools/records_release_manifest.py validate-manifest "${manifest}" \
+            --expected-commit-sha "${GITHUB_SHA}"
+      - name: Acquire Records deploy credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_RECORDS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: records-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 2700
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Execute only the attested Records Change Sets
+        run: |
+          execute() {
+            local logical_name="$1" stack name arn type executable
+            stack=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].stack' "${manifest}")
+            name=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].name' "${manifest}")
+            arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].arn' "${manifest}")
+            type=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].type' "${manifest}")
+            executable=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].executable' "${manifest}")
+            if [ "${executable}" = false ]; then
+              return 0
+            fi
+            aws cloudformation describe-change-set --change-set-name "${arn}" \
+              > "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json"
+            uv run --project services/records --frozen python \
+              tools/records_release_manifest.py create-entry \
+              "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
+              --type "${type}" --expected-name "${name}" --expected-stack "${stack}" \
+              --output "${RUNNER_TEMP}/${logical_name}-deploy-plan.json"
+            jq --exit-status --arg logical_name "${logical_name}" \
+              --slurpfile actual "${RUNNER_TEMP}/${logical_name}-deploy-plan.json" \
+              '.change_sets[$logical_name] == $actual[0]' "${manifest}" >/dev/null
+            aws cloudformation execute-change-set --change-set-name "${arn}"
+            case "${type}" in
+              CREATE)
+                aws cloudformation wait stack-create-complete --stack-name "${stack}"
+                ;;
+              UPDATE)
+                aws cloudformation wait stack-update-complete --stack-name "${stack}"
+                ;;
+              *)
+                echo "Unexpected attested Change Set type." >&2
+                exit 1
+                ;;
+            esac
+          }
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          execute stateful
+          execute application
+      - name: Verify stable Records Stack results
+        run: |
+          for stack in \
+            ShittimChest-Prod-RecordsStateful \
+            ShittimChest-Prod-RecordsApplication
+          do
+            status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
+              --query 'Stacks[0].StackStatus' --output text)
+            case "${status}" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) ;;
+              *) exit 1 ;;
+            esac
+          done
+      - name: Clean up only unexecuted Records Change Sets
+        if: always()
+        continue-on-error: true
+        run: |
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          for logical_name in stateful application
+          do
+            arn=$(jq --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].arn // empty' "${manifest}" 2>/dev/null || true)
+            status=$(aws cloudformation describe-change-set --change-set-name "${arn}" \
+              --query Status --output text 2>/dev/null || true)
+            execution=$(aws cloudformation describe-change-set --change-set-name "${arn}" \
+              --query ExecutionStatus --output text 2>/dev/null || true)
+            if [ "${status}" = CREATE_COMPLETE ] && [ "${execution}" = AVAILABLE ]; then
+              aws cloudformation delete-change-set --change-set-name "${arn}"
+            fi
+          done
+      - name: Confirm this Records release has no unexecuted Change Sets
+        if: always()
+        run: |
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          for logical_name in stateful application
+          do
+            arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].arn' "${manifest}")
+            if ! aws cloudformation describe-change-set --change-set-name "${arn}" \
+              > "${RUNNER_TEMP}/${logical_name}-final-change-set.json" \
+              2> "${RUNNER_TEMP}/${logical_name}-final-change-set.error"
+            then
+              grep --quiet "does not exist" \
+                "${RUNNER_TEMP}/${logical_name}-final-change-set.error"
+              continue
+            fi
+            status=$(jq --exit-status --raw-output .Status \
+              "${RUNNER_TEMP}/${logical_name}-final-change-set.json")
+            execution=$(jq --exit-status --raw-output .ExecutionStatus \
+              "${RUNNER_TEMP}/${logical_name}-final-change-set.json")
+            if [ "${status}" = CREATE_COMPLETE ] && [ "${execution}" = AVAILABLE ]; then
+              echo "Unexecuted Records Change Set remains after cleanup." >&2
+              exit 1
+            fi
+          done
