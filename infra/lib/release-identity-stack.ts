@@ -287,20 +287,20 @@ export class ReleaseIdentityStack extends Stack {
       "AwsSolutions-IAM5[Resource::*]",
       ...this.stackWildcardAcknowledgments(RELEASE_STACK_NAMES),
     ]);
-    // CDK 2.261 rejects a validation ID containing the S3 ARN's `:::` even
-    // though AwsSolutions emits that exact granular ID. Record the same
-    // evidence metadata directly until the validation ID parser supports it.
+    // Validation IDs containing the S3 ARN's `:::` cannot pass through
+    // Validations.acknowledge(). Record the unqualified granular IDs directly;
+    // cdk-nag resolves this metadata on the role's policy descendants.
     this.planRole.node.addMetadata(
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
       {
-        [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
           "The plan role can write only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
-        [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/templates/shittim-chest/*]`]:
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/templates/shittim-chest/*]`]:
           "The plan role can write only content-addressed oversized CloudFormation templates in the account's fixed CDK asset bucket.",
         ...Object.fromEntries(
           [TOKYO_REGION, COST_REGION].flatMap((region) =>
             this.cdkAssetObjectKeys().map((key) => [
-              `AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${region}/${key}]`,
+              `AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${region}/${key}]`,
               "The plan role can read or upload only an exact 64-character content-addressed single-part CDK JSON or ZIP asset; it cannot delete any bootstrap asset.",
             ]),
           ),
@@ -419,7 +419,7 @@ export class ReleaseIdentityStack extends Stack {
     this.deployRole.node.addMetadata(
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
       {
-        [`AwsSolutions::AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
+        [`AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/lambda/shittim-chest/*]`]:
           "The deploy role can read only content-addressed image-admission bundles in the account's fixed CDK asset bucket.",
       },
     );

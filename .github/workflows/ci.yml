@@ -460,7 +460,7 @@ jobs:
           }
           trap cleanup_record_container EXIT
           docker cp \
-            "${record_container}:/app/.venv/lib/python3.14/site-packages/shittim_chest-0.1.0.dist-info/RECORD" \
+            "${record_container}:/app/.venv/lib/python3.14/site-packages/shittim_chest-1.0.0.dist-info/RECORD" \
             "${RUNNER_TEMP}/application-record.csv"
           test -s "${RUNNER_TEMP}/application-record.csv"
           if grep --fixed-strings --quiet "/uv_cache.json," \

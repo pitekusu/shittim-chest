@@ -14,10 +14,17 @@ if NODE is None:
     raise RuntimeError("Node.js is required by the infrastructure test suite")
 
 
-def _run(report: object) -> subprocess.CompletedProcess[str]:
+def _run(
+    report: object,
+    *,
+    exceptions_path: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     assert NODE is not None
+    command = [NODE, str(CHECKER)]
+    if exceptions_path is not None:
+        command.append(str(exceptions_path))
     return subprocess.run(  # noqa: S603 - fixed local Node script.
-        (NODE, str(CHECKER)),
+        command,
         input=json.dumps(report),
         text=True,
         capture_output=True,
@@ -51,3 +58,94 @@ def test_incomplete_report_fails_closed() -> None:
 
     assert result.returncode == 1
     assert "incomplete" in result.stderr
+
+
+def _vulnerable_report(*, package: str = "brace-expansion", severity: str = "high") -> object:
+    return {
+        "auditReportVersion": 2,
+        "vulnerabilities": {
+            package: {
+                "severity": severity,
+                "via": [
+                    {
+                        "title": "test advisory",
+                        "url": "https://github.com/advisories/GHSA-test-audit-entry",
+                        "severity": severity,
+                    }
+                ],
+            }
+        },
+        "metadata": {"vulnerabilities": {severity: 1, "total": 1}},
+    }
+
+
+def _write_exceptions(tmp_path: Path, entries: list[dict[str, str]]) -> Path:
+    path = tmp_path / "npm-audit-exceptions.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+def _exception(**overrides: str) -> dict[str, str]:
+    entry = {
+        "id": "GHSA-test-audit-entry",
+        "package": "brace-expansion",
+        "severity": "high",
+        "reason": "bounded test-only exception",
+        "expires": "2999-01-01",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_matching_package_and_severity_exception_passes(tmp_path: Path) -> None:
+    result = _run(
+        _vulnerable_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception()]),
+    )
+
+    assert result.returncode == 0
+    assert "1 dated exception(s) active" in result.stdout
+
+
+def test_exception_package_mismatch_fails_closed(tmp_path: Path) -> None:
+    result = _run(
+        _vulnerable_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(package="minimatch")]),
+    )
+
+    assert result.returncode == 1
+    assert "exception package minimatch did not match brace-expansion" in result.stderr
+
+
+def test_exception_severity_mismatch_fails_closed(tmp_path: Path) -> None:
+    result = _run(
+        _vulnerable_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(severity="moderate")]),
+    )
+
+    assert result.returncode == 1
+    assert "exception severity moderate did not match high" in result.stderr
+
+
+def test_exception_unknown_field_fails_closed(tmp_path: Path) -> None:
+    result = _run(
+        _vulnerable_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(owner="nobody")]),
+    )
+
+    assert result.returncode == 1
+    assert "unknown: owner" in result.stderr
+
+
+def test_unused_exception_fails_closed(tmp_path: Path) -> None:
+    result = _run(
+        {
+            "auditReportVersion": 2,
+            "vulnerabilities": {},
+            "metadata": {"vulnerabilities": {"total": 0}},
+        },
+        exceptions_path=_write_exceptions(tmp_path, [_exception()]),
+    )
+
+    assert result.returncode == 1
+    assert "unused npm audit exception" in result.stderr

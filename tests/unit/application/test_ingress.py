@@ -23,6 +23,7 @@ from shittim_chest.application import (
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
     IngressOutcome,
+    _outcome_for_status,
 )
 from shittim_chest.application.models import DebateAuthorizationSnapshot
 from shittim_chest.application.ports import (
@@ -219,6 +220,17 @@ async def test_queue_full_is_ephemeral_result_without_side_effects() -> None:
 
 
 @pytest.mark.asyncio
+async def test_identity_conflict_is_not_presented_as_queue_pressure() -> None:
+    app, ingress, events = application()
+    ingress.enqueue_error = RepositoryIdentityConflict("immutable identity changed")
+
+    result = await app.accept(command())
+
+    assert result.outcome is IngressOutcome.NOT_ALLOWED
+    assert events == ["enqueue"]
+
+
+@pytest.mark.asyncio
 async def test_component_uses_operation_specific_accepted_response() -> None:
     debate_id = DebateId.new()
     attempt_id = AttemptId.new()
@@ -296,6 +308,16 @@ async def test_component_semantic_replay_rejects_changed_identity_without_debate
 
 
 @pytest.mark.asyncio
+async def test_component_rejects_a_missing_authorization_snapshot() -> None:
+    app, _, events = application(debates=FakeDebates())
+
+    result = await app.accept(component())
+
+    assert result.outcome is IngressOutcome.NOT_ALLOWED
+    assert events == ["replay"]
+
+
+@pytest.mark.asyncio
 async def test_processed_replay_only_repairs_public_status() -> None:
     app, ingress, events = application()
     persisted = IngressRequest.new_debate(
@@ -342,6 +364,26 @@ async def test_command_policy_fails_closed(changes: dict[str, object]) -> None:
 
     assert result.outcome is IngressOutcome.NOT_ALLOWED
     assert events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation_kind",
+    [
+        IngressKind.NEW_DEBATE,
+        IngressKind.CANCEL,
+    ],
+)
+async def test_validated_operation_shape_cannot_silently_lose_required_fields(
+    operation_kind: IngressKind,
+) -> None:
+    operation = command() if operation_kind is IngressKind.NEW_DEBATE else component()
+    missing_field = "question" if operation_kind is IngressKind.NEW_DEBATE else "custom_id"
+    object.__setattr__(operation, missing_field, None)
+    app, _, _ = application()
+
+    with pytest.raises(ValueError, match="lost required"):
+        await app.accept(operation)
 
 
 @pytest.mark.asyncio
@@ -410,6 +452,30 @@ async def test_component_rejects_context_actor_and_phase_mismatches() -> None:
         result = await app.accept(operation)
         assert result.outcome is IngressOutcome.NOT_ALLOWED
         assert events == [] or events == ["replay"]
+
+
+@pytest.mark.parametrize(
+    ("status", "kind", "expected"),
+    [
+        (IngressStatus.ACCEPTED, IngressKind.NEW_DEBATE, IngressOutcome.ACCEPTED),
+        (IngressStatus.ACCEPTED, IngressKind.RETRY, IngressOutcome.RETRY_ACCEPTED),
+        (IngressStatus.ACCEPTED, IngressKind.CANCEL, IngressOutcome.CANCEL_ACCEPTED),
+        (IngressStatus.COMPLETED, IngressKind.NEW_DEBATE, IngressOutcome.COMPLETED),
+        (IngressStatus.REJECTED, IngressKind.NEW_DEBATE, IngressOutcome.REJECTED),
+        (IngressStatus.FAILED, IngressKind.NEW_DEBATE, IngressOutcome.TERMINAL_FAILED),
+    ],
+)
+def test_persisted_status_maps_to_one_stable_public_outcome(
+    status: IngressStatus,
+    kind: IngressKind,
+    expected: IngressOutcome,
+) -> None:
+    assert _outcome_for_status(status, kind=kind) is expected
+
+
+def test_unknown_persisted_status_fails_closed() -> None:
+    with pytest.raises(AssertionError, match="unsupported ingress status"):
+        _outcome_for_status(cast(IngressStatus, object()), kind=IngressKind.NEW_DEBATE)
 
 
 def _snapshot(

@@ -840,7 +840,7 @@ export class RuntimeStack extends Stack {
       reason:
         "DescribeServiceRevisions requires deployment-generated revision and account segments; aws:ResourceAccount and the named production service confine both wildcards.",
     });
-    // FargateService has no L2 lifecycle-hook API in aws-cdk-lib 2.261.0.
+    // FargateService has no L2 lifecycle-hook API in the current aws-cdk-lib.
     // Keep the escape hatch confined to the generated lifecycleHooks field.
     // CloudFormation declares HookDetails as Json but the ECS resource provider
     // requires a JSON object serialized as a string.

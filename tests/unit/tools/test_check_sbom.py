@@ -29,9 +29,9 @@ def _cyclonedx_document() -> dict[str, object]:
             "tools": [{"vendor": "Astral Software Inc.", "name": "uv", "version": "0.11.29"}],
             "component": {
                 "type": "library",
-                "bom-ref": _versioned("shittim-chest", "0.1.0"),
+                "bom-ref": _versioned("shittim-chest", "1.0.0"),
                 "name": "shittim_chest",
-                "version": "0.1.0",
+                "version": "1.0.0",
             },
         },
         "components": [
@@ -45,7 +45,7 @@ def _cyclonedx_document() -> dict[str, object]:
         ],
         "dependencies": [
             {
-                "ref": _versioned("shittim-chest", "0.1.0"),
+                "ref": _versioned("shittim-chest", "1.0.0"),
                 "dependsOn": [_versioned("pytest", "9.1.1")],
             },
             {"ref": _versioned("pytest", "9.1.1")},
@@ -83,7 +83,7 @@ def _project_documents() -> tuple[dict[str, object], dict[str, object]]:
         "package": [
             {
                 "name": "shittim-chest",
-                "version": "0.1.0",
+                "version": "1.0.0",
                 "source": {"editable": "."},
             },
             {
@@ -93,7 +93,7 @@ def _project_documents() -> tuple[dict[str, object], dict[str, object]]:
             },
         ]
     }
-    project: dict[str, object] = {"project": {"name": "shittim-chest", "version": "0.1.0"}}
+    project: dict[str, object] = {"project": {"name": "shittim-chest", "version": "1.0.0"}}
     return lock, project
 
 
@@ -102,7 +102,7 @@ def test_valid_cyclonedx_inventory_is_accepted() -> None:
 
     assert inventory.component_count == 1
     assert inventory.package_purls == frozenset({_versioned("pkg:pypi/pytest", "9.1.1")})
-    assert inventory.project_purl == _versioned("pkg:pypi/shittim-chest", "0.1.0")
+    assert inventory.project_purl == _versioned("pkg:pypi/shittim-chest", "1.0.0")
 
 
 def test_cyclonedx_inventory_matches_project_and_lock() -> None:
@@ -175,7 +175,7 @@ def test_github_spdx_match_is_accepted() -> None:
     github_purls = github_spdx_python_purls(
         _github_spdx(
             _versioned("pkg:pypi/pytest", "9.1.1"),
-            _versioned("pkg:pypi/shittim-chest", "0.1.0"),
+            _versioned("pkg:pypi/shittim-chest", "1.0.0"),
         )
     )
 
@@ -189,7 +189,7 @@ def test_github_spdx_match_is_accepted() -> None:
         (
             (
                 _versioned("pkg:pypi/pytest", "9.1.1"),
-                _versioned("pkg:pypi/shittim-chest", "0.1.0"),
+                _versioned("pkg:pypi/shittim-chest", "1.0.0"),
                 _versioned("pkg:pypi/unexpected", "1.0.0"),
             ),
             "unexpected in GitHub",

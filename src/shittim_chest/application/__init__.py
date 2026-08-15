@@ -43,7 +43,6 @@ from shittim_chest.application.errors import (
     OutboxRecoveryAbandoned,
     OutboxRecoveryFailed,
     RequestNotAllowed,
-    RequiredEvidenceUnavailable,
     RuntimeNotReady,
 )
 from shittim_chest.application.generation_policy import (
@@ -210,7 +209,6 @@ __all__ = (
     "ReasoningEffort",
     "ReasoningMode",
     "RequestNotAllowed",
-    "RequiredEvidenceUnavailable",
     "RetryDebateCommand",
     "RuntimeActivity",
     "RuntimeNotReady",
