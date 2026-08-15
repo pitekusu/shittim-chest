@@ -1302,7 +1302,7 @@
             "required": false,
             "schema": {
               "maxLength": 256,
-              "pattern": "^/(?![/\\\\])",
+              "pattern": "^/(?![/\\\\])[^\\t\\r\\n]*$",
               "type": "string"
             }
           }

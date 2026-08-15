@@ -118,7 +118,11 @@ def build_openapi() -> dict[str, Any]:
                         _parameter(
                             "returnTo",
                             "query",
-                            {"type": "string", "pattern": r"^/(?![/\\])", "maxLength": 256},
+                            {
+                                "type": "string",
+                                "pattern": r"^/(?![/\\])[^\t\r\n]*$",
+                                "maxLength": 256,
+                            },
                         )
                     ],
                     "responses": {"302": {"description": "Discord authorization redirect"}},

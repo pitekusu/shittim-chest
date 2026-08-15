@@ -83,9 +83,15 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     return_to_pattern = return_to_schema["pattern"]
     assert re.search(return_to_pattern, "/") is not None
     assert re.search(return_to_pattern, "/records/record-example") is not None
-    assert re.search(return_to_pattern, "//evil.example") is None
-    assert re.search(return_to_pattern, r"/\evil.example") is None
-    assert re.search(return_to_pattern, r"/\\evil.example") is None
+    for unsafe_return_to in (
+        "//evil.example",
+        r"/\evil.example",
+        r"/\\evil.example",
+        "/\t/evil.example",
+        "/\r/evil.example",
+        "/\n/evil.example",
+    ):
+        assert re.search(return_to_pattern, unsafe_return_to) is None
     assert openapi["paths"]["/api/v1/session"]["get"]["security"] == []
     assert [
         parameter["name"] for parameter in openapi["paths"]["/api/v1/records"]["get"]["parameters"]
