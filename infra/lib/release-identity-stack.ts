@@ -473,6 +473,12 @@ export class ReleaseIdentityStack extends Stack {
   private grantRecordsPlanPermissions(): void {
     this.recordsPlanRole.addToPolicy(
       new iam.PolicyStatement({
+        actions: ["ssm:DescribeParameters"],
+        resources: ["*"],
+      }),
+    );
+    this.recordsPlanRole.addToPolicy(
+      new iam.PolicyStatement({
         actions: [
           "cloudformation:CreateChangeSet",
           "cloudformation:DeleteChangeSet",
@@ -516,6 +522,7 @@ export class ReleaseIdentityStack extends Stack {
       }),
     );
     this.acknowledgeRoleWildcards(this.recordsPlanRole, [
+      "AwsSolutions-IAM5[Resource::*]",
       ...this.stackWildcardAcknowledgments(RECORDS_STACK_NAMES),
     ]);
     this.acknowledgeRecordsAssetWildcards(

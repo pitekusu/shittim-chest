@@ -137,6 +137,25 @@ jobs:
           unset-current-credentials: true
           retry-max-attempts: 3
           action-timeout-s: 60
+      - name: Verify Records deployment account and parameter metadata
+        env:
+          IDENTITY_PARAMETER_NAME: /shittim-chest/production/records/identity-hmac-key
+          PRESENTATION_PARAMETER_NAME: /shittim-chest/production/records/presentation/v0001
+          SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          stream_account=$(cut -d: -f5 <<< "${SOURCE_STREAM_ARN}")
+          test "${stream_account}" = "${account}"
+          for name in "${IDENTITY_PARAMETER_NAME}" "${PRESENTATION_PARAMETER_NAME}"
+          do
+            metadata=$(aws ssm describe-parameters \
+              --parameter-filters "Key=Name,Option=Equals,Values=${name}" \
+              --max-results 1 --output json)
+            jq --exit-status --arg name "${name}" \
+              '.Parameters | length == 1 and
+               .[0].Name == $name and .[0].Type == "SecureString"' \
+              <<< "${metadata}" >/dev/null
+          done
       - name: Upload immutable bundle and synthesize standalone templates
         id: assets
         env:

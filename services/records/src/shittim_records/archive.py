@@ -135,6 +135,7 @@ def project_completed_debate(
         "completed_at": completed_at,
         "question": snapshot.question,
         "requester_display_name": snapshot.requester_display_name,
+        "requester_key": requester_key,
         "presentation_version": presentation.presentation_version,
         "participants": participant_snapshot,
         "initial_opinions": [

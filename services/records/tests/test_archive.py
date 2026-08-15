@@ -81,6 +81,15 @@ def test_projection_is_deterministic_and_public_identity_is_hmac_derived() -> No
     assert len(first.record_id) == 43
     assert first.source_fingerprint != first.record_id
 
+    changed_requester = project_completed_debate(
+        replace(source, requester_id="different-requester"),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    assert changed_requester.record_id == first.record_id
+    assert changed_requester.source_fingerprint != first.source_fingerprint
+
 
 @pytest.mark.parametrize(
     "mutation",

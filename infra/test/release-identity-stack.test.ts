@@ -128,6 +128,9 @@ describe("ReleaseIdentityStack", () => {
     expect(plan).toContain("cloudformation:CreateChangeSet");
     expect(plan).toContain("iam:PassRole");
     expect(plan).toContain("s3:PutObject");
+    expect(plan).toContain("ssm:DescribeParameters");
+    expect(plan).not.toContain('"ssm:GetParameter"');
+    expect(plan).not.toContain('"ssm:GetParameters"');
     expect(plan).not.toContain("cloudformation:ExecuteChangeSet");
     expect(deploy).toContain("cloudformation:ExecuteChangeSet");
     expect(deploy).toContain("cloudformation:DescribeEvents");
