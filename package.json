@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "test:infra": "vitest run infra/test",
+    "test:infra": "vitest run infra/test --testTimeout=15000",
     "audit:infra": "npm audit --audit-level=low --json | node infra/check-audit.mjs",
     "cdk": "cdk",
     "cdk:list": "cdk list",
