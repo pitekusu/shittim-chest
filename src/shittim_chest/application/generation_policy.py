@@ -66,7 +66,7 @@ def _policy(
         initial_opinion=PhaseBudget(ReasoningEffort.HIGH, 2_400),
         final_proposal=PhaseBudget(ReasoningEffort.HIGH, 4_000),
         vote=PhaseBudget(ReasoningEffort.MEDIUM, 800),
-        decision=PhaseBudget(ReasoningEffort.HIGH, 1_200),
+        decision=PhaseBudget(ReasoningEffort.HIGH, 2_400),
     )
 
 

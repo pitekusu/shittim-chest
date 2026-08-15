@@ -266,7 +266,7 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
         2_400,
         4_000,
         800,
-        1_200,
+        2_400,
     ]
     assert "persona for participant-a" in server.requests[-1]["instructions"]
     assert "victory_message" in server.requests[-1]["instructions"]
@@ -275,6 +275,11 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     assert "wholehearted joy" in server.requests[-1]["instructions"]
     assert "gratitude to the others" in server.requests[-1]["instructions"]
     assert "triumphant excitement" in server.requests[-1]["instructions"]
+    assert "victory_message at most 180 Japanese characters" in server.requests[-1]["instructions"]
+    assert "decision at most 900 Japanese characters" in server.requests[-1]["instructions"]
+    assert "actions between 2 and 4 items" in server.requests[-1]["instructions"]
+    assert "caveats between 1 and 3 items" in server.requests[-1]["instructions"]
+    assert "synthesize them instead of copying them" in server.requests[-1]["instructions"]
     assert (
         "Do not use a shared catchphrase or fixed template" in server.requests[-1]["instructions"]
     )
@@ -355,6 +360,8 @@ async def test_incomplete_and_missing_parsed_output_are_distinct() -> None:
     assert failure.output_tokens == 30
     assert failure.cached_input_tokens == 20
     assert failure.reasoning_tokens == 10
+    assert observer.failures[1].diagnostic_context == "structured_output"
+    assert observer.failures[1].diagnostic_kind == "missing"
 
 
 @pytest.mark.asyncio
@@ -374,6 +381,8 @@ async def test_schema_validation_error_is_mapped_without_exposing_output() -> No
     assert raised.value.code == "openai_invalid_output"
     assert "123" not in str(raised.value)
     assert observer.failures[0].code == "openai_invalid_output"
+    assert observer.failures[0].diagnostic_context == "structured_output.proposal"
+    assert observer.failures[0].diagnostic_kind == "string_type"
 
 
 @pytest.mark.asyncio

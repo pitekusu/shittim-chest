@@ -219,7 +219,7 @@ class OpenAIResponsesService:
             self._record_failure(operation, error, started, response=response, settings=settings)
             raise
         except ValidationError as error:
-            invalid_output = OpenAIInvalidOutput()
+            invalid_output = _validation_error(error, schema)
             self._record_failure(
                 operation,
                 invalid_output,
@@ -360,8 +360,58 @@ def _extract_parsed[OutputT: BaseModel](response: ParsedResponse[OutputT]) -> Ou
                 raise OpenAIRefusal()
     parsed = response.output_parsed
     if parsed is None:
-        raise OpenAIInvalidOutput()
+        raise OpenAIInvalidOutput(
+            diagnostic_context="structured_output",
+            diagnostic_kind="missing",
+        )
     return parsed
+
+
+def _validation_error(
+    error: ValidationError,
+    schema: type[BaseModel],
+) -> OpenAIInvalidOutput:
+    """Reduce Pydantic details to a content-free field and stable error type."""
+
+    details = error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    if not details:
+        return OpenAIInvalidOutput(
+            diagnostic_context="structured_output",
+            diagnostic_kind="validation_error",
+        )
+    first = details[0]
+    location = first.get("loc", ())
+    allowed_fields = frozenset(schema.model_fields)
+    field = next(
+        (
+            component
+            for component in location
+            if isinstance(component, str) and component in allowed_fields
+        ),
+        None,
+    )
+    raw_kind = first.get("type")
+    kind = (
+        raw_kind
+        if isinstance(raw_kind, str)
+        and 1 <= len(raw_kind) <= 64
+        and raw_kind.isascii()
+        and all(
+            character.islower() or character.isdigit() or character in "_."
+            for character in raw_kind
+        )
+        else "validation_error"
+    )
+    return OpenAIInvalidOutput(
+        diagnostic_context=(
+            f"structured_output.{field}" if field is not None else "structured_output"
+        ),
+        diagnostic_kind=kind,
+    )
 
 
 def _elapsed_ms(started: float) -> int:
