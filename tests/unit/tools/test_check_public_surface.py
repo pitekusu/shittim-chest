@@ -24,6 +24,14 @@ def test_snowflake_pattern_detects_delimited_id_but_not_registry_hash() -> None:
     assert pattern.search(b"abc" + digits + b"def") is None
 
 
+def test_email_pattern_detects_address_but_allows_package_versions() -> None:
+    pattern = DENY_PATTERNS["email address"]
+
+    assert pattern.search(b"operator" + b"@" + b"example.com")
+    assert pattern.search(b"vite-plus@0.2.9") is None
+    assert pattern.search(b"voidzero-dev/vite-plus-core@0.2.9") is None
+
+
 def test_candidate_files_follow_the_git_supplied_file_set(tmp_path: Path) -> None:
     source = tmp_path / "source.py"
     source.write_text("safe = True\n", encoding="utf-8")
