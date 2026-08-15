@@ -127,6 +127,14 @@ describe("App", () => {
     selfVote.votes[0].candidate = "participant-a";
     expect(isRecordsApiResponse(selfVote)).toBe(false);
 
+    const whitespaceQuestion = structuredClone(detail);
+    whitespaceQuestion.question = " \t ";
+    expect(isRecordsApiResponse(whitespaceQuestion)).toBe(false);
+
+    const imageWithoutUrl = structuredClone(detail);
+    imageWithoutUrl.requester.avatar.kind = "image";
+    expect(isRecordsApiResponse(imageWithoutUrl)).toBe(false);
+
     const mismatchedBallot = structuredClone(detail);
     mismatchedBallot.result.voteCounts = [
       { participant: "participant-a", count: 0 },

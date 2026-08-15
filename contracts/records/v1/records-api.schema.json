@@ -41,6 +41,7 @@
         },
         "csrfToken": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Csrftoken",
           "type": "string"
         },
@@ -60,52 +61,6 @@
         "csrfToken"
       ],
       "title": "AuthenticatedSession",
-      "type": "object"
-    },
-    "AvatarRef": {
-      "additionalProperties": false,
-      "properties": {
-        "alt": {
-          "minLength": 1,
-          "title": "Alt",
-          "type": "string"
-        },
-        "fallbackVariant": {
-          "enum": [
-            "cyan",
-            "pink",
-            "lavender"
-          ],
-          "title": "Fallbackvariant",
-          "type": "string"
-        },
-        "kind": {
-          "enum": [
-            "image",
-            "placeholder"
-          ],
-          "title": "Kind",
-          "type": "string"
-        },
-        "url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Url"
-        }
-      },
-      "required": [
-        "kind",
-        "alt",
-        "fallbackVariant"
-      ],
-      "title": "AvatarRef",
       "type": "object"
     },
     "CostBreakdown": {
@@ -198,16 +153,19 @@
       "properties": {
         "code": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Code",
           "type": "string"
         },
         "message": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Message",
           "type": "string"
         },
         "requestId": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Requestid",
           "type": "string"
         }
@@ -239,6 +197,7 @@
         "actions": {
           "items": {
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "title": "Actions",
@@ -247,6 +206,7 @@
         "caveats": {
           "items": {
             "minLength": 1,
+            "pattern": "\\S",
             "type": "string"
           },
           "title": "Caveats",
@@ -254,6 +214,7 @@
         },
         "decision": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Decision",
           "type": "string"
         },
@@ -304,11 +265,13 @@
         },
         "proposal": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Proposal",
           "type": "string"
         },
         "title": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Title",
           "type": "string"
         }
@@ -319,6 +282,45 @@
         "proposal"
       ],
       "title": "FinalProposalView",
+      "type": "object"
+    },
+    "ImageAvatarRef": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Alt",
+          "type": "string"
+        },
+        "fallbackVariant": {
+          "enum": [
+            "cyan",
+            "pink",
+            "lavender"
+          ],
+          "title": "Fallbackvariant",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "title": "Kind",
+          "type": "string"
+        },
+        "url": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "url",
+        "alt",
+        "fallbackVariant"
+      ],
+      "title": "ImageAvatarRef",
       "type": "object"
     },
     "InitialOpinionView": {
@@ -335,11 +337,13 @@
         },
         "proposal": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Proposal",
           "type": "string"
         },
         "summary": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Summary",
           "type": "string"
         }
@@ -356,10 +360,19 @@
       "additionalProperties": false,
       "properties": {
         "avatar": {
-          "$ref": "#/$defs/AvatarRef"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
         },
         "displayName": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Displayname",
           "type": "string"
         },
@@ -381,11 +394,56 @@
       "title": "ParticipantSummary",
       "type": "object"
     },
+    "PlaceholderAvatarRef": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Alt",
+          "type": "string"
+        },
+        "fallbackVariant": {
+          "enum": [
+            "cyan",
+            "pink",
+            "lavender"
+          ],
+          "title": "Fallbackvariant",
+          "type": "string"
+        },
+        "kind": {
+          "const": "placeholder",
+          "title": "Kind",
+          "type": "string"
+        },
+        "url": {
+          "default": null,
+          "title": "Url",
+          "type": "null"
+        }
+      },
+      "required": [
+        "kind",
+        "alt",
+        "fallbackVariant"
+      ],
+      "title": "PlaceholderAvatarRef",
+      "type": "object"
+    },
     "RankingEntry": {
       "additionalProperties": false,
       "properties": {
         "avatar": {
-          "$ref": "#/$defs/AvatarRef"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
         },
         "count": {
           "minimum": 0,
@@ -394,6 +452,7 @@
         },
         "displayName": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Displayname",
           "type": "string"
         },
@@ -654,11 +713,13 @@
         },
         "question": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Question",
           "type": "string"
         },
         "recordId": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Recordid",
           "type": "string"
         },
@@ -828,11 +889,13 @@
         },
         "questionPreview": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Questionpreview",
           "type": "string"
         },
         "recordId": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Recordid",
           "type": "string"
         },
@@ -988,10 +1051,19 @@
       "additionalProperties": false,
       "properties": {
         "avatar": {
-          "$ref": "#/$defs/AvatarRef"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
         },
         "displayName": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Displayname",
           "type": "string"
         }
@@ -1019,10 +1091,19 @@
       "additionalProperties": false,
       "properties": {
         "avatar": {
-          "$ref": "#/$defs/AvatarRef"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
         },
         "displayName": {
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Displayname",
           "type": "string"
         }

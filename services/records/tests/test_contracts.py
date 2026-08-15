@@ -11,6 +11,7 @@ from shittim_records.contracts import (
     AvatarRef,
     CostsResponse,
     ErrorResponse,
+    NonEmptyText,
     RankingsResponse,
     RecordDetailResponse,
     RecordListItem,
@@ -167,9 +168,41 @@ def test_record_list_does_not_expose_internal_or_evidence_fields() -> None:
         assert forbidden not in serialized
 
 
-def test_avatar_image_url_is_optional_for_placeholder() -> None:
-    avatar = AvatarRef(kind="placeholder", alt="代替アバター", fallback_variant="cyan")
-    assert avatar.url is None
+def test_public_text_rejects_whitespace_only() -> None:
+    adapter = TypeAdapter(NonEmptyText)
+
+    assert adapter.validate_python("内容あり") == "内容あり"
+    with pytest.raises(ValidationError):
+        adapter.validate_python(" \t\n")
+
+
+def test_avatar_contract_requires_url_only_for_images() -> None:
+    adapter = TypeAdapter(AvatarRef)
+
+    placeholder = adapter.validate_python(
+        {"kind": "placeholder", "alt": "代替アバター", "fallbackVariant": "cyan"}
+    )
+    assert placeholder.url is None
+    image = adapter.validate_python(
+        {
+            "kind": "image",
+            "url": "https://example.invalid/avatar.webp",
+            "alt": "画像アバター",
+            "fallbackVariant": "pink",
+        }
+    )
+    assert image.url == "https://example.invalid/avatar.webp"
+    with pytest.raises(ValidationError):
+        adapter.validate_python({"kind": "image", "alt": "URLなし", "fallbackVariant": "lavender"})
+    with pytest.raises(ValidationError):
+        adapter.validate_python(
+            {
+                "kind": "placeholder",
+                "url": "https://example.invalid/unexpected.webp",
+                "alt": "不正placeholder",
+                "fallbackVariant": "cyan",
+            }
+        )
 
 
 def test_error_envelope_is_strict() -> None:

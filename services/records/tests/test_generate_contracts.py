@@ -19,7 +19,9 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     json_schema = json.loads(first["records-api.schema.json"])
     assert len(json_schema["oneOf"]) == 6
     assert "#/components/schemas/" not in first["records-api.schema.json"].decode()
-    assert '"$ref": "#/$defs/AvatarRef"' in first["records-api.schema.json"].decode()
+    assert '"$ref": "#/$defs/ImageAvatarRef"' in first["records-api.schema.json"].decode()
+    assert '"$ref": "#/$defs/PlaceholderAvatarRef"' in first["records-api.schema.json"].decode()
+    assert '"pattern": "\\\\S"' in first["records-api.schema.json"].decode()
     session_branches = json_schema["$defs"]["SessionResponse"]["anyOf"]
     assert session_branches == [
         {"$ref": "#/$defs/AuthenticatedSession"},

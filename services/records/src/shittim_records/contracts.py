@@ -9,11 +9,10 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, mod
 RECORDS_API_SCHEMA_VERSION = 1
 
 ParticipantSlot = Literal["participant-a", "participant-b", "participant-c"]
-AvatarKind = Literal["image", "placeholder"]
 CostStatus = Literal["partial", "final", "unavailable"]
 CostPeriod = Literal["today", "week", "month", "all"]
 
-NonEmptyText = Annotated[str, Field(min_length=1)]
+NonEmptyText = Annotated[str, Field(min_length=1, pattern=r"\S")]
 _ALL_PARTICIPANT_SLOTS = frozenset[ParticipantSlot](
     {"participant-a", "participant-b", "participant-c"}
 )
@@ -72,11 +71,21 @@ class PublicModel(BaseModel):
     )
 
 
-class AvatarRef(PublicModel):
-    kind: AvatarKind
-    url: str | None = None
+class ImageAvatarRef(PublicModel):
+    kind: Literal["image"]
+    url: NonEmptyText
     alt: NonEmptyText
     fallback_variant: Literal["cyan", "pink", "lavender"]
+
+
+class PlaceholderAvatarRef(PublicModel):
+    kind: Literal["placeholder"]
+    url: None = None
+    alt: NonEmptyText
+    fallback_variant: Literal["cyan", "pink", "lavender"]
+
+
+AvatarRef = ImageAvatarRef | PlaceholderAvatarRef
 
 
 class RequesterSummary(PublicModel):
