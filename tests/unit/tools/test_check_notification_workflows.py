@@ -114,19 +114,19 @@ def test_records_ci_requires_the_pinned_pnpm_vite_plus_toolchain(tmp_path: Path)
         validate_notification_workflows(directory)
 
 
-def test_records_ci_rejects_an_unpinned_vite_plus_action(tmp_path: Path) -> None:
+def test_records_ci_rejects_the_non_allowlisted_vite_plus_action(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_CI_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
+            "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
             "voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0",
-            "voidzero-dev/setup-vp@v1.17.0",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="full commit SHA"):
+    with pytest.raises(WorkflowPolicyError, match="allowlisted GitHub-owned"):
         validate_notification_workflows(directory)
 
 

@@ -1092,12 +1092,14 @@ def _validate_ci_path_isolation(directory: Path) -> None:
             raise WorkflowPolicyError(f"Records CI {job} must use the canonical path decision")
 
     records_web = _workflow_job_block(records_text, "records-web")
+    if "voidzero-dev/setup-vp@" in records_web:
+        raise WorkflowPolicyError(
+            "Records CI must use the allowlisted GitHub-owned Node setup action"
+        )
     required_records_web = (
-        "uses: voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0",
-        'version: "0.2.9"',
-        "working-directory: apps/records-web",
-        "cache-dependency-path: pnpm-lock.yaml",
-        "run-install: false",
+        "uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+        "corepack enable pnpm",
+        'test "$(pnpm --version)" = "11.21.0"',
         "pnpm install --frozen-lockfile",
         "pnpm exec vp check",
         "pnpm exec vp test",
