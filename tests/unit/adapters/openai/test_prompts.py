@@ -84,3 +84,9 @@ def test_winner_announcement_receives_roster_and_selected_slot() -> None:
     assert "<current_participant_slot>participant-c</current_participant_slot>" in instructions
     assert "mechanically selected winner" in instructions
     assert "calculate the winner yourself" in instructions
+    assert "synthesize them instead of copying them" in instructions
+    assert "victory_message at most 180 Japanese characters" in instructions
+    assert "decision at most 900 Japanese characters" in instructions
+    assert "actions between 2 and 4 items" in instructions
+    assert "caveats between 1 and 3 items" in instructions
+    assert "Finish every required field" in instructions

@@ -104,7 +104,13 @@ def winner_decision_instructions(
         "excitement with persona-specific wording and energetic punctuation. Do not use a shared "
         "catchphrase or fixed template, and do not make the reaction neutral, restrained, "
         "sarcastic, or merely polite. Then organize that winner's proposal into the final "
-        "decision fields without changing the decision, actions, or caveats."
+        "decision fields without changing the decision, actions, or caveats. When the source "
+        "proposals are long, synthesize them instead of copying them. Keep the complete structured "
+        "output within these targets: victory_message at most 180 Japanese characters; decision "
+        "at most 900 Japanese characters; actions between 2 and 4 items with each item at most "
+        "140 Japanese characters; caveats between 1 and 3 items with each item at most 140 "
+        "Japanese characters. Finish every required field and the enclosing structured output "
+        "within the available output-token budget."
     )
 
 
