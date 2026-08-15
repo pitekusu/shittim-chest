@@ -7,6 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 CHECKER = REPOSITORY_ROOT / "infra" / "check-audit.mjs"
 NODE = shutil.which("node")
@@ -135,6 +137,20 @@ def test_exception_unknown_field_fails_closed(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "unknown: owner" in result.stderr
+
+
+@pytest.mark.parametrize("expires", ["2026-99-99", "2026-02-29"])
+def test_exception_nonexistent_calendar_date_fails_closed(
+    tmp_path: Path,
+    expires: str,
+) -> None:
+    result = _run(
+        _vulnerable_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(expires=expires)]),
+    )
+
+    assert result.returncode == 1
+    assert "invalid expires" in result.stderr
 
 
 def test_unused_exception_fails_closed(tmp_path: Path) -> None:

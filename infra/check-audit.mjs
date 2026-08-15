@@ -50,7 +50,12 @@ for (const [index, entry] of exceptions.entries()) {
     console.error(`npm audit exception ${index} had invalid severity; refusing to pass`);
     process.exit(1);
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.expires)) {
+  const expiry = new Date(`${entry.expires}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(entry.expires) ||
+    Number.isNaN(expiry.valueOf()) ||
+    expiry.toISOString().slice(0, 10) !== entry.expires
+  ) {
     console.error(`npm audit exception ${index} had invalid expires; refusing to pass`);
     process.exit(1);
   }
