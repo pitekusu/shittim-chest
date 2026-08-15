@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from shittim_records.generate_contracts import expected_documents, write_or_check
@@ -76,6 +77,15 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "/api/v1/insights/costs",
     }
     assert openapi["paths"]["/api/v1/auth/discord/start"]["get"]["security"] == []
+    return_to_schema = openapi["paths"]["/api/v1/auth/discord/start"]["get"]["parameters"][0][
+        "schema"
+    ]
+    return_to_pattern = return_to_schema["pattern"]
+    assert re.search(return_to_pattern, "/") is not None
+    assert re.search(return_to_pattern, "/records/record-example") is not None
+    assert re.search(return_to_pattern, "//evil.example") is None
+    assert re.search(return_to_pattern, r"/\evil.example") is None
+    assert re.search(return_to_pattern, r"/\\evil.example") is None
     assert openapi["paths"]["/api/v1/session"]["get"]["security"] == []
     assert [
         parameter["name"] for parameter in openapi["paths"]["/api/v1/records"]["get"]["parameters"]
