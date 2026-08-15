@@ -380,7 +380,8 @@ jobs:
           manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
           gh attestation verify "${manifest}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --signer-workflow "${GITHUB_WORKFLOW_REF}"
+            --signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml \
+            --source-ref refs/heads/main
           uv run --project services/records --frozen python \
             tools/records_release_manifest.py validate-manifest "${manifest}" \
             --expected-commit-sha "${GITHUB_SHA}"

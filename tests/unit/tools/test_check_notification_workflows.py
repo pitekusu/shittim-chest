@@ -244,6 +244,38 @@ def test_records_release_requires_secure_parameter_metadata(tmp_path: Path) -> N
         validate_notification_workflows(directory)
 
 
+def test_records_release_requires_a_path_only_attestation_signer(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml",
+            '--signer-workflow "${GITHUB_WORKFLOW_REF}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_binds_attestation_to_main_source_ref(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "--source-ref refs/heads/main",
+            "--source-ref refs/heads/other",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_waits_for_the_attested_change_set_type(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW

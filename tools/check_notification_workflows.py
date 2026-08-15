@@ -1204,6 +1204,8 @@ def _validate_records_workflows(directory: Path) -> None:
         "tools/records_release_manifest.py create-entry",
         "tools/records_release_manifest.py create-manifest",
         "tools/records_release_manifest.py validate-manifest",
+        "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml",
+        "--source-ref refs/heads/main",
         '--type "${type}"',
         'if [ "${executable}" = false ]',
         "Remove attested no-op Records Change Sets before approval",
