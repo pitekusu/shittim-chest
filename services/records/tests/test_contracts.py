@@ -15,7 +15,9 @@ from shittim_records.contracts import (
     RecordDetailResponse,
     RecordListItem,
     RecordListResponse,
+    RecordResultSummary,
     SessionResponse,
+    VoteView,
 )
 
 
@@ -232,24 +234,25 @@ def test_public_timestamps_require_timezone_offsets(
 
 
 @pytest.mark.parametrize(
-    ("collection_name", "identity_field"),
+    ("collection_name", "identity_field", "duplicate_slot"),
     [
-        ("participants", "slot"),
-        ("initialOpinions", "participant"),
-        ("finalProposals", "participant"),
-        ("votes", "voter"),
+        ("participants", "slot", "participant-a"),
+        ("initialOpinions", "participant", "participant-a"),
+        ("finalProposals", "participant", "participant-a"),
+        ("votes", "voter", "participant-b"),
     ],
 )
 def test_record_detail_requires_every_participant_slot_once(
     collection_name: str,
     identity_field: str,
+    duplicate_slot: str,
 ) -> None:
     payload = _record_detail_payload()
     collection = payload[collection_name]
     assert isinstance(collection, tuple)
     duplicate = collection[2]
     assert isinstance(duplicate, dict)
-    duplicate[identity_field] = "participant-a"
+    duplicate[identity_field] = duplicate_slot
 
     with pytest.raises(ValidationError, match="every participant slot exactly once"):
         RecordDetailResponse.model_validate(payload)
@@ -264,3 +267,70 @@ def test_record_detail_requires_one_canonical_winner() -> None:
 
     with pytest.raises(ValidationError, match="must identify the same winner"):
         RecordDetailResponse.model_validate(payload)
+
+
+def test_record_result_requires_complete_consistent_vote_counts() -> None:
+    complete_counts = (
+        {"participant": "participant-a", "count": 2},
+        {"participant": "participant-b", "count": 1},
+        {"participant": "participant-c", "count": 0},
+    )
+    assert (
+        RecordResultSummary.model_validate(
+            {"winner": "participant-a", "voteCounts": complete_counts, "tieBreakApplied": False}
+        ).winner
+        == "participant-a"
+    )
+
+    with pytest.raises(ValidationError, match="every participant slot exactly once"):
+        RecordResultSummary.model_validate(
+            {
+                "winner": "participant-a",
+                "voteCounts": (
+                    complete_counts[0],
+                    {"participant": "participant-a", "count": 1},
+                    complete_counts[2],
+                ),
+                "tieBreakApplied": False,
+            }
+        )
+    with pytest.raises(ValidationError, match="highest vote count"):
+        RecordResultSummary.model_validate(
+            {"winner": "participant-c", "voteCounts": complete_counts, "tieBreakApplied": False}
+        )
+    with pytest.raises(ValidationError, match="must match the vote count tie"):
+        RecordResultSummary.model_validate(
+            {
+                "winner": "participant-a",
+                "voteCounts": tuple(
+                    {"participant": slot, "count": 1}
+                    for slot in ("participant-a", "participant-b", "participant-c")
+                ),
+                "tieBreakApplied": False,
+            }
+        )
+
+
+def test_record_detail_requires_vote_counts_to_match_ballot() -> None:
+    payload = _record_detail_payload()
+    result = payload["result"]
+    final_decision = payload["finalDecision"]
+    assert isinstance(result, dict)
+    assert isinstance(final_decision, dict)
+    result["voteCounts"] = (
+        {"participant": "participant-a", "count": 0},
+        {"participant": "participant-b", "count": 0},
+        {"participant": "participant-c", "count": 3},
+    )
+    result["winner"] = "participant-c"
+    final_decision["winner"] = "participant-c"
+
+    with pytest.raises(ValidationError, match="must match the complete ballot"):
+        RecordDetailResponse.model_validate(payload)
+
+
+def test_public_vote_rejects_self_vote() -> None:
+    with pytest.raises(ValidationError, match="cannot vote for itself"):
+        VoteView.model_validate(
+            {"voter": "participant-a", "candidate": "participant-a", "reason": "自己投票"}
+        )

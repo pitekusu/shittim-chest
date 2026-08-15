@@ -903,6 +903,53 @@
           "type": "boolean"
         },
         "voteCounts": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
           "maxItems": 3,
           "minItems": 3,
           "prefixItems": [
@@ -1015,6 +1062,71 @@
     },
     "VoteView": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "voter": {
+                "const": "participant-a"
+              }
+            },
+            "required": [
+              "voter"
+            ]
+          },
+          "then": {
+            "properties": {
+              "candidate": {
+                "not": {
+                  "const": "participant-a"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "voter": {
+                "const": "participant-b"
+              }
+            },
+            "required": [
+              "voter"
+            ]
+          },
+          "then": {
+            "properties": {
+              "candidate": {
+                "not": {
+                  "const": "participant-b"
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "voter": {
+                "const": "participant-c"
+              }
+            },
+            "required": [
+              "voter"
+            ]
+          },
+          "then": {
+            "properties": {
+              "candidate": {
+                "not": {
+                  "const": "participant-c"
+                }
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "candidate": {
           "enum": [

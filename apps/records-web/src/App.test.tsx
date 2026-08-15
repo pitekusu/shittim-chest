@@ -122,5 +122,49 @@ describe("App", () => {
     const conflictingWinner = structuredClone(detail);
     conflictingWinner.finalDecision.winner = "participant-b";
     expect(isRecordsApiResponse(conflictingWinner)).toBe(false);
+
+    const selfVote = structuredClone(detail);
+    selfVote.votes[0].candidate = "participant-a";
+    expect(isRecordsApiResponse(selfVote)).toBe(false);
+
+    const mismatchedBallot = structuredClone(detail);
+    mismatchedBallot.result.voteCounts = [
+      { participant: "participant-a", count: 0 },
+      { participant: "participant-b", count: 0 },
+      { participant: "participant-c", count: 3 },
+    ];
+    mismatchedBallot.result.winner = "participant-c";
+    mismatchedBallot.finalDecision.winner = "participant-c";
+    expect(isRecordsApiResponse(mismatchedBallot)).toBe(false);
+
+    const listResponse = {
+      schemaVersion: 1,
+      items: [
+        {
+          schemaVersion: 1,
+          recordId: detail.recordId,
+          completedAt: detail.completedAt,
+          questionPreview: detail.question,
+          requester: detail.requester,
+          participants: detail.participants,
+          result: detail.result,
+        },
+      ],
+      nextCursor: null,
+    };
+    expect(isRecordsApiResponse(listResponse)).toBe(true);
+
+    const incompleteListCounts = structuredClone(listResponse);
+    incompleteListCounts.items[0].result.voteCounts[2].participant = "participant-a";
+    expect(isRecordsApiResponse(incompleteListCounts)).toBe(false);
+
+    const invalidTieSummary = structuredClone(listResponse);
+    invalidTieSummary.items[0].result.voteCounts = [
+      { participant: "participant-a", count: 1 },
+      { participant: "participant-b", count: 1 },
+      { participant: "participant-c", count: 1 },
+    ];
+    invalidTieSummary.items[0].result.tieBreakApplied = false;
+    expect(isRecordsApiResponse(invalidTieSummary)).toBe(false);
   });
 });

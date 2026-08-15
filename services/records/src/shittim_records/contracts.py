@@ -41,6 +41,21 @@ def _require_complete_slots(slots: tuple[ParticipantSlot, ...], field_name: str)
         raise ValueError(f"{field_name} must contain every participant slot exactly once")
 
 
+def _no_self_vote_json_schema() -> dict[str, object]:
+    return {
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"voter": {"const": slot}},
+                    "required": ["voter"],
+                },
+                "then": {"properties": {"candidate": {"not": {"const": slot}}}},
+            }
+            for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+        ]
+    }
+
+
 def _to_camel(value: str) -> str:
     head, *tail = value.split("_")
     return head + "".join(part.capitalize() for part in tail)
@@ -86,10 +101,33 @@ class VoteCount(PublicModel):
     count: Annotated[int, Field(ge=0, le=3)]
 
 
+VoteCountCollection = Annotated[
+    tuple[VoteCount, VoteCount, VoteCount],
+    Field(json_schema_extra=_complete_slot_json_schema("participant")),
+]
+
+
 class RecordResultSummary(PublicModel):
     winner: ParticipantSlot
-    vote_counts: tuple[VoteCount, VoteCount, VoteCount]
+    vote_counts: VoteCountCollection
     tie_break_applied: bool
+
+    @model_validator(mode="after")
+    def require_consistent_vote_summary(self) -> RecordResultSummary:
+        _require_complete_slots(
+            tuple(item.participant for item in self.vote_counts),
+            "vote_counts",
+        )
+        counts = {item.participant: item.count for item in self.vote_counts}
+        if sum(counts.values()) != len(_ALL_PARTICIPANT_SLOTS):
+            raise ValueError("vote_counts must account for the complete ballot")
+        highest_count = max(counts.values())
+        leaders = {slot for slot, count in counts.items() if count == highest_count}
+        if self.winner not in leaders:
+            raise ValueError("winner must be supported by the highest vote count")
+        if self.tie_break_applied != (len(leaders) > 1):
+            raise ValueError("tie_break_applied must match the vote count tie")
+        return self
 
 
 class RecordListItem(PublicModel):
@@ -138,9 +176,17 @@ FinalProposalCollection = Annotated[
 
 
 class VoteView(PublicModel):
+    model_config = ConfigDict(json_schema_extra=_no_self_vote_json_schema())
+
     voter: ParticipantSlot
     candidate: ParticipantSlot
     reason: Annotated[str, Field(min_length=1, max_length=500)]
+
+    @model_validator(mode="after")
+    def reject_self_vote(self) -> VoteView:
+        if self.voter == self.candidate:
+            raise ValueError("a participant cannot vote for itself")
+        return self
 
 
 VoteCollection = Annotated[
@@ -182,6 +228,12 @@ class RecordDetailResponse(PublicModel):
             "final_proposals",
         )
         _require_complete_slots(tuple(item.voter for item in self.votes), "votes")
+        ballot_counts = {slot: 0 for slot in _ALL_PARTICIPANT_SLOTS}
+        for vote in self.votes:
+            ballot_counts[vote.candidate] += 1
+        summary_counts = {item.participant: item.count for item in self.result.vote_counts}
+        if summary_counts != ballot_counts:
+            raise ValueError("vote_counts must match the complete ballot")
         if self.result.winner != self.final_decision.winner:
             raise ValueError("result and final_decision must identify the same winner")
         return self

@@ -35,6 +35,23 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
             constraint["contains"]["properties"][identity_field]["const"]
             for constraint in detail_properties[collection_name]["allOf"]
         } == {"participant-a", "participant-b", "participant-c"}
+    vote_count_constraints = json_schema["$defs"]["RecordResultSummary"]["properties"][
+        "voteCounts"
+    ]["allOf"]
+    assert {
+        constraint["contains"]["properties"]["participant"]["const"]
+        for constraint in vote_count_constraints
+    } == {"participant-a", "participant-b", "participant-c"}
+    assert {
+        constraint["if"]["properties"]["voter"]["const"]: constraint["then"]["properties"][
+            "candidate"
+        ]["not"]["const"]
+        for constraint in json_schema["$defs"]["VoteView"]["allOf"]
+    } == {
+        "participant-a": "participant-a",
+        "participant-b": "participant-b",
+        "participant-c": "participant-c",
+    }
     openapi = json.loads(first["openapi.json"])
     assert openapi["info"]["title"] == "Shittim Chest Records API"
     assert set(openapi["paths"]) == {
