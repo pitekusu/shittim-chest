@@ -157,7 +157,7 @@ class RecordListItem(PublicModel):
 class RecordListResponse(PublicModel):
     schema_version: Literal[1]
     items: tuple[RecordListItem, ...]
-    next_cursor: str | None = None
+    next_cursor: Annotated[str, Field(min_length=1)] | None = None
 
 
 class InitialOpinionView(PublicModel):
@@ -206,7 +206,13 @@ VoteCollection = Annotated[
 
 class FinalDecisionView(PublicModel):
     winner: ParticipantSlot
-    victory_message: Annotated[str, Field(min_length=1, max_length=500)] | None = None
+    victory_message: (
+        Annotated[
+            str,
+            Field(min_length=1, max_length=500, pattern=r"\S"),
+        ]
+        | None
+    ) = None
     decision: NonEmptyText
     actions: tuple[NonEmptyText, ...]
     caveats: tuple[NonEmptyText, ...]

@@ -224,6 +224,7 @@
               {
                 "maxLength": 500,
                 "minLength": 1,
+                "pattern": "\\S",
                 "type": "string"
               },
               {
@@ -937,6 +938,7 @@
           "nextCursor": {
             "anyOf": [
               {
+                "minLength": 1,
                 "type": "string"
               },
               {

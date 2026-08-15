@@ -131,6 +131,10 @@ describe("App", () => {
     whitespaceVoteReason.votes[0].reason = " \t ";
     expect(isRecordsApiResponse(whitespaceVoteReason)).toBe(false);
 
+    const whitespaceVictoryMessage = structuredClone(detail);
+    whitespaceVictoryMessage.finalDecision.victoryMessage = " \t ";
+    expect(isRecordsApiResponse(whitespaceVictoryMessage)).toBe(false);
+
     const whitespaceQuestion = structuredClone(detail);
     whitespaceQuestion.question = " \t ";
     expect(isRecordsApiResponse(whitespaceQuestion)).toBe(false);
@@ -165,6 +169,9 @@ describe("App", () => {
       nextCursor: null,
     };
     expect(isRecordsApiResponse(listResponse)).toBe(true);
+
+    const emptyNextCursor = { ...structuredClone(listResponse), nextCursor: "" };
+    expect(isRecordsApiResponse(emptyNextCursor)).toBe(false);
 
     const incompleteListCounts = structuredClone(listResponse);
     incompleteListCounts.items[0].result.voteCounts[2].participant = "participant-a";

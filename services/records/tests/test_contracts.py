@@ -168,6 +168,24 @@ def test_record_list_does_not_expose_internal_or_evidence_fields() -> None:
         assert forbidden not in serialized
 
 
+def test_record_list_requires_nonempty_next_cursor() -> None:
+    assert (
+        RecordListResponse.model_validate(
+            {"schemaVersion": 1, "items": [], "nextCursor": "cursor-example"}
+        ).next_cursor
+        == "cursor-example"
+    )
+    assert (
+        RecordListResponse.model_validate(
+            {"schemaVersion": 1, "items": [], "nextCursor": None}
+        ).next_cursor
+        is None
+    )
+
+    with pytest.raises(ValidationError):
+        RecordListResponse.model_validate({"schemaVersion": 1, "items": [], "nextCursor": ""})
+
+
 def test_public_text_rejects_whitespace_only() -> None:
     adapter = TypeAdapter(NonEmptyText)
 
@@ -374,3 +392,13 @@ def test_public_vote_rejects_whitespace_only_reason() -> None:
         VoteView.model_validate(
             {"voter": "participant-a", "candidate": "participant-b", "reason": " \t "}
         )
+
+
+def test_final_decision_rejects_whitespace_only_victory_message() -> None:
+    payload = _record_detail_payload()
+    final_decision = payload["finalDecision"]
+    assert isinstance(final_decision, dict)
+    final_decision["victoryMessage"] = " \t "
+
+    with pytest.raises(ValidationError):
+        RecordDetailResponse.model_validate(payload)
