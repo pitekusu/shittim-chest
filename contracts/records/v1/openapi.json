@@ -1,0 +1,1469 @@
+{
+  "components": {
+    "schemas": {
+      "AvatarRef": {
+        "additionalProperties": false,
+        "properties": {
+          "alt": {
+            "minLength": 1,
+            "title": "Alt",
+            "type": "string"
+          },
+          "fallbackVariant": {
+            "enum": [
+              "cyan",
+              "pink",
+              "lavender"
+            ],
+            "title": "Fallbackvariant",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "placeholder"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "required": [
+          "kind",
+          "alt",
+          "fallbackVariant"
+        ],
+        "title": "AvatarRef",
+        "type": "object"
+      },
+      "CostBreakdown": {
+        "additionalProperties": false,
+        "properties": {
+          "fargate": {
+            "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Fargate",
+            "type": "string"
+          },
+          "lambda": {
+            "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Lambda",
+            "type": "string"
+          },
+          "openai": {
+            "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Openai",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fargate",
+          "lambda",
+          "openai"
+        ],
+        "title": "CostBreakdown",
+        "type": "object"
+      },
+      "CostsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "breakdown": {
+            "$ref": "#/components/schemas/CostBreakdown"
+          },
+          "currency": {
+            "const": "USD",
+            "title": "Currency",
+            "type": "string"
+          },
+          "period": {
+            "enum": [
+              "today",
+              "week",
+              "month",
+              "all"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "partial",
+              "final",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Total",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "period",
+          "currency",
+          "total",
+          "breakdown",
+          "updatedAt",
+          "status"
+        ],
+        "title": "CostsResponse",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "requestId": {
+            "minLength": 1,
+            "title": "Requestid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "requestId"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "FinalDecisionView": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "caveats": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Caveats",
+            "type": "array"
+          },
+          "decision": {
+            "minLength": 1,
+            "title": "Decision",
+            "type": "string"
+          },
+          "victoryMessage": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Victorymessage"
+          },
+          "winner": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Winner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "winner",
+          "decision",
+          "actions",
+          "caveats"
+        ],
+        "title": "FinalDecisionView",
+        "type": "object"
+      },
+      "FinalProposalView": {
+        "additionalProperties": false,
+        "properties": {
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "proposal": {
+            "minLength": 1,
+            "title": "Proposal",
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "participant",
+          "title",
+          "proposal"
+        ],
+        "title": "FinalProposalView",
+        "type": "object"
+      },
+      "InitialOpinionView": {
+        "additionalProperties": false,
+        "properties": {
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "proposal": {
+            "minLength": 1,
+            "title": "Proposal",
+            "type": "string"
+          },
+          "summary": {
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "participant",
+          "summary",
+          "proposal"
+        ],
+        "title": "InitialOpinionView",
+        "type": "object"
+      },
+      "ParticipantSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar": {
+            "$ref": "#/components/schemas/AvatarRef"
+          },
+          "displayName": {
+            "minLength": 1,
+            "title": "Displayname",
+            "type": "string"
+          },
+          "slot": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Slot",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot",
+          "displayName",
+          "avatar"
+        ],
+        "title": "ParticipantSummary",
+        "type": "object"
+      },
+      "RankingEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar": {
+            "$ref": "#/components/schemas/AvatarRef"
+          },
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "displayName": {
+            "minLength": 1,
+            "title": "Displayname",
+            "type": "string"
+          },
+          "rank": {
+            "minimum": 1,
+            "title": "Rank",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rank",
+          "displayName",
+          "avatar",
+          "count"
+        ],
+        "title": "RankingEntry",
+        "type": "object"
+      },
+      "RankingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "generatedAt": {
+            "format": "date-time",
+            "title": "Generatedat",
+            "type": "string"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/RankingEntry"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "wins": {
+            "items": {
+              "$ref": "#/components/schemas/RankingEntry"
+            },
+            "title": "Wins",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "wins",
+          "requests",
+          "generatedAt"
+        ],
+        "title": "RankingsResponse",
+        "type": "object"
+      },
+      "RecordDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "title": "Completedat",
+            "type": "string"
+          },
+          "finalDecision": {
+            "$ref": "#/components/schemas/FinalDecisionView"
+          },
+          "finalProposals": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/FinalProposalView"
+              },
+              {
+                "$ref": "#/components/schemas/FinalProposalView"
+              },
+              {
+                "$ref": "#/components/schemas/FinalProposalView"
+              }
+            ],
+            "title": "Finalproposals",
+            "type": "array"
+          },
+          "initialOpinions": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/InitialOpinionView"
+              },
+              {
+                "$ref": "#/components/schemas/InitialOpinionView"
+              },
+              {
+                "$ref": "#/components/schemas/InitialOpinionView"
+              }
+            ],
+            "title": "Initialopinions",
+            "type": "array"
+          },
+          "participants": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              }
+            ],
+            "title": "Participants",
+            "type": "array"
+          },
+          "question": {
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "recordId": {
+            "minLength": 1,
+            "title": "Recordid",
+            "type": "string"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/RequesterSummary"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RecordResultSummary"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "votes": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/VoteView"
+              },
+              {
+                "$ref": "#/components/schemas/VoteView"
+              },
+              {
+                "$ref": "#/components/schemas/VoteView"
+              }
+            ],
+            "title": "Votes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "recordId",
+          "completedAt",
+          "question",
+          "requester",
+          "participants",
+          "initialOpinions",
+          "finalProposals",
+          "votes",
+          "result",
+          "finalDecision"
+        ],
+        "title": "RecordDetailResponse",
+        "type": "object"
+      },
+      "RecordListItem": {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "title": "Completedat",
+            "type": "string"
+          },
+          "participants": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              }
+            ],
+            "title": "Participants",
+            "type": "array"
+          },
+          "questionPreview": {
+            "minLength": 1,
+            "title": "Questionpreview",
+            "type": "string"
+          },
+          "recordId": {
+            "minLength": 1,
+            "title": "Recordid",
+            "type": "string"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/RequesterSummary"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RecordResultSummary"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "recordId",
+          "completedAt",
+          "questionPreview",
+          "requester",
+          "participants",
+          "result"
+        ],
+        "title": "RecordListItem",
+        "type": "object"
+      },
+      "RecordListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordListItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nextcursor"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "items"
+        ],
+        "title": "RecordListResponse",
+        "type": "object"
+      },
+      "RecordResultSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "tieBreakApplied": {
+            "title": "Tiebreakapplied",
+            "type": "boolean"
+          },
+          "voteCounts": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/VoteCount"
+              },
+              {
+                "$ref": "#/components/schemas/VoteCount"
+              },
+              {
+                "$ref": "#/components/schemas/VoteCount"
+              }
+            ],
+            "title": "Votecounts",
+            "type": "array"
+          },
+          "winner": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Winner",
+            "type": "string"
+          }
+        },
+        "required": [
+          "winner",
+          "voteCounts",
+          "tieBreakApplied"
+        ],
+        "title": "RecordResultSummary",
+        "type": "object"
+      },
+      "RequesterSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar": {
+            "$ref": "#/components/schemas/AvatarRef"
+          },
+          "displayName": {
+            "minLength": 1,
+            "title": "Displayname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "displayName",
+          "avatar"
+        ],
+        "title": "RequesterSummary",
+        "type": "object"
+      },
+      "SessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "csrfToken": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Csrftoken"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionUser"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "authenticated"
+        ],
+        "title": "SessionResponse",
+        "type": "object"
+      },
+      "SessionUser": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar": {
+            "$ref": "#/components/schemas/AvatarRef"
+          },
+          "displayName": {
+            "minLength": 1,
+            "title": "Displayname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "displayName",
+          "avatar"
+        ],
+        "title": "SessionUser",
+        "type": "object"
+      },
+      "VoteCount": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "maximum": 3,
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "participant",
+          "count"
+        ],
+        "title": "VoteCount",
+        "type": "object"
+      },
+      "VoteView": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Candidate",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "voter": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Voter",
+            "type": "string"
+          }
+        },
+        "required": [
+          "voter",
+          "candidate",
+          "reason"
+        ],
+        "title": "VoteView",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "sessionCookie": {
+        "in": "cookie",
+        "name": "__Host-shittim-records-session",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "title": "Shittim Chest Records API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/auth/discord/callback": {
+      "get": {
+        "operationId": "completeDiscordOAuth",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Authenticated SPA redirect"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/discord/start": {
+      "get": {
+        "operationId": "beginDiscordOAuth",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "returnTo",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "pattern": "^/(?!/)",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Discord authorization redirect"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/insights/costs": {
+      "get": {
+        "operationId": "getCosts",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "month",
+              "enum": [
+                "today",
+                "week",
+                "month",
+                "all"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostsResponse"
+                }
+              }
+            },
+            "description": "Approximate service costs"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/insights/rankings": {
+      "get": {
+        "operationId": "getRankings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RankingsResponse"
+                }
+              }
+            },
+            "description": "Victory and request rankings"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/logout": {
+      "post": {
+        "operationId": "logout",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/records": {
+      "get": {
+        "operationId": "listRecords",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 12,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "winner",
+            "required": false,
+            "schema": {
+              "enum": [
+                "participant-a",
+                "participant-b",
+                "participant-c"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordListResponse"
+                }
+              }
+            },
+            "description": "Completed debate records"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/records/{recordId}": {
+      "get": {
+        "operationId": "getRecord",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recordId",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordDetailResponse"
+                }
+              }
+            },
+            "description": "One completed debate"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "getSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Current browser session"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "sessionCookie": []
+    }
+  ]
+}

@@ -9,6 +9,7 @@ from tools.check_notification_workflows import (
     ALLOWED_TARGET_WORKFLOW,
     DEPLOY_GUARD_WORKFLOW,
     DRIFT_WORKFLOW,
+    RECORDS_CI_WORKFLOW,
     RELEASE_REQUIRED_MAIN_CHECKS,
     RELEASE_WORKFLOW,
     WORKFLOW_DIRECTORY,
@@ -35,6 +36,8 @@ def _workflow_directory(tmp_path: Path) -> Path:
     (directory / workflow_run.name).write_bytes(workflow_run.read_bytes())
     ci = WORKFLOW_DIRECTORY / "ci.yml"
     (directory / ci.name).write_bytes(ci.read_bytes())
+    records_ci = WORKFLOW_DIRECTORY / RECORDS_CI_WORKFLOW
+    (directory / records_ci.name).write_bytes(records_ci.read_bytes())
     return directory
 
 
@@ -45,6 +48,54 @@ def _replace(directory: Path, old: str, new: str) -> None:
 
 def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
     assert validate_notification_workflows(_workflow_directory(tmp_path)) == 1
+
+
+def test_ci_requires_runtime_image_path_isolation(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / "ci.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "    if: needs.changes.outputs.runtime_container == 'true'\n",
+            "    if: always()\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="run only for canonical Runtime"):
+        validate_notification_workflows(directory)
+
+
+def test_records_ci_rejects_trigger_path_filters(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_CI_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "  pull_request:\n",
+            "  pull_request:\n    paths:\n      - 'apps/records-web/**'\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="must not use path filters"):
+        validate_notification_workflows(directory)
+
+
+def test_records_ci_requires_the_canonical_classifier_decision(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_CI_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "    if: needs.records-changes.outputs.records == 'true'\n",
+            "    if: always()\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="canonical path decision"):
+        validate_notification_workflows(directory)
 
 
 @pytest.mark.parametrize(

@@ -20,6 +20,36 @@ env:
   UV_VERSION: "0.11.29"
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runtime_container: ${{ steps.classify.outputs.runtime_container }}
+      records: ${{ steps.classify.outputs.records }}
+    steps:
+      - name: Check out the tested history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify isolated build scopes
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base_sha="${BASE_SHA}"
+          if [ -z "${base_sha}" ] ||
+             [ "${base_sha}" = "0000000000000000000000000000000000000000" ] ||
+             ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null
+          then
+            base_sha=$(git rev-parse "${GITHUB_SHA}^")
+          fi
+          python3 tools/classify_ci_paths.py \
+            --base "${base_sha}" \
+            --head "${GITHUB_SHA}" \
+            --github-output "${GITHUB_OUTPUT}"
+
   quality:
     name: quality
     runs-on: ubuntu-latest
@@ -242,10 +272,12 @@ jobs:
       - name: Type-check, test, and synthesize CDK
         run: npm run check:infra
 
-  container-arm64:
-    name: container-arm64
+  container-arm64-build:
+    name: container-arm64-build
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
+    needs: changes
+    if: needs.changes.outputs.runtime_container == 'true'
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -487,13 +519,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  grype:
-    name: grype
+  grype-build:
+    name: grype-build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs:
+      - changes
       - security
-      - container-arm64
+      - container-arm64-build
+    if: needs.changes.outputs.runtime_container == 'true'
     permissions:
       contents: read
       security-events: write
@@ -685,6 +719,48 @@ jobs:
           if [ "${status}" -ne 0 ]; then
             echo "Fixable High/Critical or untracked residual container risk blocks merge." >&2
             exit "${status}"
+          fi
+
+  container-arm64:
+    name: container-arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - changes
+      - container-arm64-build
+    steps:
+      - name: Preserve the required container result
+        env:
+          REQUIRED: ${{ needs.changes.outputs.runtime_container }}
+          BUILD_RESULT: ${{ needs.container-arm64-build.result }}
+        run: |
+          if [ "${REQUIRED}" = true ]; then
+            test "${BUILD_RESULT}" = success
+          else
+            test "${BUILD_RESULT}" = skipped
+            echo "Runtime Docker context and validation inputs are unchanged."
+          fi
+
+  grype:
+    name: grype
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - changes
+      - grype-build
+    steps:
+      - name: Preserve the required Grype result
+        env:
+          REQUIRED: ${{ needs.changes.outputs.runtime_container }}
+          SCAN_RESULT: ${{ needs.grype-build.result }}
+        run: |
+          if [ "${REQUIRED}" = true ]; then
+            test "${SCAN_RESULT}" = success
+          else
+            test "${SCAN_RESULT}" = skipped
+            echo "Runtime image risk inputs are unchanged."
           fi
 
   docs-public-safety:

@@ -17,7 +17,7 @@ python tools/sync_docs.py --check --source "$SHITTIM_DOCS_SOURCE"
 uv run --frozen python -m tools.check_docs
 ```
 
-同期toolは17個のroot文書と`100_Ondemand Fargate/`配下3文書をexact setとして扱い、
+同期toolは18個のroot文書と`100_Ondemand Fargate/`配下3文書をexact setとして扱い、
 symlink、余分なfile、代表的なcredential、Discord snowflake、email address、local home pathを
 拒否します。production identifierとprivate personaはmirror対象外です。
 

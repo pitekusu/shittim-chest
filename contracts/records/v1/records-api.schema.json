@@ -1,0 +1,810 @@
+{
+  "$defs": {
+    "AvatarRef": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "minLength": 1,
+          "title": "Alt",
+          "type": "string"
+        },
+        "fallbackVariant": {
+          "enum": [
+            "cyan",
+            "pink",
+            "lavender"
+          ],
+          "title": "Fallbackvariant",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "image",
+            "placeholder"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "kind",
+        "alt",
+        "fallbackVariant"
+      ],
+      "title": "AvatarRef",
+      "type": "object"
+    },
+    "CostBreakdown": {
+      "additionalProperties": false,
+      "properties": {
+        "fargate": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Fargate",
+          "type": "string"
+        },
+        "lambda": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Lambda",
+          "type": "string"
+        },
+        "openai": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Openai",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fargate",
+        "lambda",
+        "openai"
+      ],
+      "title": "CostBreakdown",
+      "type": "object"
+    },
+    "CostsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "breakdown": {
+          "$ref": "#/$defs/CostBreakdown"
+        },
+        "currency": {
+          "const": "USD",
+          "title": "Currency",
+          "type": "string"
+        },
+        "period": {
+          "enum": [
+            "today",
+            "week",
+            "month",
+            "all"
+          ],
+          "title": "Period",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "partial",
+            "final",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "total": {
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+          "title": "Total",
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "title": "Updatedat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "period",
+        "currency",
+        "total",
+        "breakdown",
+        "updatedAt",
+        "status"
+      ],
+      "title": "CostsResponse",
+      "type": "object"
+    },
+    "ErrorBody": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "requestId": {
+          "minLength": 1,
+          "title": "Requestid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "requestId"
+      ],
+      "title": "ErrorBody",
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "FinalDecisionView": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Actions",
+          "type": "array"
+        },
+        "caveats": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Caveats",
+          "type": "array"
+        },
+        "decision": {
+          "minLength": 1,
+          "title": "Decision",
+          "type": "string"
+        },
+        "victoryMessage": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Victorymessage"
+        },
+        "winner": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Winner",
+          "type": "string"
+        }
+      },
+      "required": [
+        "winner",
+        "decision",
+        "actions",
+        "caveats"
+      ],
+      "title": "FinalDecisionView",
+      "type": "object"
+    },
+    "FinalProposalView": {
+      "additionalProperties": false,
+      "properties": {
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "proposal": {
+          "minLength": 1,
+          "title": "Proposal",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "participant",
+        "title",
+        "proposal"
+      ],
+      "title": "FinalProposalView",
+      "type": "object"
+    },
+    "InitialOpinionView": {
+      "additionalProperties": false,
+      "properties": {
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "proposal": {
+          "minLength": 1,
+          "title": "Proposal",
+          "type": "string"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "participant",
+        "summary",
+        "proposal"
+      ],
+      "title": "InitialOpinionView",
+      "type": "object"
+    },
+    "ParticipantSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "$ref": "#/$defs/AvatarRef"
+        },
+        "displayName": {
+          "minLength": 1,
+          "title": "Displayname",
+          "type": "string"
+        },
+        "slot": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Slot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot",
+        "displayName",
+        "avatar"
+      ],
+      "title": "ParticipantSummary",
+      "type": "object"
+    },
+    "RankingEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "$ref": "#/$defs/AvatarRef"
+        },
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "displayName": {
+          "minLength": 1,
+          "title": "Displayname",
+          "type": "string"
+        },
+        "rank": {
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rank",
+        "displayName",
+        "avatar",
+        "count"
+      ],
+      "title": "RankingEntry",
+      "type": "object"
+    },
+    "RankingsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "generatedAt": {
+          "format": "date-time",
+          "title": "Generatedat",
+          "type": "string"
+        },
+        "requests": {
+          "items": {
+            "$ref": "#/$defs/RankingEntry"
+          },
+          "title": "Requests",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "wins": {
+          "items": {
+            "$ref": "#/$defs/RankingEntry"
+          },
+          "title": "Wins",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "wins",
+        "requests",
+        "generatedAt"
+      ],
+      "title": "RankingsResponse",
+      "type": "object"
+    },
+    "RecordDetailResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "completedAt": {
+          "format": "date-time",
+          "title": "Completedat",
+          "type": "string"
+        },
+        "finalDecision": {
+          "$ref": "#/$defs/FinalDecisionView"
+        },
+        "finalProposals": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/FinalProposalView"
+            },
+            {
+              "$ref": "#/$defs/FinalProposalView"
+            },
+            {
+              "$ref": "#/$defs/FinalProposalView"
+            }
+          ],
+          "title": "Finalproposals",
+          "type": "array"
+        },
+        "initialOpinions": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/InitialOpinionView"
+            },
+            {
+              "$ref": "#/$defs/InitialOpinionView"
+            },
+            {
+              "$ref": "#/$defs/InitialOpinionView"
+            }
+          ],
+          "title": "Initialopinions",
+          "type": "array"
+        },
+        "participants": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            }
+          ],
+          "title": "Participants",
+          "type": "array"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "recordId": {
+          "minLength": 1,
+          "title": "Recordid",
+          "type": "string"
+        },
+        "requester": {
+          "$ref": "#/$defs/RequesterSummary"
+        },
+        "result": {
+          "$ref": "#/$defs/RecordResultSummary"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "votes": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/VoteView"
+            },
+            {
+              "$ref": "#/$defs/VoteView"
+            },
+            {
+              "$ref": "#/$defs/VoteView"
+            }
+          ],
+          "title": "Votes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "recordId",
+        "completedAt",
+        "question",
+        "requester",
+        "participants",
+        "initialOpinions",
+        "finalProposals",
+        "votes",
+        "result",
+        "finalDecision"
+      ],
+      "title": "RecordDetailResponse",
+      "type": "object"
+    },
+    "RecordListItem": {
+      "additionalProperties": false,
+      "properties": {
+        "completedAt": {
+          "format": "date-time",
+          "title": "Completedat",
+          "type": "string"
+        },
+        "participants": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            }
+          ],
+          "title": "Participants",
+          "type": "array"
+        },
+        "questionPreview": {
+          "minLength": 1,
+          "title": "Questionpreview",
+          "type": "string"
+        },
+        "recordId": {
+          "minLength": 1,
+          "title": "Recordid",
+          "type": "string"
+        },
+        "requester": {
+          "$ref": "#/$defs/RequesterSummary"
+        },
+        "result": {
+          "$ref": "#/$defs/RecordResultSummary"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "recordId",
+        "completedAt",
+        "questionPreview",
+        "requester",
+        "participants",
+        "result"
+      ],
+      "title": "RecordListItem",
+      "type": "object"
+    },
+    "RecordListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RecordListItem"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items"
+      ],
+      "title": "RecordListResponse",
+      "type": "object"
+    },
+    "RecordResultSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "tieBreakApplied": {
+          "title": "Tiebreakapplied",
+          "type": "boolean"
+        },
+        "voteCounts": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/VoteCount"
+            },
+            {
+              "$ref": "#/$defs/VoteCount"
+            },
+            {
+              "$ref": "#/$defs/VoteCount"
+            }
+          ],
+          "title": "Votecounts",
+          "type": "array"
+        },
+        "winner": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Winner",
+          "type": "string"
+        }
+      },
+      "required": [
+        "winner",
+        "voteCounts",
+        "tieBreakApplied"
+      ],
+      "title": "RecordResultSummary",
+      "type": "object"
+    },
+    "RequesterSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "$ref": "#/$defs/AvatarRef"
+        },
+        "displayName": {
+          "minLength": 1,
+          "title": "Displayname",
+          "type": "string"
+        }
+      },
+      "required": [
+        "displayName",
+        "avatar"
+      ],
+      "title": "RequesterSummary",
+      "type": "object"
+    },
+    "SessionResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "authenticated": {
+          "title": "Authenticated",
+          "type": "boolean"
+        },
+        "csrfToken": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Csrftoken"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "user": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionUser"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "authenticated"
+      ],
+      "title": "SessionResponse",
+      "type": "object"
+    },
+    "SessionUser": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "$ref": "#/$defs/AvatarRef"
+        },
+        "displayName": {
+          "minLength": 1,
+          "title": "Displayname",
+          "type": "string"
+        }
+      },
+      "required": [
+        "displayName",
+        "avatar"
+      ],
+      "title": "SessionUser",
+      "type": "object"
+    },
+    "VoteCount": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "participant",
+        "count"
+      ],
+      "title": "VoteCount",
+      "type": "object"
+    },
+    "VoteView": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Candidate",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "voter": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Voter",
+          "type": "string"
+        }
+      },
+      "required": [
+        "voter",
+        "candidate",
+        "reason"
+      ],
+      "title": "VoteView",
+      "type": "object"
+    }
+  },
+  "$id": "https://shittim-chest.invalid/contracts/records/v1/records-api.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/RecordListResponse"
+    },
+    {
+      "$ref": "#/$defs/RecordDetailResponse"
+    },
+    {
+      "$ref": "#/$defs/SessionResponse"
+    },
+    {
+      "$ref": "#/$defs/RankingsResponse"
+    },
+    {
+      "$ref": "#/$defs/CostsResponse"
+    },
+    {
+      "$ref": "#/$defs/ErrorResponse"
+    }
+  ],
+  "title": "Shittim Chest Records API v1"
+}

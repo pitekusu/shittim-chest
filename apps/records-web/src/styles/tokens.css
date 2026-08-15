@@ -1,0 +1,37 @@
+:root {
+  font-family: "LINE Seed JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --records-ice-50: #f5fbff;
+  --records-cyan-100: #dff8fb;
+  --records-cyan-400: #58d9e8;
+  --records-pink-100: #fde8f1;
+  --records-lavender-100: #eeecff;
+  --records-ink-900: #17324d;
+  --records-ink-600: #587087;
+  --records-surface: rgba(255, 255, 255, 0.78);
+  --records-line: rgba(63, 180, 205, 0.24);
+  --records-shadow: 0 18px 50px rgba(45, 119, 148, 0.14);
+  --records-radius-card: 24px;
+}
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+a {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--records-cyan-400);
+  outline-offset: 3px;
+}

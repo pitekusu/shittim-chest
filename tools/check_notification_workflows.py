@@ -14,6 +14,7 @@ ALLOWED_TARGET_WORKFLOW = "discord-repository-events.yml"
 DEPLOY_GUARD_WORKFLOW = "production-deploy-guard.yml"
 RELEASE_WORKFLOW = "release.yml"
 DRIFT_WORKFLOW = "drift.yml"
+RECORDS_CI_WORKFLOW = "records-ci.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.35.0"
 PINNED_BUILDKIT_DIGEST = "sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
@@ -113,6 +114,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_deploy_guard(directory)
     _validate_release(directory)
     _validate_ci_container_risk(directory)
+    _validate_ci_path_isolation(directory)
     _validate_drift(directory)
     _validate_aws_capability_boundary(directory)
     _validate_workflow_run_allowlist(directory)
@@ -1026,6 +1028,99 @@ def _validate_ci_container_risk(directory: Path) -> None:
         raise WorkflowPolicyError(
             "CI Docker context proof must compare clean src with actual .dockerignore output"
         )
+
+
+def _validate_ci_path_isolation(directory: Path) -> None:
+    ci_text = (directory / "ci.yml").read_text(encoding="utf-8")
+    records_path = directory / RECORDS_CI_WORKFLOW
+    if not records_path.is_file():
+        raise WorkflowPolicyError("Records CI workflow is required")
+    records_text = records_path.read_text(encoding="utf-8")
+
+    for workflow, text in (("ci.yml", ci_text), (RECORDS_CI_WORKFLOW, records_text)):
+        if text.count("python3 tools/classify_ci_paths.py") != 1:
+            raise WorkflowPolicyError(f"{workflow} must use the canonical path classifier once")
+
+    records_triggers = _top_level_triggers(records_text)
+    if records_triggers != ("pull_request", "push", "workflow_dispatch"):
+        raise WorkflowPolicyError(
+            "Records CI must always create its required result for PR, main, and manual runs"
+        )
+    trigger_end = records_text.index("\npermissions:")
+    if re.search(r"(?m)^\s{4,}(?:paths|paths-ignore):", records_text[:trigger_end]):
+        raise WorkflowPolicyError("Records CI triggers must not use path filters")
+
+    runtime_condition = "if: needs.changes.outputs.runtime_container == 'true'"
+    for job in ("container-arm64-build", "grype-build"):
+        block = _workflow_job_block(ci_text, job)
+        if block.count(runtime_condition) != 1:
+            raise WorkflowPolicyError(
+                f"CI {job} must run only for canonical Runtime image or risk inputs"
+            )
+
+    runtime_gates = {
+        "container-arm64": (
+            "- container-arm64-build",
+            "BUILD_RESULT: ${{ needs.container-arm64-build.result }}",
+        ),
+        "grype": (
+            "- grype-build",
+            "SCAN_RESULT: ${{ needs.grype-build.result }}",
+        ),
+    }
+    for job, markers in runtime_gates.items():
+        block = _workflow_job_block(ci_text, job)
+        required = (
+            "if: always()",
+            "- changes",
+            "REQUIRED: ${{ needs.changes.outputs.runtime_container }}",
+            'if [ "${REQUIRED}" = true ]',
+            "= success",
+            "= skipped",
+            *markers,
+        )
+        if any(marker not in block for marker in required):
+            raise WorkflowPolicyError(
+                f"CI {job} must preserve one required result around its conditional heavy job"
+            )
+
+    records_condition = "if: needs.records-changes.outputs.records == 'true'"
+    for job in ("records-python", "records-contract", "records-web"):
+        block = _workflow_job_block(records_text, job)
+        if block.count(records_condition) != 1:
+            raise WorkflowPolicyError(f"Records CI {job} must use the canonical path decision")
+
+    records_gate = _workflow_job_block(records_text, "records-gate")
+    required_records_gate = (
+        "if: always()",
+        "- records-changes",
+        "- records-python",
+        "- records-contract",
+        "- records-web",
+        "REQUIRED: ${{ needs.records-changes.outputs.records }}",
+        'test "${PYTHON_RESULT}" = success',
+        'test "${CONTRACT_RESULT}" = success',
+        'test "${WEB_RESULT}" = success',
+        'test "${PYTHON_RESULT}" = skipped',
+        'test "${CONTRACT_RESULT}" = skipped',
+        'test "${WEB_RESULT}" = skipped',
+    )
+    if any(marker not in records_gate for marker in required_records_gate):
+        raise WorkflowPolicyError(
+            "Records CI must preserve one required result around all conditional Records jobs"
+        )
+
+
+def _workflow_job_block(text: str, job_id: str) -> str:
+    """Return one literal top-level workflow job for strict policy checks."""
+
+    marker = f"  {job_id}:\n"
+    start = text.index(marker)
+    next_job = re.search(r"(?m)^  [a-zA-Z0-9_-]+:\s*$", text[start + len(marker) :])
+    if next_job is None:
+        return text[start:]
+    end = start + len(marker) + next_job.start()
+    return text[start:end]
 
 
 def _workflow_step_block(text: str, name: str) -> str:
