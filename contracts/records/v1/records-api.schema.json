@@ -1221,6 +1221,7 @@
         "reason": {
           "maxLength": 500,
           "minLength": 1,
+          "pattern": "\\S",
           "title": "Reason",
           "type": "string"
         },

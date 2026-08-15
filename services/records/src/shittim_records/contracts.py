@@ -189,7 +189,7 @@ class VoteView(PublicModel):
 
     voter: ParticipantSlot
     candidate: ParticipantSlot
-    reason: Annotated[str, Field(min_length=1, max_length=500)]
+    reason: Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")]
 
     @model_validator(mode="after")
     def reject_self_vote(self) -> VoteView:

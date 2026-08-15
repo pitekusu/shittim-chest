@@ -127,6 +127,10 @@ describe("App", () => {
     selfVote.votes[0].candidate = "participant-a";
     expect(isRecordsApiResponse(selfVote)).toBe(false);
 
+    const whitespaceVoteReason = structuredClone(detail);
+    whitespaceVoteReason.votes[0].reason = " \t ";
+    expect(isRecordsApiResponse(whitespaceVoteReason)).toBe(false);
+
     const whitespaceQuestion = structuredClone(detail);
     whitespaceQuestion.question = " \t ";
     expect(isRecordsApiResponse(whitespaceQuestion)).toBe(false);

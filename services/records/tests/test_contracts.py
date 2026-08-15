@@ -367,3 +367,10 @@ def test_public_vote_rejects_self_vote() -> None:
         VoteView.model_validate(
             {"voter": "participant-a", "candidate": "participant-a", "reason": "自己投票"}
         )
+
+
+def test_public_vote_rejects_whitespace_only_reason() -> None:
+    with pytest.raises(ValidationError):
+        VoteView.model_validate(
+            {"voter": "participant-a", "candidate": "participant-b", "reason": " \t "}
+        )
