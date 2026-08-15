@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from shittim_records.adapters import (
     ArchiveRepository,
+    BackfillMode,
     ConfigurationRepository,
     SourceDebateRepository,
     StatisticsRepository,
@@ -83,13 +84,14 @@ class BackfillService:
         now: datetime,
         page_limit: int = 100,
     ) -> BackfillResult:
-        checkpoint = self._statistics.load_backfill_checkpoint() if apply else None
+        mode: BackfillMode = "apply" if apply else "dry-run"
+        checkpoint = self._statistics.load_backfill_checkpoint(mode=mode)
         if checkpoint is not None and checkpoint.complete:
             return BackfillResult(
-                candidates=0,
-                validated=0,
-                projected=0,
-                skipped=0,
+                candidates=checkpoint.candidate_count,
+                validated=checkpoint.validated_count,
+                projected=checkpoint.projected_count,
+                skipped=checkpoint.skipped_count,
                 complete=True,
             )
         partition_keys, last_key = self._source.scan_completed_meta(
@@ -112,21 +114,27 @@ class BackfillService:
                 projected += 1
             else:
                 skipped += 1
-        if apply:
-            self._statistics.save_backfill_checkpoint(
-                exclusive_start_key=last_key,
-                projected_count=(
-                    (checkpoint.projected_count if checkpoint is not None else 0) + projected
-                ),
-                skipped_count=(
-                    (checkpoint.skipped_count if checkpoint is not None else 0) + skipped
-                ),
-                updated_at=now.astimezone(UTC).isoformat(),
-            )
+        previous_candidates = checkpoint.candidate_count if checkpoint is not None else 0
+        previous_validated = checkpoint.validated_count if checkpoint is not None else 0
+        previous_projected = checkpoint.projected_count if checkpoint is not None else 0
+        previous_skipped = checkpoint.skipped_count if checkpoint is not None else 0
+        cumulative_candidates = previous_candidates + len(partition_keys)
+        cumulative_validated = previous_validated + validated
+        cumulative_projected = previous_projected + projected
+        cumulative_skipped = previous_skipped + skipped
+        self._statistics.save_backfill_checkpoint(
+            mode=mode,
+            exclusive_start_key=last_key,
+            candidate_count=cumulative_candidates,
+            validated_count=cumulative_validated,
+            projected_count=cumulative_projected,
+            skipped_count=cumulative_skipped,
+            updated_at=now.astimezone(UTC).isoformat(),
+        )
         return BackfillResult(
-            candidates=len(partition_keys),
-            validated=validated,
-            projected=projected,
-            skipped=skipped,
+            candidates=cumulative_candidates,
+            validated=cumulative_validated,
+            projected=cumulative_projected,
+            skipped=cumulative_skipped,
             complete=last_key is None,
         )

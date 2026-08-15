@@ -1194,20 +1194,32 @@ def _validate_records_workflows(directory: Path) -> None:
         "ShittimChest-Prod-RecordsApplication",
         'all(.[]; .Action != "Remove"',
         '(.Replacement // "False") == "False"',
+        "tools/records_release_manifest.py create-entry",
+        "tools/records_release_manifest.py create-manifest",
+        "tools/records_release_manifest.py validate-manifest",
+        '--type "${type}"',
+        'if [ "${executable}" = false ]',
+        "Remove attested no-op Records Change Sets before approval",
         "uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4",
         "environment: production",
         "Execute only the attested Records Change Sets",
-        "--query ChangeSetType --output text",
-        'case "${change_set_type}" in',
+        'case "${type}" in',
         "stack-create-complete",
         "stack-update-complete",
         "Clean up only unexecuted Records Change Sets",
+        "Confirm this Records release has no unexecuted Change Sets",
     )
     if any(marker not in release for marker in release_markers):
         raise WorkflowPolicyError("Records Release is missing its immutable plan/deploy boundary")
+    if release.count('--type "${type}"') != 2:
+        raise WorkflowPolicyError("Records Release must attest and revalidate each Change Set type")
     deploy_block = _workflow_job_block(release, "deploy")
     if deploy_block.count("environment: production") != 1:
         raise WorkflowPolicyError("Records deploy requires one production Environment approval")
+    if "ChangeSetType" in release:
+        raise WorkflowPolicyError("Records Release must use only the attested Change Set type")
+    if release.index("execute stateful") >= release.index("execute application"):
+        raise WorkflowPolicyError("Records Release must preserve Stateful before Application")
     if "docker build" in release or "docker push" in release:
         raise WorkflowPolicyError("Records Release must not build or push a Fargate image")
 

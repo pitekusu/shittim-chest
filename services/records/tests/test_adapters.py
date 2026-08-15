@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from shittim_chest.adapters.dynamodb.codec import marshal_item
+from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import serialize_snapshot
 from tests.factories import NOW, completed_snapshot, presentation
 
@@ -142,18 +142,72 @@ def test_statistics_repository_preserves_completed_checkpoint_state() -> None:
     repository = StatisticsRepository(cast(Any, client), "statistics")
 
     repository.save_backfill_checkpoint(
+        mode="apply",
         exclusive_start_key=None,
+        candidate_count=3,
+        validated_count=3,
         projected_count=2,
         skipped_count=1,
         updated_at="2026-08-15T12:00:00+00:00",
     )
 
-    checkpoint = repository.load_backfill_checkpoint()
+    checkpoint = repository.load_backfill_checkpoint(mode="apply")
     assert checkpoint is not None
     assert checkpoint.complete is True
     assert checkpoint.exclusive_start_key is None
+    assert checkpoint.candidate_count == 3
+    assert checkpoint.validated_count == 3
     assert checkpoint.projected_count == 2
     assert checkpoint.skipped_count == 1
+
+
+def test_statistics_repository_uses_independent_dry_run_and_apply_keys() -> None:
+    client = FakeDynamoDb()
+    repository = StatisticsRepository(cast(Any, client), "statistics")
+
+    repository.save_backfill_checkpoint(
+        mode="dry-run",
+        exclusive_start_key={"PK": "DEBATE#cursor"},
+        candidate_count=2,
+        validated_count=2,
+        projected_count=0,
+        skipped_count=0,
+        updated_at="2026-08-15T12:00:00+00:00",
+    )
+
+    item = unmarshal_item(cast(Any, client.marker))
+    assert item["SK"] == "ARCHIVE#V1#DRY-RUN"
+    assert item["mode"] == "dry-run"
+    assert item["exclusive_start_key"] == {"PK": "DEBATE#cursor"}
+
+    repository.save_backfill_checkpoint(
+        mode="apply",
+        exclusive_start_key=None,
+        candidate_count=1,
+        validated_count=1,
+        projected_count=1,
+        skipped_count=0,
+        updated_at="2026-08-15T12:05:00+00:00",
+    )
+
+    item = unmarshal_item(cast(Any, client.marker))
+    assert item["SK"] == "ARCHIVE#V1#APPLY"
+    assert item["mode"] == "apply"
+
+
+def test_statistics_repository_rejects_archive_counts_for_dry_run() -> None:
+    repository = StatisticsRepository(cast(Any, FakeDynamoDb()), "statistics")
+
+    with pytest.raises(ValueError, match="cannot contain Archive writes"):
+        repository.save_backfill_checkpoint(
+            mode="dry-run",
+            exclusive_start_key=None,
+            candidate_count=1,
+            validated_count=1,
+            projected_count=1,
+            skipped_count=0,
+            updated_at="2026-08-15T12:00:00+00:00",
+        )
 
 
 @pytest.mark.parametrize(

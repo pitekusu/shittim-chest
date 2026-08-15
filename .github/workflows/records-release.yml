@@ -27,8 +27,6 @@ jobs:
     timeout-minutes: 45
     outputs:
       artifact_name: ${{ steps.evidence.outputs.artifact_name }}
-      stateful_change_set: ${{ steps.plan.outputs.stateful_change_set }}
-      application_change_set: ${{ steps.plan.outputs.application_change_set }}
     permissions:
       attestations: write
       checks: read
@@ -85,10 +83,13 @@ jobs:
           npm ci --ignore-scripts
       - name: Re-run Records release-critical gates
         run: |
-          uv run --project services/records --frozen ruff format --check .
-          uv run --project services/records --frozen ruff check .
-          uv run --project services/records --frozen ty check
-          uv run --project services/records --frozen pytest
+          (
+            cd services/records
+            uv run --frozen ruff format --check .
+            uv run --frozen ruff check .
+            uv run --frozen ty check
+            uv run --frozen pytest
+          )
           npm run build
           npx vitest run \
             infra/test/records-stateful-stack.test.ts \
@@ -173,14 +174,27 @@ jobs:
           STATEFUL_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful
         run: |
           create_plan() {
-            local stack="$1" change_set="$2" template_key="$3"
-            local type=UPDATE
-            if ! aws cloudformation describe-stacks --stack-name "${stack}" >/dev/null 2>&1
+            local logical_name="$1" stack="$2" change_set="$3" template_key="$4"
+            local stack_status type arn status
+            shift 4
+            if aws cloudformation describe-stacks --stack-name "${stack}" \
+              > "${RUNNER_TEMP}/${logical_name}-stack.json" \
+              2> "${RUNNER_TEMP}/${logical_name}-stack.error"
             then
-              type=CREATE
+              stack_status=$(jq --exit-status --raw-output '.Stacks[0].StackStatus' \
+                "${RUNNER_TEMP}/${logical_name}-stack.json")
+            else
+              grep --quiet "does not exist" "${RUNNER_TEMP}/${logical_name}-stack.error"
+              stack_status=""
             fi
-            shift 3
-            aws cloudformation create-change-set \
+            case "${stack_status}" in
+              ""|REVIEW_IN_PROGRESS) type=CREATE ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE)
+                type=UPDATE
+                ;;
+              *) exit 1 ;;
+            esac
+            arn=$(aws cloudformation create-change-set \
               --stack-name "${stack}" \
               --change-set-name "${change_set}" \
               --change-set-type "${type}" \
@@ -188,51 +202,72 @@ jobs:
               --template-url "https://${ASSET_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${template_key}" \
               --role-arn "${EXECUTION_ROLE_ARN}" \
               --capabilities CAPABILITY_NAMED_IAM \
-              "$@" >/dev/null
-            aws cloudformation wait change-set-create-complete \
-              --stack-name "${stack}" --change-set-name "${change_set}"
+              --client-token "records-${logical_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              "$@" --query Id --output text)
+            for attempt in $(seq 1 60)
+            do
+              status=$(aws cloudformation describe-change-set \
+                --change-set-name "${arn}" --query Status --output text)
+              case "${status}" in
+                CREATE_COMPLETE|FAILED) break ;;
+              esac
+              test "${attempt}" -lt 60
+              sleep 5
+            done
             aws cloudformation describe-change-set \
-              --stack-name "${stack}" --change-set-name "${change_set}" \
-              > "${RUNNER_TEMP}/${change_set}.json"
+              --change-set-name "${arn}" \
+              > "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json"
+            uv run --project services/records --frozen python \
+              tools/release_supply_chain.py validate-change-set \
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+              --expected-arn "${arn}" --expected-stack "${stack}"
+            if [ "${logical_name}" = application ]; then
+              uv run --project services/records --frozen python \
+                tools/release_supply_chain.py validate-change-set \
+                "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+                --expected-arn "${arn}" --expected-stack "${stack}" \
+                --expected-parameter "SourceDebateTableStreamArn=${SOURCE_STREAM_ARN}" \
+                --expected-parameter "RecordsBundleBucketName=${ASSET_BUCKET}" \
+                --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
+                --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}"
+            fi
+            uv run --project services/records --frozen python \
+              tools/records_release_manifest.py create-entry \
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+              --type "${type}" --expected-name "${change_set}" \
+              --expected-stack "${stack}" \
+              --output "${RUNNER_TEMP}/records-release-${logical_name}-plan.json"
             jq --exit-status \
               '[.Changes[].ResourceChange // empty] |
                all(.[]; .Action != "Remove" and
                         (.Replacement // "False") == "False")' \
-              "${RUNNER_TEMP}/${change_set}.json" >/dev/null
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
           }
           stateful_key=$(awk '$1 == "RecordsStateful" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")
           application_key=$(awk '$1 == "RecordsApplication" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")
-          create_plan ShittimChest-Prod-RecordsStateful \
+          create_plan stateful ShittimChest-Prod-RecordsStateful \
             "${STATEFUL_CHANGE_SET}" "${stateful_key}"
-          create_plan ShittimChest-Prod-RecordsApplication \
+          create_plan application ShittimChest-Prod-RecordsApplication \
             "${APPLICATION_CHANGE_SET}" "${application_key}" \
             --parameters \
               ParameterKey=SourceDebateTableStreamArn,ParameterValue="${SOURCE_STREAM_ARN}" \
               ParameterKey=RecordsBundleBucketName,ParameterValue="${ASSET_BUCKET}" \
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
               ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"
-          echo "stateful_change_set=${STATEFUL_CHANGE_SET}" >> "${GITHUB_OUTPUT}"
-          echo "application_change_set=${APPLICATION_CHANGE_SET}" >> "${GITHUB_OUTPUT}"
       - name: Record Records release evidence
         id: evidence
         env:
-          APPLICATION_CHANGE_SET: ${{ steps.plan.outputs.application_change_set }}
           BUNDLE_HASH: ${{ steps.bundle.outputs.bundle_hash }}
-          STATEFUL_CHANGE_SET: ${{ steps.plan.outputs.stateful_change_set }}
         run: |
           artifact_name="records-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          jq --null-input \
-            --arg schema_version "1" \
-            --arg commit_sha "${GITHUB_SHA}" \
-            --arg bundle_sha256 "${BUNDLE_HASH}" \
-            --arg stateful_change_set "${STATEFUL_CHANGE_SET}" \
-            --arg application_change_set "${APPLICATION_CHANGE_SET}" \
-            '{schema_version:($schema_version|tonumber), commit_sha:$commit_sha,
-              bundle_sha256:$bundle_sha256, stateful_change_set:$stateful_change_set,
-              application_change_set:$application_change_set}' \
-            > "${RUNNER_TEMP}/records-release-manifest.json"
+          uv run --project services/records --frozen python \
+            tools/records_release_manifest.py create-manifest \
+            --stateful-plan "${RUNNER_TEMP}/records-release-stateful-plan.json" \
+            --application-plan "${RUNNER_TEMP}/records-release-application-plan.json" \
+            --commit-sha "${GITHUB_SHA}" --bundle-sha256 "${BUNDLE_HASH}" \
+            --output "${RUNNER_TEMP}/records-release-manifest.json"
           mkdir -p "${RUNNER_TEMP}/records-evidence"
           cp "${RUNNER_TEMP}/records-release-manifest.json" \
             "${RUNNER_TEMP}/records-sbom.cdx.json" \
@@ -250,6 +285,33 @@ jobs:
           path: ${{ runner.temp }}/records-evidence
           if-no-files-found: error
           retention-days: 14
+      - name: Remove attested no-op Records Change Sets before approval
+        run: |
+          manifest="${RUNNER_TEMP}/records-release-manifest.json"
+          for logical_name in stateful application
+          do
+            executable=$(jq --exit-status --raw-output \
+              --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].executable' "${manifest}")
+            if [ "${executable}" = false ]; then
+              arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+                '.change_sets[$logical_name].arn' "${manifest}")
+              aws cloudformation delete-change-set --change-set-name "${arn}"
+              for attempt in $(seq 1 12)
+              do
+                if aws cloudformation describe-change-set --change-set-name "${arn}" \
+                  >/dev/null 2> "${RUNNER_TEMP}/${logical_name}-noop-cleanup.error"
+                then
+                  test "${attempt}" -lt 12
+                  sleep 5
+                  continue
+                fi
+                grep --quiet "does not exist" \
+                  "${RUNNER_TEMP}/${logical_name}-noop-cleanup.error"
+                break
+              done
+            fi
+          done
       - name: Clean up unexecuted Change Sets after plan failure
         if: failure()
         continue-on-error: true
@@ -280,6 +342,18 @@ jobs:
         with:
           name: ${{ needs.plan.outputs.artifact_name }}
           path: ${{ runner.temp }}/records-evidence
+      - name: Check out the fixed Records release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned Python and uv for evidence validation
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: services/records/uv.lock
       - name: Revalidate the Records plan attestation and fixed SHA
         env:
           GH_TOKEN: ${{ github.token }}
@@ -288,8 +362,9 @@ jobs:
           gh attestation verify "${manifest}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_WORKFLOW_REF}"
-          jq --exit-status --arg sha "${GITHUB_SHA}" \
-            '.schema_version == 1 and .commit_sha == $sha' "${manifest}" >/dev/null
+          uv run --project services/records --frozen python \
+            tools/records_release_manifest.py validate-manifest "${manifest}" \
+            --expected-commit-sha "${GITHUB_SHA}"
       - name: Acquire Records deploy credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
@@ -302,19 +377,34 @@ jobs:
           retry-max-attempts: 3
           action-timeout-s: 60
       - name: Execute only the attested Records Change Sets
-        env:
-          APPLICATION_CHANGE_SET: ${{ needs.plan.outputs.application_change_set }}
-          STATEFUL_CHANGE_SET: ${{ needs.plan.outputs.stateful_change_set }}
         run: |
           execute() {
-            local stack="$1" change_set="$2"
-            local change_set_type
-            change_set_type=$(aws cloudformation describe-change-set \
-              --stack-name "${stack}" --change-set-name "${change_set}" \
-              --query ChangeSetType --output text)
-            aws cloudformation execute-change-set \
-              --stack-name "${stack}" --change-set-name "${change_set}"
-            case "${change_set_type}" in
+            local logical_name="$1" stack name arn type executable
+            stack=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].stack' "${manifest}")
+            name=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].name' "${manifest}")
+            arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].arn' "${manifest}")
+            type=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].type' "${manifest}")
+            executable=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].executable' "${manifest}")
+            if [ "${executable}" = false ]; then
+              return 0
+            fi
+            aws cloudformation describe-change-set --change-set-name "${arn}" \
+              > "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json"
+            uv run --project services/records --frozen python \
+              tools/records_release_manifest.py create-entry \
+              "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
+              --type "${type}" --expected-name "${name}" --expected-stack "${stack}" \
+              --output "${RUNNER_TEMP}/${logical_name}-deploy-plan.json"
+            jq --exit-status --arg logical_name "${logical_name}" \
+              --slurpfile actual "${RUNNER_TEMP}/${logical_name}-deploy-plan.json" \
+              '.change_sets[$logical_name] == $actual[0]' "${manifest}" >/dev/null
+            aws cloudformation execute-change-set --change-set-name "${arn}"
+            case "${type}" in
               CREATE)
                 aws cloudformation wait stack-create-complete --stack-name "${stack}"
                 ;;
@@ -322,13 +412,14 @@ jobs:
                 aws cloudformation wait stack-update-complete --stack-name "${stack}"
                 ;;
               *)
-                echo "Unexpected Change Set type." >&2
+                echo "Unexpected attested Change Set type." >&2
                 exit 1
                 ;;
             esac
           }
-          execute ShittimChest-Prod-RecordsStateful "${STATEFUL_CHANGE_SET}"
-          execute ShittimChest-Prod-RecordsApplication "${APPLICATION_CHANGE_SET}"
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          execute stateful
+          execute application
       - name: Verify stable Records Stack results
         run: |
           for stack in \
@@ -345,19 +436,42 @@ jobs:
       - name: Clean up only unexecuted Records Change Sets
         if: always()
         continue-on-error: true
-        env:
-          APPLICATION_CHANGE_SET: ${{ needs.plan.outputs.application_change_set }}
-          STATEFUL_CHANGE_SET: ${{ needs.plan.outputs.stateful_change_set }}
         run: |
-          for pair in \
-            "ShittimChest-Prod-RecordsStateful ${STATEFUL_CHANGE_SET}" \
-            "ShittimChest-Prod-RecordsApplication ${APPLICATION_CHANGE_SET}"
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          for logical_name in stateful application
           do
-            read -r stack change_set <<< "${pair}"
-            status=$(aws cloudformation describe-change-set --stack-name "${stack}" \
-              --change-set-name "${change_set}" --query Status --output text 2>/dev/null || true)
-            if [ "${status}" = CREATE_COMPLETE ]; then
-              aws cloudformation delete-change-set \
-                --stack-name "${stack}" --change-set-name "${change_set}"
+            arn=$(jq --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].arn // empty' "${manifest}" 2>/dev/null || true)
+            status=$(aws cloudformation describe-change-set --change-set-name "${arn}" \
+              --query Status --output text 2>/dev/null || true)
+            execution=$(aws cloudformation describe-change-set --change-set-name "${arn}" \
+              --query ExecutionStatus --output text 2>/dev/null || true)
+            if [ "${status}" = CREATE_COMPLETE ] && [ "${execution}" = AVAILABLE ]; then
+              aws cloudformation delete-change-set --change-set-name "${arn}"
+            fi
+          done
+      - name: Confirm this Records release has no unexecuted Change Sets
+        if: always()
+        run: |
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          for logical_name in stateful application
+          do
+            arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].arn' "${manifest}")
+            if ! aws cloudformation describe-change-set --change-set-name "${arn}" \
+              > "${RUNNER_TEMP}/${logical_name}-final-change-set.json" \
+              2> "${RUNNER_TEMP}/${logical_name}-final-change-set.error"
+            then
+              grep --quiet "does not exist" \
+                "${RUNNER_TEMP}/${logical_name}-final-change-set.error"
+              continue
+            fi
+            status=$(jq --exit-status --raw-output .Status \
+              "${RUNNER_TEMP}/${logical_name}-final-change-set.json")
+            execution=$(jq --exit-status --raw-output .ExecutionStatus \
+              "${RUNNER_TEMP}/${logical_name}-final-change-set.json")
+            if [ "${status}" = CREATE_COMPLETE ] && [ "${execution}" = AVAILABLE ]; then
+              echo "Unexecuted Records Change Set remains after cleanup." >&2
+              exit 1
             fi
           done

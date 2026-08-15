@@ -217,8 +217,57 @@ def test_records_release_waits_for_the_attested_change_set_type(tmp_path: Path) 
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "--query ChangeSetType --output text",
-            "--query Status --output text",
+            '--type "${type}"',
+            "--type UPDATE",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="attest and revalidate"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_rejects_runtime_change_set_type_lookup(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '            aws cloudformation execute-change-set --change-set-name "${arn}"\n',
+            "            aws cloudformation describe-change-set --query ChangeSetType\n"
+            '            aws cloudformation execute-change-set --change-set-name "${arn}"\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="attested Change Set type"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_noop_cleanup_before_approval(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "Remove attested no-op Records Change Sets before approval",
+            "Ignore attested no-op Records Change Sets",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_final_unexecuted_change_set_check(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "Confirm this Records release has no unexecuted Change Sets",
+            "Skip the final Records Change Set inventory",
             1,
         ),
         encoding="utf-8",

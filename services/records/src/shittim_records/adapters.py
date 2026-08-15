@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, cast
+from typing import Any, Literal, cast
 
 from botocore.exceptions import ClientError
 from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -27,6 +27,7 @@ from shittim_records.archive import ArchiveProjection, RecordsPresentationConfig
 MAX_DYNAMODB_ITEM_BYTES = 400 * 1024
 MAX_TRANSACTION_BYTES = 4 * 1024 * 1024
 MAX_TRANSACTION_ACTIONS = 100
+BackfillMode = Literal["dry-run", "apply"]
 
 
 class ProjectionConflict(RuntimeError):
@@ -49,6 +50,8 @@ class BackfillCheckpoint:
 
     exclusive_start_key: DynamoItem | None
     complete: bool
+    candidate_count: int = 0
+    validated_count: int = 0
     projected_count: int = 0
     skipped_count: int = 0
 
@@ -174,19 +177,14 @@ class ArchiveRepository:
 class StatisticsRepository:
     """Persist only the internal resumable backfill checkpoint."""
 
-    _KEY: ClassVar[dict[str, DynamoValue]] = {
-        "PK": "CHECKPOINT#BACKFILL",
-        "SK": "ARCHIVE#V1",
-    }
-
     def __init__(self, client: DynamoDBClient, table_name: str) -> None:
         self._client = client
         self._table_name = table_name
 
-    def load_backfill_checkpoint(self) -> BackfillCheckpoint | None:
+    def load_backfill_checkpoint(self, *, mode: BackfillMode) -> BackfillCheckpoint | None:
         response = self._client.get_item(
             TableName=self._table_name,
-            Key=marshal_item(self._KEY),
+            Key=marshal_item(self._key(mode)),
             ConsistentRead=True,
         )
         item = response.get("Item")
@@ -196,13 +194,29 @@ class StatisticsRepository:
         if (
             decoded.get("schema_version") != 1
             or decoded.get("record_type") != "backfill_checkpoint"
+            or decoded.get("mode") != mode
             or not isinstance(decoded.get("complete"), bool)
         ):
             raise ValueError("backfill checkpoint is invalid")
-        for field in ("projected_count", "skipped_count"):
+        for field in (
+            "candidate_count",
+            "validated_count",
+            "projected_count",
+            "skipped_count",
+        ):
             value = decoded.get(field)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError("backfill checkpoint count is invalid")
+        candidate_count = cast(int, decoded["candidate_count"])
+        validated_count = cast(int, decoded["validated_count"])
+        projected_count = cast(int, decoded["projected_count"])
+        skipped_count = cast(int, decoded["skipped_count"])
+        if validated_count != candidate_count:
+            raise ValueError("backfill checkpoint candidates were not all validated")
+        if projected_count + skipped_count > validated_count:
+            raise ValueError("backfill checkpoint projection counts are invalid")
+        if mode == "dry-run" and (projected_count != 0 or skipped_count != 0):
+            raise ValueError("dry-run checkpoint contains Archive writes")
         complete = cast(bool, decoded["complete"])
         raw_key = decoded.get("exclusive_start_key")
         if complete and raw_key is not None:
@@ -212,24 +226,41 @@ class StatisticsRepository:
         return BackfillCheckpoint(
             exclusive_start_key=cast(DynamoItem | None, raw_key),
             complete=complete,
-            projected_count=cast(int, decoded["projected_count"]),
-            skipped_count=cast(int, decoded["skipped_count"]),
+            candidate_count=candidate_count,
+            validated_count=validated_count,
+            projected_count=projected_count,
+            skipped_count=skipped_count,
         )
 
     def save_backfill_checkpoint(
         self,
         *,
+        mode: BackfillMode,
         exclusive_start_key: DynamoItem | None,
+        candidate_count: int,
+        validated_count: int,
         projected_count: int,
         skipped_count: int,
         updated_at: str,
     ) -> None:
-        if projected_count < 0 or skipped_count < 0:
+        counts = (candidate_count, validated_count, projected_count, skipped_count)
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0 for count in counts
+        ):
             raise ValueError("backfill checkpoint counts must be non-negative")
+        if validated_count != candidate_count:
+            raise ValueError("backfill checkpoint candidates must all be validated")
+        if projected_count + skipped_count > validated_count:
+            raise ValueError("backfill checkpoint projection counts are invalid")
+        if mode == "dry-run" and (projected_count != 0 or skipped_count != 0):
+            raise ValueError("dry-run checkpoint cannot contain Archive writes")
         item: DynamoItem = {
-            **self._KEY,
+            **self._key(mode),
             "schema_version": 1,
             "record_type": "backfill_checkpoint",
+            "mode": mode,
+            "candidate_count": candidate_count,
+            "validated_count": validated_count,
             "projected_count": projected_count,
             "skipped_count": skipped_count,
             "updated_at": updated_at,
@@ -238,6 +269,15 @@ class StatisticsRepository:
         if exclusive_start_key is not None:
             item["exclusive_start_key"] = exclusive_start_key
         self._client.put_item(TableName=self._table_name, Item=marshal_item(item))
+
+    @staticmethod
+    def _key(mode: BackfillMode) -> dict[str, DynamoValue]:
+        if mode not in {"dry-run", "apply"}:
+            raise ValueError("backfill checkpoint mode is invalid")
+        return {
+            "PK": "CHECKPOINT#BACKFILL",
+            "SK": f"ARCHIVE#V1#{mode.upper()}",
+        }
 
 
 class ConfigurationRepository:
