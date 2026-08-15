@@ -36,7 +36,7 @@
 | AWS／Release／security／operations／test | `docs/14_*`〜`docs/18_*` |
 | traceability／現在の検証記録 | `docs/19_*`, `docs/20_*` |
 | source／test／IaC／tool／workflow | `src/shittim_chest/`, `tests/`, `infra/`, `tools/`, `.github/workflows/` |
-| dependency version | `uv.lock`, `package-lock.json`, `.github/tool-versions.json` |
+| dependency version | `uv.lock`, `package-lock.json`, `apps/records-web/pnpm-lock.yaml`, `.github/tool-versions.json` |
 
 pathは実際のtreeとimportから特定し、古い進捗記録から推測しない。
 

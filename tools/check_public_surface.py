@@ -26,7 +26,8 @@ DENY_PATTERNS = {
     "AWS account ID": re.compile(rb"(?<![A-Za-z0-9])(?!0{12}(?![0-9]))[0-9]{12}(?![A-Za-z0-9])"),
     "Discord snowflake": re.compile(rb"(?<![A-Za-z0-9])[0-9]{17,20}(?![A-Za-z0-9])"),
     "email address": re.compile(
-        rb"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"
+        rb"\b[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+"
+        rb"(?:\.[A-Za-z0-9-]+)*\.(?:[A-Za-z]{2,63}|xn--[A-Za-z0-9-]{2,59})\b"
     ),
 }
 

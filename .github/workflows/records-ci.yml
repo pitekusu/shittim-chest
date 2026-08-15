@@ -123,16 +123,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Install pinned Records web toolchain
+        uses: voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0
         with:
+          version: "0.2.9"
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: apps/records-web/package-lock.json
+          working-directory: apps/records-web
+          cache: true
+          cache-dependency-path: pnpm-lock.yaml
+          run-install: false
       - name: Install locked Records web dependencies
-        run: npm ci
-      - name: Test, build, and audit Records web
-        run: npm run check
+        run: pnpm install --frozen-lockfile
+      - name: Check Records web formatting, lint, and types
+        run: pnpm exec vp check
+      - name: Test Records web
+        run: pnpm exec vp test
+      - name: Build Records web
+        run: pnpm exec vp build
+      - name: Audit Records web dependencies
+        run: pnpm audit --audit-level=low
 
   records-gate:
     name: records-gate

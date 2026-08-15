@@ -1036,6 +1036,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     if not records_path.is_file():
         raise WorkflowPolicyError("Records CI workflow is required")
     records_text = records_path.read_text(encoding="utf-8")
+    _require_full_action_pins(records_text, "Records CI")
 
     for workflow, text in (("ci.yml", ci_text), (RECORDS_CI_WORKFLOW, records_text)):
         if text.count("python3 tools/classify_ci_paths.py") != 1:
@@ -1089,6 +1090,24 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         block = _workflow_job_block(records_text, job)
         if block.count(records_condition) != 1:
             raise WorkflowPolicyError(f"Records CI {job} must use the canonical path decision")
+
+    records_web = _workflow_job_block(records_text, "records-web")
+    required_records_web = (
+        "uses: voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0",
+        'version: "0.2.9"',
+        "working-directory: apps/records-web",
+        "cache-dependency-path: pnpm-lock.yaml",
+        "run-install: false",
+        "pnpm install --frozen-lockfile",
+        "pnpm exec vp check",
+        "pnpm exec vp test",
+        "pnpm exec vp build",
+        "pnpm audit --audit-level=low",
+    )
+    if any(marker not in records_web for marker in required_records_web):
+        raise WorkflowPolicyError("Records CI must use the pinned pnpm and Vite+ toolchain")
+    if "npm ci" in records_web or "package-lock.json" in records_web:
+        raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
 
     records_gate = _workflow_job_block(records_text, "records-gate")
     required_records_gate = (
