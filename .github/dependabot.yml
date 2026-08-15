@@ -59,6 +59,33 @@ updates:
           - ">=0.12"
     open-pull-requests-limit: 5
 
+  # Keep the independently locked Records service current as its own uv project.
+  - package-ecosystem: "uv"
+    directory: "/services/records"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    assignees:
+      - "pitekusu"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      records-python-minor-and-patch:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "uv-build"
+        versions:
+          - ">=0.12"
+    open-pull-requests-limit: 5
+
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

@@ -1,10 +1,11 @@
 import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
 
 import recordsApiSchema from "../../../contracts/records/v1/records-api.schema.json";
 
-const validator = new Ajv2020({ allErrors: true, strict: true, validateFormats: false }).compile(
-  recordsApiSchema,
-);
+const ajv = new Ajv2020({ allErrors: true, strict: true });
+addFormats(ajv);
+const validator = ajv.compile(recordsApiSchema);
 
 export function isRecordsApiResponse(value: unknown): boolean {
   return validator(value);

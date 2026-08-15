@@ -74,6 +74,12 @@ jobs:
         run: |
           uv lock --check
           uv sync --frozen --all-groups
+      - name: Audit locked Records Python dependencies
+        run: |
+          uv export --quiet --frozen --all-groups --no-emit-project --no-annotate \
+            --output-file "${RUNNER_TEMP}/records-audit-requirements.txt"
+          uv run --frozen pip-audit --strict --require-hashes \
+            --requirement "${RUNNER_TEMP}/records-audit-requirements.txt"
       - name: Check Records formatting, lint, and types
         run: |
           uv run --frozen ruff format --check .
@@ -155,18 +161,23 @@ jobs:
     steps:
       - name: Preserve one required Records result
         env:
+          CHANGES_RESULT: ${{ needs.records-changes.result }}
           REQUIRED: ${{ needs.records-changes.outputs.records }}
           PYTHON_RESULT: ${{ needs.records-python.result }}
           CONTRACT_RESULT: ${{ needs.records-contract.result }}
           WEB_RESULT: ${{ needs.records-web.result }}
         run: |
+          test "${CHANGES_RESULT}" = success
           if [ "${REQUIRED}" = true ]; then
             test "${PYTHON_RESULT}" = success
             test "${CONTRACT_RESULT}" = success
             test "${WEB_RESULT}" = success
-          else
+          elif [ "${REQUIRED}" = false ]; then
             test "${PYTHON_RESULT}" = skipped
             test "${CONTRACT_RESULT}" = skipped
             test "${WEB_RESULT}" = skipped
             echo "Records inputs are unchanged."
+          else
+            echo "Records path classification did not publish an explicit result." >&2
+            exit 1
           fi

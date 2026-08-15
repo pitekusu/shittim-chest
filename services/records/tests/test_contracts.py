@@ -5,28 +5,35 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from shittim_records.contracts import (
     AvatarRef,
+    CostsResponse,
     ErrorResponse,
+    RankingsResponse,
+    RecordDetailResponse,
+    RecordListItem,
     RecordListResponse,
     SessionResponse,
 )
 
 
 def test_public_contracts_use_camel_case_and_reject_unknown_fields() -> None:
-    response = SessionResponse(
-        schema_version=1,
-        authenticated=True,
-        user={
-            "displayName": "利用者",
-            "avatar": {
-                "kind": "placeholder",
-                "alt": "利用者のアバター",
-                "fallbackVariant": "cyan",
+    response = SessionResponse.model_validate(
+        {
+            "schemaVersion": 1,
+            "authenticated": True,
+            "user": {
+                "displayName": "利用者",
+                "avatar": {
+                    "kind": "placeholder",
+                    "alt": "利用者のアバター",
+                    "fallbackVariant": "cyan",
+                },
             },
-        },
+            "csrfToken": "csrf-example",
+        }
     )
 
     payload = response.model_dump(by_alias=True, mode="json")
@@ -112,3 +119,50 @@ def test_versioned_responses_require_the_exact_schema_version() -> None:
         SessionResponse.model_validate({"authenticated": False})
     with pytest.raises(ValidationError):
         SessionResponse.model_validate({"schemaVersion": 2, "authenticated": False})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"schemaVersion": 1, "authenticated": True, "user": None, "csrfToken": None},
+        {
+            "schemaVersion": 1,
+            "authenticated": False,
+            "user": {
+                "displayName": "利用者",
+                "avatar": {
+                    "kind": "placeholder",
+                    "alt": "利用者のアバター",
+                    "fallbackVariant": "cyan",
+                },
+            },
+            "csrfToken": "unexpected",
+        },
+    ],
+)
+def test_session_contract_rejects_ambiguous_authentication_states(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        SessionResponse.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("model", "field_name"),
+    [
+        (RecordListItem, "completed_at"),
+        (RecordDetailResponse, "completed_at"),
+        (RankingsResponse, "generated_at"),
+        (CostsResponse, "updated_at"),
+    ],
+)
+def test_public_timestamps_require_timezone_offsets(
+    model: type[BaseModel],
+    field_name: str,
+) -> None:
+    adapter = TypeAdapter(model.model_fields[field_name].annotation)
+    aware = datetime(2026, 8, 15, tzinfo=UTC)
+
+    assert adapter.validate_python(aware) == aware
+    with pytest.raises(ValidationError):
+        adapter.validate_python(aware.replace(tzinfo=None))

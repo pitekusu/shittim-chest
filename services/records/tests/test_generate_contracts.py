@@ -19,6 +19,11 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     assert len(json_schema["oneOf"]) == 6
     assert "#/components/schemas/" not in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/AvatarRef"' in first["records-api.schema.json"].decode()
+    session_branches = json_schema["$defs"]["SessionResponse"]["anyOf"]
+    assert session_branches == [
+        {"$ref": "#/$defs/AuthenticatedSession"},
+        {"$ref": "#/$defs/AnonymousSession"},
+    ]
     openapi = json.loads(first["openapi.json"])
     assert openapi["info"]["title"] == "Shittim Chest Records API"
     assert set(openapi["paths"]) == {
@@ -32,6 +37,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "/api/v1/insights/costs",
     }
     assert openapi["paths"]["/api/v1/auth/discord/start"]["get"]["security"] == []
+    assert openapi["paths"]["/api/v1/session"]["get"]["security"] == []
     assert [
         parameter["name"] for parameter in openapi["paths"]["/api/v1/records"]["get"]["parameters"]
     ] == ["cursor", "limit", "from", "to", "winner"]

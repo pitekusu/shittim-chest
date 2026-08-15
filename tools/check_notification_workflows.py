@@ -1074,8 +1074,11 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         required = (
             "if: always()",
             "- changes",
+            "CHANGES_RESULT: ${{ needs.changes.result }}",
             "REQUIRED: ${{ needs.changes.outputs.runtime_container }}",
+            'test "${CHANGES_RESULT}" = success',
             'if [ "${REQUIRED}" = true ]',
+            'elif [ "${REQUIRED}" = false ]',
             "= success",
             "= skipped",
             *markers,
@@ -1090,6 +1093,15 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         block = _workflow_job_block(records_text, job)
         if block.count(records_condition) != 1:
             raise WorkflowPolicyError(f"Records CI {job} must use the canonical path decision")
+
+    records_python = _workflow_job_block(records_text, "records-python")
+    required_records_audit = (
+        "uv export --quiet --frozen --all-groups --no-emit-project --no-annotate",
+        "records-audit-requirements.txt",
+        "uv run --frozen pip-audit --strict --require-hashes",
+    )
+    if any(marker not in records_python for marker in required_records_audit):
+        raise WorkflowPolicyError("Records CI must audit the frozen Records Python lock")
 
     records_web = _workflow_job_block(records_text, "records-web")
     if "voidzero-dev/setup-vp@" in records_web:
@@ -1118,7 +1130,10 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "- records-python",
         "- records-contract",
         "- records-web",
+        "CHANGES_RESULT: ${{ needs.records-changes.result }}",
         "REQUIRED: ${{ needs.records-changes.outputs.records }}",
+        'test "${CHANGES_RESULT}" = success',
+        'elif [ "${REQUIRED}" = false ]',
         'test "${PYTHON_RESULT}" = success',
         'test "${CONTRACT_RESULT}" = success',
         'test "${WEB_RESULT}" = success',

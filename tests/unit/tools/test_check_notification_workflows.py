@@ -98,6 +98,38 @@ def test_records_ci_requires_the_canonical_classifier_decision(tmp_path: Path) -
         validate_notification_workflows(directory)
 
 
+def test_records_ci_gate_requires_the_classifier_job_to_succeed(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_CI_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "CHANGES_RESULT: ${{ needs.records-changes.result }}",
+            "CHANGES_RESULT: ignored",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="preserve one required result"):
+        validate_notification_workflows(directory)
+
+
+def test_records_ci_requires_a_frozen_python_dependency_audit(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_CI_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "uv run --frozen pip-audit --strict --require-hashes",
+            "echo audit-disabled",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="audit the frozen Records Python lock"):
+        validate_notification_workflows(directory)
+
+
 def test_records_ci_requires_the_pinned_pnpm_vite_plus_toolchain(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_CI_WORKFLOW
@@ -127,6 +159,22 @@ def test_records_ci_rejects_the_non_allowlisted_vite_plus_action(tmp_path: Path)
     )
 
     with pytest.raises(WorkflowPolicyError, match="allowlisted GitHub-owned"):
+        validate_notification_workflows(directory)
+
+
+def test_runtime_required_gates_require_the_classifier_job_to_succeed(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / "ci.yml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "CHANGES_RESULT: ${{ needs.changes.result }}",
+            "CHANGES_RESULT: ignored",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="preserve one required result"):
         validate_notification_workflows(directory)
 
 

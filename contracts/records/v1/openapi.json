@@ -1,6 +1,68 @@
 {
   "components": {
     "schemas": {
+      "AnonymousSession": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticated": {
+            "const": false,
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "csrfToken": {
+            "default": null,
+            "title": "Csrftoken",
+            "type": "null"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "user": {
+            "default": null,
+            "title": "User",
+            "type": "null"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "authenticated"
+        ],
+        "title": "AnonymousSession",
+        "type": "object"
+      },
+      "AuthenticatedSession": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticated": {
+            "const": true,
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "csrfToken": {
+            "minLength": 1,
+            "title": "Csrftoken",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "authenticated",
+          "user",
+          "csrfToken"
+        ],
+        "title": "AuthenticatedSession",
+        "type": "object"
+      },
       "AvatarRef": {
         "additionalProperties": false,
         "properties": {
@@ -661,47 +723,16 @@
         "type": "object"
       },
       "SessionResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "authenticated": {
-            "title": "Authenticated",
-            "type": "boolean"
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/AuthenticatedSession"
           },
-          "csrfToken": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Csrftoken"
-          },
-          "schemaVersion": {
-            "const": 1,
-            "title": "Schemaversion",
-            "type": "integer"
-          },
-          "user": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SessionUser"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null
+          {
+            "$ref": "#/components/schemas/AnonymousSession"
           }
-        },
-        "required": [
-          "schemaVersion",
-          "authenticated"
         ],
-        "title": "SessionResponse",
-        "type": "object"
+        "description": "Authenticated or anonymous session state with no ambiguous combinations.",
+        "title": "SessionResponse"
       },
       "SessionUser": {
         "additionalProperties": false,
@@ -1457,7 +1488,8 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": []
       }
     }
   },

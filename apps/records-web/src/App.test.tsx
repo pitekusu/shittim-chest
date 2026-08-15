@@ -24,4 +24,16 @@ describe("App", () => {
     expect(isRecordsApiResponse({ authenticated: false })).toBe(false);
     expect(isRecordsApiResponse({ schemaVersion: 1, privateId: "forbidden" })).toBe(false);
   });
+
+  it("rejects malformed date-time values from the API", () => {
+    const rankings = {
+      schemaVersion: 1,
+      wins: [],
+      requests: [],
+      generatedAt: "2026-08-15T06:00:00Z",
+    };
+
+    expect(isRecordsApiResponse(rankings)).toBe(true);
+    expect(isRecordsApiResponse({ ...rankings, generatedAt: "not-a-date" })).toBe(false);
+  });
 });

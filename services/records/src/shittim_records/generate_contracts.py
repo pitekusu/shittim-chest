@@ -137,6 +137,7 @@ def build_openapi() -> dict[str, Any]:
             "/api/v1/session": {
                 "get": {
                     "operationId": "getSession",
+                    "security": [],
                     "responses": {
                         "200": _response("SessionResponse", "Current browser session"),
                         **error_responses,

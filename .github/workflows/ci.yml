@@ -732,14 +732,19 @@ jobs:
     steps:
       - name: Preserve the required container result
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           REQUIRED: ${{ needs.changes.outputs.runtime_container }}
           BUILD_RESULT: ${{ needs.container-arm64-build.result }}
         run: |
+          test "${CHANGES_RESULT}" = success
           if [ "${REQUIRED}" = true ]; then
             test "${BUILD_RESULT}" = success
-          else
+          elif [ "${REQUIRED}" = false ]; then
             test "${BUILD_RESULT}" = skipped
             echo "Runtime Docker context and validation inputs are unchanged."
+          else
+            echo "Runtime path classification did not publish an explicit result." >&2
+            exit 1
           fi
 
   grype:
@@ -753,14 +758,19 @@ jobs:
     steps:
       - name: Preserve the required Grype result
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           REQUIRED: ${{ needs.changes.outputs.runtime_container }}
           SCAN_RESULT: ${{ needs.grype-build.result }}
         run: |
+          test "${CHANGES_RESULT}" = success
           if [ "${REQUIRED}" = true ]; then
             test "${SCAN_RESULT}" = success
-          else
+          elif [ "${REQUIRED}" = false ]; then
             test "${SCAN_RESULT}" = skipped
             echo "Runtime image risk inputs are unchanged."
+          else
+            echo "Runtime path classification did not publish an explicit result." >&2
+            exit 1
           fi
 
   docs-public-safety:

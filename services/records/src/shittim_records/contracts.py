@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel
 
 RECORDS_API_SCHEMA_VERSION = 1
 
@@ -65,7 +64,7 @@ class RecordResultSummary(PublicModel):
 class RecordListItem(PublicModel):
     schema_version: Literal[1]
     record_id: NonEmptyText
-    completed_at: datetime
+    completed_at: AwareDatetime
     question_preview: NonEmptyText
     requester: RequesterSummary
     participants: tuple[ParticipantSummary, ParticipantSummary, ParticipantSummary]
@@ -107,7 +106,7 @@ class FinalDecisionView(PublicModel):
 class RecordDetailResponse(PublicModel):
     schema_version: Literal[1]
     record_id: NonEmptyText
-    completed_at: datetime
+    completed_at: AwareDatetime
     question: NonEmptyText
     requester: RequesterSummary
     participants: tuple[ParticipantSummary, ParticipantSummary, ParticipantSummary]
@@ -123,11 +122,25 @@ class SessionUser(PublicModel):
     avatar: AvatarRef
 
 
-class SessionResponse(PublicModel):
+class AuthenticatedSession(PublicModel):
     schema_version: Literal[1]
-    authenticated: bool
-    user: SessionUser | None = None
-    csrf_token: str | None = None
+    authenticated: Literal[True]
+    user: SessionUser
+    csrf_token: NonEmptyText
+
+
+class AnonymousSession(PublicModel):
+    schema_version: Literal[1]
+    authenticated: Literal[False]
+    user: None = None
+    csrf_token: None = None
+
+
+SessionState = AuthenticatedSession | AnonymousSession
+
+
+class SessionResponse(RootModel[SessionState]):
+    """Authenticated or anonymous session state with no ambiguous combinations."""
 
 
 class RankingEntry(PublicModel):
@@ -141,7 +154,7 @@ class RankingsResponse(PublicModel):
     schema_version: Literal[1]
     wins: tuple[RankingEntry, ...]
     requests: tuple[RankingEntry, ...]
-    generated_at: datetime
+    generated_at: AwareDatetime
 
 
 class CostBreakdown(PublicModel):
@@ -156,7 +169,7 @@ class CostsResponse(PublicModel):
     currency: Literal["USD"]
     total: Annotated[str, Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")]
     breakdown: CostBreakdown
-    updated_at: datetime
+    updated_at: AwareDatetime
     status: CostStatus
 
 
@@ -170,7 +183,7 @@ class ErrorResponse(PublicModel):
     error: ErrorBody
 
 
-PUBLIC_RESPONSE_MODELS: tuple[type[PublicModel], ...] = (
+PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordListResponse,
     RecordDetailResponse,
     SessionResponse,
