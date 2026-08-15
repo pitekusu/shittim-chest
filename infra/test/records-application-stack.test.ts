@@ -58,6 +58,35 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
+  test("binds each function to one explicit 90-day log group", () => {
+    const { template } = synthesize();
+    const logGroups = template.findResources("AWS::Logs::LogGroup");
+
+    template.resourceCountIs("AWS::Logs::LogGroup", 2);
+    for (const functionName of [
+      "shittim-chest-production-records-projector",
+      "shittim-chest-production-records-backfill",
+    ]) {
+      const [logGroupLogicalId] = Object.entries(logGroups).find(
+        ([, resource]) =>
+          resource.Properties.LogGroupName === `/aws/lambda/${functionName}` &&
+          resource.Properties.RetentionInDays === 90,
+      ) ?? [undefined];
+      const functionResource = Object.values(
+        template.findResources("AWS::Lambda::Function"),
+      ).find((resource) => resource.Properties.FunctionName === functionName);
+
+      expect(logGroupLogicalId).toBeDefined();
+      expect(functionResource?.Properties.LoggingConfig).toEqual({
+        LogFormat: "JSON",
+        LogGroup: { Ref: logGroupLogicalId },
+      });
+    }
+    for (const resource of Object.values(logGroups)) {
+      expect(resource.Properties.RetentionInDays).toBe(90);
+    }
+  });
+
   test("filters completed metadata and bounds every stream retry dimension", () => {
     const { template } = synthesize();
 

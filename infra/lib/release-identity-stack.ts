@@ -563,6 +563,15 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.recordsDeployRole.addToPolicy(
       new iam.PolicyStatement({
+        actions: ["cloudformation:UpdateTerminationProtection"],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+        },
+        resources: this.stackArns(RECORDS_STACK_NAMES),
+      }),
+    );
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
         actions: ["s3:GetObject"],
         resources: this.recordsAssetObjectArns(),
       }),

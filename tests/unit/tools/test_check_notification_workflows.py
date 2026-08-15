@@ -341,6 +341,56 @@ def test_records_release_requires_final_unexecuted_change_set_check(tmp_path: Pa
         validate_notification_workflows(directory)
 
 
+def test_records_release_requires_termination_protection_update(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "aws cloudformation update-termination-protection",
+            "aws cloudformation describe-stacks",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_verifies_termination_protection_twice(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            ".Stacks[0].EnableTerminationProtection == true",
+            ".Stacks[0].EnableTerminationProtection != true",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="during and after deployment"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_protects_noop_stacks(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        '            if [ "${executable}" = true ]; then\n',
+        '            if [ "${executable}" = false ]; then\n'
+        "              return 0\n"
+        "            fi\n"
+        '            if [ "${executable}" = true ]; then\n',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="protect stable no-op stacks"):
+        validate_notification_workflows(directory)
+
+
 def test_records_backfill_rejects_unbounded_page_limit(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_BACKFILL_WORKFLOW
