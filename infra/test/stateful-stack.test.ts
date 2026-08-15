@@ -28,9 +28,11 @@ function synthesize(): {
 describe("StatefulStack", () => {
   test("creates the retained and protected DynamoDB table", () => {
     const { stack, template } = synthesize();
+    const tables = template.findResources("AWS::DynamoDB::Table");
 
     expect(stack.terminationProtection).toBe(true);
     template.resourceCountIs("AWS::DynamoDB::Table", 1);
+    expect(Object.keys(tables)).toEqual(["DebateTable2AC1D488"]);
     template.hasResource("AWS::DynamoDB::Table", {
       DeletionPolicy: "Retain",
       UpdateReplacePolicy: "Retain",
@@ -46,6 +48,7 @@ describe("StatefulStack", () => {
           RecoveryPeriodInDays: 35,
         },
         SSESpecification: { SSEEnabled: true },
+        StreamSpecification: { StreamViewType: "NEW_IMAGE" },
         TableName: "shittim-chest-production",
       },
     });
