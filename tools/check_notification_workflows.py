@@ -1217,7 +1217,8 @@ def _validate_records_workflows(directory: Path) -> None:
             "Records Release must extract executable as a boolean-safe string"
         )
 
-    change_set_safety = """all(.[];
+    change_set_safety = """'[.Changes[].ResourceChange // empty] |
+               all(.[];
                  if .ResourceType == "AWS::CDK::Metadata" then
                    (.Action == "Add" and
                     (.Replacement // "False") == "False") or
@@ -1227,7 +1228,7 @@ def _validate_records_workflows(directory: Path) -> None:
                  else
                    .Action != "Remove" and
                    (.Replacement // "False") == "False"
-                 end)"""
+                 end)'"""
     if release.count(change_set_safety) != 1:
         raise WorkflowPolicyError(
             "Records Release must scope conditional replacement to CDK metadata"

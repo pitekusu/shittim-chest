@@ -310,6 +310,24 @@ def test_records_release_scopes_conditional_replacement_to_cdk_metadata(
         validate_notification_workflows(directory)
 
 
+def test_records_release_rejects_a_true_prefix_before_the_safety_predicate(
+    tmp_path: Path,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "               all(.[];",
+            "               true or all(.[];",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_rejects_true_cdk_metadata_replacement(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
