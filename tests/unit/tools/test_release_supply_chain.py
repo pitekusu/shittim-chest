@@ -474,10 +474,43 @@ def referrer_snapshots() -> tuple[dict[str, object], dict[str, object]]:
     return before, after
 
 
+def notation_inspection(
+    *suffixes: str,
+    profile_arn: str = PROFILE,
+) -> dict[str, object]:
+    return {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "Signatures": [
+            {
+                "digest": "sha256:" + suffix * 64,
+                "signedAttributes": {
+                    "com.amazonaws.signer.signingProfileVersion": f"{profile_arn}/ABCDEFGHIJ"
+                },
+            }
+            for suffix in suffixes
+        ],
+    }
+
+
+def select_referrer_fixture(
+    *,
+    before: object,
+    after: object,
+    inspection: object | None = None,
+    profile_arn: str = PROFILE,
+) -> dict[str, object]:
+    return select_release_referrers(
+        before=before,
+        after=after,
+        notation_inspection=inspection or notation_inspection("1"),
+        profile_arn=profile_arn,
+    )
+
+
 def test_selects_only_this_runs_three_sigstore_referrers() -> None:
     before, after = referrer_snapshots()
 
-    selected = select_release_referrers(before=before, after=after)
+    selected = select_referrer_fixture(before=before, after=after)
 
     selected_digests = [
         cast(dict[str, object], item)["digest"]
@@ -506,13 +539,87 @@ def test_selects_only_this_runs_three_sigstore_referrers() -> None:
     }
 
 
+def test_referrer_delta_selects_one_stable_existing_signature() -> None:
+    before, after = referrer_snapshots()
+    older_signature = artifact("application/vnd.cncf.notary.signature", "0")
+    cast(list[dict[str, object]], before["referrers"]).insert(0, older_signature)
+    cast(list[dict[str, object]], after["referrers"]).append(deepcopy(older_signature))
+
+    selected = select_referrer_fixture(
+        before=before,
+        after=after,
+        inspection=notation_inspection("1", "0"),
+    )
+
+    selected_digests = [
+        cast(dict[str, object], item)["digest"]
+        for item in cast(list[object], selected["referrers"])
+    ]
+    assert selected_digests == [
+        "sha256:" + "0" * 64,
+        "sha256:" + "5" * 64,
+        "sha256:" + "6" * 64,
+        "sha256:" + "7" * 64,
+    ]
+
+
+def test_referrer_delta_rejects_a_missing_notation_signature() -> None:
+    before, after = referrer_snapshots()
+    cast(list[dict[str, object]], before["referrers"]).pop(0)
+    cast(list[dict[str, object]], after["referrers"]).pop(0)
+
+    with pytest.raises(ValueError, match="at least one active Notation signature"):
+        select_referrer_fixture(
+            before=before,
+            after=after,
+            inspection=notation_inspection(),
+        )
+
+
+def test_referrer_delta_selects_only_a_signature_from_the_expected_profile() -> None:
+    before, after = referrer_snapshots()
+    other_signature = artifact("application/vnd.cncf.notary.signature", "0")
+    cast(list[dict[str, object]], before["referrers"]).insert(0, other_signature)
+    cast(list[dict[str, object]], after["referrers"]).append(deepcopy(other_signature))
+    inspection = notation_inspection("1")
+    other_inspection = notation_inspection(
+        "0",
+        profile_arn="arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/other",
+    )
+    cast(list[dict[str, object]], inspection["Signatures"]).append(
+        cast(list[dict[str, object]], other_inspection["Signatures"])[0]
+    )
+
+    selected = select_referrer_fixture(before=before, after=after, inspection=inspection)
+
+    assert cast(list[dict[str, object]], selected["referrers"])[0]["digest"] == (
+        "sha256:" + "1" * 64
+    )
+
+
+def test_referrer_delta_rejects_inspection_without_the_expected_profile() -> None:
+    before, after = referrer_snapshots()
+
+    with pytest.raises(ValueError, match="matches the expected signing profile"):
+        select_referrer_fixture(
+            before=before,
+            after=after,
+            inspection=notation_inspection(
+                "1",
+                profile_arn="arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/other",
+            ),
+        )
+
+
 def test_referrer_delta_cli_writes_the_selected_snapshot(tmp_path: Path) -> None:
     before, after = referrer_snapshots()
     before_path = tmp_path / "before.json"
     after_path = tmp_path / "after.json"
+    inspection_path = tmp_path / "notation.json"
     output_path = tmp_path / "selected.json"
     before_path.write_text(json.dumps(before), encoding="utf-8")
     after_path.write_text(json.dumps(after), encoding="utf-8")
+    inspection_path.write_text(json.dumps(notation_inspection("1")), encoding="utf-8")
 
     assert (
         release_supply_chain_main(
@@ -522,6 +629,10 @@ def test_referrer_delta_cli_writes_the_selected_snapshot(tmp_path: Path) -> None
                 str(before_path),
                 "--after-referrers",
                 str(after_path),
+                "--notation-inspection",
+                str(inspection_path),
+                "--profile-arn",
+                PROFILE,
                 "--output",
                 str(output_path),
             )
@@ -539,7 +650,7 @@ def test_referrer_delta_rejects_incomplete_pagination(snapshot_name: str) -> Non
     snapshot["nextToken"] = "more"
 
     with pytest.raises(ValueError, match="not fully paginated"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_referrer_delta_rejects_a_missing_new_predicate() -> None:
@@ -547,7 +658,7 @@ def test_referrer_delta_rejects_a_missing_new_predicate() -> None:
     cast(list[dict[str, object]], after["referrers"]).pop()
 
     with pytest.raises(ValueError, match="exactly three new"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_referrer_delta_rejects_an_extra_new_referrer() -> None:
@@ -557,7 +668,7 @@ def test_referrer_delta_rejects_an_extra_new_referrer() -> None:
     )
 
     with pytest.raises(ValueError, match="exactly three new"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_referrer_delta_rejects_a_duplicated_new_predicate() -> None:
@@ -568,7 +679,7 @@ def test_referrer_delta_rejects_a_duplicated_new_predicate() -> None:
     }
 
     with pytest.raises(ValueError, match="predicate is duplicated"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_referrer_delta_rejects_an_unknown_new_predicate() -> None:
@@ -577,7 +688,7 @@ def test_referrer_delta_rejects_an_unknown_new_predicate() -> None:
     added[1]["annotations"] = {"dev.sigstore.bundle.predicateType": "unknown"}
 
     with pytest.raises(ValueError, match="unknown predicate"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_referrer_delta_rejects_a_new_non_sigstore_referrer() -> None:
@@ -585,7 +696,7 @@ def test_referrer_delta_rejects_a_new_non_sigstore_referrer() -> None:
     cast(list[dict[str, object]], after["referrers"])[-1]["artifactType"] = "unknown"
 
     with pytest.raises(ValueError, match="not a Sigstore bundle"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_referrer_delta_rejects_duplicate_digests() -> None:
@@ -595,7 +706,7 @@ def test_referrer_delta_rejects_duplicate_digests() -> None:
     )
 
     with pytest.raises(ValueError, match="duplicate referrer digest"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_referrer_delta_rejects_a_disappearing_existing_referrer() -> None:
@@ -603,7 +714,7 @@ def test_referrer_delta_rejects_a_disappearing_existing_referrer() -> None:
     cast(list[dict[str, object]], after["referrers"]).pop(1)
 
     with pytest.raises(ValueError, match="existing active referrer disappeared"):
-        select_release_referrers(before=before, after=after)
+        select_referrer_fixture(before=before, after=after)
 
 
 def test_verifies_exact_managed_signature_referrers_and_scan() -> None:

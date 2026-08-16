@@ -174,9 +174,17 @@ def verify_image_evidence(
     }
 
 
-def select_release_referrers(*, before: object, after: object) -> dict[str, object]:
-    """Select one existing Notation signature and this run's three new attestations."""
+def select_release_referrers(
+    *,
+    before: object,
+    after: object,
+    notation_inspection: object,
+    profile_arn: str,
+) -> dict[str, object]:
+    """Select a stable existing Notation signature and this run's new attestations."""
 
+    if _PROFILE_ARN.fullmatch(profile_arn) is None:
+        raise ValueError("signing profile ARN is invalid")
     before_by_digest = _active_referrers_by_digest(before, "pre-attestation referrers")
     after_by_digest = _active_referrers_by_digest(after, "post-attestation referrers")
     if not before_by_digest.keys() <= after_by_digest.keys():
@@ -206,9 +214,36 @@ def select_release_referrers(*, before: object, after: object) -> dict[str, obje
     signatures = [
         item for item in after_by_digest.values() if item.get("artifactType") == _NOTATION_SIGNATURE
     ]
-    signature_digest = _one_artifact_digest(signatures, "Notation signature")
-    if signature_digest not in before_by_digest:
-        raise ValueError("the Notation signature was not present before attestations")
+    active_signature_digests = {cast(str, item["digest"]) for item in signatures}
+    if not active_signature_digests:
+        raise ValueError("expected at least one active Notation signature referrer")
+    if any(digest not in before_by_digest for digest in active_signature_digests):
+        raise ValueError("a Notation signature was not present before attestations")
+
+    inspected = _object(notation_inspection, "Notation inspection")
+    inspected_signatures = _array(inspected.get("Signatures"), "Notation inspection signatures")
+    inspected_by_digest: dict[str, Mapping[str, object]] = {}
+    for value in inspected_signatures:
+        item = _object(value, "Notation inspected signature")
+        digest = item.get("digest")
+        _require_digest(digest)
+        if digest in inspected_by_digest:
+            raise ValueError("Notation inspection contains a duplicate signature digest")
+        inspected_by_digest[cast(str, digest)] = item
+    if set(inspected_by_digest) != active_signature_digests:
+        raise ValueError("Notation inspection does not match active signature referrers")
+
+    profile_version = re.compile(rf"{re.escape(profile_arn)}/[A-Za-z0-9]{{10}}")
+    matching_signature_digests = []
+    for digest, item in inspected_by_digest.items():
+        attributes = _object(item.get("signedAttributes"), "Notation signed attributes")
+        if profile_version.fullmatch(
+            cast(str, attributes.get("com.amazonaws.signer.signingProfileVersion", ""))
+        ):
+            matching_signature_digests.append(digest)
+    if not matching_signature_digests:
+        raise ValueError("no active Notation signature matches the expected signing profile")
+    signature_digest = min(matching_signature_digests)
 
     return {
         "referrers": [
@@ -1146,6 +1181,8 @@ def _parser() -> argparse.ArgumentParser:
     select_referrers = commands.add_parser("select-release-referrers")
     select_referrers.add_argument("--before-referrers", type=Path, required=True)
     select_referrers.add_argument("--after-referrers", type=Path, required=True)
+    select_referrers.add_argument("--notation-inspection", type=Path, required=True)
+    select_referrers.add_argument("--profile-arn", required=True)
     select_referrers.add_argument("--output", type=Path, required=True)
     predicate = commands.add_parser("create-vulnerability-predicate")
     predicate.add_argument("--digest", required=True)
@@ -1225,6 +1262,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 select_release_referrers(
                     before=_read(args.before_referrers),
                     after=_read(args.after_referrers),
+                    notation_inspection=_read(args.notation_inspection),
+                    profile_arn=args.profile_arn,
                 ),
             )
         elif args.command == "create-vulnerability-predicate":

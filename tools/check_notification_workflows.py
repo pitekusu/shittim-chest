@@ -862,6 +862,7 @@ def _validate_release_referrer_delta(text: str) -> None:
         text.count("select-release-referrers") != 2
         or text.count("--before-referrers") != 2
         or text.count("--after-referrers") != 2
+        or text.count("--notation-inspection") != 2
         or text.count('--referrers "${RUNNER_TEMP}/${mode}.referrers.json"') != 2
     ):
         raise WorkflowPolicyError(
@@ -874,6 +875,9 @@ def _validate_release_referrer_delta(text: str) -> None:
         )
         plan_verify = _workflow_step_block(
             text, "Strictly verify both Signer identities and four referrers"
+        )
+        deploy_identity = _workflow_step_block(
+            text, "Cryptographically reverify both image identities"
         )
         deploy_verify = _workflow_step_block(
             text, "Reverify AWS evidence and immutable change sets"
@@ -889,14 +893,22 @@ def _validate_release_referrer_delta(text: str) -> None:
         "select-release-referrers",
         '--before-referrers "${RUNNER_TEMP}/${mode}.referrers-before.json"',
         '--after-referrers "${RUNNER_TEMP}/${mode}.referrers-after.json"',
+        '--notation-inspection "${RUNNER_TEMP}/${mode}.notation.json"',
+        '--profile-arn "${SIGNING_PROFILE_ARN}"',
         '--output "${RUNNER_TEMP}/${mode}.referrers.json"',
         '--referrers "${RUNNER_TEMP}/${mode}.referrers.json"',
+    )
+    required_deploy_identity = (
+        'notation inspect --output json "${reference}"',
+        '> "${RUNNER_TEMP}/${mode}.notation.json"',
     )
     required_deploy = (
         '"${RUNNER_TEMP}/${mode}.referrers-current.json"',
         "select-release-referrers",
         '"${RUNNER_TEMP}/release/${mode}.referrers-before.json"',
         '--after-referrers "${RUNNER_TEMP}/${mode}.referrers-current.json"',
+        '--notation-inspection "${RUNNER_TEMP}/${mode}.notation.json"',
+        '--profile-arn "${SIGNING_PROFILE_ARN}"',
         '--output "${RUNNER_TEMP}/${mode}.referrers.json"',
         '--referrers "${RUNNER_TEMP}/${mode}.referrers.json"',
     )
@@ -904,6 +916,8 @@ def _validate_release_referrer_delta(text: str) -> None:
         raise WorkflowPolicyError("Release pre-attestation referrer baseline is incomplete")
     if any(marker not in plan_verify for marker in required_plan):
         raise WorkflowPolicyError("Release plan referrer delta verification is incomplete")
+    if any(marker not in deploy_identity for marker in required_deploy_identity):
+        raise WorkflowPolicyError("Release deploy Notation identity inspection is incomplete")
     if any(marker not in deploy_verify for marker in required_deploy):
         raise WorkflowPolicyError("Release deploy referrer delta verification is incomplete")
 

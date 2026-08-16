@@ -727,6 +727,10 @@ jobs:
           notation policy import --force "${RUNNER_TEMP}/notation-trust-policy.json"
           notation verify "${NORMAL_REFERENCE}"
           notation verify "${BREAK_GLASS_REFERENCE}"
+          notation inspect --output json "${NORMAL_REFERENCE}" \
+            > "${RUNNER_TEMP}/normal.notation.json"
+          notation inspect --output json "${BREAK_GLASS_REFERENCE}" \
+            > "${RUNNER_TEMP}/break-glass.notation.json"
           for mode in normal break-glass
           do
             digest_variable="${mode^^}_DIGEST"
@@ -740,6 +744,8 @@ jobs:
               select-release-referrers \
               --before-referrers "${RUNNER_TEMP}/${mode}.referrers-before.json" \
               --after-referrers "${RUNNER_TEMP}/${mode}.referrers-after.json" \
+              --notation-inspection "${RUNNER_TEMP}/${mode}.notation.json" \
+              --profile-arn "${SIGNING_PROFILE_ARN}" \
               --output "${RUNNER_TEMP}/${mode}.referrers.json"
             uv run --frozen python tools/release_supply_chain.py verify-image \
               --digest "${digest}" \
@@ -1299,6 +1305,9 @@ jobs:
             reference=$(jq --raw-output --arg key "${key}" '.images[$key].reference' \
               "${manifest}")
             notation verify "${reference}"
+            mode="${key//_/-}"
+            notation inspect --output json "${reference}" \
+              > "${RUNNER_TEMP}/${mode}.notation.json"
             for predicate in \
               https://slsa.dev/provenance/v1 \
               https://spdx.dev/Document/v2.3 \
@@ -1350,6 +1359,8 @@ jobs:
               --before-referrers \
                 "${RUNNER_TEMP}/release/${mode}.referrers-before.json" \
               --after-referrers "${RUNNER_TEMP}/${mode}.referrers-current.json" \
+              --notation-inspection "${RUNNER_TEMP}/${mode}.notation.json" \
+              --profile-arn "${SIGNING_PROFILE_ARN}" \
               --output "${RUNNER_TEMP}/${mode}.referrers.json"
             uv run --frozen python tools/release_supply_chain.py verify-image \
               --digest "${digest}" --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
