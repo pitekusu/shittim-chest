@@ -345,22 +345,31 @@ def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
-    "call_end",
+    ("call_end", "unsafe_suffix"),
     [
-        '"${STATEFUL_CHANGE_SET}" "${stateful_key}"',
-        'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
+        ('"${STATEFUL_CHANGE_SET}" "${stateful_key}"', ""),
+        ('"${STATEFUL_CHANGE_SET}" "${stateful_key}"', " || true"),
+        (
+            'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
+            "",
+        ),
+        (
+            'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
+            " || true",
+        ),
     ],
 )
 def test_records_release_propagates_each_create_plan_failure(
     tmp_path: Path,
     call_end: str,
+    unsafe_suffix: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            call_end,
-            f"{call_end} || true",
+            f"{call_end} || exit $?",
+            f"{call_end}{unsafe_suffix}",
             1,
         ),
         encoding="utf-8",
