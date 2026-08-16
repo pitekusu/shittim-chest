@@ -7,11 +7,13 @@ import logging
 import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import boto3
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_ssm.client import SSMClient
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_ssm.client import SSMClient
 
 from shittim_records.adapters import (
     ArchiveRepository,
