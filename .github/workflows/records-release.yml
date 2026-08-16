@@ -311,7 +311,9 @@ jobs:
           do
             executable=$(jq --exit-status --raw-output \
               --arg logical_name "${logical_name}" \
-              '.change_sets[$logical_name].executable' "${manifest}")
+              '.change_sets[$logical_name].executable
+               | if type == "boolean" then tostring else error("executable must be boolean") end' \
+              "${manifest}")
             if [ "${executable}" = false ]; then
               arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
                 '.change_sets[$logical_name].arn' "${manifest}")
@@ -409,7 +411,9 @@ jobs:
             type=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].type' "${manifest}")
             executable=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
-              '.change_sets[$logical_name].executable' "${manifest}")
+              '.change_sets[$logical_name].executable
+               | if type == "boolean" then tostring else error("executable must be boolean") end' \
+              "${manifest}")
             if [ "${executable}" = true ]; then
               aws cloudformation describe-change-set --change-set-name "${arn}" \
                 > "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json"

@@ -325,6 +325,22 @@ def test_records_release_requires_noop_cleanup_before_approval(tmp_path: Path) -
         validate_notification_workflows(directory)
 
 
+def test_records_release_requires_boolean_safe_executable_extraction(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '| if type == "boolean" then tostring else error("executable must be boolean") end',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="boolean-safe"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_requires_final_unexecuted_change_set_check(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
