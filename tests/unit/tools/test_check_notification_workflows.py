@@ -1194,6 +1194,57 @@ def test_release_loads_regenerated_image_verification_for_comparison(tmp_path: P
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        ".images[$key].scan.image_digest == $actual[0].scan.image_digest",
+        ".images[$key].scan.schema_version == $actual[0].scan.schema_version",
+        ".images[$key].scan.scanner == $actual[0].scan.scanner",
+        '$actual[0].scan.result == "passed"',
+        '$actual[0].scan.risk_gate == "passed"',
+    ],
+)
+def test_release_requires_current_scan_identity_and_gates(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(path.read_text(encoding="utf-8").replace(marker, "true", 1), encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="stable scan identity"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "mutable_comparison",
+    [
+        ".images[$key].scan == $actual[0].scan",
+        ".images[$key].scan.scanned_at == $actual[0].scan.scanned_at",
+        ".images[$key].scan.severity_counts == $actual[0].scan.severity_counts",
+    ],
+)
+def test_release_rejects_mutable_scan_evidence_comparisons(
+    tmp_path: Path,
+    mutable_comparison: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            ".images[$key].scan.image_digest == $actual[0].scan.image_digest and",
+            f"{mutable_comparison} and\n"
+            "               .images[$key].scan.image_digest == "
+            "$actual[0].scan.image_digest and",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="mutable scan evidence"):
+        validate_notification_workflows(directory)
+
+
 def test_release_passes_the_planned_artifact_name_to_deploy(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

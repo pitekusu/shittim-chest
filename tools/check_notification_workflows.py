@@ -508,6 +508,29 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must load the regenerated image verification document before comparison"
         )
+    deploy_reverification = _workflow_step_block(
+        text, "Reverify AWS evidence and immutable change sets"
+    )
+    forbidden_scan_comparisons = (
+        ".images[$key].scan == $actual[0].scan",
+        ".images[$key].scan.scanned_at == $actual[0].scan.scanned_at",
+        ".images[$key].scan.severity_counts == $actual[0].scan.severity_counts",
+    )
+    if any(marker in deploy_reverification for marker in forbidden_scan_comparisons):
+        raise WorkflowPolicyError(
+            "Release deploy must not compare mutable scan evidence across verification times"
+        )
+    required_scan_reverification = (
+        ".images[$key].scan.image_digest == $actual[0].scan.image_digest",
+        ".images[$key].scan.schema_version == $actual[0].scan.schema_version",
+        ".images[$key].scan.scanner == $actual[0].scan.scanner",
+        '$actual[0].scan.result == "passed"',
+        '$actual[0].scan.risk_gate == "passed"',
+    )
+    if any(marker not in deploy_reverification for marker in required_scan_reverification):
+        raise WorkflowPolicyError(
+            "Release deploy must bind stable scan identity and require current scan gates"
+        )
     try:
         synth_index = text.index("name: Synthesize and publish the complete CDK asset closure")
         publish_index = text.index("npm run cdk -- publish-assets")
