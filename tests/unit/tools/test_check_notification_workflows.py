@@ -487,6 +487,29 @@ def test_records_backfill_requires_terminal_completion(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("    timeout-minutes: 60\n", "    timeout-minutes: 20\n"),
+        ("          role-duration-seconds: 3600\n", "          role-duration-seconds: 1200\n"),
+    ],
+)
+def test_records_backfill_requires_the_bounded_run_time_budget(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_BACKFILL_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(old, new, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="bounded and content-free"):
+        validate_notification_workflows(directory)
+
+
 def test_runtime_required_gates_require_the_classifier_job_to_succeed(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"

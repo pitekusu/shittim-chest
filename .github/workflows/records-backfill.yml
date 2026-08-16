@@ -31,7 +31,7 @@ jobs:
   backfill:
     name: backfill
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     environment: production
     permissions:
       contents: read
@@ -60,7 +60,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_RECORDS_BACKFILL_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: records-backfill-${{ github.run_id }}-${{ github.run_attempt }}
-          role-duration-seconds: 1200
+          role-duration-seconds: 3600
           mask-aws-account-id: true
           unset-current-credentials: true
           retry-max-attempts: 3
