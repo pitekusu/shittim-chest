@@ -272,21 +272,40 @@ def create_vulnerability_predicate(
     risk_gate_passed: bool = False,
     scan: object,
 ) -> dict[str, object]:
-    """Normalize enhanced ECR counts without publishing vulnerability identifiers."""
+    """Normalize enhanced ECR evidence without publishing vulnerability identifiers."""
 
     _require_digest(digest)
     scan_payload = _object(scan, "image scan")
+    if scan_payload.get("nextToken") not in (None, ""):
+        raise ValueError("image scan input is not fully paginated")
     status = _object(scan_payload.get("imageScanStatus"), "image scan status")
     if status.get("status") not in {"ACTIVE", "COMPLETE"}:
         raise ValueError("enhanced image scan is not active or complete")
     findings = _object(scan_payload.get("imageScanFindings"), "image scan findings")
     raw_counts = _object(findings.get("findingSeverityCounts", {}), "severity counts")
+    allowed_severities = {
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "INFORMATIONAL",
+        "UNDEFINED",
+        "UNTRIAGED",
+    }
+    if not set(raw_counts) <= allowed_severities or (
+        "UNDEFINED" in raw_counts and "UNTRIAGED" in raw_counts
+    ):
+        raise ValueError("severity count keys are invalid")
     counts: dict[str, int] = {}
-    for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL", "UNDEFINED"):
+    for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"):
         value = raw_counts.get(severity, 0)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError("severity count is invalid")
         counts[severity.lower()] = value
+    undefined = raw_counts.get("UNTRIAGED", raw_counts.get("UNDEFINED", 0))
+    if isinstance(undefined, bool) or not isinstance(undefined, int) or undefined < 0:
+        raise ValueError("severity count is invalid")
+    counts["undefined"] = undefined
     if (counts["critical"] or counts["high"]) and not risk_gate_passed:
         raise ValueError("release image has unaccepted high or critical findings")
     coverage_scanned_at = (
@@ -301,15 +320,75 @@ def create_vulnerability_predicate(
     )
     if not isinstance(scanned_at, str) or not scanned_at:
         raise ValueError("image scan timestamp is missing")
+    vulnerability_set_sha256 = _enhanced_vulnerability_set_sha256(
+        findings=findings,
+        severity_counts=counts,
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "image_digest": digest,
         "result": "passed",
         "risk_gate": "passed",
         "scanned_at": scanned_at,
         "scanner": "ECR_ENHANCED",
         "severity_counts": counts,
+        "vulnerability_set_sha256": vulnerability_set_sha256,
     }
+
+
+def _enhanced_vulnerability_set_sha256(
+    *,
+    findings: Mapping[str, object],
+    severity_counts: Mapping[str, int],
+) -> str:
+    raw_findings = _array(findings.get("enhancedFindings", []), "enhanced findings")
+    normalized: list[dict[str, str]] = []
+    observed_counts = {severity: 0 for severity in severity_counts}
+    finding_arns: set[str] = set()
+    severity_names = {
+        "CRITICAL": "critical",
+        "HIGH": "high",
+        "MEDIUM": "medium",
+        "LOW": "low",
+        "INFORMATIONAL": "informational",
+        "UNTRIAGED": "undefined",
+    }
+    for raw_finding in raw_findings:
+        finding = _object(raw_finding, "enhanced finding")
+        finding_arn = _string(finding, "findingArn", "enhanced finding")
+        if finding_arn in finding_arns:
+            raise ValueError("enhanced finding ARN is duplicated")
+        finding_arns.add(finding_arn)
+        severity = _string(finding, "severity", "enhanced finding")
+        severity_key = severity_names.get(severity)
+        if severity_key is None:
+            raise ValueError("enhanced finding severity is invalid")
+        observed_counts[severity_key] += 1
+        details = _object(
+            finding.get("packageVulnerabilityDetails"),
+            "enhanced finding package vulnerability details",
+        )
+        normalized.append(
+            {
+                "finding_arn": finding_arn,
+                "severity": severity,
+                "status": _string(finding, "status", "enhanced finding"),
+                "vulnerability_id": _string(
+                    details,
+                    "vulnerabilityId",
+                    "enhanced finding package vulnerability details",
+                ),
+            }
+        )
+    if observed_counts != severity_counts:
+        raise ValueError("enhanced findings do not match severity counts")
+    payload = json.dumps(
+        sorted(normalized, key=lambda item: item["finding_arn"]),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def create_cdk_asset_evidence(
@@ -983,16 +1062,19 @@ def _validate_scan_predicate(value: object, *, digest: str) -> None:
         "scanned_at",
         "scanner",
         "severity_counts",
+        "vulnerability_set_sha256",
     }:
         raise ValueError("release scan fields are invalid")
     if (
-        scan.get("schema_version") != 1
+        scan.get("schema_version") != 2
         or scan.get("image_digest") != digest
         or scan.get("result") != "passed"
         or scan.get("risk_gate") != "passed"
         or scan.get("scanner") != "ECR_ENHANCED"
         or not isinstance(scan.get("scanned_at"), str)
         or not scan.get("scanned_at")
+        or not isinstance(scan.get("vulnerability_set_sha256"), str)
+        or _CONTENT_HASH.fullmatch(cast(str, scan["vulnerability_set_sha256"])) is None
     ):
         raise ValueError("release scan is invalid")
     counts = _object(scan.get("severity_counts"), "release severity counts")
