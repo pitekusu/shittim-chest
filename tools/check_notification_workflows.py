@@ -1219,9 +1219,11 @@ def _validate_records_workflows(directory: Path) -> None:
 
     change_set_safety = """all(.[];
                  if .ResourceType == "AWS::CDK::Metadata" then
-                   .Action == "Modify" and
-                   ((.Replacement // "False") == "False" or
-                    .Replacement == "Conditional")
+                   (.Action == "Add" and
+                    (.Replacement // "False") == "False") or
+                   (.Action == "Modify" and
+                    ((.Replacement // "False") == "False" or
+                     .Replacement == "Conditional"))
                  else
                    .Action != "Remove" and
                    (.Replacement // "False") == "False"

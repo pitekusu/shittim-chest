@@ -326,6 +326,22 @@ def test_records_release_rejects_true_cdk_metadata_replacement(tmp_path: Path) -
         validate_notification_workflows(directory)
 
 
+def test_records_release_rejects_conditional_cdk_metadata_addition(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '(.Action == "Add" and\n                    (.Replacement // "False") == "False")',
+            '(.Action == "Add" and .Replacement == "Conditional")',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_rejects_runtime_change_set_type_lookup(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
