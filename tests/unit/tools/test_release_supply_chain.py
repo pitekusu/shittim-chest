@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
@@ -350,6 +351,18 @@ def test_cdk_asset_cli_round_trip_matches_the_artifact_layout(tmp_path: Path) ->
     )
 
 
+def enhanced_finding(*, severity: str, suffix: str) -> dict[str, object]:
+    return {
+        "findingArn": (
+            "arn:aws:inspector2:ap-northeast-1:000000000000:finding/"
+            f"00000000-0000-0000-0000-00000000000{suffix}"
+        ),
+        "packageVulnerabilityDetails": {"vulnerabilityId": f"CVE-2026-000{suffix}"},
+        "severity": severity,
+        "status": "ACTIVE",
+    }
+
+
 def evidence() -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     signing = {"signingStatuses": [{"signingProfileArn": PROFILE, "status": "COMPLETE"}]}
     referrers = {
@@ -376,6 +389,13 @@ def evidence() -> tuple[dict[str, object], dict[str, object], dict[str, object]]
     scan = {
         "imageScanStatus": {"status": "ACTIVE"},
         "imageScanFindings": {
+            "enhancedFindings": [
+                enhanced_finding(severity="MEDIUM", suffix="1"),
+                enhanced_finding(severity="LOW", suffix="2"),
+                enhanced_finding(severity="MEDIUM", suffix="3"),
+                enhanced_finding(severity="LOW", suffix="4"),
+                enhanced_finding(severity="LOW", suffix="5"),
+            ],
             "findingSeverityCounts": {"MEDIUM": 2, "LOW": 3},
             "imageScanCompletedAt": "2026-07-29T00:00:00Z",
         },
@@ -604,8 +624,12 @@ def test_verifies_exact_managed_signature_referrers_and_scan() -> None:
         "sbom": "sha256:" + "3" * 64,
         "vulnerability": "sha256:" + "4" * 64,
     }
-    assert result["scan"] == {
-        "schema_version": 1,
+    scan_result = cast(dict[str, object], result["scan"])
+    vulnerability_set_sha256 = scan_result.pop("vulnerability_set_sha256")
+    assert isinstance(vulnerability_set_sha256, str)
+    assert re.fullmatch(r"[0-9a-f]{64}", vulnerability_set_sha256)
+    assert scan_result == {
+        "schema_version": 2,
         "image_digest": DIGEST,
         "result": "passed",
         "risk_gate": "passed",
@@ -679,12 +703,18 @@ def test_vulnerability_predicate_is_content_free() -> None:
         "scanned_at",
         "scanner",
         "severity_counts",
+        "vulnerability_set_sha256",
     }
-    assert "findings" not in json.dumps(result).lower()
+    serialized = json.dumps(result).lower()
+    assert "cve-" not in serialized
+    assert "finding/" not in serialized
 
     signing, referrers, scan = evidence()
     findings = cast(dict[str, object], scan["imageScanFindings"])
     cast(dict[str, object], findings["findingSeverityCounts"])["HIGH"] = 1
+    cast(list[dict[str, object]], findings["enhancedFindings"]).append(
+        enhanced_finding(severity="HIGH", suffix="6")
+    )
     with pytest.raises(ValueError, match="high or critical"):
         verify_image_evidence(
             digest=DIGEST,
@@ -703,11 +733,83 @@ def test_vulnerability_predicate_is_content_free() -> None:
     assert cast(dict[str, int], accepted["severity_counts"])["high"] == 1
 
 
+def test_vulnerability_set_fingerprint_binds_current_finding_identity() -> None:
+    _, _, scan = evidence()
+    original = create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+    findings = cast(dict[str, object], scan["imageScanFindings"])
+    first = cast(list[dict[str, object]], findings["enhancedFindings"])[0]
+    details = cast(dict[str, object], first["packageVulnerabilityDetails"])
+    details["vulnerabilityId"] = "CVE-2026-9999"
+    changed = create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+    assert changed["severity_counts"] == original["severity_counts"]
+    assert changed["vulnerability_set_sha256"] != original["vulnerability_set_sha256"]
+
+
+def test_vulnerability_set_fingerprint_ignores_finding_order() -> None:
+    _, _, scan = evidence()
+    original = create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+    findings = cast(dict[str, object], scan["imageScanFindings"])
+    cast(list[dict[str, object]], findings["enhancedFindings"]).reverse()
+    reordered = create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+    assert reordered["vulnerability_set_sha256"] == original["vulnerability_set_sha256"]
+
+
+def test_vulnerability_predicate_normalizes_untriaged_severity() -> None:
+    _, _, scan = evidence()
+    findings = cast(dict[str, object], scan["imageScanFindings"])
+    counts = cast(dict[str, object], findings["findingSeverityCounts"])
+    counts["LOW"] = 2
+    counts["UNTRIAGED"] = 1
+    second = cast(list[dict[str, object]], findings["enhancedFindings"])[1]
+    second["severity"] = "UNTRIAGED"
+
+    result = create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+    assert cast(dict[str, int], result["severity_counts"])["undefined"] == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda counts: counts.update(TOTAL=5),
+        lambda counts: counts.update(UNDEFINED=0, UNTRIAGED=0),
+    ],
+)
+def test_rejects_unknown_or_ambiguous_severity_count_keys(
+    mutation: Callable[[dict[str, object]], None],
+) -> None:
+    _, _, scan = evidence()
+    findings = cast(dict[str, object], scan["imageScanFindings"])
+    counts = cast(dict[str, object], findings["findingSeverityCounts"])
+    mutation(counts)
+
+    with pytest.raises(ValueError, match="severity count keys"):
+        create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+
+def test_rejects_incomplete_or_count_mismatched_enhanced_findings() -> None:
+    _, _, scan = evidence()
+    scan["nextToken"] = "not-fully-paginated"
+    with pytest.raises(ValueError, match="fully paginated"):
+        create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+    scan.pop("nextToken")
+    findings = cast(dict[str, object], scan["imageScanFindings"])
+    cast(list[dict[str, object]], findings["enhancedFindings"]).pop()
+    with pytest.raises(ValueError, match="do not match severity counts"):
+        create_vulnerability_predicate(digest=DIGEST, scan=scan)
+
+
 def test_uses_successful_inspector_coverage_timestamp_for_zero_findings() -> None:
     _, _, scan = evidence()
     findings = cast(dict[str, object], scan["imageScanFindings"])
     findings.pop("imageScanCompletedAt")
     findings.pop("findingSeverityCounts")
+    findings["enhancedFindings"] = []
 
     result = create_vulnerability_predicate(coverage=inspector_coverage(), digest=DIGEST, scan=scan)
 
@@ -859,6 +961,9 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
         ),
         lambda value: value["images"]["normal"].update(config_digest="not-a-digest"),  # type: ignore[index]
         lambda value: value["images"]["normal"]["referrers"].pop("sbom"),  # type: ignore[index]
+        lambda value: value["images"]["normal"]["scan"].update(  # type: ignore[index]
+            vulnerability_set_sha256="not-a-hash"
+        ),
         lambda value: value["change_sets"].update({"ShittimChest-Prod-Runtime": "not-an-arn"}),
         lambda value: value["cdk_assets"]["files"].pop(),  # type: ignore[index]
     ],

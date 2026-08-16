@@ -1364,7 +1364,8 @@ jobs:
               '.images[$key].digest == $actual[0].image_digest and
                .images[$key].media_type == $actual[0].media_type and
                .images[$key].referrers == $actual[0].referrers and
-               .images[$key].scan == $actual[0].scan and
+               (.images[$key].scan | del(.scanned_at)) ==
+                 ($actual[0].scan | del(.scanned_at)) and
                .images[$key].signing_profile_arn == $actual[0].signing_profile_arn' \
               "${manifest}" >/dev/null
           done

@@ -1194,6 +1194,48 @@ def test_release_loads_regenerated_image_verification_for_comparison(tmp_path: P
         validate_notification_workflows(directory)
 
 
+def test_release_requires_all_current_scan_evidence_except_timestamp(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "($actual[0].scan | del(.scanned_at))",
+            "($actual[0].scan | del(.scanned_at, .severity_counts))",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="all current scan evidence"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "mutable_comparison",
+    [
+        ".images[$key].scan == $actual[0].scan",
+        ".images[$key].scan.scanned_at == $actual[0].scan.scanned_at",
+    ],
+)
+def test_release_rejects_mutable_scan_evidence_comparisons(
+    tmp_path: Path,
+    mutable_comparison: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "(.images[$key].scan | del(.scanned_at)) ==",
+            f"{mutable_comparison} and\n               (.images[$key].scan | del(.scanned_at)) ==",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="mutable scan evidence"):
+        validate_notification_workflows(directory)
+
+
 def test_release_passes_the_planned_artifact_name_to_deploy(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
