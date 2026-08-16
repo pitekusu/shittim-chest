@@ -5,15 +5,18 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from botocore.exceptions import ClientError
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_dynamodb.type_defs import (
-    AttributeValueTypeDef,
-    TransactWriteItemTypeDef,
-)
-from mypy_boto3_ssm.client import SSMClient
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_dynamodb.type_defs import (
+        AttributeValueTypeDef,
+        TransactWriteItemTypeDef,
+    )
+    from mypy_boto3_ssm.client import SSMClient
+
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import (
     DynamoItem,

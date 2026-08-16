@@ -2,12 +2,41 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from typing import Any, cast
 
 import pytest
 
 from shittim_records import lambda_handlers
 from shittim_records.projector import BackfillResult, ProjectionResult
+
+
+def test_lambda_handlers_import_without_boto3_type_stubs() -> None:
+    script = """
+import builtins
+
+original_import = builtins.__import__
+
+
+def reject_type_stubs(name, globals=None, locals=None, fromlist=(), level=0):
+    if name.startswith("mypy_boto3_"):
+        raise ModuleNotFoundError(name)
+    return original_import(name, globals, locals, fromlist, level)
+
+
+builtins.__import__ = reject_type_stubs
+import shittim_records.lambda_handlers
+"""
+
+    result = subprocess.run(  # noqa: S603 - fixed interpreter and local script.
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 class FakeProjector:
