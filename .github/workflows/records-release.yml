@@ -258,14 +258,24 @@ jobs:
               --output "${RUNNER_TEMP}/records-release-${logical_name}-plan.json"
             jq --exit-status \
               '[.Changes[].ResourceChange // empty] |
-               all(.[]; .Action != "Remove" and
-                        (.Replacement // "False") == "False")' \
+               all(.[];
+                 if .ResourceType == "AWS::CDK::Metadata" then
+                   (.Action == "Add" and
+                    (.Replacement // "False") == "False") or
+                   (.Action == "Modify" and
+                    ((.Replacement // "False") == "False" or
+                     .Replacement == "Conditional"))
+                 else
+                   .Action != "Remove" and
+                   (.Replacement // "False") == "False"
+                 end)' \
               "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
           }
           stateful_key=$(awk '$1 == "RecordsStateful" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")
           application_key=$(awk '$1 == "RecordsApplication" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")
+          set -e
           create_plan stateful ShittimChest-Prod-RecordsStateful \
             "${STATEFUL_CHANGE_SET}" "${stateful_key}"
           create_plan application ShittimChest-Prod-RecordsApplication \

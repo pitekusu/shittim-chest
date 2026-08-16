@@ -1217,6 +1217,50 @@ def _validate_records_workflows(directory: Path) -> None:
             "Records Release must extract executable as a boolean-safe string"
         )
 
+    change_set_safety = """            jq --exit-status \\
+              '[.Changes[].ResourceChange // empty] |
+               all(.[];
+                 if .ResourceType == "AWS::CDK::Metadata" then
+                   (.Action == "Add" and
+                    (.Replacement // "False") == "False") or
+                   (.Action == "Modify" and
+                    ((.Replacement // "False") == "False" or
+                     .Replacement == "Conditional"))
+                 else
+                   .Action != "Remove" and
+                   (.Replacement // "False") == "False"
+                 end)' \\
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
+          }"""
+    if release.count(change_set_safety) != 1:
+        raise WorkflowPolicyError(
+            "Records Release must scope conditional replacement to CDK metadata"
+        )
+    change_set_calls = (
+        (
+            "          set -e\n"
+            "          create_plan stateful ShittimChest-Prod-RecordsStateful \\\n"
+            '            "${STATEFUL_CHANGE_SET}" "${stateful_key}"\n'
+            "          create_plan application"
+        ),
+        (
+            "          create_plan application ShittimChest-Prod-RecordsApplication \\\n"
+            '            "${APPLICATION_CHANGE_SET}" "${application_key}" \\\n'
+            "            --parameters \\\n"
+            "              ParameterKey=SourceDebateTableStreamArn,"
+            'ParameterValue="${SOURCE_STREAM_ARN}" \\\n'
+            "              ParameterKey=RecordsBundleBucketName,"
+            'ParameterValue="${ASSET_BUCKET}" \\\n'
+            "              ParameterKey=RecordsBundleObjectKey,"
+            'ParameterValue="${BUNDLE_KEY}" \\\n'
+            "              ParameterKey=RecordsBundleObjectVersion,"
+            'ParameterValue="${BUNDLE_VERSION}"\n'
+            "      - name: Record Records release evidence"
+        ),
+    )
+    if any(release.count(call) != 1 for call in change_set_calls):
+        raise WorkflowPolicyError("Records Release must propagate each create_plan safety failure")
+
     release_markers = (
         "name: Records Release",
         "group: production-release",
@@ -1240,8 +1284,6 @@ def _validate_records_workflows(directory: Path) -> None:
         "records-release-${{ github.run_id }}-${{ github.run_attempt }}-application",
         "ShittimChest-Prod-RecordsStateful",
         "ShittimChest-Prod-RecordsApplication",
-        'all(.[]; .Action != "Remove"',
-        '(.Replacement // "False") == "False"',
         "tools/records_release_manifest.py create-entry",
         "tools/records_release_manifest.py create-manifest",
         "tools/records_release_manifest.py validate-manifest",
