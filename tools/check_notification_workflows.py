@@ -1291,20 +1291,25 @@ def _validate_records_workflows(directory: Path) -> None:
         "name: Records Backfill",
         "group: records-backfill",
         "environment: production",
+        "timeout-minutes: 60",
         "vars.AWS_RECORDS_BACKFILL_ROLE_ARN",
+        "role-duration-seconds: 3600",
         'test "${MODE}" = dry-run || test "${MODE}" = apply',
         'test "${PAGE_LIMIT}" -ge 1',
         'test "${PAGE_LIMIT}" -le 100',
+        'BACKFILL_MAX_PAGES: "25"',
         "lambda get-function-configuration",
         "lambda invoke",
         "shittim-chest-production-records-backfill",
         'keys == ["candidates","complete","mode","projected","skipped","validated"]',
         ".validated == .candidates",
+        "for ((page = 1; page <= BACKFILL_MAX_PAGES; page++)); do",
+        'test "${complete}" = true',
     )
     if any(marker not in backfill for marker in backfill_markers):
         raise WorkflowPolicyError("Records Backfill is not bounded and content-free")
-    if "for attempt" in backfill or "while " in backfill:
-        raise WorkflowPolicyError("Records Backfill may invoke only one bounded page per run")
+    if "while " in backfill:
+        raise WorkflowPolicyError("Records Backfill completion loop must remain bounded")
 
 
 def _workflow_job_block(text: str, job_id: str) -> str:
