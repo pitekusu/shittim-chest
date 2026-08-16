@@ -328,6 +328,22 @@ def test_records_release_rejects_a_true_prefix_before_the_safety_predicate(
         validate_notification_workflows(directory)
 
 
+def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'change-set.json" >/dev/null\n          }',
+            'change-set.json" >/dev/null || true\n          }',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_rejects_true_cdk_metadata_replacement(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
