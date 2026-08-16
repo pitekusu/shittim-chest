@@ -1176,6 +1176,14 @@ def _validate_records_workflows(directory: Path) -> None:
     if "secrets." in release or "secrets." in backfill:
         raise WorkflowPolicyError("Records workflows must consume only pre-registered handles")
 
+    executable_filter = (
+        '| if type == "boolean" then tostring else error("executable must be boolean") end'
+    )
+    if release.count(executable_filter) != 2:
+        raise WorkflowPolicyError(
+            "Records Release must extract executable as a boolean-safe string"
+        )
+
     release_markers = (
         "name: Records Release",
         "group: production-release",
