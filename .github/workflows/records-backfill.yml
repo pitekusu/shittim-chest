@@ -25,6 +25,7 @@ concurrency:
 
 env:
   AWS_REGION: ap-northeast-1
+  BACKFILL_MAX_PAGES: "25"
 
 jobs:
   backfill:
@@ -64,7 +65,7 @@ jobs:
           unset-current-credentials: true
           retry-max-attempts: 3
           action-timeout-s: 60
-      - name: Invoke one bounded content-free Backfill page
+      - name: Invoke bounded content-free Backfill pages to completion
         env:
           MODE: ${{ inputs.mode }}
           PAGE_LIMIT: ${{ inputs.page_limit }}
@@ -78,21 +79,29 @@ jobs:
           jq --exit-status \
             '.State == "Active" and .LastUpdateStatus == "Successful"' \
             "${RUNNER_TEMP}/function.json" >/dev/null
-          aws lambda invoke \
-            --function-name shittim-chest-production-records-backfill \
-            --cli-binary-format raw-in-base64-out \
-            --payload "fileb://${RUNNER_TEMP}/payload.json" \
-            "${RUNNER_TEMP}/response.json" > "${RUNNER_TEMP}/invoke.json"
-          jq --exit-status '.FunctionError == null' "${RUNNER_TEMP}/invoke.json" >/dev/null
-          jq --exit-status --arg mode "${MODE}" \
-            'keys == ["candidates","complete","mode","projected","skipped","validated"] and
-             .mode == $mode and
-             (.candidates|type) == "number" and
-             (.validated|type) == "number" and
-             (.projected|type) == "number" and
-             (.skipped|type) == "number" and
-             .validated == .candidates and
-             (.complete|type) == "boolean"' \
-            "${RUNNER_TEMP}/response.json" >/dev/null
+          complete=false
+          for ((page = 1; page <= BACKFILL_MAX_PAGES; page++)); do
+            aws lambda invoke \
+              --function-name shittim-chest-production-records-backfill \
+              --cli-binary-format raw-in-base64-out \
+              --payload "fileb://${RUNNER_TEMP}/payload.json" \
+              "${RUNNER_TEMP}/response.json" > "${RUNNER_TEMP}/invoke.json"
+            jq --exit-status '.FunctionError == null' "${RUNNER_TEMP}/invoke.json" >/dev/null
+            jq --exit-status --arg mode "${MODE}" \
+              'keys == ["candidates","complete","mode","projected","skipped","validated"] and
+               .mode == $mode and
+               (.candidates|type) == "number" and
+               (.validated|type) == "number" and
+               (.projected|type) == "number" and
+               (.skipped|type) == "number" and
+               .validated == .candidates and
+               (.complete|type) == "boolean"' \
+              "${RUNNER_TEMP}/response.json" >/dev/null
+            complete="$(jq --raw-output '.complete' "${RUNNER_TEMP}/response.json")"
+            if [ "${complete}" = true ]; then
+              break
+            fi
+          done
+          test "${complete}" = true
           jq '{mode,candidates,validated,projected,skipped,complete}' \
             "${RUNNER_TEMP}/response.json" >> "${GITHUB_STEP_SUMMARY}"
