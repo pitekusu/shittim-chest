@@ -603,6 +603,22 @@ def test_release_requires_current_run_referrer_selection(tmp_path: Path) -> None
         validate_notification_workflows(directory)
 
 
+def test_release_binds_selected_referrers_to_notation_inspection(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '--notation-inspection "${RUNNER_TEMP}/${mode}.notation.json"',
+            '--notation-inspection "${RUNNER_TEMP}/${mode}.referrers-after.json"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="referrer delta verification"):
+        validate_notification_workflows(directory)
+
+
 def test_release_referrer_snapshots_must_keep_aws_pagination(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
