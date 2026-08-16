@@ -134,6 +134,27 @@ describe("RecordsApplicationStack", () => {
       });
       expect(archivePolicy).toBeDefined();
     }
+
+    const backfillPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("BackfillFunctionRole"),
+    );
+    expect(backfillPolicy).toBeDefined();
+    const backfillStatements = backfillPolicy?.Properties.PolicyDocument.Statement as Array<{
+      readonly Action: string | string[];
+      readonly Resource: unknown;
+    }>;
+    const archivePutStatements = backfillStatements.filter((statement) => {
+      const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+      return (
+        actions.length === 1 &&
+        actions[0] === "dynamodb:PutItem" &&
+        JSON.stringify(statement.Resource).includes("table/shittim-chest-production-records")
+      );
+    });
+    expect(archivePutStatements).toHaveLength(1);
+    expect(JSON.stringify(archivePutStatements[0]?.Resource)).not.toContain(
+      "records-statistics",
+    );
   });
 
   test("does not recreate the source debate table", () => {
