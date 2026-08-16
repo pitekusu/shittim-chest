@@ -275,15 +275,16 @@ jobs:
             "${RUNNER_TEMP}/template-assets.txt")
           application_key=$(awk '$1 == "RecordsApplication" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")
+          set -e
           create_plan stateful ShittimChest-Prod-RecordsStateful \
-            "${STATEFUL_CHANGE_SET}" "${stateful_key}" || exit $?
+            "${STATEFUL_CHANGE_SET}" "${stateful_key}"
           create_plan application ShittimChest-Prod-RecordsApplication \
             "${APPLICATION_CHANGE_SET}" "${application_key}" \
             --parameters \
               ParameterKey=SourceDebateTableStreamArn,ParameterValue="${SOURCE_STREAM_ARN}" \
               ParameterKey=RecordsBundleBucketName,ParameterValue="${ASSET_BUCKET}" \
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
-              ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}" || exit $?
+              ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"
       - name: Record Records release evidence
         id: evidence
         env:

@@ -1238,8 +1238,9 @@ def _validate_records_workflows(directory: Path) -> None:
         )
     change_set_calls = (
         (
+            "          set -e\n"
             "          create_plan stateful ShittimChest-Prod-RecordsStateful \\\n"
-            '            "${STATEFUL_CHANGE_SET}" "${stateful_key}" || exit $?\n'
+            '            "${STATEFUL_CHANGE_SET}" "${stateful_key}"\n'
             "          create_plan application"
         ),
         (
@@ -1253,7 +1254,7 @@ def _validate_records_workflows(directory: Path) -> None:
             "              ParameterKey=RecordsBundleObjectKey,"
             'ParameterValue="${BUNDLE_KEY}" \\\n'
             "              ParameterKey=RecordsBundleObjectVersion,"
-            'ParameterValue="${BUNDLE_VERSION}" || exit $?\n'
+            'ParameterValue="${BUNDLE_VERSION}"\n'
             "      - name: Record Records release evidence"
         ),
     )

@@ -345,31 +345,38 @@ def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
-    ("call_end", "unsafe_suffix"),
+    "call_end",
     [
-        ('"${STATEFUL_CHANGE_SET}" "${stateful_key}"', ""),
-        ('"${STATEFUL_CHANGE_SET}" "${stateful_key}"', " || true"),
-        (
-            'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
-            "",
-        ),
-        (
-            'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
-            " || true",
-        ),
+        '"${STATEFUL_CHANGE_SET}" "${stateful_key}"',
+        'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
     ],
 )
 def test_records_release_propagates_each_create_plan_failure(
     tmp_path: Path,
     call_end: str,
-    unsafe_suffix: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"{call_end} || exit $?",
-            f"{call_end}{unsafe_suffix}",
+            call_end,
+            f"{call_end} || true",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="create_plan safety failure"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_errexit_for_create_plan_calls(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "          set -e\n          create_plan stateful",
+            "          set +e\n          create_plan stateful",
             1,
         ),
         encoding="utf-8",
