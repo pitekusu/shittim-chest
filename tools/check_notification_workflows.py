@@ -514,22 +514,18 @@ def _validate_release(directory: Path) -> None:
     forbidden_scan_comparisons = (
         ".images[$key].scan == $actual[0].scan",
         ".images[$key].scan.scanned_at == $actual[0].scan.scanned_at",
-        ".images[$key].scan.severity_counts == $actual[0].scan.severity_counts",
     )
     if any(marker in deploy_reverification for marker in forbidden_scan_comparisons):
         raise WorkflowPolicyError(
             "Release deploy must not compare mutable scan evidence across verification times"
         )
-    required_scan_reverification = (
-        ".images[$key].scan.image_digest == $actual[0].scan.image_digest",
-        ".images[$key].scan.schema_version == $actual[0].scan.schema_version",
-        ".images[$key].scan.scanner == $actual[0].scan.scanner",
-        '$actual[0].scan.result == "passed"',
-        '$actual[0].scan.risk_gate == "passed"',
+    normalized_scan_comparison = (
+        "(.images[$key].scan | del(.scanned_at)) ==\n"
+        "                 ($actual[0].scan | del(.scanned_at)) and"
     )
-    if any(marker not in deploy_reverification for marker in required_scan_reverification):
+    if deploy_reverification.count(normalized_scan_comparison) != 1:
         raise WorkflowPolicyError(
-            "Release deploy must bind stable scan identity and require current scan gates"
+            "Release deploy must compare all current scan evidence except its mutable timestamp"
         )
     try:
         synth_index = text.index("name: Synthesize and publish the complete CDK asset closure")

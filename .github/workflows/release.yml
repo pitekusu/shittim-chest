@@ -1364,11 +1364,8 @@ jobs:
               '.images[$key].digest == $actual[0].image_digest and
                .images[$key].media_type == $actual[0].media_type and
                .images[$key].referrers == $actual[0].referrers and
-               .images[$key].scan.image_digest == $actual[0].scan.image_digest and
-               .images[$key].scan.schema_version == $actual[0].scan.schema_version and
-               .images[$key].scan.scanner == $actual[0].scan.scanner and
-               $actual[0].scan.result == "passed" and
-               $actual[0].scan.risk_gate == "passed" and
+               (.images[$key].scan | del(.scanned_at)) ==
+                 ($actual[0].scan | del(.scanned_at)) and
                .images[$key].signing_profile_arn == $actual[0].signing_profile_arn' \
               "${manifest}" >/dev/null
           done
