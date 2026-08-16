@@ -344,6 +344,32 @@ def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) ->
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "call_end",
+    [
+        '"${STATEFUL_CHANGE_SET}" "${stateful_key}"',
+        'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
+    ],
+)
+def test_records_release_propagates_each_create_plan_failure(
+    tmp_path: Path,
+    call_end: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            call_end,
+            f"{call_end} || true",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="create_plan safety failure"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_rejects_true_cdk_metadata_replacement(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW

@@ -1236,6 +1236,29 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Records Release must scope conditional replacement to CDK metadata"
         )
+    change_set_calls = (
+        (
+            "          create_plan stateful ShittimChest-Prod-RecordsStateful \\\n"
+            '            "${STATEFUL_CHANGE_SET}" "${stateful_key}"\n'
+            "          create_plan application"
+        ),
+        (
+            "          create_plan application ShittimChest-Prod-RecordsApplication \\\n"
+            '            "${APPLICATION_CHANGE_SET}" "${application_key}" \\\n'
+            "            --parameters \\\n"
+            "              ParameterKey=SourceDebateTableStreamArn,"
+            'ParameterValue="${SOURCE_STREAM_ARN}" \\\n'
+            "              ParameterKey=RecordsBundleBucketName,"
+            'ParameterValue="${ASSET_BUCKET}" \\\n'
+            "              ParameterKey=RecordsBundleObjectKey,"
+            'ParameterValue="${BUNDLE_KEY}" \\\n'
+            "              ParameterKey=RecordsBundleObjectVersion,"
+            'ParameterValue="${BUNDLE_VERSION}"\n'
+            "      - name: Record Records release evidence"
+        ),
+    )
+    if any(release.count(call) != 1 for call in change_set_calls):
+        raise WorkflowPolicyError("Records Release must propagate each create_plan safety failure")
 
     release_markers = (
         "name: Records Release",
