@@ -292,6 +292,40 @@ def test_records_release_waits_for_the_attested_change_set_type(tmp_path: Path) 
         validate_notification_workflows(directory)
 
 
+def test_records_release_scopes_conditional_replacement_to_cdk_metadata(
+    tmp_path: Path,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '.ResourceType == "AWS::CDK::Metadata"',
+            '.ResourceType != ""',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_rejects_true_cdk_metadata_replacement(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '.Replacement == "Conditional"',
+            '.Replacement != "False"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_rejects_runtime_change_set_type_lookup(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW

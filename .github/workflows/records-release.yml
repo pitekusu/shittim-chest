@@ -258,8 +258,15 @@ jobs:
               --output "${RUNNER_TEMP}/records-release-${logical_name}-plan.json"
             jq --exit-status \
               '[.Changes[].ResourceChange // empty] |
-               all(.[]; .Action != "Remove" and
-                        (.Replacement // "False") == "False")' \
+               all(.[];
+                 if .ResourceType == "AWS::CDK::Metadata" then
+                   .Action == "Modify" and
+                   ((.Replacement // "False") == "False" or
+                    .Replacement == "Conditional")
+                 else
+                   .Action != "Remove" and
+                   (.Replacement // "False") == "False"
+                 end)' \
               "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
           }
           stateful_key=$(awk '$1 == "RecordsStateful" {print $2}' \
