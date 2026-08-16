@@ -175,7 +175,7 @@ def verify_image_evidence(
 
 
 def select_release_referrers(*, before: object, after: object) -> dict[str, object]:
-    """Select one existing Notation signature and this run's three new attestations."""
+    """Select a stable existing Notation signature and this run's new attestations."""
 
     before_by_digest = _active_referrers_by_digest(before, "pre-attestation referrers")
     after_by_digest = _active_referrers_by_digest(after, "post-attestation referrers")
@@ -206,9 +206,12 @@ def select_release_referrers(*, before: object, after: object) -> dict[str, obje
     signatures = [
         item for item in after_by_digest.values() if item.get("artifactType") == _NOTATION_SIGNATURE
     ]
-    signature_digest = _one_artifact_digest(signatures, "Notation signature")
-    if signature_digest not in before_by_digest:
-        raise ValueError("the Notation signature was not present before attestations")
+    signature_digests = sorted(cast(str, item["digest"]) for item in signatures)
+    if not signature_digests:
+        raise ValueError("expected at least one active Notation signature referrer")
+    if any(digest not in before_by_digest for digest in signature_digests):
+        raise ValueError("a Notation signature was not present before attestations")
+    signature_digest = signature_digests[0]
 
     return {
         "referrers": [

@@ -506,6 +506,35 @@ def test_selects_only_this_runs_three_sigstore_referrers() -> None:
     }
 
 
+def test_referrer_delta_selects_one_stable_existing_signature() -> None:
+    before, after = referrer_snapshots()
+    older_signature = artifact("application/vnd.cncf.notary.signature", "0")
+    cast(list[dict[str, object]], before["referrers"]).insert(0, older_signature)
+    cast(list[dict[str, object]], after["referrers"]).append(deepcopy(older_signature))
+
+    selected = select_release_referrers(before=before, after=after)
+
+    selected_digests = [
+        cast(dict[str, object], item)["digest"]
+        for item in cast(list[object], selected["referrers"])
+    ]
+    assert selected_digests == [
+        "sha256:" + "0" * 64,
+        "sha256:" + "5" * 64,
+        "sha256:" + "6" * 64,
+        "sha256:" + "7" * 64,
+    ]
+
+
+def test_referrer_delta_rejects_a_missing_notation_signature() -> None:
+    before, after = referrer_snapshots()
+    cast(list[dict[str, object]], before["referrers"]).pop(0)
+    cast(list[dict[str, object]], after["referrers"]).pop(0)
+
+    with pytest.raises(ValueError, match="at least one active Notation signature"):
+        select_release_referrers(before=before, after=after)
+
+
 def test_referrer_delta_cli_writes_the_selected_snapshot(tmp_path: Path) -> None:
     before, after = referrer_snapshots()
     before_path = tmp_path / "before.json"
