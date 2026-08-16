@@ -1215,6 +1215,10 @@ def _validate_records_workflows(directory: Path) -> None:
         'case "${type}" in',
         "stack-create-complete",
         "stack-update-complete",
+        "cloudformation update-termination-protection",
+        "--enable-termination-protection",
+        "EnableTerminationProtection",
+        ".Stacks[0].EnableTerminationProtection == true",
         "Clean up only unexecuted Records Change Sets",
         "Confirm this Records release has no unexecuted Change Sets",
     )
@@ -1229,6 +1233,30 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError("Records Release must use only the attested Change Set type")
     if release.index("execute stateful") >= release.index("execute application"):
         raise WorkflowPolicyError("Records Release must preserve Stateful before Application")
+    execute_start = release.index("          execute() {")
+    execute_end = release.index("          manifest=", execute_start)
+    execute_step = release[execute_start:execute_end]
+    if 'if [ "${executable}" = false ]; then\n              return 0' in execute_step:
+        raise WorkflowPolicyError(
+            "Records Release must protect stable no-op stacks before continuing"
+        )
+    if execute_step.index("cloudformation update-termination-protection") <= execute_step.index(
+        "cloudformation execute-change-set"
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must enable termination protection after execution"
+        )
+    if release.count(".Stacks[0].EnableTerminationProtection == true") != 2:
+        raise WorkflowPolicyError(
+            "Records Release must verify termination protection during and after deployment"
+        )
+    stable_noop_statuses = (
+        "CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;"
+    )
+    if release.count(stable_noop_statuses) != 2:
+        raise WorkflowPolicyError(
+            "Records Release must preserve all stable statuses accepted by its no-op plan"
+        )
     if "docker build" in release or "docker push" in release:
         raise WorkflowPolicyError("Records Release must not build or push a Fargate image")
 

@@ -410,32 +410,41 @@ jobs:
               '.change_sets[$logical_name].type' "${manifest}")
             executable=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].executable' "${manifest}")
-            if [ "${executable}" = false ]; then
-              return 0
+            if [ "${executable}" = true ]; then
+              aws cloudformation describe-change-set --change-set-name "${arn}" \
+                > "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json"
+              uv run --project services/records --frozen python \
+                tools/records_release_manifest.py create-entry \
+                "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
+                --type "${type}" --expected-name "${name}" --expected-stack "${stack}" \
+                --output "${RUNNER_TEMP}/${logical_name}-deploy-plan.json"
+              jq --exit-status --arg logical_name "${logical_name}" \
+                --slurpfile actual "${RUNNER_TEMP}/${logical_name}-deploy-plan.json" \
+                '.change_sets[$logical_name] == $actual[0]' "${manifest}" >/dev/null
+              aws cloudformation execute-change-set --change-set-name "${arn}"
+              case "${type}" in
+                CREATE)
+                  aws cloudformation wait stack-create-complete --stack-name "${stack}"
+                  ;;
+                UPDATE)
+                  aws cloudformation wait stack-update-complete --stack-name "${stack}"
+                  ;;
+                *)
+                  echo "Unexpected attested Change Set type." >&2
+                  exit 1
+                  ;;
+              esac
             fi
-            aws cloudformation describe-change-set --change-set-name "${arn}" \
-              > "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json"
-            uv run --project services/records --frozen python \
-              tools/records_release_manifest.py create-entry \
-              "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
-              --type "${type}" --expected-name "${name}" --expected-stack "${stack}" \
-              --output "${RUNNER_TEMP}/${logical_name}-deploy-plan.json"
-            jq --exit-status --arg logical_name "${logical_name}" \
-              --slurpfile actual "${RUNNER_TEMP}/${logical_name}-deploy-plan.json" \
-              '.change_sets[$logical_name] == $actual[0]' "${manifest}" >/dev/null
-            aws cloudformation execute-change-set --change-set-name "${arn}"
-            case "${type}" in
-              CREATE)
-                aws cloudformation wait stack-create-complete --stack-name "${stack}"
-                ;;
-              UPDATE)
-                aws cloudformation wait stack-update-complete --stack-name "${stack}"
-                ;;
-              *)
-                echo "Unexpected attested Change Set type." >&2
-                exit 1
-                ;;
+            status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
+              --query 'Stacks[0].StackStatus' --output text)
+            case "${status}" in
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;
+              *) exit 1 ;;
             esac
+            aws cloudformation update-termination-protection \
+              --enable-termination-protection --stack-name "${stack}"
+            aws cloudformation describe-stacks --stack-name "${stack}" --output json \
+              | jq --exit-status '.Stacks[0].EnableTerminationProtection == true' >/dev/null
           }
           manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
           execute stateful
@@ -449,9 +458,11 @@ jobs:
             status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
               --query 'Stacks[0].StackStatus' --output text)
             case "${status}" in
-              CREATE_COMPLETE|UPDATE_COMPLETE) ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;
               *) exit 1 ;;
             esac
+            aws cloudformation describe-stacks --stack-name "${stack}" --output json \
+              | jq --exit-status '.Stacks[0].EnableTerminationProtection == true' >/dev/null
           done
       - name: Clean up only unexecuted Records Change Sets
         if: always()

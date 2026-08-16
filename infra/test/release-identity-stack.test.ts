@@ -124,6 +124,14 @@ describe("ReleaseIdentityStack", () => {
     const backfill = policyFor("RecordsBackfillRole");
     const drift = policyFor("RecordsDriftRole");
     const recordsPolicies = [plan, deploy, backfill, drift].join("\n");
+    const deployPolicy = policies.find((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes("RecordsDeployRole"),
+    );
+    const terminationProtectionStatements =
+      deployPolicy?.Properties.PolicyDocument.Statement.filter(
+        (statement: { Action?: string | string[] }) =>
+          [statement.Action].flat().includes("cloudformation:UpdateTerminationProtection"),
+      );
 
     expect(plan).toContain("cloudformation:CreateChangeSet");
     expect(plan).toContain("iam:PassRole");
@@ -134,6 +142,22 @@ describe("ReleaseIdentityStack", () => {
     expect(plan).not.toContain("cloudformation:ExecuteChangeSet");
     expect(deploy).toContain("cloudformation:ExecuteChangeSet");
     expect(deploy).toContain("cloudformation:DescribeEvents");
+    expect(terminationProtectionStatements).toEqual([
+      {
+        Action: "cloudformation:UpdateTerminationProtection",
+        Condition: {
+          StringEquals: {
+            "aws:ResourceAccount": { Ref: "AWS::AccountId" },
+          },
+        },
+        Effect: "Allow",
+        Resource: [
+          "arn:aws:cloudformation:ap-northeast-1:*:stack/ShittimChest-Prod-RecordsStateful/*",
+          "arn:aws:cloudformation:ap-northeast-1:*:stack/ShittimChest-Prod-RecordsApplication/*",
+          "arn:aws:cloudformation:ap-northeast-1:*:stack/ShittimChest-Prod-RecordsEdge/*",
+        ],
+      },
+    ]);
     expect(deploy).not.toContain("cloudformation:CreateChangeSet");
     expect(deploy).not.toContain("iam:PassRole");
     expect(backfill).toContain("lambda:GetFunctionConfiguration");
@@ -142,6 +166,9 @@ describe("ReleaseIdentityStack", () => {
     expect(backfill).not.toContain("cloudformation:");
     expect(drift).toContain("cloudformation:DetectStackDrift");
     expect(drift).not.toContain("cloudformation:ExecuteChangeSet");
+    expect(plan).not.toContain("cloudformation:UpdateTerminationProtection");
+    expect(backfill).not.toContain("cloudformation:UpdateTerminationProtection");
+    expect(drift).not.toContain("cloudformation:UpdateTerminationProtection");
     expect(recordsPolicies).toContain("ShittimChest-Prod-RecordsStateful");
     expect(recordsPolicies).toContain("ShittimChest-Prod-RecordsApplication");
     expect(recordsPolicies).toContain("ShittimChest-Prod-RecordsEdge");

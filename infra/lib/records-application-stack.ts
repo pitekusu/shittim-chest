@@ -221,6 +221,7 @@ export class RecordsApplicationStack extends Stack {
       timeout: options.timeout,
       reservedConcurrentExecutions: options.reservedConcurrentExecutions,
       role,
+      logGroup,
       environment: {
         SOURCE_TABLE_NAME: options.sourceTable.tableName,
         ARCHIVE_TABLE_NAME: options.archiveTable.tableName,
@@ -230,7 +231,6 @@ export class RecordsApplicationStack extends Stack {
       },
       loggingFormat: lambda.LoggingFormat.JSON,
     });
-    function_.node.addDependency(logGroup);
     return function_;
   }
 }
