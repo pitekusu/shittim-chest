@@ -1217,6 +1217,20 @@ def _validate_records_workflows(directory: Path) -> None:
             "Records Release must extract executable as a boolean-safe string"
         )
 
+    change_set_safety = """all(.[];
+                 if .ResourceType == "AWS::CDK::Metadata" then
+                   .Action == "Modify" and
+                   ((.Replacement // "False") == "False" or
+                    .Replacement == "Conditional")
+                 else
+                   .Action != "Remove" and
+                   (.Replacement // "False") == "False"
+                 end)"""
+    if release.count(change_set_safety) != 1:
+        raise WorkflowPolicyError(
+            "Records Release must scope conditional replacement to CDK metadata"
+        )
+
     release_markers = (
         "name: Records Release",
         "group: production-release",
@@ -1240,12 +1254,6 @@ def _validate_records_workflows(directory: Path) -> None:
         "records-release-${{ github.run_id }}-${{ github.run_attempt }}-application",
         "ShittimChest-Prod-RecordsStateful",
         "ShittimChest-Prod-RecordsApplication",
-        "all(.[];",
-        '.Action != "Remove"',
-        '.ResourceType == "AWS::CDK::Metadata"',
-        '.Action == "Modify"',
-        '.Replacement == "Conditional"',
-        '(.Replacement // "False") == "False"',
         "tools/records_release_manifest.py create-entry",
         "tools/records_release_manifest.py create-manifest",
         "tools/records_release_manifest.py validate-manifest",

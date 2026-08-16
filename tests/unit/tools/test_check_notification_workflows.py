@@ -300,13 +300,13 @@ def test_records_release_scopes_conditional_replacement_to_cdk_metadata(
     path.write_text(
         path.read_text(encoding="utf-8").replace(
             '.ResourceType == "AWS::CDK::Metadata"',
-            '.ResourceType != ""',
+            'true or .ResourceType == "AWS::CDK::Metadata"',
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
         validate_notification_workflows(directory)
 
 
@@ -322,7 +322,7 @@ def test_records_release_rejects_true_cdk_metadata_replacement(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
         validate_notification_workflows(directory)
 
 
