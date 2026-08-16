@@ -197,6 +197,12 @@ export class RecordsApplicationStack extends Stack {
     if (options.allowScan) {
       role.addToPrincipalPolicy(
         new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem"],
+          resources: [options.archiveTable.tableArn],
+        }),
+      );
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
           resources: [options.statisticsTable.tableArn],
         }),
