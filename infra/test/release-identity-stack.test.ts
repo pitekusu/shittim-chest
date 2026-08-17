@@ -136,12 +136,18 @@ describe("ReleaseIdentityStack", () => {
     expect(plan).toContain("cloudformation:CreateChangeSet");
     expect(plan).toContain("iam:PassRole");
     expect(plan).toContain("s3:PutObject");
+    expect(plan).toContain("cdk-hnb659fds-cfn-exec-role");
+    expect(plan).toContain("us-east-1");
     expect(plan).toContain("ssm:DescribeParameters");
     expect(plan).not.toContain('"ssm:GetParameter"');
     expect(plan).not.toContain('"ssm:GetParameters"');
     expect(plan).not.toContain("cloudformation:ExecuteChangeSet");
     expect(deploy).toContain("cloudformation:ExecuteChangeSet");
     expect(deploy).toContain("cloudformation:DescribeEvents");
+    expect(deploy).toContain("cloudfront:CreateInvalidation");
+    expect(deploy).toContain("shittim-chest-production-records-web");
+    expect(deploy).toContain("s3:DeleteObject");
+    expect(deploy).toContain("index.html");
     expect(terminationProtectionStatements).toEqual([
       {
         Action: "cloudformation:UpdateTerminationProtection",
@@ -154,7 +160,7 @@ describe("ReleaseIdentityStack", () => {
         Resource: [
           "arn:aws:cloudformation:ap-northeast-1:*:stack/ShittimChest-Prod-RecordsStateful/*",
           "arn:aws:cloudformation:ap-northeast-1:*:stack/ShittimChest-Prod-RecordsApplication/*",
-          "arn:aws:cloudformation:ap-northeast-1:*:stack/ShittimChest-Prod-RecordsEdge/*",
+          "arn:aws:cloudformation:us-east-1:*:stack/ShittimChest-Prod-RecordsEdge/*",
         ],
       },
     ]);

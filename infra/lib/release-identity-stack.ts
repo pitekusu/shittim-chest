@@ -20,6 +20,7 @@ const DEPLOY_SUBJECT =
   "repo:pitekusu@12059348/shittim-chest@1302516701:environment:production";
 const TOKYO_REGION = "ap-northeast-1";
 const COST_REGION = "us-east-1";
+const RECORDS_EDGE_REGION = "us-east-1";
 const ENHANCED_SCAN_READ_ACTIONS = [
   "inspector2:ListAccountPermissions",
   "inspector2:ListCoverage",
@@ -504,6 +505,7 @@ export class ReleaseIdentityStack extends Stack {
         },
         resources: [
           `arn:aws:iam::${Aws.ACCOUNT_ID}:role/cdk-hnb659fds-cfn-exec-role-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`,
+          `arn:aws:iam::${Aws.ACCOUNT_ID}:role/cdk-hnb659fds-cfn-exec-role-${Aws.ACCOUNT_ID}-${RECORDS_EDGE_REGION}`,
         ],
       }),
     );
@@ -512,6 +514,7 @@ export class ReleaseIdentityStack extends Stack {
         actions: ["s3:GetBucketLocation"],
         resources: [
           `arn:aws:s3:::cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`,
+          `arn:aws:s3:::cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${RECORDS_EDGE_REGION}`,
         ],
       }),
     );
@@ -527,7 +530,7 @@ export class ReleaseIdentityStack extends Stack {
     ]);
     this.acknowledgeRecordsAssetWildcards(
       this.recordsPlanRole,
-      "The Records plan role can read or upload only exact content-addressed CDK JSON or ZIP assets in Tokyo.",
+      "The Records plan role can read or upload only exact content-addressed CDK JSON or ZIP assets in the fixed Tokyo and Edge bootstrap buckets.",
     );
   }
 
@@ -576,13 +579,54 @@ export class ReleaseIdentityStack extends Stack {
         resources: this.recordsAssetObjectArns(),
       }),
     );
+    const recordsWebBucketArn =
+      `arn:aws:s3:::shittim-chest-production-records-web-${Aws.ACCOUNT_ID}`;
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:ListBucket"],
+        resources: [recordsWebBucketArn],
+      }),
+    );
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"],
+        resources: [`${recordsWebBucketArn}/*`],
+      }),
+    );
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:DeleteObject"],
+        resources: [`${recordsWebBucketArn}/index.html`],
+      }),
+    );
+    this.recordsDeployRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cloudfront:CreateInvalidation",
+          "cloudfront:GetDistribution",
+          "cloudfront:GetInvalidation",
+        ],
+        resources: [
+          `arn:aws:cloudfront::${Aws.ACCOUNT_ID}:distribution/*`,
+        ],
+      }),
+    );
     this.acknowledgeRoleWildcards(this.recordsDeployRole, [
       ...this.stackWildcardAcknowledgments(RECORDS_STACK_NAMES),
       ...this.recordsChangeSetWildcardAcknowledgments(),
     ]);
+    this.recordsDeployRole.node.addMetadata(
+      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+      {
+        "AwsSolutions-IAM5[Resource::arn:aws:s3:::shittim-chest-production-records-web-<AWS::AccountId>/*]":
+          "The deploy role writes immutable build output and the versioned entry point only within the fixed Records Web bucket.",
+        "AwsSolutions-IAM5[Resource::arn:aws:cloudfront::<AWS::AccountId>:distribution/*]":
+          "The distribution ID is created by the attested Records Edge stack and validated from its exact output before invalidation.",
+      },
+    );
     this.acknowledgeRecordsAssetWildcards(
       this.recordsDeployRole,
-      "The Records deploy role can read only exact content-addressed CDK JSON or ZIP assets in Tokyo.",
+      "The Records deploy role can read only exact content-addressed CDK JSON or ZIP assets in the fixed Tokyo and Edge bootstrap buckets.",
     );
   }
 
@@ -663,14 +707,14 @@ export class ReleaseIdentityStack extends Stack {
 
   private stackArns(names: readonly string[]): string[] {
     return names.map((name) => {
-      const region = name === "ShittimChest-Prod-CostGovernance" ? COST_REGION : TOKYO_REGION;
+      const region = this.stackRegion(name);
       return `arn:aws:cloudformation:${region}:*:stack/${name}/*`;
     });
   }
 
   private stackWildcardAcknowledgments(names: readonly string[]): string[] {
     return names.map((name) => {
-      const region = name === "ShittimChest-Prod-CostGovernance" ? COST_REGION : TOKYO_REGION;
+      const region = this.stackRegion(name);
       return `AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:*:stack/${name}/*]`;
     });
   }
@@ -689,15 +733,17 @@ export class ReleaseIdentityStack extends Stack {
   }
 
   private recordsChangeSetArns(): string[] {
-    return [
-      `arn:aws:cloudformation:${TOKYO_REGION}:*:changeSet/${RECORDS_CHANGE_SET_PATTERN}/*`,
-    ];
+    return [TOKYO_REGION, RECORDS_EDGE_REGION].map(
+      (region) =>
+        `arn:aws:cloudformation:${region}:*:changeSet/${RECORDS_CHANGE_SET_PATTERN}/*`,
+    );
   }
 
   private recordsChangeSetWildcardAcknowledgments(): string[] {
-    return [
-      `AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${TOKYO_REGION}:*:changeSet/${RECORDS_CHANGE_SET_PATTERN}/*]`,
-    ];
+    return [TOKYO_REGION, RECORDS_EDGE_REGION].map(
+      (region) =>
+        `AwsSolutions-IAM5[Resource::arn:aws:cloudformation:${region}:*:changeSet/${RECORDS_CHANGE_SET_PATTERN}/*]`,
+    );
   }
 
   private cloudFormationExecutionRoleArns(): string[] {
@@ -726,20 +772,34 @@ export class ReleaseIdentityStack extends Stack {
   }
 
   private recordsAssetObjectArns(): string[] {
-    const bucketName = `cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`;
-    return this.cdkAssetObjectKeys().map((key) => `arn:aws:s3:::${bucketName}/${key}`);
+    return [TOKYO_REGION, RECORDS_EDGE_REGION].flatMap((region) => {
+      const bucketName = `cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${region}`;
+      return this.cdkAssetObjectKeys().map((key) => `arn:aws:s3:::${bucketName}/${key}`);
+    });
   }
 
   private acknowledgeRecordsAssetWildcards(role: iam.Role, reason: string): void {
     role.node.addMetadata(
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
       Object.fromEntries(
-        this.cdkAssetObjectKeys().map((key) => [
-          `AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/${key}]`,
-          reason,
-        ]),
+        [TOKYO_REGION, RECORDS_EDGE_REGION].flatMap((region) =>
+          this.cdkAssetObjectKeys().map((key) => [
+            `AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${region}/${key}]`,
+            reason,
+          ]),
+        ),
       ),
     );
+  }
+
+  private stackRegion(name: string): string {
+    if (
+      name === "ShittimChest-Prod-CostGovernance" ||
+      name === "ShittimChest-Prod-RecordsEdge"
+    ) {
+      return COST_REGION;
+    }
+    return TOKYO_REGION;
   }
 
   private acknowledgeRoleWildcards(role: iam.Role, ids: string[]): void {

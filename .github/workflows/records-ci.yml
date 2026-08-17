@@ -149,6 +149,10 @@ jobs:
         run: pnpm exec vp test
       - name: Build Records web
         run: pnpm exec vp build
+      - name: Install the pinned browser for Records acceptance tests
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Test Records browser flows and visual contracts
+        run: pnpm exec playwright test
       - name: Audit Records web dependencies
         run: pnpm audit --audit-level=low
 
@@ -177,6 +181,7 @@ jobs:
           npx vitest run \
             infra/test/records-stateful-stack.test.ts \
             infra/test/records-application-stack.test.ts \
+            infra/test/records-edge-stack.test.ts \
             --testTimeout=15000
           npm run synth:records
 
