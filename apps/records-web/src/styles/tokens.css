@@ -1,3 +1,27 @@
+@font-face {
+  font-family: "LINE Seed JP";
+  src: url("../assets/fonts/LINESeedJP-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "LINE Seed JP";
+  src: url("../assets/fonts/LINESeedJP-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "LINE Seed JP";
+  src: url("../assets/fonts/LINESeedJP-ExtraBold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
 :root {
   font-family: "LINE Seed JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
   color-scheme: light;
@@ -5,33 +29,49 @@
   text-rendering: optimizeLegibility;
   --records-ice-50: #f5fbff;
   --records-cyan-100: #dff8fb;
-  --records-cyan-400: #58d9e8;
+  --records-cyan-500: #58d9e8;
   --records-pink-100: #fde8f1;
   --records-lavender-100: #eeecff;
   --records-ink-900: #17324d;
   --records-ink-600: #587087;
-  --records-surface: rgba(255, 255, 255, 0.78);
-  --records-line: rgba(63, 180, 205, 0.24);
-  --records-shadow: 0 18px 50px rgba(45, 119, 148, 0.14);
+  --records-surface: rgb(255 255 255 / 76%);
+  --records-surface-strong: rgb(255 255 255 / 92%);
+  --records-line: rgb(63 180 205 / 24%);
+  --records-line-strong: rgb(63 180 205 / 44%);
+  --records-shadow: 0 18px 50px rgb(45 119 148 / 14%);
+  --records-shadow-soft: 0 12px 34px rgb(45 119 148 / 9%);
   --records-radius-card: 24px;
 }
+
 * {
   box-sizing: border-box;
 }
-
+html {
+  min-width: 320px;
+  min-height: 100%;
+}
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
 }
-
 button,
+input,
+select,
 a {
   min-width: 44px;
   min-height: 44px;
 }
-
+button,
+input,
+select {
+  font: inherit;
+}
 :focus-visible {
-  outline: 3px solid var(--records-cyan-400);
+  outline: 3px solid var(--records-cyan-500);
   outline-offset: 3px;
+}
+::selection {
+  background: var(--records-pink-100);
+  color: var(--records-ink-900);
 }

@@ -402,7 +402,7 @@ def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) ->
 @pytest.mark.parametrize(
     "call_end",
     [
-        '"${STATEFUL_CHANGE_SET}" "${stateful_key}"',
+        '"${stateful_bucket}" "${stateful_key}"',
         'ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}"',
     ],
 )
@@ -478,9 +478,11 @@ def test_records_release_rejects_runtime_change_set_type_lookup(tmp_path: Path) 
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            '            aws cloudformation execute-change-set --change-set-name "${arn}"\n',
+            '              aws cloudformation execute-change-set --region "${region}" \\\n'
+            '                --change-set-name "${arn}"\n',
             "            aws cloudformation describe-change-set --query ChangeSetType\n"
-            '            aws cloudformation execute-change-set --change-set-name "${arn}"\n',
+            '              aws cloudformation execute-change-set --region "${region}" \\\n'
+            '                --change-set-name "${arn}"\n',
             1,
         ),
         encoding="utf-8",

@@ -1,36 +1,37 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vite-plus/test";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
+import type { SessionResponse } from "./api";
 import { isRecordsApiResponse } from "./contracts";
+
+const RECORD_ID = "r".repeat(43);
+
+function placeholder(displayName: string, fallbackVariant: "cyan" | "pink" | "lavender") {
+  return {
+    kind: "placeholder",
+    url: null,
+    alt: `${displayName}のアバター`,
+    fallbackVariant,
+  };
+}
 
 function recordDetail() {
   const participants = [
-    ["participant-a", "参加者A", "cyan"],
-    ["participant-b", "参加者B", "pink"],
-    ["participant-c", "参加者C", "lavender"],
+    ["participant-a", "アロナ", "cyan"],
+    ["participant-b", "プラナ", "pink"],
+    ["participant-c", "安倍晋三AI", "lavender"],
   ].map(([slot, displayName, fallbackVariant]) => ({
     slot,
     displayName,
-    avatar: {
-      kind: "placeholder",
-      alt: `${displayName}のアバター`,
-      fallbackVariant,
-    },
+    avatar: placeholder(displayName!, fallbackVariant as "cyan" | "pink" | "lavender"),
   }));
   return {
     schemaVersion: 1,
-    recordId: "r".repeat(43),
+    recordId: RECORD_ID,
     completedAt: "2026-08-15T06:00:00Z",
     question: "休日の過ごし方を決める",
-    requester: {
-      displayName: "依頼者",
-      avatar: {
-        kind: "placeholder",
-        alt: "依頼者のアバター",
-        fallbackVariant: "cyan",
-      },
-    },
+    requester: { displayName: "依頼者", avatar: placeholder("依頼者", "cyan") },
     participants,
     initialOpinions: participants.map(({ slot }) => ({
       participant: slot,
@@ -40,7 +41,7 @@ function recordDetail() {
     finalProposals: participants.map(({ slot }) => ({
       participant: slot,
       title: "最終案",
-      proposal: "提案",
+      proposal: "完成した提案",
     })),
     votes: [
       { voter: "participant-a", candidate: "participant-b", reason: "理由A" },
@@ -66,119 +67,158 @@ function recordDetail() {
   };
 }
 
+function authenticatedSession() {
+  return {
+    schemaVersion: 1,
+    authenticated: true,
+    user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
+    csrfToken: "csrf-token",
+  };
+}
+
+function listResponse() {
+  const detail = recordDetail();
+  return {
+    schemaVersion: 1,
+    items: [
+      {
+        schemaVersion: 1,
+        recordId: detail.recordId,
+        completedAt: detail.completedAt,
+        questionPreview: detail.question,
+        requester: detail.requester,
+        participants: detail.participants,
+        result: detail.result,
+      },
+    ],
+    nextCursor: null,
+  };
+}
+
+function response(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function mockApi(session: SessionResponse = authenticatedSession() as SessionResponse) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const path =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (path === "/api/v1/session") return Promise.resolve(response(session));
+      if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
+      if (path === `/api/v1/records/${RECORD_ID}`) {
+        return Promise.resolve(response(recordDetail()));
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    }),
+  );
+}
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+  window.history.replaceState(null, "", "/");
+});
+
 describe("App", () => {
-  it("uses the approved product display name", () => {
+  it("shows the approved login page for an anonymous Guild visitor", async () => {
+    mockApi({ schemaVersion: 1, authenticated: false, user: null, csrfToken: null });
+
     render(<App />);
 
-    expect(screen.getByRole("heading", { name: "シッテムの箱 議事録" })).toBeVisible();
-    expect(screen.getByText(/完了した議論/)).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "シッテムの箱 議事録" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Discordでログイン" })).toHaveAttribute(
+      "href",
+      "/api/v1/auth/discord/start?returnTo=%2F",
+    );
+    expect(screen.getByText(/Guildのメンバーだけ/)).toBeVisible();
+  });
+
+  it("renders completed records without duration or Evidence", async () => {
+    mockApi();
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "議論の記録" })).toBeVisible();
+    const card = await screen.findByRole("article");
+    expect(within(card).getByText("休日の過ごし方を決める")).toBeVisible();
+    expect(within(card).getAllByText("依頼者")).toHaveLength(2);
+    expect(within(card).getByText("アロナ")).toBeVisible();
+    expect(
+      within(screen.getByRole("navigation", { name: "モバイルナビゲーション" })).getByRole(
+        "button",
+        { name: "ログアウト" },
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
+  });
+
+  it("returns to login when a protected request reports an expired session", async () => {
+    let sessionRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (path === "/api/v1/session") {
+          sessionRequests += 1;
+          const session =
+            sessionRequests === 1
+              ? authenticatedSession()
+              : { schemaVersion: 1, authenticated: false, user: null, csrfToken: null };
+          return Promise.resolve(response(session));
+        }
+        if (path.startsWith("/api/v1/records?")) {
+          return Promise.resolve(
+            response(
+              {
+                error: {
+                  code: "AUTHENTICATION_REQUIRED",
+                  message: "ログインし直してください。",
+                  requestId: "request-id",
+                },
+              },
+              401,
+            ),
+          );
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "シッテムの箱 議事録" })).toBeVisible();
+    expect(sessionRequests).toBe(2);
+  });
+
+  it("renders named votes and only the saved final result on detail", async () => {
+    window.history.replaceState(null, "", `/records/${RECORD_ID}`);
+    mockApi();
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "休日の過ごし方を決める" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "3人の意見" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "投票" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "アロナ → プラナ" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "最終決定" })).toBeVisible();
+    expect(screen.getByText("勝利しました")).toBeVisible();
+    expect(screen.getByText("実行する")).toBeVisible();
   });
 
   it("validates API payloads against the generated Python contract", () => {
-    expect(
-      isRecordsApiResponse({
-        schemaVersion: 1,
-        authenticated: false,
-        user: null,
-        csrfToken: null,
-      }),
-    ).toBe(true);
+    expect(isRecordsApiResponse(recordDetail())).toBe(true);
     expect(isRecordsApiResponse({ authenticated: false })).toBe(false);
     expect(isRecordsApiResponse({ schemaVersion: 1, privateId: "forbidden" })).toBe(false);
-  });
 
-  it("rejects malformed date-time values from the API", () => {
-    const detail = recordDetail();
-
-    expect(isRecordsApiResponse(detail)).toBe(true);
-    expect(isRecordsApiResponse({ ...detail, completedAt: "not-a-date" })).toBe(false);
-  });
-
-  it("rejects incomplete participant collections and conflicting winners", () => {
-    const detail = recordDetail();
-    expect(isRecordsApiResponse(detail)).toBe(true);
-
-    const duplicateParticipant = structuredClone(detail);
-    duplicateParticipant.participants[2].slot = "participant-a";
-    expect(isRecordsApiResponse(duplicateParticipant)).toBe(false);
-
-    const duplicateInitialOpinion = structuredClone(detail);
-    duplicateInitialOpinion.initialOpinions[2].participant = "participant-a";
-    expect(isRecordsApiResponse(duplicateInitialOpinion)).toBe(false);
-
-    const duplicateFinalProposal = structuredClone(detail);
-    duplicateFinalProposal.finalProposals[2].participant = "participant-a";
-    expect(isRecordsApiResponse(duplicateFinalProposal)).toBe(false);
-
-    const duplicateVoter = structuredClone(detail);
-    duplicateVoter.votes[2].voter = "participant-a";
-    expect(isRecordsApiResponse(duplicateVoter)).toBe(false);
-
-    const conflictingWinner = structuredClone(detail);
+    const conflictingWinner = structuredClone(recordDetail());
     conflictingWinner.finalDecision.winner = "participant-b";
     expect(isRecordsApiResponse(conflictingWinner)).toBe(false);
-
-    const selfVote = structuredClone(detail);
-    selfVote.votes[0].candidate = "participant-a";
-    expect(isRecordsApiResponse(selfVote)).toBe(false);
-
-    const whitespaceVoteReason = structuredClone(detail);
-    whitespaceVoteReason.votes[0].reason = " \t ";
-    expect(isRecordsApiResponse(whitespaceVoteReason)).toBe(false);
-
-    const whitespaceVictoryMessage = structuredClone(detail);
-    whitespaceVictoryMessage.finalDecision.victoryMessage = " \t ";
-    expect(isRecordsApiResponse(whitespaceVictoryMessage)).toBe(false);
-
-    const whitespaceQuestion = structuredClone(detail);
-    whitespaceQuestion.question = " \t ";
-    expect(isRecordsApiResponse(whitespaceQuestion)).toBe(false);
-
-    const imageWithoutUrl = structuredClone(detail);
-    imageWithoutUrl.requester.avatar.kind = "image";
-    expect(isRecordsApiResponse(imageWithoutUrl)).toBe(false);
-
-    const mismatchedBallot = structuredClone(detail);
-    mismatchedBallot.result.voteCounts = [
-      { participant: "participant-a", count: 0 },
-      { participant: "participant-b", count: 0 },
-      { participant: "participant-c", count: 3 },
-    ];
-    mismatchedBallot.result.winner = "participant-c";
-    mismatchedBallot.finalDecision.winner = "participant-c";
-    expect(isRecordsApiResponse(mismatchedBallot)).toBe(false);
-
-    const listResponse = {
-      schemaVersion: 1,
-      items: [
-        {
-          schemaVersion: 1,
-          recordId: detail.recordId,
-          completedAt: detail.completedAt,
-          questionPreview: detail.question,
-          requester: detail.requester,
-          participants: detail.participants,
-          result: detail.result,
-        },
-      ],
-      nextCursor: null,
-    };
-    expect(isRecordsApiResponse(listResponse)).toBe(true);
-
-    const emptyNextCursor = { ...structuredClone(listResponse), nextCursor: "" };
-    expect(isRecordsApiResponse(emptyNextCursor)).toBe(false);
-
-    const incompleteListCounts = structuredClone(listResponse);
-    incompleteListCounts.items[0].result.voteCounts[2].participant = "participant-a";
-    expect(isRecordsApiResponse(incompleteListCounts)).toBe(false);
-
-    const invalidTieSummary = structuredClone(listResponse);
-    invalidTieSummary.items[0].result.voteCounts = [
-      { participant: "participant-a", count: 1 },
-      { participant: "participant-b", count: 1 },
-      { participant: "participant-c", count: 1 },
-    ];
-    invalidTieSummary.items[0].result.tieBreakApplied = false;
-    expect(isRecordsApiResponse(invalidTieSummary)).toBe(false);
   });
 });

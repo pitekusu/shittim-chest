@@ -81,6 +81,9 @@ jobs:
         run: |
           uv sync --project services/records --frozen --all-groups
           npm ci --ignore-scripts
+          corepack enable pnpm
+          test "$(pnpm --version)" = "11.21.0"
+          pnpm --dir apps/records-web install --frozen-lockfile
       - name: Re-run Records release-critical gates
         run: |
           (
@@ -94,7 +97,12 @@ jobs:
           npx vitest run \
             infra/test/records-stateful-stack.test.ts \
             infra/test/records-application-stack.test.ts \
+            infra/test/records-edge-stack.test.ts \
             --testTimeout=15000
+          pnpm --dir apps/records-web exec vp check
+          pnpm --dir apps/records-web exec vp test
+          pnpm --dir apps/records-web exec vp build
+          pnpm --dir apps/records-web audit --audit-level=low
       - name: Build deterministic Records Lambda bundle and SBOM
         id: bundle
         run: |
@@ -118,18 +126,58 @@ jobs:
           test "$(printf '%s' "${bundle_code_sha256}" | wc -c)" -eq 44
           echo "bundle_hash=${bundle_hash}" >> "${GITHUB_OUTPUT}"
           echo "bundle_code_sha256=${bundle_code_sha256}" >> "${GITHUB_OUTPUT}"
+      - name: Build the deterministic Records Web artifact
+        id: web
+        run: |
+          uv run --frozen python tools/build_records_web_artifact.py \
+            --source apps/records-web/dist \
+            --output "${RUNNER_TEMP}/records-web.zip"
+          web_hash=$(sha256sum "${RUNNER_TEMP}/records-web.zip" | cut -d' ' -f1)
+          echo "web_hash=${web_hash}" >> "${GITHUB_OUTPUT}"
+      - name: Generate the pinned Records Web SBOM
+        id: web_sbom
+        run: |
+          version=$(jq --raw-output '.tools.syft.version' .github/tool-versions.json)
+          archive_name=$(jq --raw-output '.tools.syft.archive_name' .github/tool-versions.json)
+          archive_sha=$(jq --raw-output '.tools.syft.archive_sha256' .github/tool-versions.json)
+          archive="${RUNNER_TEMP}/${archive_name}"
+          curl --fail --location --proto '=https' --show-error --silent --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/anchore/syft/releases/download/v${version}/${archive_name}"
+          printf '%s  %s\n' "${archive_sha}" "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" syft
+          test "$("${RUNNER_TEMP}/syft" version -o json | jq --raw-output .version)" = \
+            "${version}"
+          "${RUNNER_TEMP}/syft" "dir:apps/records-web" \
+            --output "cyclonedx-json=${RUNNER_TEMP}/records-web-sbom.cdx.json"
+          web_sbom_hash=$(sha256sum "${RUNNER_TEMP}/records-web-sbom.cdx.json" \
+            | cut -d' ' -f1)
+          echo "web_sbom_hash=${web_sbom_hash}" >> "${GITHUB_OUTPUT}"
       - name: Validate Records plan handles
         env:
           ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
+          EDGE_EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_US_EAST_1 }}
           EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
+          HOSTED_ZONE_ID: ${{ vars.RECORDS_HOSTED_ZONE_ID }}
+          HOSTED_ZONE_NAME: ${{ vars.RECORDS_HOSTED_ZONE_NAME }}
           PLAN_ROLE_ARN: ${{ vars.AWS_RECORDS_PLAN_ROLE_ARN }}
+          PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
         run: |
-          for value in "${ASSET_BUCKET}" "${EXECUTION_ROLE_ARN}" "${PLAN_ROLE_ARN}"
+          for value in \
+            "${ASSET_BUCKET}" \
+            "${EXECUTION_ROLE_ARN}" \
+            "${EDGE_EXECUTION_ROLE_ARN}" \
+            "${HOSTED_ZONE_ID}" \
+            "${HOSTED_ZONE_NAME}" \
+            "${PLAN_ROLE_ARN}" \
+            "${PUBLIC_HOSTNAME}"
           do
             test -n "${value}"
           done
           [[ "${SOURCE_STREAM_ARN}" =~ ^arn:[^:]+:dynamodb:${AWS_REGION}:[0-9]{12}:table/shittim-chest-production/stream/.+$ ]]
+          [[ "${PUBLIC_HOSTNAME}" =~ ^[a-z0-9.-]+$ ]]
+          [[ "${HOSTED_ZONE_ID}" =~ ^Z[A-Z0-9]+$ ]]
       - name: Acquire Records plan credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
@@ -176,6 +224,7 @@ jobs:
         run: |
           account=$(aws sts get-caller-identity --query Account --output text)
           test "${ASSET_BUCKET}" = "cdk-hnb659fds-assets-${account}-${AWS_REGION}"
+          edge_asset_bucket="cdk-hnb659fds-assets-${account}-us-east-1"
           bundle_key="${BUNDLE_HASH}.zip"
           upload=$(aws s3api put-object --bucket "${ASSET_BUCKET}" --key "${bundle_key}" \
             --body "${RUNNER_TEMP}/records-lambda.zip" --output json)
@@ -183,17 +232,25 @@ jobs:
           test -n "${bundle_version}"
           CDK_DEFAULT_ACCOUNT="${account}" CDK_DEFAULT_REGION="${AWS_REGION}" \
             npm run synth:records
-          for stack in RecordsStateful RecordsApplication
+          for stack in RecordsStateful RecordsApplication RecordsEdge
           do
             template="cdk.out/${stack}.template.json"
             key=$(sha256sum "${template}" | cut -d' ' -f1).json
-            aws s3api put-object --bucket "${ASSET_BUCKET}" --key "${key}" \
+            if [ "${stack}" = RecordsEdge ]; then
+              bucket="${edge_asset_bucket}"
+              region=us-east-1
+            else
+              bucket="${ASSET_BUCKET}"
+              region="${AWS_REGION}"
+            fi
+            aws s3api put-object --region "${region}" --bucket "${bucket}" --key "${key}" \
               --body "${template}" >/dev/null
-            echo "${stack} ${key}" >> "${RUNNER_TEMP}/template-assets.txt"
+            echo "${stack} ${region} ${bucket} ${key}" \
+              >> "${RUNNER_TEMP}/template-assets.txt"
           done
           echo "bundle_key=${bundle_key}" >> "${GITHUB_OUTPUT}"
           echo "bundle_version=${bundle_version}" >> "${GITHUB_OUTPUT}"
-      - name: Create and validate the two Records Change Sets
+      - name: Create and validate the three Records Change Sets
         id: plan
         env:
           APPLICATION_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-application
@@ -201,15 +258,21 @@ jobs:
           BUNDLE_KEY: ${{ steps.assets.outputs.bundle_key }}
           BUNDLE_CODE_SHA256: ${{ steps.bundle.outputs.bundle_code_sha256 }}
           BUNDLE_VERSION: ${{ steps.assets.outputs.bundle_version }}
+          EDGE_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-edge
+          EDGE_EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_US_EAST_1 }}
           EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
+          HOSTED_ZONE_ID: ${{ vars.RECORDS_HOSTED_ZONE_ID }}
+          HOSTED_ZONE_NAME: ${{ vars.RECORDS_HOSTED_ZONE_NAME }}
+          PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
           STATEFUL_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful
         run: |
           create_plan() {
-            local logical_name="$1" stack="$2" change_set="$3" template_key="$4"
+            local logical_name="$1" stack="$2" change_set="$3" region="$4"
+            local execution_role="$5" template_bucket="$6" template_key="$7"
             local stack_status type arn status
-            shift 4
-            if aws cloudformation describe-stacks --stack-name "${stack}" \
+            shift 7
+            if aws cloudformation describe-stacks --region "${region}" --stack-name "${stack}" \
               > "${RUNNER_TEMP}/${logical_name}-stack.json" \
               2> "${RUNNER_TEMP}/${logical_name}-stack.error"
             then
@@ -227,18 +290,20 @@ jobs:
               *) exit 1 ;;
             esac
             arn=$(aws cloudformation create-change-set \
+              --region "${region}" \
               --stack-name "${stack}" \
               --change-set-name "${change_set}" \
               --change-set-type "${type}" \
               --description "Records ${GITHUB_SHA} run ${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" \
-              --template-url "https://${ASSET_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${template_key}" \
-              --role-arn "${EXECUTION_ROLE_ARN}" \
+              --template-url "https://${template_bucket}.s3.${region}.amazonaws.com/${template_key}" \
+              --role-arn "${execution_role}" \
               --capabilities CAPABILITY_NAMED_IAM \
               --client-token "records-${logical_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               "$@" --query Id --output text)
             for attempt in $(seq 1 60)
             do
               status=$(aws cloudformation describe-change-set \
+                --region "${region}" \
                 --change-set-name "${arn}" --query Status --output text)
               case "${status}" in
                 CREATE_COMPLETE|FAILED) break ;;
@@ -247,6 +312,7 @@ jobs:
               sleep 5
             done
             aws cloudformation describe-change-set \
+              --region "${region}" \
               --change-set-name "${arn}" \
               > "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json"
             uv run --project services/records --frozen python \
@@ -263,11 +329,21 @@ jobs:
                 --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
                 --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}" \
                 --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}"
+            elif [ "${logical_name}" = edge ]; then
+              uv run --project services/records --frozen python \
+                tools/release_supply_chain.py validate-change-set \
+                "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+                --expected-arn "${arn}" --expected-stack "${stack}" \
+                --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}" \
+                --expected-parameter "RecordsHostedZoneId=${HOSTED_ZONE_ID}" \
+                --expected-parameter "RecordsHostedZoneName=${HOSTED_ZONE_NAME}" \
+                --expected-parameter "RecordsApiOriginDomain=${api_origin_domain}" \
+                --expected-parameter "RecordsMediaOriginDomain=${media_origin_domain}"
             fi
             uv run --project services/records --frozen python \
               tools/records_release_manifest.py create-entry \
               "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
-              --type "${type}" --expected-name "${change_set}" \
+              --type "${type}" --expected-name "${change_set}" --expected-region "${region}" \
               --expected-stack "${stack}" \
               --output "${RUNNER_TEMP}/records-release-${logical_name}-plan.json"
             jq --exit-status \
@@ -285,36 +361,77 @@ jobs:
                  end)' \
               "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
           }
-          stateful_key=$(awk '$1 == "RecordsStateful" {print $2}' \
+          stateful_region=$(awk '$1 == "RecordsStateful" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")
-          application_key=$(awk '$1 == "RecordsApplication" {print $2}' \
+          stateful_bucket=$(awk '$1 == "RecordsStateful" {print $3}' \
             "${RUNNER_TEMP}/template-assets.txt")
+          stateful_key=$(awk '$1 == "RecordsStateful" {print $4}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          application_region=$(awk '$1 == "RecordsApplication" {print $2}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          application_bucket=$(awk '$1 == "RecordsApplication" {print $3}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          application_key=$(awk '$1 == "RecordsApplication" {print $4}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          edge_region=$(awk '$1 == "RecordsEdge" {print $2}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          edge_bucket=$(awk '$1 == "RecordsEdge" {print $3}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          edge_key=$(awk '$1 == "RecordsEdge" {print $4}' \
+            "${RUNNER_TEMP}/template-assets.txt")
+          account=$(aws sts get-caller-identity --query Account --output text)
+          api_endpoint=$(aws cloudformation describe-stacks \
+            --stack-name ShittimChest-Prod-RecordsApplication \
+            --query "Stacks[0].Outputs[?OutputKey=='RecordsApiEndpoint'].OutputValue | [0]" \
+            --output text)
+          [[ "${api_endpoint}" =~ ^https://[a-z0-9]+\.execute-api\.${AWS_REGION}\.amazonaws\.com/?$ ]]
+          api_origin_domain=${api_endpoint#https://}
+          api_origin_domain=${api_origin_domain%/}
+          media_origin_domain="shittim-chest-production-records-media-${account}.s3.${AWS_REGION}.amazonaws.com"
           set -e
           create_plan stateful ShittimChest-Prod-RecordsStateful \
-            "${STATEFUL_CHANGE_SET}" "${stateful_key}"
+            "${STATEFUL_CHANGE_SET}" "${stateful_region}" "${EXECUTION_ROLE_ARN}" \
+            "${stateful_bucket}" "${stateful_key}"
           create_plan application ShittimChest-Prod-RecordsApplication \
-            "${APPLICATION_CHANGE_SET}" "${application_key}" \
+            "${APPLICATION_CHANGE_SET}" "${application_region}" "${EXECUTION_ROLE_ARN}" \
+            "${application_bucket}" "${application_key}" \
             --parameters \
               ParameterKey=SourceDebateTableStreamArn,ParameterValue="${SOURCE_STREAM_ARN}" \
               ParameterKey=RecordsBundleBucketName,ParameterValue="${ASSET_BUCKET}" \
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
               ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}" \
               ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}"
+          create_plan edge ShittimChest-Prod-RecordsEdge \
+            "${EDGE_CHANGE_SET}" "${edge_region}" "${EDGE_EXECUTION_ROLE_ARN}" \
+            "${edge_bucket}" "${edge_key}" \
+            --parameters \
+              ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}" \
+              ParameterKey=RecordsHostedZoneId,ParameterValue="${HOSTED_ZONE_ID}" \
+              ParameterKey=RecordsHostedZoneName,ParameterValue="${HOSTED_ZONE_NAME}" \
+              ParameterKey=RecordsApiOriginDomain,ParameterValue="${api_origin_domain}" \
+              ParameterKey=RecordsMediaOriginDomain,ParameterValue="${media_origin_domain}"
       - name: Record Records release evidence
         id: evidence
         env:
           BUNDLE_HASH: ${{ steps.bundle.outputs.bundle_hash }}
+          WEB_HASH: ${{ steps.web.outputs.web_hash }}
+          WEB_SBOM_HASH: ${{ steps.web_sbom.outputs.web_sbom_hash }}
         run: |
           artifact_name="records-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           uv run --project services/records --frozen python \
             tools/records_release_manifest.py create-manifest \
             --stateful-plan "${RUNNER_TEMP}/records-release-stateful-plan.json" \
             --application-plan "${RUNNER_TEMP}/records-release-application-plan.json" \
+            --edge-plan "${RUNNER_TEMP}/records-release-edge-plan.json" \
             --commit-sha "${GITHUB_SHA}" --bundle-sha256 "${BUNDLE_HASH}" \
+            --web-artifact-sha256 "${WEB_HASH}" \
+            --web-sbom-sha256 "${WEB_SBOM_HASH}" \
             --output "${RUNNER_TEMP}/records-release-manifest.json"
           mkdir -p "${RUNNER_TEMP}/records-evidence"
           cp "${RUNNER_TEMP}/records-release-manifest.json" \
             "${RUNNER_TEMP}/records-sbom.cdx.json" \
+            "${RUNNER_TEMP}/records-web.zip" \
+            "${RUNNER_TEMP}/records-web-sbom.cdx.json" \
             "${RUNNER_TEMP}"/records-release-*.json \
             "${RUNNER_TEMP}/records-evidence/"
           echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
@@ -322,6 +439,10 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ runner.temp }}/records-release-manifest.json
+      - name: Attest the Records Web artifact
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/records-web.zip
       - name: Upload Records plan evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -332,8 +453,11 @@ jobs:
       - name: Remove attested no-op Records Change Sets before approval
         run: |
           manifest="${RUNNER_TEMP}/records-release-manifest.json"
-          for logical_name in stateful application
+          for logical_name in stateful application edge
           do
+            region=$(jq --exit-status --raw-output \
+              --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].region' "${manifest}")
             executable=$(jq --exit-status --raw-output \
               --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].executable
@@ -342,10 +466,12 @@ jobs:
             if [ "${executable}" = false ]; then
               arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
                 '.change_sets[$logical_name].arn' "${manifest}")
-              aws cloudformation delete-change-set --change-set-name "${arn}"
+              aws cloudformation delete-change-set --region "${region}" \
+                --change-set-name "${arn}"
               for attempt in $(seq 1 12)
               do
-                if aws cloudformation describe-change-set --change-set-name "${arn}" \
+                if aws cloudformation describe-change-set --region "${region}" \
+                  --change-set-name "${arn}" \
                   >/dev/null 2> "${RUNNER_TEMP}/${logical_name}-noop-cleanup.error"
                 then
                   test "${attempt}" -lt 12
@@ -363,6 +489,7 @@ jobs:
         continue-on-error: true
         env:
           APPLICATION_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-application
+          EDGE_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-edge
           STATEFUL_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful
         run: |
           aws cloudformation delete-change-set \
@@ -371,6 +498,9 @@ jobs:
           aws cloudformation delete-change-set \
             --stack-name ShittimChest-Prod-RecordsStateful \
             --change-set-name "${STATEFUL_CHANGE_SET}" 2>/dev/null || true
+          aws cloudformation delete-change-set --region us-east-1 \
+            --stack-name ShittimChest-Prod-RecordsEdge \
+            --change-set-name "${EDGE_CHANGE_SET}" 2>/dev/null || true
 
   deploy:
     name: deploy
@@ -409,9 +539,23 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml \
             --source-ref refs/heads/main
+          gh attestation verify "${RUNNER_TEMP}/records-evidence/records-web.zip" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml \
+            --source-ref refs/heads/main
           uv run --project services/records --frozen python \
             tools/records_release_manifest.py validate-manifest "${manifest}" \
             --expected-commit-sha "${GITHUB_SHA}"
+          expected_web_hash=$(jq --exit-status --raw-output \
+            .web_artifact_sha256 "${manifest}")
+          actual_web_hash=$(sha256sum \
+            "${RUNNER_TEMP}/records-evidence/records-web.zip" | cut -d' ' -f1)
+          test "${actual_web_hash}" = "${expected_web_hash}"
+          expected_web_sbom_hash=$(jq --exit-status --raw-output \
+            .web_sbom_sha256 "${manifest}")
+          actual_web_sbom_hash=$(sha256sum \
+            "${RUNNER_TEMP}/records-evidence/records-web-sbom.cdx.json" | cut -d' ' -f1)
+          test "${actual_web_sbom_hash}" = "${expected_web_sbom_hash}"
       - name: Acquire Records deploy credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
@@ -426,13 +570,15 @@ jobs:
       - name: Execute only the attested Records Change Sets
         run: |
           execute() {
-            local logical_name="$1" stack name arn type executable
+            local logical_name="$1" stack name arn region type executable
             stack=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].stack' "${manifest}")
             name=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].name' "${manifest}")
             arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].arn' "${manifest}")
+            region=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].region' "${manifest}")
             type=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].type' "${manifest}")
             executable=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
@@ -440,7 +586,8 @@ jobs:
                | if type == "boolean" then tostring else error("executable must be boolean") end' \
               "${manifest}")
             if [ "${executable}" = true ]; then
-              aws cloudformation describe-change-set --change-set-name "${arn}" \
+              aws cloudformation describe-change-set --region "${region}" \
+                --change-set-name "${arn}" \
                 > "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json"
               if [ "${logical_name}" = application ]; then
                 bundle_hash=$(jq --exit-status --raw-output .bundle_sha256 "${manifest}")
@@ -454,18 +601,22 @@ jobs:
               uv run --project services/records --frozen python \
                 tools/records_release_manifest.py create-entry \
                 "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
-                --type "${type}" --expected-name "${name}" --expected-stack "${stack}" \
+                --type "${type}" --expected-name "${name}" \
+                --expected-region "${region}" --expected-stack "${stack}" \
                 --output "${RUNNER_TEMP}/${logical_name}-deploy-plan.json"
               jq --exit-status --arg logical_name "${logical_name}" \
                 --slurpfile actual "${RUNNER_TEMP}/${logical_name}-deploy-plan.json" \
                 '.change_sets[$logical_name] == $actual[0]' "${manifest}" >/dev/null
-              aws cloudformation execute-change-set --change-set-name "${arn}"
+              aws cloudformation execute-change-set --region "${region}" \
+                --change-set-name "${arn}"
               case "${type}" in
                 CREATE)
-                  aws cloudformation wait stack-create-complete --stack-name "${stack}"
+                  aws cloudformation wait stack-create-complete --region "${region}" \
+                    --stack-name "${stack}"
                   ;;
                 UPDATE)
-                  aws cloudformation wait stack-update-complete --stack-name "${stack}"
+                  aws cloudformation wait stack-update-complete --region "${region}" \
+                    --stack-name "${stack}"
                   ;;
                 *)
                   echo "Unexpected attested Change Set type." >&2
@@ -473,43 +624,118 @@ jobs:
                   ;;
               esac
             fi
-            status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
+            status=$(aws cloudformation describe-stacks --region "${region}" \
+              --stack-name "${stack}" \
               --query 'Stacks[0].StackStatus' --output text)
             case "${status}" in
               CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;
               *) exit 1 ;;
             esac
             aws cloudformation update-termination-protection \
-              --enable-termination-protection --stack-name "${stack}"
-            aws cloudformation describe-stacks --stack-name "${stack}" --output json \
+              --region "${region}" --enable-termination-protection --stack-name "${stack}"
+            aws cloudformation describe-stacks --region "${region}" \
+              --stack-name "${stack}" --output json \
               | jq --exit-status '.Stacks[0].EnableTerminationProtection == true' >/dev/null
           }
           manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
           execute stateful
           execute application
+          execute edge
+      - name: Publish the attested Records Web artifact
+        run: |
+          web_archive="${RUNNER_TEMP}/records-evidence/records-web.zip"
+          web_stage="${RUNNER_TEMP}/records-web-dist"
+          mkdir -p "${web_stage}"
+          WEB_ARCHIVE="${web_archive}" WEB_STAGE="${web_stage}" python3 - <<'PY'
+          import os
+          import pathlib
+          import zipfile
+
+          archive = pathlib.Path(os.environ["WEB_ARCHIVE"])
+          destination = pathlib.Path(os.environ["WEB_STAGE"])
+          with zipfile.ZipFile(archive) as source:
+              for item in source.infolist():
+                  path = pathlib.PurePosixPath(item.filename)
+                  if path.is_absolute() or ".." in path.parts or item.is_dir():
+                      raise SystemExit("unsafe Records Web artifact")
+              source.extractall(destination)
+          if not (destination / "index.html").is_file():
+              raise SystemExit("Records Web artifact has no index.html")
+          PY
+          edge_stack=$(aws cloudformation describe-stacks --region us-east-1 \
+            --stack-name ShittimChest-Prod-RecordsEdge --output json)
+          web_bucket=$(jq --exit-status --raw-output \
+            '.Stacks[0].Outputs[] | select(.OutputKey == "RecordsWebBucketName") | .OutputValue' \
+            <<< "${edge_stack}")
+          distribution_id=$(jq --exit-status --raw-output \
+            '.Stacks[0].Outputs[] | select(.OutputKey == "RecordsDistributionId") | .OutputValue' \
+            <<< "${edge_stack}")
+          public_origin=$(jq --exit-status --raw-output \
+            '.Stacks[0].Outputs[] | select(.OutputKey == "RecordsPublicOrigin") | .OutputValue' \
+            <<< "${edge_stack}")
+          account=$(aws sts get-caller-identity --query Account --output text)
+          test "${web_bucket}" = "shittim-chest-production-records-web-${account}"
+          [[ "${distribution_id}" =~ ^[A-Z0-9]+$ ]]
+          [[ "${public_origin}" =~ ^https://[a-z0-9.-]+$ ]]
+          aws s3api get-bucket-versioning --bucket "${web_bucket}" --output json \
+            | jq --exit-status '.Status == "Enabled"' >/dev/null
+          if aws s3api head-object --bucket "${web_bucket}" --key index.html \
+            > "${RUNNER_TEMP}/records-previous-index.json" \
+            2> "${RUNNER_TEMP}/records-previous-index.error"
+          then
+            jq --exit-status --raw-output '.VersionId // empty' \
+              "${RUNNER_TEMP}/records-previous-index.json" \
+              > "${RUNNER_TEMP}/records-previous-index-version"
+          else
+            grep --extended-regexp --quiet '404|Not Found' \
+              "${RUNNER_TEMP}/records-previous-index.error"
+            : > "${RUNNER_TEMP}/records-previous-index-version"
+          fi
+          printf '%s' "${web_bucket}" > "${RUNNER_TEMP}/records-web-bucket"
+          printf '%s' "${distribution_id}" > "${RUNNER_TEMP}/records-distribution-id"
+          aws s3 cp "${web_stage}/assets" "s3://${web_bucket}/assets" \
+            --recursive \
+            --cache-control "public,max-age=31536000,immutable"
+          test "$(find "${web_stage}" -mindepth 1 -maxdepth 1 -type f \
+            ! -name index.html | wc -l)" -eq 0
+          aws s3 cp "${web_stage}/index.html" "s3://${web_bucket}/index.html" \
+            --cache-control "no-cache" --content-type "text/html; charset=utf-8"
+          touch "${RUNNER_TEMP}/records-index-published"
+          invalidation_id=$(aws cloudfront create-invalidation \
+            --distribution-id "${distribution_id}" --paths "/index.html" \
+            --query 'Invalidation.Id' --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${distribution_id}" --id "${invalidation_id}"
+          printf '%s' "${public_origin}" > "${RUNNER_TEMP}/records-public-origin"
       - name: Verify stable Records Stack results
         run: |
-          for stack in \
-            ShittimChest-Prod-RecordsStateful \
-            ShittimChest-Prod-RecordsApplication
+          for stack_region in \
+            ShittimChest-Prod-RecordsStateful:ap-northeast-1 \
+            ShittimChest-Prod-RecordsApplication:ap-northeast-1 \
+            ShittimChest-Prod-RecordsEdge:us-east-1
           do
-            status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
+            stack=${stack_region%:*}
+            region=${stack_region#*:}
+            status=$(aws cloudformation describe-stacks --region "${region}" \
+              --stack-name "${stack}" \
               --query 'Stacks[0].StackStatus' --output text)
             case "${status}" in
               CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE) ;;
               *) exit 1 ;;
             esac
-            aws cloudformation describe-stacks --stack-name "${stack}" --output json \
+            aws cloudformation describe-stacks --region "${region}" \
+              --stack-name "${stack}" --output json \
               | jq --exit-status '.Stacks[0].EnableTerminationProtection == true' >/dev/null
           done
       - name: Verify anonymous and protected Records API boundaries
         run: |
-          endpoint=$(aws cloudformation describe-stacks \
-            --stack-name ShittimChest-Prod-RecordsApplication \
-            --query "Stacks[0].Outputs[?OutputKey=='RecordsApiEndpoint'].OutputValue | [0]" \
-            --output text)
-          [[ "${endpoint}" =~ ^https://[a-z0-9]+\.execute-api\.${AWS_REGION}\.amazonaws\.com/?$ ]]
-          endpoint=${endpoint%/}
+          endpoint=$(cat "${RUNNER_TEMP}/records-public-origin")
+          [[ "${endpoint}" =~ ^https://[a-z0-9.-]+$ ]]
+          index_status=$(curl --silent --show-error --location \
+            --output "${RUNNER_TEMP}/records-index.html" --write-out '%{http_code}' \
+            "${endpoint}/")
+          test "${index_status}" = 200
+          grep --quiet '<div id="root"></div>' "${RUNNER_TEMP}/records-index.html"
           session_status=$(curl --silent --show-error \
             --dump-header "${RUNNER_TEMP}/records-session.headers" \
             --output "${RUNNER_TEMP}/records-session.json" \
@@ -535,32 +761,68 @@ jobs:
           test "${records_status}" = 401
           jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
             "${RUNNER_TEMP}/records-list.json" >/dev/null
+      - name: Restore the previous Records entry point after a post-publish failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          if [ ! -f "${RUNNER_TEMP}/records-index-published" ]; then
+            exit 0
+          fi
+          web_bucket=$(cat "${RUNNER_TEMP}/records-web-bucket")
+          distribution_id=$(cat "${RUNNER_TEMP}/records-distribution-id")
+          previous_version=$(cat "${RUNNER_TEMP}/records-previous-index-version")
+          if [ -n "${previous_version}" ]; then
+            encoded_version=$(jq --null-input --raw-output --arg value "${previous_version}" \
+              '$value | @uri')
+            aws s3api copy-object \
+              --bucket "${web_bucket}" \
+              --key index.html \
+              --copy-source "${web_bucket}/index.html?versionId=${encoded_version}" \
+              --cache-control "no-cache" \
+              --content-type "text/html; charset=utf-8" \
+              --metadata-directive REPLACE >/dev/null
+          else
+            aws s3api delete-object --bucket "${web_bucket}" --key index.html >/dev/null
+          fi
+          rollback_invalidation=$(aws cloudfront create-invalidation \
+            --distribution-id "${distribution_id}" --paths "/index.html" \
+            --query 'Invalidation.Id' --output text)
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${distribution_id}" --id "${rollback_invalidation}"
       - name: Clean up only unexecuted Records Change Sets
         if: always()
         continue-on-error: true
         run: |
           manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
-          for logical_name in stateful application
+          for logical_name in stateful application edge
           do
             arn=$(jq --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].arn // empty' "${manifest}" 2>/dev/null || true)
-            status=$(aws cloudformation describe-change-set --change-set-name "${arn}" \
+            region=$(jq --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].region // empty' "${manifest}" 2>/dev/null || true)
+            status=$(aws cloudformation describe-change-set --region "${region}" \
+              --change-set-name "${arn}" \
               --query Status --output text 2>/dev/null || true)
-            execution=$(aws cloudformation describe-change-set --change-set-name "${arn}" \
+            execution=$(aws cloudformation describe-change-set --region "${region}" \
+              --change-set-name "${arn}" \
               --query ExecutionStatus --output text 2>/dev/null || true)
             if [ "${status}" = CREATE_COMPLETE ] && [ "${execution}" = AVAILABLE ]; then
-              aws cloudformation delete-change-set --change-set-name "${arn}"
+              aws cloudformation delete-change-set --region "${region}" \
+                --change-set-name "${arn}"
             fi
           done
       - name: Confirm this Records release has no unexecuted Change Sets
         if: always()
         run: |
           manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
-          for logical_name in stateful application
+          for logical_name in stateful application edge
           do
             arn=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
               '.change_sets[$logical_name].arn' "${manifest}")
-            if ! aws cloudformation describe-change-set --change-set-name "${arn}" \
+            region=$(jq --exit-status --raw-output --arg logical_name "${logical_name}" \
+              '.change_sets[$logical_name].region' "${manifest}")
+            if ! aws cloudformation describe-change-set --region "${region}" \
+              --change-set-name "${arn}" \
               > "${RUNNER_TEMP}/${logical_name}-final-change-set.json" \
               2> "${RUNNER_TEMP}/${logical_name}-final-change-set.error"
             then

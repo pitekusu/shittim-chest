@@ -11,14 +11,17 @@ from typing import Any
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
-_CHANGE_SET_NAME = re.compile(r"records-release-[1-9][0-9]*-[1-9][0-9]*-(stateful|application)")
+_CHANGE_SET_NAME = re.compile(
+    r"records-release-[1-9][0-9]*-[1-9][0-9]*-(stateful|application|edge)"
+)
 _CHANGE_SET_ARN = re.compile(
-    r"arn:[a-z0-9-]+:cloudformation:ap-northeast-1:[0-9]{12}:"
+    r"arn:[a-z0-9-]+:cloudformation:(ap-northeast-1|us-east-1):[0-9]{12}:"
     r"changeSet/[A-Za-z0-9][-A-Za-z0-9]*/[0-9a-f-]{36}"
 )
 _STACKS = {
-    "stateful": ("ShittimChest-Prod-RecordsStateful", "stateful"),
-    "application": ("ShittimChest-Prod-RecordsApplication", "application"),
+    "stateful": ("ShittimChest-Prod-RecordsStateful", "stateful", "ap-northeast-1"),
+    "application": ("ShittimChest-Prod-RecordsApplication", "application", "ap-northeast-1"),
+    "edge": ("ShittimChest-Prod-RecordsEdge", "edge", "us-east-1"),
 }
 
 
@@ -27,6 +30,7 @@ def create_change_set_plan(
     *,
     change_set_type: str,
     expected_name: str,
+    expected_region: str,
     expected_stack: str,
 ) -> dict[str, object]:
     """Normalize one described Change Set into its attested execution plan."""
@@ -43,6 +47,8 @@ def create_change_set_plan(
         raise ValueError("Records Change Set ARN is invalid")
     if f"changeSet/{expected_name}/" not in arn:
         raise ValueError("Records Change Set ARN does not bind its name")
+    if f":cloudformation:{expected_region}:" not in arn:
+        raise ValueError("Records Change Set ARN does not bind its region")
 
     status = record.get("Status")
     execution_status = record.get("ExecutionStatus")
@@ -62,6 +68,7 @@ def create_change_set_plan(
         "stack": expected_stack,
         "name": expected_name,
         "arn": arn,
+        "region": expected_region,
         "type": change_set_type,
         "executable": executable,
     }
@@ -72,17 +79,23 @@ def create_manifest(
     application_plan: object,
     bundle_sha256: str,
     commit_sha: str,
+    edge_plan: object,
     stateful_plan: object,
+    web_artifact_sha256: str,
+    web_sbom_sha256: str,
 ) -> dict[str, object]:
-    """Bind the fixed commit, bundle, and two normalized plans."""
+    """Bind the fixed commit, Lambda/Web evidence, and three normalized plans."""
 
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "commit_sha": commit_sha,
         "bundle_sha256": bundle_sha256,
+        "web_artifact_sha256": web_artifact_sha256,
+        "web_sbom_sha256": web_sbom_sha256,
         "change_sets": {
             "stateful": stateful_plan,
             "application": application_plan,
+            "edge": edge_plan,
         },
     }
     validate_manifest(manifest)
@@ -93,9 +106,16 @@ def validate_manifest(value: object, *, expected_commit_sha: str | None = None) 
     """Reject extra fields or an altered stack, identity, type, or execution decision."""
 
     root = _object(value, "Records Release manifest")
-    if set(root) != {"schema_version", "commit_sha", "bundle_sha256", "change_sets"}:
+    if set(root) != {
+        "schema_version",
+        "commit_sha",
+        "bundle_sha256",
+        "web_artifact_sha256",
+        "web_sbom_sha256",
+        "change_sets",
+    }:
         raise ValueError("Records Release manifest fields are invalid")
-    if root.get("schema_version") != 2:
+    if root.get("schema_version") != 3:
         raise ValueError("Records Release manifest schema is invalid")
     commit_sha = root.get("commit_sha")
     if not isinstance(commit_sha, str) or _COMMIT_SHA.fullmatch(commit_sha) is None:
@@ -105,12 +125,18 @@ def validate_manifest(value: object, *, expected_commit_sha: str | None = None) 
     bundle_sha256 = root.get("bundle_sha256")
     if not isinstance(bundle_sha256, str) or _SHA256.fullmatch(bundle_sha256) is None:
         raise ValueError("Records Release bundle hash is invalid")
+    web_artifact_sha256 = root.get("web_artifact_sha256")
+    if not isinstance(web_artifact_sha256, str) or _SHA256.fullmatch(web_artifact_sha256) is None:
+        raise ValueError("Records Release web artifact hash is invalid")
+    web_sbom_sha256 = root.get("web_sbom_sha256")
+    if not isinstance(web_sbom_sha256, str) or _SHA256.fullmatch(web_sbom_sha256) is None:
+        raise ValueError("Records Release web SBOM hash is invalid")
     change_sets = _object(root.get("change_sets"), "Records Change Set plans")
     if tuple(change_sets) != tuple(_STACKS):
         raise ValueError("Records Change Set plan order is invalid")
-    for logical_name, (expected_stack, expected_suffix) in _STACKS.items():
+    for logical_name, (expected_stack, expected_suffix, expected_region) in _STACKS.items():
         plan = _object(change_sets.get(logical_name), f"Records {logical_name} plan")
-        if set(plan) != {"stack", "name", "arn", "type", "executable"}:
+        if set(plan) != {"stack", "name", "arn", "region", "type", "executable"}:
             raise ValueError("Records Change Set plan fields are invalid")
         name = plan.get("name")
         if (
@@ -128,6 +154,10 @@ def validate_manifest(value: object, *, expected_commit_sha: str | None = None) 
             raise ValueError("Records Change Set plan ARN is invalid")
         if plan.get("stack") != expected_stack:
             raise ValueError("Records Change Set plan stack is invalid")
+        if plan.get(
+            "region"
+        ) != expected_region or f":cloudformation:{expected_region}:" not in str(arn):
+            raise ValueError("Records Change Set plan region is invalid")
         change_set_type = plan.get("type")
         executable = plan.get("executable")
         if change_set_type not in {"CREATE", "UPDATE"} or not isinstance(executable, bool):
@@ -160,13 +190,17 @@ def _parser() -> argparse.ArgumentParser:
     entry.add_argument("described_change_set", type=Path)
     entry.add_argument("--type", choices=("CREATE", "UPDATE"), required=True)
     entry.add_argument("--expected-name", required=True)
+    entry.add_argument("--expected-region", choices=("ap-northeast-1", "us-east-1"), required=True)
     entry.add_argument("--expected-stack", required=True)
     entry.add_argument("--output", type=Path, required=True)
     create = commands.add_parser("create-manifest")
     create.add_argument("--stateful-plan", type=Path, required=True)
     create.add_argument("--application-plan", type=Path, required=True)
+    create.add_argument("--edge-plan", type=Path, required=True)
     create.add_argument("--commit-sha", required=True)
     create.add_argument("--bundle-sha256", required=True)
+    create.add_argument("--web-artifact-sha256", required=True)
+    create.add_argument("--web-sbom-sha256", required=True)
     create.add_argument("--output", type=Path, required=True)
     validate = commands.add_parser("validate-manifest")
     validate.add_argument("manifest", type=Path)
@@ -183,6 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _read(args.described_change_set),
                 change_set_type=args.type,
                 expected_name=args.expected_name,
+                expected_region=args.expected_region,
                 expected_stack=args.expected_stack,
             ),
         )
@@ -192,8 +227,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             create_manifest(
                 stateful_plan=_read(args.stateful_plan),
                 application_plan=_read(args.application_plan),
+                edge_plan=_read(args.edge_plan),
                 commit_sha=args.commit_sha,
                 bundle_sha256=args.bundle_sha256,
+                web_artifact_sha256=args.web_artifact_sha256,
+                web_sbom_sha256=args.web_sbom_sha256,
             ),
         )
     else:

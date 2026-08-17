@@ -59,7 +59,11 @@ RECORDS_FILES = frozenset(
         "docs/00_シッテムの箱_ドキュメント索引.md",
         "docs/24_シッテムの箱 議事録設計.md",
         "docs/README.md",
+        "infra/lib/release-identity-stack.ts",
+        "infra/test/release-identity-stack.test.ts",
         "tests/unit/tools/test_classify_ci_paths.py",
+        "tests/unit/tools/test_build_records_web_artifact.py",
+        "tools/build_records_web_artifact.py",
         "tools/classify_ci_paths.py",
         "tools/sync_docs.py",
     }

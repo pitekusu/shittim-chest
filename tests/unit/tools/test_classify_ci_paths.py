@@ -36,6 +36,10 @@ def test_runtime_image_or_validation_changes_require_container_gates(path: str) 
         "contracts/records/v1/openapi.json",
         ".github/workflows/records-ci.yml",
         ".github/workflows/records-release.yml",
+        "tools/build_records_web_artifact.py",
+        "tests/unit/tools/test_build_records_web_artifact.py",
+        "infra/lib/release-identity-stack.ts",
+        "infra/test/release-identity-stack.test.ts",
         "docs/24_シッテムの箱 議事録設計.md",
     ),
 )

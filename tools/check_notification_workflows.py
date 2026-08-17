@@ -1243,30 +1243,17 @@ def _validate_records_workflows(directory: Path) -> None:
             "Records Release must scope conditional replacement to CDK metadata"
         )
     change_set_calls = (
-        (
-            "          set -e\n"
-            "          create_plan stateful ShittimChest-Prod-RecordsStateful \\\n"
-            '            "${STATEFUL_CHANGE_SET}" "${stateful_key}"\n'
-            "          create_plan application"
-        ),
-        (
-            "          create_plan application ShittimChest-Prod-RecordsApplication \\\n"
-            '            "${APPLICATION_CHANGE_SET}" "${application_key}" \\\n'
-            "            --parameters \\\n"
-            "              ParameterKey=SourceDebateTableStreamArn,"
-            'ParameterValue="${SOURCE_STREAM_ARN}" \\\n'
-            "              ParameterKey=RecordsBundleBucketName,"
-            'ParameterValue="${ASSET_BUCKET}" \\\n'
-            "              ParameterKey=RecordsBundleObjectKey,"
-            'ParameterValue="${BUNDLE_KEY}" \\\n'
-            "              ParameterKey=RecordsBundleObjectVersion,"
-            'ParameterValue="${BUNDLE_VERSION}" \\\n'
-            "              ParameterKey=RecordsBundleCodeSha256,"
-            'ParameterValue="${BUNDLE_CODE_SHA256}"\n'
-            "      - name: Record Records release evidence"
-        ),
+        "create_plan stateful ShittimChest-Prod-RecordsStateful",
+        "create_plan application ShittimChest-Prod-RecordsApplication",
+        "create_plan edge ShittimChest-Prod-RecordsEdge",
     )
     if any(release.count(call) != 1 for call in change_set_calls):
+        raise WorkflowPolicyError("Records Release must propagate each create_plan safety failure")
+    plan_step = _workflow_step_block(release, "Create and validate the three Records Change Sets")
+    if (
+        "          set -e\n          create_plan stateful" not in plan_step
+        or "|| true" in plan_step
+    ):
         raise WorkflowPolicyError("Records Release must propagate each create_plan safety failure")
 
     release_markers = (
@@ -1278,6 +1265,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "gh api --paginate --slurp",
         "npm run synth:records",
         "tools/build_records_bundle.py",
+        "tools/build_records_web_artifact.py",
         "--format cyclonedx1.5",
         "vars.AWS_RECORDS_PLAN_ROLE_ARN",
         "vars.AWS_RECORDS_DEPLOY_ROLE_ARN",
@@ -1293,8 +1281,24 @@ def _validate_records_workflows(directory: Path) -> None:
         '.[0].Name == $name and .[0].Type == "SecureString"',
         "records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful",
         "records-release-${{ github.run_id }}-${{ github.run_attempt }}-application",
+        "records-release-${{ github.run_id }}-${{ github.run_attempt }}-edge",
         "ShittimChest-Prod-RecordsStateful",
         "ShittimChest-Prod-RecordsApplication",
+        "ShittimChest-Prod-RecordsEdge",
+        "RecordsPublicHostname",
+        "RecordsHostedZoneId",
+        "RecordsHostedZoneName",
+        "RecordsApiOriginDomain",
+        "RecordsMediaOriginDomain",
+        "records-web.zip",
+        "web_artifact_sha256",
+        "records-web-sbom.cdx.json",
+        "web_sbom_sha256",
+        "cloudfront create-invalidation",
+        "Restore the previous Records entry point after a post-publish failure",
+        "records-previous-index-version",
+        "s3api copy-object",
+        "s3api delete-object",
         "tools/records_release_manifest.py create-entry",
         "tools/records_release_manifest.py create-manifest",
         "tools/records_release_manifest.py validate-manifest",
@@ -1325,6 +1329,14 @@ def _validate_records_workflows(directory: Path) -> None:
     )
     if any(marker not in release for marker in release_markers):
         raise WorkflowPolicyError("Records Release is missing its immutable plan/deploy boundary")
+    if (
+        release.count(
+            "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml"
+        )
+        != 2
+        or release.count("--source-ref refs/heads/main") != 2
+    ):
+        raise WorkflowPolicyError("Records Release is missing its immutable plan/deploy boundary")
     if release.count('--expected-parameter "RecordsBundleCodeSha256=') != 2:
         raise WorkflowPolicyError(
             "Records Release must verify the Lambda code checksum during plan and deploy"
@@ -1338,6 +1350,8 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError("Records Release must use only the attested Change Set type")
     if release.index("execute stateful") >= release.index("execute application"):
         raise WorkflowPolicyError("Records Release must preserve Stateful before Application")
+    if release.index("execute application") >= release.index("execute edge"):
+        raise WorkflowPolicyError("Records Release must preserve Application before Edge")
     execute_start = release.index("          execute() {")
     execute_end = release.index("          manifest=", execute_start)
     execute_step = release[execute_start:execute_end]

@@ -14,6 +14,8 @@ from tools.records_release_manifest import (
 
 COMMIT_SHA = "a" * 40
 BUNDLE_SHA = "b" * 64
+WEB_SHA = "c" * 64
+WEB_SBOM_SHA = "d" * 64
 ACCOUNT = "000000000000"
 
 
@@ -25,16 +27,18 @@ def described(
     reason: str | None = None,
 ) -> dict[str, object]:
     name = f"records-release-123-1-{logical_name}"
-    stack = (
-        "ShittimChest-Prod-RecordsStateful"
-        if logical_name == "stateful"
-        else "ShittimChest-Prod-RecordsApplication"
-    )
+    stacks = {
+        "stateful": "ShittimChest-Prod-RecordsStateful",
+        "application": "ShittimChest-Prod-RecordsApplication",
+        "edge": "ShittimChest-Prod-RecordsEdge",
+    }
+    stack = stacks[logical_name]
+    region = "us-east-1" if logical_name == "edge" else "ap-northeast-1"
     result: dict[str, object] = {
         "StackName": stack,
         "ChangeSetName": name,
         "ChangeSetId": (
-            f"arn:aws:cloudformation:ap-northeast-1:{ACCOUNT}:"
+            f"arn:aws:cloudformation:{region}:{ACCOUNT}:"
             f"changeSet/{name}/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         ),
         "Status": status,
@@ -51,6 +55,7 @@ def plan(logical_name: str, change_set_type: str = "UPDATE") -> dict[str, object
         record,
         change_set_type=change_set_type,
         expected_name=str(record["ChangeSetName"]),
+        expected_region="us-east-1" if logical_name == "edge" else "ap-northeast-1",
         expected_stack=str(record["StackName"]),
     )
 
@@ -59,19 +64,24 @@ def manifest() -> dict[str, object]:
     return create_manifest(
         stateful_plan=plan("stateful"),
         application_plan=plan("application", "CREATE"),
+        edge_plan=plan("edge", "CREATE"),
         commit_sha=COMMIT_SHA,
         bundle_sha256=BUNDLE_SHA,
+        web_artifact_sha256=WEB_SHA,
+        web_sbom_sha256=WEB_SBOM_SHA,
     )
 
 
 def test_change_set_plan_attests_create_or_update_and_execution_decision() -> None:
     stateful = plan("stateful")
     application = plan("application", "CREATE")
+    edge = plan("edge", "CREATE")
 
     assert stateful["type"] == "UPDATE"
     assert stateful["executable"] is True
     assert application["type"] == "CREATE"
     assert application["executable"] is True
+    assert edge["region"] == "us-east-1"
 
 
 def test_unchanged_update_is_a_normal_non_executable_plan() -> None:
@@ -86,6 +96,7 @@ def test_unchanged_update_is_a_normal_non_executable_plan() -> None:
         record,
         change_set_type="UPDATE",
         expected_name=str(record["ChangeSetName"]),
+        expected_region="ap-northeast-1",
         expected_stack=str(record["StackName"]),
     )
 
@@ -117,6 +128,7 @@ def test_change_set_plan_rejects_failures_and_incomplete_states(
             record,
             change_set_type="UPDATE",
             expected_name=str(record["ChangeSetName"]),
+            expected_region="ap-northeast-1",
             expected_stack=str(record["StackName"]),
         )
 
@@ -126,10 +138,13 @@ def test_manifest_binds_fixed_sha_stack_name_type_and_execution() -> None:
 
     validate_manifest(value, expected_commit_sha=COMMIT_SHA)
 
-    assert value["schema_version"] == 2
+    assert value["schema_version"] == 3
+    assert value["web_artifact_sha256"] == WEB_SHA
+    assert value["web_sbom_sha256"] == WEB_SBOM_SHA
     assert value["change_sets"] == {
         "stateful": plan("stateful"),
         "application": plan("application", "CREATE"),
+        "edge": plan("edge", "CREATE"),
     }
 
 
@@ -137,9 +152,11 @@ def test_manifest_binds_fixed_sha_stack_name_type_and_execution() -> None:
     ("path", "replacement"),
     (
         (("commit_sha",), "c" * 40),
+        (("web_sbom_sha256",), "not-a-hash"),
         (("change_sets", "stateful", "stack"), "WrongStack"),
         (("change_sets", "stateful", "name"), "records-release-123-1-application"),
         (("change_sets", "stateful", "type"), "REPLACE"),
+        (("change_sets", "edge", "region"), "ap-northeast-1"),
         (("change_sets", "application", "executable"), False),
     ),
 )
