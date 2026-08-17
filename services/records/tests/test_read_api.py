@@ -154,6 +154,16 @@ def test_list_rejects_a_row_outside_the_requested_time_range() -> None:
     assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
 
 
+def test_list_converts_stored_timestamp_overflow_to_archive_unavailable() -> None:
+    records, reader = service()
+    reader.meta["completed_at"] = "9999-12-31T23:59:59-01:00"
+
+    with pytest.raises(ReadFailure) as caught:
+        records.list_records(query=ListQuery(), now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
+
+
 def test_cursor_is_bound_to_filters_limit_index_and_expiry() -> None:
     codec = CursorCodec(SESSION_KEY)
     query = ListQuery(limit=12, winner="participant-b")

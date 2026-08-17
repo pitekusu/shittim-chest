@@ -533,7 +533,7 @@ def _validate_list_projection(
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
     try:
         completed_at = TypeAdapter(AwareDatetime).validate_python(completed_text).astimezone(UTC)
-    except ValidationError:
+    except OverflowError, ValidationError:
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
     if completed_at.isoformat() != completed_text:
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
