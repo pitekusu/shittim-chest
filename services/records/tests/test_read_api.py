@@ -81,6 +81,89 @@ def test_list_normalizes_preview_and_uses_profile_avatar() -> None:
     assert reader.list_calls[0]["limit"] == 12
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("gsi1pk", "ARCHIVE#UNKNOWN"),
+        ("gsi1sk", "2026-08-17T00:00:00+00:00#wrong-record"),
+    ),
+)
+def test_list_rejects_malformed_selected_gsi1_projection(field: str, value: str) -> None:
+    records, reader = service()
+    reader.meta[field] = value
+
+    with pytest.raises(ReadFailure) as caught:
+        records.list_records(query=ListQuery(), now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
+
+
+def test_winner_filtered_list_rejects_a_row_for_another_winner() -> None:
+    records, reader = service()
+    requested_winner = cast(Any, reader.meta["winner"])
+    conflicting_winner = next(
+        slot
+        for slot in ("participant-a", "participant-b", "participant-c")
+        if slot != requested_winner
+    )
+    reader.meta["winner"] = conflicting_winner
+    reader.page = ArchivePage(
+        items=(reader.meta,),
+        last_evaluated_key=None,
+        index_name="gsi2",
+    )
+
+    with pytest.raises(ReadFailure) as caught:
+        records.list_records(query=ListQuery(winner=requested_winner), now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("gsi2pk", "WINNER#participant-unknown"),
+        ("gsi2sk", "2026-08-17T00:00:00+00:00#wrong-record"),
+    ),
+)
+def test_winner_filtered_list_rejects_malformed_selected_gsi2_projection(
+    field: str,
+    value: str,
+) -> None:
+    records, reader = service()
+    requested_winner = cast(Any, reader.meta["winner"])
+    reader.meta[field] = value
+    reader.page = ArchivePage(
+        items=(reader.meta,),
+        last_evaluated_key=None,
+        index_name="gsi2",
+    )
+
+    with pytest.raises(ReadFailure) as caught:
+        records.list_records(query=ListQuery(winner=requested_winner), now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
+
+
+def test_list_rejects_a_row_outside_the_requested_time_range() -> None:
+    records, _reader = service()
+
+    with pytest.raises(ReadFailure) as caught:
+        records.list_records(query=ListQuery(from_at=NOW + timedelta(seconds=1)), now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
+
+
+def test_list_converts_stored_timestamp_overflow_to_archive_unavailable() -> None:
+    records, reader = service()
+    reader.meta["completed_at"] = "9999-12-31T23:59:59-01:00"
+
+    with pytest.raises(ReadFailure) as caught:
+        records.list_records(query=ListQuery(), now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
+
+
 def test_cursor_is_bound_to_filters_limit_index_and_expiry() -> None:
     codec = CursorCodec(SESSION_KEY)
     query = ListQuery(limit=12, winner="participant-b")
