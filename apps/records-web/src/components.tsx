@@ -81,6 +81,9 @@ export function Layout({
         >
           記録
         </NavLink>
+        <button className={styles.mobileLogout} type="button" onClick={onLogout}>
+          ログアウト
+        </button>
       </nav>
     </div>
   );

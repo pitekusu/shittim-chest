@@ -149,7 +149,52 @@ describe("App", () => {
     expect(within(card).getByText("休日の過ごし方を決める")).toBeVisible();
     expect(within(card).getAllByText("依頼者")).toHaveLength(2);
     expect(within(card).getByText("アロナ")).toBeVisible();
+    expect(
+      within(screen.getByRole("navigation", { name: "モバイルナビゲーション" })).getByRole(
+        "button",
+        { name: "ログアウト" },
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
+  });
+
+  it("returns to login when a protected request reports an expired session", async () => {
+    let sessionRequests = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (path === "/api/v1/session") {
+          sessionRequests += 1;
+          const session =
+            sessionRequests === 1
+              ? authenticatedSession()
+              : { schemaVersion: 1, authenticated: false, user: null, csrfToken: null };
+          return Promise.resolve(response(session));
+        }
+        if (path.startsWith("/api/v1/records?")) {
+          return Promise.resolve(
+            response(
+              {
+                error: {
+                  code: "AUTHENTICATION_REQUIRED",
+                  message: "ログインし直してください。",
+                  requestId: "request-id",
+                },
+              },
+              401,
+            ),
+          );
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "シッテムの箱 議事録" })).toBeVisible();
+    expect(sessionRequests).toBe(2);
   });
 
   it("renders named votes and only the saved final result on detail", async () => {

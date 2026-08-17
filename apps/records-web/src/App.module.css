@@ -878,12 +878,30 @@
     bottom: 10px;
     left: 12px;
     display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
     padding: 7px;
     border: 1px solid rgb(255 255 255 / 90%);
     border-radius: 18px;
     background: rgb(255 255 255 / 88%);
     box-shadow: var(--records-shadow);
     backdrop-filter: blur(20px);
+  }
+  .mobileLogout {
+    min-height: 48px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--records-ink-600);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+  }
+  .mobileLogout:hover,
+  .mobileLogout:focus-visible {
+    background: var(--records-pink-100);
+    color: var(--records-ink-900);
   }
 }
 

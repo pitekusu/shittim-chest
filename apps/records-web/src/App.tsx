@@ -34,6 +34,24 @@ import styles from "./App.module.css";
 const SESSION_QUERY_KEY = ["records-session"] as const;
 const LOGIN_TRANSITION_KEY = "shittim-records-login-transition";
 
+function useAuthenticationRecovery(error: unknown) {
+  const client = useQueryClient();
+  useEffect(() => {
+    if (
+      !(error instanceof RecordsApiError) ||
+      error.status !== 401 ||
+      error.code !== "AUTHENTICATION_REQUIRED"
+    ) {
+      return;
+    }
+    void client.invalidateQueries({ queryKey: SESSION_QUERY_KEY, exact: true }).finally(() => {
+      client.removeQueries({
+        predicate: (query) => query.queryKey[0] === "records" || query.queryKey[0] === "record",
+      });
+    });
+  }, [client, error]);
+}
+
 function LoadingScreen() {
   return (
     <main className={styles.loadingScreen} aria-busy="true">
@@ -161,6 +179,7 @@ function RecordsHome() {
       }),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
+  useAuthenticationRecovery(records.error);
   const visibleRecords = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ja-JP");
     const items = records.data?.pages.flatMap((page) => page.items) ?? [];
@@ -267,6 +286,7 @@ function RecordDetail() {
     queryFn: () => getRecord(recordId),
     enabled: /^[A-Za-z0-9_-]{43}$/.test(recordId),
   });
+  useAuthenticationRecovery(record.error);
   if (!/^[A-Za-z0-9_-]{43}$/.test(recordId)) return <NotFound />;
   if (record.isPending) return <p className={styles.loadingLine}>議論の記録を開いています。</p>;
   if (record.isError) {
