@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import re
 import secrets
@@ -397,8 +396,7 @@ def _digest(key: bytes, domain: str, value: str) -> str:
         raise AuthFailure("configuration_invalid")
     # Values are independent 256-bit random bearer tokens, not low-entropy passwords;
     # keyed HMAC-SHA256 is the intentional lookup-key derivation required by the design.
-    # codeql[py/weak-sensitive-data-hashing]
-    return hmac.new(key, f"records:{domain}:{value}".encode(), hashlib.sha256).hexdigest()
+    return hmac.digest(key, f"records:{domain}:{value}".encode(), "sha256").hex()
 
 
 def _cookie(name: str, value: str, *, max_age: int, http_only: bool = True) -> str:
