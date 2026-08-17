@@ -396,6 +396,8 @@ def _digest(key: bytes, domain: str, value: str) -> str:
         raise AuthFailure("configuration_invalid")
     # Values are independent 256-bit random bearer tokens, not low-entropy passwords;
     # keyed HMAC-SHA256 is the intentional lookup-key derivation required by the design.
+
+    # codeql[py/weak-sensitive-data-hashing]
     return hmac.digest(key, f"records:{domain}:{value}".encode(), "sha256").hex()
 
 
