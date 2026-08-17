@@ -35,14 +35,16 @@ function synthesize(): {
 }
 
 describe("RecordsApplicationStack", () => {
-  test("creates two Python 3.14 ARM64 functions from an immutable S3 version", () => {
+  test("creates four Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 2);
+    template.resourceCountIs("AWS::Lambda::Function", 4);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
+      "shittim-chest-production-records-auth",
+      "shittim-chest-production-records-read",
     ]) {
       template.hasResourceProperties("AWS::Lambda::Function", {
         Architectures: ["arm64"],
@@ -62,10 +64,12 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 2);
+    template.resourceCountIs("AWS::Logs::LogGroup", 5);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
+      "shittim-chest-production-records-auth",
+      "shittim-chest-production-records-read",
     ]) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
         ([, resource]) =>
@@ -85,6 +89,59 @@ describe("RecordsApplicationStack", () => {
     for (const resource of Object.values(logGroups)) {
       expect(resource.Properties.RetentionInDays).toBe(90);
     }
+  });
+
+  test("publishes Auth and Read aliases behind exactly six HTTP API routes", () => {
+    const { template } = synthesize();
+
+    template.resourceCountIs("AWS::Lambda::Version", 2);
+    template.resourceCountIs("AWS::Lambda::Alias", 2);
+    template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 6);
+    template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
+    template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
+      AutoDeploy: true,
+      DefaultRouteSettings: {
+        ThrottlingBurstLimit: 20,
+        ThrottlingRateLimit: 10,
+      },
+      StageName: "$default",
+    });
+    const serialized = JSON.stringify(template.toJSON());
+    expect(serialized).not.toContain("/api/v1/insights");
+    expect(template.toJSON().Parameters.RecordsBundleCodeSha256.Default).toBeUndefined();
+    for (const alias of Object.values(template.findResources("AWS::Lambda::Alias"))) {
+      expect(alias.Properties.Name).toBe("live");
+    }
+  });
+
+  test("keeps Auth and Read IAM resources exact and disjoint", () => {
+    const { template } = synthesize();
+    const policies = template.findResources("AWS::IAM::Policy");
+    const auth = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("AuthFunctionRole"),
+    );
+    const read = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("ReadFunctionRole"),
+    );
+
+    expect(auth).toBeDefined();
+    expect(read).toBeDefined();
+    const authText = JSON.stringify(auth);
+    const readText = JSON.stringify(read);
+    expect(authText).toContain("dynamodb:TransactWriteItems");
+    expect(authText).toContain("/requesters/*");
+    expect(authText).not.toContain("/participants/*");
+    expect(authText).not.toContain("/index/gsi");
+    expect(readText).toContain("dynamodb:BatchGetItem");
+    expect(readText).toContain("/index/gsi1");
+    expect(readText).toContain("/index/gsi2");
+    expect(readText).not.toContain("/index/gsi3");
+    expect(readText).toContain("/participants/*");
+    expect(readText).toContain("/requesters/*");
+    expect(readText).not.toContain("dynamodb:PutItem");
+    expect(readText).not.toContain("dynamodb:DeleteItem");
+    expect(readText).not.toContain("s3:PutObject");
   });
 
   test("filters completed metadata and bounds every stream retry dimension", () => {
@@ -113,10 +170,15 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const policies = template.findResources("AWS::IAM::Policy");
     const serialized = JSON.stringify(policies);
+    const projectionPolicies = Object.values(policies).filter((policy) => {
+      const value = JSON.stringify(policy);
+      return value.includes("ProjectorFunctionRole") || value.includes("BackfillFunctionRole");
+    });
+    const projectionText = JSON.stringify(projectionPolicies);
 
-    expect(serialized).not.toContain("dynamodb:DeleteItem");
-    expect(serialized).not.toContain("dynamodb:UpdateItem");
-    expect(serialized).not.toContain("dynamodb:BatchWriteItem");
+    expect(projectionText).not.toContain("dynamodb:DeleteItem");
+    expect(projectionText).not.toContain("dynamodb:UpdateItem");
+    expect(projectionText).not.toContain("dynamodb:BatchWriteItem");
     const projectorPolicy = Object.values(policies).find((policy) =>
       JSON.stringify(policy).includes("ProjectorFunctionRole"),
     );

@@ -13,6 +13,7 @@ CostStatus = Literal["partial", "final", "unavailable"]
 CostPeriod = Literal["today", "week", "month", "all"]
 
 NonEmptyText = Annotated[str, Field(min_length=1, pattern=r"\S")]
+RecordId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
 _ALL_PARTICIPANT_SLOTS = frozenset[ParticipantSlot](
     {"participant-a", "participant-b", "participant-c"}
 )
@@ -141,9 +142,9 @@ class RecordResultSummary(PublicModel):
 
 class RecordListItem(PublicModel):
     schema_version: Literal[1]
-    record_id: NonEmptyText
+    record_id: RecordId
     completed_at: AwareDatetime
-    question_preview: NonEmptyText
+    question_preview: Annotated[str, Field(min_length=1, max_length=160, pattern=r"\S")]
     requester: RequesterSummary
     participants: ParticipantCollection
     result: RecordResultSummary
@@ -157,7 +158,7 @@ class RecordListItem(PublicModel):
 class RecordListResponse(PublicModel):
     schema_version: Literal[1]
     items: tuple[RecordListItem, ...]
-    next_cursor: Annotated[str, Field(min_length=1)] | None = None
+    next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
 
 
 class InitialOpinionView(PublicModel):
@@ -220,7 +221,7 @@ class FinalDecisionView(PublicModel):
 
 class RecordDetailResponse(PublicModel):
     schema_version: Literal[1]
-    record_id: NonEmptyText
+    record_id: RecordId
     completed_at: AwareDatetime
     question: NonEmptyText
     requester: RequesterSummary
@@ -324,7 +325,5 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordListResponse,
     RecordDetailResponse,
     SessionResponse,
-    RankingsResponse,
-    CostsResponse,
     ErrorResponse,
 )

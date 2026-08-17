@@ -110,7 +110,7 @@ def project_completed_debate(
     debate_id = str(snapshot.state.debate_id)
     attempt_id = str(snapshot.state.attempt_id)
     record_id = _opaque_key(identity_hmac_key, f"record:{debate_id}")
-    requester_key = _opaque_key(identity_hmac_key, f"requester:{snapshot.requester_id}")
+    requester_key = derive_requester_key(identity_hmac_key, snapshot.requester_id)
     completed_at = snapshot.state.updated_at.astimezone(UTC).isoformat()
     projected_at_text = projected_at.isoformat()
     vote_counts = Counter(vote.candidate for vote in snapshot.votes)
@@ -267,6 +267,14 @@ def project_completed_debate(
 def _opaque_key(key: bytes, value: str) -> str:
     digest = hmac.new(key, value.encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def derive_requester_key(key: bytes, requester_id: str) -> str:
+    """Derive the requester identity shared by projection and OAuth profiles."""
+
+    if len(key) < 32 or not requester_id:
+        raise ValueError("requester key input is invalid")
+    return _opaque_key(key, f"requester:{requester_id}")
 
 
 def _canonical_json(value: object) -> bytes:

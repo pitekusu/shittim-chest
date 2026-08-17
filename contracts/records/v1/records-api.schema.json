@@ -63,91 +63,6 @@
       "title": "AuthenticatedSession",
       "type": "object"
     },
-    "CostBreakdown": {
-      "additionalProperties": false,
-      "properties": {
-        "fargate": {
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
-          "title": "Fargate",
-          "type": "string"
-        },
-        "lambda": {
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
-          "title": "Lambda",
-          "type": "string"
-        },
-        "openai": {
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
-          "title": "Openai",
-          "type": "string"
-        }
-      },
-      "required": [
-        "fargate",
-        "lambda",
-        "openai"
-      ],
-      "title": "CostBreakdown",
-      "type": "object"
-    },
-    "CostsResponse": {
-      "additionalProperties": false,
-      "properties": {
-        "breakdown": {
-          "$ref": "#/$defs/CostBreakdown"
-        },
-        "currency": {
-          "const": "USD",
-          "title": "Currency",
-          "type": "string"
-        },
-        "period": {
-          "enum": [
-            "today",
-            "week",
-            "month",
-            "all"
-          ],
-          "title": "Period",
-          "type": "string"
-        },
-        "schemaVersion": {
-          "const": 1,
-          "title": "Schemaversion",
-          "type": "integer"
-        },
-        "status": {
-          "enum": [
-            "partial",
-            "final",
-            "unavailable"
-          ],
-          "title": "Status",
-          "type": "string"
-        },
-        "total": {
-          "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
-          "title": "Total",
-          "type": "string"
-        },
-        "updatedAt": {
-          "format": "date-time",
-          "title": "Updatedat",
-          "type": "string"
-        }
-      },
-      "required": [
-        "schemaVersion",
-        "period",
-        "currency",
-        "total",
-        "breakdown",
-        "updatedAt",
-        "status"
-      ],
-      "title": "CostsResponse",
-      "type": "object"
-    },
     "ErrorBody": {
       "additionalProperties": false,
       "properties": {
@@ -432,83 +347,6 @@
       "title": "PlaceholderAvatarRef",
       "type": "object"
     },
-    "RankingEntry": {
-      "additionalProperties": false,
-      "properties": {
-        "avatar": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ImageAvatarRef"
-            },
-            {
-              "$ref": "#/$defs/PlaceholderAvatarRef"
-            }
-          ],
-          "title": "Avatar"
-        },
-        "count": {
-          "minimum": 0,
-          "title": "Count",
-          "type": "integer"
-        },
-        "displayName": {
-          "minLength": 1,
-          "pattern": "\\S",
-          "title": "Displayname",
-          "type": "string"
-        },
-        "rank": {
-          "minimum": 1,
-          "title": "Rank",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "rank",
-        "displayName",
-        "avatar",
-        "count"
-      ],
-      "title": "RankingEntry",
-      "type": "object"
-    },
-    "RankingsResponse": {
-      "additionalProperties": false,
-      "properties": {
-        "generatedAt": {
-          "format": "date-time",
-          "title": "Generatedat",
-          "type": "string"
-        },
-        "requests": {
-          "items": {
-            "$ref": "#/$defs/RankingEntry"
-          },
-          "title": "Requests",
-          "type": "array"
-        },
-        "schemaVersion": {
-          "const": 1,
-          "title": "Schemaversion",
-          "type": "integer"
-        },
-        "wins": {
-          "items": {
-            "$ref": "#/$defs/RankingEntry"
-          },
-          "title": "Wins",
-          "type": "array"
-        }
-      },
-      "required": [
-        "schemaVersion",
-        "wins",
-        "requests",
-        "generatedAt"
-      ],
-      "title": "RankingsResponse",
-      "type": "object"
-    },
     "RecordDetailResponse": {
       "additionalProperties": false,
       "properties": {
@@ -719,8 +557,7 @@
           "type": "string"
         },
         "recordId": {
-          "minLength": 1,
-          "pattern": "\\S",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
           "title": "Recordid",
           "type": "string"
         },
@@ -889,14 +726,14 @@
           "type": "array"
         },
         "questionPreview": {
+          "maxLength": 160,
           "minLength": 1,
           "pattern": "\\S",
           "title": "Questionpreview",
           "type": "string"
         },
         "recordId": {
-          "minLength": 1,
-          "pattern": "\\S",
+          "pattern": "^[A-Za-z0-9_-]{43}$",
           "title": "Recordid",
           "type": "string"
         },
@@ -937,6 +774,7 @@
         "nextCursor": {
           "anyOf": [
             {
+              "maxLength": 4096,
               "minLength": 1,
               "type": "string"
             },
@@ -1257,12 +1095,6 @@
     },
     {
       "$ref": "#/$defs/SessionResponse"
-    },
-    {
-      "$ref": "#/$defs/RankingsResponse"
-    },
-    {
-      "$ref": "#/$defs/CostsResponse"
     },
     {
       "$ref": "#/$defs/ErrorResponse"

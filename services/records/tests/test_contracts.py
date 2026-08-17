@@ -41,7 +41,7 @@ def _record_detail_payload() -> dict[str, object]:
     )
     return {
         "schemaVersion": 1,
-        "recordId": "record-example",
+        "recordId": "r" * 43,
         "completedAt": datetime(2026, 8, 15, tzinfo=UTC),
         "question": "休日の過ごし方を決める",
         "requester": {
@@ -116,7 +116,7 @@ def test_record_list_does_not_expose_internal_or_evidence_fields() -> None:
         items=(
             {
                 "schemaVersion": 1,
-                "recordId": "record-example",
+                "recordId": "r" * 43,
                 "completedAt": datetime(2026, 8, 15, tzinfo=UTC),
                 "questionPreview": "休日の過ごし方を決める",
                 "requester": {

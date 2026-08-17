@@ -1144,6 +1144,12 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     )
     if any(marker not in records_python for marker in required_records_audit):
         raise WorkflowPolicyError("Records CI must audit the frozen Records Python lock")
+    required_records_dynamodb = (
+        "tools/run_dynamodb_local.py",
+        "tests/test_dynamodb_integration.py",
+    )
+    if any(marker not in records_python for marker in required_records_dynamodb):
+        raise WorkflowPolicyError("Records CI must run the pinned DynamoDB Local integration test")
 
     records_web = _workflow_job_block(records_text, "records-web")
     if "voidzero-dev/setup-vp@" in records_web:
@@ -1254,7 +1260,9 @@ def _validate_records_workflows(directory: Path) -> None:
             "              ParameterKey=RecordsBundleObjectKey,"
             'ParameterValue="${BUNDLE_KEY}" \\\n'
             "              ParameterKey=RecordsBundleObjectVersion,"
-            'ParameterValue="${BUNDLE_VERSION}"\n'
+            'ParameterValue="${BUNDLE_VERSION}" \\\n'
+            "              ParameterKey=RecordsBundleCodeSha256,"
+            'ParameterValue="${BUNDLE_CODE_SHA256}"\n'
             "      - name: Record Records release evidence"
         ),
     )
@@ -1279,6 +1287,9 @@ def _validate_records_workflows(directory: Path) -> None:
         "aws ssm describe-parameters",
         "/shittim-chest/production/records/identity-hmac-key",
         "/shittim-chest/production/records/presentation/v0001",
+        "/shittim-chest/production/records/discord/oauth/v0001",
+        "/shittim-chest/production/records/discord/client-secret",
+        "/shittim-chest/production/records/session-key",
         '.[0].Name == $name and .[0].Type == "SecureString"',
         "records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful",
         "records-release-${{ github.run_id }}-${{ github.run_attempt }}-application",
@@ -1304,9 +1315,20 @@ def _validate_records_workflows(directory: Path) -> None:
         ".Stacks[0].EnableTerminationProtection == true",
         "Clean up only unexecuted Records Change Sets",
         "Confirm this Records release has no unexecuted Change Sets",
+        "RecordsBundleCodeSha256",
+        "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w0)",
+        '--expected-parameter "RecordsBundleCodeSha256=${bundle_code_sha256}"',
+        "Verify anonymous and protected Records API boundaries",
+        '"${endpoint}/api/v1/session"',
+        '"${endpoint}/api/v1/records"',
+        '.error.code == "AUTHENTICATION_REQUIRED"',
     )
     if any(marker not in release for marker in release_markers):
         raise WorkflowPolicyError("Records Release is missing its immutable plan/deploy boundary")
+    if release.count('--expected-parameter "RecordsBundleCodeSha256=') != 2:
+        raise WorkflowPolicyError(
+            "Records Release must verify the Lambda code checksum during plan and deploy"
+        )
     if release.count('--type "${type}"') != 2:
         raise WorkflowPolicyError("Records Release must attest and revalidate each Change Set type")
     deploy_block = _workflow_job_block(release, "deploy")

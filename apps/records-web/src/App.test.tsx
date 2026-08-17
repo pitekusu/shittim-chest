@@ -20,7 +20,7 @@ function recordDetail() {
   }));
   return {
     schemaVersion: 1,
-    recordId: "record-example",
+    recordId: "r".repeat(43),
     completedAt: "2026-08-15T06:00:00Z",
     question: "休日の過ごし方を決める",
     requester: {
@@ -88,15 +88,10 @@ describe("App", () => {
   });
 
   it("rejects malformed date-time values from the API", () => {
-    const rankings = {
-      schemaVersion: 1,
-      wins: [],
-      requests: [],
-      generatedAt: "2026-08-15T06:00:00Z",
-    };
+    const detail = recordDetail();
 
-    expect(isRecordsApiResponse(rankings)).toBe(true);
-    expect(isRecordsApiResponse({ ...rankings, generatedAt: "not-a-date" })).toBe(false);
+    expect(isRecordsApiResponse(detail)).toBe(true);
+    expect(isRecordsApiResponse({ ...detail, completedAt: "not-a-date" })).toBe(false);
   });
 
   it("rejects incomplete participant collections and conflicting winners", () => {

@@ -244,6 +244,61 @@ def test_records_release_requires_secure_parameter_metadata(tmp_path: Path) -> N
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "parameter_name",
+    (
+        "/shittim-chest/production/records/discord/oauth/v0001",
+        "/shittim-chest/production/records/discord/client-secret",
+        "/shittim-chest/production/records/session-key",
+    ),
+)
+def test_records_release_requires_each_auth_parameter_metadata(
+    tmp_path: Path,
+    parameter_name: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(parameter_name, "/removed", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_read_only_api_smoke(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '"${endpoint}/api/v1/records"',
+            '"${endpoint}/api/v1/session"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '--expected-parameter "RecordsBundleCodeSha256=${bundle_code_sha256}"',
+            '--expected-parameter "RecordsBundleCodeSha256=unattested"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"plan/deploy boundary|code checksum"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_requires_a_path_only_attestation_signer(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
@@ -348,7 +403,7 @@ def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) ->
     "call_end",
     [
         '"${STATEFUL_CHANGE_SET}" "${stateful_key}"',
-        'ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"',
+        'ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}"',
     ],
 )
 def test_records_release_propagates_each_create_plan_failure(
