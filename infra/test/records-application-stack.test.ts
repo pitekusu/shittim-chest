@@ -35,6 +35,20 @@ function synthesize(): {
 }
 
 describe("RecordsApplicationStack", () => {
+  test("synthesizes when the deployment account is unresolved", () => {
+    const app = new App();
+    const stack = new RecordsApplicationStack(app, "RecordsApplication", {
+      env: { region: "ap-northeast-1" },
+      stackName: "ShittimChest-Prod-RecordsApplication",
+      terminationProtection: true,
+    });
+    const checks = new AwsSolutionsChecks(app, { verbose: true });
+    Validations.of(app).addPlugins(checks);
+
+    expect(() => app.synth()).not.toThrow();
+    expect(checks.validateScope(stack).success).toBe(true);
+  });
+
   test("creates four Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 

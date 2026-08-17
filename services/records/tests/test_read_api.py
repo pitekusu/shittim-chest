@@ -157,6 +157,18 @@ def test_detail_reconstructs_exact_twelve_items_without_internal_fields() -> Non
         assert forbidden not in serialized
 
 
+def test_detail_rejects_conflicting_saved_winners() -> None:
+    reader = FakeReader()
+    decision = next(item for item in reader.items if item["SK"] == "DECISION")
+    decision["winner"] = "participant-a"
+    records, _reader = service(reader)
+
+    with pytest.raises(ReadFailure) as caught:
+        records.get_record(record_id=reader.record_id, now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
+
+
 @pytest.mark.parametrize(
     "mutation",
     (

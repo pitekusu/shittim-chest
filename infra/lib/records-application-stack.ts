@@ -5,6 +5,7 @@ import {
   RemovalPolicy,
   Stack,
   StackProps,
+  Token,
   Validations,
   aws_apigateway as apigateway,
   aws_apigatewayv2 as apigatewayv2,
@@ -39,6 +40,7 @@ export class RecordsApplicationStack extends Stack {
     props: RecordsApplicationStackProps,
   ) {
     super(scope, id, props);
+    const nagAccount = Token.isUnresolved(this.account) ? "<AWS::AccountId>" : this.account;
 
     const sourceTableName = new CfnParameter(this, "SourceDebateTableName", {
       type: "String",
@@ -248,7 +250,7 @@ export class RecordsApplicationStack extends Stack {
       Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].map((partition) => [
           `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
-            `shittim-chest-production-records-media-${this.account}/requesters/*]`,
+            `shittim-chest-production-records-media-${nagAccount}/requesters/*]`,
           "OAuth avatar caching is restricted to opaque object keys below the requester media prefix.",
         ]),
       ),
@@ -298,7 +300,7 @@ export class RecordsApplicationStack extends Stack {
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
           ["participants", "requesters"].map((prefix) => [
             `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
-              `shittim-chest-production-records-media-${this.account}/${prefix}/*]`,
+              `shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
             "Authenticated avatar reads are restricted to the two approved private media prefixes.",
           ]),
         ),

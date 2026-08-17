@@ -237,6 +237,10 @@ class RecordsReadService:
             meta,
             _unexpired_profile(profiles.get(requester_key), now=_utc(now)),
         )
+        stored_winner = _required_text(meta, "winner")
+        decision_winner = _required_text(by_key["DECISION"], "winner")
+        if stored_winner != decision_winner:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         payload: dict[str, Any] = {
             "schemaVersion": 1,
             "recordId": _required_text(meta, "record_id"),
@@ -270,7 +274,7 @@ class RecordsReadService:
             ),
             "result": self._result(meta),
             "finalDecision": {
-                "winner": _required_text(by_key["DECISION"], "winner"),
+                "winner": decision_winner,
                 "victoryMessage": by_key["DECISION"].get("victory_message"),
                 "decision": _required_text(by_key["DECISION"], "decision"),
                 "actions": _required_text_list(by_key["DECISION"], "actions"),
