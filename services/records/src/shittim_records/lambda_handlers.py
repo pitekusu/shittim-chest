@@ -1,4 +1,4 @@
-"""AWS Lambda entry points for projection and bounded backfill."""
+"""AWS Lambda entry points for Records projection, backfill, auth, and reads."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import boto3
+import httpx
+from botocore.config import Config
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -21,13 +23,31 @@ from shittim_records.adapters import (
     SourceDebateRepository,
     StatisticsRepository,
 )
+from shittim_records.auth import AuthService
+from shittim_records.auth_adapters import (
+    AuthConfigurationRepository,
+    DiscordOAuthClient,
+    DynamoAuthStore,
+    S3AvatarStore,
+)
+from shittim_records.http_api import AuthHttpController, ReadHttpController
 from shittim_records.projector import BackfillService, ProjectorService
+from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
+from shittim_records.read_api import CursorCodec, RecordsReadService
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 
 _PROJECTOR: ProjectorService | None = None
 _BACKFILL: BackfillService | None = None
+_AUTH_CONTROLLER: AuthHttpController | None = None
+_READ_CONTROLLER: ReadHttpController | None = None
+
+SDK_CONFIG = Config(
+    retries={"total_max_attempts": 2, "mode": "standard"},
+    connect_timeout=2,
+    read_timeout=5,
+)
 
 
 def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
@@ -88,6 +108,18 @@ def backfill_handler(event: Mapping[str, Any], _context: object) -> dict[str, ob
     return response
 
 
+def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
+    """Handle public OAuth and session routes."""
+
+    return _auth_controller().handle(event, now=datetime.now(UTC))
+
+
+def read_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
+    """Handle authenticated Archive list and detail routes."""
+
+    return _read_controller().handle(event, now=datetime.now(UTC))
+
+
 def _projector_service() -> ProjectorService:
     global _PROJECTOR
     if _PROJECTOR is None:
@@ -110,6 +142,55 @@ def _backfill_service() -> BackfillService:
             ),
         )
     return _BACKFILL
+
+
+def _auth_controller() -> AuthHttpController:
+    global _AUTH_CONTROLLER
+    if _AUTH_CONTROLLER is None:
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        configuration = AuthConfigurationRepository(
+            boto3.client("ssm", config=SDK_CONFIG),
+            identity_parameter_name=_environment("IDENTITY_HMAC_PARAMETER_NAME"),
+            oauth_parameter_name=_environment("OAUTH_CONFIG_PARAMETER_NAME"),
+            client_secret_parameter_name=_environment("OAUTH_CLIENT_SECRET_PARAMETER_NAME"),
+            session_key_parameter_name=_environment("SESSION_KEY_PARAMETER_NAME"),
+        ).load()
+        service = AuthService(
+            store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
+            discord=DiscordOAuthClient(
+                httpx.Client(timeout=httpx.Timeout(3.0, connect=2.0), follow_redirects=False)
+            ),
+            avatars=S3AvatarStore(
+                boto3.client("s3", config=SDK_CONFIG),
+                _environment("MEDIA_BUCKET_NAME"),
+            ),
+            configuration=configuration,
+        )
+        _AUTH_CONTROLLER = AuthHttpController(service)
+    return _AUTH_CONTROLLER
+
+
+def _read_controller() -> ReadHttpController:
+    global _READ_CONTROLLER
+    if _READ_CONTROLLER is None:
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        session_key = ReadConfigurationRepository(
+            boto3.client("ssm", config=SDK_CONFIG),
+            _environment("SESSION_KEY_PARAMETER_NAME"),
+        ).load_session_key()
+        reader = DynamoRecordsReader(
+            dynamodb,
+            boto3.client("s3", config=SDK_CONFIG),
+            archive_table_name=_environment("ARCHIVE_TABLE_NAME"),
+            session_table_name=_environment("SESSION_TABLE_NAME"),
+            media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
+        )
+        _READ_CONTROLLER = ReadHttpController(
+            store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
+            session_key=session_key,
+            records=RecordsReadService(reader=reader, cursor_codec=CursorCodec(session_key)),
+        )
+    return _READ_CONTROLLER
 
 
 def _build_projector(

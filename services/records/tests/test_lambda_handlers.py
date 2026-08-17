@@ -66,6 +66,12 @@ class FakeBackfill:
         )
 
 
+class FakeHttpController:
+    def handle(self, event: object, *, now: object) -> dict[str, object]:
+        del now
+        return {"statusCode": 200, "event": event}
+
+
 def stream_event() -> dict[str, object]:
     return {
         "Records": [
@@ -139,3 +145,19 @@ def test_backfill_handler_rejects_boolean_page_limit() -> None:
             {"mode": "dry-run", "page_limit": True},
             object(),
         )
+
+
+def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:
+    controller = cast(Any, FakeHttpController())
+    monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", controller)
+    monkeypatch.setattr(lambda_handlers, "_READ_CONTROLLER", controller)
+    event = {"routeKey": "GET /api/v1/session"}
+
+    assert lambda_handlers.auth_handler(event, object()) == {
+        "statusCode": 200,
+        "event": event,
+    }
+    assert lambda_handlers.read_handler(event, object()) == {
+        "statusCode": 200,
+        "event": event,
+    }

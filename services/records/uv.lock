@@ -191,6 +191,9 @@ wheels = [
 dynamodb = [
     { name = "mypy-boto3-dynamodb" },
 ]
+s3 = [
+    { name = "mypy-boto3-s3" },
+]
 ssm = [
     { name = "mypy-boto3-ssm" },
 ]
@@ -665,6 +668,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-s3"
+version = "1.43.66"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/b4/d9af4054a80a46e27bfec10ead824ac1d39a974179b47db4ad9844bc5658/mypy_boto3_s3-1.43.66.tar.gz", hash = "sha256:b2f74763e373b3f3d64cfcd2f00cdb1c10c8a4cefe6d4cdbc1ed4a6ade085c07", size = 78866, upload-time = "2026-08-07T00:17:38.354Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/73/bc/8ed7dad2bc1506732cc503ccbbc0fd48786d85900bb2c6577a26a634843b/mypy_boto3_s3-1.43.66-py3-none-any.whl", hash = "sha256:f9385e190d423690dbc161260dac02439e3b6c9841e992ba6a92d15c1050b3af", size = 86296, upload-time = "2026-08-07T00:17:36.388Z" },
+]
+
+[[package]]
 name = "mypy-boto3-ssm"
 version = "1.43.53"
 source = { registry = "https://pypi.org/simple" }
@@ -1092,13 +1104,14 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "shittim-chest" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "boto3-stubs", extra = ["dynamodb", "ssm"] },
+    { name = "boto3-stubs", extra = ["dynamodb", "s3", "ssm"] },
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -1108,13 +1121,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.66,<2" },
+    { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
     { name = "shittim-chest", directory = "../../" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", extras = ["dynamodb", "ssm"], specifier = ">=1.43.66,<2" },
+    { name = "boto3-stubs", extras = ["dynamodb", "s3", "ssm"], specifier = ">=1.43.66,<2" },
     { name = "pip-audit", specifier = ">=2.10.1,<3" },
     { name = "pytest", specifier = ">=9.1.1,<10" },
     { name = "ruff", specifier = ">=0.16.2,<0.17" },

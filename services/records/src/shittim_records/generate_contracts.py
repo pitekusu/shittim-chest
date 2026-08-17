@@ -171,7 +171,11 @@ def build_openapi() -> dict[str, Any]:
                 "get": {
                     "operationId": "listRecords",
                     "parameters": [
-                        _parameter("cursor", "query", {"type": "string", "minLength": 1}),
+                        _parameter(
+                            "cursor",
+                            "query",
+                            {"type": "string", "minLength": 1, "maxLength": 4096},
+                        ),
                         _parameter(
                             "limit",
                             "query",
@@ -202,40 +206,14 @@ def build_openapi() -> dict[str, Any]:
                             "name": "recordId",
                             "in": "path",
                             "required": True,
-                            "schema": {"type": "string", "minLength": 1},
+                            "schema": {
+                                "type": "string",
+                                "pattern": "^[A-Za-z0-9_-]{43}$",
+                            },
                         }
                     ],
                     "responses": {
                         "200": _response("RecordDetailResponse", "One completed debate"),
-                        **error_responses,
-                    },
-                }
-            },
-            "/api/v1/insights/rankings": {
-                "get": {
-                    "operationId": "getRankings",
-                    "responses": {
-                        "200": _response("RankingsResponse", "Victory and request rankings"),
-                        **error_responses,
-                    },
-                }
-            },
-            "/api/v1/insights/costs": {
-                "get": {
-                    "operationId": "getCosts",
-                    "parameters": [
-                        _parameter(
-                            "period",
-                            "query",
-                            {
-                                "type": "string",
-                                "enum": ["today", "week", "month", "all"],
-                                "default": "month",
-                            },
-                        )
-                    ],
-                    "responses": {
-                        "200": _response("CostsResponse", "Approximate service costs"),
                         **error_responses,
                     },
                 }

@@ -113,7 +113,11 @@ jobs:
           uv run --frozen python tools/build_records_bundle.py \
             --source "${stage}" --output "${RUNNER_TEMP}/records-lambda.zip"
           bundle_hash=$(sha256sum "${RUNNER_TEMP}/records-lambda.zip" | cut -d' ' -f1)
+          bundle_code_sha256=$(openssl dgst -sha256 -binary \
+            "${RUNNER_TEMP}/records-lambda.zip" | base64 -w0)
+          test "$(printf '%s' "${bundle_code_sha256}" | wc -c)" -eq 44
           echo "bundle_hash=${bundle_hash}" >> "${GITHUB_OUTPUT}"
+          echo "bundle_code_sha256=${bundle_code_sha256}" >> "${GITHUB_OUTPUT}"
       - name: Validate Records plan handles
         env:
           ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
@@ -140,13 +144,21 @@ jobs:
       - name: Verify Records deployment account and parameter metadata
         env:
           IDENTITY_PARAMETER_NAME: /shittim-chest/production/records/identity-hmac-key
+          OAUTH_CLIENT_SECRET_PARAMETER_NAME: /shittim-chest/production/records/discord/client-secret
+          OAUTH_CONFIG_PARAMETER_NAME: /shittim-chest/production/records/discord/oauth/v0001
           PRESENTATION_PARAMETER_NAME: /shittim-chest/production/records/presentation/v0001
+          SESSION_KEY_PARAMETER_NAME: /shittim-chest/production/records/session-key
           SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
         run: |
           account=$(aws sts get-caller-identity --query Account --output text)
           stream_account=$(cut -d: -f5 <<< "${SOURCE_STREAM_ARN}")
           test "${stream_account}" = "${account}"
-          for name in "${IDENTITY_PARAMETER_NAME}" "${PRESENTATION_PARAMETER_NAME}"
+          for name in \
+            "${IDENTITY_PARAMETER_NAME}" \
+            "${PRESENTATION_PARAMETER_NAME}" \
+            "${OAUTH_CONFIG_PARAMETER_NAME}" \
+            "${OAUTH_CLIENT_SECRET_PARAMETER_NAME}" \
+            "${SESSION_KEY_PARAMETER_NAME}"
           do
             metadata=$(aws ssm describe-parameters \
               --parameter-filters "Key=Name,Option=Equals,Values=${name}" \
@@ -187,6 +199,7 @@ jobs:
           APPLICATION_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-application
           ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
           BUNDLE_KEY: ${{ steps.assets.outputs.bundle_key }}
+          BUNDLE_CODE_SHA256: ${{ steps.bundle.outputs.bundle_code_sha256 }}
           BUNDLE_VERSION: ${{ steps.assets.outputs.bundle_version }}
           EXECUTION_ROLE_ARN: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
           SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
@@ -248,7 +261,8 @@ jobs:
                 --expected-parameter "SourceDebateTableStreamArn=${SOURCE_STREAM_ARN}" \
                 --expected-parameter "RecordsBundleBucketName=${ASSET_BUCKET}" \
                 --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
-                --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}"
+                --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}" \
+                --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}"
             fi
             uv run --project services/records --frozen python \
               tools/records_release_manifest.py create-entry \
@@ -284,7 +298,8 @@ jobs:
               ParameterKey=SourceDebateTableStreamArn,ParameterValue="${SOURCE_STREAM_ARN}" \
               ParameterKey=RecordsBundleBucketName,ParameterValue="${ASSET_BUCKET}" \
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
-              ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}"
+              ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}" \
+              ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}"
       - name: Record Records release evidence
         id: evidence
         env:
@@ -427,6 +442,15 @@ jobs:
             if [ "${executable}" = true ]; then
               aws cloudformation describe-change-set --change-set-name "${arn}" \
                 > "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json"
+              if [ "${logical_name}" = application ]; then
+                bundle_hash=$(jq --exit-status --raw-output .bundle_sha256 "${manifest}")
+                bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w0)
+                uv run --project services/records --frozen python \
+                  tools/release_supply_chain.py validate-change-set \
+                  "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
+                  --expected-arn "${arn}" --expected-stack "${stack}" \
+                  --expected-parameter "RecordsBundleCodeSha256=${bundle_code_sha256}"
+              fi
               uv run --project services/records --frozen python \
                 tools/records_release_manifest.py create-entry \
                 "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
@@ -478,6 +502,39 @@ jobs:
             aws cloudformation describe-stacks --stack-name "${stack}" --output json \
               | jq --exit-status '.Stacks[0].EnableTerminationProtection == true' >/dev/null
           done
+      - name: Verify anonymous and protected Records API boundaries
+        run: |
+          endpoint=$(aws cloudformation describe-stacks \
+            --stack-name ShittimChest-Prod-RecordsApplication \
+            --query "Stacks[0].Outputs[?OutputKey=='RecordsApiEndpoint'].OutputValue | [0]" \
+            --output text)
+          [[ "${endpoint}" =~ ^https://[a-z0-9]+\.execute-api\.${AWS_REGION}\.amazonaws\.com/?$ ]]
+          endpoint=${endpoint%/}
+          session_status=$(curl --silent --show-error \
+            --dump-header "${RUNNER_TEMP}/records-session.headers" \
+            --output "${RUNNER_TEMP}/records-session.json" \
+            --write-out '%{http_code}' \
+            "${endpoint}/api/v1/session")
+          test "${session_status}" = 200
+          jq --exit-status \
+            '.schemaVersion == 1 and .authenticated == false and
+             .user == null and .csrfToken == null' \
+            "${RUNNER_TEMP}/records-session.json" >/dev/null
+          grep --ignore-case --quiet '^cache-control: private, no-store' \
+            "${RUNNER_TEMP}/records-session.headers"
+          if grep --ignore-case --quiet '^set-cookie:' \
+            "${RUNNER_TEMP}/records-session.headers"
+          then
+            exit 1
+          fi
+          records_status=$(curl --silent --show-error \
+            --dump-header "${RUNNER_TEMP}/records-list.headers" \
+            --output "${RUNNER_TEMP}/records-list.json" \
+            --write-out '%{http_code}' \
+            "${endpoint}/api/v1/records")
+          test "${records_status}" = 401
+          jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
+            "${RUNNER_TEMP}/records-list.json" >/dev/null
       - name: Clean up only unexecuted Records Change Sets
         if: always()
         continue-on-error: true

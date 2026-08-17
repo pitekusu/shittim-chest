@@ -87,6 +87,10 @@ jobs:
           uv run --frozen ty check
       - name: Run Records unit tests
         run: uv run --frozen pytest
+      - name: Run Records DynamoDB Local integration tests
+        run: |
+          uv run --frozen python ../../tools/run_dynamodb_local.py -- \
+            uv run --frozen pytest tests/test_dynamodb_integration.py
 
   records-contract:
     name: records-contract
