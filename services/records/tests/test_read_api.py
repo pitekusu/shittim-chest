@@ -87,7 +87,6 @@ def test_cursor_is_bound_to_filters_limit_index_and_expiry() -> None:
     key = {
         "PK": f"RECORD#{'r' * 43}",
         "SK": "META",
-        "record_id": "r" * 43,
         "gsi2pk": "WINNER#participant-b",
         "gsi2sk": f"2026-08-17T00:00:00+00:00#{'r' * 43}",
     }
@@ -125,13 +124,36 @@ def test_tampered_cursor_is_rejected() -> None:
     cursor = codec.encode(
         query=query,
         index_name="gsi1",
-        last_evaluated_key={"PK": "p", "SK": "s", "record_id": "r" * 43},
+        last_evaluated_key={
+            "PK": "p",
+            "SK": "s",
+            "gsi1pk": "ARCHIVE#COMPLETED",
+            "gsi1sk": "completed#record",
+        },
         now=NOW,
     )
 
     with pytest.raises(ReadFailure) as caught:
         codec.decode(query=ListQuery(cursor=f"x{cursor}"), now=NOW)
     assert caught.value.status == 400
+
+
+def test_cursor_rejects_a_key_for_the_wrong_index() -> None:
+    codec = CursorCodec(SESSION_KEY)
+
+    with pytest.raises(ReadFailure) as caught:
+        codec.encode(
+            query=ListQuery(),
+            index_name="gsi1",
+            last_evaluated_key={
+                "PK": "p",
+                "SK": "s",
+                "gsi2pk": "WINNER#participant-b",
+                "gsi2sk": "completed#record",
+            },
+            now=NOW,
+        )
+    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
 
 
 def test_detail_reconstructs_exact_twelve_items_without_internal_fields() -> None:

@@ -101,6 +101,10 @@ class CursorCodec:
         expected_index = "gsi2" if query.winner else "gsi1"
         if index_name != expected_index:
             raise ReadFailure("CURSOR_INVALID", 400)
+        try:
+            cursor_key = _validate_cursor_key(last_evaluated_key, index_name=index_name)
+        except ValueError:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
         payload = {
             "version": 1,
             "index": index_name,
@@ -109,7 +113,7 @@ class CursorCodec:
             "to": _time_text(query.to_at),
             "winner": query.winner,
             "expires_at": int((_utc(now) + CURSOR_TTL).timestamp()),
-            "last_evaluated_key": _validate_cursor_key(last_evaluated_key),
+            "last_evaluated_key": cursor_key,
         }
         encoded = _base64url(_canonical(payload))
         signature = _base64url(
@@ -160,7 +164,10 @@ class CursorCodec:
         ):
             raise ReadFailure("CURSOR_INVALID", 400)
         try:
-            key = _validate_cursor_key(payload["last_evaluated_key"])
+            key = _validate_cursor_key(
+                payload["last_evaluated_key"],
+                index_name=expected_index,
+            )
         except ValueError:
             raise ReadFailure("CURSOR_INVALID", 400) from None
         return expected_index, key
@@ -478,14 +485,14 @@ def _is_record_id(value: str) -> bool:
     )
 
 
-def _validate_cursor_key(value: Any) -> DynamoItem:
-    if not isinstance(value, dict) or not 2 <= len(value) <= 6:
+def _validate_cursor_key(value: Any, *, index_name: str) -> DynamoItem:
+    expected_fields = {"PK", "SK", f"{index_name}pk", f"{index_name}sk"}
+    if index_name not in {"gsi1", "gsi2"} or not isinstance(value, dict):
         raise ValueError("cursor key is invalid")
-    if any(not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()):
+    if set(value) != expected_fields or any(
+        not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()
+    ):
         raise ValueError("cursor key is invalid")
-    required = {"PK", "SK", "record_id"}
-    if not required <= set(value):
-        raise ValueError("cursor key is incomplete")
     return cast(DynamoItem, dict(value))
 
 
