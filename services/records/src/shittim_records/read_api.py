@@ -197,6 +197,14 @@ class RecordsReadService:
         )
         if page.index_name != expected_index:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        for item in page.items:
+            _validate_list_projection(
+                item,
+                index_name=page.index_name,
+                winner=query.winner,
+                from_at=query.from_at,
+                to_at=query.to_at,
+            )
         requester_keys = tuple(
             cast(str, item.get("requester_key"))
             for item in page.items
@@ -506,6 +514,49 @@ def _validate_meta_item(item: DynamoItem) -> None:
         or item.get("PK") != f"RECORD#{record_id}"
         or item.get("SK") != "META"
     ):
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+
+def _validate_list_projection(
+    item: DynamoItem,
+    *,
+    index_name: str,
+    winner: ParticipantSlot | None,
+    from_at: datetime | None,
+    to_at: datetime | None,
+) -> None:
+    _validate_meta_item(item)
+    record_id = _required_text(item, "record_id")
+    completed_text = _required_text(item, "completed_at")
+    stored_winner = _required_text(item, "winner")
+    if stored_winner not in PARTICIPANT_SLOTS:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    try:
+        completed_at = TypeAdapter(AwareDatetime).validate_python(completed_text).astimezone(UTC)
+    except ValidationError:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
+    if completed_at.isoformat() != completed_text:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+    expected_sort_key = f"{completed_text}#{record_id}"
+    if index_name == "gsi1":
+        if winner is not None or item.get("gsi1pk") != "ARCHIVE#COMPLETED":
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        if item.get("gsi1sk") != expected_sort_key:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    elif index_name == "gsi2":
+        if winner is None or stored_winner != winner:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        if item.get("gsi2pk") != f"WINNER#{stored_winner}":
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        if item.get("gsi2sk") != expected_sort_key:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    else:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+    if from_at is not None and completed_at < from_at:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    if to_at is not None and completed_at > to_at:
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
 
 
