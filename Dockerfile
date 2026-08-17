@@ -4,7 +4,7 @@ ARG SOURCE_DATE_EPOCH=0
 
 FROM ghcr.io/astral-sh/uv:0.11.33@sha256:77280f2f771df71f90786c314fe1bbc1e023feac652969bbf139c280babf2eb7 AS uv
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:4e6d70f6819594aa6210ba629695eaec7e56f72cd1ec0dca22e9cf0699ff01d7 AS builder
+FROM dhi.io/python:3.14.7-debian13-dev@sha256:35263a6c329e601a836a011a27792d3ae84f387b9055b40035b0649d5ce68e3c AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -33,7 +33,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
-FROM dhi.io/python:3.14.6-debian13@sha256:7fa71fa6509c110456742c8505dfea44f0b4656018123b3eaf4f33f71ae902b7 AS runtime-base
+FROM dhi.io/python:3.14.7-debian13@sha256:ca15493305d675cccc8f3ea8ee5cdff5f4904ae8f90ab9fd26a0a5cbe5ad984a AS runtime-base
 
 ARG SOURCE_DATE_EPOCH
 
@@ -67,7 +67,7 @@ COPY --chown=65532:65532 tests/fixtures/container_process.py \
 
 ENV PYTHONPATH=/fault-tests
 
-FROM dhi.io/python:3.14.6-debian13-dev@sha256:4e6d70f6819594aa6210ba629695eaec7e56f72cd1ec0dca22e9cf0699ff01d7 AS break-glass-tools
+FROM dhi.io/python:3.14.7-debian13-dev@sha256:35263a6c329e601a836a011a27792d3ae84f387b9055b40035b0649d5ce68e3c AS break-glass-tools
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends bsdutils procps \
