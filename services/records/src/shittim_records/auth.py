@@ -395,9 +395,9 @@ def _valid_requester_asset_key(value: str) -> bool:
 def _digest(key: bytes, domain: str, value: str) -> str:
     if len(key) < 32:
         raise AuthFailure("configuration_invalid")
-    # codeql[py/weak-sensitive-data-hashing]
     # Values are independent 256-bit random bearer tokens, not low-entropy passwords;
     # keyed HMAC-SHA256 is the intentional lookup-key derivation required by the design.
+    # codeql[py/weak-sensitive-data-hashing]
     return hmac.new(key, f"records:{domain}:{value}".encode(), hashlib.sha256).hexdigest()
 
 
