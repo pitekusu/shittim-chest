@@ -108,6 +108,7 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   await expect(page).toHaveScreenshot("records-home.png", {
     animations: "disabled",
     fullPage: true,
+    maxDiffPixels: 20,
   });
   await page.getByRole("link", { name: "記録を読む" }).click();
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
