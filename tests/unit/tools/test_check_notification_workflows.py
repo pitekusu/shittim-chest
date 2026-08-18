@@ -379,39 +379,26 @@ def test_records_release_waits_for_the_attested_change_set_type(tmp_path: Path) 
         validate_notification_workflows(directory)
 
 
-def test_records_release_scopes_conditional_replacement_to_cdk_metadata(
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    [
+        ("validate-change-set-safety", "validate-manifest"),
+        ('--logical-name "${logical_name}"', "--logical-name application"),
+    ],
+)
+def test_records_release_uses_the_scoped_change_set_safety_validator(
     tmp_path: Path,
+    original: str,
+    replacement: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
-        path.read_text(encoding="utf-8").replace(
-            '.ResourceType == "AWS::CDK::Metadata"',
-            'true or .ResourceType == "AWS::CDK::Metadata"',
-            1,
-        ),
+        path.read_text(encoding="utf-8").replace(original, replacement, 1),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
-        validate_notification_workflows(directory)
-
-
-def test_records_release_rejects_a_true_prefix_before_the_safety_predicate(
-    tmp_path: Path,
-) -> None:
-    directory = _workflow_directory(tmp_path)
-    path = directory / RECORDS_RELEASE_WORKFLOW
-    path.write_text(
-        path.read_text(encoding="utf-8").replace(
-            "               all(.[];",
-            "               true or all(.[];",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
+    with pytest.raises(WorkflowPolicyError, match="scope replacements"):
         validate_notification_workflows(directory)
 
 
@@ -420,14 +407,14 @@ def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) ->
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            'change-set.json" >/dev/null\n          }',
-            'change-set.json" >/dev/null || true\n          }',
+            '              --logical-name "${logical_name}"\n          }',
+            '              --logical-name "${logical_name}" || true\n          }',
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
+    with pytest.raises(WorkflowPolicyError, match="scope replacements"):
         validate_notification_workflows(directory)
 
 
@@ -470,38 +457,6 @@ def test_records_release_requires_errexit_for_create_plan_calls(tmp_path: Path) 
     )
 
     with pytest.raises(WorkflowPolicyError, match="create_plan safety failure"):
-        validate_notification_workflows(directory)
-
-
-def test_records_release_rejects_true_cdk_metadata_replacement(tmp_path: Path) -> None:
-    directory = _workflow_directory(tmp_path)
-    path = directory / RECORDS_RELEASE_WORKFLOW
-    path.write_text(
-        path.read_text(encoding="utf-8").replace(
-            '.Replacement == "Conditional"',
-            '.Replacement != "False"',
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
-        validate_notification_workflows(directory)
-
-
-def test_records_release_rejects_conditional_cdk_metadata_addition(tmp_path: Path) -> None:
-    directory = _workflow_directory(tmp_path)
-    path = directory / RECORDS_RELEASE_WORKFLOW
-    path.write_text(
-        path.read_text(encoding="utf-8").replace(
-            '(.Action == "Add" and\n                    (.Replacement // "False") == "False")',
-            '(.Action == "Add" and .Replacement == "Conditional")',
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(WorkflowPolicyError, match="conditional replacement"):
         validate_notification_workflows(directory)
 
 

@@ -352,20 +352,10 @@ jobs:
               --type "${type}" --expected-name "${change_set}" --expected-region "${region}" \
               --expected-stack "${stack}" \
               --output "${RUNNER_TEMP}/records-release-${logical_name}-plan.json"
-            jq --exit-status \
-              '[.Changes[].ResourceChange // empty] |
-               all(.[];
-                 if .ResourceType == "AWS::CDK::Metadata" then
-                   (.Action == "Add" and
-                    (.Replacement // "False") == "False") or
-                   (.Action == "Modify" and
-                    ((.Replacement // "False") == "False" or
-                     .Replacement == "Conditional"))
-                 else
-                   .Action != "Remove" and
-                   (.Replacement // "False") == "False"
-                 end)' \
-              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
+            uv run --project services/records --frozen python \
+              tools/records_release_manifest.py validate-change-set-safety \
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+              --logical-name "${logical_name}"
           }
           stateful_region=$(awk '$1 == "RecordsStateful" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")

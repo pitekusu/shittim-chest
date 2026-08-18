@@ -1258,24 +1258,15 @@ def _validate_records_workflows(directory: Path) -> None:
             "Records Release must extract executable as a boolean-safe string"
         )
 
-    change_set_safety = """            jq --exit-status \\
-              '[.Changes[].ResourceChange // empty] |
-               all(.[];
-                 if .ResourceType == "AWS::CDK::Metadata" then
-                   (.Action == "Add" and
-                    (.Replacement // "False") == "False") or
-                   (.Action == "Modify" and
-                    ((.Replacement // "False") == "False" or
-                     .Replacement == "Conditional"))
-                 else
-                   .Action != "Remove" and
-                   (.Replacement // "False") == "False"
-                 end)' \\
-              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" >/dev/null
+    change_set_safety = """            uv run --project services/records --frozen python \\
+              tools/records_release_manifest.py validate-change-set-safety \\
+              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \\
+              --logical-name "${logical_name}"
           }"""
     if release.count(change_set_safety) != 1:
         raise WorkflowPolicyError(
-            "Records Release must scope conditional replacement to CDK metadata"
+            "Records Release must scope replacements to CDK metadata "
+            "and Application Lambda versions"
         )
     change_set_calls = (
         "create_plan stateful ShittimChest-Prod-RecordsStateful",

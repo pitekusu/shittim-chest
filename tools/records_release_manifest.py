@@ -74,6 +74,56 @@ def create_change_set_plan(
     }
 
 
+def validate_change_set_safety(value: object, *, logical_name: str) -> None:
+    """Reject removals and replacements outside the two intended immutable resources."""
+
+    if logical_name not in _STACKS:
+        raise ValueError("Records Change Set logical name is invalid")
+    record = _object(value, "described Change Set")
+    changes = record.get("Changes")
+    if not isinstance(changes, list):
+        raise ValueError("Records Change Set changes must be an array")
+    invalid: list[dict[str, object]] = []
+    for item_value in changes:
+        item = _object(item_value, "Records Change Set change")
+        change = _object(item.get("ResourceChange"), "Records resource change")
+        resource_type = change.get("ResourceType")
+        logical_id = change.get("LogicalResourceId")
+        action = change.get("Action")
+        replacement = change.get("Replacement", "False")
+        if not all(
+            isinstance(value, str) and value for value in (resource_type, logical_id, action)
+        ):
+            raise ValueError("Records resource change identity is invalid")
+        if replacement not in {"False", "Conditional", "True"}:
+            raise ValueError("Records resource change replacement is invalid")
+
+        if resource_type == "AWS::CDK::Metadata":
+            safe = (action == "Add" and replacement == "False") or (
+                action == "Modify" and replacement in {"False", "Conditional"}
+            )
+        elif logical_name == "application" and resource_type == "AWS::Lambda::Version":
+            safe = (action != "Remove" and replacement == "False") or (
+                action == "Modify" and replacement == "True"
+            )
+        else:
+            safe = action != "Remove" and replacement == "False"
+        if not safe:
+            invalid.append(
+                {
+                    "logical_resource_id": logical_id,
+                    "resource_type": resource_type,
+                    "action": action,
+                    "replacement": replacement,
+                }
+            )
+    if invalid:
+        raise ValueError(
+            "Records Change Set safety rejected: "
+            + json.dumps(invalid, ensure_ascii=True, separators=(",", ":"))
+        )
+
+
 def create_manifest(
     *,
     application_plan: object,
@@ -205,6 +255,9 @@ def _parser() -> argparse.ArgumentParser:
     validate = commands.add_parser("validate-manifest")
     validate.add_argument("manifest", type=Path)
     validate.add_argument("--expected-commit-sha", required=True)
+    safety = commands.add_parser("validate-change-set-safety")
+    safety.add_argument("described_change_set", type=Path)
+    safety.add_argument("--logical-name", choices=tuple(_STACKS), required=True)
     return parser
 
 
@@ -234,10 +287,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 web_sbom_sha256=args.web_sbom_sha256,
             ),
         )
-    else:
+    elif args.command == "validate-manifest":
         validate_manifest(
             _read(args.manifest),
             expected_commit_sha=args.expected_commit_sha,
+        )
+    else:
+        validate_change_set_safety(
+            _read(args.described_change_set),
+            logical_name=args.logical_name,
         )
     return 0
 

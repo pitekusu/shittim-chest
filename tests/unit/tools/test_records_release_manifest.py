@@ -9,6 +9,7 @@ import pytest
 from tools.records_release_manifest import (
     create_change_set_plan,
     create_manifest,
+    validate_change_set_safety,
     validate_manifest,
 )
 
@@ -101,6 +102,54 @@ def test_unchanged_update_is_a_normal_non_executable_plan() -> None:
     )
 
     assert result["executable"] is False
+
+
+def resource_change(
+    resource_type: str,
+    *,
+    action: str = "Modify",
+    replacement: str | None = "False",
+) -> dict[str, object]:
+    change: dict[str, object] = {
+        "Action": action,
+        "LogicalResourceId": "ExpectedResource1234",
+        "ResourceType": resource_type,
+    }
+    if replacement is not None:
+        change["Replacement"] = replacement
+    return {"ResourceChange": change}
+
+
+def test_change_set_safety_allows_only_expected_immutable_replacements() -> None:
+    validate_change_set_safety(
+        {
+            "Changes": [
+                resource_change("AWS::DynamoDB::Table", action="Add", replacement=None),
+                resource_change("AWS::Lambda::Function"),
+                resource_change("AWS::CDK::Metadata", replacement="Conditional"),
+                resource_change("AWS::Lambda::Version", replacement="True"),
+            ]
+        },
+        logical_name="application",
+    )
+
+
+@pytest.mark.parametrize(
+    ("logical_name", "change"),
+    (
+        ("stateful", resource_change("AWS::DynamoDB::Table", action="Remove")),
+        ("application", resource_change("AWS::Lambda::Function", replacement="True")),
+        ("application", resource_change("AWS::Lambda::Version", action="Remove")),
+        ("edge", resource_change("AWS::Lambda::Version", replacement="True")),
+        ("application", resource_change("AWS::CDK::Metadata", replacement="True")),
+    ),
+)
+def test_change_set_safety_rejects_other_removals_and_replacements(
+    logical_name: str,
+    change: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="safety rejected"):
+        validate_change_set_safety({"Changes": [change]}, logical_name=logical_name)
 
 
 @pytest.mark.parametrize(
