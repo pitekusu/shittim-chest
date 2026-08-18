@@ -1215,6 +1215,22 @@ def _validate_records_workflows(directory: Path) -> None:
     if "secrets." in release or "secrets." in backfill:
         raise WorkflowPolicyError("Records workflows must consume only pre-registered handles")
 
+    install_step = _workflow_step_block(release, "Install frozen build environments")
+    app_local_pnpm = (
+        "          (\n"
+        "            cd apps/records-web\n"
+        "            corepack enable pnpm\n"
+        '            test "$(pnpm --version)" = "11.21.0"\n'
+        "            pnpm install --frozen-lockfile\n"
+        "          )"
+    )
+    if install_step.count(app_local_pnpm) != 1:
+        raise WorkflowPolicyError(
+            "Records Release must resolve pinned pnpm from the Records Web package boundary"
+        )
+    if "pnpm --dir apps/records-web" in install_step:
+        raise WorkflowPolicyError("Records Release must not resolve pnpm from the repository root")
+
     executable_filter = (
         '| if type == "boolean" then tostring else error("executable must be boolean") end'
     )

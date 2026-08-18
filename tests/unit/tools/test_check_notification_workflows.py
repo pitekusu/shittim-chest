@@ -88,6 +88,22 @@ def test_records_ci_rejects_trigger_path_filters(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_records_release_resolves_pnpm_from_records_web_boundary(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "            cd apps/records-web\n",
+            "            cd .\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="Records Web package boundary"):
+        validate_notification_workflows(directory)
+
+
 def test_records_ci_requires_the_canonical_classifier_decision(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_CI_WORKFLOW
