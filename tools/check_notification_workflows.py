@@ -1231,6 +1231,25 @@ def _validate_records_workflows(directory: Path) -> None:
     if "pnpm --dir apps/records-web" in install_step:
         raise WorkflowPolicyError("Records Release must not resolve pnpm from the repository root")
 
+    release_gate_step = _workflow_step_block(release, "Re-run Records release-critical gates")
+    app_local_web_gates = (
+        "          (\n"
+        "            cd apps/records-web\n"
+        "            pnpm exec vp check\n"
+        "            pnpm exec vp test\n"
+        "            pnpm exec vp build\n"
+        "            pnpm audit --audit-level=low\n"
+        "          )"
+    )
+    if release_gate_step.count(app_local_web_gates) != 1:
+        raise WorkflowPolicyError(
+            "Records Release must run all web gates from the Records Web package boundary"
+        )
+    if "pnpm --dir apps/records-web" in release_gate_step:
+        raise WorkflowPolicyError(
+            "Records Release web gates must not resolve pnpm from the repository root"
+        )
+
     executable_filter = (
         '| if type == "boolean" then tostring else error("executable must be boolean") end'
     )
