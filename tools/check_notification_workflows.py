@@ -1265,7 +1265,8 @@ def _validate_records_workflows(directory: Path) -> None:
           }"""
     if release.count(change_set_safety) != 1:
         raise WorkflowPolicyError(
-            "Records Release must scope replacements to CDK metadata and Application Lambda versions"
+            "Records Release must scope replacements to CDK metadata "
+            "and Application Lambda versions"
         )
     change_set_calls = (
         "create_plan stateful ShittimChest-Prod-RecordsStateful",
