@@ -81,9 +81,12 @@ jobs:
         run: |
           uv sync --project services/records --frozen --all-groups
           npm ci --ignore-scripts
-          corepack enable pnpm
-          test "$(pnpm --version)" = "11.21.0"
-          pnpm --dir apps/records-web install --frozen-lockfile
+          (
+            cd apps/records-web
+            corepack enable pnpm
+            test "$(pnpm --version)" = "11.21.0"
+            pnpm install --frozen-lockfile
+          )
       - name: Re-run Records release-critical gates
         run: |
           (
@@ -99,10 +102,13 @@ jobs:
             infra/test/records-application-stack.test.ts \
             infra/test/records-edge-stack.test.ts \
             --testTimeout=15000
-          pnpm --dir apps/records-web exec vp check
-          pnpm --dir apps/records-web exec vp test
-          pnpm --dir apps/records-web exec vp build
-          pnpm --dir apps/records-web audit --audit-level=low
+          (
+            cd apps/records-web
+            pnpm exec vp check
+            pnpm exec vp test
+            pnpm exec vp build
+            pnpm audit --audit-level=low
+          )
       - name: Build deterministic Records Lambda bundle and SBOM
         id: bundle
         run: |
