@@ -108,11 +108,12 @@ def resource_change(
     resource_type: str,
     *,
     action: str = "Modify",
+    logical_id: str = "ExpectedResource1234",
     replacement: str | None = "False",
 ) -> dict[str, object]:
     change: dict[str, object] = {
         "Action": action,
-        "LogicalResourceId": "ExpectedResource1234",
+        "LogicalResourceId": logical_id,
         "ResourceType": resource_type,
     }
     if replacement is not None:
@@ -133,6 +134,24 @@ def test_change_set_safety_allows_only_expected_immutable_replacements() -> None
         logical_name="application",
     )
 
+    validate_change_set_safety(
+        {
+            "Changes": [
+                resource_change(
+                    "AWS::Route53::RecordSet",
+                    logical_id="Ipv4AliasF16765B0",
+                    replacement="True",
+                ),
+                resource_change(
+                    "AWS::Route53::RecordSet",
+                    logical_id="Ipv6AliasBCE03BB2",
+                    replacement="True",
+                ),
+            ]
+        },
+        logical_name="edge",
+    )
+
 
 @pytest.mark.parametrize(
     ("logical_name", "change"),
@@ -141,6 +160,23 @@ def test_change_set_safety_allows_only_expected_immutable_replacements() -> None
         ("application", resource_change("AWS::Lambda::Function", replacement="True")),
         ("application", resource_change("AWS::Lambda::Version", action="Remove")),
         ("edge", resource_change("AWS::Lambda::Version", replacement="True")),
+        (
+            "edge",
+            resource_change(
+                "AWS::Route53::RecordSet",
+                logical_id="UnexpectedAlias1234",
+                replacement="True",
+            ),
+        ),
+        (
+            "edge",
+            resource_change(
+                "AWS::Route53::RecordSet",
+                logical_id="Ipv4AliasF16765B0",
+                action="Remove",
+                replacement="False",
+            ),
+        ),
         ("application", resource_change("AWS::CDK::Metadata", replacement="True")),
     ),
 )

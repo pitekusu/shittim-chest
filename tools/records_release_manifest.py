@@ -75,7 +75,7 @@ def create_change_set_plan(
 
 
 def validate_change_set_safety(value: object, *, logical_name: str) -> None:
-    """Reject removals and replacements outside the two intended immutable resources."""
+    """Reject removals and replacements outside explicitly permitted resources."""
 
     if logical_name not in _STACKS:
         raise ValueError("Records Change Set logical name is invalid")
@@ -106,6 +106,12 @@ def validate_change_set_safety(value: object, *, logical_name: str) -> None:
             safe = (action != "Remove" and replacement == "False") or (
                 action == "Modify" and replacement == "True"
             )
+        elif (
+            logical_name == "edge"
+            and resource_type == "AWS::Route53::RecordSet"
+            and logical_id in {"Ipv4AliasF16765B0", "Ipv6AliasBCE03BB2"}
+        ):
+            safe = action == "Modify" and replacement == "True"
         else:
             safe = action != "Remove" and replacement == "False"
         if not safe:

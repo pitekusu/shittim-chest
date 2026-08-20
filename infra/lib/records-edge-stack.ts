@@ -204,12 +204,12 @@ export class RecordsEdgeStack extends Stack {
 
     new route53.ARecord(this, "Ipv4Alias", {
       zone: hostedZone,
-      recordName: publicHostname.valueAsString,
+      recordName: `${publicHostname.valueAsString}.`,
       target: route53.RecordTarget.fromAlias(new targets.CloudFrontTarget(this.distribution)),
     });
     new route53.AaaaRecord(this, "Ipv6Alias", {
       zone: hostedZone,
-      recordName: publicHostname.valueAsString,
+      recordName: `${publicHostname.valueAsString}.`,
       target: route53.RecordTarget.fromAlias(new targets.CloudFrontTarget(this.distribution)),
     });
 
