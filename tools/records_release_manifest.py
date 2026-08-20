@@ -23,6 +23,10 @@ _STACKS = {
     "application": ("ShittimChest-Prod-RecordsApplication", "application", "ap-northeast-1"),
     "edge": ("ShittimChest-Prod-RecordsEdge", "edge", "us-east-1"),
 }
+_EDGE_ALIAS_TYPES = {
+    "Ipv4AliasF16765B0": "A",
+    "Ipv6AliasBCE03BB2": "AAAA",
+}
 
 
 def create_change_set_plan(
@@ -74,7 +78,14 @@ def create_change_set_plan(
     }
 
 
-def validate_change_set_safety(value: object, *, logical_name: str) -> None:
+def validate_change_set_safety(
+    value: object,
+    *,
+    logical_name: str,
+    expected_edge_hostname: str | None = None,
+    expected_edge_zone_id: str | None = None,
+    expected_edge_zone_name: str | None = None,
+) -> None:
     """Reject removals and replacements outside explicitly permitted resources."""
 
     if logical_name not in _STACKS:
@@ -109,9 +120,15 @@ def validate_change_set_safety(value: object, *, logical_name: str) -> None:
         elif (
             logical_name == "edge"
             and resource_type == "AWS::Route53::RecordSet"
-            and logical_id in {"Ipv4AliasF16765B0", "Ipv6AliasBCE03BB2"}
+            and logical_id in _EDGE_ALIAS_TYPES
         ):
-            safe = action == "Modify" and replacement == "True"
+            safe = _is_expected_edge_alias_migration(
+                change,
+                expected_hostname=expected_edge_hostname,
+                expected_record_type=_EDGE_ALIAS_TYPES[logical_id],
+                expected_zone_id=expected_edge_zone_id,
+                expected_zone_name=expected_edge_zone_name,
+            )
         else:
             safe = action != "Remove" and replacement == "False"
         if not safe:
@@ -128,6 +145,90 @@ def validate_change_set_safety(value: object, *, logical_name: str) -> None:
             "Records Change Set safety rejected: "
             + json.dumps(invalid, ensure_ascii=True, separators=(",", ":"))
         )
+
+
+def _is_expected_edge_alias_migration(
+    change: Mapping[str, object],
+    *,
+    expected_hostname: str | None,
+    expected_record_type: str,
+    expected_zone_id: str | None,
+    expected_zone_name: str | None,
+) -> bool:
+    """Allow only the one-time duplicated-name to absolute-FQDN migration."""
+
+    if not isinstance(expected_hostname, str) or not expected_hostname:
+        return False
+    if not isinstance(expected_zone_id, str) or not expected_zone_id:
+        return False
+    if not isinstance(expected_zone_name, str) or not expected_zone_name:
+        return False
+    if expected_hostname.endswith("."):
+        return False
+    zone_name = expected_zone_name.removesuffix(".")
+    if not zone_name or expected_hostname == zone_name:
+        return False
+    before_name = f"{expected_hostname}.{zone_name}."
+    after_name = f"{expected_hostname}."
+    expected_detail = {
+        "Target": {
+            "Attribute": "Properties",
+            "Name": "Name",
+            "RequiresRecreation": "Always",
+            "Path": "/Properties/Name",
+            "BeforeValue": before_name,
+            "AfterValue": after_name,
+            "AttributeChangeType": "Modify",
+        },
+        "Evaluation": "Static",
+        "ChangeSource": "DirectModification",
+    }
+    if (
+        change.get("Action") != "Modify"
+        or change.get("Replacement") != "True"
+        or change.get("Details") != [expected_detail]
+    ):
+        return False
+    before = _json_object(change.get("BeforeContext"))
+    after = _json_object(change.get("AfterContext"))
+    if before is None or after is None or set(before) != {"Properties", "Metadata"}:
+        return False
+    if set(after) != {"Properties", "Metadata"} or before["Metadata"] != after["Metadata"]:
+        return False
+    before_properties = before.get("Properties")
+    after_properties = after.get("Properties")
+    if not isinstance(before_properties, dict) or not isinstance(after_properties, dict):
+        return False
+    required_properties = {"AliasTarget", "Type", "HostedZoneId", "Name"}
+    if (
+        set(before_properties) != required_properties
+        or set(after_properties) != required_properties
+    ):
+        return False
+    if (
+        before_properties.get("Type") != expected_record_type
+        or after_properties.get("Type") != expected_record_type
+        or before_properties.get("HostedZoneId") != expected_zone_id
+        or after_properties.get("HostedZoneId") != expected_zone_id
+        or before_properties.get("Name") != before_name
+        or after_properties.get("Name") != after_name
+    ):
+        return False
+    before_without_name = dict(before_properties)
+    after_without_name = dict(after_properties)
+    before_without_name.pop("Name")
+    after_without_name.pop("Name")
+    return before_without_name == after_without_name
+
+
+def _json_object(value: object) -> dict[str, object] | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except TypeError, ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def create_manifest(
@@ -264,6 +365,9 @@ def _parser() -> argparse.ArgumentParser:
     safety = commands.add_parser("validate-change-set-safety")
     safety.add_argument("described_change_set", type=Path)
     safety.add_argument("--logical-name", choices=tuple(_STACKS), required=True)
+    safety.add_argument("--expected-edge-hostname")
+    safety.add_argument("--expected-edge-zone-id")
+    safety.add_argument("--expected-edge-zone-name")
     return parser
 
 
@@ -302,6 +406,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_change_set_safety(
             _read(args.described_change_set),
             logical_name=args.logical_name,
+            expected_edge_hostname=args.expected_edge_hostname,
+            expected_edge_zone_id=args.expected_edge_zone_id,
+            expected_edge_zone_name=args.expected_edge_zone_name,
         )
     return 0
 

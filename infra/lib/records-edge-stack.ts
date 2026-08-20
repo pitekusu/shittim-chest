@@ -42,11 +42,6 @@ export class RecordsEdgeStack extends Stack {
       type: "String",
       allowedPattern: "^Z[A-Z0-9]+$",
     });
-    const hostedZoneName = new CfnParameter(this, "RecordsHostedZoneName", {
-      type: "String",
-      allowedPattern:
-        "^(?=.{1,253}\\.?$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.?$",
-    });
     const apiOriginDomain = new CfnParameter(this, "RecordsApiOriginDomain", {
       type: "String",
       allowedPattern: "^[a-z0-9]+\\.execute-api\\.ap-northeast-1\\.amazonaws\\.com$",
@@ -57,10 +52,11 @@ export class RecordsEdgeStack extends Stack {
         "^shittim-chest-production-records-media-[0-9]{12}\\.s3\\.ap-northeast-1\\.amazonaws\\.com$",
     });
 
-    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, "HostedZone", {
-      hostedZoneId: hostedZoneId.valueAsString,
-      zoneName: hostedZoneName.valueAsString,
-    });
+    const hostedZone = route53.HostedZone.fromHostedZoneId(
+      this,
+      "HostedZone",
+      hostedZoneId.valueAsString,
+    );
     const certificate = new acm.Certificate(this, "Certificate", {
       domainName: publicHostname.valueAsString,
       validation: acm.CertificateValidation.fromDns(hostedZone),

@@ -90,7 +90,6 @@ describe("RecordsEdgeStack", () => {
     for (const parameter of [
       "RecordsPublicHostname",
       "RecordsHostedZoneId",
-      "RecordsHostedZoneName",
       "RecordsApiOriginDomain",
       "RecordsMediaOriginDomain",
     ]) {

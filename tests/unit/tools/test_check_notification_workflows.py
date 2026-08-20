@@ -407,14 +407,14 @@ def test_records_release_propagates_change_set_safety_failure(tmp_path: Path) ->
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            '              --logical-name "${logical_name}"\n          }',
-            '              --logical-name "${logical_name}" || true\n          }',
+            '                --logical-name "${logical_name}"\n            fi',
+            '                --logical-name "${logical_name}" || true\n            fi',
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="scope replacements"):
+    with pytest.raises(WorkflowPolicyError, match="propagate each create_plan safety failure"):
         validate_notification_workflows(directory)
 
 
