@@ -18,6 +18,7 @@ from tools.check_container_risk_acceptance import (
 DIGEST = "sha256:" + "a" * 64
 BREAK_GLASS_DIGEST = "sha256:" + "b" * 64
 OTHER_DIGEST = "sha256:" + "c" * 64
+ALTERNATE_DIGEST = "sha256:" + "d" * 64
 TODAY = dt.date(2026, 7, 22)
 FINDING = Finding(FindingKey("CVE-2026-12345", "libexample"), "High", "not-fixed")
 
@@ -26,7 +27,7 @@ def _write_policy(
     path: Path,
     acceptances: list[dict[str, object]],
     *,
-    schema_version: int = 4,
+    schema_version: int = 5,
     extra_root: dict[str, object] | None = None,
 ) -> Path:
     root: dict[str, object] = {
@@ -47,7 +48,7 @@ def _acceptance(**overrides: object) -> dict[str, object]:
     value: dict[str, object] = {
         "vulnerability_id": "CVE-2026-12345",
         "package": "libexample",
-        "image_config_digests": {"production": DIGEST},
+        "image_config_digests": {"production": [DIGEST]},
         "status": "under_investigation",
         "justification": "No upstream fix is available; deployment remains monitored.",
         "impact": "A successful exploit could affect the isolated application process.",
@@ -91,7 +92,7 @@ def test_config_digest_preflight_accepts_the_exact_loaded_image(tmp_path: Path) 
     )
 
 
-def test_schema_v4_empty_policy_accepts_any_valid_production_digest(tmp_path: Path) -> None:
+def test_schema_v5_empty_policy_accepts_any_valid_production_digest(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 
     assert (
@@ -162,7 +163,7 @@ def test_policy_rejects_extra_root_field(tmp_path: Path) -> None:
 
 
 def test_policy_rejects_legacy_schema(tmp_path: Path) -> None:
-    policy = _write_policy(tmp_path / "policy.json", [], schema_version=3)
+    policy = _write_policy(tmp_path / "policy.json", [], schema_version=4)
 
     with pytest.raises(ValueError, match="version"):
         validate_config_digest_bindings(
@@ -183,6 +184,25 @@ def test_config_digest_preflight_blocks_before_push_on_exporter_drift(tmp_path: 
             image_config_digest=OTHER_DIGEST,
             today=TODAY,
         )
+
+
+@pytest.mark.parametrize("measured_digest", (DIGEST, ALTERNATE_DIGEST))
+def test_acceptance_can_bind_independent_ci_and_release_digests(
+    tmp_path: Path, measured_digest: str
+) -> None:
+    policy = _write_policy(
+        tmp_path / "policy.json",
+        [_acceptance(image_config_digests={"production": [DIGEST, ALTERNATE_DIGEST]})],
+    )
+
+    assert validate_acceptances(
+        policy,
+        findings=(FINDING,),
+        vendor_suppressions=frozenset(),
+        image_kind="production",
+        image_config_digest=measured_digest,
+        today=TODAY,
+    ) == (0, 1)
 
 
 def test_config_digest_preflight_rejects_expired_policy_before_push(tmp_path: Path) -> None:
@@ -216,8 +236,25 @@ def test_full_validation_with_empty_acceptances_has_no_static_baseline(tmp_path:
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
-        ({"image_config_digests": {"production": OTHER_DIGEST}}, "does not match"),
-        ({"image_config_digests": {"unknown": DIGEST}}, "unsupported"),
+        ({"image_config_digests": {"production": [OTHER_DIGEST]}}, "does not match"),
+        ({"image_config_digests": {"production": DIGEST}}, "non-empty array"),
+        ({"image_config_digests": {"production": []}}, "non-empty array"),
+        ({"image_config_digests": {"production": [DIGEST, DIGEST]}}, "unique"),
+        (
+            {
+                "image_config_digests": {
+                    "production": [
+                        DIGEST,
+                        BREAK_GLASS_DIGEST,
+                        OTHER_DIGEST,
+                        ALTERNATE_DIGEST,
+                        "sha256:" + "e" * 64,
+                    ]
+                }
+            },
+            "at most 4",
+        ),
+        ({"image_config_digests": {"unknown": [DIGEST]}}, "unsupported"),
         ({"expires_on": "2026-07-21"}, "expired"),
         ({"expires_on": "2026-12-31"}, "within 90 days"),
         ({"status": "not_affected"}, "must not claim"),
@@ -275,8 +312,8 @@ def test_acceptances_are_scoped_to_one_image_kind(tmp_path: Path) -> None:
         [
             _acceptance(
                 image_config_digests={
-                    "production": DIGEST,
-                    "break-glass": BREAK_GLASS_DIGEST,
+                    "production": [DIGEST],
+                    "break-glass": [BREAK_GLASS_DIGEST],
                 }
             ),
         ],

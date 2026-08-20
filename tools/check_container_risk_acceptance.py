@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Final, cast
 
 MAX_JSON_BYTES: Final = 64 * 1024 * 1024
+MAX_CONFIG_DIGESTS_PER_IMAGE_KIND: Final = 4
 DIGEST_PATTERN: Final = re.compile(r"^sha256:[0-9a-f]{64}$")
 VULNERABILITY_PATTERN: Final = re.compile(
     r"^(?:CVE-[0-9]{4}-[0-9]{4,}|GHSA-[23456789cfghjmpqrvwx]{4}(?:-[23456789cfghjmpqrvwx]{4}){2})$"
@@ -169,7 +170,7 @@ def _load_policy(policy_path: Path) -> list[object]:
     root = _object(_read_json(policy_path, "risk acceptance policy"), "risk policy")
     if set(root) != REQUIRED_POLICY_FIELDS:
         raise ValueError("risk acceptance policy has unexpected root fields")
-    if root["schema_version"] != 4 or root["maximum_validity_days"] != 90:
+    if root["schema_version"] != 5 or root["maximum_validity_days"] != 90:
         raise ValueError("risk acceptance policy version or maximum validity is unsupported")
     raw_acceptances = root["acceptances"]
     if not isinstance(raw_acceptances, list):
@@ -186,19 +187,40 @@ def _acceptance_record(value: object, label: str) -> dict[str, object]:
     return record
 
 
-def _config_digests(record: dict[str, object], label: str) -> dict[str, object]:
-    config_digests = _object(record.get("image_config_digests"), f"{label}.image_config_digests")
-    if not config_digests or not set(config_digests) <= IMAGE_KINDS:
+def _config_digests(record: dict[str, object], label: str) -> dict[str, tuple[str, ...]]:
+    raw_config_digests = _object(
+        record.get("image_config_digests"), f"{label}.image_config_digests"
+    )
+    if not raw_config_digests or not set(raw_config_digests) <= IMAGE_KINDS:
         raise ValueError(f"{label}.image_config_digests has unsupported image kinds")
-    for scoped_kind, scoped_digest in config_digests.items():
-        if not isinstance(scoped_digest, str) or DIGEST_PATTERN.fullmatch(scoped_digest) is None:
+    config_digests: dict[str, tuple[str, ...]] = {}
+    for scoped_kind, raw_digests in raw_config_digests.items():
+        if not isinstance(raw_digests, list) or not raw_digests:
+            raise ValueError(
+                f"{label}.image_config_digests.{scoped_kind} must be a non-empty array"
+            )
+        if len(raw_digests) > MAX_CONFIG_DIGESTS_PER_IMAGE_KIND:
+            raise ValueError(
+                f"{label}.image_config_digests.{scoped_kind} must contain at most "
+                f"{MAX_CONFIG_DIGESTS_PER_IMAGE_KIND} digests"
+            )
+        if not all(
+            isinstance(digest, str) and DIGEST_PATTERN.fullmatch(digest) is not None
+            for digest in raw_digests
+        ):
             raise ValueError(f"{label}.image_config_digests.{scoped_kind} is invalid")
+        typed_digests = cast(list[str], raw_digests)
+        if len(set(typed_digests)) != len(typed_digests):
+            raise ValueError(
+                f"{label}.image_config_digests.{scoped_kind} must contain unique digests"
+            )
+        config_digests[scoped_kind] = tuple(typed_digests)
     return config_digests
 
 
 def _validated_acceptance(
     value: object, label: str, today: dt.date
-) -> tuple[FindingKey, dict[str, object]]:
+) -> tuple[FindingKey, dict[str, tuple[str, ...]]]:
     record = _acceptance_record(value, label)
     vulnerability_id = _string(record, "vulnerability_id", label)
     package = _string(record, "package", label)
@@ -223,7 +245,9 @@ def _validated_acceptance(
 
 
 def _register_acceptance_scopes(
-    seen: set[tuple[str, FindingKey]], key: FindingKey, config_digests: dict[str, object]
+    seen: set[tuple[str, FindingKey]],
+    key: FindingKey,
+    config_digests: dict[str, tuple[str, ...]],
 ) -> None:
     for scoped_kind in config_digests:
         scoped_key = (scoped_kind, key)
@@ -247,10 +271,10 @@ def validate_config_digest_bindings(
         label = f"acceptances[{index}]"
         key, config_digests = _validated_acceptance(value, label, today)
         _register_acceptance_scopes(seen, key, config_digests)
-        record_config_digest = config_digests.get(image_kind)
-        if record_config_digest is None:
+        record_config_digests = config_digests.get(image_kind)
+        if record_config_digests is None:
             continue
-        if record_config_digest != image_config_digest:
+        if image_config_digest not in record_config_digests:
             raise ValueError(f"{label} config digest does not match the tested image")
         bound += 1
     return bound
@@ -281,10 +305,10 @@ def validate_acceptances(
         label = f"acceptances[{index}]"
         key, config_digests = _validated_acceptance(value, label, today)
         _register_acceptance_scopes(seen, key, config_digests)
-        record_config_digest = config_digests.get(image_kind)
-        if record_config_digest is not None and record_config_digest != image_config_digest:
+        record_config_digests = config_digests.get(image_kind)
+        if record_config_digests is not None and image_config_digest not in record_config_digests:
             raise ValueError(f"{label} config digest does not match the tested image")
-        if record_config_digest is None:
+        if record_config_digests is None:
             continue
         if key not in tracked:
             raise ValueError(f"{label} does not reference a current unfixable High/Critical")

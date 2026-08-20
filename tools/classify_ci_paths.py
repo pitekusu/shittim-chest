@@ -32,6 +32,7 @@ RUNTIME_VALIDATION_FILES = frozenset(
         ".github/tool-versions.json",
         ".github/workflows/ci.yml",
         "security/container-risk-acceptance.json",
+        "security/container-risk-acceptance.schema.json",
         "tools/classify_ci_paths.py",
     }
 )
