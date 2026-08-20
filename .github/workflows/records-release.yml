@@ -282,8 +282,16 @@ jobs:
               > "${RUNNER_TEMP}/${logical_name}-stack.json" \
               2> "${RUNNER_TEMP}/${logical_name}-stack.error"
             then
-              stack_status=$(jq --exit-status --raw-output '.Stacks[0].StackStatus' \
-                "${RUNNER_TEMP}/${logical_name}-stack.json")
+              stack_status=$(jq --exit-status --raw-output '
+                .Stacks
+                | if type != "array" or length != 1 then
+                    error("expected exactly one stack")
+                  elif .[0].DeletionTime? != null then
+                    ""
+                  else
+                    .[0].StackStatus
+                  end
+              ' "${RUNNER_TEMP}/${logical_name}-stack.json")
             else
               grep --quiet "does not exist" "${RUNNER_TEMP}/${logical_name}-stack.error"
               stack_status=""

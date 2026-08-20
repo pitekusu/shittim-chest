@@ -460,6 +460,45 @@ def test_records_release_requires_errexit_for_create_plan_calls(tmp_path: Path) 
         validate_notification_workflows(directory)
 
 
+def test_records_release_requires_deleted_stack_history_classification(
+    tmp_path: Path,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "                  elif .[0].DeletionTime? != null then\n"
+            '                    ""\n'
+            "                  else\n"
+            "                    .[0].StackStatus\n",
+            "                  else\n                    .[0].StackStatus\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="deleted stack history"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_rejects_active_rollback_complete_as_create(
+    tmp_path: Path,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '              ""|REVIEW_IN_PROGRESS) type=CREATE ;;',
+            '              ""|REVIEW_IN_PROGRESS|ROLLBACK_COMPLETE) type=CREATE ;;',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="active ROLLBACK_COMPLETE"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_rejects_runtime_change_set_type_lookup(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW

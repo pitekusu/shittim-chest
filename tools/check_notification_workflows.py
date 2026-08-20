@@ -1281,6 +1281,16 @@ def _validate_records_workflows(directory: Path) -> None:
         or "|| true" in plan_step
     ):
         raise WorkflowPolicyError("Records Release must propagate each create_plan safety failure")
+    deleted_stack_markers = (
+        'error("expected exactly one stack")',
+        "elif .[0].DeletionTime? != null then",
+        ".[0].StackStatus",
+        '""|REVIEW_IN_PROGRESS) type=CREATE ;;',
+    )
+    if "REVIEW_IN_PROGRESS|ROLLBACK_COMPLETE) type=CREATE ;;" in plan_step:
+        raise WorkflowPolicyError("Records Release must reject an active ROLLBACK_COMPLETE stack")
+    if any(marker not in plan_step for marker in deleted_stack_markers):
+        raise WorkflowPolicyError("Records Release must treat only deleted stack history as absent")
 
     release_markers = (
         "name: Records Release",
