@@ -286,8 +286,6 @@ jobs:
                 .Stacks
                 | if type != "array" or length != 1 then
                     error("expected exactly one stack")
-                  elif .[0].DeletionTime? != null then
-                    ""
                   else
                     .[0].StackStatus
                   end
