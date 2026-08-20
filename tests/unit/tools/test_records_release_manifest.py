@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -18,6 +19,9 @@ BUNDLE_SHA = "b" * 64
 WEB_SHA = "c" * 64
 WEB_SBOM_SHA = "d" * 64
 ACCOUNT = "000000000000"
+EDGE_HOSTNAME = "shittim.example.com"
+EDGE_ZONE_ID = "Z0123456789EXAMPLE"
+EDGE_ZONE_NAME = "example.com"
 
 
 def described(
@@ -108,16 +112,72 @@ def resource_change(
     resource_type: str,
     *,
     action: str = "Modify",
+    logical_id: str = "ExpectedResource1234",
     replacement: str | None = "False",
 ) -> dict[str, object]:
     change: dict[str, object] = {
         "Action": action,
-        "LogicalResourceId": "ExpectedResource1234",
+        "LogicalResourceId": logical_id,
         "ResourceType": resource_type,
     }
     if replacement is not None:
         change["Replacement"] = replacement
     return {"ResourceChange": change}
+
+
+def edge_alias_migration(logical_id: str, record_type: str) -> dict[str, object]:
+    before_name = f"{EDGE_HOSTNAME}.{EDGE_ZONE_NAME}."
+    after_name = f"{EDGE_HOSTNAME}."
+    alias_target = {
+        "HostedZoneId": "Z2FDTNDATAQYW2",
+        "DNSName": "example.cloudfront.net",
+    }
+    construct_id = "Ipv4Alias" if record_type == "A" else "Ipv6Alias"
+    return {
+        "ResourceChange": {
+            "Action": "Modify",
+            "LogicalResourceId": logical_id,
+            "ResourceType": "AWS::Route53::RecordSet",
+            "Replacement": "True",
+            "Details": [
+                {
+                    "Target": {
+                        "Attribute": "Properties",
+                        "Name": "Name",
+                        "RequiresRecreation": "Always",
+                        "Path": "/Properties/Name",
+                        "BeforeValue": before_name,
+                        "AfterValue": after_name,
+                        "AttributeChangeType": "Modify",
+                    },
+                    "Evaluation": "Static",
+                    "ChangeSource": "DirectModification",
+                }
+            ],
+            "BeforeContext": json.dumps(
+                {
+                    "Properties": {
+                        "AliasTarget": alias_target,
+                        "Type": record_type,
+                        "HostedZoneId": EDGE_ZONE_ID,
+                        "Name": before_name,
+                    },
+                    "Metadata": {"aws:cdk:path": f"RecordsEdge/{construct_id}/Resource"},
+                }
+            ),
+            "AfterContext": json.dumps(
+                {
+                    "Properties": {
+                        "AliasTarget": alias_target,
+                        "Type": record_type,
+                        "HostedZoneId": EDGE_ZONE_ID,
+                        "Name": after_name,
+                    },
+                    "Metadata": {"aws:cdk:path": f"RecordsEdge/{construct_id}/Resource"},
+                }
+            ),
+        }
+    }
 
 
 def test_change_set_safety_allows_only_expected_immutable_replacements() -> None:
@@ -133,6 +193,50 @@ def test_change_set_safety_allows_only_expected_immutable_replacements() -> None
         logical_name="application",
     )
 
+    validate_change_set_safety(
+        {
+            "Changes": [
+                edge_alias_migration("Ipv4AliasF16765B0", "A"),
+                edge_alias_migration("Ipv6AliasBCE03BB2", "AAAA"),
+            ]
+        },
+        logical_name="edge",
+        expected_edge_hostname=EDGE_HOSTNAME,
+        expected_edge_zone_id=EDGE_ZONE_ID,
+        expected_edge_zone_name=EDGE_ZONE_NAME,
+    )
+
+
+def test_change_set_safety_rejects_future_or_widened_alias_replacements() -> None:
+    future = edge_alias_migration("Ipv4AliasF16765B0", "A")
+    future_change = future["ResourceChange"]
+    assert isinstance(future_change, dict)
+    future_detail = future_change["Details"]
+    assert isinstance(future_detail, list)
+    target = future_detail[0]["Target"]
+    assert isinstance(target, dict)
+    target["BeforeValue"] = f"{EDGE_HOSTNAME}."
+    before = json.loads(str(future_change["BeforeContext"]))
+    before["Properties"]["Name"] = f"{EDGE_HOSTNAME}."
+    future_change["BeforeContext"] = json.dumps(before)
+
+    widened = edge_alias_migration("Ipv6AliasBCE03BB2", "AAAA")
+    widened_change = widened["ResourceChange"]
+    assert isinstance(widened_change, dict)
+    after = json.loads(str(widened_change["AfterContext"]))
+    after["Properties"]["AliasTarget"]["DNSName"] = "other.cloudfront.net"
+    widened_change["AfterContext"] = json.dumps(after)
+
+    for change in (future, widened):
+        with pytest.raises(ValueError, match="safety rejected"):
+            validate_change_set_safety(
+                {"Changes": [change]},
+                logical_name="edge",
+                expected_edge_hostname=EDGE_HOSTNAME,
+                expected_edge_zone_id=EDGE_ZONE_ID,
+                expected_edge_zone_name=EDGE_ZONE_NAME,
+            )
+
 
 @pytest.mark.parametrize(
     ("logical_name", "change"),
@@ -141,6 +245,23 @@ def test_change_set_safety_allows_only_expected_immutable_replacements() -> None
         ("application", resource_change("AWS::Lambda::Function", replacement="True")),
         ("application", resource_change("AWS::Lambda::Version", action="Remove")),
         ("edge", resource_change("AWS::Lambda::Version", replacement="True")),
+        (
+            "edge",
+            resource_change(
+                "AWS::Route53::RecordSet",
+                logical_id="UnexpectedAlias1234",
+                replacement="True",
+            ),
+        ),
+        (
+            "edge",
+            resource_change(
+                "AWS::Route53::RecordSet",
+                logical_id="Ipv4AliasF16765B0",
+                action="Remove",
+                replacement="False",
+            ),
+        ),
         ("application", resource_change("AWS::CDK::Metadata", replacement="True")),
     ),
 )

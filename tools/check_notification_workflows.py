@@ -1258,15 +1258,21 @@ def _validate_records_workflows(directory: Path) -> None:
             "Records Release must extract executable as a boolean-safe string"
         )
 
-    change_set_safety = """            uv run --project services/records --frozen python \\
-              tools/records_release_manifest.py validate-change-set-safety \\
-              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \\
-              --logical-name "${logical_name}"
-          }"""
-    if release.count(change_set_safety) != 1:
+    safety_command = "tools/records_release_manifest.py validate-change-set-safety"
+    edge_migration_markers = (
+        "--include-property-values",
+        '--expected-edge-hostname "${PUBLIC_HOSTNAME}"',
+        '--expected-edge-zone-id "${HOSTED_ZONE_ID}"',
+        '--expected-edge-zone-name "${HOSTED_ZONE_NAME}"',
+    )
+    if (
+        release.count(safety_command) != 2
+        or release.count('--logical-name "${logical_name}"') != 2
+        or any(release.count(marker) != 1 for marker in edge_migration_markers)
+    ):
         raise WorkflowPolicyError(
-            "Records Release must scope replacements to CDK metadata "
-            "and Application Lambda versions"
+            "Records Release must scope replacements to immutable application resources "
+            "and the exact edge alias migration"
         )
     change_set_calls = (
         "create_plan stateful ShittimChest-Prod-RecordsStateful",
@@ -1324,7 +1330,10 @@ def _validate_records_workflows(directory: Path) -> None:
         "ShittimChest-Prod-RecordsEdge",
         "RecordsPublicHostname",
         "RecordsHostedZoneId",
-        "RecordsHostedZoneName",
+        "--include-property-values",
+        "--expected-edge-hostname",
+        "--expected-edge-zone-id",
+        "--expected-edge-zone-name",
         "RecordsApiOriginDomain",
         "RecordsMediaOriginDomain",
         "records-web.zip",

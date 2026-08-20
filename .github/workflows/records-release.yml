@@ -325,7 +325,7 @@ jobs:
             done
             aws cloudformation describe-change-set \
               --region "${region}" \
-              --change-set-name "${arn}" \
+              --change-set-name "${arn}" --include-property-values \
               > "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json"
             uv run --project services/records --frozen python \
               tools/release_supply_chain.py validate-change-set \
@@ -348,7 +348,6 @@ jobs:
                 --expected-arn "${arn}" --expected-stack "${stack}" \
                 --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}" \
                 --expected-parameter "RecordsHostedZoneId=${HOSTED_ZONE_ID}" \
-                --expected-parameter "RecordsHostedZoneName=${HOSTED_ZONE_NAME}" \
                 --expected-parameter "RecordsApiOriginDomain=${api_origin_domain}" \
                 --expected-parameter "RecordsMediaOriginDomain=${media_origin_domain}"
             fi
@@ -358,10 +357,20 @@ jobs:
               --type "${type}" --expected-name "${change_set}" --expected-region "${region}" \
               --expected-stack "${stack}" \
               --output "${RUNNER_TEMP}/records-release-${logical_name}-plan.json"
-            uv run --project services/records --frozen python \
-              tools/records_release_manifest.py validate-change-set-safety \
-              "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
-              --logical-name "${logical_name}"
+            if [ "${logical_name}" = edge ]; then
+              uv run --project services/records --frozen python \
+                tools/records_release_manifest.py validate-change-set-safety \
+                "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+                --logical-name "${logical_name}" \
+                --expected-edge-hostname "${PUBLIC_HOSTNAME}" \
+                --expected-edge-zone-id "${HOSTED_ZONE_ID}" \
+                --expected-edge-zone-name "${HOSTED_ZONE_NAME}"
+            else
+              uv run --project services/records --frozen python \
+                tools/records_release_manifest.py validate-change-set-safety \
+                "${RUNNER_TEMP}/records-release-${logical_name}-change-set.json" \
+                --logical-name "${logical_name}"
+            fi
           }
           stateful_region=$(awk '$1 == "RecordsStateful" {print $2}' \
             "${RUNNER_TEMP}/template-assets.txt")
@@ -409,7 +418,6 @@ jobs:
             --parameters \
               ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}" \
               ParameterKey=RecordsHostedZoneId,ParameterValue="${HOSTED_ZONE_ID}" \
-              ParameterKey=RecordsHostedZoneName,ParameterValue="${HOSTED_ZONE_NAME}" \
               ParameterKey=RecordsApiOriginDomain,ParameterValue="${api_origin_domain}" \
               ParameterKey=RecordsMediaOriginDomain,ParameterValue="${media_origin_domain}"
       - name: Record Records release evidence

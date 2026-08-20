@@ -90,7 +90,6 @@ describe("RecordsEdgeStack", () => {
     for (const parameter of [
       "RecordsPublicHostname",
       "RecordsHostedZoneId",
-      "RecordsHostedZoneName",
       "RecordsApiOriginDomain",
       "RecordsMediaOriginDomain",
     ]) {
@@ -98,6 +97,15 @@ describe("RecordsEdgeStack", () => {
     }
     template.resourceCountIs("AWS::CertificateManager::Certificate", 1);
     template.resourceCountIs("AWS::Route53::RecordSet", 2);
+    template.resourcePropertiesCountIs(
+      "AWS::Route53::RecordSet",
+      {
+        Name: {
+          "Fn::Join": ["", [{ Ref: "RecordsPublicHostname" }, "."]],
+        },
+      },
+      2,
+    );
     expect(serialized).toContain("ContentSecurityPolicy");
     expect(serialized).toContain("StrictTransportSecurity");
     expect(serialized).toContain("Permissions-Policy");
