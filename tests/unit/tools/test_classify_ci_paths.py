@@ -20,6 +20,7 @@ from tools.classify_ci_paths import changed_paths, classify_paths
         "src/shittim_chest/application/service.py",
         "tools/check_container_policy.py",
         "security/container-risk-acceptance.json",
+        "security/container-risk-acceptance.schema.json",
         ".github/tool-versions.json",
         ".github/workflows/ci.yml",
     ),

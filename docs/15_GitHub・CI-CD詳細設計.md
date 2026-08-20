@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-14
+updated: 2026-08-20
 ---
 
 # GitHub・CI-CD詳細設計
@@ -42,7 +42,9 @@ workflow名と一致させ、rerunでflaky failureを隠さない。
 - 各targetのconfig digest、SBOM、VEX、Grype、risk resultを同一SHA／runに紐づくimage／scan
   artifact間で照合する。artifactごとの保持fieldはworkflow schemaを正とする。
 - PR required gateは静的policy baselineや別runとのconfig digest完全一致を要求しない。
-- risk acceptanceが必要なfindingだけ、対象imageの実測config digest、finding key、期限へ束縛する。
+- risk acceptanceが必要なfindingだけ、対象image kind、承認済みbuild contextごとの
+  実測config digest、finding key、期限へ束縛する。同kindの独立したCI／Release buildは
+  複数digestを一acceptanceに有限数登録できるが、未登録digestは拒否する。
 - `fault-test` imageはproduction／break-glassのbaselineやrisk acceptance対象外とする。
 - manifest digestからconfig digestを推測せず、別exporterや過去runの値を流用しない。
 
