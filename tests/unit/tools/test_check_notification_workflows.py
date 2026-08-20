@@ -460,24 +460,24 @@ def test_records_release_requires_errexit_for_create_plan_calls(tmp_path: Path) 
         validate_notification_workflows(directory)
 
 
-def test_records_release_requires_deleted_stack_history_classification(
+def test_records_release_rejects_deletion_time_as_stack_absence(
     tmp_path: Path,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
+            "                  else\n                    .[0].StackStatus\n",
             "                  elif .[0].DeletionTime? != null then\n"
             '                    ""\n'
             "                  else\n"
             "                    .[0].StackStatus\n",
-            "                  else\n                    .[0].StackStatus\n",
             1,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="deleted stack history"):
+    with pytest.raises(WorkflowPolicyError, match="stack absence from DeletionTime"):
         validate_notification_workflows(directory)
 
 
