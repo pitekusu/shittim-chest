@@ -180,7 +180,7 @@ export class RecordsEdgeStack extends Stack {
       domainNames: [publicHostname.valueAsString],
       enableIpv6: true,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
-      minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+      minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_3_2025,
       priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
     });
     Validations.of(this.distribution).acknowledge({

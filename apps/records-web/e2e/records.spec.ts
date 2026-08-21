@@ -125,6 +125,12 @@ test("authenticated member can browse the completed archive", async ({ page }) =
     "datetime",
     detail.completedAt,
   );
+  await expect(page.getByLabel("依頼者")).toHaveValue("");
+  await expect(
+    page.getByLabel("依頼者").getByRole("option", { name: "パワー系ウナギ" }),
+  ).toHaveCount(1);
+  await page.getByLabel("依頼者").selectOption("パワー系ウナギ");
+  await expect(card).toContainText(detail.question);
   await expect(page.getByLabel("並び順")).toHaveValue("newest");
   await expect(page.getByLabel("開始日")).toHaveCount(0);
   await expect(page.getByLabel("終了日")).toHaveCount(0);

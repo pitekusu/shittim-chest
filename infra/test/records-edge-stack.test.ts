@@ -66,9 +66,11 @@ describe("RecordsEdgeStack", () => {
         HttpVersion: "http2and3",
         IPV6Enabled: true,
         PriceClass: "PriceClass_200",
-        ViewerCertificate: Match.objectLike({ MinimumProtocolVersion: "TLSv1.2_2021" }),
+        ViewerCertificate: Match.objectLike({ MinimumProtocolVersion: "TLSv1.3_2025" }),
       }),
     });
+    const serialized = JSON.stringify(template.toJSON());
+    expect(serialized).not.toContain("TLSv1.2_2021");
   });
 
   test("rewrites only extensionless SPA routes and preserves API and assets", () => {
