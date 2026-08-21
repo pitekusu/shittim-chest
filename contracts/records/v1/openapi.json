@@ -1271,19 +1271,14 @@
           },
           {
             "in": "query",
-            "name": "from",
+            "name": "sort",
             "required": false,
             "schema": {
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "to",
-            "required": false,
-            "schema": {
-              "format": "date-time",
+              "default": "newest",
+              "enum": [
+                "newest",
+                "oldest"
+              ],
               "type": "string"
             }
           },

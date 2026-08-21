@@ -331,7 +331,7 @@
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(130px, 1fr));
+  grid-template-columns: minmax(240px, 2fr) repeat(2, minmax(130px, 1fr));
   gap: 14px;
   margin-bottom: 32px;
   padding: 18px;

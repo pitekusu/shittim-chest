@@ -20,6 +20,7 @@ from shittim_records.auth import (
 )
 from shittim_records.contracts import RecordListResponse
 from shittim_records.http_api import AuthHttpController, ReadHttpController
+from shittim_records.read_api import ListQuery
 
 NOW = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
 SESSION_KEY = b"s" * 32
@@ -87,7 +88,11 @@ class FakeSessionStore:
 
 
 class FakeRecords:
+    def __init__(self) -> None:
+        self.list_query: ListQuery | None = None
+
     def list_records(self, **_kwargs: Any) -> RecordListResponse:
+        self.list_query = _kwargs["query"]
         return RecordListResponse(schema_version=1, items=())
 
     def get_record(self, **_kwargs: Any) -> None:
@@ -199,16 +204,17 @@ def test_protected_records_reject_missing_or_expired_session() -> None:
 
 
 def test_protected_records_returns_only_public_contract() -> None:
+    records = FakeRecords()
     controller = ReadHttpController(
         store=cast(Any, FakeSessionStore(session())),
         session_key=SESSION_KEY,
-        records=cast(Any, FakeRecords()),
+        records=cast(Any, records),
     )
 
     response = controller.handle(
         event(
             "GET /api/v1/records",
-            query="limit=12",
+            query="limit=12&sort=oldest",
             cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
         ),
         now=NOW,
@@ -220,6 +226,49 @@ def test_protected_records_returns_only_public_contract() -> None:
         "items": [],
         "nextCursor": None,
     }
+    assert records.list_query is not None
+    assert records.list_query.sort == "oldest"
+
+
+def test_records_defaults_to_newest_and_rejects_unknown_sort() -> None:
+    records = FakeRecords()
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, records),
+    )
+    cookies = [f"{SESSION_COOKIE_NAME}=session-token"]
+
+    newest = controller.handle(event("GET /api/v1/records", cookies=cookies), now=NOW)
+    invalid = controller.handle(
+        event("GET /api/v1/records", query="sort=sideways", cookies=cookies),
+        now=NOW,
+    )
+
+    assert newest["statusCode"] == 200
+    assert records.list_query is not None
+    assert records.list_query.sort == "newest"
+    assert invalid["statusCode"] == 400
+
+
+def test_records_rejects_removed_date_filters() -> None:
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, FakeRecords()),
+    )
+
+    response = controller.handle(
+        event(
+            "GET /api/v1/records",
+            query="from=2026-08-01T00%3A00%3A00Z",
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+        ),
+        now=NOW,
+    )
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
 
 
 def test_unknown_auth_failure_is_content_free() -> None:

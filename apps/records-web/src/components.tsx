@@ -1,17 +1,19 @@
-import type { PropsWithChildren } from "react";
+import { useState, type PropsWithChildren } from "react";
 import { Link, NavLink } from "react-router-dom";
 
 import type { AvatarRef, RecordListItem } from "./api";
 import styles from "./App.module.css";
 
 export function Avatar({ avatar }: { readonly avatar: AvatarRef }) {
-  if (avatar.kind === "image" && avatar.url) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (avatar.kind === "image" && avatar.url && avatar.url !== failedUrl) {
     return (
       <img
         className={styles.avatar}
         src={avatar.url}
         alt={avatar.alt}
         referrerPolicy="no-referrer"
+        onError={() => setFailedUrl(avatar.url ?? null)}
       />
     );
   }

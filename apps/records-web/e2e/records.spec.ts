@@ -117,6 +117,9 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible();
   await expect(page.getByRole("article")).toContainText(detail.question);
+  await expect(page.getByLabel("並び順")).toHaveValue("newest");
+  await expect(page.getByLabel("開始日")).toHaveCount(0);
+  await expect(page.getByLabel("終了日")).toHaveCount(0);
   await expect(page).toHaveScreenshot("records-home.png", {
     animations: "disabled",
     fullPage: true,
@@ -167,5 +170,6 @@ test("anonymous login page boots under the production CSP without dynamic evalua
   await page.goto("/");
 
   await expect(page.getByRole("link", { name: "Discordでログイン" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
   expect(pageErrors).toEqual([]);
 });

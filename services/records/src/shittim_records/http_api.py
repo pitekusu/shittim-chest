@@ -35,7 +35,6 @@ from shittim_records.read_api import (
     ListQuery,
     ReadFailure,
     RecordsReadService,
-    parse_aware_datetime,
 )
 
 JSON_HEADERS = {
@@ -176,11 +175,12 @@ class ReadHttpController:
                 return error_response(401, "AUTHENTICATION_REQUIRED", request.request_id)
             if request.route_key == "GET /api/v1/records":
                 query = _query(request.raw_query)
+                if not set(query).issubset({"cursor", "limit", "sort", "winner"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.list_records(
                     query=ListQuery(
                         limit=_limit(_optional_single(query, "limit")),
-                        from_at=parse_aware_datetime(_optional_single(query, "from")),
-                        to_at=parse_aware_datetime(_optional_single(query, "to")),
+                        sort=_sort(_optional_single(query, "sort")),
                         winner=_winner(_optional_single(query, "winner")),
                         cursor=_optional_single(query, "cursor"),
                     ),
@@ -299,6 +299,14 @@ def _winner(value: str | None) -> Any:
     if value is None:
         return None
     if value not in {"participant-a", "participant-b", "participant-c"}:
+        raise ReadFailure("REQUEST_INVALID", 400)
+    return value
+
+
+def _sort(value: str | None) -> Any:
+    if value is None:
+        return "newest"
+    if value not in {"newest", "oldest"}:
         raise ReadFailure("REQUEST_INVALID", 400)
     return value
 

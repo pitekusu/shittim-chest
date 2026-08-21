@@ -14,7 +14,13 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 
 from shittim_records.auth import AuthFailure
-from shittim_records.read_api import ArchivePage, ParticipantSlot, ReadFailure, RequesterProfile
+from shittim_records.read_api import (
+    ArchivePage,
+    ParticipantSlot,
+    ReadFailure,
+    RequesterProfile,
+    SortOrder,
+)
 
 MAX_BATCH_GET_ATTEMPTS = 5
 
@@ -65,34 +71,22 @@ class DynamoRecordsReader:
         self,
         *,
         limit: int,
-        from_at: str | None,
-        to_at: str | None,
+        sort: SortOrder,
         winner: ParticipantSlot | None,
         exclusive_start_key: DynamoItem | None,
     ) -> ArchivePage:
         index_name = "gsi2" if winner else "gsi1"
         partition_value = f"WINNER#{winner}" if winner else "ARCHIVE#COMPLETED"
         pk_name = f"{index_name}pk"
-        sk_name = f"{index_name}sk"
         expression = "#pk = :pk"
         values: DynamoItem = {":pk": partition_value}
-        if from_at is not None and to_at is not None:
-            expression += " AND #sk BETWEEN :from AND :to"
-            values[":from"] = f"{from_at}#"
-            values[":to"] = f"{to_at}#\uffff"
-        elif from_at is not None:
-            expression += " AND #sk >= :from"
-            values[":from"] = f"{from_at}#"
-        elif to_at is not None:
-            expression += " AND #sk <= :to"
-            values[":to"] = f"{to_at}#\uffff"
         parameters: dict[str, Any] = {
             "TableName": self._archive_table,
             "IndexName": index_name,
             "KeyConditionExpression": expression,
-            "ExpressionAttributeNames": {"#pk": pk_name, "#sk": sk_name},
+            "ExpressionAttributeNames": {"#pk": pk_name},
             "ExpressionAttributeValues": marshal_item(values),
-            "ScanIndexForward": False,
+            "ScanIndexForward": sort == "oldest",
             "Limit": limit,
         }
         if exclusive_start_key is not None:
