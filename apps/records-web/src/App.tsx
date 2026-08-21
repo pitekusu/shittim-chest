@@ -206,6 +206,11 @@ function RecordsHome() {
       ),
     [loadedRecords],
   );
+  useEffect(() => {
+    if (requester && !records.isPending && !requesterNames.includes(requester)) {
+      setRequester("");
+    }
+  }, [records.isPending, requester, requesterNames]);
   const visibleRecords = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ja-JP");
     return loadedRecords.filter((record) => {

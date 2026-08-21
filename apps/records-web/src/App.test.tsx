@@ -215,9 +215,8 @@ describe("App", () => {
           return Promise.resolve(response(authenticatedSession()));
         }
         if (path.startsWith("/api/v1/records?")) {
-          return Promise.resolve(
-            response({ schemaVersion: 1, items: [first, second], nextCursor: null }),
-          );
+          const items = path.includes("sort=oldest") ? [first] : [first, second];
+          return Promise.resolve(response({ schemaVersion: 1, items, nextCursor: null }));
         }
         throw new Error(`Unexpected request: ${path}`);
       }),
@@ -232,6 +231,11 @@ describe("App", () => {
 
     expect(screen.getByText("別の依頼")).toBeVisible();
     expect(screen.queryByText("休日の過ごし方を決める")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("並び順"), { target: { value: "oldest" } });
+
+    await waitFor(() => expect(requesterFilter).toHaveValue(""));
+    expect(await screen.findByText("休日の過ごし方を決める")).toBeVisible();
   });
 
   it("returns to login when a protected request reports an expired session", async () => {
