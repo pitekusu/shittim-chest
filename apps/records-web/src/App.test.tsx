@@ -195,6 +195,49 @@ describe("App", () => {
     });
   });
 
+  it("filters loaded records by the selected requester", async () => {
+    const first = listResponse().items[0]!;
+    const second = {
+      ...structuredClone(first),
+      recordId: "s".repeat(43),
+      questionPreview: "別の依頼",
+      requester: {
+        displayName: "パワー系ウナギ",
+        avatar: placeholder("パワー系ウナギ", "pink"),
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (path === "/api/v1/session") {
+          return Promise.resolve(response(authenticatedSession()));
+        }
+        if (path.startsWith("/api/v1/records?")) {
+          const items = path.includes("sort=oldest") ? [first] : [first, second];
+          return Promise.resolve(response({ schemaVersion: 1, items, nextCursor: null }));
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("別の依頼")).toBeVisible();
+    const requesterFilter = screen.getByLabelText("依頼者");
+    expect(within(requesterFilter).getByRole("option", { name: "パワー系ウナギ" })).toBeVisible();
+    fireEvent.change(requesterFilter, { target: { value: "パワー系ウナギ" } });
+
+    expect(screen.getByText("別の依頼")).toBeVisible();
+    expect(screen.queryByText("休日の過ごし方を決める")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("並び順"), { target: { value: "oldest" } });
+
+    await waitFor(() => expect(requesterFilter).toHaveValue(""));
+    expect(await screen.findByText("休日の過ごし方を決める")).toBeVisible();
+  });
+
   it("returns to login when a protected request reports an expired session", async () => {
     let sessionRequests = 0;
     vi.stubGlobal(

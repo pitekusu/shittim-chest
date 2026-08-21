@@ -182,6 +182,7 @@ function RecordsHome() {
   const [winner, setWinner] = useState<ParticipantSlot | "">("");
   const [sort, setSort] = useState<SortOrder>("newest");
   const [search, setSearch] = useState("");
+  const [requester, setRequester] = useState("");
   const records = useInfiniteQuery({
     queryKey: ["records", winner, sort],
     initialPageParam: undefined as string | undefined,
@@ -194,19 +195,35 @@ function RecordsHome() {
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
   useAuthenticationRecovery(records.error);
+  const loadedRecords = useMemo(
+    () => records.data?.pages.flatMap((page) => page.items) ?? [],
+    [records.data],
+  );
+  const requesterNames = useMemo(
+    () =>
+      Array.from(new Set(loadedRecords.map((record) => record.requester.displayName))).sort(
+        (a, b) => a.localeCompare(b, "ja-JP"),
+      ),
+    [loadedRecords],
+  );
+  useEffect(() => {
+    if (requester && !records.isPending && !requesterNames.includes(requester)) {
+      setRequester("");
+    }
+  }, [records.isPending, requester, requesterNames]);
   const visibleRecords = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ja-JP");
-    const items = records.data?.pages.flatMap((page) => page.items) ?? [];
-    if (!needle) return items;
-    return items.filter((record) => {
+    return loadedRecords.filter((record) => {
+      if (requester && record.requester.displayName !== requester) return false;
+      if (!needle) return true;
       const winnerName = record.participants.find(
         (participant) => participant.slot === record.result.winner,
       )?.displayName;
-      return [record.questionPreview, record.requester.displayName, winnerName]
+      return [record.questionPreview, winnerName]
         .filter(Boolean)
         .some((value) => value?.toLocaleLowerCase("ja-JP").includes(needle));
     });
-  }, [records.data, search]);
+  }, [loadedRecords, requester, search]);
   const error = records.error instanceof RecordsApiError ? records.error : undefined;
   return (
     <>
@@ -224,8 +241,19 @@ function RecordsHome() {
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="質問・依頼者・勝者"
+            placeholder="質問・勝者"
           />
+        </label>
+        <label>
+          依頼者
+          <select value={requester} onChange={(event) => setRequester(event.target.value)}>
+            <option value="">すべて</option>
+            {requesterNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           勝者
