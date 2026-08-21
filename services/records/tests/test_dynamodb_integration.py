@@ -11,9 +11,9 @@ from typing import Any, cast
 import boto3
 import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
-from shittim_chest.adapters.dynamodb.codec import marshal_item
 from tests.factories import NOW, completed_snapshot, presentation
 
+from shittim_records.adapters import ArchiveRepository
 from shittim_records.archive import project_completed_debate
 from shittim_records.auth import AuthFailure, OAuthState, SessionRecord
 from shittim_records.auth_adapters import DynamoAuthStore
@@ -128,8 +128,8 @@ def test_oauth_claim_session_and_archive_pagination(
         presentation=presentation(),
         projected_at=NOW,
     )
-    for item in projection.items:
-        dynamodb_client.put_item(TableName=archive_table, Item=marshal_item(item))
+    assert ArchiveRepository(dynamodb_client, archive_table).put_projection(projection) is True
+    assert ArchiveRepository(dynamodb_client, archive_table).put_projection(projection) is False
     reader = DynamoRecordsReader(
         dynamodb_client,
         cast(Any, _NoopS3()),

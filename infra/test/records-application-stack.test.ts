@@ -199,38 +199,47 @@ describe("RecordsApplicationStack", () => {
     expect(projectorPolicy).toBeDefined();
     expect(JSON.stringify(projectorPolicy)).not.toContain("dynamodb:Scan");
     expect(serialized).toContain("dynamodb:Query");
-    expect(serialized).toContain("dynamodb:TransactWriteItems");
     expect(serialized).toContain("dynamodb:PutItem");
     expect(serialized).toContain("ssm:GetParameters");
     expect(serialized).not.toContain("ssm:GetParameterHistory");
     for (const role of ["ProjectorFunctionRole", "BackfillFunctionRole"]) {
       const archivePolicy = Object.values(policies).find((policy) => {
         const value = JSON.stringify(policy);
-        return value.includes(role) && value.includes("dynamodb:TransactWriteItems");
+        return (
+          value.includes(role) &&
+          value.includes("dynamodb:PutItem") &&
+          value.includes("dynamodb:EnclosingOperation") &&
+          value.includes("TransactWriteItems")
+        );
       });
       expect(archivePolicy).toBeDefined();
     }
 
-    const backfillPolicy = Object.values(policies).find((policy) =>
-      JSON.stringify(policy).includes("BackfillFunctionRole"),
-    );
-    expect(backfillPolicy).toBeDefined();
-    const backfillStatements = backfillPolicy?.Properties.PolicyDocument.Statement as Array<{
-      readonly Action: string | string[];
-      readonly Resource: unknown;
-    }>;
-    const archivePutStatements = backfillStatements.filter((statement) => {
-      const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
-      return (
-        actions.length === 1 &&
-        actions[0] === "dynamodb:PutItem" &&
-        JSON.stringify(statement.Resource).includes("table/shittim-chest-production-records")
+    expect(projectionText).not.toContain('"Action":"dynamodb:TransactWriteItems"');
+
+    for (const role of ["ProjectorFunctionRole", "BackfillFunctionRole"]) {
+      const policy = Object.values(policies).find((candidate) =>
+        JSON.stringify(candidate).includes(role),
       );
-    });
-    expect(archivePutStatements).toHaveLength(1);
-    expect(JSON.stringify(archivePutStatements[0]?.Resource)).not.toContain(
-      "records-statistics",
-    );
+      expect(policy).toBeDefined();
+      const statements = policy?.Properties.PolicyDocument.Statement as Array<{
+        readonly Action: string | string[];
+        readonly Resource: unknown;
+        readonly Condition?: unknown;
+      }>;
+      const archivePutStatements = statements.filter((statement) => {
+        const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+        return (
+          actions.length === 1 &&
+          actions[0] === "dynamodb:PutItem" &&
+          JSON.stringify(statement.Resource).includes("table/shittim-chest-production-records")
+        );
+      });
+      expect(archivePutStatements).toHaveLength(1);
+      expect(archivePutStatements[0]?.Condition).toEqual({
+        StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+      });
+    }
   });
 
   test("does not recreate the source debate table", () => {

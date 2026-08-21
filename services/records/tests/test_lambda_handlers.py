@@ -7,6 +7,7 @@ import sys
 from typing import Any, cast
 
 import pytest
+from botocore.exceptions import ClientError
 
 from shittim_records import lambda_handlers
 from shittim_records.projector import BackfillResult, ProjectionResult
@@ -79,11 +80,12 @@ def stream_event() -> dict[str, object]:
                 "eventID": "opaque-stream-event",
                 "eventName": "MODIFY",
                 "dynamodb": {
+                    "SequenceNumber": "opaque-stream-sequence",
                     "NewImage": {
                         "PK": {"S": "DEBATE#opaque"},
                         "record_type": {"S": "debate_meta"},
                         "current_phase": {"S": "completed"},
-                    }
+                    },
                 },
             }
         ]
@@ -100,13 +102,13 @@ def test_projector_handler_returns_empty_partial_failure_list(monkeypatch: Any) 
     assert service.partitions == ["DEBATE#opaque"]
 
 
-def test_projector_handler_returns_only_failed_event_identifier(monkeypatch: Any) -> None:
+def test_projector_handler_returns_only_failed_stream_sequence(monkeypatch: Any) -> None:
     service = FakeProjector(fail=True)
     monkeypatch.setattr(lambda_handlers, "_PROJECTOR", cast(Any, service))
 
     result = lambda_handlers.projector_handler(stream_event(), object())
 
-    assert result == {"batchItemFailures": [{"itemIdentifier": "opaque-stream-event"}]}
+    assert result == {"batchItemFailures": [{"itemIdentifier": "opaque-stream-sequence"}]}
 
 
 def test_projector_handler_fails_closed_on_non_completed_event(monkeypatch: Any) -> None:
@@ -117,8 +119,40 @@ def test_projector_handler_fails_closed_on_non_completed_event(monkeypatch: Any)
 
     result = lambda_handlers.projector_handler(event, object())
 
-    assert result["batchItemFailures"] == [{"itemIdentifier": "opaque-stream-event"}]
+    assert result["batchItemFailures"] == [{"itemIdentifier": "opaque-stream-sequence"}]
     assert service.partitions == []
+
+
+def test_projector_handler_rejects_missing_stream_sequence(monkeypatch: Any) -> None:
+    service = FakeProjector(fail=True)
+    monkeypatch.setattr(lambda_handlers, "_PROJECTOR", cast(Any, service))
+    event = cast(dict[str, Any], stream_event())
+    del event["Records"][0]["dynamodb"]["SequenceNumber"]
+
+    with pytest.raises(ValueError, match="sequence number"):
+        lambda_handlers.projector_handler(event, object())
+
+
+def test_projection_failure_fields_keep_only_content_free_client_codes() -> None:
+    error = ClientError(
+        {
+            "Error": {"Code": "AccessDeniedException", "Message": "private detail"},
+            "CancellationReasons": [
+                {"Code": "ConditionalCheckFailed", "Message": "private item"},
+                {"Code": "None"},
+            ],
+        },
+        "TransactWriteItems",
+    )
+
+    fields = lambda_handlers._projection_failure_fields(error)
+
+    assert fields == {
+        "error_type": "ClientError",
+        "client_error_code": "AccessDeniedException",
+        "cancellation_reason_codes": ["ConditionalCheckFailed", "None"],
+    }
+    assert "private" not in str(fields)
 
 
 def test_backfill_handler_returns_only_content_free_counts(monkeypatch: Any) -> None:

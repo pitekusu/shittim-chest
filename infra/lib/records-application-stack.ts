@@ -462,17 +462,22 @@ export class RecordsApplicationStack extends Stack {
     );
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
-        actions: ["dynamodb:GetItem", "dynamodb:TransactWriteItems"],
+        actions: ["dynamodb:GetItem"],
         resources: [options.archiveTable.tableArn],
       }),
     );
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:PutItem"],
+        resources: [options.archiveTable.tableArn],
+        conditions: {
+          StringEquals: {
+            "dynamodb:EnclosingOperation": "TransactWriteItems",
+          },
+        },
+      }),
+    );
     if (options.allowScan) {
-      role.addToPrincipalPolicy(
-        new iam.PolicyStatement({
-          actions: ["dynamodb:PutItem"],
-          resources: [options.archiveTable.tableArn],
-        }),
-      );
       role.addToPrincipalPolicy(
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
