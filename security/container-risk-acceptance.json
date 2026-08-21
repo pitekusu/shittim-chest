@@ -1,50 +1,5 @@
 {
   "schema_version": 5,
   "maximum_validity_days": 90,
-  "acceptances": [
-    {
-      "vulnerability_id": "CVE-2026-66046",
-      "package": "libexpat1",
-      "image_config_digests": {
-        "production": [
-          "sha256:449fca99256ea45637a8ee92c284827e84eb077818f672ede5006da42fb750c3",
-          "sha256:e1e17a5bed518fc4beedc26356fc0ae28ca419ad5fc16da2195dd74d9bf5bdd5"
-        ],
-        "break-glass": [
-          "sha256:d420658584af772c072d2ec974c361c34f76343418cbd7eb2720efbc730de208"
-        ]
-      },
-      "status": "affected",
-      "justification": "The pinned DHI images predate the fixed Debian package and no rebuilt DHI image containing the fix is currently available.",
-      "impact": "A crafted XML document could consume excessive CPU and deny service if it reached an Expat parsing path.",
-      "exploitability": "The application accepts signed Discord JSON and has no code path that parses user-controlled XML; the container is also non-root with a read-only root filesystem.",
-      "evidence": "Canonical ARM64 SBOM and Grype results identify libexpat1 2.8.2-1~deb13u1+dhi0, while repository inspection finds no application XML parser usage.",
-      "approved_on": "2026-08-20",
-      "expires_on": "2026-09-19",
-      "reevaluation_conditions": "Reevaluate when DHI publishes a rebuilt base image, Expat is introduced into an input path, or the container exposure changes.",
-      "owner": "repository-owner"
-    },
-    {
-      "vulnerability_id": "CVE-2026-66046",
-      "package": "libexpat1-dev",
-      "image_config_digests": {
-        "production": [
-          "sha256:449fca99256ea45637a8ee92c284827e84eb077818f672ede5006da42fb750c3",
-          "sha256:e1e17a5bed518fc4beedc26356fc0ae28ca419ad5fc16da2195dd74d9bf5bdd5"
-        ],
-        "break-glass": [
-          "sha256:d420658584af772c072d2ec974c361c34f76343418cbd7eb2720efbc730de208"
-        ]
-      },
-      "status": "affected",
-      "justification": "The pinned DHI images predate the fixed Debian package and no rebuilt DHI image containing the fix is currently available.",
-      "impact": "The development package accompanies the affected Expat runtime and represents the same potential CPU denial of service if a crafted XML document were parsed.",
-      "exploitability": "The application accepts signed Discord JSON and has no code path that parses user-controlled XML; production execution is non-root and the break-glass target is isolated from the service.",
-      "evidence": "Canonical ARM64 SBOM and Grype results identify libexpat1-dev 2.8.2-1~deb13u1+dhi0, while repository inspection finds no application XML parser usage.",
-      "approved_on": "2026-08-20",
-      "expires_on": "2026-09-19",
-      "reevaluation_conditions": "Reevaluate when DHI publishes a rebuilt base image, Expat is introduced into an input path, or the container exposure changes.",
-      "owner": "repository-owner"
-    }
-  ]
+  "acceptances": []
 }
