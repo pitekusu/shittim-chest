@@ -27,6 +27,7 @@ import {
   type ParticipantSlot,
   type RecordDetailResponse,
   type SessionResponse,
+  type SortOrder,
 } from "./api";
 import { Avatar, BrandMark, DebateCard, ErrorPanel, Layout } from "./components";
 import styles from "./App.module.css";
@@ -164,18 +165,16 @@ function AuthenticatedRoutes({
 
 function RecordsHome() {
   const [winner, setWinner] = useState<ParticipantSlot | "">("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [sort, setSort] = useState<SortOrder>("newest");
   const [search, setSearch] = useState("");
   const records = useInfiniteQuery({
-    queryKey: ["records", winner, from, to],
+    queryKey: ["records", winner, sort],
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
       getRecords({
         cursor: pageParam,
+        sort,
         winner: winner || undefined,
-        from: from ? new Date(`${from}T00:00:00+09:00`).toISOString() : undefined,
-        to: to ? new Date(`${to}T23:59:59.999+09:00`).toISOString() : undefined,
       }),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
@@ -199,7 +198,7 @@ function RecordsHome() {
       <header className={styles.pageHeader}>
         <p className={styles.eyebrow}>RECORDS ARCHIVE</p>
         <h1 tabIndex={-1}>議論の記録</h1>
-        <p>正常に完了した議論だけを、新しい順に閲覧できます。</p>
+        <p>正常に完了した議論だけを、選んだ順序で閲覧できます。</p>
       </header>
       <section className={styles.filters} aria-label="記録の絞り込み">
         <label>
@@ -224,17 +223,11 @@ function RecordsHome() {
           </select>
         </label>
         <label>
-          開始日
-          <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-        </label>
-        <label>
-          終了日
-          <input
-            type="date"
-            value={to}
-            min={from || undefined}
-            onChange={(event) => setTo(event.target.value)}
-          />
+          並び順
+          <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
+            <option value="newest">新しい順</option>
+            <option value="oldest">古い順</option>
+          </select>
         </label>
         <p>検索対象は現在読み込み済みのカードです。</p>
       </section>

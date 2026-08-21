@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any, cast
 
 import pytest
@@ -16,7 +16,6 @@ from shittim_records.read_api import (
     ReadFailure,
     RecordsReadService,
     RequesterProfile,
-    parse_aware_datetime,
 )
 
 HMAC_KEY = b"records-test-key-that-is-longer-than-32-bytes"
@@ -79,6 +78,7 @@ def test_list_normalizes_preview_and_uses_profile_avatar() -> None:
     assert result.items[0].requester.display_name == "Current Requester"
     assert result.items[0].requester.avatar.kind == "image"
     assert reader.list_calls[0]["limit"] == 12
+    assert reader.list_calls[0]["sort"] == "newest"
 
 
 @pytest.mark.parametrize(
@@ -145,15 +145,6 @@ def test_winner_filtered_list_rejects_malformed_selected_gsi2_projection(
     assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
 
 
-def test_list_rejects_a_row_outside_the_requested_time_range() -> None:
-    records, _reader = service()
-
-    with pytest.raises(ReadFailure) as caught:
-        records.list_records(query=ListQuery(from_at=NOW + timedelta(seconds=1)), now=NOW)
-
-    assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
-
-
 def test_list_converts_stored_timestamp_overflow_to_archive_unavailable() -> None:
     records, reader = service()
     reader.meta["completed_at"] = "9999-12-31T23:59:59-01:00"
@@ -164,9 +155,9 @@ def test_list_converts_stored_timestamp_overflow_to_archive_unavailable() -> Non
     assert (caught.value.code, caught.value.status) == ("ARCHIVE_UNAVAILABLE", 503)
 
 
-def test_cursor_is_bound_to_filters_limit_index_and_expiry() -> None:
+def test_cursor_is_bound_to_filters_limit_sort_index_and_expiry() -> None:
     codec = CursorCodec(SESSION_KEY)
-    query = ListQuery(limit=12, winner="participant-b")
+    query = ListQuery(limit=12, sort="oldest", winner="participant-b")
     key = {
         "PK": f"RECORD#{'r' * 43}",
         "SK": "META",
@@ -181,7 +172,7 @@ def test_cursor_is_bound_to_filters_limit_index_and_expiry() -> None:
     )
 
     index, restored = codec.decode(
-        query=ListQuery(limit=12, winner="participant-b", cursor=cursor),
+        query=ListQuery(limit=12, sort="oldest", winner="participant-b", cursor=cursor),
         now=NOW,
     )
     assert index == "gsi2"
@@ -190,13 +181,14 @@ def test_cursor_is_bound_to_filters_limit_index_and_expiry() -> None:
     for changed in (
         ListQuery(limit=13, winner="participant-b", cursor=cursor),
         ListQuery(limit=12, winner="participant-a", cursor=cursor),
+        ListQuery(limit=12, sort="newest", winner="participant-b", cursor=cursor),
     ):
         with pytest.raises(ReadFailure) as caught:
             codec.decode(query=changed, now=NOW)
         assert caught.value.code == "CURSOR_INVALID"
     with pytest.raises(ReadFailure):
         codec.decode(
-            query=ListQuery(limit=12, winner="participant-b", cursor=cursor),
+            query=ListQuery(limit=12, sort="oldest", winner="participant-b", cursor=cursor),
             now=NOW + timedelta(hours=1),
         )
 
@@ -303,18 +295,9 @@ def test_invalid_record_id_and_missing_record_are_distinct() -> None:
     assert missing.value.status == 404
 
 
-def test_list_query_rejects_naive_or_reversed_dates() -> None:
+def test_list_query_rejects_unknown_sort() -> None:
     records, _reader = service()
-    with pytest.raises(ReadFailure):
-        records.list_records(
-            query=ListQuery(
-                from_at=datetime(2026, 8, 18, tzinfo=UTC),
-                to_at=datetime(2026, 8, 17, tzinfo=UTC),
-            ),
-            now=NOW,
-        )
-    with pytest.raises(ReadFailure):
-        records.list_records(query=ListQuery(from_at=datetime(2026, 8, 17)), now=NOW)
-    assert parse_aware_datetime("2026-08-17T12:00:00+09:00") == datetime(
-        2026, 8, 17, 3, 0, tzinfo=UTC
-    )
+    with pytest.raises(ReadFailure) as caught:
+        records.list_records(query=ListQuery(sort=cast(Any, "unknown")), now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("REQUEST_INVALID", 400)

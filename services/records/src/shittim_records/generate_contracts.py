@@ -181,8 +181,15 @@ def build_openapi() -> dict[str, Any]:
                             "query",
                             {"type": "integer", "minimum": 1, "maximum": 50, "default": 12},
                         ),
-                        _parameter("from", "query", {"type": "string", "format": "date-time"}),
-                        _parameter("to", "query", {"type": "string", "format": "date-time"}),
+                        _parameter(
+                            "sort",
+                            "query",
+                            {
+                                "type": "string",
+                                "enum": ["newest", "oldest"],
+                                "default": "newest",
+                            },
+                        ),
                         _parameter(
                             "winner",
                             "query",

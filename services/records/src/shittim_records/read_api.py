@@ -30,6 +30,7 @@ PARTICIPANT_SLOTS: tuple[ParticipantSlot, ...] = (
     "participant-c",
 )
 FallbackVariant = Literal["cyan", "pink", "lavender"]
+SortOrder = Literal["newest", "oldest"]
 
 
 class ReadFailure(RuntimeError):
@@ -44,8 +45,7 @@ class ReadFailure(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class ListQuery:
     limit: int = 12
-    from_at: datetime | None = None
-    to_at: datetime | None = None
+    sort: SortOrder = "newest"
     winner: ParticipantSlot | None = None
     cursor: str | None = None
 
@@ -69,8 +69,7 @@ class RecordsReader(Protocol):
         self,
         *,
         limit: int,
-        from_at: str | None,
-        to_at: str | None,
+        sort: SortOrder,
         winner: ParticipantSlot | None,
         exclusive_start_key: DynamoItem | None,
     ) -> ArchivePage: ...
@@ -106,11 +105,10 @@ class CursorCodec:
         except ValueError:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
         payload = {
-            "version": 1,
+            "version": 2,
             "index": index_name,
             "limit": query.limit,
-            "from": _time_text(query.from_at),
-            "to": _time_text(query.to_at),
+            "sort": query.sort,
             "winner": query.winner,
             "expires_at": int((_utc(now) + CURSOR_TTL).timestamp()),
             "last_evaluated_key": cursor_key,
@@ -142,8 +140,7 @@ class CursorCodec:
             "version",
             "index",
             "limit",
-            "from",
-            "to",
+            "sort",
             "winner",
             "expires_at",
             "last_evaluated_key",
@@ -152,11 +149,10 @@ class CursorCodec:
             raise ReadFailure("CURSOR_INVALID", 400)
         expected_index = "gsi2" if query.winner else "gsi1"
         if (
-            payload["version"] != 1
+            payload["version"] != 2
             or payload["index"] != expected_index
             or payload["limit"] != query.limit
-            or payload["from"] != _time_text(query.from_at)
-            or payload["to"] != _time_text(query.to_at)
+            or payload["sort"] != query.sort
             or payload["winner"] != query.winner
             or isinstance(payload["expires_at"], bool)
             or not isinstance(payload["expires_at"], int)
@@ -190,8 +186,7 @@ class RecordsReadService:
                 raise ReadFailure("CURSOR_INVALID", 400)
         page = self._reader.list_meta(
             limit=query.limit,
-            from_at=_time_text(query.from_at),
-            to_at=_time_text(query.to_at),
+            sort=query.sort,
             winner=query.winner,
             exclusive_start_key=start_key,
         )
@@ -202,8 +197,6 @@ class RecordsReadService:
                 item,
                 index_name=page.index_name,
                 winner=query.winner,
-                from_at=query.from_at,
-                to_at=query.to_at,
             )
         requester_keys = tuple(
             cast(str, item.get("requester_key"))
@@ -432,28 +425,16 @@ class RecordsReadService:
 def validate_list_query(query: ListQuery) -> ListQuery:
     if isinstance(query.limit, bool) or not 1 <= query.limit <= 50:
         raise ReadFailure("REQUEST_INVALID", 400)
-    from_at = _utc(query.from_at) if query.from_at is not None else None
-    to_at = _utc(query.to_at) if query.to_at is not None else None
-    if from_at is not None and to_at is not None and from_at > to_at:
+    if query.sort not in {"newest", "oldest"}:
         raise ReadFailure("REQUEST_INVALID", 400)
     if query.winner is not None and query.winner not in PARTICIPANT_SLOTS:
         raise ReadFailure("REQUEST_INVALID", 400)
     return ListQuery(
         limit=query.limit,
-        from_at=from_at,
-        to_at=to_at,
+        sort=query.sort,
         winner=query.winner,
         cursor=query.cursor,
     )
-
-
-def parse_aware_datetime(value: str | None) -> datetime | None:
-    if value is None:
-        return None
-    try:
-        return TypeAdapter(AwareDatetime).validate_python(value).astimezone(UTC)
-    except ValidationError:
-        raise ReadFailure("REQUEST_INVALID", 400) from None
 
 
 def _required_text(item: DynamoItem, field: str) -> str:
@@ -522,8 +503,6 @@ def _validate_list_projection(
     *,
     index_name: str,
     winner: ParticipantSlot | None,
-    from_at: datetime | None,
-    to_at: datetime | None,
 ) -> None:
     _validate_meta_item(item)
     record_id = _required_text(item, "record_id")
@@ -552,11 +531,6 @@ def _validate_list_projection(
         if item.get("gsi2sk") != expected_sort_key:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
     else:
-        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
-
-    if from_at is not None and completed_at < from_at:
-        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
-    if to_at is not None and completed_at > to_at:
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
 
 
@@ -599,10 +573,6 @@ def _base64url(value: bytes) -> str:
 
 def _decode_base64url(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-
-
-def _time_text(value: datetime | None) -> str | None:
-    return None if value is None else _utc(value).isoformat()
 
 
 def _utc(value: datetime) -> datetime:

@@ -93,5 +93,11 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     assert openapi["paths"]["/api/v1/session"]["get"]["security"] == []
     assert [
         parameter["name"] for parameter in openapi["paths"]["/api/v1/records"]["get"]["parameters"]
-    ] == ["cursor", "limit", "from", "to", "winner"]
+    ] == ["cursor", "limit", "sort", "winner"]
+    sort_parameter = openapi["paths"]["/api/v1/records"]["get"]["parameters"][2]["schema"]
+    assert sort_parameter == {
+        "type": "string",
+        "enum": ["newest", "oldest"],
+        "default": "newest",
+    }
     assert openapi["paths"]["/api/v1/logout"]["post"]["parameters"][0]["name"] == ("X-CSRF-Token")

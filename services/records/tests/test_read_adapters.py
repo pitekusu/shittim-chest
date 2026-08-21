@@ -56,13 +56,16 @@ def reader(client: FakeDynamo) -> DynamoRecordsReader:
     )
 
 
-def test_list_uses_gsi2_for_winner_and_inclusive_time_bounds() -> None:
+@pytest.mark.parametrize(("sort", "scan_forward"), (("newest", False), ("oldest", True)))
+def test_list_uses_selected_gsi_and_sort_without_unused_expression_names(
+    sort: str,
+    scan_forward: bool,
+) -> None:
     client = FakeDynamo([{"Items": []}])
 
     page = reader(client).list_meta(
         limit=12,
-        from_at="2026-08-01T00:00:00+00:00",
-        to_at="2026-08-31T23:59:59+00:00",
+        sort=cast(Any, sort),
         winner="participant-b",
         exclusive_start_key=None,
     )
@@ -70,8 +73,9 @@ def test_list_uses_gsi2_for_winner_and_inclusive_time_bounds() -> None:
     call = client.queries[0]
     assert page.index_name == "gsi2"
     assert call["IndexName"] == "gsi2"
-    assert call["ScanIndexForward"] is False
-    assert "BETWEEN" in call["KeyConditionExpression"]
+    assert call["ScanIndexForward"] is scan_forward
+    assert call["ExpressionAttributeNames"] == {"#pk": "gsi2pk"}
+    assert call["KeyConditionExpression"] == "#pk = :pk"
 
 
 def test_detail_query_reads_all_pages_strongly_consistently() -> None:

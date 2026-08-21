@@ -1,7 +1,8 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
+import { Avatar } from "./components";
 import type { SessionResponse } from "./api";
 import { isRecordsApiResponse } from "./contracts";
 
@@ -103,11 +104,13 @@ function response(value: unknown, status = 200): Response {
 }
 
 function mockApi(session: SessionResponse = authenticatedSession() as SessionResponse) {
+  const requests: string[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const path =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      requests.push(path);
       if (path === "/api/v1/session") return Promise.resolve(response(session));
       if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
       if (path === `/api/v1/records/${RECORD_ID}`) {
@@ -116,6 +119,7 @@ function mockApi(session: SessionResponse = authenticatedSession() as SessionRes
       throw new Error(`Unexpected request: ${path}`);
     }),
   );
+  return requests;
 }
 
 afterEach(() => {
@@ -140,7 +144,7 @@ describe("App", () => {
   });
 
   it("renders completed records without duration or Evidence", async () => {
-    mockApi();
+    const requests = mockApi();
 
     render(<App />);
 
@@ -156,6 +160,22 @@ describe("App", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("開始日")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("終了日")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("並び順")).toHaveValue("newest");
+    expect(requests).toContain("/api/v1/records?limit=12&sort=newest");
+  });
+
+  it("requests the complete archive in the selected order", async () => {
+    const requests = mockApi();
+    render(<App />);
+    await screen.findByRole("heading", { name: "議論の記録" });
+
+    fireEvent.change(screen.getByLabelText("並び順"), { target: { value: "oldest" } });
+
+    await waitFor(() => {
+      expect(requests).toContain("/api/v1/records?limit=12&sort=oldest");
+    });
   });
 
   it("returns to login when a protected request reports an expired session", async () => {
@@ -220,5 +240,23 @@ describe("App", () => {
     const conflictingWinner = structuredClone(recordDetail());
     conflictingWinner.finalDecision.winner = "participant-b";
     expect(isRecordsApiResponse(conflictingWinner)).toBe(false);
+  });
+
+  it("uses the geometric placeholder when an avatar image cannot load", () => {
+    render(
+      <Avatar
+        avatar={{
+          kind: "image",
+          url: "https://media.example.invalid/avatar.webp",
+          alt: "依頼者のアバター",
+          fallbackVariant: "cyan",
+        }}
+      />,
+    );
+
+    fireEvent.error(screen.getByRole("img", { name: "依頼者のアバター" }));
+
+    expect(screen.queryByRole("img", { name: "依頼者のアバター" })).not.toBeInTheDocument();
+    expect(screen.getByText("依頼者のアバター")).toBeInTheDocument();
   });
 });

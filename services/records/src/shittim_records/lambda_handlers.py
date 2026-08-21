@@ -48,6 +48,7 @@ SDK_CONFIG = Config(
     connect_timeout=2,
     read_timeout=5,
 )
+S3_SDK_CONFIG = SDK_CONFIG.merge(Config(s3={"addressing_style": "virtual"}))
 
 
 def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
@@ -161,7 +162,7 @@ def _auth_controller() -> AuthHttpController:
                 httpx.Client(timeout=httpx.Timeout(3.0, connect=2.0), follow_redirects=False)
             ),
             avatars=S3AvatarStore(
-                boto3.client("s3", config=SDK_CONFIG),
+                _regional_s3_client(),
                 _environment("MEDIA_BUCKET_NAME"),
             ),
             configuration=configuration,
@@ -180,7 +181,7 @@ def _read_controller() -> ReadHttpController:
         ).load_session_key()
         reader = DynamoRecordsReader(
             dynamodb,
-            boto3.client("s3", config=SDK_CONFIG),
+            _regional_s3_client(),
             archive_table_name=_environment("ARCHIVE_TABLE_NAME"),
             session_table_name=_environment("SESSION_TABLE_NAME"),
             media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
@@ -248,6 +249,16 @@ def _environment(name: str) -> str:
     if not value:
         raise RuntimeError(f"required environment variable is missing: {name}")
     return value
+
+
+def _regional_s3_client() -> Any:
+    region = _environment("AWS_REGION")
+    return boto3.client(
+        "s3",
+        region_name=region,
+        endpoint_url=f"https://s3.{region}.amazonaws.com",
+        config=S3_SDK_CONFIG,
+    )
 
 
 def _log(**fields: object) -> None:

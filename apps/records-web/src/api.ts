@@ -1,6 +1,7 @@
 import { isRecordsApiResponse } from "./contracts";
 
 export type ParticipantSlot = "participant-a" | "participant-b" | "participant-c";
+export type SortOrder = "newest" | "oldest";
 
 export interface AvatarRef {
   readonly kind: "image" | "placeholder";
@@ -173,8 +174,7 @@ export async function getSession(): Promise<SessionResponse> {
 
 export interface RecordListFilters {
   readonly cursor?: string;
-  readonly from?: string;
-  readonly to?: string;
+  readonly sort?: SortOrder;
   readonly winner?: ParticipantSlot;
 }
 

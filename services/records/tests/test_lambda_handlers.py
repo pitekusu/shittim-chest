@@ -161,3 +161,27 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
         "statusCode": 200,
         "event": event,
     }
+
+
+def test_s3_presigning_client_uses_the_lambda_region_endpoint(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    client = object()
+
+    def fake_client(service: str, **kwargs: Any) -> object:
+        calls.append((service, kwargs))
+        return client
+
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    monkeypatch.setattr(lambda_handlers.boto3, "client", fake_client)
+
+    assert lambda_handlers._regional_s3_client() is client
+    assert calls == [
+        (
+            "s3",
+            {
+                "region_name": "ap-northeast-1",
+                "endpoint_url": "https://s3.ap-northeast-1.amazonaws.com",
+                "config": lambda_handlers.S3_SDK_CONFIG,
+            },
+        )
+    ]

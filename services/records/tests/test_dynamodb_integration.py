@@ -6,7 +6,6 @@ import os
 import time
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from typing import Any, cast
 
 import boto3
@@ -141,8 +140,7 @@ def test_oauth_claim_session_and_archive_pagination(
     for _attempt in range(20):
         page = reader.list_meta(
             limit=1,
-            from_at=datetime(2026, 8, 1, tzinfo=UTC).isoformat(),
-            to_at=datetime(2026, 8, 31, tzinfo=UTC).isoformat(),
+            sort="newest",
             winner=None,
             exclusive_start_key=None,
         )
