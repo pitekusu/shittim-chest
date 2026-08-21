@@ -66,6 +66,18 @@ const detail = {
   },
 };
 
+const PRODUCTION_CSP = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "connect-src 'self'",
+  "font-src 'self'",
+  "img-src 'self' data:",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+].join("; ");
+
 async function mockAuthenticatedApi(page: Page): Promise<void> {
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
@@ -130,4 +142,30 @@ test("reduced motion skips the long login transition", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible({
     timeout: 1_000,
   });
+});
+
+test("anonymous login page boots under the production CSP without dynamic evaluation", async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/v1/session") {
+      await route.fulfill({
+        json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+      });
+      return;
+    }
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      headers: { ...response.headers(), "content-security-policy": PRODUCTION_CSP },
+    });
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByRole("link", { name: "Discordでログイン" })).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });

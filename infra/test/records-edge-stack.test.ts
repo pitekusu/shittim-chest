@@ -107,6 +107,7 @@ describe("RecordsEdgeStack", () => {
       2,
     );
     expect(serialized).toContain("ContentSecurityPolicy");
+    expect(serialized).not.toContain("unsafe-eval");
     expect(serialized).toContain("StrictTransportSecurity");
     expect(serialized).toContain("Permissions-Policy");
     expect(serialized).toContain("RecordsMediaOriginDomain");
