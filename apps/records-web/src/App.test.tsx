@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
-import { Avatar } from "./components";
+import { Avatar, formatCompletedDateTime } from "./components";
 import type { SessionResponse } from "./api";
 import { isRecordsApiResponse } from "./contracts";
 
@@ -129,13 +129,26 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+describe("formatCompletedDateTime", () => {
+  it("formats completed timestamps in fixed JST to minute precision", () => {
+    expect(formatCompletedDateTime("2026-08-15T06:00:00Z")).toBe("2026年8月15日 15:00");
+    expect(formatCompletedDateTime("2026-12-31T15:00:00Z")).toBe("2027年1月1日 00:00");
+    expect(formatCompletedDateTime("2026-08-15T14:59:59Z")).toBe("2026年8月15日 23:59");
+  });
+});
+
 describe("App", () => {
   it("shows the approved login page for an anonymous Guild visitor", async () => {
     mockApi({ schemaVersion: 1, authenticated: false, user: null, csrfToken: null });
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "シッテムの箱 議事録" })).toBeVisible();
+    const productName = await screen.findByRole("heading", { name: "シッテムの箱 議事録" });
+    expect(productName).toBeVisible();
+    expect(Array.from(productName.children, (child) => child.textContent)).toEqual([
+      "シッテムの箱",
+      "議事録",
+    ]);
     expect(screen.getByRole("link", { name: "Discordでログイン" })).toHaveAttribute(
       "href",
       "/api/v1/auth/discord/start?returnTo=%2F",
@@ -151,6 +164,10 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "議論の記録" })).toBeVisible();
     const card = await screen.findByRole("article");
     expect(within(card).getByText("休日の過ごし方を決める")).toBeVisible();
+    expect(within(card).getByText("2026年8月15日 15:00")).toHaveAttribute(
+      "datetime",
+      "2026-08-15T06:00:00Z",
+    );
     expect(within(card).getAllByText("依頼者")).toHaveLength(2);
     expect(within(card).getByText("アロナ")).toBeVisible();
     expect(
@@ -230,6 +247,10 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "最終決定" })).toBeVisible();
     expect(screen.getByText("勝利しました")).toBeVisible();
     expect(screen.getByText("実行する")).toBeVisible();
+    expect(screen.getByText("2026年8月15日 15:00")).toHaveAttribute(
+      "datetime",
+      "2026-08-15T06:00:00Z",
+    );
   });
 
   it("validates API payloads against the generated Python contract", () => {
