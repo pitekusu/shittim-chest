@@ -33,6 +33,35 @@ export function BrandMark({ compact = false }: { readonly compact?: boolean }) {
   );
 }
 
+function ProductNameLines() {
+  return (
+    <>
+      <span className={styles.productNameLine}>シッテムの箱</span>
+      <span className={styles.productNameLine}>議事録</span>
+    </>
+  );
+}
+
+export function ProductName({ headingId }: { readonly headingId?: string }) {
+  const accessibleName = "シッテムの箱 議事録";
+  if (headingId) {
+    return (
+      <h1
+        id={headingId}
+        className={`${styles.productName} ${styles.japaneseHeading}`}
+        aria-label={accessibleName}
+      >
+        <ProductNameLines />
+      </h1>
+    );
+  }
+  return (
+    <span className={styles.productName} aria-label={accessibleName}>
+      <ProductNameLines />
+    </span>
+  );
+}
+
 export function Layout({
   children,
   displayName,
@@ -49,11 +78,7 @@ export function Layout({
       <aside className={styles.sidebar} aria-label="主要ナビゲーション">
         <Link className={styles.brandLink} to="/">
           <BrandMark compact />
-          <span>
-            シッテムの箱
-            <br />
-            議事録
-          </span>
+          <ProductName />
         </Link>
         <nav>
           <NavLink
@@ -91,12 +116,18 @@ export function Layout({
   );
 }
 
-function completedDate(value: string): string {
-  return new Intl.DateTimeFormat("ja-JP", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  }).format(new Date(value));
+const COMPLETED_DATE_TIME_FORMAT = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+export function formatCompletedDateTime(value: string): string {
+  return COMPLETED_DATE_TIME_FORMAT.format(new Date(value));
 }
 
 export function DebateCard({ record }: { readonly record: RecordListItem }) {
@@ -106,10 +137,10 @@ export function DebateCard({ record }: { readonly record: RecordListItem }) {
   return (
     <article className={styles.debateCard}>
       <div className={styles.cardMeta}>
-        <time dateTime={record.completedAt}>{completedDate(record.completedAt)}</time>
+        <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
         {record.result.tieBreakApplied && <span className={styles.tieBadge}>既定ルール決着</span>}
       </div>
-      <h2>
+      <h2 className={styles.japaneseText}>
         <Link to={`/records/${record.recordId}`}>{record.questionPreview}</Link>
       </h2>
       <div className={styles.cardPeople}>

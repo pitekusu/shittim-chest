@@ -63,6 +63,40 @@
   letter-spacing: 0.18em;
 }
 
+.japaneseText {
+  line-break: strict;
+  overflow-wrap: anywhere;
+  text-autospace: normal;
+  word-break: normal;
+}
+
+@supports (word-break: auto-phrase) {
+  .japaneseText {
+    word-break: auto-phrase;
+  }
+}
+
+.japaneseHeading {
+  text-wrap: balance;
+}
+
+.japaneseProse {
+  text-wrap: pretty;
+}
+
+.readableMeasure {
+  max-inline-size: 48ic;
+}
+
+.productName {
+  display: block;
+}
+
+.productNameLine {
+  display: block;
+  white-space: nowrap;
+}
+
 .primaryButton,
 .secondaryButton,
 .quietButton,
@@ -187,7 +221,7 @@
 
 .loginPanel h1 {
   margin: 18px 0;
-  font-size: clamp(2.1rem, 5vw, 4.25rem);
+  font-size: clamp(1.9rem, 5vw, 4.25rem);
   line-height: 1.12;
 }
 
@@ -867,6 +901,9 @@
   .recordMeta time {
     width: 100%;
     margin: 10px 0 0;
+  }
+  .readableMeasure {
+    max-inline-size: 100%;
   }
   .detailSection {
     border-radius: 20px;

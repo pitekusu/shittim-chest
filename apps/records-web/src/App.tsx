@@ -29,11 +29,22 @@ import {
   type SessionResponse,
   type SortOrder,
 } from "./api";
-import { Avatar, BrandMark, DebateCard, ErrorPanel, Layout } from "./components";
+import {
+  Avatar,
+  BrandMark,
+  DebateCard,
+  ErrorPanel,
+  formatCompletedDateTime,
+  Layout,
+  ProductName,
+} from "./components";
 import styles from "./App.module.css";
 
 const SESSION_QUERY_KEY = ["records-session"] as const;
 const LOGIN_TRANSITION_KEY = "shittim-records-login-transition";
+const JAPANESE_HEADING_CLASS = `${styles.japaneseText} ${styles.japaneseHeading}`;
+const JAPANESE_PROSE_CLASS = `${styles.japaneseText} ${styles.japaneseProse}`;
+const READABLE_JAPANESE_PROSE_CLASS = `${JAPANESE_PROSE_CLASS} ${styles.readableMeasure}`;
 
 function useAuthenticationRecovery(error: unknown) {
   const client = useQueryClient();
@@ -92,8 +103,10 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
       </section>
       <section className={styles.loginPanel} aria-labelledby="login-title">
         <p className={styles.eyebrow}>THE SHITTIM CHEST</p>
-        <h1 id="login-title">シッテムの箱 議事録</h1>
-        <p>完了した議論を、あとから静かに振り返るための記録庫です。</p>
+        <ProductName headingId="login-title" />
+        <p className={JAPANESE_PROSE_CLASS}>
+          完了した議論を、あとから静かに振り返るための記録庫です。
+        </p>
         <a
           className={styles.primaryButton}
           href={startPath}
@@ -101,7 +114,9 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
         >
           Discordでログイン
         </a>
-        <p className={styles.loginNote}>対象Discord Guildのメンバーだけが閲覧できます。</p>
+        <p className={`${styles.loginNote} ${JAPANESE_PROSE_CLASS}`}>
+          対象Discord Guildのメンバーだけが閲覧できます。
+        </p>
       </section>
     </main>
   );
@@ -197,8 +212,10 @@ function RecordsHome() {
     <>
       <header className={styles.pageHeader}>
         <p className={styles.eyebrow}>RECORDS ARCHIVE</p>
-        <h1 tabIndex={-1}>議論の記録</h1>
-        <p>正常に完了した議論だけを、選んだ順序で閲覧できます。</p>
+        <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
+          議論の記録
+        </h1>
+        <p className={JAPANESE_PROSE_CLASS}>正常に完了した議論だけを、選んだ順序で閲覧できます。</p>
       </header>
       <section className={styles.filters} aria-label="記録の絞り込み">
         <label>
@@ -308,22 +325,22 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
           ← 記録一覧へ
         </Link>
         <p className={styles.eyebrow}>COMPLETED DEBATE</p>
-        <h1 tabIndex={-1}>{record.question}</h1>
+        <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
+          {record.question}
+        </h1>
         <div className={styles.recordMeta}>
           <Avatar avatar={record.requester.avatar} />
           <span>
             <small>依頼者</small>
             {record.requester.displayName}
           </span>
-          <time dateTime={record.completedAt}>
-            {new Intl.DateTimeFormat("ja-JP", { dateStyle: "long" }).format(
-              new Date(record.completedAt),
-            )}
-          </time>
+          <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
         </div>
       </header>
       <section className={styles.detailSection} aria-labelledby="opinions-title">
-        <h2 id="opinions-title">3人の意見</h2>
+        <h2 id="opinions-title" className={JAPANESE_HEADING_CLASS}>
+          3人の意見
+        </h2>
         <div className={styles.opinionGrid}>
           {record.participants.map((person) => {
             const initial = record.initialOpinions.find(
@@ -338,13 +355,13 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
                 </header>
                 <div>
                   <h4>初回意見</h4>
-                  <strong>{initial.summary}</strong>
-                  <p>{initial.proposal}</p>
+                  <strong className={styles.japaneseText}>{initial.summary}</strong>
+                  <p className={JAPANESE_PROSE_CLASS}>{initial.proposal}</p>
                 </div>
                 <div className={styles.finalProposal}>
                   <h4>最終案</h4>
-                  <strong>{final.title}</strong>
-                  <p>{final.proposal}</p>
+                  <strong className={styles.japaneseText}>{final.title}</strong>
+                  <p className={JAPANESE_PROSE_CLASS}>{final.proposal}</p>
                 </div>
               </article>
             );
@@ -352,7 +369,9 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
         </div>
       </section>
       <section className={styles.detailSection} aria-labelledby="votes-title">
-        <h2 id="votes-title">投票</h2>
+        <h2 id="votes-title" className={JAPANESE_HEADING_CLASS}>
+          投票
+        </h2>
         <VoteGraph record={record} />
         <div className={styles.voteList}>
           {record.votes.map((vote) => (
@@ -362,13 +381,13 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
                 <h3>
                   {participant(vote.voter).displayName} → {participant(vote.candidate).displayName}
                 </h3>
-                <p>{vote.reason}</p>
+                <p className={JAPANESE_PROSE_CLASS}>{vote.reason}</p>
               </div>
             </article>
           ))}
         </div>
         {record.result.tieBreakApplied && (
-          <p className={styles.tieNotice}>
+          <p className={`${styles.tieNotice} ${JAPANESE_PROSE_CLASS}`}>
             同票のため、シッテムの箱の既定ルールで勝者を決定しました。
           </p>
         )}
@@ -378,22 +397,28 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
         aria-labelledby="decision-title"
       >
         <p className={styles.eyebrow}>FINAL DECISION</p>
-        <h2 id="decision-title">最終決定</h2>
+        <h2 id="decision-title" className={JAPANESE_HEADING_CLASS}>
+          最終決定
+        </h2>
         <div className={styles.winnerPanel}>
           <Avatar avatar={participant(record.result.winner).avatar} />
           <div>
             <small>勝者 {count(record.result.winner)}票</small>
             <h3>{participant(record.result.winner).displayName}</h3>
             {record.finalDecision.victoryMessage && (
-              <blockquote>{record.finalDecision.victoryMessage}</blockquote>
+              <blockquote className={READABLE_JAPANESE_PROSE_CLASS}>
+                {record.finalDecision.victoryMessage}
+              </blockquote>
             )}
           </div>
         </div>
-        <p className={styles.decisionText}>{record.finalDecision.decision}</p>
+        <p className={`${styles.decisionText} ${READABLE_JAPANESE_PROSE_CLASS}`}>
+          {record.finalDecision.decision}
+        </p>
         <div className={styles.decisionColumns}>
           <div>
             <h3>実行案</h3>
-            <ul>
+            <ul className={JAPANESE_PROSE_CLASS}>
               {record.finalDecision.actions.map((action) => (
                 <li key={action}>{action}</li>
               ))}
@@ -401,7 +426,7 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
           </div>
           <div>
             <h3>注意点</h3>
-            <ul>
+            <ul className={JAPANESE_PROSE_CLASS}>
               {record.finalDecision.caveats.map((caveat) => (
                 <li key={caveat}>{caveat}</li>
               ))}
