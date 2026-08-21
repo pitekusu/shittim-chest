@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import boto3
 import httpx
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -59,7 +60,7 @@ def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, o
     created = 0
     skipped = 0
     for record in event.get("Records", []):
-        event_id = _required_text(record, "eventID")
+        sequence_number = _stream_sequence_number(record)
         try:
             partition_key = _completed_meta_partition(record)
             result = service.project_partition(partition_key, now=datetime.now(UTC))
@@ -68,10 +69,10 @@ def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, o
             else:
                 skipped += 1
         except Exception as error:
-            failures.append({"itemIdentifier": event_id})
+            failures.append({"itemIdentifier": sequence_number})
             _log(
                 event="records_projection_failed",
-                error_type=type(error).__name__,
+                **_projection_failure_fields(error),
             )
     _log(
         event="records_projection_batch",
@@ -242,6 +243,41 @@ def _required_text(record: Mapping[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"stream record has no {field}")
     return value
+
+
+def _stream_sequence_number(record: Mapping[str, Any]) -> str:
+    dynamodb = record.get("dynamodb")
+    if not isinstance(dynamodb, Mapping):
+        raise ValueError("stream record has no DynamoDB payload")
+    value = dynamodb.get("SequenceNumber")
+    if not isinstance(value, str) or not value:
+        raise ValueError("stream record has no sequence number")
+    return value
+
+
+def _projection_failure_fields(error: Exception) -> dict[str, object]:
+    fields: dict[str, object] = {"error_type": type(error).__name__}
+    if not isinstance(error, ClientError):
+        return fields
+    raw_code = error.response.get("Error", {}).get("Code")
+    fields["client_error_code"] = (
+        raw_code
+        if isinstance(raw_code, str) and raw_code.isascii() and raw_code.isalnum()
+        else "unknown"
+    )
+    raw_reasons = error.response.get("CancellationReasons")
+    if isinstance(raw_reasons, list):
+        reason_codes = [
+            code
+            for reason in raw_reasons
+            if isinstance(reason, Mapping)
+            and isinstance((code := reason.get("Code")), str)
+            and code.isascii()
+            and code.isalnum()
+        ]
+        if reason_codes:
+            fields["cancellation_reason_codes"] = reason_codes
+    return fields
 
 
 def _environment(name: str) -> str:
