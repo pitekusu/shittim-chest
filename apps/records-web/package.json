@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "contracts:generate": "node scripts/generate-contract-validator.mjs --write",
+    "contracts:check": "node scripts/generate-contract-validator.mjs --check",
     "dev": "vp dev",
     "check": "vp check",
     "test": "vp test",
