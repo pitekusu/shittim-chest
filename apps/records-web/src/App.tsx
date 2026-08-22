@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BrowserRouter,
   Link,
@@ -31,6 +31,8 @@ import {
 } from "./api";
 import {
   Avatar,
+  AvatarSelect,
+  type AvatarSelectOption,
   BrandMark,
   DebateCard,
   ErrorPanel,
@@ -105,9 +107,7 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
       <section className={styles.loginPanel} aria-labelledby="login-title">
         <p className={styles.eyebrow}>THE SHITTIM CHEST</p>
         <ProductName headingId="login-title" />
-        <p className={JAPANESE_PROSE_CLASS}>
-          完了した議論を、あとから静かに振り返るための記録庫です。
-        </p>
+        <p className={JAPANESE_PROSE_CLASS}>シッテムの箱BOTの議事録を閲覧できるシステム</p>
         <a
           className={styles.primaryButton}
           href={startPath}
@@ -116,7 +116,7 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
           Discordでログイン
         </a>
         <p className={`${styles.loginNote} ${JAPANESE_PROSE_CLASS}`}>
-          対象Discord Guildのメンバーだけが閲覧できます。
+          吹雪型JCのつどいサーバのメンバーであることを認証します。
         </p>
       </section>
     </main>
@@ -184,6 +184,10 @@ function RecordsHome() {
   const [sort, setSort] = useState<SortOrder>("newest");
   const [search, setSearch] = useState("");
   const [requester, setRequester] = useState("");
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const localFiltersActive = search.trim().length > 0 || requester !== "";
+  const localFiltersActiveRef = useRef(localFiltersActive);
+  localFiltersActiveRef.current = localFiltersActive;
   const records = useInfiniteQuery({
     queryKey: ["records", winner, sort],
     initialPageParam: undefined as string | undefined,
@@ -195,18 +199,56 @@ function RecordsHome() {
       }),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = records;
   useAuthenticationRecovery(records.error);
   const loadedRecords = useMemo(
     () => records.data?.pages.flatMap((page) => page.items) ?? [],
     [records.data],
   );
+  const requesterOptions = useMemo<readonly AvatarSelectOption<string>[]>(() => {
+    const requesters = new Map(
+      loadedRecords.map((record) => [record.requester.displayName, record.requester] as const),
+    );
+    return [
+      { value: "", label: "すべて", avatar: null },
+      ...Array.from(requesters.values())
+        .sort((a, b) => a.displayName.localeCompare(b.displayName, "ja-JP"))
+        .map((item) => ({ value: item.displayName, label: item.displayName, avatar: item.avatar })),
+    ];
+  }, [loadedRecords]);
   const requesterNames = useMemo(
-    () =>
-      Array.from(new Set(loadedRecords.map((record) => record.requester.displayName))).sort(
-        (a, b) => a.localeCompare(b, "ja-JP"),
-      ),
-    [loadedRecords],
+    () => requesterOptions.filter((option) => option.value).map((option) => option.value),
+    [requesterOptions],
   );
+  const winnerOptions = useMemo<readonly AvatarSelectOption<ParticipantSlot | "">[]>(() => {
+    const participants = new Map(
+      loadedRecords.flatMap((record) =>
+        record.participants.map((participant) => [participant.slot, participant] as const),
+      ),
+    );
+    const defaults = {
+      "participant-a": { displayName: "アロナ", fallbackVariant: "cyan" },
+      "participant-b": { displayName: "プラナ", fallbackVariant: "pink" },
+      "participant-c": { displayName: "安倍晋三AI", fallbackVariant: "lavender" },
+    } as const;
+    return [
+      { value: "", label: "すべて", avatar: null },
+      ...Object.entries(defaults).map(([slot, fallback]) => {
+        const participantSlot = slot as ParticipantSlot;
+        const participant = participants.get(participantSlot);
+        return {
+          value: participantSlot,
+          label: participant?.displayName ?? fallback.displayName,
+          avatar: participant?.avatar ?? {
+            kind: "placeholder" as const,
+            url: null,
+            alt: `${fallback.displayName}のアバター`,
+            fallbackVariant: fallback.fallbackVariant,
+          },
+        };
+      }),
+    ];
+  }, [loadedRecords]);
   useEffect(() => {
     if (requester && !records.isPending && !requesterNames.includes(requester)) {
       setRequester("");
@@ -225,6 +267,29 @@ function RecordsHome() {
         .some((value) => value?.toLocaleLowerCase("ja-JP").includes(needle));
     });
   }, [loadedRecords, requester, search]);
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (
+      !sentinel ||
+      !hasNextPage ||
+      isFetchingNextPage ||
+      isFetchNextPageError ||
+      localFiltersActive ||
+      !("IntersectionObserver" in window)
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting || localFiltersActiveRef.current) return;
+        observer.unobserve(sentinel);
+        void fetchNextPage();
+      },
+      { rootMargin: "320px 0px", threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError, localFiltersActive]);
   const error = records.error instanceof RecordsApiError ? records.error : undefined;
   return (
     <>
@@ -233,41 +298,25 @@ function RecordsHome() {
         <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           議論の記録
         </h1>
-        <p className={JAPANESE_PROSE_CLASS}>正常に完了した議論だけを、選んだ順序で閲覧できます。</p>
+        <p className={JAPANESE_PROSE_CLASS}>議論記録を閲覧できます。</p>
       </header>
       <section className={styles.filters} aria-label="記録の絞り込み">
         <label>
-          読み込み済みの記録を検索
+          フリーワード検索
           <input
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="質問・勝者"
+            placeholder="質問文などを入力"
           />
         </label>
-        <label>
-          依頼者
-          <select value={requester} onChange={(event) => setRequester(event.target.value)}>
-            <option value="">すべて</option>
-            {requesterNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          勝者
-          <select
-            value={winner}
-            onChange={(event) => setWinner(event.target.value as ParticipantSlot | "")}
-          >
-            <option value="">すべて</option>
-            <option value="participant-a">アロナ</option>
-            <option value="participant-b">プラナ</option>
-            <option value="participant-c">安倍晋三AI</option>
-          </select>
-        </label>
+        <AvatarSelect
+          label="依頼者"
+          value={requester}
+          options={requesterOptions}
+          onChange={setRequester}
+        />
+        <AvatarSelect label="勝者" value={winner} options={winnerOptions} onChange={setWinner} />
         <label>
           並び順
           <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
@@ -303,15 +352,41 @@ function RecordsHome() {
         ))}
       </section>
       {records.hasNextPage && (
-        <div className={styles.loadMore}>
-          <button
-            className={styles.secondaryButton}
-            type="button"
-            disabled={records.isFetchingNextPage}
-            onClick={() => void records.fetchNextPage()}
-          >
-            {records.isFetchingNextPage ? "読み込み中" : "さらに読み込む"}
-          </button>
+        <div
+          className={styles.loadMore}
+          ref={loadMoreRef}
+          aria-busy={isFetchingNextPage}
+          aria-live="polite"
+        >
+          {isFetchingNextPage ? (
+            <span>次の記録を読み込んでいます。</span>
+          ) : isFetchNextPageError ? (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              onClick={() => void fetchNextPage()}
+            >
+              次の記録をもう一度読み込む
+            </button>
+          ) : localFiltersActive ? (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              onClick={() => void fetchNextPage()}
+            >
+              検索対象をさらに読み込む
+            </button>
+          ) : "IntersectionObserver" in window ? (
+            <span>この位置までスクロールすると、次の記録を自動で読み込みます。</span>
+          ) : (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              onClick={() => void fetchNextPage()}
+            >
+              さらに読み込む
+            </button>
+          )}
         </div>
       )}
     </>

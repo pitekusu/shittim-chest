@@ -118,6 +118,9 @@
   background: linear-gradient(135deg, var(--records-cyan-500), #77c6ee);
   box-shadow: 0 12px 30px rgb(45 152 183 / 22%);
   color: #092d45;
+  transition:
+    box-shadow 120ms ease,
+    transform 120ms ease;
 }
 
 .secondaryButton {
@@ -139,6 +142,12 @@
 .secondaryButton:hover,
 .cardLink:hover {
   transform: translateY(-1px);
+}
+
+.primaryButton:hover:active,
+.primaryButton:active {
+  box-shadow: 0 5px 14px rgb(45 152 183 / 18%);
+  transform: translateY(2px) scale(0.97);
 }
 
 .loginShell {
@@ -375,7 +384,8 @@
   box-shadow: 0 12px 34px rgb(45 119 148 / 8%);
 }
 
-.filters label {
+.filters label,
+.filterField {
   display: grid;
   gap: 7px;
   color: var(--records-ink-600);
@@ -393,6 +403,119 @@
   color: var(--records-ink-900);
   font: inherit;
   padding: 0 12px;
+}
+
+.avatarSelect {
+  position: relative;
+}
+
+.avatarSelectButton,
+.avatarSelectOption {
+  display: grid;
+  width: 100%;
+  align-items: center;
+  border: 0;
+  color: var(--records-ink-900);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
+.avatarSelectButton {
+  min-height: 46px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 9px;
+  padding: 6px 10px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 13px;
+  background: rgb(255 255 255 / 86%);
+}
+
+.avatarSelectButton:hover,
+.avatarSelectButton:focus-visible {
+  border-color: var(--records-cyan-500);
+  outline: 2px solid rgb(88 217 232 / 20%);
+  outline-offset: 2px;
+}
+
+.filterAvatar,
+.filterAllIcon {
+  width: 28px;
+  height: 28px;
+}
+
+.filterAvatar {
+  display: grid;
+  place-items: center;
+}
+
+.filterAvatar .avatar {
+  width: 28px;
+  height: 28px;
+  border-width: 2px;
+  box-shadow: 0 0 0 1px var(--records-line-strong);
+}
+
+.filterAvatar .avatar span {
+  width: 9px;
+  height: 9px;
+  border-width: 3px;
+}
+
+.filterAllIcon {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--records-cyan-100);
+  color: #278ca5;
+  font-size: 1rem;
+}
+
+.selectChevron {
+  color: var(--records-ink-600);
+  transition: transform 120ms ease;
+}
+
+.avatarSelectButton[aria-expanded="true"] .selectChevron {
+  transform: rotate(180deg);
+}
+
+.avatarSelectMenu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 7px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: 280px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 98%);
+  box-shadow: var(--records-shadow);
+}
+
+.avatarSelectOption {
+  min-height: 44px;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.avatarSelectOption:hover,
+.avatarSelectOption:focus-visible,
+.avatarSelectOption[aria-selected="true"] {
+  background: var(--records-cyan-100);
+  outline: none;
+}
+
+.selectedCheck {
+  color: #278ca5;
+  text-align: center;
 }
 
 .filters p {
@@ -551,8 +674,11 @@
 
 .loadMore {
   display: grid;
+  min-height: 86px;
   margin-top: 30px;
   place-items: center;
+  color: var(--records-ink-600);
+  font-size: 0.78rem;
 }
 
 .loadingLine {
@@ -916,5 +1042,10 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .primaryButton:hover:active,
+  .primaryButton:active {
+    transform: none;
   }
 }

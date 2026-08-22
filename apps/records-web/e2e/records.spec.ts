@@ -127,12 +127,19 @@ test("authenticated member can browse the completed archive", async ({ page }) =
     "datetime",
     detail.completedAt,
   );
-  await expect(page.getByLabel("依頼者")).toHaveValue("");
-  await expect(
-    page.getByLabel("依頼者").getByRole("option", { name: "パワー系ウナギ" }),
-  ).toHaveCount(1);
-  await page.getByLabel("依頼者").selectOption("パワー系ウナギ");
+  await expect(page.getByRole("button", { name: "依頼者" })).toContainText("すべて");
+  await page.getByRole("button", { name: "依頼者" }).click();
+  const requesterOption = page.getByRole("option", { name: "パワー系ウナギ" });
+  await expect(requesterOption.locator("[aria-hidden=true]").first()).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await requesterOption.click();
   await expect(card).toContainText(detail.question);
+  await page.getByRole("button", { name: "勝者" }).click();
+  await expect(
+    page.getByRole("option", { name: "アロナ" }).locator("[aria-hidden=true]").first(),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.locator("body").click({ position: { x: 4, y: 4 } });
   await expect(page.getByLabel("並び順")).toHaveValue("newest");
   await expect(page.getByLabel("開始日")).toHaveCount(0);
   await expect(page.getByLabel("終了日")).toHaveCount(0);
@@ -219,6 +226,52 @@ test("product name keeps the approved two-line break at narrow widths", async ({
       viewport.width,
     );
   }
+});
+
+test("loads the next archive page automatically near the end of the loaded cards", async ({
+  page,
+}) => {
+  const firstPage = Array.from({ length: 12 }, (_, index) => ({
+    schemaVersion: 1,
+    recordId: String.fromCharCode(65 + index).repeat(43),
+    completedAt: detail.completedAt,
+    questionPreview: `読み込み済みの議論 ${index + 1}`,
+    requester: detail.requester,
+    participants: detail.participants,
+    result: detail.result,
+  }));
+  const nextRecord = {
+    ...firstPage[0]!,
+    recordId: "Z".repeat(43),
+    questionPreview: "自動で追加された議論",
+  };
+  await page.route("**/api/v1/session", (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 1,
+        authenticated: true,
+        user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
+        csrfToken: "csrf-token",
+      },
+    }),
+  );
+  await page.route("**/api/v1/records?*", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    return route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: cursor === "next-page" ? [nextRecord] : firstPage,
+        nextCursor: cursor === "next-page" ? null : "next-page",
+      },
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("読み込み済みの議論 12")).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+
+  await expect(page.getByText("自動で追加された議論")).toBeVisible();
+  await expect(page.getByRole("button", { name: "さらに読み込む" })).toHaveCount(0);
 });
 
 test("record detail stays inside the mobile viewport with long Japanese content", async ({
@@ -393,7 +446,19 @@ test("anonymous login page boots under the production CSP without dynamic evalua
 
   await page.goto("/");
 
-  await expect(page.getByRole("link", { name: "Discordでログイン" })).toBeVisible();
+  const loginButton = page.getByRole("link", { name: "Discordでログイン" });
+  await expect(loginButton).toBeVisible();
+  await loginButton.hover();
+  await page.waitForTimeout(150);
+  const hoverTransform = await loginButton.evaluate(
+    (element) => getComputedStyle(element).transform,
+  );
+  await page.mouse.down();
+  await expect
+    .poll(() => loginButton.evaluate((element) => getComputedStyle(element).transform))
+    .not.toBe(hoverTransform);
+  await page.mouse.move(0, 0);
+  await page.mouse.up();
   await page.evaluate(() => document.fonts.ready);
   expect(pageErrors).toEqual([]);
 });
