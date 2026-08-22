@@ -60,10 +60,15 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
     [record.participants],
   );
   const figureReference = useRef<HTMLElement>(null);
+  const handledTouchActivation = useRef<string | null>(null);
   const [hasRevealed, setHasRevealed] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
-  const [activeNode, setActiveNode] = useState<ParticipantSlot | null>(null);
-  const [activeVote, setActiveVote] = useState<string | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<ParticipantSlot | null>(null);
+  const [focusedNode, setFocusedNode] = useState<ParticipantSlot | null>(null);
+  const [selectedNode, setSelectedNode] = useState<ParticipantSlot | null>(null);
+  const [hoveredVote, setHoveredVote] = useState<string | null>(null);
+  const [focusedVote, setFocusedVote] = useState<string | null>(null);
+  const [selectedVote, setSelectedVote] = useState<string | null>(null);
   const rawId = useId().replaceAll(":", "");
   const titleId = `vote-graph-title-${rawId}`;
   const descriptionId = `vote-graph-description-${rawId}`;
@@ -96,15 +101,28 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
     }
     return [...targets.entries()];
   }, [routes]);
-  const selectedRoute = routes.find((route) => route.key === activeVote) ?? null;
+  const activeVote = hoveredVote ?? focusedVote ?? selectedVote;
+  const activeNode = activeVote === null ? (hoveredNode ?? focusedNode ?? selectedNode) : null;
+  const activeRoute = routes.find((route) => route.key === activeVote) ?? null;
 
   const clearSelection = () => {
-    setActiveNode(null);
-    setActiveVote(null);
+    handledTouchActivation.current = null;
+    setHoveredNode(null);
+    setFocusedNode(null);
+    setSelectedNode(null);
+    setHoveredVote(null);
+    setFocusedVote(null);
+    setSelectedVote(null);
   };
-  const activateNode = (slot: ParticipantSlot) => {
-    setActiveVote(null);
-    setActiveNode(slot);
+  const toggleNodeSelection = (slot: ParticipantSlot) => {
+    setFocusedNode(null);
+    setSelectedVote(null);
+    setSelectedNode((current) => (current === slot ? null : slot));
+  };
+  const toggleVoteSelection = (key: string) => {
+    setFocusedVote(null);
+    setSelectedNode(null);
+    setSelectedVote((current) => (current === key ? null : key));
   };
 
   return (
@@ -189,11 +207,22 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
                 data-relation={relation}
                 style={animationStyle}
                 onPointerEnter={(event) => {
-                  if (event.pointerType === "mouse") setActiveVote(route.key);
+                  if (event.pointerType === "mouse") setHoveredVote(route.key);
+                }}
+                onTouchStart={() => {
+                  handledTouchActivation.current = null;
+                }}
+                onTouchEnd={(event) => {
+                  event.preventDefault();
+                  handledTouchActivation.current = `vote:${route.key}`;
+                  toggleVoteSelection(route.key);
+                }}
+                onTouchCancel={() => {
+                  handledTouchActivation.current = null;
                 }}
                 onPointerLeave={(event) => {
                   if (event.pointerType === "mouse") {
-                    setActiveVote((current) => (current === route.key ? null : current));
+                    setHoveredVote((current) => (current === route.key ? null : current));
                   }
                 }}
               >
@@ -217,18 +246,24 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
                   aria-label={label}
                   aria-describedby={activeVote === route.key ? tooltipId : undefined}
                   tabIndex={0}
-                  onFocus={() => setActiveVote(route.key)}
+                  onFocus={() => setFocusedVote(route.key)}
                   onBlur={() =>
-                    setActiveVote((current) => (current === route.key ? null : current))
+                    setFocusedVote((current) => (current === route.key ? null : current))
                   }
-                  onClick={() =>
-                    setActiveVote((current) => (current === route.key ? null : route.key))
-                  }
+                  onClick={(event) => {
+                    const activationKey = `vote:${route.key}`;
+                    if (event.detail > 0 && handledTouchActivation.current === activationKey) {
+                      handledTouchActivation.current = null;
+                      return;
+                    }
+                    handledTouchActivation.current = null;
+                    toggleVoteSelection(route.key);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") clearSelection();
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      setActiveVote((current) => (current === route.key ? null : route.key));
+                      toggleVoteSelection(route.key);
                     }
                   }}
                 />
@@ -254,9 +289,8 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
         {record.participants.map((participant) => {
           const highlighted =
             activeNode === participant.slot ||
-            (selectedRoute !== null &&
-              (selectedRoute.source === participant.slot ||
-                selectedRoute.target === participant.slot));
+            (activeRoute !== null &&
+              (activeRoute.source === participant.slot || activeRoute.target === participant.slot));
           return (
             <button
               key={participant.slot}
@@ -265,24 +299,38 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
               style={nodeStyle(participant.slot, layout)}
               data-highlighted={highlighted}
               aria-label={`${participant.displayName}に関係する投票を強調`}
-              aria-pressed={activeNode === participant.slot}
+              aria-pressed={selectedNode === participant.slot}
               onPointerEnter={(event) => {
-                if (event.pointerType === "mouse") activateNode(participant.slot);
+                if (event.pointerType === "mouse") setHoveredNode(participant.slot);
+              }}
+              onTouchStart={() => {
+                handledTouchActivation.current = null;
+              }}
+              onTouchEnd={(event) => {
+                event.preventDefault();
+                handledTouchActivation.current = `node:${participant.slot}`;
+                toggleNodeSelection(participant.slot);
+              }}
+              onTouchCancel={() => {
+                handledTouchActivation.current = null;
               }}
               onPointerLeave={(event) => {
                 if (event.pointerType === "mouse") {
-                  setActiveNode((current) => (current === participant.slot ? null : current));
+                  setHoveredNode((current) => (current === participant.slot ? null : current));
                 }
               }}
-              onFocus={() => activateNode(participant.slot)}
+              onFocus={() => setFocusedNode(participant.slot)}
               onBlur={() =>
-                setActiveNode((current) => (current === participant.slot ? null : current))
+                setFocusedNode((current) => (current === participant.slot ? null : current))
               }
-              onClick={() => {
-                setActiveVote(null);
-                setActiveNode((current) =>
-                  current === participant.slot ? null : participant.slot,
-                );
+              onClick={(event) => {
+                const activationKey = `node:${participant.slot}`;
+                if (event.detail > 0 && handledTouchActivation.current === activationKey) {
+                  handledTouchActivation.current = null;
+                  return;
+                }
+                handledTouchActivation.current = null;
+                toggleNodeSelection(participant.slot);
               }}
               onKeyDown={(event) => {
                 if (event.key === "Escape") clearSelection();
@@ -292,18 +340,18 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
             </button>
           );
         })}
-        {selectedRoute !== null && (
+        {activeRoute !== null && (
           <div
             id={tooltipId}
             className={styles.voteTooltip}
             role="tooltip"
             style={{
-              left: `${(selectedRoute.midpoint.x / layout.width) * 100}%`,
-              top: `${(selectedRoute.midpoint.y / layout.height) * 100}%`,
+              left: `${(activeRoute.midpoint.x / layout.width) * 100}%`,
+              top: `${(activeRoute.midpoint.y / layout.height) * 100}%`,
             }}
           >
-            {participantBySlot.get(selectedRoute.source)?.displayName ?? selectedRoute.source}が
-            {participantBySlot.get(selectedRoute.target)?.displayName ?? selectedRoute.target}に投票
+            {participantBySlot.get(activeRoute.source)?.displayName ?? activeRoute.source}が
+            {participantBySlot.get(activeRoute.target)?.displayName ?? activeRoute.target}に投票
           </div>
         )}
       </div>

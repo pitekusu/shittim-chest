@@ -321,6 +321,35 @@ test("vote graph keeps distinct routes, interactions, and responsive layouts", a
   });
 });
 
+test("touch activation keeps a vote selection until the same target is tapped again", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  await mockAuthenticatedApi(page);
+  await page.goto(`/records/${RECORD_ID}`);
+
+  const graph = page.getByTestId("vote-graph");
+  await graph.scrollIntoViewIfNeeded();
+  const node = graph.getByRole("button", { name: "アロナに関係する投票を強調" });
+  const route = graph.getByLabel("アロナがプラナに投票");
+
+  await node.tap();
+  await expect(node).toHaveAttribute("aria-pressed", "true");
+  await expect(route.locator("..")).toHaveAttribute("data-relation", "outgoing");
+
+  await node.tap();
+  await expect(node).toHaveAttribute("aria-pressed", "false");
+  await expect(route.locator("..")).toHaveAttribute("data-relation", "default");
+
+  await route.tap();
+  await expect(graph.getByRole("tooltip")).toHaveText("アロナがプラナに投票");
+  await expect(route.locator("..")).toHaveAttribute("data-relation", "active");
+
+  await route.tap();
+  await expect(graph.getByRole("tooltip")).toHaveCount(0);
+  await expect(route.locator("..")).toHaveAttribute("data-relation", "default");
+});
+
 test("reduced motion skips the long login transition", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAuthenticatedApi(page);
