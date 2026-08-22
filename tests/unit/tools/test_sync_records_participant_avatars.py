@@ -152,7 +152,11 @@ def test_downloads_and_validates_all_current_bot_avatars() -> None:
         return httpx.Response(200, content=WEBP, headers={"Content-Type": "image/webp"})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        avatars = sync.download_current_avatars(client, tokens)
+        avatars = sync.download_current_avatars(
+            client,
+            tokens,
+            image_decoder=lambda _body: (256, 256),
+        )
 
     assert tuple(avatar.slot for avatar in avatars) == sync.PARTICIPANT_SLOTS
     assert tuple(avatar.object_key for avatar in avatars) == tuple(sync.AVATAR_OBJECT_KEYS.values())
@@ -186,7 +190,11 @@ def test_rejects_identity_without_a_current_bot_avatar(
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(sync.AvatarSyncError) as caught,
     ):
-        sync.download_current_avatars(client, tokens)
+        sync.download_current_avatars(
+            client,
+            tokens,
+            image_decoder=lambda _body: (256, 256),
+        )
 
     assert caught.value.code == expected_code
 
@@ -205,7 +213,11 @@ def test_rejects_duplicate_resolved_bot_identity_before_upload() -> None:
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(sync.AvatarSyncError) as caught,
     ):
-        sync.download_current_avatars(client, tokens)
+        sync.download_current_avatars(
+            client,
+            tokens,
+            image_decoder=lambda _body: (256, 256),
+        )
 
     assert caught.value.code == "discord_bot_identity_duplicated"
 
@@ -224,7 +236,11 @@ def test_rejects_non_webp_avatar_before_any_upload() -> None:
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(sync.AvatarSyncError) as caught,
     ):
-        sync.download_current_avatars(client, tokens)
+        sync.download_current_avatars(
+            client,
+            tokens,
+            image_decoder=lambda _body: (256, 256),
+        )
 
     assert caught.value.code == "discord_avatar_media_type_invalid"
 
@@ -244,9 +260,76 @@ def test_rejects_malformed_or_incorrectly_sized_webp(body: bytes) -> None:
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(sync.AvatarSyncError) as caught,
     ):
-        sync.download_current_avatars(client, tokens)
+        sync.download_current_avatars(
+            client,
+            tokens,
+            image_decoder=lambda _body: (256, 256),
+        )
 
     assert caught.value.code == "discord_avatar_content_invalid"
+
+
+def test_rejects_webp_that_the_decoder_cannot_confirm() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v10/users/@me":
+            return httpx.Response(
+                200,
+                json={"id": "1" * 18, "avatar": "a" * 32, "bot": True},
+            )
+        return httpx.Response(200, content=WEBP, headers={"Content-Type": "image/webp"})
+
+    tokens = {slot: f"token-{slot}" for slot in sync.PARTICIPANT_SLOTS}
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(sync.AvatarSyncError) as caught,
+    ):
+        sync.download_current_avatars(
+            client,
+            tokens,
+            image_decoder=lambda _body: (128, 128),
+        )
+
+    assert caught.value.code == "discord_avatar_content_invalid"
+
+
+def test_decoder_dependency_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sync.shutil, "which", lambda _name: None)
+
+    with pytest.raises(sync.AvatarSyncError) as caught:
+        sync._decode_webp_dimensions(WEBP)
+
+    assert caught.value.code == "webp_decoder_missing"
+
+
+def test_decoder_uses_stdin_without_a_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def run(command: list[str], **kwargs: Any) -> Any:
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return sync.subprocess.CompletedProcess(command, 0, stdout=b"256 256", stderr=b"")
+
+    monkeypatch.setattr(sync.shutil, "which", lambda _name: "/usr/bin/magick")
+    monkeypatch.setattr(sync.subprocess, "run", run)
+
+    assert sync._decode_webp_dimensions(WEBP) == (256, 256)
+    assert captured["command"][0] == "/usr/bin/magick"
+    assert captured["kwargs"]["input"] == WEBP
+    assert captured["kwargs"]["timeout"] == 10
+    assert "shell" not in captured["kwargs"]
+
+
+def test_account_preflight_failure_returns_stable_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_preflight(_repository: str) -> None:
+        raise sync.SetupError("production_account_preflight_failed")
+
+    monkeypatch.setattr(sync, "require_target_account", fail_preflight)
+
+    assert sync.main(["--check"]) == 1
+    assert capsys.readouterr().err == ("同期に失敗しました: production_account_preflight_failed\n")
 
 
 def test_uploads_only_stable_current_keys_with_integrity_metadata() -> None:

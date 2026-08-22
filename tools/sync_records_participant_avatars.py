@@ -8,8 +8,10 @@ import argparse
 import base64
 import hashlib
 import re
+import shutil
+import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -18,7 +20,7 @@ import httpx
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from tools.configure_records_auth_inputs import require_target_account
+from tools.configure_records_auth_inputs import SetupError, require_target_account
 
 AWS_REGION = "ap-northeast-1"
 GITHUB_REPOSITORY = "pitekusu/shittim-chest"
@@ -30,6 +32,7 @@ MAX_AVATAR_BYTES = 512 * 1024
 APPLY_CONFIRMATION = "y"
 
 ParticipantSlot = Literal["participant-a", "participant-b", "participant-c"]
+ImageDecoder = Callable[[bytes], tuple[int, int]]
 PARTICIPANT_SLOTS: tuple[ParticipantSlot, ...] = (
     "participant-a",
     "participant-b",
@@ -109,11 +112,14 @@ def load_participant_tokens(client: Any) -> dict[ParticipantSlot, str]:
 def download_current_avatars(
     client: httpx.Client,
     tokens: Mapping[ParticipantSlot, str],
+    *,
+    image_decoder: ImageDecoder | None = None,
 ) -> tuple[ParticipantAvatar, ...]:
     """Resolve and validate all current Bot avatars before any S3 write occurs."""
 
     if set(tokens) != set(PARTICIPANT_SLOTS):
         raise AvatarSyncError("participant_token_set_incomplete")
+    decoder = image_decoder or _decode_webp_dimensions
     avatars: list[ParticipantAvatar] = []
     resolved_user_ids: set[str] = set()
     for slot in PARTICIPANT_SLOTS:
@@ -145,6 +151,7 @@ def download_current_avatars(
         body = _download_webp(
             client,
             f"{DISCORD_CDN_ROOT}/avatars/{user_id}/{avatar_hash}.webp?size=256",
+            image_decoder=decoder,
         )
         avatars.append(ParticipantAvatar(slot=slot, object_key=AVATAR_OBJECT_KEYS[slot], body=body))
     return tuple(avatars)
@@ -224,15 +231,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         upload_current_avatars(s3, bucket_name, avatars)
         print("3体の現在プロフィール用アイコンを同期しました。")
         return 0
-    except (BotoCoreError, ClientError, OSError, AvatarSyncError, httpx.HTTPError) as error:
+    except (
+        BotoCoreError,
+        ClientError,
+        OSError,
+        AvatarSyncError,
+        SetupError,
+        httpx.HTTPError,
+    ) as error:
         code = (
-            error.code if isinstance(error, AvatarSyncError) else "participant_avatar_sync_failed"
+            error.code
+            if isinstance(error, (AvatarSyncError, SetupError))
+            else "participant_avatar_sync_failed"
         )
         print(f"同期に失敗しました: {code}", file=sys.stderr)
         return 1
 
 
-def _download_webp(client: httpx.Client, url: str) -> bytes:
+def _download_webp(
+    client: httpx.Client,
+    url: str,
+    *,
+    image_decoder: ImageDecoder,
+) -> bytes:
     try:
         with client.stream("GET", url) as response:
             if response.status_code != 200:
@@ -257,7 +278,7 @@ def _download_webp(client: httpx.Client, url: str) -> bytes:
     except httpx.HTTPError:
         raise AvatarSyncError("discord_avatar_download_failed") from None
     body = b"".join(chunks)
-    if not _valid_webp(body):
+    if not _valid_webp(body) or image_decoder(body) != (256, 256):
         raise AvatarSyncError("discord_avatar_content_invalid")
     return body
 
@@ -331,6 +352,41 @@ def _vp8l_dimensions(payload: bytes) -> tuple[int, int] | None:
     if bits >> 29:
         return None
     return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+
+
+def _decode_webp_dimensions(body: bytes) -> tuple[int, int]:
+    executable = shutil.which("magick")
+    if executable is None:
+        raise AvatarSyncError("webp_decoder_missing")
+    try:
+        result = subprocess.run(  # noqa: S603 - resolved executable and fixed arguments.
+            [
+                executable,
+                "-limit",
+                "memory",
+                "32MiB",
+                "-limit",
+                "map",
+                "64MiB",
+                "-limit",
+                "disk",
+                "0",
+                "webp:-",
+                "-format",
+                "%w %h",
+                "info:",
+            ],
+            input=body,
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        raise AvatarSyncError("webp_decode_failed") from None
+    match = re.fullmatch(rb"([1-9][0-9]{0,4}) ([1-9][0-9]{0,4})", result.stdout)
+    if result.returncode != 0 or match is None:
+        raise AvatarSyncError("webp_decode_failed")
+    return int(match.group(1)), int(match.group(2))
 
 
 def _account_id(client: Any) -> str:
