@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -45,7 +46,7 @@ def archive_meta(
             "gsi1pk": "ARCHIVE#COMPLETED",
             "gsi1sk": f"{completed_at}#{record_id}",
             "winner": winner,
-            "participants": PARTICIPANTS,
+            "participants": deepcopy(PARTICIPANTS),
             "vote_counts": vote_counts,
             "tie_break_applied": False,
             "requester_key": requester_key,
@@ -139,6 +140,46 @@ def test_build_rankings_rejects_inconsistent_saved_winner_summary() -> None:
     }
 
     with pytest.raises(RankingDataInvalid, match="winner summary"):
+        build_rankings((item,), generated_at=NOW)
+
+
+def test_build_rankings_accepts_historical_null_avatar_compatibility_member() -> None:
+    item = archive_meta(
+        1,
+        winner="participant-a",
+        requester_key="requester-a",
+        requester_name="Requester",
+    )
+    participants = cast(dict[str, dict[str, object]], item["participants"])
+    for profile in participants.values():
+        profile["avatar_asset_key"] = None
+
+    snapshot = build_rankings((item,), generated_at=NOW)
+
+    assert snapshot.archive_count == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("avatar_asset_key", "participants/participant-a/historical.webp"),
+        ("unexpected", None),
+    ),
+)
+def test_build_rankings_rejects_non_null_or_unknown_participant_fields(
+    field: str,
+    value: object,
+) -> None:
+    item = archive_meta(
+        1,
+        winner="participant-a",
+        requester_key="requester-a",
+        requester_name="Requester",
+    )
+    participants = cast(dict[str, dict[str, object]], item["participants"])
+    participants["participant-a"][field] = value
+
+    with pytest.raises(RankingDataInvalid, match="participant presentation"):
         build_rankings((item,), generated_at=NOW)
 
 
