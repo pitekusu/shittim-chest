@@ -350,10 +350,12 @@ test("touch activation keeps a vote selection until the same target is tapped ag
   await expect(route.locator("..")).toHaveAttribute("data-relation", "default");
 
   await route.tap();
+  await expect(route).toHaveAttribute("aria-pressed", "true");
   await expect(graph.getByRole("tooltip")).toHaveText("アロナがプラナに投票");
   await expect(route.locator("..")).toHaveAttribute("data-relation", "active");
 
   await route.tap();
+  await expect(route).toHaveAttribute("aria-pressed", "false");
   await expect(graph.getByRole("tooltip")).toHaveCount(0);
   await expect(route.locator("..")).toHaveAttribute("data-relation", "default");
 });

@@ -120,10 +120,12 @@ describe("VoteGraph", () => {
 
     fireEvent.focus(route);
     fireEvent.click(route, { detail: 1 });
+    expect(route).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("tooltip")).toHaveTextContent("アロナがプラナに投票");
     expect(route.parentElement).toHaveAttribute("data-relation", "active");
 
     fireEvent.click(route, { detail: 1 });
+    expect(route).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(route.parentElement).toHaveAttribute("data-relation", "default");
   });

@@ -231,6 +231,7 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
                   // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- An SVG route needs a keyboard-selectable accessible name.
                   role="button"
                   aria-label={label}
+                  aria-pressed={selectedVote === route.key}
                   aria-describedby={activeVote === route.key ? tooltipId : undefined}
                   tabIndex={0}
                   onFocus={() => setFocusedVote(route.key)}
