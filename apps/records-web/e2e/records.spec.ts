@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 
 const RECORD_ID = "r".repeat(43);
 
@@ -625,7 +626,13 @@ test("publishes complete Open Graph metadata and a 1200 by 630 preview image", a
     page.locator(`meta[name="${name}"]`).getAttribute("content");
   const description =
     "シッテムの箱 議事録閲覧システム。吹雪型JCのつどいサーバの先生であることを認証して、議論記録を閲覧できます。";
-  const imageUrl = "https://shittim.pitekusu.dev/assets/shittim-chest-archive-og-v2.png";
+  const imageUrl = await propertyContent("og:image");
+  expect(imageUrl).toMatch(
+    /^https:\/\/shittim\.pitekusu\.dev\/assets\/shittim-chest-archive-og-[a-f0-9]{12}\.png$/,
+  );
+  if (imageUrl === null) {
+    throw new Error("og_image_metadata_missing");
+  }
 
   await expect(page).toHaveTitle("THE SHITTIM CHEST ARCHIVE | シッテムの箱 議事録閲覧システム");
   expect(await namedContent("description")).toBe(description);
@@ -638,7 +645,6 @@ test("publishes complete Open Graph metadata and a 1200 by 630 preview image", a
   expect(await propertyContent("og:url")).toBe("https://shittim.pitekusu.dev/");
   expect(await propertyContent("og:site_name")).toBe("シッテムの箱 議事録");
   expect(await propertyContent("og:locale")).toBe("ja_JP");
-  expect(await propertyContent("og:image")).toBe(imageUrl);
   expect(await propertyContent("og:image:secure_url")).toBe(imageUrl);
   expect(await propertyContent("og:image:type")).toBe("image/png");
   expect(await propertyContent("og:image:width")).toBe("1200");
@@ -651,12 +657,19 @@ test("publishes complete Open Graph metadata and a 1200 by 630 preview image", a
   expect(await namedContent("twitter:image")).toBe(imageUrl);
   expect(await namedContent("twitter:image:alt")).toContain("THE SHITTIM CHEST ARCHIVE");
 
-  const image = await page.evaluate(async () => {
+  const imagePath = new URL(imageUrl).pathname;
+  const imageResponse = await page.request.get(imagePath);
+  expect(imageResponse.ok()).toBe(true);
+  const imageBytes = await imageResponse.body();
+  const contentHash = createHash("sha256").update(imageBytes).digest("hex").slice(0, 12);
+  expect(imagePath).toBe(`/assets/shittim-chest-archive-og-${contentHash}.png`);
+
+  const image = await page.evaluate(async (source) => {
     const element = new Image();
-    element.src = "/assets/shittim-chest-archive-og-v2.png";
+    element.src = source;
     await element.decode();
     return { height: element.naturalHeight, width: element.naturalWidth };
-  });
+  }, imagePath);
   expect(image).toEqual({ height: 630, width: 1200 });
 });
 

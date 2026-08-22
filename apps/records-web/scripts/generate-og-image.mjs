@@ -1,11 +1,12 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "@playwright/test";
 
-const outputPath = fileURLToPath(
-  new URL("../public/assets/shittim-chest-archive-og-v2.png", import.meta.url),
-);
+const outputDirectory = new URL("../public/assets/", import.meta.url);
+const indexPath = new URL("../index.html", import.meta.url);
+const ogImagePathPattern = /\/assets\/shittim-chest-archive-og-(?:v\d+|[a-f0-9]{12})\.png/g;
 
 const [delogy, lineSeed, aronaAvatar, planaAvatar, abeAvatar] = await Promise.all([
   readFile(new URL("../src/assets/fonts/Delogy-Regular.ttf", import.meta.url), "base64"),
@@ -281,9 +282,10 @@ const html = String.raw`<!doctype html>
   </body>
 </html>`;
 
-await mkdir(new URL("../public/assets/", import.meta.url), { recursive: true });
+await mkdir(outputDirectory, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
+let image;
 try {
   const page = await browser.newPage({
     colorScheme: "light",
@@ -303,13 +305,26 @@ try {
     throw new Error("og_image_fonts_unavailable");
   }
 
-  await page.screenshot({
+  image = await page.screenshot({
     animations: "disabled",
-    path: outputPath,
     type: "png",
   });
 } finally {
   await browser.close();
 }
 
-process.stdout.write("Generated public/assets/shittim-chest-archive-og-v2.png (1200x630)\n");
+const contentHash = createHash("sha256").update(image).digest("hex").slice(0, 12);
+const outputFileName = `shittim-chest-archive-og-${contentHash}.png`;
+const outputPath = fileURLToPath(new URL(outputFileName, outputDirectory));
+const publicImagePath = `/assets/${outputFileName}`;
+const index = await readFile(indexPath, "utf8");
+const imagePathMatches = [...index.matchAll(ogImagePathPattern)];
+
+if (imagePathMatches.length !== 3 || new Set(imagePathMatches.map(([match]) => match)).size !== 1) {
+  throw new Error("og_image_metadata_contract_mismatch");
+}
+
+await writeFile(outputPath, image);
+await writeFile(indexPath, index.replaceAll(ogImagePathPattern, publicImagePath));
+
+process.stdout.write(`Generated public/assets/${outputFileName} (1200x630)\n`);
