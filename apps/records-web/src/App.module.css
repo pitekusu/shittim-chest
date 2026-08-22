@@ -601,7 +601,12 @@
 
 .recordDocument {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 28px;
+}
+
+.recordDocument > * {
+  min-inline-size: 0;
 }
 
 .recordHeader {
