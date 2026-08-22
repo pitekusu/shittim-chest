@@ -29,6 +29,9 @@ PARTICIPANT_SLOTS: tuple[ParticipantSlot, ...] = (
     "participant-b",
     "participant-c",
 )
+PARTICIPANT_AVATAR_ASSET_KEYS: dict[ParticipantSlot, str] = {
+    slot: f"participants/{slot}/avatar.webp" for slot in PARTICIPANT_SLOTS
+}
 FallbackVariant = Literal["cyan", "pink", "lavender"]
 SortOrder = Literal["newest", "oldest"]
 
@@ -359,11 +362,8 @@ class RecordsReadService:
             if not isinstance(profile, dict):
                 raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
             display_name = _required_text(profile, "display_name")
-            asset_key = profile.get("avatar_asset_key")
-            if asset_key is not None and not isinstance(asset_key, str):
-                raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
             avatar = self._avatar(
-                asset_key=asset_key,
+                asset_key=PARTICIPANT_AVATAR_ASSET_KEYS[slot],
                 alt=f"{display_name}のアバター",
                 fallback_variant=variants[slot],
                 prefix="participants/",

@@ -240,6 +240,11 @@ def test_detail_reconstructs_exact_twelve_items_without_internal_fields() -> Non
     assert len(result.initial_opinions) == 3
     assert len(result.final_proposals) == 3
     assert len(result.votes) == 3
+    assert [participant.avatar.url for participant in result.participants] == [
+        "https://media.example.invalid/participants/participant-a/avatar.webp",
+        "https://media.example.invalid/participants/participant-b/avatar.webp",
+        "https://media.example.invalid/participants/participant-c/avatar.webp",
+    ]
     serialized = repr(payload)
     for forbidden in (
         "accuracyScore",
@@ -251,6 +256,18 @@ def test_detail_reconstructs_exact_twelve_items_without_internal_fields() -> Non
         "evidence",
     ):
         assert forbidden not in serialized
+
+
+def test_detail_ignores_legacy_archived_participant_avatar_key() -> None:
+    records, reader = service()
+    participants = cast(dict[str, dict[str, Any]], reader.meta["participants"])
+    participants["participant-a"]["avatar_asset_key"] = "participants/participant-a/historical.webp"
+
+    result = records.get_record(record_id=reader.record_id, now=NOW)
+
+    assert result.participants[0].avatar.url == (
+        "https://media.example.invalid/participants/participant-a/avatar.webp"
+    )
 
 
 def test_detail_rejects_conflicting_saved_winners() -> None:

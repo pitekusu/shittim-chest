@@ -34,7 +34,9 @@ class ParticipantPresentation(BaseModel):
 
     display_name: str = Field(min_length=1, max_length=100)
     accent: str = Field(min_length=1, max_length=32)
-    avatar_asset_key: str | None = Field(default=None, max_length=256)
+    # Kept as a null-only compatibility member for the deployed v0001 SSM document.
+    # Participant avatars are current profile assets and are never archived per debate.
+    avatar_asset_key: None = None
 
 
 class RecordsPresentationConfig(BaseModel):
@@ -123,7 +125,20 @@ def project_completed_debate(
             {
                 "display_name": presentation.participants[slot].display_name,
                 "accent": presentation.participants[slot].accent,
-                "avatar_asset_key": presentation.participants[slot].avatar_asset_key,
+            },
+        )
+        for slot in PARTICIPANTS
+    }
+    # Preserve the v1 fingerprint input used by already-projected records. The deployed
+    # presentation has always required this compatibility member to be null, while new
+    # Archive META items intentionally omit it.
+    fingerprint_participant_snapshot: dict[str, DynamoValue] = {
+        slot.value: cast(
+            DynamoValue,
+            {
+                "display_name": presentation.participants[slot].display_name,
+                "accent": presentation.participants[slot].accent,
+                "avatar_asset_key": None,
             },
         )
         for slot in PARTICIPANTS
@@ -137,7 +152,7 @@ def project_completed_debate(
         "requester_display_name": snapshot.requester_display_name,
         "requester_key": requester_key,
         "presentation_version": presentation.presentation_version,
-        "participants": participant_snapshot,
+        "participants": fingerprint_participant_snapshot,
         "initial_opinions": [
             {
                 "participant": slot.value,
