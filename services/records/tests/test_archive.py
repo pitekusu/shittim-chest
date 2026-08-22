@@ -48,6 +48,7 @@ def test_completed_projection_contains_exact_archive_shape_without_private_ids()
         "participant-c": 0,
     }
     assert meta["tie_break_applied"] is False
+    assert "avatar_asset_key" not in repr(meta["participants"])
     serialized = repr(projection.items)
     for private_value in (
         source.requester_id,
@@ -134,4 +135,14 @@ def test_presentation_requires_exact_unique_participants() -> None:
     del raw["participants"]["participant-c"]
 
     with pytest.raises(ValueError, match="exactly"):
+        type(presentation()).model_validate(raw)
+
+
+def test_presentation_rejects_historical_participant_avatar_keys() -> None:
+    raw = presentation().model_dump(mode="json")
+    raw["participants"]["participant-a"]["avatar_asset_key"] = (
+        "participants/participant-a/history.webp"
+    )
+
+    with pytest.raises(ValueError):
         type(presentation()).model_validate(raw)
