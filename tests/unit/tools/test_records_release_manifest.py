@@ -180,13 +180,26 @@ def edge_alias_migration(logical_id: str, record_type: str) -> dict[str, object]
     }
 
 
-def edge_certificate_migration() -> dict[str, object]:
+def edge_certificate_migration(*, explicit_before_algorithm: bool = False) -> dict[str, object]:
     properties = {
         "DomainName": {"Ref": "RecordsPublicHostname"},
         "ValidationMethod": "DNS",
         "Tags": [{"Key": "Project", "Value": "shittim-chest"}],
     }
+    before_properties = dict(properties)
+    if explicit_before_algorithm:
+        before_properties["KeyAlgorithm"] = "RSA_2048"
     metadata = {"aws:cdk:path": "RecordsEdge/Certificate/Resource"}
+    target = {
+        "Attribute": "Properties",
+        "Name": "KeyAlgorithm",
+        "RequiresRecreation": "Always",
+        "Path": "/Properties/KeyAlgorithm",
+        "AfterValue": "EC_prime256v1",
+        "AttributeChangeType": "Modify" if explicit_before_algorithm else "Add",
+    }
+    if explicit_before_algorithm:
+        target["BeforeValue"] = "RSA_2048"
     return {
         "ResourceChange": {
             "Action": "Modify",
@@ -195,20 +208,12 @@ def edge_certificate_migration() -> dict[str, object]:
             "Replacement": "True",
             "Details": [
                 {
-                    "Target": {
-                        "Attribute": "Properties",
-                        "Name": "KeyAlgorithm",
-                        "RequiresRecreation": "Always",
-                        "Path": "/Properties/KeyAlgorithm",
-                        "BeforeValue": "RSA_2048",
-                        "AfterValue": "EC_prime256v1",
-                        "AttributeChangeType": "Modify",
-                    },
+                    "Target": target,
                     "Evaluation": "Static",
                     "ChangeSource": "DirectModification",
                 }
             ],
-            "BeforeContext": json.dumps({"Properties": properties, "Metadata": metadata}),
+            "BeforeContext": json.dumps({"Properties": before_properties, "Metadata": metadata}),
             "AfterContext": json.dumps(
                 {
                     "Properties": {**properties, "KeyAlgorithm": "EC_prime256v1"},
@@ -246,6 +251,11 @@ def test_change_set_safety_allows_only_expected_immutable_replacements() -> None
         expected_edge_zone_name=EDGE_ZONE_NAME,
     )
 
+    validate_change_set_safety(
+        {"Changes": [edge_certificate_migration(explicit_before_algorithm=True)]},
+        logical_name="edge",
+    )
+
 
 def test_change_set_safety_rejects_widened_certificate_replacement() -> None:
     migration = edge_certificate_migration()
@@ -254,6 +264,27 @@ def test_change_set_safety_rejects_widened_certificate_replacement() -> None:
     after = json.loads(str(change["AfterContext"]))
     after["Properties"]["DomainName"] = "other.example.com"
     change["AfterContext"] = json.dumps(after)
+
+    with pytest.raises(ValueError, match="safety rejected"):
+        validate_change_set_safety({"Changes": [migration]}, logical_name="edge")
+
+
+@pytest.mark.parametrize(
+    ("explicit_before_algorithm", "attribute_change_type"),
+    ((False, "Modify"), (True, "Add")),
+)
+def test_change_set_safety_rejects_certificate_change_type_context_mismatch(
+    explicit_before_algorithm: bool,
+    attribute_change_type: str,
+) -> None:
+    migration = edge_certificate_migration(explicit_before_algorithm=explicit_before_algorithm)
+    change = migration["ResourceChange"]
+    assert isinstance(change, dict)
+    details = change["Details"]
+    assert isinstance(details, list)
+    target = details[0]["Target"]
+    assert isinstance(target, dict)
+    target["AttributeChangeType"] = attribute_change_type
 
     with pytest.raises(ValueError, match="safety rejected"):
         validate_change_set_safety({"Changes": [migration]}, logical_name="edge")
