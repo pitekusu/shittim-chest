@@ -38,6 +38,7 @@ import {
   Layout,
   ProductName,
 } from "./components";
+import { VoteGraph } from "./VoteGraph";
 import styles from "./App.module.css";
 
 const SESSION_QUERY_KEY = ["records-session"] as const;
@@ -463,43 +464,6 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
         </div>
       </section>
     </article>
-  );
-}
-
-function VoteGraph({ record }: { readonly record: RecordDetailResponse }) {
-  const positions: Record<ParticipantSlot, number> = {
-    "participant-a": 110,
-    "participant-b": 360,
-    "participant-c": 610,
-  };
-  return (
-    // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users need to scroll the vote graph on narrow screens.
-    <figure className={styles.voteGraph} tabIndex={0}>
-      <svg viewBox="0 0 720 190" aria-labelledby="vote-graph-title">
-        <title id="vote-graph-title">参加者間の投票関係。詳細は直後の一覧に記載しています。</title>
-        <defs>
-          <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L7,3 z" />
-          </marker>
-        </defs>
-        {record.votes.map((vote, index) => (
-          <path
-            key={vote.voter}
-            d={`M ${positions[vote.voter]} 90 Q 360 ${25 + index * 28} ${positions[vote.candidate]} 90`}
-            markerEnd="url(#arrow)"
-          />
-        ))}
-        {record.participants.map((person) => (
-          <g key={person.slot}>
-            <circle cx={positions[person.slot]} cy="110" r="42" />
-            <text x={positions[person.slot]} y="116" textAnchor="middle">
-              {person.displayName}
-            </text>
-          </g>
-        ))}
-      </svg>
-      <figcaption>矢印は「誰が誰へ投票したか」を示します。</figcaption>
-    </figure>
   );
 }
 

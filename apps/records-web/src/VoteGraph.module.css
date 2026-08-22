@@ -1,0 +1,367 @@
+.voteGraph {
+  --vote-line: #55b8ce;
+  --vote-line-strong: #2498b5;
+  --vote-arrow: #1687a7;
+  --vote-halo: rgb(223 248 251 / 94%);
+  --vote-glow: rgb(75 194 220 / 25%);
+  margin: 0 0 28px;
+}
+
+.graphStage {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  min-height: 260px;
+  margin-inline: auto;
+  isolation: isolate;
+}
+
+.graphCanvas {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.gradientStart {
+  stop-color: var(--vote-line);
+}
+
+.gradientEnd {
+  stop-color: var(--vote-line-strong);
+}
+
+.voteEdge {
+  opacity: 0.86;
+  transition: opacity 180ms ease;
+}
+
+.edgeHalo,
+.edgeLine,
+.edgeFlow,
+.edgeHitArea,
+.targetPulse {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.edgeHalo,
+.edgeLine,
+.edgeFlow {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.edgeHalo {
+  stroke: var(--vote-halo);
+  stroke-width: 9;
+}
+
+.edgeLine {
+  stroke-width: 3.5;
+  transition: stroke-width 180ms ease;
+}
+
+.edgeFlow {
+  opacity: 0;
+  stroke: rgb(255 255 255 / 92%);
+  stroke-dasharray: 0.075 0.925;
+  stroke-dashoffset: 1;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px var(--vote-glow));
+}
+
+.edgeHitArea {
+  cursor: pointer;
+  pointer-events: stroke;
+  stroke: transparent;
+  stroke-width: 20;
+}
+
+.edgeHitArea:focus {
+  outline: none;
+}
+
+.startDot {
+  fill: var(--vote-line-strong);
+  stroke: white;
+  stroke-width: 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  vector-effect: non-scaling-stroke;
+}
+
+.arrowShape {
+  fill: var(--vote-arrow);
+  stroke: var(--vote-arrow);
+  stroke-linejoin: round;
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.targetPulse {
+  opacity: 0;
+  stroke: var(--vote-line-strong);
+  stroke-width: 3;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.voteEdge[data-relation="active"],
+.voteEdge[data-relation="outgoing"] {
+  opacity: 1;
+}
+
+.voteEdge[data-relation="incoming"] {
+  opacity: 0.9;
+}
+
+.voteEdge[data-relation="unrelated"] {
+  opacity: 0.25;
+}
+
+.voteEdge[data-relation="active"] .edgeLine,
+.voteEdge[data-relation="outgoing"] .edgeLine {
+  stroke-width: 4.5;
+}
+
+.voteEdge[data-relation="incoming"] .edgeLine {
+  stroke-width: 4;
+}
+
+.voteEdge:has(.edgeHitArea:focus-visible) .edgeHalo {
+  stroke: rgb(181 235 244 / 100%);
+}
+
+.voteNode {
+  position: absolute;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+  aspect-ratio: 1;
+  padding: 9px;
+  border: 3px solid var(--records-line-strong);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 94%);
+  box-shadow:
+    0 0 0 5px rgb(255 255 255 / 58%),
+    0 12px 30px rgb(45 119 148 / 9%);
+  color: var(--records-ink-900);
+  cursor: pointer;
+  font: inherit;
+  font-size: clamp(0.72rem, 1.5vw, 0.96rem);
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-autospace: normal;
+  transform: translate(-50%, -50%);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.voteNode:hover,
+.voteNode:focus-visible,
+.voteNode[data-highlighted="true"] {
+  border-color: var(--vote-line-strong);
+  box-shadow:
+    0 0 0 6px rgb(88 217 232 / 17%),
+    0 14px 34px rgb(45 119 148 / 15%);
+  transform: translate(-50%, -50%) scale(1.035);
+}
+
+.voteTooltip {
+  position: absolute;
+  z-index: 4;
+  max-width: min(240px, 68%);
+  padding: 7px 11px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: var(--records-shadow-soft);
+  color: var(--records-ink-900);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.4;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 12px));
+}
+
+.voteGraph figcaption {
+  margin-top: 4px;
+  padding-bottom: 4px;
+  color: var(--records-ink-600);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.voteGraph[data-revealed="false"] .edgeHalo,
+.voteGraph[data-revealed="false"] .edgeLine {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+.voteGraph[data-revealed="false"] .startDot,
+.voteGraph[data-revealed="false"] .arrowShape {
+  opacity: 0;
+}
+
+.voteGraph[data-revealed="true"] .edgeHalo,
+.voteGraph[data-revealed="true"] .edgeLine {
+  animation: voteRouteDraw 760ms cubic-bezier(0.25, 0.7, 0.3, 1) var(--edge-delay) both;
+  stroke-dasharray: 1;
+}
+
+.voteGraph[data-revealed="true"] .startDot {
+  animation: voteStartSignal 420ms ease-out var(--edge-delay) both;
+}
+
+.voteGraph[data-revealed="true"] .arrowShape {
+  animation: voteArrowArrive 220ms ease-out calc(var(--edge-delay) + 760ms) both;
+}
+
+.voteGraph[data-revealed="true"] .targetPulse {
+  animation: voteTargetPulse 480ms ease-out calc(var(--edge-delay) + 780ms) both;
+}
+
+.voteGraph[data-revealed="true"][data-visible="true"] .edgeFlow {
+  animation: voteFlow 2.8s linear calc(var(--edge-delay) + 1.15s) infinite;
+}
+
+@keyframes voteRouteDraw {
+  from {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  99% {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes voteStartSignal {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  58% {
+    opacity: 1;
+    transform: scale(1.45);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes voteArrowArrive {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes voteTargetPulse {
+  0% {
+    opacity: 0;
+    transform: scale(0.88);
+  }
+  35% {
+    opacity: 0.42;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.16);
+  }
+}
+
+@keyframes voteFlow {
+  0%,
+  15% {
+    opacity: 0;
+    stroke-dashoffset: 1;
+  }
+  24% {
+    opacity: 0.72;
+  }
+  62% {
+    opacity: 0.72;
+  }
+  72%,
+  100% {
+    opacity: 0;
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (max-width: 899px) {
+  .graphStage {
+    max-width: 380px;
+    min-height: 330px;
+  }
+
+  .voteNode {
+    font-size: clamp(0.68rem, 2.2vw, 0.88rem);
+  }
+}
+
+@media (max-width: 479px) {
+  .graphStage {
+    min-height: 0;
+  }
+
+  .voteNode {
+    padding: 7px;
+    border-width: 2.5px;
+    font-size: clamp(0.64rem, 3.2vw, 0.8rem);
+  }
+
+  .voteTooltip {
+    max-width: 74%;
+    font-size: 0.7rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voteEdge,
+  .edgeLine,
+  .voteNode {
+    transition: none;
+  }
+
+  .voteGraph[data-revealed] .edgeHalo,
+  .voteGraph[data-revealed] .edgeLine {
+    animation: none;
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+
+  .voteGraph[data-revealed] .startDot,
+  .voteGraph[data-revealed] .arrowShape {
+    animation: none;
+    opacity: 1;
+  }
+
+  .voteGraph .edgeFlow,
+  .voteGraph .targetPulse {
+    display: none;
+    animation: none;
+  }
+
+  .voteNode:hover,
+  .voteNode:focus-visible,
+  .voteNode[data-highlighted="true"] {
+    transform: translate(-50%, -50%);
+  }
+}

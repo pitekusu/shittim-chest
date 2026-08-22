@@ -688,45 +688,6 @@
   background: linear-gradient(145deg, rgb(223 248 251 / 48%), rgb(253 232 241 / 28%));
 }
 
-.voteGraph {
-  margin: 0 0 28px;
-  overflow-x: auto;
-}
-
-.voteGraph svg {
-  display: block;
-  min-width: 680px;
-  width: 100%;
-}
-
-.voteGraph path {
-  fill: none;
-  stroke: #65b8ca;
-  stroke-width: 3;
-}
-
-.voteGraph marker path {
-  fill: #65b8ca;
-}
-
-.voteGraph circle {
-  fill: rgb(255 255 255 / 90%);
-  stroke: var(--records-line-strong);
-  stroke-width: 3;
-}
-
-.voteGraph text {
-  fill: var(--records-ink-900);
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.voteGraph figcaption {
-  color: var(--records-ink-600);
-  font-size: 0.72rem;
-  text-align: center;
-}
-
 .voteList {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
