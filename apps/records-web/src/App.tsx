@@ -551,6 +551,7 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
 }
 
 function RankingPanel({
+  variant,
   title,
   description,
   entries,
@@ -558,6 +559,7 @@ function RankingPanel({
   error,
   onRetry,
 }: {
+  readonly variant: "wins" | "requests";
   readonly title: string;
   readonly description: string;
   readonly entries: readonly RankingEntry[] | undefined;
@@ -568,14 +570,35 @@ function RankingPanel({
   const apiError = error instanceof RecordsApiError ? error : undefined;
   const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
   const scaleMaximum = Math.max(1, ...(entries?.map((entry) => entry.count) ?? []));
+  const total = entries?.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
   return (
-    <section className={styles.rankingPanel} aria-labelledby={`${title}-title`} aria-busy={pending}>
-      <header>
-        <p className={styles.eyebrow}>RANKING</p>
-        <h2 id={`${title}-title`} className={JAPANESE_HEADING_CLASS}>
-          {title}
-        </h2>
-        <p className={JAPANESE_PROSE_CLASS}>{description}</p>
+    <section
+      className={`${styles.rankingPanel} ${
+        variant === "wins" ? styles.rankingPanelWins : styles.rankingPanelRequests
+      }`}
+      aria-labelledby={`${title}-title`}
+      aria-busy={pending}
+    >
+      <header className={styles.rankingHeader}>
+        <div className={styles.rankingHeaderLayout}>
+          <RankingEmblem variant={variant} />
+          <div className={styles.rankingHeaderCopy}>
+            <p className={styles.eyebrow}>RANKING</p>
+            <h2 id={`${title}-title`} className={JAPANESE_HEADING_CLASS}>
+              {title}
+            </h2>
+          </div>
+          {!pending && !error && entries && entries.length > 0 && (
+            <output
+              aria-label={`${title}の${variant === "wins" ? "合計" : "上位合計"}`}
+              className={styles.rankingTotal}
+            >
+              <span>{variant === "wins" ? "合計" : "上位合計"}</span>
+              <strong>{total}</strong>回
+            </output>
+          )}
+        </div>
+        <p className={`${JAPANESE_PROSE_CLASS} ${styles.rankingDescription}`}>{description}</p>
       </header>
       {pending && (
         <p className={styles.rankingStatus} aria-live="polite">
@@ -604,33 +627,150 @@ function RankingPanel({
         </div>
       )}
       {!pending && !error && entries && entries.length > 0 && (
-        <ol className={styles.rankingList}>
-          {entries.map((entry, index) => (
-            <li
-              className={entry.rank <= 3 ? styles[`rankingTop${entry.rank}`] : undefined}
-              key={`${entry.rank}-${entry.displayName}-${index}`}
-              value={entry.rank}
-            >
-              <span className={styles.rankingPosition} aria-label={`${entry.rank}位`}>
-                {entry.rank}
-              </span>
-              <Avatar avatar={entry.avatar} />
-              <span className={styles.rankingName}>{entry.displayName}</span>
-              <span className={styles.rankingCount}>
-                <strong>{entry.count}</strong>回
-              </span>
-              <meter
-                aria-label={`${entry.displayName}: ${entry.count}回（最多${scaleMaximum}回との比較）`}
-                className={styles.rankingBar}
-                max={scaleMaximum}
-                min={0}
-                value={entry.count}
-              />
-            </li>
-          ))}
-        </ol>
+        <>
+          {variant === "wins" && <WinPodium entries={entries} total={total} />}
+          <ol
+            className={`${styles.rankingList} ${
+              variant === "wins" ? styles.winRankingList : styles.requestRankingList
+            }`}
+          >
+            {entries.map((entry, index) => {
+              const share = total > 0 ? Math.round((entry.count / total) * 100) : 0;
+              const meterLabel =
+                variant === "requests"
+                  ? `${entry.displayName}: ${entry.count}回（上位合計の${share}%、最多${scaleMaximum}回との比較）`
+                  : `${entry.displayName}: ${entry.count}回（最多${scaleMaximum}回との比較）`;
+              return (
+                <li
+                  className={entry.rank <= 3 ? styles[`rankingTop${entry.rank}`] : undefined}
+                  key={`${entry.rank}-${entry.displayName}-${index}`}
+                  value={entry.rank}
+                >
+                  <span className={styles.rankingPosition}>
+                    <span aria-hidden="true">{entry.rank}</span>
+                    <span className={styles.visuallyHidden}>{entry.rank}位</span>
+                  </span>
+                  {variant === "requests" ? (
+                    <RankingShareAvatar entry={entry} total={total} />
+                  ) : (
+                    <Avatar avatar={entry.avatar} />
+                  )}
+                  <span className={styles.rankingName}>{entry.displayName}</span>
+                  <span className={styles.rankingCount}>
+                    <strong>{entry.count}</strong>回
+                  </span>
+                  <meter
+                    aria-label={meterLabel}
+                    className={styles.rankingBar}
+                    max={scaleMaximum}
+                    min={0}
+                    value={entry.count}
+                  />
+                </li>
+              );
+            })}
+          </ol>
+        </>
       )}
     </section>
+  );
+}
+
+function RankingEmblem({ variant }: { readonly variant: "wins" | "requests" }) {
+  return (
+    <span
+      className={`${styles.rankingEmblem} ${
+        variant === "wins" ? styles.rankingEmblemWins : styles.rankingEmblemRequests
+      }`}
+      aria-hidden="true"
+    >
+      {variant === "wins" ? (
+        <svg viewBox="0 0 48 48">
+          <path d="M9 17l9 8 6-13 6 13 9-8-4 19H13L9 17Z" />
+          <path d="M14 40h20" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 48 48">
+          <circle cx="24" cy="20" r="10" />
+          <circle cx="24" cy="20" r="4" />
+          <path d="m17 29-3 12 10-5 10 5-3-12" />
+        </svg>
+      )}
+    </span>
+  );
+}
+
+function WinPodium({
+  entries,
+  total,
+}: {
+  readonly entries: readonly RankingEntry[];
+  readonly total: number;
+}) {
+  const topThree = entries.slice(0, 3);
+  if (topThree.length !== 3) return null;
+
+  const hasUniquePodium = topThree.every((entry, index) => entry.rank === index + 1);
+  const placedEntries = hasUniquePodium
+    ? [
+        { entry: topThree[1]!, placement: "second" },
+        { entry: topThree[0]!, placement: "first" },
+        { entry: topThree[2]!, placement: "third" },
+      ]
+    : topThree.map((entry) => ({ entry, placement: "shared" as const }));
+
+  return (
+    <div
+      className={`${styles.winPodium} ${!hasUniquePodium ? styles.winPodiumShared : ""}`}
+      data-podium-layout={hasUniquePodium ? "ranked" : "shared"}
+      aria-hidden="true"
+    >
+      <span className={styles.podiumOrbit} />
+      {placedEntries.map(({ entry, placement }, index) => {
+        const share = total > 0 ? Math.round((entry.count / total) * 100) : 0;
+        return (
+          <div
+            className={`${styles.podiumEntry} ${styles[`podium-${placement}`]} ${
+              entry.rank <= 3 ? styles[`podiumRank${entry.rank}`] : ""
+            }`}
+            key={`${entry.rank}-${entry.displayName}-${index}`}
+          >
+            <span className={styles.podiumBadge}>{entry.rank}位</span>
+            <span className={styles.podiumAvatarRing}>
+              <Avatar avatar={entry.avatar} />
+            </span>
+            <strong className={styles.podiumName}>{entry.displayName}</strong>
+            <span className={styles.podiumScore}>
+              <strong>{entry.count}</strong>回 <small>{share}%</small>
+            </span>
+            <span className={styles.podiumBase} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RankingShareAvatar({
+  entry,
+  total,
+}: {
+  readonly entry: RankingEntry;
+  readonly total: number;
+}) {
+  const share = total > 0 ? Math.round((entry.count / total) * 100) : 0;
+  return (
+    <span className={styles.rankingShareVisual} aria-hidden="true">
+      <span
+        className={styles.rankingShareRing}
+        style={{
+          background: `conic-gradient(var(--ranking-bar-end) ${share * 3.6}deg, rgb(23 50 77 / 8%) 0deg)`,
+        }}
+      >
+        <Avatar avatar={entry.avatar} />
+      </span>
+      <span className={styles.rankingShareLabel}>{share}%</span>
+    </span>
   );
 }
 
@@ -656,16 +796,18 @@ function RankingsPage() {
       </header>
       <div className={styles.rankingsGrid}>
         <RankingPanel
+          variant="wins"
           title="勝利回数ランキング"
-          description="3人の参加者が勝者に選ばれた回数です。バーの長さは最多回数との比較です。"
+          description="3人の参加者が勝者に選ばれた回数と、全勝利に占める割合です。"
           entries={rankings.data?.wins}
           pending={rankings.isPending}
           error={rankings.error}
           onRetry={() => void rankings.refetch()}
         />
         <RankingPanel
+          variant="requests"
           title="依頼回数ランキング"
-          description="議論を依頼した回数の上位10人です。バーの長さは最多回数との比較です。"
+          description="議論を依頼した回数の上位10人です。リングは表示中の上位合計に占める割合です。"
           entries={rankings.data?.requests}
           pending={rankings.isPending}
           error={rankings.error}

@@ -140,7 +140,10 @@ function response(value: unknown, status = 200): Response {
   });
 }
 
-function mockApi(session: SessionResponse = authenticatedSession() as SessionResponse) {
+function mockApi(
+  session: SessionResponse = authenticatedSession() as SessionResponse,
+  rankings: unknown = rankingsResponse(),
+) {
   const requests: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -154,7 +157,7 @@ function mockApi(session: SessionResponse = authenticatedSession() as SessionRes
         return Promise.resolve(response(recordDetail()));
       }
       if (path === "/api/v1/insights/rankings") {
-        return Promise.resolve(response(rankingsResponse()));
+        return Promise.resolve(response(rankings));
       }
       throw new Error(`Unexpected request: ${path}`);
     }),
@@ -265,7 +268,13 @@ describe("App", () => {
     const wins = screen.getByRole("region", { name: "勝利回数ランキング" });
     const requestsPanel = screen.getByRole("region", { name: "依頼回数ランキング" });
     expect(await within(wins).findAllByRole("listitem")).toHaveLength(3);
-    expect(within(wins).getByText("安倍晋三AI")).toBeVisible();
+    expect(within(wins).getAllByText("安倍晋三AI")).toHaveLength(2);
+    expect(
+      within(wins).getByRole("status", { name: "勝利回数ランキングの合計" }),
+    ).toHaveTextContent("合計54回");
+    expect(
+      within(requestsPanel).getByRole("status", { name: "依頼回数ランキングの上位合計" }),
+    ).toHaveTextContent("上位合計32回");
     const aronaBar = within(wins).getByRole("meter", {
       name: "アロナ: 20回（最多20回との比較）",
     });
@@ -275,12 +284,33 @@ describe("App", () => {
     expect(aronaBar).toHaveAttribute("max", "20");
     expect(aronaBar).toHaveAttribute("value", "20");
     expect(planaBar).toHaveAttribute("value", "18");
-    expect(within(requestsPanel).getAllByLabelText("1位")).toHaveLength(2);
-    expect(within(requestsPanel).getByLabelText("3位")).toBeVisible();
+    expect(within(requestsPanel).getAllByText("1位")).toHaveLength(2);
+    expect(within(requestsPanel).getByText("3位")).toBeInTheDocument();
     expect(within(requestsPanel).getAllByRole("meter")).toHaveLength(3);
+    expect(
+      within(requestsPanel).getByRole("meter", {
+        name: "パワー系ウナギ: 12回（上位合計の38%、最多12回との比較）",
+      }),
+    ).toHaveAttribute("value", "12");
     expect(screen.getByText("最終集計:")).toHaveTextContent("2026年8月22日 09:00");
     expect(screen.queryByText(/費用|Fargate|OpenAI/)).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/insights/rankings");
+  });
+
+  it("keeps all winners at the same podium height when every participant is tied", async () => {
+    window.history.replaceState(null, "", "/insights");
+    const tiedRankings = rankingsResponse();
+    tiedRankings.wins = tiedRankings.wins.map((entry) => ({ ...entry, rank: 1, count: 20 }));
+    mockApi(authenticatedSession() as SessionResponse, tiedRankings);
+
+    const { container } = render(<App />);
+
+    await screen.findByRole("heading", { name: "いろいろな記録" });
+    await within(screen.getByRole("region", { name: "勝利回数ランキング" })).findAllByRole(
+      "listitem",
+    );
+    expect(container.querySelector('[data-podium-layout="shared"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-podium-layout="ranked"]')).not.toBeInTheDocument();
   });
 
   it("shows snapshot preparation independently in both ranking panels", async () => {
