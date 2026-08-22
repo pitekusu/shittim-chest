@@ -212,13 +212,14 @@ export function ProductName({ headingId }: { readonly headingId?: string }) {
         id={headingId}
         className={`${styles.productName} ${styles.japaneseHeading}`}
         aria-label={accessibleName}
+        lang="en"
       >
         <ProductNameLines />
       </h1>
     );
   }
   return (
-    <span className={styles.productName} aria-label={accessibleName}>
+    <span className={styles.productName} aria-label={accessibleName} lang="en">
       <ProductNameLines />
     </span>
   );
@@ -260,7 +261,7 @@ export function Layout({
         <div className={styles.account}>
           <Avatar avatar={avatar} />
           <span>{displayName}</span>
-          <button className={styles.quietButton} type="button" onClick={onLogout}>
+          <button className={styles.quietButton} type="button" lang="en" onClick={onLogout}>
             LOGOFF
           </button>
         </div>
@@ -282,7 +283,7 @@ export function Layout({
         >
           いろいろ
         </NavLink>
-        <button className={styles.mobileLogout} type="button" onClick={onLogout}>
+        <button className={styles.mobileLogout} type="button" lang="en" onClick={onLogout}>
           LOGOFF
         </button>
       </nav>

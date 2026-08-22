@@ -156,6 +156,7 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   const logoff = page.getByRole("button", { name: "LOGOFF" });
   await expect(logoff).toHaveCSS("font-family", /Delogy/);
   await expect(logoff).toHaveCSS("border-top-style", "solid");
+  await expect(logoff).toHaveAttribute("lang", "en");
   const card = page.getByRole("article");
   await expect(card).toContainText(detail.question);
   await expect(card.getByText("2026年8月15日 15:00")).toHaveAttribute(
@@ -238,6 +239,7 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
     "CHEST ARCHIVE",
   ]);
   await expect(sidebarProductName).toHaveCSS("font-family", /Delogy/);
+  await expect(sidebarProductName).toHaveAttribute("lang", "en");
   const sidebarType = await sidebarProductName.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
@@ -570,15 +572,16 @@ test("English display copy uses Delogy while Japanese copy keeps LINE Seed JP", 
   await page.goto("/");
   await page.evaluate(() => document.fonts.ready);
 
-  await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toHaveCSS(
-    "font-family",
-    /Delogy/,
-  );
+  const loginHeading = page.getByRole("heading", { name: "The Shittim Chest Archive" });
+  await expect(loginHeading).toHaveCSS("font-family", /Delogy/);
+  await expect(loginHeading).toHaveAttribute("lang", "en");
   await expect(page.getByText("シッテムの箱 議事録閲覧システム")).toHaveCSS(
     "font-family",
     /LINE Seed JP/,
   );
-  await expect(page.getByRole("link", { name: "AUTHENTICATE" })).toHaveCSS("font-family", /Delogy/);
+  const authenticate = page.getByRole("link", { name: "AUTHENTICATE" });
+  await expect(authenticate).toHaveCSS("font-family", /Delogy/);
+  await expect(authenticate).toHaveAttribute("lang", "en");
   expect(await page.evaluate(() => document.fonts.check('16px "Delogy"'))).toBe(true);
   await expect(page).toHaveScreenshot("display-font-login.png", {
     animations: "disabled",
