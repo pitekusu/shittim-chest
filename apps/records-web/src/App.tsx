@@ -567,6 +567,7 @@ function RankingPanel({
 }) {
   const apiError = error instanceof RecordsApiError ? error : undefined;
   const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
+  const scaleMaximum = Math.max(1, ...(entries?.map((entry) => entry.count) ?? []));
   return (
     <section className={styles.rankingPanel} aria-labelledby={`${title}-title`} aria-busy={pending}>
       <header>
@@ -618,6 +619,13 @@ function RankingPanel({
               <span className={styles.rankingCount}>
                 <strong>{entry.count}</strong>回
               </span>
+              <meter
+                aria-label={`${entry.displayName}: ${entry.count}回（最多${scaleMaximum}回との比較）`}
+                className={styles.rankingBar}
+                max={scaleMaximum}
+                min={0}
+                value={entry.count}
+              />
             </li>
           ))}
         </ol>
@@ -649,7 +657,7 @@ function RankingsPage() {
       <div className={styles.rankingsGrid}>
         <RankingPanel
           title="勝利回数ランキング"
-          description="3人の参加者が勝者に選ばれた回数です。"
+          description="3人の参加者が勝者に選ばれた回数です。バーの長さは最多回数との比較です。"
           entries={rankings.data?.wins}
           pending={rankings.isPending}
           error={rankings.error}
@@ -657,7 +665,7 @@ function RankingsPage() {
         />
         <RankingPanel
           title="依頼回数ランキング"
-          description="議論を依頼した回数の上位10人です。"
+          description="議論を依頼した回数の上位10人です。バーの長さは最多回数との比較です。"
           entries={rankings.data?.requests}
           pending={rankings.isPending}
           error={rankings.error}

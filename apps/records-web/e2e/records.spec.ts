@@ -227,7 +227,12 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   const wins = page.getByRole("region", { name: "勝利回数ランキング" });
   const requests = page.getByRole("region", { name: "依頼回数ランキング" });
   await expect(wins.getByRole("listitem")).toHaveCount(3);
+  await expect(wins.getByRole("meter")).toHaveCount(3);
+  await expect(
+    wins.getByRole("meter", { name: "アロナ: 20回（最多20回との比較）" }),
+  ).toHaveAttribute("value", "20");
   await expect(requests.getByLabel("1位")).toHaveCount(2);
+  await expect(requests.getByRole("meter")).toHaveCount(3);
   await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
   await expect(page.getByText(/費用|Fargate|OpenAI/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(

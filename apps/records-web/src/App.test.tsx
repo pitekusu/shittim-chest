@@ -266,8 +266,18 @@ describe("App", () => {
     const requestsPanel = screen.getByRole("region", { name: "依頼回数ランキング" });
     expect(await within(wins).findAllByRole("listitem")).toHaveLength(3);
     expect(within(wins).getByText("安倍晋三AI")).toBeVisible();
+    const aronaBar = within(wins).getByRole("meter", {
+      name: "アロナ: 20回（最多20回との比較）",
+    });
+    const planaBar = within(wins).getByRole("meter", {
+      name: "プラナ: 18回（最多20回との比較）",
+    });
+    expect(aronaBar).toHaveAttribute("max", "20");
+    expect(aronaBar).toHaveAttribute("value", "20");
+    expect(planaBar).toHaveAttribute("value", "18");
     expect(within(requestsPanel).getAllByLabelText("1位")).toHaveLength(2);
     expect(within(requestsPanel).getByLabelText("3位")).toBeVisible();
+    expect(within(requestsPanel).getAllByRole("meter")).toHaveLength(3);
     expect(screen.getByText("最終集計:")).toHaveTextContent("2026年8月22日 09:00");
     expect(screen.queryByText(/費用|Fargate|OpenAI/)).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/insights/rankings");
