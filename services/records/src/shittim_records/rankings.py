@@ -186,7 +186,14 @@ def _parse_archive_row(item: DynamoItem) -> _ArchiveRankingRow:
     participant_names: dict[ParticipantSlot, str] = {}
     for slot in PARTICIPANT_SLOTS:
         profile = raw_participants[slot]
-        if not isinstance(profile, dict) or set(profile) != {"display_name", "accent"}:
+        if not isinstance(profile, dict):
+            raise RankingDataInvalid("Archive participant presentation is invalid")
+        profile_fields = set(profile)
+        current_fields = {"display_name", "accent"}
+        historical_fields = {*current_fields, "avatar_asset_key"}
+        if profile_fields not in (current_fields, historical_fields) or (
+            profile_fields == historical_fields and profile["avatar_asset_key"] is not None
+        ):
             raise RankingDataInvalid("Archive participant presentation is invalid")
         participant_names[slot] = _required_text(profile, "display_name")
         _required_text(profile, "accent")
