@@ -177,7 +177,9 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   await expect(page).toHaveScreenshot("records-detail.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 20,
+    // Self-hosted font rasterization differs by a few edge pixels between the
+    // pinned local and GitHub-hosted Chromium environments.
+    maxDiffPixels: 30,
   });
 
   const accessibility = await new AxeBuilder({ page }).analyze();
@@ -332,6 +334,12 @@ test("touch activation keeps a vote selection until the same target is tapped ag
   await graph.scrollIntoViewIfNeeded();
   const node = graph.getByRole("button", { name: "アロナに関係する投票を強調" });
   const route = graph.getByLabel("アロナがプラナに投票");
+
+  await node.dispatchEvent("touchstart");
+  await node.dispatchEvent("touchmove");
+  await node.dispatchEvent("touchend");
+  await expect(node).toHaveAttribute("aria-pressed", "false");
+  await expect(route.locator("..")).toHaveAttribute("data-relation", "default");
 
   await node.tap();
   await expect(node).toHaveAttribute("aria-pressed", "true");

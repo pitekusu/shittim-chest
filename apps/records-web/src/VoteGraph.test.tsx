@@ -92,34 +92,37 @@ describe("VoteGraph", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("アロナがプラナに投票");
   });
 
-  it("keeps the first touch selection and clears it on a second tap", () => {
+  it("uses click activation without treating a cancelled touch gesture as a selection", () => {
     render(<VoteGraph record={record} />);
 
     const node = screen.getByRole("button", { name: "アロナに関係する投票を強調" });
     const route = screen.getByLabelText("アロナがプラナに投票");
 
     fireEvent.touchStart(node);
-    fireEvent.focus(node);
+    fireEvent.touchMove(node);
     fireEvent.touchEnd(node);
+    expect(node).toHaveAttribute("aria-pressed", "false");
+    expect(route.parentElement).toHaveAttribute("data-relation", "default");
+
+    fireEvent.focus(node);
     fireEvent.click(node, { detail: 1 });
     expect(node).toHaveAttribute("aria-pressed", "true");
     expect(route.parentElement).toHaveAttribute("data-relation", "outgoing");
 
-    fireEvent.touchStart(node);
-    fireEvent.touchEnd(node);
     fireEvent.click(node, { detail: 1 });
     expect(node).toHaveAttribute("aria-pressed", "false");
     expect(route.parentElement).toHaveAttribute("data-relation", "default");
 
     fireEvent.touchStart(route);
-    fireEvent.focus(route);
+    fireEvent.touchMove(route);
     fireEvent.touchEnd(route);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    fireEvent.focus(route);
     fireEvent.click(route, { detail: 1 });
     expect(screen.getByRole("tooltip")).toHaveTextContent("アロナがプラナに投票");
     expect(route.parentElement).toHaveAttribute("data-relation", "active");
 
-    fireEvent.touchStart(route);
-    fireEvent.touchEnd(route);
     fireEvent.click(route, { detail: 1 });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(route.parentElement).toHaveAttribute("data-relation", "default");

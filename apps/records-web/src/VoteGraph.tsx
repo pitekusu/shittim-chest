@@ -60,7 +60,6 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
     [record.participants],
   );
   const figureReference = useRef<HTMLElement>(null);
-  const handledTouchActivation = useRef<string | null>(null);
   const [hasRevealed, setHasRevealed] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [hoveredNode, setHoveredNode] = useState<ParticipantSlot | null>(null);
@@ -106,7 +105,6 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
   const activeRoute = routes.find((route) => route.key === activeVote) ?? null;
 
   const clearSelection = () => {
-    handledTouchActivation.current = null;
     setHoveredNode(null);
     setFocusedNode(null);
     setSelectedNode(null);
@@ -209,17 +207,6 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
                 onPointerEnter={(event) => {
                   if (event.pointerType === "mouse") setHoveredVote(route.key);
                 }}
-                onTouchStart={() => {
-                  handledTouchActivation.current = null;
-                }}
-                onTouchEnd={(event) => {
-                  event.preventDefault();
-                  handledTouchActivation.current = `vote:${route.key}`;
-                  toggleVoteSelection(route.key);
-                }}
-                onTouchCancel={() => {
-                  handledTouchActivation.current = null;
-                }}
                 onPointerLeave={(event) => {
                   if (event.pointerType === "mouse") {
                     setHoveredVote((current) => (current === route.key ? null : current));
@@ -250,15 +237,7 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
                   onBlur={() =>
                     setFocusedVote((current) => (current === route.key ? null : current))
                   }
-                  onClick={(event) => {
-                    const activationKey = `vote:${route.key}`;
-                    if (event.detail > 0 && handledTouchActivation.current === activationKey) {
-                      handledTouchActivation.current = null;
-                      return;
-                    }
-                    handledTouchActivation.current = null;
-                    toggleVoteSelection(route.key);
-                  }}
+                  onClick={() => toggleVoteSelection(route.key)}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") clearSelection();
                     if (event.key === "Enter" || event.key === " ") {
@@ -303,17 +282,6 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
               onPointerEnter={(event) => {
                 if (event.pointerType === "mouse") setHoveredNode(participant.slot);
               }}
-              onTouchStart={() => {
-                handledTouchActivation.current = null;
-              }}
-              onTouchEnd={(event) => {
-                event.preventDefault();
-                handledTouchActivation.current = `node:${participant.slot}`;
-                toggleNodeSelection(participant.slot);
-              }}
-              onTouchCancel={() => {
-                handledTouchActivation.current = null;
-              }}
               onPointerLeave={(event) => {
                 if (event.pointerType === "mouse") {
                   setHoveredNode((current) => (current === participant.slot ? null : current));
@@ -323,15 +291,7 @@ export function VoteGraph({ record }: { readonly record: RecordDetailResponse })
               onBlur={() =>
                 setFocusedNode((current) => (current === participant.slot ? null : current))
               }
-              onClick={(event) => {
-                const activationKey = `node:${participant.slot}`;
-                if (event.detail > 0 && handledTouchActivation.current === activationKey) {
-                  handledTouchActivation.current = null;
-                  return;
-                }
-                handledTouchActivation.current = null;
-                toggleNodeSelection(participant.slot);
-              }}
+              onClick={() => toggleNodeSelection(participant.slot)}
               onKeyDown={(event) => {
                 if (event.key === "Escape") clearSelection();
               }}
