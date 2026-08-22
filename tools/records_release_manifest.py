@@ -181,13 +181,10 @@ def _is_expected_edge_certificate_migration(change: Mapping[str, object]) -> boo
         "RequiresRecreation": "Always",
         "Path": "/Properties/KeyAlgorithm",
         "AfterValue": "EC_prime256v1",
-        "AttributeChangeType": "Modify",
     }
     if any(target.get(key) != value for key, value in required_target.items()):
         return False
-    if set(target) - (set(required_target) | {"BeforeValue"}):
-        return False
-    if target.get("BeforeValue") not in (None, "RSA_2048"):
+    if set(target) - (set(required_target) | {"BeforeValue", "AttributeChangeType"}):
         return False
     if detail["Evaluation"] != "Static" or detail["ChangeSource"] != "DirectModification":
         return False
@@ -204,7 +201,16 @@ def _is_expected_edge_certificate_migration(change: Mapping[str, object]) -> boo
         return False
     if after_properties.get("KeyAlgorithm") != "EC_prime256v1":
         return False
+    before_has_algorithm = "KeyAlgorithm" in before_properties
     if before_properties.get("KeyAlgorithm", "RSA_2048") != "RSA_2048":
+        return False
+    if before_has_algorithm:
+        if target.get("AttributeChangeType") != "Modify" or target.get("BeforeValue") != "RSA_2048":
+            return False
+    elif target.get("AttributeChangeType") != "Add" or target.get("BeforeValue") not in (
+        None,
+        "RSA_2048",
+    ):
         return False
     before_without_algorithm = dict(before_properties)
     after_without_algorithm = dict(after_properties)
