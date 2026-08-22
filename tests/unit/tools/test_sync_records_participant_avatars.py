@@ -10,7 +10,23 @@ import httpx
 import pytest
 from tools import sync_records_participant_avatars as sync
 
-WEBP = b"RIFF\x04\x00\x00\x00WEBPtest"
+
+def webp(width: int = 256, height: int = 256) -> bytes:
+    payload = (
+        b"\x00\x00\x00"
+        + b"\x9d\x01\x2a"
+        + width.to_bytes(2, "little")
+        + height.to_bytes(2, "little")
+        + b"encoded"
+    )
+    chunk = b"VP8 " + len(payload).to_bytes(4, "little") + payload
+    if len(payload) % 2:
+        chunk += b"\x00"
+    riff_payload = b"WEBP" + chunk
+    return b"RIFF" + len(riff_payload).to_bytes(4, "little") + riff_payload
+
+
+WEBP = webp()
 
 
 class FakePaginator:
@@ -47,11 +63,28 @@ class FakeSsm:
 
 
 class FakeS3:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_at: int | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.delete_calls: list[dict[str, Any]] = []
+        self.fail_at = fail_at
 
-    def put_object(self, **kwargs: Any) -> None:
+    def get_bucket_versioning(self, **kwargs: Any) -> dict[str, str]:
+        assert kwargs == {"Bucket": "private-media"}
+        return {"Status": "Enabled"}
+
+    def put_object(self, **kwargs: Any) -> dict[str, str]:
+        if self.fail_at == len(self.calls):
+            from botocore.exceptions import ClientError
+
+            raise ClientError(
+                {"Error": {"Code": "InternalError", "Message": "failed"}},
+                "PutObject",
+            )
         self.calls.append(kwargs)
+        return {"VersionId": f"version-{len(self.calls)}"}
+
+    def delete_object(self, **kwargs: Any) -> None:
+        self.delete_calls.append(kwargs)
 
 
 def test_current_avatar_contract_uses_three_stable_slot_keys() -> None:
@@ -158,6 +191,25 @@ def test_rejects_identity_without_a_current_bot_avatar(
     assert caught.value.code == expected_code
 
 
+def test_rejects_duplicate_resolved_bot_identity_before_upload() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v10/users/@me":
+            return httpx.Response(
+                200,
+                json={"id": "1" * 18, "avatar": "a" * 32, "bot": True},
+            )
+        return httpx.Response(200, content=WEBP, headers={"Content-Type": "image/webp"})
+
+    tokens = {slot: f"token-{slot}" for slot in sync.PARTICIPANT_SLOTS}
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(sync.AvatarSyncError) as caught,
+    ):
+        sync.download_current_avatars(client, tokens)
+
+    assert caught.value.code == "discord_bot_identity_duplicated"
+
+
 def test_rejects_non_webp_avatar_before_any_upload() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v10/users/@me":
@@ -175,6 +227,26 @@ def test_rejects_non_webp_avatar_before_any_upload() -> None:
         sync.download_current_avatars(client, tokens)
 
     assert caught.value.code == "discord_avatar_media_type_invalid"
+
+
+@pytest.mark.parametrize("body", (webp(128, 128), WEBP[:-1], b"RIFFinvalidWEBP"))
+def test_rejects_malformed_or_incorrectly_sized_webp(body: bytes) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v10/users/@me":
+            return httpx.Response(
+                200,
+                json={"id": "1" * 18, "avatar": "a" * 32, "bot": True},
+            )
+        return httpx.Response(200, content=body, headers={"Content-Type": "image/webp"})
+
+    tokens = {slot: f"token-{slot}" for slot in sync.PARTICIPANT_SLOTS}
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(sync.AvatarSyncError) as caught,
+    ):
+        sync.download_current_avatars(client, tokens)
+
+    assert caught.value.code == "discord_avatar_content_invalid"
 
 
 def test_uploads_only_stable_current_keys_with_integrity_metadata() -> None:
@@ -196,6 +268,7 @@ def test_uploads_only_stable_current_keys_with_integrity_metadata() -> None:
     assert all(call["ServerSideEncryption"] == "AES256" for call in client.calls)
     expected_checksum = base64.b64encode(hashlib.sha256(WEBP).digest()).decode("ascii")
     assert all(call["ChecksumSHA256"] == expected_checksum for call in client.calls)
+    assert client.delete_calls == []
 
 
 def test_incomplete_upload_set_fails_before_any_s3_write() -> None:
@@ -211,3 +284,27 @@ def test_incomplete_upload_set_fails_before_any_s3_write() -> None:
 
     assert caught.value.code == "participant_avatar_set_incomplete"
     assert client.calls == []
+
+
+def test_partial_upload_is_rolled_back_to_previous_versions() -> None:
+    client = FakeS3(fail_at=1)
+    avatars = tuple(
+        sync.ParticipantAvatar(
+            slot=slot,
+            object_key=sync.AVATAR_OBJECT_KEYS[slot],
+            body=WEBP,
+        )
+        for slot in sync.PARTICIPANT_SLOTS
+    )
+
+    with pytest.raises(sync.AvatarSyncError) as caught:
+        sync.upload_current_avatars(client, "private-media", avatars)
+
+    assert caught.value.code == "participant_avatar_upload_rolled_back"
+    assert client.delete_calls == [
+        {
+            "Bucket": "private-media",
+            "Key": "participants/participant-a/avatar.webp",
+            "VersionId": "version-1",
+        }
+    ]

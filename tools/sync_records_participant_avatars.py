@@ -115,6 +115,7 @@ def download_current_avatars(
     if set(tokens) != set(PARTICIPANT_SLOTS):
         raise AvatarSyncError("participant_token_set_incomplete")
     avatars: list[ParticipantAvatar] = []
+    resolved_user_ids: set[str] = set()
     for slot in PARTICIPANT_SLOTS:
         identity = client.get(
             f"{DISCORD_API_ROOT}/users/@me",
@@ -138,6 +139,9 @@ def download_current_avatars(
             or payload.get("bot") is not True
         ):
             raise AvatarSyncError("discord_bot_avatar_unavailable")
+        if user_id in resolved_user_ids:
+            raise AvatarSyncError("discord_bot_identity_duplicated")
+        resolved_user_ids.add(user_id)
         body = _download_webp(
             client,
             f"{DISCORD_CDN_ROOT}/avatars/{user_id}/{avatar_hash}.webp?size=256",
@@ -156,17 +160,32 @@ def upload_current_avatars(
     for avatar in avatars:
         if avatar.object_key != AVATAR_OBJECT_KEYS[avatar.slot] or not _valid_webp(avatar.body):
             raise AvatarSyncError("participant_avatar_set_invalid")
-    for avatar in avatars:
-        checksum = base64.b64encode(hashlib.sha256(avatar.body).digest()).decode("ascii")
-        client.put_object(
-            Bucket=bucket_name,
-            Key=avatar.object_key,
-            Body=avatar.body,
-            ContentType="image/webp",
-            CacheControl="private, max-age=300",
-            ServerSideEncryption="AES256",
-            ChecksumSHA256=checksum,
-        )
+    if client.get_bucket_versioning(Bucket=bucket_name).get("Status") != "Enabled":
+        raise AvatarSyncError("media_bucket_versioning_required")
+    uploaded: list[tuple[str, str]] = []
+    try:
+        for avatar in avatars:
+            checksum = base64.b64encode(hashlib.sha256(avatar.body).digest()).decode("ascii")
+            response = client.put_object(
+                Bucket=bucket_name,
+                Key=avatar.object_key,
+                Body=avatar.body,
+                ContentType="image/webp",
+                CacheControl="private, max-age=300",
+                ServerSideEncryption="AES256",
+                ChecksumSHA256=checksum,
+            )
+            version_id = response.get("VersionId")
+            if not isinstance(version_id, str) or not version_id:
+                raise AvatarSyncError("participant_avatar_version_missing")
+            uploaded.append((avatar.object_key, version_id))
+    except BotoCoreError, ClientError, AvatarSyncError:
+        try:
+            for object_key, version_id in reversed(uploaded):
+                client.delete_object(Bucket=bucket_name, Key=object_key, VersionId=version_id)
+        except BotoCoreError, ClientError:
+            raise AvatarSyncError("participant_avatar_rollback_failed") from None
+        raise AvatarSyncError("participant_avatar_upload_rolled_back") from None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -244,7 +263,74 @@ def _download_webp(client: httpx.Client, url: str) -> bytes:
 
 
 def _valid_webp(body: bytes) -> bool:
-    return len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP"
+    return _webp_dimensions(body) == (256, 256)
+
+
+def _webp_dimensions(body: bytes) -> tuple[int, int] | None:
+    if (
+        len(body) < 20
+        or body[:4] != b"RIFF"
+        or body[8:12] != b"WEBP"
+        or int.from_bytes(body[4:8], "little") + 8 != len(body)
+    ):
+        return None
+    offset = 12
+    dimensions: tuple[int, int] | None = None
+    image_payload_found = False
+    while offset < len(body):
+        if offset + 8 > len(body):
+            return None
+        chunk_type = body[offset : offset + 4]
+        chunk_size = int.from_bytes(body[offset + 4 : offset + 8], "little")
+        payload_start = offset + 8
+        payload_end = payload_start + chunk_size
+        padded_end = payload_end + (chunk_size % 2)
+        if payload_end > len(body) or padded_end > len(body):
+            return None
+        payload = body[payload_start:payload_end]
+        parsed: tuple[int, int] | None = None
+        if chunk_type == b"VP8 ":
+            parsed = _vp8_dimensions(payload)
+            image_payload_found = parsed is not None
+        elif chunk_type == b"VP8L":
+            parsed = _vp8l_dimensions(payload)
+            image_payload_found = parsed is not None
+        elif chunk_type == b"VP8X":
+            if len(payload) != 10 or payload[1:4] != b"\x00\x00\x00":
+                return None
+            parsed = (
+                int.from_bytes(payload[4:7], "little") + 1,
+                int.from_bytes(payload[7:10], "little") + 1,
+            )
+        elif chunk_type == b"ANMF":
+            if len(payload) < 16:
+                return None
+            image_payload_found = True
+        if parsed is not None:
+            if dimensions is not None and dimensions != parsed:
+                return None
+            dimensions = parsed
+        offset = padded_end
+    if offset != len(body) or not image_payload_found:
+        return None
+    return dimensions
+
+
+def _vp8_dimensions(payload: bytes) -> tuple[int, int] | None:
+    if len(payload) < 10 or payload[3:6] != b"\x9d\x01\x2a":
+        return None
+    width = int.from_bytes(payload[6:8], "little") & 0x3FFF
+    height = int.from_bytes(payload[8:10], "little") & 0x3FFF
+    return (width, height) if width and height else None
+
+
+def _vp8l_dimensions(payload: bytes) -> tuple[int, int] | None:
+    if len(payload) < 5 or payload[0] != 0x2F:
+        return None
+    bits = int.from_bytes(payload[1:5], "little")
+    if bits >> 29:
+        return None
+    return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
 
 
 def _account_id(client: Any) -> str:
