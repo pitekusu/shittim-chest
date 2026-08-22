@@ -210,7 +210,13 @@ test("authenticated member can browse the completed archive", async ({ page }) =
     maxDiffPixels: 20,
   });
   await page.getByRole("link", { name: "記録を読む" }).click();
-  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  const questionHeading = page.getByRole("heading", { name: detail.question });
+  const opinionsHeading = page.getByRole("heading", { name: "3人の意見" });
+  await expect(questionHeading).toBeVisible();
+  await expect(opinionsHeading).toBeVisible();
+  expect(await questionHeading.evaluate((element) => getComputedStyle(element).fontSize)).toBe(
+    await opinionsHeading.evaluate((element) => getComputedStyle(element).fontSize),
+  );
   await expect(page.getByRole("heading", { name: "アロナ → プラナ" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "最終決定" })).toBeVisible();
   await expect(page.getByText(detail.finalDecision.victoryMessage)).toBeVisible();
