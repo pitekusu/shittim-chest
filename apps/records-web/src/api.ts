@@ -48,6 +48,20 @@ export interface RecordListResponse {
   readonly nextCursor: string | null;
 }
 
+export interface RankingEntry {
+  readonly rank: number;
+  readonly displayName: string;
+  readonly avatar: AvatarRef;
+  readonly count: number;
+}
+
+export interface RankingsResponse {
+  readonly schemaVersion: 1;
+  readonly wins: readonly RankingEntry[];
+  readonly requests: readonly RankingEntry[];
+  readonly generatedAt: string;
+}
+
 export interface RecordDetailResponse {
   readonly schemaVersion: 1;
   readonly recordId: string;
@@ -192,6 +206,10 @@ export async function getRecord(recordId: string): Promise<RecordDetailResponse>
   return (await requestJson(
     `/api/v1/records/${encodeURIComponent(recordId)}`,
   )) as RecordDetailResponse;
+}
+
+export async function getRankings(): Promise<RankingsResponse> {
+  return (await requestJson("/api/v1/insights/rankings")) as RankingsResponse;
 }
 
 export async function logout(csrfToken: string): Promise<void> {

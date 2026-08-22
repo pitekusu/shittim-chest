@@ -58,12 +58,14 @@ class DynamoRecordsReader:
         s3_client: S3Client,
         *,
         archive_table_name: str,
+        statistics_table_name: str,
         session_table_name: str,
         media_bucket_name: str,
     ) -> None:
         self._client = client
         self._s3 = s3_client
         self._archive_table = archive_table_name
+        self._statistics_table = statistics_table_name
         self._session_table = session_table_name
         self._media_bucket = media_bucket_name
 
@@ -117,6 +119,24 @@ class DynamoRecordsReader:
             if not start_key:
                 break
         return tuple(items)
+
+    def load_ranking_snapshots(self) -> tuple[DynamoItem, ...]:
+        response = self._client.transact_get_items(
+            TransactItems=[
+                {
+                    "Get": {
+                        "TableName": self._statistics_table,
+                        "Key": marshal_item({"PK": pk, "SK": "CURRENT"}),
+                    }
+                }
+                for pk in ("RANKING#WINS", "RANKING#REQUESTS")
+            ]
+        )
+        return tuple(
+            unmarshal_item(raw["Item"])
+            for raw in response.get("Responses", [])
+            if raw.get("Item") is not None
+        )
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]:
         if not requester_keys:

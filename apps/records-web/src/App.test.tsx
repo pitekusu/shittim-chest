@@ -96,6 +96,43 @@ function listResponse() {
   };
 }
 
+function rankingsResponse() {
+  return {
+    schemaVersion: 1,
+    wins: [
+      { rank: 1, displayName: "アロナ", avatar: placeholder("アロナ", "cyan"), count: 20 },
+      { rank: 2, displayName: "プラナ", avatar: placeholder("プラナ", "pink"), count: 18 },
+      {
+        rank: 3,
+        displayName: "安倍晋三AI",
+        avatar: placeholder("安倍晋三AI", "lavender"),
+        count: 16,
+      },
+    ],
+    requests: [
+      {
+        rank: 1,
+        displayName: "パワー系ウナギ",
+        avatar: placeholder("パワー系ウナギ", "cyan"),
+        count: 12,
+      },
+      {
+        rank: 1,
+        displayName: "吹雪型JC",
+        avatar: placeholder("吹雪型JC", "pink"),
+        count: 12,
+      },
+      {
+        rank: 3,
+        displayName: "先生",
+        avatar: placeholder("先生", "lavender"),
+        count: 8,
+      },
+    ],
+    generatedAt: "2026-08-22T00:00:00Z",
+  };
+}
+
 function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -103,7 +140,10 @@ function response(value: unknown, status = 200): Response {
   });
 }
 
-function mockApi(session: SessionResponse = authenticatedSession() as SessionResponse) {
+function mockApi(
+  session: SessionResponse = authenticatedSession() as SessionResponse,
+  rankings: unknown = rankingsResponse(),
+) {
   const requests: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -115,6 +155,9 @@ function mockApi(session: SessionResponse = authenticatedSession() as SessionRes
       if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
       if (path === `/api/v1/records/${RECORD_ID}`) {
         return Promise.resolve(response(recordDetail()));
+      }
+      if (path === "/api/v1/insights/rankings") {
+        return Promise.resolve(response(rankings));
       }
       throw new Error(`Unexpected request: ${path}`);
     }),
@@ -159,6 +202,18 @@ describe("App", () => {
     ).toBeVisible();
   });
 
+  it("returns an anonymous visitor to the requested insights page after login", async () => {
+    window.history.replaceState(null, "", "/insights");
+    mockApi({ schemaVersion: 1, authenticated: false, user: null, csrfToken: null });
+
+    render(<App />);
+
+    expect(await screen.findByRole("link", { name: "Discordでログイン" })).toHaveAttribute(
+      "href",
+      "/api/v1/auth/discord/start?returnTo=%2Finsights",
+    );
+  });
+
   it("renders completed records without duration or Evidence", async () => {
     const requests = mockApi();
 
@@ -201,6 +256,95 @@ describe("App", () => {
     await waitFor(() => {
       expect(requests).toContain("/api/v1/records?limit=12&sort=oldest");
     });
+  });
+
+  it("renders the two ranking panels with competition ranks and no cost placeholder", async () => {
+    window.history.replaceState(null, "", "/insights");
+    const requests = mockApi();
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "いろいろな記録" })).toBeVisible();
+    const wins = screen.getByRole("region", { name: "勝利回数ランキング" });
+    const requestsPanel = screen.getByRole("region", { name: "依頼回数ランキング" });
+    expect(await within(wins).findAllByRole("listitem")).toHaveLength(3);
+    expect(within(wins).getAllByText("安倍晋三AI")).toHaveLength(2);
+    expect(
+      within(wins).getByRole("status", { name: "勝利回数ランキングの合計" }),
+    ).toHaveTextContent("合計54回");
+    expect(
+      within(requestsPanel).getByRole("status", { name: "依頼回数ランキングの上位合計" }),
+    ).toHaveTextContent("上位合計32回");
+    const aronaBar = within(wins).getByRole("meter", {
+      name: "アロナ: 20回（最多20回との比較）",
+    });
+    const planaBar = within(wins).getByRole("meter", {
+      name: "プラナ: 18回（最多20回との比較）",
+    });
+    expect(aronaBar).toHaveAttribute("max", "20");
+    expect(aronaBar).toHaveAttribute("value", "20");
+    expect(planaBar).toHaveAttribute("value", "18");
+    expect(within(requestsPanel).getAllByText("1位")).toHaveLength(2);
+    expect(within(requestsPanel).getByText("3位")).toBeInTheDocument();
+    expect(within(requestsPanel).getAllByRole("meter")).toHaveLength(3);
+    expect(
+      within(requestsPanel).getByRole("meter", {
+        name: "パワー系ウナギ: 12回（上位合計の38%、最多12回との比較）",
+      }),
+    ).toHaveAttribute("value", "12");
+    expect(screen.getByText("最終集計:")).toHaveTextContent("2026年8月22日 09:00");
+    expect(screen.queryByText(/費用|Fargate|OpenAI/)).not.toBeInTheDocument();
+    expect(requests).toContain("/api/v1/insights/rankings");
+  });
+
+  it("keeps all winners at the same podium height when every participant is tied", async () => {
+    window.history.replaceState(null, "", "/insights");
+    const tiedRankings = rankingsResponse();
+    tiedRankings.wins = tiedRankings.wins.map((entry) => ({ ...entry, rank: 1, count: 20 }));
+    mockApi(authenticatedSession() as SessionResponse, tiedRankings);
+
+    const { container } = render(<App />);
+
+    await screen.findByRole("heading", { name: "いろいろな記録" });
+    await within(screen.getByRole("region", { name: "勝利回数ランキング" })).findAllByRole(
+      "listitem",
+    );
+    expect(container.querySelector('[data-podium-layout="shared"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-podium-layout="ranked"]')).not.toBeInTheDocument();
+  });
+
+  it("shows snapshot preparation independently in both ranking panels", async () => {
+    window.history.replaceState(null, "", "/insights");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (path === "/api/v1/session") {
+          return Promise.resolve(response(authenticatedSession()));
+        }
+        if (path === "/api/v1/insights/rankings") {
+          return Promise.resolve(
+            response(
+              {
+                error: {
+                  code: "INSIGHTS_UNAVAILABLE",
+                  message: "集計を準備しています。",
+                  requestId: "request-id",
+                },
+              },
+              503,
+            ),
+          );
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findAllByText("集計を準備しています")).toHaveLength(2);
+    expect(screen.getAllByRole("status")).toHaveLength(2);
   });
 
   it("filters loaded records by the selected requester", async () => {

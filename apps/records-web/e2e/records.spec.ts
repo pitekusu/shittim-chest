@@ -69,6 +69,31 @@ const detail = {
   },
 };
 
+const rankings = {
+  schemaVersion: 1,
+  wins: [
+    { rank: 1, displayName: "アロナ", avatar: participants[0]!.avatar, count: 20 },
+    { rank: 2, displayName: "プラナ", avatar: participants[1]!.avatar, count: 18 },
+    { rank: 3, displayName: "安倍晋三AI", avatar: participants[2]!.avatar, count: 16 },
+  ],
+  requests: [
+    {
+      rank: 1,
+      displayName: "パワー系ウナギ",
+      avatar: placeholder("パワー系ウナギ", "cyan"),
+      count: 12,
+    },
+    {
+      rank: 1,
+      displayName: "吹雪型JC",
+      avatar: placeholder("吹雪型JC", "pink"),
+      count: 12,
+    },
+    { rank: 3, displayName: "先生", avatar: placeholder("先生", "lavender"), count: 8 },
+  ],
+  generatedAt: "2026-08-22T00:00:00Z",
+};
+
 const PRODUCTION_CSP = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -114,6 +139,7 @@ async function mockAuthenticatedApi(page: Page, recordDetail = detail): Promise<
   await page.route(`**/api/v1/records/${RECORD_ID}`, (route) =>
     route.fulfill({ json: recordDetail }),
   );
+  await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
 }
 
 test("authenticated member can browse the completed archive", async ({ page }) => {
@@ -191,6 +217,39 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("authenticated member can review responsive rankings", async ({ page }) => {
+  await mockAuthenticatedApi(page);
+  await page.goto("/insights");
+
+  await expect(page.getByRole("heading", { name: "いろいろな記録" })).toBeVisible();
+  const wins = page.getByRole("region", { name: "勝利回数ランキング" });
+  const requests = page.getByRole("region", { name: "依頼回数ランキング" });
+  await expect(wins.getByRole("listitem")).toHaveCount(3);
+  await expect(wins.getByRole("meter")).toHaveCount(3);
+  await expect(
+    wins.getByRole("meter", { name: "アロナ: 20回（最多20回との比較）" }),
+  ).toHaveAttribute("value", "20");
+  await expect(wins.getByRole("status", { name: "勝利回数ランキングの合計" })).toContainText(
+    "54回",
+  );
+  await expect(requests.getByText("1位", { exact: true })).toHaveCount(2);
+  await expect(
+    requests.getByRole("status", { name: "依頼回数ランキングの上位合計" }),
+  ).toContainText("32回");
+  await expect(requests.getByRole("meter")).toHaveCount(3);
+  await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
+  await expect(page.getByText(/費用|Fargate|OpenAI/)).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    await page.evaluate(() => document.documentElement.clientWidth),
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-insights.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixels: 20,
+  });
 });
 
 test("product name keeps the approved two-line break at narrow widths", async ({

@@ -1,4 +1,4 @@
-"""AWS Lambda entry points for Records projection, backfill, auth, and reads."""
+"""AWS Lambda entry points for Records projection, rankings, auth, and reads."""
 
 from __future__ import annotations
 
@@ -33,6 +33,8 @@ from shittim_records.auth_adapters import (
 )
 from shittim_records.http_api import AuthHttpController, ReadHttpController
 from shittim_records.projector import BackfillService, ProjectorService
+from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
+from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
 from shittim_records.read_api import CursorCodec, RecordsReadService
 
@@ -41,6 +43,7 @@ LOGGER.setLevel(logging.INFO)
 
 _PROJECTOR: ProjectorService | None = None
 _BACKFILL: BackfillService | None = None
+_RANKING: RankingService | None = None
 _AUTH_CONTROLLER: AuthHttpController | None = None
 _READ_CONTROLLER: ReadHttpController | None = None
 
@@ -110,6 +113,19 @@ def backfill_handler(event: Mapping[str, Any], _context: object) -> dict[str, ob
     return response
 
 
+def ranking_handler(_event: Mapping[str, Any], _context: object) -> dict[str, object]:
+    """Recompute both ranking snapshots without logging identity data."""
+
+    result = _ranking_service().refresh(now=datetime.now(UTC))
+    response = {
+        "archive_count": result.archive_count,
+        "win_entries": len(result.wins),
+        "request_entries": len(result.requests),
+    }
+    _log(event="records_rankings_refreshed", **response)
+    return response
+
+
 def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle public OAuth and session routes."""
 
@@ -144,6 +160,23 @@ def _backfill_service() -> BackfillService:
             ),
         )
     return _BACKFILL
+
+
+def _ranking_service() -> RankingService:
+    global _RANKING
+    if _RANKING is None:
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        _RANKING = RankingService(
+            source=DynamoRankingSource(
+                dynamodb,
+                _environment("ARCHIVE_TABLE_NAME"),
+            ),
+            store=DynamoRankingSnapshotStore(
+                dynamodb,
+                _environment("STATISTICS_TABLE_NAME"),
+            ),
+        )
+    return _RANKING
 
 
 def _auth_controller() -> AuthHttpController:
@@ -184,6 +217,7 @@ def _read_controller() -> ReadHttpController:
             dynamodb,
             _regional_s3_client(),
             archive_table_name=_environment("ARCHIVE_TABLE_NAME"),
+            statistics_table_name=_environment("STATISTICS_TABLE_NAME"),
             session_table_name=_environment("SESSION_TABLE_NAME"),
             media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
         )

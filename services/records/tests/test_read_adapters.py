@@ -20,6 +20,7 @@ class FakeDynamo:
         self.responses = responses
         self.queries: list[dict[str, Any]] = []
         self.batch_calls: list[dict[str, Any]] = []
+        self.transact_get_calls: list[dict[str, Any]] = []
 
     def query(self, **kwargs: Any) -> dict[str, Any]:
         self.queries.append(kwargs)
@@ -27,6 +28,10 @@ class FakeDynamo:
 
     def batch_get_item(self, **kwargs: Any) -> dict[str, Any]:
         self.batch_calls.append(kwargs)
+        return self.responses.pop(0)
+
+    def transact_get_items(self, **kwargs: Any) -> dict[str, Any]:
+        self.transact_get_calls.append(kwargs)
         return self.responses.pop(0)
 
 
@@ -51,9 +56,41 @@ def reader(client: FakeDynamo) -> DynamoRecordsReader:
         cast(Any, client),
         cast(Any, FakeS3()),
         archive_table_name="archive",
+        statistics_table_name="statistics",
         session_table_name="sessions",
         media_bucket_name="media",
     )
+
+
+def test_rankings_use_one_atomic_read_for_both_snapshots() -> None:
+    wins = marshal_item({"PK": "RANKING#WINS", "SK": "CURRENT"})
+    requests = marshal_item({"PK": "RANKING#REQUESTS", "SK": "CURRENT"})
+    client = FakeDynamo([{"Responses": [{"Item": wins}, {"Item": requests}]}])
+
+    result = reader(client).load_ranking_snapshots()
+
+    assert result == (
+        {"PK": "RANKING#WINS", "SK": "CURRENT"},
+        {"PK": "RANKING#REQUESTS", "SK": "CURRENT"},
+    )
+    assert client.transact_get_calls == [
+        {
+            "TransactItems": [
+                {
+                    "Get": {
+                        "TableName": "statistics",
+                        "Key": marshal_item({"PK": "RANKING#WINS", "SK": "CURRENT"}),
+                    }
+                },
+                {
+                    "Get": {
+                        "TableName": "statistics",
+                        "Key": marshal_item({"PK": "RANKING#REQUESTS", "SK": "CURRENT"}),
+                    }
+                },
+            ]
+        }
+    ]
 
 
 @pytest.mark.parametrize(("sort", "scan_forward"), (("newest", False), ("oldest", True)))

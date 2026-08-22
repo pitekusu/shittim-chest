@@ -324,6 +324,7 @@ class ErrorResponse(PublicModel):
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordListResponse,
     RecordDetailResponse,
+    RankingsResponse,
     SessionResponse,
     ErrorResponse,
 )
