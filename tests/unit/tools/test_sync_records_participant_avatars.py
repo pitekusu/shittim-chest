@@ -62,21 +62,45 @@ class FakeSsm:
         return self.response
 
 
+class FakeVersionPaginator:
+    def __init__(self, client: FakeS3) -> None:
+        self.client = client
+
+    def paginate(self, **kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["Bucket"] == "private-media"
+        object_key = kwargs["Prefix"]
+        return [
+            {
+                "Versions": [
+                    {"Key": object_key, "VersionId": version_id}
+                    for version_id in self.client.versions.get(object_key, [])
+                ]
+            }
+        ]
+
+
 class FakeS3:
     def __init__(
         self,
         *,
         fail_at: int | None = None,
         delete_fail_keys: frozenset[str] = frozenset(),
+        extra_put_versions: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.delete_calls: list[dict[str, Any]] = []
         self.fail_at = fail_at
         self.delete_fail_keys = delete_fail_keys
+        self.extra_put_versions = extra_put_versions or {}
+        self.versions: dict[str, list[str]] = {}
 
     def get_bucket_versioning(self, **kwargs: Any) -> dict[str, str]:
         assert kwargs == {"Bucket": "private-media"}
         return {"Status": "Enabled"}
+
+    def get_paginator(self, operation: str) -> FakeVersionPaginator:
+        assert operation == "list_object_versions"
+        return FakeVersionPaginator(self)
 
     def put_object(self, **kwargs: Any) -> dict[str, str]:
         if self.fail_at == len(self.calls):
@@ -87,7 +111,12 @@ class FakeS3:
                 "PutObject",
             )
         self.calls.append(kwargs)
-        return {"VersionId": f"version-{len(self.calls)}"}
+        object_key = kwargs["Key"]
+        version_id = f"version-{len(self.calls)}"
+        versions = self.versions.setdefault(object_key, [])
+        versions.extend(self.extra_put_versions.get(object_key, ()))
+        versions.append(version_id)
+        return {"VersionId": version_id}
 
     def delete_object(self, **kwargs: Any) -> None:
         self.delete_calls.append(kwargs)
@@ -98,6 +127,7 @@ class FakeS3:
                 {"Error": {"Code": "InternalError", "Message": "failed"}},
                 "DeleteObject",
             )
+        self.versions[kwargs["Key"]].remove(kwargs["VersionId"])
 
 
 def test_current_avatar_contract_uses_three_stable_slot_keys() -> None:
@@ -437,6 +467,7 @@ def test_rollback_attempts_every_uploaded_version_after_one_delete_fails() -> No
 
     assert caught.value.code == "participant_avatar_rollback_failed"
     assert caught.value.rollback_outcomes == (
+        ("participant-c", "unchanged"),
         ("participant-b", "failed"),
         ("participant-a", "deleted"),
     )
@@ -445,5 +476,36 @@ def test_rollback_attempts_every_uploaded_version_after_one_delete_fails() -> No
         "participants/participant-a/avatar.webp",
     ]
     assert sync._failure_message(caught.value) == (
-        "participant_avatar_rollback_failed (participant-b=failed,participant-a=deleted)"
+        "participant_avatar_rollback_failed "
+        "(participant-c=unchanged,participant-b=failed,participant-a=deleted)"
     )
+
+
+def test_rollback_removes_every_version_created_by_a_retried_put() -> None:
+    object_key = "participants/participant-a/avatar.webp"
+    client = FakeS3(
+        fail_at=1,
+        extra_put_versions={object_key: ("retry-created-version",)},
+    )
+    avatars = tuple(
+        sync.ParticipantAvatar(
+            slot=slot,
+            object_key=sync.AVATAR_OBJECT_KEYS[slot],
+            body=WEBP,
+        )
+        for slot in sync.PARTICIPANT_SLOTS
+    )
+
+    with pytest.raises(sync.AvatarSyncError) as caught:
+        sync.upload_current_avatars(client, "private-media", avatars)
+
+    assert caught.value.code == "participant_avatar_upload_rolled_back"
+    assert caught.value.rollback_outcomes == (
+        ("participant-b", "unchanged"),
+        ("participant-a", "deleted"),
+    )
+    assert client.versions[object_key] == []
+    assert {call["VersionId"] for call in client.delete_calls} == {
+        "retry-created-version",
+        "version-1",
+    }

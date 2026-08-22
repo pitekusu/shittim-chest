@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -32,7 +33,7 @@ MAX_AVATAR_BYTES = 512 * 1024
 APPLY_CONFIRMATION = "y"
 
 ParticipantSlot = Literal["participant-a", "participant-b", "participant-c"]
-RollbackStatus = Literal["deleted", "failed"]
+RollbackStatus = Literal["deleted", "unchanged", "failed"]
 ImageDecoder = Callable[[bytes], tuple[int, int]]
 PARTICIPANT_SLOTS: tuple[ParticipantSlot, ...] = (
     "participant-a",
@@ -176,9 +177,14 @@ def upload_current_avatars(
             raise AvatarSyncError("participant_avatar_set_invalid")
     if client.get_bucket_versioning(Bucket=bucket_name).get("Status") != "Enabled":
         raise AvatarSyncError("media_bucket_versioning_required")
-    uploaded: list[tuple[ParticipantSlot, str, str]] = []
+    baselines = {
+        slot: _object_version_ids(client, bucket_name, AVATAR_OBJECT_KEYS[slot])
+        for slot in PARTICIPANT_SLOTS
+    }
+    attempted: list[ParticipantSlot] = []
     try:
         for avatar in avatars:
+            attempted.append(avatar.slot)
             checksum = base64.b64encode(hashlib.sha256(avatar.body).digest()).decode("ascii")
             response = client.put_object(
                 Bucket=bucket_name,
@@ -192,17 +198,8 @@ def upload_current_avatars(
             version_id = response.get("VersionId")
             if not isinstance(version_id, str) or not version_id:
                 raise AvatarSyncError("participant_avatar_version_missing")
-            uploaded.append((avatar.slot, avatar.object_key, version_id))
     except BotoCoreError, ClientError, AvatarSyncError:
-        rollback_outcomes: list[tuple[ParticipantSlot, RollbackStatus]] = []
-        for slot, object_key, version_id in reversed(uploaded):
-            try:
-                client.delete_object(Bucket=bucket_name, Key=object_key, VersionId=version_id)
-            except BotoCoreError, ClientError:
-                rollback_outcomes.append((slot, "failed"))
-            else:
-                rollback_outcomes.append((slot, "deleted"))
-        outcomes = tuple(rollback_outcomes)
+        outcomes = _rollback_new_versions(client, bucket_name, attempted, baselines)
         if any(status == "failed" for _, status in outcomes):
             raise AvatarSyncError(
                 "participant_avatar_rollback_failed",
@@ -212,6 +209,58 @@ def upload_current_avatars(
             "participant_avatar_upload_rolled_back",
             rollback_outcomes=outcomes,
         ) from None
+
+
+def _object_version_ids(client: Any, bucket_name: str, object_key: str) -> frozenset[str]:
+    versions: set[str] = set()
+    paginator = client.get_paginator("list_object_versions")
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=object_key):
+        raw_versions = page.get("Versions", [])
+        if not isinstance(raw_versions, list):
+            raise AvatarSyncError("participant_avatar_version_inventory_invalid")
+        for item in raw_versions:
+            if not isinstance(item, dict):
+                raise AvatarSyncError("participant_avatar_version_inventory_invalid")
+            if item.get("Key") != object_key:
+                continue
+            version_id = item.get("VersionId")
+            if not isinstance(version_id, str) or not version_id or version_id in versions:
+                raise AvatarSyncError("participant_avatar_version_inventory_invalid")
+            versions.add(version_id)
+    return frozenset(versions)
+
+
+def _rollback_new_versions(
+    client: Any,
+    bucket_name: str,
+    attempted: Sequence[ParticipantSlot],
+    baselines: Mapping[ParticipantSlot, frozenset[str]],
+) -> tuple[tuple[ParticipantSlot, RollbackStatus], ...]:
+    outcomes: list[tuple[ParticipantSlot, RollbackStatus]] = []
+    for slot in reversed(attempted):
+        object_key = AVATAR_OBJECT_KEYS[slot]
+        try:
+            created_versions = (
+                _object_version_ids(client, bucket_name, object_key) - baselines[slot]
+            )
+        except BotoCoreError, ClientError, AvatarSyncError, KeyError:
+            outcomes.append((slot, "failed"))
+            continue
+        for version_id in sorted(created_versions):
+            with suppress(BotoCoreError, ClientError):
+                client.delete_object(Bucket=bucket_name, Key=object_key, VersionId=version_id)
+        try:
+            remaining = _object_version_ids(client, bucket_name, object_key) - baselines[slot]
+        except BotoCoreError, ClientError, AvatarSyncError:
+            outcomes.append((slot, "failed"))
+            continue
+        if remaining:
+            outcomes.append((slot, "failed"))
+        elif created_versions:
+            outcomes.append((slot, "deleted"))
+        else:
+            outcomes.append((slot, "unchanged"))
+    return tuple(outcomes)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
