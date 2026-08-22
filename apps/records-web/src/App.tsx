@@ -725,7 +725,6 @@ function WinPodium({
       data-podium-layout={hasUniquePodium ? "ranked" : "shared"}
       aria-hidden="true"
     >
-      <span className={styles.podiumOrbit} />
       {placedEntries.map(({ entry, placement }, index) => {
         const share = total > 0 ? Math.round((entry.count / total) * 100) : 0;
         return (

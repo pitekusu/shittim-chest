@@ -241,6 +241,14 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   await expect(requests.getByRole("meter")).toHaveCount(3);
   await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
   await expect(page.getByText(/費用|Fargate|OpenAI/)).toHaveCount(0);
+  const podium = wins.locator('[data-podium-layout="ranked"]');
+  const podiumBox = await podium.boundingBox();
+  const winsBox = await wins.boundingBox();
+  expect(podiumBox).not.toBeNull();
+  expect(winsBox).not.toBeNull();
+  expect(podiumBox!.x).toBeGreaterThanOrEqual(winsBox!.x);
+  expect(podiumBox!.x + podiumBox!.width).toBeLessThanOrEqual(winsBox!.x + winsBox!.width);
+  await expect(podium).toHaveCSS("overflow", "clip");
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     await page.evaluate(() => document.documentElement.clientWidth),
   );
