@@ -6,6 +6,7 @@
   "scripts": {
     "contracts:generate": "node scripts/generate-contract-validator.mjs --write",
     "contracts:check": "node scripts/generate-contract-validator.mjs --check",
+    "og:image:generate": "node scripts/generate-og-image.mjs",
     "dev": "vp dev",
     "check": "vp check",
     "test": "vp test",

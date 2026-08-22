@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 
 const RECORD_ID = "r".repeat(43);
 
@@ -146,7 +147,20 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   await mockAuthenticatedApi(page);
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible();
+  const recordsHeading = page.getByRole("heading", { name: "議論の記録" });
+  await expect(recordsHeading).toBeVisible();
+  expect(
+    await recordsHeading.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).fontSize),
+    ),
+  ).toBeLessThanOrEqual(45);
+  const logoff = page.getByRole("button", { name: "LOGOFF" });
+  await expect(logoff).toHaveCSS("font-family", /Delogy/);
+  await expect(logoff).toHaveCSS("border-top-style", "solid");
+  await expect(logoff).toHaveAttribute("lang", "en");
+  const logoffBox = await logoff.boundingBox();
+  expect(logoffBox).not.toBeNull();
+  expect(logoffBox!.height).toBeGreaterThanOrEqual(44);
   const card = page.getByRole("article");
   await expect(card).toContainText(detail.question);
   await expect(card.getByText("2026年8月15日 15:00")).toHaveAttribute(
@@ -223,9 +237,39 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   await mockAuthenticatedApi(page);
   await page.goto("/insights");
 
-  await expect(page.getByRole("heading", { name: "いろいろな記録" })).toBeVisible();
+  const sidebarProductName = page.locator('[aria-label="The Shittim Chest Archive"]');
+  await expect(sidebarProductName.locator(":scope > span")).toHaveText([
+    "THE SHITTIM",
+    "CHEST ARCHIVE",
+  ]);
+  await expect(sidebarProductName).toHaveCSS("font-family", /Delogy/);
+  await expect(sidebarProductName).toHaveAttribute("lang", "en");
+  const sidebarType = await sidebarProductName.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      fontSize: Number.parseFloat(style.fontSize),
+      lineHeight: Number.parseFloat(style.lineHeight),
+    };
+  });
+  expect(sidebarType.lineHeight / sidebarType.fontSize).toBeGreaterThanOrEqual(1.4);
+  expect(
+    await sidebarProductName.evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
+  await expect(sidebarProductName.locator("..").locator('[aria-hidden="true"]').first()).toHaveCSS(
+    "width",
+    "44px",
+  );
+  const insightsHeading = page.getByRole("heading", { name: "いろいろな記録" });
+  await expect(insightsHeading).toBeVisible();
+  expect(
+    await insightsHeading.evaluate((element) =>
+      Number.parseFloat(getComputedStyle(element).fontSize),
+    ),
+  ).toBeLessThanOrEqual(45);
   const wins = page.getByRole("region", { name: "勝利回数ランキング" });
   const requests = page.getByRole("region", { name: "依頼回数ランキング" });
+  await expect(wins.getByText("VICTORIES", { exact: true })).toBeVisible();
+  await expect(requests.getByText("REQUESTS", { exact: true })).toBeVisible();
   await expect(wins.getByRole("listitem")).toHaveCount(3);
   await expect(wins.getByRole("meter")).toHaveCount(3);
   await expect(
@@ -260,7 +304,7 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   });
 });
 
-test("product name keeps the approved two-line break at narrow widths", async ({
+test("English login product name keeps the approved two-line break at narrow widths", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
@@ -270,28 +314,63 @@ test("product name keeps the approved two-line break at narrow widths", async ({
     }),
   );
   await page.goto("/");
+  await page.evaluate(() => document.fonts.ready);
 
   for (const viewport of [
     { width: 320, height: 800 },
     { width: 808, height: 730 },
   ]) {
     await page.setViewportSize(viewport);
-    const heading = page.getByRole("heading", { name: "シッテムの箱 議事録" });
+    const heading = page.getByRole("heading", { name: "The Shittim Chest Archive" });
     await expect(heading).toBeVisible();
     const lines = await heading.locator("span").evaluateAll((elements) =>
       elements.map((element) => {
         const bounds = element.getBoundingClientRect();
         const style = getComputedStyle(element);
-        return { display: style.display, top: bounds.top, whiteSpace: style.whiteSpace };
+        return {
+          clientWidth: element.clientWidth,
+          display: style.display,
+          scrollWidth: element.scrollWidth,
+          top: bounds.top,
+          whiteSpace: style.whiteSpace,
+        };
       }),
     );
     expect(lines).toHaveLength(2);
     expect(lines[0]?.display).toBe("block");
     expect(lines[0]?.whiteSpace).toBe("nowrap");
     expect(lines[1]!.top).toBeGreaterThan(lines[0]!.top);
+    expect(
+      lines.every((line) => line.scrollWidth <= line.clientWidth),
+      JSON.stringify({ viewport, lines }),
+    ).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
+    await expect(heading).toHaveCSS("text-align", "center");
+    const headingType = await heading.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        fontSize: Number.parseFloat(style.fontSize),
+        lineHeight: Number.parseFloat(style.lineHeight),
+      };
+    });
+    expect(headingType.lineHeight / headingType.fontSize).toBeGreaterThanOrEqual(1.2);
+    const authenticate = page.getByRole("link", { name: "AUTHENTICATE" });
+    const authenticateType = await authenticate.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        fontSize: Number.parseFloat(style.fontSize),
+        paddingInline: Number.parseFloat(style.paddingInlineStart),
+      };
+    });
+    expect(authenticateType.fontSize).toBeLessThanOrEqual(10.6);
+    expect(authenticateType.paddingInline).toBeGreaterThanOrEqual(16);
+    await expect(page).toHaveScreenshot(`display-font-login-${viewport.width}.png`, {
+      animations: "disabled",
+      fullPage: true,
+      maxDiffPixels: 20,
+    });
   }
 });
 
@@ -483,12 +562,126 @@ test("touch activation keeps a vote selection until the same target is tapped ag
 test("reduced motion skips the long login transition", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAuthenticatedApi(page);
-  await page.addInitScript(() => sessionStorage.setItem("records-login-transition", "pending"));
+  await page.addInitScript(() =>
+    sessionStorage.setItem("shittim-records-login-transition", "pending"),
+  );
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible({
     timeout: 1_000,
   });
+});
+
+test("English display copy uses Delogy while Japanese copy keeps LINE Seed JP", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.route("**/api/v1/session", (route) =>
+    route.fulfill({
+      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+    }),
+  );
+  await page.goto("/");
+  await page.evaluate(() => document.fonts.ready);
+
+  const loginHeading = page.getByRole("heading", { name: "The Shittim Chest Archive" });
+  await expect(loginHeading).toHaveCSS("font-family", /Delogy/);
+  await expect(loginHeading).toHaveAttribute("lang", "en");
+  await expect(page.getByText("シッテムの箱 議事録閲覧システム")).toHaveCSS(
+    "font-family",
+    /LINE Seed JP/,
+  );
+  const authenticate = page.getByRole("link", { name: "AUTHENTICATE" });
+  await expect(authenticate).toHaveCSS("font-family", /Delogy/);
+  await expect(authenticate).toHaveAttribute("lang", "en");
+  expect(await page.evaluate(() => document.fonts.check('16px "Delogy"'))).toBe(true);
+  await expect(page).toHaveScreenshot("display-font-login.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixels: 20,
+  });
+
+  await page.unroute("**/api/v1/session");
+  await mockAuthenticatedApi(page);
+  await page.addInitScript(() =>
+    sessionStorage.setItem("shittim-records-login-transition", "pending"),
+  );
+  await page.goto("/");
+  const welcome = page.getByText("WELCOME, SENSEI.");
+  await expect(welcome).toBeVisible();
+  await expect(welcome).toHaveCSS("font-family", /Delogy/);
+  await page.addStyleTag({
+    content: "*, *::before, *::after { animation: none !important; transition: none !important; }",
+  });
+  await expect(page).toHaveScreenshot("display-font-transition.png", {
+    animations: "allow",
+    fullPage: true,
+    maxDiffPixels: 20,
+  });
+});
+
+test("publishes complete Open Graph metadata and a 1200 by 630 preview image", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.route("**/api/v1/session", (route) =>
+    route.fulfill({
+      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+    }),
+  );
+  await page.goto("/");
+
+  const propertyContent = (property: string) =>
+    page.locator(`meta[property="${property}"]`).getAttribute("content");
+  const namedContent = (name: string) =>
+    page.locator(`meta[name="${name}"]`).getAttribute("content");
+  const description =
+    "シッテムの箱 議事録閲覧システム。吹雪型JCのつどいサーバの先生であることを認証して、議論記録を閲覧できます。";
+  const imageUrl = await propertyContent("og:image");
+  expect(imageUrl).toMatch(
+    /^https:\/\/shittim\.pitekusu\.dev\/assets\/shittim-chest-archive-og-[a-f0-9]{12}\.png$/,
+  );
+  if (imageUrl === null) {
+    throw new Error("og_image_metadata_missing");
+  }
+
+  await expect(page).toHaveTitle("THE SHITTIM CHEST ARCHIVE | シッテムの箱 議事録閲覧システム");
+  expect(await namedContent("description")).toBe(description);
+  expect(await page.locator('link[rel="canonical"]').getAttribute("href")).toBe(
+    "https://shittim.pitekusu.dev/",
+  );
+  expect(await propertyContent("og:title")).toBe("THE SHITTIM CHEST ARCHIVE");
+  expect(await propertyContent("og:description")).toBe(description);
+  expect(await propertyContent("og:type")).toBe("website");
+  expect(await propertyContent("og:url")).toBe("https://shittim.pitekusu.dev/");
+  expect(await propertyContent("og:site_name")).toBe("シッテムの箱 議事録");
+  expect(await propertyContent("og:locale")).toBe("ja_JP");
+  expect(await propertyContent("og:image:secure_url")).toBe(imageUrl);
+  expect(await propertyContent("og:image:type")).toBe("image/png");
+  expect(await propertyContent("og:image:width")).toBe("1200");
+  expect(await propertyContent("og:image:height")).toBe("630");
+  expect(await propertyContent("og:image:alt")).toContain("THE SHITTIM CHEST ARCHIVE");
+  expect(await propertyContent("og:image:alt")).toContain("アロナ・プラナ・安倍晋三AI");
+  expect(await namedContent("twitter:card")).toBe("summary_large_image");
+  expect(await namedContent("twitter:title")).toBe("THE SHITTIM CHEST ARCHIVE");
+  expect(await namedContent("twitter:description")).toBe(description);
+  expect(await namedContent("twitter:image")).toBe(imageUrl);
+  expect(await namedContent("twitter:image:alt")).toContain("THE SHITTIM CHEST ARCHIVE");
+
+  const imagePath = new URL(imageUrl).pathname;
+  const imageResponse = await page.request.get(imagePath);
+  expect(imageResponse.ok()).toBe(true);
+  const imageBytes = await imageResponse.body();
+  const contentHash = createHash("sha256").update(imageBytes).digest("hex").slice(0, 12);
+  expect(imagePath).toBe(`/assets/shittim-chest-archive-og-${contentHash}.png`);
+
+  const image = await page.evaluate(async (source) => {
+    const element = new Image();
+    element.src = source;
+    await element.decode();
+    return { height: element.naturalHeight, width: element.naturalWidth };
+  }, imagePath);
+  expect(image).toEqual({ height: 630, width: 1200 });
 });
 
 test("anonymous login page boots under the production CSP without dynamic evaluation", async ({
@@ -513,7 +706,7 @@ test("anonymous login page boots under the production CSP without dynamic evalua
 
   await page.goto("/");
 
-  const loginButton = page.getByRole("link", { name: "Discordでログイン" });
+  const loginButton = page.getByRole("link", { name: "AUTHENTICATE" });
   await expect(loginButton).toBeVisible();
   await loginButton.hover();
   await page.waitForTimeout(150);

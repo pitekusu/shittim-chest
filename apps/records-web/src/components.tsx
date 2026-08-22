@@ -198,27 +198,28 @@ export function BrandMark({ compact = false }: { readonly compact?: boolean }) {
 function ProductNameLines() {
   return (
     <>
-      <span className={styles.productNameLine}>シッテムの箱</span>
-      <span className={styles.productNameLine}>議事録</span>
+      <span className={styles.productNameLine}>THE SHITTIM</span>
+      <span className={styles.productNameLine}>CHEST ARCHIVE</span>
     </>
   );
 }
 
 export function ProductName({ headingId }: { readonly headingId?: string }) {
-  const accessibleName = "シッテムの箱 議事録";
+  const accessibleName = "The Shittim Chest Archive";
   if (headingId) {
     return (
       <h1
         id={headingId}
         className={`${styles.productName} ${styles.japaneseHeading}`}
         aria-label={accessibleName}
+        lang="en"
       >
         <ProductNameLines />
       </h1>
     );
   }
   return (
-    <span className={styles.productName} aria-label={accessibleName}>
+    <span className={styles.productName} aria-label={accessibleName} lang="en">
       <ProductNameLines />
     </span>
   );
@@ -260,8 +261,8 @@ export function Layout({
         <div className={styles.account}>
           <Avatar avatar={avatar} />
           <span>{displayName}</span>
-          <button className={styles.quietButton} type="button" onClick={onLogout}>
-            ログアウト
+          <button className={styles.quietButton} type="button" lang="en" onClick={onLogout}>
+            LOGOFF
           </button>
         </div>
       </aside>
@@ -282,8 +283,8 @@ export function Layout({
         >
           いろいろ
         </NavLink>
-        <button className={styles.mobileLogout} type="button" onClick={onLogout}>
-          ログアウト
+        <button className={styles.mobileLogout} type="button" lang="en" onClick={onLogout}>
+          LOGOFF
         </button>
       </nav>
     </div>

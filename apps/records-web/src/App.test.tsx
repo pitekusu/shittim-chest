@@ -186,20 +186,20 @@ describe("App", () => {
 
     render(<App />);
 
-    const productName = await screen.findByRole("heading", { name: "シッテムの箱 議事録" });
+    const productName = await screen.findByRole("heading", {
+      name: "The Shittim Chest Archive",
+    });
     expect(productName).toBeVisible();
     expect(Array.from(productName.children, (child) => child.textContent)).toEqual([
-      "シッテムの箱",
-      "議事録",
+      "THE SHITTIM",
+      "CHEST ARCHIVE",
     ]);
-    expect(screen.getByRole("link", { name: "Discordでログイン" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AUTHENTICATE" })).toHaveAttribute(
       "href",
       "/api/v1/auth/discord/start?returnTo=%2F",
     );
-    expect(screen.getByText("シッテムの箱BOTの議事録を閲覧できるシステム")).toBeVisible();
-    expect(
-      screen.getByText("吹雪型JCのつどいサーバのメンバーであることを認証します。"),
-    ).toBeVisible();
+    expect(screen.getByText("シッテムの箱 議事録閲覧システム")).toBeVisible();
+    expect(screen.getByText("吹雪型JCのつどいサーバの先生であることを認証します。")).toBeVisible();
   });
 
   it("returns an anonymous visitor to the requested insights page after login", async () => {
@@ -208,7 +208,7 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("link", { name: "Discordでログイン" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "AUTHENTICATE" })).toHaveAttribute(
       "href",
       "/api/v1/auth/discord/start?returnTo=%2Finsights",
     );
@@ -231,7 +231,7 @@ describe("App", () => {
     expect(
       within(screen.getByRole("navigation", { name: "モバイルナビゲーション" })).getByRole(
         "button",
-        { name: "ログアウト" },
+        { name: "LOGOFF" },
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
@@ -554,7 +554,7 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "シッテムの箱 議事録" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
     expect(sessionRequests).toBe(2);
   });
 

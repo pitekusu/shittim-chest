@@ -14,3 +14,11 @@ Vendored WOFF2 checksums:
 | `LINESeedJP-Regular.woff2`   | `0724ad3f3d0d84b2783eabfbe552f326e56adcfd89c315854640fae480d90601` |
 | `LINESeedJP-Bold.woff2`      | `bb4008ed0dfce2d74273f2d58d4b3f67c739c0ea23af49825544fea99aa27450` |
 | `LINESeedJP-ExtraBold.woff2` | `d37cb0244179cee1bc9d1b46af27437523dedb042d2024d9707990672f5d057a` |
+
+## Delogy
+
+- Designer: Rasul Hasan
+- Source and license: <https://befonts.com/delogy-typeface.html>
+- License: Commercial Use Allowed
+- Vendored without conversion or subsetting as `Delogy-Regular.ttf`
+- SHA-256: `7e8c1c12ab4a537da2d0e558cf3cbb3f81f8b2d98420a7f6891a50cee4e01e63`

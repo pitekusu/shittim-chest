@@ -40,7 +40,6 @@ import {
   ErrorPanel,
   formatCompletedDateTime,
   Layout,
-  ProductName,
 } from "./components";
 import { VoteGraph } from "./VoteGraph";
 import styles from "./App.module.css";
@@ -112,18 +111,26 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
         </div>
       </section>
       <section className={styles.loginPanel} aria-labelledby="login-title">
-        <p className={styles.eyebrow}>THE SHITTIM CHEST</p>
-        <ProductName headingId="login-title" />
-        <p className={JAPANESE_PROSE_CLASS}>シッテムの箱BOTの議事録を閲覧できるシステム</p>
+        <h1
+          id="login-title"
+          className={`${styles.productName} ${styles.loginProductName}`}
+          aria-label="The Shittim Chest Archive"
+          lang="en"
+        >
+          <span className={styles.productNameLine}>THE SHITTIM</span>
+          <span className={styles.productNameLine}>CHEST ARCHIVE</span>
+        </h1>
+        <p className={JAPANESE_PROSE_CLASS}>シッテムの箱 議事録閲覧システム</p>
         <a
-          className={styles.primaryButton}
+          className={`${styles.primaryButton} ${styles.loginAuthButton}`}
           href={startPath}
+          lang="en"
           onClick={() => sessionStorage.setItem(LOGIN_TRANSITION_KEY, "pending")}
         >
-          Discordでログイン
+          AUTHENTICATE
         </a>
         <p className={`${styles.loginNote} ${JAPANESE_PROSE_CLASS}`}>
-          吹雪型JCのつどいサーバのメンバーであることを認証します。
+          吹雪型JCのつどいサーバの先生であることを認証します。
         </p>
       </section>
     </main>
@@ -139,7 +146,7 @@ function BrandTransition({ onComplete }: { readonly onComplete: () => void }) {
   return (
     <output className={styles.brandTransition} aria-label="ログインしました">
       <BrandMark />
-      <p>WELCOME, SENSEI.</p>
+      <p lang="en">WELCOME, SENSEI.</p>
     </output>
   );
 }
@@ -302,7 +309,9 @@ function RecordsHome() {
   return (
     <>
       <header className={styles.pageHeader}>
-        <p className={styles.eyebrow}>RECORDS ARCHIVE</p>
+        <p className={styles.eyebrow} lang="en">
+          RECORDS ARCHIVE
+        </p>
         <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           議論の記録
         </h1>
@@ -436,7 +445,9 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
         <Link className={styles.backLink} to="/">
           ← 記録一覧へ
         </Link>
-        <p className={styles.eyebrow}>COMPLETED DEBATE</p>
+        <p className={styles.eyebrow} lang="en">
+          COMPLETED DEBATE
+        </p>
         <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           {record.question}
         </h1>
@@ -508,7 +519,9 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
         className={`${styles.detailSection} ${styles.decisionSection}`}
         aria-labelledby="decision-title"
       >
-        <p className={styles.eyebrow}>FINAL DECISION</p>
+        <p className={styles.eyebrow} lang="en">
+          FINAL DECISION
+        </p>
         <h2 id="decision-title" className={JAPANESE_HEADING_CLASS}>
           最終決定
         </h2>
@@ -583,7 +596,9 @@ function RankingPanel({
         <div className={styles.rankingHeaderLayout}>
           <RankingEmblem variant={variant} />
           <div className={styles.rankingHeaderCopy}>
-            <p className={styles.eyebrow}>RANKING</p>
+            <p className={styles.eyebrow} lang="en">
+              {variant === "wins" ? "VICTORIES" : "REQUESTS"}
+            </p>
             <h2 id={`${title}-title`} className={JAPANESE_HEADING_CLASS}>
               {title}
             </h2>
@@ -779,7 +794,9 @@ function RankingsPage() {
   return (
     <>
       <header className={styles.pageHeader}>
-        <p className={styles.eyebrow}>RECORDS INSIGHTS</p>
+        <p className={styles.eyebrow} lang="en">
+          RECORDS INSIGHTS
+        </p>
         <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           いろいろな記録
         </h1>

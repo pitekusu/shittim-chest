@@ -27,6 +27,7 @@
 }
 
 .brandMarkCompact {
+  flex: 0 0 44px;
   width: 44px;
   height: 44px;
   box-shadow: 0 0 0 5px rgb(88 217 232 / 12%);
@@ -58,8 +59,9 @@
 .eyebrow {
   margin: 0;
   color: var(--records-ink-600);
+  font-family: var(--records-font-display);
   font-size: 0.72rem;
-  font-weight: 800;
+  font-weight: 400;
   letter-spacing: 0.18em;
 }
 
@@ -90,6 +92,9 @@
 
 .productName {
   display: block;
+  font-family: var(--records-font-display);
+  font-weight: 400;
+  letter-spacing: 0.045em;
 }
 
 .productNameLine {
@@ -225,25 +230,43 @@
   border-radius: 32px;
   background: var(--records-surface);
   box-shadow: var(--records-shadow);
+  text-align: center;
   backdrop-filter: blur(24px);
 }
 
 .loginPanel h1 {
-  margin: 18px 0;
-  font-size: clamp(1.9rem, 5vw, 4.25rem);
-  line-height: 1.12;
+  margin: 0 0 24px;
+}
+
+.loginProductName {
+  color: var(--records-ink-900);
+  font-size: clamp(0.95rem, 2vw, 1.6rem);
+  letter-spacing: 0.02em;
+  line-height: 1.24;
+  text-align: center;
+}
+
+.loginAuthButton {
+  min-width: 124px;
+  padding: 9px 16px;
+  font-family: var(--records-font-display);
+  font-size: 0.66rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1;
 }
 
 .loginPanel > p:not(.eyebrow, .loginNote) {
   margin: 0 0 32px;
   color: var(--records-ink-600);
+  font-size: 0.92rem;
   line-height: 1.9;
 }
 
 .loginNote {
   margin: 18px 0 0;
   color: var(--records-ink-600);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
 }
 
 .loadingScreen,
@@ -262,6 +285,11 @@
 .brandTransition p {
   font-weight: 800;
   letter-spacing: 0.18em;
+}
+
+.brandTransition p {
+  font-family: var(--records-font-display);
+  font-weight: 400;
 }
 
 .brandTransition {
@@ -302,6 +330,13 @@
   font-weight: 800;
   line-height: 1.35;
   text-decoration: none;
+}
+
+.brandLink .productName {
+  min-width: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
 }
 
 .sidebar nav {
@@ -346,6 +381,25 @@
 .account .quietButton {
   grid-column: 2;
   justify-self: start;
+  min-height: 44px;
+  padding: 5px 12px;
+  border: 1px solid var(--records-line);
+  background: rgb(255 255 255 / 44%);
+  font-family: var(--records-font-display);
+  font-size: 0.65rem;
+  font-weight: 400;
+  letter-spacing: 0.12em;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.account .quietButton:hover,
+.account .quietButton:focus-visible {
+  border-color: var(--records-line-strong);
+  background: rgb(223 248 251 / 72%);
+  color: var(--records-ink-900);
 }
 
 .mainContent {
@@ -360,7 +414,12 @@
   margin-bottom: 28px;
 }
 
-.pageHeader h1,
+.pageHeader h1 {
+  margin: 10px 0 12px;
+  font-size: clamp(1.75rem, 3vw, 2.8rem);
+  line-height: 1.25;
+}
+
 .recordHeader h1 {
   margin: 10px 0 12px;
   font-size: clamp(2rem, 4vw, 3.8rem);
@@ -1433,6 +1492,23 @@
 }
 
 @media (max-width: 899px) {
+  .loginShell {
+    grid-template-columns: 1fr;
+  }
+
+  .loginVisual {
+    min-height: 36vh;
+  }
+
+  .loginPanel {
+    width: auto;
+    margin: -30px 16px 24px;
+  }
+
+  .orbit {
+    width: 80vw;
+  }
+
   .rankingsGrid {
     grid-template-columns: 1fr;
   }
@@ -1447,19 +1523,6 @@
 }
 
 @media (max-width: 767px) {
-  .loginShell {
-    grid-template-columns: 1fr;
-  }
-  .loginVisual {
-    min-height: 36vh;
-  }
-  .loginPanel {
-    width: auto;
-    margin: -30px 16px 24px;
-  }
-  .orbit {
-    width: 80vw;
-  }
   .appShell {
     display: block;
     padding-bottom: 70px;
@@ -1583,13 +1646,15 @@
   .mobileLogout {
     min-height: 48px;
     padding: 0 16px;
-    border: 0;
+    border: 1px solid var(--records-line);
     border-radius: 14px;
-    background: transparent;
+    background: rgb(255 255 255 / 48%);
     color: var(--records-ink-600);
     cursor: pointer;
-    font: inherit;
-    font-weight: 700;
+    font-family: var(--records-font-display);
+    font-size: 0.65rem;
+    font-weight: 400;
+    letter-spacing: 0.1em;
   }
   .mobileLogout:hover,
   .mobileLogout:focus-visible {
