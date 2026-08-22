@@ -317,6 +317,64 @@ describe("App", () => {
     expect(unobserve).toHaveBeenCalledOnce();
   });
 
+  it("does not drain remaining pages automatically while a local filter is active", async () => {
+    let notify: IntersectionObserverCallback | undefined;
+    class MockIntersectionObserver implements IntersectionObserver {
+      public readonly root = null;
+      public readonly rootMargin = "320px 0px";
+      public readonly scrollMargin = "";
+      public readonly thresholds = [0];
+
+      public constructor(callback: IntersectionObserverCallback) {
+        notify = callback;
+      }
+
+      public observe = vi.fn<(target: Element) => void>();
+      public disconnect = vi.fn<() => void>();
+      public unobserve = vi.fn<(target: Element) => void>();
+      public takeRecords = () => [];
+    }
+    vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+    const first = listResponse().items[0]!;
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        requests.push(path);
+        if (path === "/api/v1/session") {
+          return Promise.resolve(response(authenticatedSession()));
+        }
+        if (path.includes("cursor=next-page")) {
+          return Promise.resolve(response({ schemaVersion: 1, items: [], nextCursor: null }));
+        }
+        if (path.startsWith("/api/v1/records?")) {
+          return Promise.resolve(
+            response({ schemaVersion: 1, items: [first], nextCursor: "next-page" }),
+          );
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText(first.questionPreview)).toBeVisible();
+    fireEvent.change(screen.getByLabelText("フリーワード検索"), {
+      target: { value: "一致しない検索" },
+    });
+    notify?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+
+    await waitFor(() => {
+      expect(requests.filter((path) => path.includes("cursor=next-page"))).toHaveLength(0);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "検索対象をさらに読み込む" }));
+    await waitFor(() => {
+      expect(requests.filter((path) => path.includes("cursor=next-page"))).toHaveLength(1);
+    });
+  });
+
   it("returns to login when a protected request reports an expired session", async () => {
     let sessionRequests = 0;
     vi.stubGlobal(

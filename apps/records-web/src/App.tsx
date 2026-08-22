@@ -185,6 +185,9 @@ function RecordsHome() {
   const [search, setSearch] = useState("");
   const [requester, setRequester] = useState("");
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const localFiltersActive = search.trim().length > 0 || requester !== "";
+  const localFiltersActiveRef = useRef(localFiltersActive);
+  localFiltersActiveRef.current = localFiltersActive;
   const records = useInfiniteQuery({
     queryKey: ["records", winner, sort],
     initialPageParam: undefined as string | undefined,
@@ -271,13 +274,14 @@ function RecordsHome() {
       !hasNextPage ||
       isFetchingNextPage ||
       isFetchNextPageError ||
+      localFiltersActive ||
       !("IntersectionObserver" in window)
     ) {
       return;
     }
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (!entry?.isIntersecting) return;
+        if (!entry?.isIntersecting || localFiltersActiveRef.current) return;
         observer.unobserve(sentinel);
         void fetchNextPage();
       },
@@ -285,7 +289,7 @@ function RecordsHome() {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError]);
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError, localFiltersActive]);
   const error = records.error instanceof RecordsApiError ? records.error : undefined;
   return (
     <>
@@ -363,6 +367,14 @@ function RecordsHome() {
               onClick={() => void fetchNextPage()}
             >
               次の記録をもう一度読み込む
+            </button>
+          ) : localFiltersActive ? (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              onClick={() => void fetchNextPage()}
+            >
+              検索対象をさらに読み込む
             </button>
           ) : "IntersectionObserver" in window ? (
             <span>この位置までスクロールすると、次の記録を自動で読み込みます。</span>
