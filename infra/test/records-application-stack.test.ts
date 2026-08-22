@@ -163,6 +163,14 @@ describe("RecordsApplicationStack", () => {
         },
       ],
     });
+    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 1);
+    template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+      FunctionName: {
+        Ref: Match.stringLikeRegexp("^RankingFunction"),
+      },
+      MaximumRetryAttempts: 0,
+      Qualifier: "$LATEST",
+    });
   });
 
   test("keeps Auth, Read, and Ranking IAM resources exact and disjoint", () => {

@@ -286,6 +286,9 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    this.rankingFunction.configureAsyncInvoke({
+      retryAttempts: 0,
+    });
     new events.Rule(this, "RankingSchedule", {
       description: "Rebuild the Records ranking snapshots every 15 minutes",
       schedule: events.Schedule.rate(Duration.minutes(15)),
