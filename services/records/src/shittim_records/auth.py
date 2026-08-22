@@ -19,7 +19,6 @@ SESSION_COOKIE_NAME = "__Host-shittim-records-session"
 CSRF_COOKIE_NAME = "__Host-shittim-records-csrf"
 OAUTH_TTL = timedelta(minutes=10)
 SESSION_TTL = timedelta(hours=12)
-PROFILE_TTL = timedelta(days=30)
 DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 HOSTNAME_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
@@ -145,7 +144,6 @@ class AuthStore(Protocol):
         *,
         session_hash: str,
         session: SessionRecord,
-        profile_expires_at: int,
     ) -> None: ...
 
     def get_session(self, *, session_hash: str) -> SessionRecord | None: ...
@@ -271,7 +269,6 @@ class AuthService:
                 guild_verified_at=now.isoformat(),
                 expires_at=expires_at,
             ),
-            profile_expires_at=int((now + PROFILE_TTL).timestamp()),
         )
         return OAuthCompletion(
             location=f"{self._configuration.oauth.allowed_origin}{claimed.return_to}",

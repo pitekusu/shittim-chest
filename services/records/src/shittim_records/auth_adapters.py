@@ -163,7 +163,6 @@ class DynamoAuthStore:
         *,
         session_hash: str,
         session: SessionRecord,
-        profile_expires_at: int,
     ) -> None:
         self._client.transact_write_items(
             TransactItems=[
@@ -201,7 +200,6 @@ class DynamoAuthStore:
                                 "display_name": session.display_name,
                                 "avatar_asset_key": session.avatar_asset_key,
                                 "updated_at": session.guild_verified_at,
-                                "expiresAt": profile_expires_at,
                             }
                         ),
                     }

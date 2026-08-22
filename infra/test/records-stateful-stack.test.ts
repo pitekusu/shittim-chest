@@ -26,7 +26,7 @@ function synthesize(): {
 }
 
 describe("RecordsStatefulStack", () => {
-  test("creates retained archive and statistics tables plus an expiring session table", () => {
+  test("retains every table while expiring only ephemeral session records", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
@@ -50,9 +50,14 @@ describe("RecordsStatefulStack", () => {
       });
     }
     template.hasResource("AWS::DynamoDB::Table", {
-      DeletionPolicy: "Delete",
-      UpdateReplacePolicy: "Delete",
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
       Properties: Match.objectLike({
+        DeletionProtectionEnabled: true,
+        PointInTimeRecoverySpecification: {
+          PointInTimeRecoveryEnabled: true,
+          RecoveryPeriodInDays: 35,
+        },
         TableName: "shittim-chest-production-records-sessions",
         TimeToLiveSpecification: { AttributeName: "expiresAt", Enabled: true },
       }),

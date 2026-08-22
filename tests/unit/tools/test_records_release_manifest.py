@@ -180,6 +180,45 @@ def edge_alias_migration(logical_id: str, record_type: str) -> dict[str, object]
     }
 
 
+def edge_certificate_migration() -> dict[str, object]:
+    properties = {
+        "DomainName": {"Ref": "RecordsPublicHostname"},
+        "ValidationMethod": "DNS",
+        "Tags": [{"Key": "Project", "Value": "shittim-chest"}],
+    }
+    metadata = {"aws:cdk:path": "RecordsEdge/Certificate/Resource"}
+    return {
+        "ResourceChange": {
+            "Action": "Modify",
+            "LogicalResourceId": "Certificate4E7ABB08",
+            "ResourceType": "AWS::CertificateManager::Certificate",
+            "Replacement": "True",
+            "Details": [
+                {
+                    "Target": {
+                        "Attribute": "Properties",
+                        "Name": "KeyAlgorithm",
+                        "RequiresRecreation": "Always",
+                        "Path": "/Properties/KeyAlgorithm",
+                        "BeforeValue": "RSA_2048",
+                        "AfterValue": "EC_prime256v1",
+                        "AttributeChangeType": "Modify",
+                    },
+                    "Evaluation": "Static",
+                    "ChangeSource": "DirectModification",
+                }
+            ],
+            "BeforeContext": json.dumps({"Properties": properties, "Metadata": metadata}),
+            "AfterContext": json.dumps(
+                {
+                    "Properties": {**properties, "KeyAlgorithm": "EC_prime256v1"},
+                    "Metadata": metadata,
+                }
+            ),
+        }
+    }
+
+
 def test_change_set_safety_allows_only_expected_immutable_replacements() -> None:
     validate_change_set_safety(
         {
@@ -196,6 +235,7 @@ def test_change_set_safety_allows_only_expected_immutable_replacements() -> None
     validate_change_set_safety(
         {
             "Changes": [
+                edge_certificate_migration(),
                 edge_alias_migration("Ipv4AliasF16765B0", "A"),
                 edge_alias_migration("Ipv6AliasBCE03BB2", "AAAA"),
             ]
@@ -205,6 +245,18 @@ def test_change_set_safety_allows_only_expected_immutable_replacements() -> None
         expected_edge_zone_id=EDGE_ZONE_ID,
         expected_edge_zone_name=EDGE_ZONE_NAME,
     )
+
+
+def test_change_set_safety_rejects_widened_certificate_replacement() -> None:
+    migration = edge_certificate_migration()
+    change = migration["ResourceChange"]
+    assert isinstance(change, dict)
+    after = json.loads(str(change["AfterContext"]))
+    after["Properties"]["DomainName"] = "other.example.com"
+    change["AfterContext"] = json.dumps(after)
+
+    with pytest.raises(ValueError, match="safety rejected"):
+        validate_change_set_safety({"Changes": [migration]}, logical_name="edge")
 
 
 def test_change_set_safety_rejects_future_or_widened_alias_replacements() -> None:

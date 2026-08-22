@@ -49,9 +49,14 @@ export class RecordsStatefulStack extends Stack {
       partitionKey: { name: "PK", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "SK", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      deletionProtection: true,
       encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: {
+        pointInTimeRecoveryEnabled: true,
+        recoveryPeriodInDays: 35,
+      },
       timeToLiveAttribute: "expiresAt",
-      removalPolicy: RemovalPolicy.DESTROY,
+      removalPolicy: RemovalPolicy.RETAIN,
     });
 
     const accessLogs = new s3.Bucket(this, "MediaAccessLogs", {
@@ -82,12 +87,6 @@ export class RecordsStatefulStack extends Stack {
       reason:
         "This queue is the terminal failure destination for the bounded DynamoDB Streams retry policy.",
     });
-    Validations.of(this.sessionTable).acknowledge({
-      id: "AwsSolutions-DDB3",
-      reason:
-        "Sessions are short-lived, TTL-controlled, revocable authentication state and are intentionally not recoverable.",
-    });
-
     Validations.of(accessLogs).acknowledge({
       id: "AwsSolutions-S1",
       reason: "The access-log destination cannot recursively log to itself.",

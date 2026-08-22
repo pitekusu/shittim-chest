@@ -27,6 +27,7 @@ _EDGE_ALIAS_TYPES = {
     "Ipv4AliasF16765B0": "A",
     "Ipv6AliasBCE03BB2": "AAAA",
 }
+_EDGE_CERTIFICATE_LOGICAL_ID = "Certificate4E7ABB08"
 
 
 def create_change_set_plan(
@@ -119,6 +120,12 @@ def validate_change_set_safety(
             )
         elif (
             logical_name == "edge"
+            and resource_type == "AWS::CertificateManager::Certificate"
+            and logical_id == _EDGE_CERTIFICATE_LOGICAL_ID
+        ):
+            safe = _is_expected_edge_certificate_migration(change)
+        elif (
+            logical_name == "edge"
             and resource_type == "AWS::Route53::RecordSet"
             and logical_id in _EDGE_ALIAS_TYPES
         ):
@@ -145,6 +152,65 @@ def validate_change_set_safety(
             "Records Change Set safety rejected: "
             + json.dumps(invalid, ensure_ascii=True, separators=(",", ":"))
         )
+
+
+def _is_expected_edge_certificate_migration(change: Mapping[str, object]) -> bool:
+    """Allow only the one-time RSA 2048 to ECDSA P-256 certificate replacement."""
+
+    details = change.get("Details")
+    if (
+        change.get("Action") != "Modify"
+        or change.get("Replacement") != "True"
+        or not isinstance(details, list)
+        or len(details) != 1
+    ):
+        return False
+    detail = details[0]
+    if not isinstance(detail, dict) or set(detail) != {
+        "Target",
+        "Evaluation",
+        "ChangeSource",
+    }:
+        return False
+    target = detail.get("Target")
+    if not isinstance(target, dict):
+        return False
+    required_target = {
+        "Attribute": "Properties",
+        "Name": "KeyAlgorithm",
+        "RequiresRecreation": "Always",
+        "Path": "/Properties/KeyAlgorithm",
+        "AfterValue": "EC_prime256v1",
+        "AttributeChangeType": "Modify",
+    }
+    if any(target.get(key) != value for key, value in required_target.items()):
+        return False
+    if set(target) - (set(required_target) | {"BeforeValue"}):
+        return False
+    if target.get("BeforeValue") not in (None, "RSA_2048"):
+        return False
+    if detail["Evaluation"] != "Static" or detail["ChangeSource"] != "DirectModification":
+        return False
+
+    before = _json_object(change.get("BeforeContext"))
+    after = _json_object(change.get("AfterContext"))
+    if before is None or after is None or set(before) != {"Properties", "Metadata"}:
+        return False
+    if set(after) != {"Properties", "Metadata"} or before["Metadata"] != after["Metadata"]:
+        return False
+    before_properties = before.get("Properties")
+    after_properties = after.get("Properties")
+    if not isinstance(before_properties, dict) or not isinstance(after_properties, dict):
+        return False
+    if after_properties.get("KeyAlgorithm") != "EC_prime256v1":
+        return False
+    if before_properties.get("KeyAlgorithm", "RSA_2048") != "RSA_2048":
+        return False
+    before_without_algorithm = dict(before_properties)
+    after_without_algorithm = dict(after_properties)
+    before_without_algorithm.pop("KeyAlgorithm", None)
+    after_without_algorithm.pop("KeyAlgorithm", None)
+    return before_without_algorithm == after_without_algorithm
 
 
 def _is_expected_edge_alias_migration(

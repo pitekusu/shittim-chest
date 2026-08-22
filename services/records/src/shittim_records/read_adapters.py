@@ -147,7 +147,7 @@ class DynamoRecordsReader:
             key = item.get("SK")
             name = item.get("display_name")
             avatar = item.get("avatar_asset_key")
-            expires_at = item.get("expiresAt")
+            legacy_expires_at = item.get("expiresAt")
             if (
                 item.get("schema_version") != 1
                 or item.get("record_type") != "requester_profile"
@@ -156,15 +156,19 @@ class DynamoRecordsReader:
                 or not isinstance(name, str)
                 or not name.strip()
                 or (avatar is not None and not isinstance(avatar, str))
-                or isinstance(expires_at, bool)
-                or not isinstance(expires_at, int)
+                or (
+                    legacy_expires_at is not None
+                    and (
+                        isinstance(legacy_expires_at, bool)
+                        or not isinstance(legacy_expires_at, int)
+                    )
+                )
                 or key in profiles
             ):
                 raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
             profiles[key] = RequesterProfile(
                 display_name=name,
                 avatar_asset_key=avatar,
-                expires_at=expires_at,
             )
         return profiles
 

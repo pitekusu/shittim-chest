@@ -11,6 +11,7 @@ from typing import Any, cast
 import boto3
 import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
+from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.adapters import ArchiveRepository
@@ -117,8 +118,16 @@ def test_oauth_claim_session_and_archive_pagination(
         guild_verified_at="2026-08-17T00:00:00+00:00",
         expires_at=200,
     )
-    store.create_session(session_hash="session-hash", session=session, profile_expires_at=300)
+    store.create_session(session_hash="session-hash", session=session)
     assert store.get_session(session_hash="session-hash") == session
+    profile_response = dynamodb_client.get_item(
+        TableName=session_table,
+        Key=marshal_item({"PK": "PROFILE#REQUESTER", "SK": "requester"}),
+        ConsistentRead=True,
+    )
+    profile = unmarshal_item(profile_response["Item"])
+    assert profile["display_name"] == "Requester"
+    assert "expiresAt" not in profile
     store.delete_session(session_hash="session-hash")
     assert store.get_session(session_hash="session-hash") is None
 
