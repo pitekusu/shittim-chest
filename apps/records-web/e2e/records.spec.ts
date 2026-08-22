@@ -251,6 +251,76 @@ test("record detail stays inside the mobile viewport with long Japanese content"
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
 });
 
+test("vote graph keeps distinct routes, interactions, and responsive layouts", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mockAuthenticatedApi(page);
+  await page.goto(`/records/${RECORD_ID}`);
+  await page.evaluate(() => document.fonts.ready);
+
+  const graph = page.getByTestId("vote-graph");
+  await graph.scrollIntoViewIfNeeded();
+  await expect(graph).toHaveAttribute("data-layout", "wide");
+  await expect(graph).toHaveAttribute("data-revealed", "true");
+  await expect(graph.getByLabel("アロナがプラナに投票")).toBeVisible();
+  await expect(graph.getByLabel("プラナがアロナに投票")).toBeVisible();
+  await expect(graph.getByLabel("安倍晋三AIがアロナに投票")).toBeVisible();
+
+  const beforeAnimation = await graph.boundingBox();
+  await page.waitForTimeout(1_500);
+  const afterAnimation = await graph.boundingBox();
+  expect(beforeAnimation).not.toBeNull();
+  expect(afterAnimation).not.toBeNull();
+  expect(Math.abs(afterAnimation!.width - beforeAnimation!.width)).toBeLessThan(0.5);
+  expect(Math.abs(afterAnimation!.height - beforeAnimation!.height)).toBeLessThan(0.5);
+  await expect(graph.locator('[data-part="line"]').first()).toHaveCSS("stroke-dasharray", "none");
+
+  await expect(graph).toHaveScreenshot("vote-graph-desktop.png", {
+    animations: "disabled",
+    maxDiffPixels: 20,
+  });
+
+  const aronaNode = graph.getByRole("button", { name: "アロナに関係する投票を強調" });
+  await aronaNode.hover();
+  await expect(graph.locator('[data-vote-key="participant-a-participant-b"]')).toHaveAttribute(
+    "data-relation",
+    "outgoing",
+  );
+  await expect(graph).toHaveScreenshot("vote-graph-desktop-hover.png", {
+    animations: "disabled",
+    maxDiffPixels: 20,
+  });
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(graph).toHaveAttribute("data-layout", "wide");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
+
+  await page.setViewportSize({ width: 768, height: 900 });
+  await expect(graph).toHaveAttribute("data-layout", "compact");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(768);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(graph).toHaveAttribute("data-layout", "compact");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await expect(graph).toHaveScreenshot("vote-graph-mobile-390.png", {
+    animations: "disabled",
+    maxDiffPixels: 20,
+  });
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.reload();
+  await graph.scrollIntoViewIfNeeded();
+  await expect(graph.locator('[data-part="line"]').first()).toHaveCSS("animation-name", "none");
+  await expect(graph.locator('[data-part="flow"]').first()).toHaveCSS("display", "none");
+  await expect(graph.locator('[data-part="arrow"]').first()).toHaveCSS("opacity", "1");
+  await expect(graph).toHaveScreenshot("vote-graph-reduced-motion.png", {
+    animations: "disabled",
+    maxDiffPixels: 20,
+  });
+});
+
 test("reduced motion skips the long login transition", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAuthenticatedApi(page);
