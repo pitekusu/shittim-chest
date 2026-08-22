@@ -22,6 +22,15 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Delogy";
+  src: url("../assets/fonts/Delogy-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0020-007e;
+}
+
 :root {
   font-family: "LINE Seed JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
   color-scheme: light;
@@ -41,6 +50,7 @@
   --records-shadow: 0 18px 50px rgb(45 119 148 / 14%);
   --records-shadow-soft: 0 12px 34px rgb(45 119 148 / 9%);
   --records-radius-card: 24px;
+  --records-font-display: "Delogy", "LINE Seed JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
 }
 
 * {

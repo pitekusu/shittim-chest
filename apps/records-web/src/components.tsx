@@ -198,14 +198,14 @@ export function BrandMark({ compact = false }: { readonly compact?: boolean }) {
 function ProductNameLines() {
   return (
     <>
-      <span className={styles.productNameLine}>シッテムの箱</span>
-      <span className={styles.productNameLine}>議事録</span>
+      <span className={styles.productNameLine}>THE SHITTIM</span>
+      <span className={styles.productNameLine}>CHEST ARCHIVE</span>
     </>
   );
 }
 
 export function ProductName({ headingId }: { readonly headingId?: string }) {
-  const accessibleName = "シッテムの箱 議事録";
+  const accessibleName = "The Shittim Chest Archive";
   if (headingId) {
     return (
       <h1
@@ -261,7 +261,7 @@ export function Layout({
           <Avatar avatar={avatar} />
           <span>{displayName}</span>
           <button className={styles.quietButton} type="button" onClick={onLogout}>
-            ログアウト
+            LOGOFF
           </button>
         </div>
       </aside>
@@ -283,7 +283,7 @@ export function Layout({
           いろいろ
         </NavLink>
         <button className={styles.mobileLogout} type="button" onClick={onLogout}>
-          ログアウト
+          LOGOFF
         </button>
       </nav>
     </div>

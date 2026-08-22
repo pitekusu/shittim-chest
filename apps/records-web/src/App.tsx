@@ -40,7 +40,6 @@ import {
   ErrorPanel,
   formatCompletedDateTime,
   Layout,
-  ProductName,
 } from "./components";
 import { VoteGraph } from "./VoteGraph";
 import styles from "./App.module.css";
@@ -112,18 +111,24 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
         </div>
       </section>
       <section className={styles.loginPanel} aria-labelledby="login-title">
-        <p className={styles.eyebrow}>THE SHITTIM CHEST</p>
-        <ProductName headingId="login-title" />
-        <p className={JAPANESE_PROSE_CLASS}>シッテムの箱BOTの議事録を閲覧できるシステム</p>
+        <h1
+          id="login-title"
+          className={`${styles.productName} ${styles.loginProductName}`}
+          aria-label="The Shittim Chest Archive"
+        >
+          <span className={styles.productNameLine}>THE SHITTIM</span>
+          <span className={styles.productNameLine}>CHEST ARCHIVE</span>
+        </h1>
+        <p className={JAPANESE_PROSE_CLASS}>シッテムの箱 議事録閲覧システム</p>
         <a
-          className={styles.primaryButton}
+          className={`${styles.primaryButton} ${styles.loginAuthButton}`}
           href={startPath}
           onClick={() => sessionStorage.setItem(LOGIN_TRANSITION_KEY, "pending")}
         >
-          Discordでログイン
+          AUTHENTICATE
         </a>
         <p className={`${styles.loginNote} ${JAPANESE_PROSE_CLASS}`}>
-          吹雪型JCのつどいサーバのメンバーであることを認証します。
+          吹雪型JCのつどいサーバの先生であることを認証します。
         </p>
       </section>
     </main>
@@ -583,7 +588,7 @@ function RankingPanel({
         <div className={styles.rankingHeaderLayout}>
           <RankingEmblem variant={variant} />
           <div className={styles.rankingHeaderCopy}>
-            <p className={styles.eyebrow}>RANKING</p>
+            <p className={styles.eyebrow}>{variant === "wins" ? "VICTORIES" : "REQUESTS"}</p>
             <h2 id={`${title}-title`} className={JAPANESE_HEADING_CLASS}>
               {title}
             </h2>
