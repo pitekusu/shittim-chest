@@ -97,7 +97,8 @@ def test_detail_query_reads_all_pages_strongly_consistently() -> None:
     assert client.queries[1]["ExclusiveStartKey"] == cursor
 
 
-def test_profiles_retry_unprocessed_keys_and_reject_duplicates() -> None:
+@pytest.mark.parametrize("legacy_expiry", (None, 2_000_000_000))
+def test_profiles_are_permanent_and_accept_legacy_expiry(legacy_expiry: int | None) -> None:
     profile = marshal_item(
         {
             "PK": "PROFILE#REQUESTER",
@@ -106,7 +107,7 @@ def test_profiles_retry_unprocessed_keys_and_reject_duplicates() -> None:
             "record_type": "requester_profile",
             "display_name": "Requester",
             "avatar_asset_key": None,
-            "expiresAt": 2_000_000_000,
+            **({"expiresAt": legacy_expiry} if legacy_expiry is not None else {}),
         }
     )
     client = FakeDynamo(

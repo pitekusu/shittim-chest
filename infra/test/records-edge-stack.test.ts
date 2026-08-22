@@ -98,6 +98,9 @@ describe("RecordsEdgeStack", () => {
       expect(json.Parameters[parameter].Default).toBeUndefined();
     }
     template.resourceCountIs("AWS::CertificateManager::Certificate", 1);
+    template.hasResourceProperties("AWS::CertificateManager::Certificate", {
+      KeyAlgorithm: "EC_prime256v1",
+    });
     template.resourceCountIs("AWS::Route53::RecordSet", 2);
     template.resourcePropertiesCountIs(
       "AWS::Route53::RecordSet",

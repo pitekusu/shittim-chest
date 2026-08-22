@@ -52,7 +52,6 @@ class FakeReader:
             key: RequesterProfile(
                 display_name="Current Requester",
                 avatar_asset_key=f"requesters/{key}/avatar.webp",
-                expires_at=int((NOW + timedelta(days=1)).timestamp()),
             )
             for key in requester_keys
         }

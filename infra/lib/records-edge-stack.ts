@@ -59,6 +59,7 @@ export class RecordsEdgeStack extends Stack {
     );
     const certificate = new acm.Certificate(this, "Certificate", {
       domainName: publicHostname.valueAsString,
+      keyAlgorithm: acm.KeyAlgorithm.EC_PRIME256V1,
       validation: acm.CertificateValidation.fromDns(hostedZone),
     });
 

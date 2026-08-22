@@ -36,7 +36,6 @@ class FakeStore:
         self.oauth: dict[str, OAuthState] = {}
         self.claimed: set[str] = set()
         self.sessions: dict[str, SessionRecord] = {}
-        self.profile_expiry: int | None = None
 
     def create_oauth_state(self, *, state_hash: str, state: OAuthState) -> None:
         assert state_hash not in self.oauth
@@ -67,10 +66,8 @@ class FakeStore:
         *,
         session_hash: str,
         session: SessionRecord,
-        profile_expires_at: int,
     ) -> None:
         self.sessions[session_hash] = session
-        self.profile_expiry = profile_expires_at
 
     def get_session(self, *, session_hash: str) -> SessionRecord | None:
         return self.sessions.get(session_hash)
@@ -221,8 +218,6 @@ def test_callback_claims_once_and_stores_only_hashed_session_values() -> None:
     assert completed.location == "https://records.example.invalid/insights"
     assert "HttpOnly" in completed.session_cookie
     assert "HttpOnly" not in completed.csrf_cookie
-    assert store.profile_expiry == int((NOW + timedelta(seconds=1, days=30)).timestamp())
-
     with pytest.raises(AuthFailure) as caught:
         auth.complete(
             code="another-code",

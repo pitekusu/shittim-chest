@@ -61,7 +61,6 @@ class ArchivePage:
 class RequesterProfile:
     display_name: str
     avatar_asset_key: str | None
-    expires_at: int
 
 
 class RecordsReader(Protocol):
@@ -204,7 +203,7 @@ class RecordsReadService:
             if isinstance(item.get("requester_key"), str)
         )
         profiles = self._reader.load_profiles(requester_keys=tuple(dict.fromkeys(requester_keys)))
-        items = tuple(self._list_item(item, profiles, now=_utc(now)) for item in page.items)
+        items = tuple(self._list_item(item, profiles) for item in page.items)
         next_cursor = None
         if page.last_evaluated_key is not None:
             next_cursor = self._cursor_codec.encode(
@@ -243,7 +242,7 @@ class RecordsReadService:
         profiles = self._reader.load_profiles(requester_keys=(requester_key,))
         requester = self._requester(
             meta,
-            _unexpired_profile(profiles.get(requester_key), now=_utc(now)),
+            profiles.get(requester_key),
         )
         stored_winner = _required_text(meta, "winner")
         decision_winner = _required_text(by_key["DECISION"], "winner")
@@ -301,8 +300,6 @@ class RecordsReadService:
         self,
         item: DynamoItem,
         profiles: dict[str, RequesterProfile],
-        *,
-        now: datetime,
     ) -> RecordListItem:
         _validate_meta_item(item)
         requester_key = _required_text(item, "requester_key")
@@ -318,7 +315,7 @@ class RecordsReadService:
                     "questionPreview": question,
                     "requester": self._requester(
                         item,
-                        _unexpired_profile(profiles.get(requester_key), now=now),
+                        profiles.get(requester_key),
                     ),
                     "participants": self._participants(item),
                     "result": self._result(item),
@@ -551,16 +548,6 @@ def _validate_archive_items(items: dict[str, DynamoItem], *, record_id: str) -> 
             or item.get("record_type") != expected_types[sk]
         ):
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
-
-
-def _unexpired_profile(
-    profile: RequesterProfile | None,
-    *,
-    now: datetime,
-) -> RequesterProfile | None:
-    if profile is None or profile.expires_at <= int(_utc(now).timestamp()):
-        return None
-    return profile
 
 
 def _canonical(value: object) -> bytes:
