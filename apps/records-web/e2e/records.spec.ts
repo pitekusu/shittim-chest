@@ -276,6 +276,18 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   const requests = page.getByRole("region", { name: "依頼回数ランキング" });
   await expect(wins.getByText("VICTORIES", { exact: true })).toBeVisible();
   await expect(requests.getByText("REQUESTS", { exact: true })).toBeVisible();
+  for (const [panel, label] of [
+    [wins, "VICTORIES"],
+    [requests, "REQUESTS"],
+  ] as const) {
+    const emblemBox = await panel.locator("header [aria-hidden='true']").first().boundingBox();
+    const headingBox = await panel.getByText(label, { exact: true }).locator("..").boundingBox();
+    expect(emblemBox).not.toBeNull();
+    expect(headingBox).not.toBeNull();
+    expect(
+      Math.abs(emblemBox!.y + emblemBox!.height / 2 - (headingBox!.y + headingBox!.height / 2)),
+    ).toBeLessThanOrEqual(2);
+  }
   await expect(wins.getByRole("listitem")).toHaveCount(3);
   await expect(wins.getByRole("meter")).toHaveCount(3);
   await expect(
