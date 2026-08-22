@@ -18,7 +18,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     assert first == expected_documents()
     assert set(first) == {"openapi.json", "records-api.schema.json", "records-invariants.ts"}
     json_schema = json.loads(first["records-api.schema.json"])
-    assert len(json_schema["oneOf"]) == 4
+    assert len(json_schema["oneOf"]) == 5
     assert "#/components/schemas/" not in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/ImageAvatarRef"' in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/PlaceholderAvatarRef"' in first["records-api.schema.json"].decode()
@@ -73,6 +73,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "/api/v1/logout",
         "/api/v1/records",
         "/api/v1/records/{recordId}",
+        "/api/v1/insights/rankings",
     }
     assert openapi["paths"]["/api/v1/auth/discord/start"]["get"]["security"] == []
     return_to_schema = openapi["paths"]["/api/v1/auth/discord/start"]["get"]["parameters"][0][

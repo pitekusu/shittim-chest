@@ -348,6 +348,83 @@
         "title": "PlaceholderAvatarRef",
         "type": "object"
       },
+      "RankingEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageAvatarRef"
+              },
+              {
+                "$ref": "#/components/schemas/PlaceholderAvatarRef"
+              }
+            ],
+            "title": "Avatar"
+          },
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "displayName": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Displayname",
+            "type": "string"
+          },
+          "rank": {
+            "minimum": 1,
+            "title": "Rank",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rank",
+          "displayName",
+          "avatar",
+          "count"
+        ],
+        "title": "RankingEntry",
+        "type": "object"
+      },
+      "RankingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "generatedAt": {
+            "format": "date-time",
+            "title": "Generatedat",
+            "type": "string"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/RankingEntry"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "wins": {
+            "items": {
+              "$ref": "#/components/schemas/RankingEntry"
+            },
+            "title": "Wins",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "wins",
+          "requests",
+          "generatedAt"
+        ],
+        "title": "RankingsResponse",
+        "type": "object"
+      },
       "RecordDetailResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1151,6 +1228,93 @@
           }
         },
         "security": []
+      }
+    },
+    "/api/v1/insights/rankings": {
+      "get": {
+        "operationId": "getRankings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RankingsResponse"
+                }
+              }
+            },
+            "description": "Current Records rankings"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
       }
     },
     "/api/v1/logout": {

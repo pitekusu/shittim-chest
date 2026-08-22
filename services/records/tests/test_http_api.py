@@ -18,7 +18,12 @@ from shittim_records.auth import (
 from shittim_records.auth import (
     session_hash as hash_session,
 )
-from shittim_records.contracts import RecordListResponse
+from shittim_records.contracts import (
+    PlaceholderAvatarRef,
+    RankingEntry,
+    RankingsResponse,
+    RecordListResponse,
+)
 from shittim_records.http_api import AuthHttpController, ReadHttpController
 from shittim_records.read_api import ListQuery
 
@@ -97,6 +102,25 @@ class FakeRecords:
 
     def get_record(self, **_kwargs: Any) -> None:
         raise AssertionError("detail should not be called")
+
+    def get_rankings(self, **_kwargs: Any) -> RankingsResponse:
+        return RankingsResponse(
+            schema_version=1,
+            wins=(
+                RankingEntry(
+                    rank=1,
+                    display_name="Arona",
+                    avatar=PlaceholderAvatarRef(
+                        kind="placeholder",
+                        alt="Arona avatar",
+                        fallback_variant="cyan",
+                    ),
+                    count=3,
+                ),
+            ),
+            requests=(),
+            generated_at=NOW,
+        )
 
 
 def session(*, avatar: bool = False, expired: bool = False) -> SessionRecord:
@@ -269,6 +293,44 @@ def test_records_rejects_removed_date_filters() -> None:
 
     assert response["statusCode"] == 400
     assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
+
+
+def test_rankings_route_requires_authentication_and_rejects_query_parameters() -> None:
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, FakeRecords()),
+    )
+    route = "GET /api/v1/insights/rankings"
+
+    unauthorized = controller.handle(event(route), now=NOW)
+    successful = controller.handle(
+        event(route, cookies=[f"{SESSION_COOKIE_NAME}=session-token"]),
+        now=NOW,
+    )
+    invalid = controller.handle(
+        event(
+            route,
+            query="unexpected=value",
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+        ),
+        now=NOW,
+    )
+
+    assert unauthorized["statusCode"] == 401
+    assert successful["statusCode"] == 200
+    assert json.loads(successful["body"])["wins"][0] == {
+        "rank": 1,
+        "displayName": "Arona",
+        "avatar": {
+            "kind": "placeholder",
+            "url": None,
+            "alt": "Arona avatar",
+            "fallbackVariant": "cyan",
+        },
+        "count": 3,
+    }
+    assert invalid["statusCode"] == 400
 
 
 def test_unknown_auth_failure_is_content_free() -> None:

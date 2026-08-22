@@ -225,6 +225,15 @@ def build_openapi() -> dict[str, Any]:
                     },
                 }
             },
+            "/api/v1/insights/rankings": {
+                "get": {
+                    "operationId": "getRankings",
+                    "responses": {
+                        "200": _response("RankingsResponse", "Current Records rankings"),
+                        **error_responses,
+                    },
+                }
+            },
         },
         "components": {
             "schemas": _component_schemas(reference_prefix="#/components/schemas/"),

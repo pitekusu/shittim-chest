@@ -11,6 +11,8 @@ import {
   aws_apigatewayv2 as apigatewayv2,
   aws_apigatewayv2_integrations as integrations,
   aws_dynamodb as dynamodb,
+  aws_events as events,
+  aws_events_targets as eventTargets,
   aws_iam as iam,
   aws_lambda as lambda,
   aws_lambda_event_sources as eventSources,
@@ -26,12 +28,14 @@ export interface RecordsApplicationStackProps extends StackProps {
 
 const BACKFILL_FUNCTION_NAME = "shittim-chest-production-records-backfill";
 const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
+const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
   public readonly backfillFunction: lambda.Function;
   public readonly authFunction: lambda.Function;
+  public readonly rankingFunction: lambda.Function;
   public readonly readFunction: lambda.Function;
 
   public constructor(
@@ -255,6 +259,42 @@ export class RecordsApplicationStack extends Stack {
         ]),
       ),
     );
+    this.rankingFunction = this.httpFunctionWithRole({
+      id: "RankingFunction",
+      functionName: RANKING_FUNCTION_NAME,
+      handler: "shittim_records.lambda_handlers.ranking_handler",
+      code,
+      timeout: Duration.seconds(60),
+      reservedConcurrentExecutions: 1,
+      environment: {
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"],
+          resources: [`${archiveTable.tableArn}/index/gsi1`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            StringEquals: {
+              "dynamodb:EnclosingOperation": "TransactWriteItems",
+            },
+          },
+        }),
+      ],
+    });
+    new events.Rule(this, "RankingSchedule", {
+      description: "Rebuild the Records ranking snapshots every 15 minutes",
+      schedule: events.Schedule.rate(Duration.minutes(15)),
+      targets: [
+        new eventTargets.LambdaFunction(this.rankingFunction, {
+          retryAttempts: 0,
+        }),
+      ],
+    });
     this.readFunction = this.httpFunctionWithRole({
       id: "ReadFunction",
       functionName: READ_FUNCTION_NAME,
@@ -264,6 +304,7 @@ export class RecordsApplicationStack extends Stack {
       reservedConcurrentExecutions: 4,
       environment: {
         ARCHIVE_TABLE_NAME: archiveTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
         SESSION_TABLE_NAME: sessionTable.tableName,
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
@@ -272,6 +313,10 @@ export class RecordsApplicationStack extends Stack {
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:BatchGetItem"],
           resources: [sessionTable.tableArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [statisticsTable.tableArn],
         }),
         new iam.PolicyStatement({
           actions: ["dynamodb:Query"],
@@ -368,6 +413,11 @@ export class RecordsApplicationStack extends Stack {
     });
     api.addRoutes({
       path: "/api/v1/records/{recordId}",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: readIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/insights/rankings",
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
     });

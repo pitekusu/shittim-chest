@@ -20,11 +20,13 @@ import {
 
 import {
   getRecord,
+  getRankings,
   getRecords,
   getSession,
   logout,
   RecordsApiError,
   type ParticipantSlot,
+  type RankingEntry,
   type RecordDetailResponse,
   type SessionResponse,
   type SortOrder,
@@ -61,7 +63,10 @@ function useAuthenticationRecovery(error: unknown) {
     }
     void client.invalidateQueries({ queryKey: SESSION_QUERY_KEY, exact: true }).finally(() => {
       client.removeQueries({
-        predicate: (query) => query.queryKey[0] === "records" || query.queryKey[0] === "record",
+        predicate: (query) =>
+          query.queryKey[0] === "records" ||
+          query.queryKey[0] === "record" ||
+          query.queryKey[0] === "rankings",
       });
     });
   }, [client, error]);
@@ -89,7 +94,9 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
       ? location.state.from
       : "/";
   const returnTo =
-    requestedPath === "/" || /^\/records\/[A-Za-z0-9_-]{43}$/.test(requestedPath)
+    requestedPath === "/" ||
+    requestedPath === "/insights" ||
+    /^\/records\/[A-Za-z0-9_-]{43}$/.test(requestedPath)
       ? requestedPath
       : "/";
   const startPath = `/api/v1/auth/discord/start?returnTo=${encodeURIComponent(returnTo)}`;
@@ -172,6 +179,7 @@ function AuthenticatedRoutes({
       <Routes>
         <Route path="/" element={<RecordsHome />} />
         <Route path="/records/:recordId" element={<RecordDetail />} />
+        <Route path="/insights" element={<RankingsPage />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
@@ -539,6 +547,124 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
         </div>
       </section>
     </article>
+  );
+}
+
+function RankingPanel({
+  title,
+  description,
+  entries,
+  pending,
+  error,
+  onRetry,
+}: {
+  readonly title: string;
+  readonly description: string;
+  readonly entries: readonly RankingEntry[] | undefined;
+  readonly pending: boolean;
+  readonly error: unknown;
+  readonly onRetry: () => void;
+}) {
+  const apiError = error instanceof RecordsApiError ? error : undefined;
+  const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
+  return (
+    <section className={styles.rankingPanel} aria-labelledby={`${title}-title`} aria-busy={pending}>
+      <header>
+        <p className={styles.eyebrow}>RANKING</p>
+        <h2 id={`${title}-title`} className={JAPANESE_HEADING_CLASS}>
+          {title}
+        </h2>
+        <p className={JAPANESE_PROSE_CLASS}>{description}</p>
+      </header>
+      {pending && (
+        <p className={styles.rankingStatus} aria-live="polite">
+          集計結果を読み込んでいます。
+        </p>
+      )}
+      {preparing && (
+        <output className={styles.rankingStatus}>
+          <strong>集計を準備しています</strong>
+          <span>最初の集計が終わるまで、しばらくお待ちください。</span>
+        </output>
+      )}
+      {error !== null && error !== undefined && !preparing && (
+        <div className={styles.rankingStatus} role="alert">
+          <strong>ランキングを読み込めませんでした</strong>
+          <span>{apiError?.message ?? "通信状態を確認してください。"}</span>
+          <button className={styles.secondaryButton} type="button" onClick={onRetry}>
+            もう一度試す
+          </button>
+        </div>
+      )}
+      {!pending && !error && entries?.length === 0 && (
+        <div className={styles.rankingStatus}>
+          <strong>まだ集計対象がありません</strong>
+          <span>完了した議論が記録されると、ここに表示されます。</span>
+        </div>
+      )}
+      {!pending && !error && entries && entries.length > 0 && (
+        <ol className={styles.rankingList}>
+          {entries.map((entry, index) => (
+            <li
+              className={entry.rank <= 3 ? styles[`rankingTop${entry.rank}`] : undefined}
+              key={`${entry.rank}-${entry.displayName}-${index}`}
+              value={entry.rank}
+            >
+              <span className={styles.rankingPosition} aria-label={`${entry.rank}位`}>
+                {entry.rank}
+              </span>
+              <Avatar avatar={entry.avatar} />
+              <span className={styles.rankingName}>{entry.displayName}</span>
+              <span className={styles.rankingCount}>
+                <strong>{entry.count}</strong>回
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function RankingsPage() {
+  const rankings = useQuery({ queryKey: ["rankings"], queryFn: getRankings });
+  useAuthenticationRecovery(rankings.error);
+  return (
+    <>
+      <header className={styles.pageHeader}>
+        <p className={styles.eyebrow}>RECORDS INSIGHTS</p>
+        <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
+          いろいろな記録
+        </h1>
+        <p className={JAPANESE_PROSE_CLASS}>これまでの議論を、ランキングで振り返れます。</p>
+        {rankings.data && (
+          <p className={styles.insightsGeneratedAt}>
+            最終集計:{" "}
+            <time dateTime={rankings.data.generatedAt}>
+              {formatCompletedDateTime(rankings.data.generatedAt)}
+            </time>
+          </p>
+        )}
+      </header>
+      <div className={styles.rankingsGrid}>
+        <RankingPanel
+          title="勝利回数ランキング"
+          description="3人の参加者が勝者に選ばれた回数です。"
+          entries={rankings.data?.wins}
+          pending={rankings.isPending}
+          error={rankings.error}
+          onRetry={() => void rankings.refetch()}
+        />
+        <RankingPanel
+          title="依頼回数ランキング"
+          description="議論を依頼した回数の上位10人です。"
+          entries={rankings.data?.requests}
+          pending={rankings.isPending}
+          error={rankings.error}
+          onRetry={() => void rankings.refetch()}
+        />
+      </div>
+    </>
   );
 }
 

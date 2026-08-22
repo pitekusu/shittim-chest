@@ -149,7 +149,7 @@ class AuthHttpController:
 
 
 class ReadHttpController:
-    """Authenticate then expose only list and detail reads."""
+    """Authenticate then expose Records and insights reads."""
 
     def __init__(
         self,
@@ -191,6 +191,10 @@ class ReadHttpController:
                     record_id=request.path_parameters.get("recordId", ""),
                     now=now,
                 )
+            elif request.route_key == "GET /api/v1/insights/rankings":
+                if request.raw_query:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.get_rankings(now=now)
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             return json_response(200, result.model_dump(by_alias=True, mode="json"))
@@ -242,6 +246,7 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "ROUTE_NOT_FOUND": "指定されたAPIは存在しません。",
         "REQUEST_INVALID": "リクエストが正しくありません。",
         "CURSOR_INVALID": "ページ情報が正しくありません。",
+        "INSIGHTS_UNAVAILABLE": "ランキングを準備しています。",
     }.get(code, "議事録サービスを利用できません。")
     payload = ErrorResponse(error=ErrorBody(code=code, message=message, request_id=request_id))
     return json_response(status, payload.model_dump(by_alias=True, mode="json"))

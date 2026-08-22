@@ -17,6 +17,8 @@ from shittim_records.contracts import (
     ImageAvatarRef,
     ParticipantSlot,
     PlaceholderAvatarRef,
+    RankingEntry,
+    RankingsResponse,
     RecordDetailResponse,
     RecordListItem,
     RecordListResponse,
@@ -77,6 +79,8 @@ class RecordsReader(Protocol):
     ) -> ArchivePage: ...
 
     def load_record(self, *, record_id: str) -> tuple[DynamoItem, ...]: ...
+
+    def load_ranking_snapshots(self) -> tuple[DynamoItem, ...]: ...
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]: ...
 
@@ -298,6 +302,79 @@ class RecordsReadService:
         if result.record_id != record_id:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         return result
+
+    def get_rankings(self, *, now: datetime) -> RankingsResponse:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ReadFailure("REQUEST_INVALID", 400)
+        raw_items = self._reader.load_ranking_snapshots()
+        by_kind: dict[str, DynamoItem] = {}
+        for item in raw_items:
+            kind = item.get("ranking_kind")
+            if not isinstance(kind, str) or kind in by_kind:
+                raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+            by_kind[kind] = item
+        if set(by_kind) != {"wins", "requests"}:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        wins_item = by_kind["wins"]
+        requests_item = by_kind["requests"]
+        generated_at = _validate_ranking_snapshot(wins_item, kind="wins")
+        requests_generated_at = _validate_ranking_snapshot(requests_item, kind="requests")
+        if generated_at != requests_generated_at:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+
+        wins_raw = cast(list[DynamoItem], wins_item["entries"])
+        requests_raw = cast(list[DynamoItem], requests_item["entries"])
+        requester_keys = tuple(_required_text(item, "requester_key") for item in requests_raw)
+        profiles = self._reader.load_profiles(requester_keys=requester_keys)
+        variants: dict[ParticipantSlot, FallbackVariant] = {
+            "participant-a": "cyan",
+            "participant-b": "pink",
+            "participant-c": "lavender",
+        }
+        wins = tuple(
+            RankingEntry(
+                rank=cast(int, item["rank"]),
+                display_name=_required_text(item, "display_name"),
+                avatar=self._avatar(
+                    asset_key=PARTICIPANT_AVATAR_ASSET_KEYS[
+                        cast(ParticipantSlot, item["participant"])
+                    ],
+                    alt=f"{_required_text(item, 'display_name')}のアバター",
+                    fallback_variant=variants[cast(ParticipantSlot, item["participant"])],
+                    prefix="participants/",
+                ),
+                count=cast(int, item["count"]),
+            )
+            for item in wins_raw
+        )
+        requests: list[RankingEntry] = []
+        for item in requests_raw:
+            requester_key = _required_text(item, "requester_key")
+            profile = profiles.get(requester_key)
+            display_name = (
+                profile.display_name
+                if profile is not None
+                else _required_text(item, "display_name")
+            )
+            requests.append(
+                RankingEntry(
+                    rank=cast(int, item["rank"]),
+                    display_name=display_name,
+                    avatar=self._avatar(
+                        asset_key=profile.avatar_asset_key if profile is not None else None,
+                        alt=f"{display_name}のアバター",
+                        fallback_variant=_requester_variant(requester_key),
+                        prefix="requesters/",
+                    ),
+                    count=cast(int, item["count"]),
+                )
+            )
+        return RankingsResponse(
+            schema_version=1,
+            wins=wins,
+            requests=tuple(requests),
+            generated_at=generated_at,
+        )
 
     def _list_item(
         self,
@@ -548,6 +625,131 @@ def _validate_archive_items(items: dict[str, DynamoItem], *, record_id: str) -> 
             or item.get("record_type") != expected_types[sk]
         ):
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+
+def _validate_ranking_snapshot(item: DynamoItem, *, kind: Literal["wins", "requests"]) -> datetime:
+    expected_pk = "RANKING#WINS" if kind == "wins" else "RANKING#REQUESTS"
+    expected_fields = {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "ranking_kind",
+        "generated_at",
+        "archive_count",
+        "entries",
+    }
+    archive_count = item.get("archive_count")
+    entries = item.get("entries")
+    if (
+        set(item) != expected_fields
+        or item.get("PK") != expected_pk
+        or item.get("SK") != "CURRENT"
+        or item.get("schema_version") != 1
+        or item.get("record_type") != "ranking_snapshot"
+        or item.get("ranking_kind") != kind
+        or isinstance(archive_count, bool)
+        or not isinstance(archive_count, int)
+        or archive_count < 0
+        or not isinstance(entries, list)
+    ):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    try:
+        generated_at = (
+            TypeAdapter(AwareDatetime)
+            .validate_python(_required_text(item, "generated_at"))
+            .astimezone(UTC)
+        )
+    except OverflowError, ValidationError:
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503) from None
+    if generated_at.isoformat() != item["generated_at"]:
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    if kind == "wins":
+        _validate_win_entries(cast(list[DynamoItem], entries), archive_count=archive_count)
+    else:
+        _validate_request_entries(cast(list[DynamoItem], entries), archive_count=archive_count)
+    return generated_at
+
+
+def _validate_win_entries(entries: list[DynamoItem], *, archive_count: int) -> None:
+    if (archive_count == 0 and entries) or (archive_count > 0 and len(entries) != 3):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    participants: list[str] = []
+    sortable: list[tuple[int, str, str]] = []
+    counts: list[int] = []
+    for item in entries:
+        if set(item) != {"participant", "display_name", "count", "rank"}:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        participant = _required_text(item, "participant")
+        if participant not in PARTICIPANT_SLOTS:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        display_name = _required_text(item, "display_name")
+        count, rank = _ranking_numbers(item)
+        participants.append(participant)
+        counts.append(count)
+        sortable.append((-count, display_name, participant))
+        if rank < 1:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    if (
+        (entries and set(participants) != set(PARTICIPANT_SLOTS))
+        or sum(counts) != archive_count
+        or sortable != sorted(sortable)
+        or not _valid_competition_ranks(entries)
+    ):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+
+
+def _validate_request_entries(entries: list[DynamoItem], *, archive_count: int) -> None:
+    if len(entries) > 10 or (archive_count == 0 and entries) or (archive_count > 0 and not entries):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    keys: list[str] = []
+    sortable: list[tuple[int, str, str]] = []
+    total = 0
+    for item in entries:
+        if set(item) != {"requester_key", "display_name", "count", "rank"}:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        key = _required_text(item, "requester_key")
+        display_name = _required_text(item, "display_name")
+        count, rank = _ranking_numbers(item)
+        if count < 1 or rank < 1:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        keys.append(key)
+        total += count
+        sortable.append((-count, display_name, key))
+    if (
+        len(set(keys)) != len(keys)
+        or total > archive_count
+        or sortable != sorted(sortable)
+        or not _valid_competition_ranks(entries)
+    ):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+
+
+def _ranking_numbers(item: DynamoItem) -> tuple[int, int]:
+    count = item.get("count")
+    rank = item.get("rank")
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 0
+        or isinstance(rank, bool)
+        or not isinstance(rank, int)
+    ):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    return count, rank
+
+
+def _valid_competition_ranks(entries: list[DynamoItem]) -> bool:
+    previous_count: int | None = None
+    previous_rank = 0
+    for index, item in enumerate(entries, start=1):
+        count = cast(int, item["count"])
+        expected_rank = previous_rank if count == previous_count else index
+        if item["rank"] != expected_rank:
+            return False
+        previous_count = count
+        previous_rank = expected_rank
+    return True
 
 
 def _canonical(value: object) -> bytes:

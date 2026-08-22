@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -64,6 +65,16 @@ class FakeBackfill:
             projected=0,
             skipped=0,
             complete=False,
+        )
+
+
+class FakeRanking:
+    def refresh(self, *, now: object) -> object:
+        del now
+        return SimpleNamespace(
+            archive_count=54,
+            wins=(object(), object(), object()),
+            requests=(object(), object()),
         )
 
 
@@ -179,6 +190,14 @@ def test_backfill_handler_rejects_boolean_page_limit() -> None:
             {"mode": "dry-run", "page_limit": True},
             object(),
         )
+
+
+def test_ranking_handler_returns_only_content_free_counts(monkeypatch: Any) -> None:
+    monkeypatch.setattr(lambda_handlers, "_RANKING", cast(Any, FakeRanking()))
+
+    result = lambda_handlers.ranking_handler({}, object())
+
+    assert result == {"archive_count": 54, "win_entries": 3, "request_entries": 2}
 
 
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:

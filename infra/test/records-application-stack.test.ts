@@ -1,5 +1,5 @@
 import { App, Tags, Validations } from "aws-cdk-lib";
-import { Template } from "aws-cdk-lib/assertions";
+import { Match, Template } from "aws-cdk-lib/assertions";
 import { AwsSolutionsChecks } from "cdk-nag";
 import { describe, expect, test } from "vitest";
 
@@ -49,15 +49,16 @@ describe("RecordsApplicationStack", () => {
     expect(checks.validateScope(stack).success).toBe(true);
   });
 
-  test("creates four Python 3.14 ARM64 functions from one immutable S3 version", () => {
+  test("creates five Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 4);
+    template.resourceCountIs("AWS::Lambda::Function", 5);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
       "shittim-chest-production-records-auth",
+      "shittim-chest-production-records-ranking",
       "shittim-chest-production-records-read",
     ]) {
       template.hasResourceProperties("AWS::Lambda::Function", {
@@ -78,11 +79,12 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 5);
+    template.resourceCountIs("AWS::Logs::LogGroup", 6);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
       "shittim-chest-production-records-auth",
+      "shittim-chest-production-records-ranking",
       "shittim-chest-production-records-read",
     ]) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
@@ -105,13 +107,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes Auth and Read aliases behind exactly six HTTP API routes", () => {
+  test("publishes Auth and Read aliases behind exactly seven HTTP API routes", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::Lambda::Version", 2);
     template.resourceCountIs("AWS::Lambda::Alias", 2);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 6);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -122,14 +124,48 @@ describe("RecordsApplicationStack", () => {
       StageName: "$default",
     });
     const serialized = JSON.stringify(template.toJSON());
-    expect(serialized).not.toContain("/api/v1/insights");
+    expect(serialized).toContain("GET /api/v1/insights/rankings");
+    expect(serialized).not.toContain("/api/v1/insights/costs");
     expect(template.toJSON().Parameters.RecordsBundleCodeSha256.Default).toBeUndefined();
     for (const alias of Object.values(template.findResources("AWS::Lambda::Alias"))) {
       expect(alias.Properties.Name).toBe("live");
     }
   });
 
-  test("keeps Auth and Read IAM resources exact and disjoint", () => {
+  test("rebuilds rankings every 15 minutes without asynchronous retries", () => {
+    const { template } = synthesize();
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-ranking",
+      Handler: "shittim_records.lambda_handlers.ranking_handler",
+      MemorySize: 512,
+      ReservedConcurrentExecutions: 1,
+      Runtime: "python3.14",
+      Timeout: 60,
+      Environment: {
+        Variables: {
+          ARCHIVE_TABLE_NAME: "shittim-chest-production-records",
+          STATISTICS_TABLE_NAME: "shittim-chest-production-records-statistics",
+        },
+      },
+    });
+    template.resourceCountIs("AWS::Events::Rule", 1);
+    template.hasResourceProperties("AWS::Events::Rule", {
+      ScheduleExpression: "rate(15 minutes)",
+      State: "ENABLED",
+      Targets: [
+        {
+          Arn: {
+            "Fn::GetAtt": [Match.stringLikeRegexp("^RankingFunction"), "Arn"],
+          },
+          Id: Match.anyValue(),
+          RetryPolicy: { MaximumRetryAttempts: 0 },
+        },
+      ],
+    });
+  });
+
+  test("keeps Auth, Read, and Ranking IAM resources exact and disjoint", () => {
     const { template } = synthesize();
     const policies = template.findResources("AWS::IAM::Policy");
     const auth = Object.values(policies).find((policy) =>
@@ -138,11 +174,16 @@ describe("RecordsApplicationStack", () => {
     const read = Object.values(policies).find((policy) =>
       JSON.stringify(policy).includes("ReadFunctionRole"),
     );
+    const ranking = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("RankingFunctionRole"),
+    );
 
     expect(auth).toBeDefined();
     expect(read).toBeDefined();
+    expect(ranking).toBeDefined();
     const authText = JSON.stringify(auth);
     const readText = JSON.stringify(read);
+    const rankingText = JSON.stringify(ranking);
     expect(authText).toContain("dynamodb:TransactWriteItems");
     expect(authText).toContain("/requesters/*");
     expect(authText).not.toContain("/participants/*");
@@ -156,6 +197,16 @@ describe("RecordsApplicationStack", () => {
     expect(readText).not.toContain("dynamodb:PutItem");
     expect(readText).not.toContain("dynamodb:DeleteItem");
     expect(readText).not.toContain("s3:PutObject");
+    expect(readText).toContain("shittim-chest-production-records-statistics");
+    expect(rankingText).toContain("/index/gsi1");
+    expect(rankingText).toContain("dynamodb:Query");
+    expect(rankingText).toContain("dynamodb:PutItem");
+    expect(rankingText).toContain("dynamodb:EnclosingOperation");
+    expect(rankingText).toContain("TransactWriteItems");
+    expect(rankingText).not.toContain("dynamodb:Scan");
+    expect(rankingText).not.toContain("dynamodb:GetItem");
+    expect(rankingText).not.toContain("dynamodb:UpdateItem");
+    expect(rankingText).not.toContain("dynamodb:DeleteItem");
   });
 
   test("filters completed metadata and bounds every stream retry dimension", () => {

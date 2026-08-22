@@ -347,6 +347,83 @@
       "title": "PlaceholderAvatarRef",
       "type": "object"
     },
+    "RankingEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
+        },
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        },
+        "rank": {
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rank",
+        "displayName",
+        "avatar",
+        "count"
+      ],
+      "title": "RankingEntry",
+      "type": "object"
+    },
+    "RankingsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "generatedAt": {
+          "format": "date-time",
+          "title": "Generatedat",
+          "type": "string"
+        },
+        "requests": {
+          "items": {
+            "$ref": "#/$defs/RankingEntry"
+          },
+          "title": "Requests",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "wins": {
+          "items": {
+            "$ref": "#/$defs/RankingEntry"
+          },
+          "title": "Wins",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "wins",
+        "requests",
+        "generatedAt"
+      ],
+      "title": "RankingsResponse",
+      "type": "object"
+    },
     "RecordDetailResponse": {
       "additionalProperties": false,
       "properties": {
@@ -1092,6 +1169,9 @@
     },
     {
       "$ref": "#/$defs/RecordDetailResponse"
+    },
+    {
+      "$ref": "#/$defs/RankingsResponse"
     },
     {
       "$ref": "#/$defs/SessionResponse"

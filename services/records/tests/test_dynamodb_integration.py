@@ -18,6 +18,8 @@ from shittim_records.adapters import ArchiveRepository
 from shittim_records.archive import project_completed_debate
 from shittim_records.auth import AuthFailure, OAuthState, SessionRecord
 from shittim_records.auth_adapters import DynamoAuthStore
+from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
+from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
 
 
@@ -36,10 +38,11 @@ def dynamodb_client() -> DynamoDBClient:
 
 
 @pytest.fixture
-def table_names(dynamodb_client: DynamoDBClient) -> Iterator[tuple[str, str]]:
+def table_names(dynamodb_client: DynamoDBClient) -> Iterator[tuple[str, str, str]]:
     suffix = uuid.uuid4().hex
     session_table = f"records-session-{suffix}"
     archive_table = f"records-archive-{suffix}"
+    statistics_table = f"records-statistics-{suffix}"
     dynamodb_client.create_table(
         TableName=session_table,
         AttributeDefinitions=[
@@ -75,21 +78,35 @@ def table_names(dynamodb_client: DynamoDBClient) -> Iterator[tuple[str, str]]:
         ],
         BillingMode="PAY_PER_REQUEST",
     )
+    dynamodb_client.create_table(
+        TableName=statistics_table,
+        AttributeDefinitions=[
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+        ],
+        KeySchema=[
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
     waiter = dynamodb_client.get_waiter("table_exists")
     waiter.wait(TableName=session_table)
     waiter.wait(TableName=archive_table)
+    waiter.wait(TableName=statistics_table)
     try:
-        yield session_table, archive_table
+        yield session_table, archive_table, statistics_table
     finally:
         dynamodb_client.delete_table(TableName=session_table)
         dynamodb_client.delete_table(TableName=archive_table)
+        dynamodb_client.delete_table(TableName=statistics_table)
 
 
 def test_oauth_claim_session_and_archive_pagination(
     dynamodb_client: DynamoDBClient,
-    table_names: tuple[str, str],
+    table_names: tuple[str, str, str],
 ) -> None:
-    session_table, archive_table = table_names
+    session_table, archive_table, statistics_table = table_names
     store = DynamoAuthStore(dynamodb_client, session_table)
     store.create_oauth_state(
         state_hash="state-hash",
@@ -143,6 +160,7 @@ def test_oauth_claim_session_and_archive_pagination(
         dynamodb_client,
         cast(Any, _NoopS3()),
         archive_table_name=archive_table,
+        statistics_table_name=statistics_table,
         session_table_name=session_table,
         media_bucket_name="media",
     )
@@ -161,6 +179,14 @@ def test_oauth_claim_session_and_archive_pagination(
     assert len(page.items) == 1
     assert page.items[0]["record_id"] == projection.record_id
     assert len(reader.load_record(record_id=projection.record_id)) == 12
+
+    ranking = RankingService(
+        source=DynamoRankingSource(dynamodb_client, archive_table),
+        store=DynamoRankingSnapshotStore(dynamodb_client, statistics_table),
+    ).refresh(now=NOW)
+    assert ranking.archive_count == 1
+    assert sum(entry.count for entry in ranking.wins) == 1
+    assert len(reader.load_ranking_snapshots()) == 2
 
 
 class _NoopS3:

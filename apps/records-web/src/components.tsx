@@ -250,6 +250,12 @@ export function Layout({
           >
             議論の記録
           </NavLink>
+          <NavLink
+            className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+            to="/insights"
+          >
+            いろいろな記録
+          </NavLink>
         </nav>
         <div className={styles.account}>
           <Avatar avatar={avatar} />
@@ -269,6 +275,12 @@ export function Layout({
           end
         >
           記録
+        </NavLink>
+        <NavLink
+          className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+          to="/insights"
+        >
+          いろいろ
         </NavLink>
         <button className={styles.mobileLogout} type="button" onClick={onLogout}>
           ログアウト

@@ -35,6 +35,7 @@ class FakeReader:
         self.meta = next(item for item in self.items if item["SK"] == "META")
         self.page = ArchivePage(items=(self.meta,), last_evaluated_key=None, index_name="gsi1")
         self.list_calls: list[dict[str, Any]] = []
+        self.ranking_items = ranking_items()
 
     def list_meta(self, **kwargs: Any) -> ArchivePage:
         self.list_calls.append(kwargs)
@@ -42,6 +43,9 @@ class FakeReader:
 
     def load_record(self, *, record_id: str) -> tuple[dict[str, Any], ...]:
         return self.items if record_id == self.record_id else ()
+
+    def load_ranking_snapshots(self) -> tuple[dict[str, Any], ...]:
+        return self.ranking_items
 
     def load_profiles(
         self,
@@ -65,6 +69,42 @@ def service(reader: FakeReader | None = None) -> tuple[RecordsReadService, FakeR
     return RecordsReadService(reader=actual, cursor_codec=CursorCodec(SESSION_KEY)), actual
 
 
+def ranking_items() -> tuple[dict[str, Any], ...]:
+    common = {
+        "SK": "CURRENT",
+        "schema_version": 1,
+        "record_type": "ranking_snapshot",
+        "generated_at": NOW.isoformat(),
+        "archive_count": 4,
+    }
+    return (
+        {
+            **common,
+            "PK": "RANKING#WINS",
+            "ranking_kind": "wins",
+            "entries": [
+                {"participant": "participant-a", "display_name": "Arona", "count": 2, "rank": 1},
+                {
+                    "participant": "participant-c",
+                    "display_name": "Participant C",
+                    "count": 1,
+                    "rank": 2,
+                },
+                {"participant": "participant-b", "display_name": "Plana", "count": 1, "rank": 2},
+            ],
+        },
+        {
+            **common,
+            "PK": "RANKING#REQUESTS",
+            "ranking_kind": "requests",
+            "entries": [
+                {"requester_key": "requester-a", "display_name": "Stored A", "count": 2, "rank": 1},
+                {"requester_key": "requester-b", "display_name": "Stored B", "count": 2, "rank": 1},
+            ],
+        },
+    )
+
+
 def test_list_normalizes_preview_and_uses_profile_avatar() -> None:
     records, reader = service()
     reader.meta["question"] = "  one\n two\tthree  "
@@ -78,6 +118,45 @@ def test_list_normalizes_preview_and_uses_profile_avatar() -> None:
     assert result.items[0].requester.avatar.kind == "image"
     assert reader.list_calls[0]["limit"] == 12
     assert reader.list_calls[0]["sort"] == "newest"
+
+
+def test_rankings_use_atomic_snapshots_and_current_requester_profiles() -> None:
+    records, _reader = service()
+
+    result = records.get_rankings(now=NOW)
+    payload = result.model_dump(by_alias=True, mode="json")
+
+    assert [(entry.display_name, entry.count, entry.rank) for entry in result.wins] == [
+        ("Arona", 2, 1),
+        ("Participant C", 1, 2),
+        ("Plana", 1, 2),
+    ]
+    assert [(entry.display_name, entry.count, entry.rank) for entry in result.requests] == [
+        ("Current Requester", 2, 1),
+        ("Current Requester", 2, 1),
+    ]
+    assert all(entry.avatar.kind == "image" for entry in result.requests)
+    assert "requesterKey" not in repr(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda reader: setattr(reader, "ranking_items", reader.ranking_items[:1]),
+        lambda reader: reader.ranking_items[1]["entries"][0].update({"count": 0}),
+        lambda reader: reader.ranking_items[1].update(
+            {"generated_at": (NOW + timedelta(seconds=1)).isoformat()}
+        ),
+    ),
+)
+def test_rankings_fail_closed_on_incomplete_or_malformed_snapshot(mutate: Any) -> None:
+    records, reader = service()
+    mutate(reader)
+
+    with pytest.raises(ReadFailure) as caught:
+        records.get_rankings(now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("INSIGHTS_UNAVAILABLE", 503)
 
 
 @pytest.mark.parametrize(
