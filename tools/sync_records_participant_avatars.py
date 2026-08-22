@@ -32,6 +32,7 @@ MAX_AVATAR_BYTES = 512 * 1024
 APPLY_CONFIRMATION = "y"
 
 ParticipantSlot = Literal["participant-a", "participant-b", "participant-c"]
+RollbackStatus = Literal["deleted", "failed"]
 ImageDecoder = Callable[[bytes], tuple[int, int]]
 PARTICIPANT_SLOTS: tuple[ParticipantSlot, ...] = (
     "participant-a",
@@ -52,8 +53,14 @@ ACCOUNT_ID_PATTERN = re.compile(r"[0-9]{12}\Z")
 class AvatarSyncError(RuntimeError):
     """Stable, content-free synchronization failure."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        rollback_outcomes: tuple[tuple[ParticipantSlot, RollbackStatus], ...] = (),
+    ) -> None:
         self.code = code
+        self.rollback_outcomes = rollback_outcomes
         super().__init__(code)
 
 
@@ -169,7 +176,7 @@ def upload_current_avatars(
             raise AvatarSyncError("participant_avatar_set_invalid")
     if client.get_bucket_versioning(Bucket=bucket_name).get("Status") != "Enabled":
         raise AvatarSyncError("media_bucket_versioning_required")
-    uploaded: list[tuple[str, str]] = []
+    uploaded: list[tuple[ParticipantSlot, str, str]] = []
     try:
         for avatar in avatars:
             checksum = base64.b64encode(hashlib.sha256(avatar.body).digest()).decode("ascii")
@@ -185,14 +192,26 @@ def upload_current_avatars(
             version_id = response.get("VersionId")
             if not isinstance(version_id, str) or not version_id:
                 raise AvatarSyncError("participant_avatar_version_missing")
-            uploaded.append((avatar.object_key, version_id))
+            uploaded.append((avatar.slot, avatar.object_key, version_id))
     except BotoCoreError, ClientError, AvatarSyncError:
-        try:
-            for object_key, version_id in reversed(uploaded):
+        rollback_outcomes: list[tuple[ParticipantSlot, RollbackStatus]] = []
+        for slot, object_key, version_id in reversed(uploaded):
+            try:
                 client.delete_object(Bucket=bucket_name, Key=object_key, VersionId=version_id)
-        except BotoCoreError, ClientError:
-            raise AvatarSyncError("participant_avatar_rollback_failed") from None
-        raise AvatarSyncError("participant_avatar_upload_rolled_back") from None
+            except BotoCoreError, ClientError:
+                rollback_outcomes.append((slot, "failed"))
+            else:
+                rollback_outcomes.append((slot, "deleted"))
+        outcomes = tuple(rollback_outcomes)
+        if any(status == "failed" for _, status in outcomes):
+            raise AvatarSyncError(
+                "participant_avatar_rollback_failed",
+                rollback_outcomes=outcomes,
+            ) from None
+        raise AvatarSyncError(
+            "participant_avatar_upload_rolled_back",
+            rollback_outcomes=outcomes,
+        ) from None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -224,7 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ) as web:
             avatars = download_current_avatars(web, tokens)
         print("3体の現在のBotアイコンを検証しました。秘密値とDiscord IDは表示していません。")
-        confirmation = input("Recordsの現在プロフィール用アイコン3件を上書きしますか [y/N]: ")
+        confirmation = _read_confirmation()
         if confirmation.strip().lower() != APPLY_CONFIRMATION:
             print("キャンセルしました。S3は変更していません。")
             return 2
@@ -239,13 +258,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         SetupError,
         httpx.HTTPError,
     ) as error:
-        code = (
-            error.code
-            if isinstance(error, (AvatarSyncError, SetupError))
-            else "participant_avatar_sync_failed"
-        )
-        print(f"同期に失敗しました: {code}", file=sys.stderr)
+        print(f"同期に失敗しました: {_failure_message(error)}", file=sys.stderr)
         return 1
+
+
+def _read_confirmation() -> str:
+    try:
+        return input("Recordsの現在プロフィール用アイコン3件を上書きしますか [y/N]: ")
+    except EOFError:
+        raise AvatarSyncError("confirmation_input_unavailable") from None
+
+
+def _failure_message(error: BaseException) -> str:
+    if isinstance(error, AvatarSyncError):
+        if not error.rollback_outcomes:
+            return error.code
+        outcomes = ",".join(f"{slot}={status}" for slot, status in error.rollback_outcomes)
+        return f"{error.code} ({outcomes})"
+    if isinstance(error, SetupError):
+        return error.code
+    return "participant_avatar_sync_failed"
 
 
 def _download_webp(

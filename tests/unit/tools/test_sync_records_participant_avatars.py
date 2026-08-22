@@ -63,10 +63,16 @@ class FakeSsm:
 
 
 class FakeS3:
-    def __init__(self, *, fail_at: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_at: int | None = None,
+        delete_fail_keys: frozenset[str] = frozenset(),
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.delete_calls: list[dict[str, Any]] = []
         self.fail_at = fail_at
+        self.delete_fail_keys = delete_fail_keys
 
     def get_bucket_versioning(self, **kwargs: Any) -> dict[str, str]:
         assert kwargs == {"Bucket": "private-media"}
@@ -85,6 +91,13 @@ class FakeS3:
 
     def delete_object(self, **kwargs: Any) -> None:
         self.delete_calls.append(kwargs)
+        if kwargs["Key"] in self.delete_fail_keys:
+            from botocore.exceptions import ClientError
+
+            raise ClientError(
+                {"Error": {"Code": "InternalError", "Message": "failed"}},
+                "DeleteObject",
+            )
 
 
 def test_current_avatar_contract_uses_three_stable_slot_keys() -> None:
@@ -332,6 +345,18 @@ def test_account_preflight_failure_returns_stable_error(
     assert capsys.readouterr().err == ("同期に失敗しました: production_account_preflight_failed\n")
 
 
+def test_confirmation_eof_returns_stable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_eof(_prompt: str) -> str:
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", raise_eof)
+
+    with pytest.raises(sync.AvatarSyncError) as caught:
+        sync._read_confirmation()
+
+    assert caught.value.code == "confirmation_input_unavailable"
+
+
 def test_uploads_only_stable_current_keys_with_integrity_metadata() -> None:
     client = FakeS3()
     avatars = tuple(
@@ -391,3 +416,34 @@ def test_partial_upload_is_rolled_back_to_previous_versions() -> None:
             "VersionId": "version-1",
         }
     ]
+
+
+def test_rollback_attempts_every_uploaded_version_after_one_delete_fails() -> None:
+    client = FakeS3(
+        fail_at=2,
+        delete_fail_keys=frozenset({"participants/participant-b/avatar.webp"}),
+    )
+    avatars = tuple(
+        sync.ParticipantAvatar(
+            slot=slot,
+            object_key=sync.AVATAR_OBJECT_KEYS[slot],
+            body=WEBP,
+        )
+        for slot in sync.PARTICIPANT_SLOTS
+    )
+
+    with pytest.raises(sync.AvatarSyncError) as caught:
+        sync.upload_current_avatars(client, "private-media", avatars)
+
+    assert caught.value.code == "participant_avatar_rollback_failed"
+    assert caught.value.rollback_outcomes == (
+        ("participant-b", "failed"),
+        ("participant-a", "deleted"),
+    )
+    assert [call["Key"] for call in client.delete_calls] == [
+        "participants/participant-b/avatar.webp",
+        "participants/participant-a/avatar.webp",
+    ]
+    assert sync._failure_message(caught.value) == (
+        "participant_avatar_rollback_failed (participant-b=failed,participant-a=deleted)"
+    )
