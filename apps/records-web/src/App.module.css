@@ -381,7 +381,7 @@
 .account .quietButton {
   grid-column: 2;
   justify-self: start;
-  min-height: 30px;
+  min-height: 44px;
   padding: 5px 12px;
   border: 1px solid var(--records-line);
   background: rgb(255 255 255 / 44%);

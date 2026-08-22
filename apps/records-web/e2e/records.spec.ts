@@ -158,6 +158,9 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   await expect(logoff).toHaveCSS("font-family", /Delogy/);
   await expect(logoff).toHaveCSS("border-top-style", "solid");
   await expect(logoff).toHaveAttribute("lang", "en");
+  const logoffBox = await logoff.boundingBox();
+  expect(logoffBox).not.toBeNull();
+  expect(logoffBox!.height).toBeGreaterThanOrEqual(44);
   const card = page.getByRole("article");
   await expect(card).toContainText(detail.question);
   await expect(card.getByText("2026年8月15日 15:00")).toHaveAttribute(
