@@ -81,7 +81,7 @@ const PRODUCTION_CSP = [
   "style-src 'self'",
 ].join("; ");
 
-async function mockAuthenticatedApi(page: Page): Promise<void> {
+async function mockAuthenticatedApi(page: Page, recordDetail = detail): Promise<void> {
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
       json: {
@@ -99,19 +99,21 @@ async function mockAuthenticatedApi(page: Page): Promise<void> {
         items: [
           {
             schemaVersion: 1,
-            recordId: detail.recordId,
-            completedAt: detail.completedAt,
-            questionPreview: detail.question,
-            requester: detail.requester,
-            participants: detail.participants,
-            result: detail.result,
+            recordId: recordDetail.recordId,
+            completedAt: recordDetail.completedAt,
+            questionPreview: recordDetail.question,
+            requester: recordDetail.requester,
+            participants: recordDetail.participants,
+            result: recordDetail.result,
           },
         ],
         nextCursor: null,
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}`, (route) => route.fulfill({ json: detail }));
+  await page.route(`**/api/v1/records/${RECORD_ID}`, (route) =>
+    route.fulfill({ json: recordDetail }),
+  );
 }
 
 test("authenticated member can browse the completed archive", async ({ page }) => {
@@ -215,6 +217,38 @@ test("product name keeps the approved two-line break at narrow widths", async ({
       viewport.width,
     );
   }
+});
+
+test("record detail stays inside the mobile viewport with long Japanese content", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  const longText =
+    "最初に必要な道具と時間を整理してから小さく試し、途中で休憩を入れながら、参加する全員が無理なく楽しめる進め方を選びます。最後に感想を共有して次回の工夫へつなげます。";
+  const longDetail = {
+    ...detail,
+    question:
+      "新しい趣味を始めるなら、庭で植物を育てるか室内で工作を楽しむか、それぞれの価値観から話し合って決める",
+    initialOpinions: detail.initialOpinions.map((opinion) => ({
+      ...opinion,
+      summary: "準備を整えてから全員で無理なく楽しめる方法を選ぶ",
+      proposal: longText,
+    })),
+    finalProposals: detail.finalProposals.map((proposal) => ({
+      ...proposal,
+      title: "小さく試して長く続ける共同趣味の計画",
+      proposal: longText,
+    })),
+  };
+  await mockAuthenticatedApi(page, longDetail);
+  await page.goto(`/records/${RECORD_ID}`);
+  await expect(page.getByRole("heading", { name: longDetail.question })).toBeVisible();
+
+  const viewport = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
 });
 
 test("reduced motion skips the long login transition", async ({ page }) => {

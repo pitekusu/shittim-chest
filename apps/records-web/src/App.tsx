@@ -473,7 +473,8 @@ function VoteGraph({ record }: { readonly record: RecordDetailResponse }) {
     "participant-c": 610,
   };
   return (
-    <figure className={styles.voteGraph}>
+    // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Keyboard users need to scroll the vote graph on narrow screens.
+    <figure className={styles.voteGraph} tabIndex={0}>
       <svg viewBox="0 0 720 190" aria-labelledby="vote-graph-title">
         <title id="vote-graph-title">参加者間の投票関係。詳細は直後の一覧に記載しています。</title>
         <defs>
