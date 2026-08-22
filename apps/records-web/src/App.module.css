@@ -422,7 +422,7 @@
 
 .recordHeader h1 {
   margin: 10px 0 12px;
-  font-size: clamp(2rem, 4vw, 3.8rem);
+  font-size: clamp(1.5rem, 3vw, 2.3rem);
   line-height: 1.25;
 }
 
