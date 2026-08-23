@@ -97,6 +97,7 @@
   --records-vote-node: rgb(255 255 255 / 94%);
   --records-vote-node-ring: rgb(255 255 255 / 58%);
   --records-vote-tooltip: rgb(255 255 255 / 96%);
+  --records-theme-border: var(--records-line);
   --records-theme-row: rgb(255 255 255 / 44%);
   --records-theme-track: rgb(181 216 225 / 72%);
   --records-theme-thumb: #fff;
@@ -170,6 +171,7 @@
   --records-vote-node: rgb(18 44 64 / 96%);
   --records-vote-node-ring: rgb(98 219 234 / 14%);
   --records-vote-tooltip: rgb(12 33 49 / 98%);
+  --records-theme-border: rgb(104 222 235 / 62%);
   --records-theme-row: rgb(18 44 64 / 72%);
   --records-theme-track: rgb(5 20 32 / 82%);
   --records-theme-thumb: #8ae8f3;

@@ -379,7 +379,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 4px 8px 4px 13px;
-  border: 1px solid var(--records-line);
+  border: 1px solid var(--records-theme-border);
   border-radius: 15px;
   background: var(--records-theme-row);
   color: var(--records-ink-600);
