@@ -131,8 +131,8 @@
     radial-gradient(circle at 50% 40%, rgb(28 87 105 / 42%), transparent 30%),
     linear-gradient(145deg, #071724, #0c2434);
   --records-sidebar-background: rgb(8 27 42 / 86%);
-  --records-panel-border: rgb(104 222 235 / 26%);
-  --records-panel-border-soft: rgb(104 222 235 / 22%);
+  --records-panel-border: rgb(104 222 235 / 54%);
+  --records-panel-border-soft: rgb(104 222 235 / 48%);
   --records-control-background: rgb(18 44 64 / 94%);
   --records-control-background-soft: rgb(19 46 66 / 78%);
   --records-control-background-quiet: rgb(17 44 63 / 68%);
