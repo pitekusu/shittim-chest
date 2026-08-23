@@ -403,7 +403,7 @@ describe("App", () => {
       "placeholder",
       "質問文などを入力",
     );
-    expect(screen.getByText("議論記録を閲覧できます。")).toBeVisible();
+    expect(screen.queryByText("議論記録を閲覧できます。")).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/records?limit=12&sort=newest");
   });
 
@@ -426,6 +426,9 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "いろいろな記録" })).toBeVisible();
+    expect(
+      screen.queryByText("これまでの議論を、ランキングで振り返れます。"),
+    ).not.toBeInTheDocument();
     const wins = screen.getByRole("region", { name: "勝利回数ランキング" });
     const requestsPanel = screen.getByRole("region", { name: "依頼回数ランキング" });
     expect(await within(wins).findAllByRole("listitem")).toHaveLength(3);

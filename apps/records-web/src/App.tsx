@@ -327,7 +327,6 @@ function RecordsHome() {
         <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           議論の記録
         </h1>
-        <p className={JAPANESE_PROSE_CLASS}>議論記録を閲覧できます。</p>
       </header>
       <section className={styles.filters} aria-label="記録の絞り込み">
         <label>
@@ -812,7 +811,6 @@ function RankingsPage() {
         <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           いろいろな記録
         </h1>
-        <p className={JAPANESE_PROSE_CLASS}>これまでの議論を、ランキングで振り返れます。</p>
         {rankings.data && (
           <p className={styles.insightsGeneratedAt}>
             最終集計:{" "}
