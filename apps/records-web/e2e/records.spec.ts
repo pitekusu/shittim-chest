@@ -183,6 +183,21 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   expect(logoffBox!.height).toBeGreaterThanOrEqual(44);
   const card = page.getByRole("article");
   await expect(card).toContainText(detail.question);
+  const cardDecoration = card.locator("[data-card-decoration]");
+  await expect(cardDecoration).toBeVisible();
+  await expect(cardDecoration).toHaveAttribute("aria-hidden", "true");
+  expect(
+    await cardDecoration.evaluate((element) => {
+      const cardBounds = element.parentElement!.getBoundingClientRect();
+      const decorationBounds = element.getBoundingClientRect();
+      return {
+        clippedByCard:
+          decorationBounds.right >= cardBounds.right &&
+          decorationBounds.bottom >= cardBounds.bottom,
+        pointerEvents: getComputedStyle(element).pointerEvents,
+      };
+    }),
+  ).toEqual({ clippedByCard: true, pointerEvents: "none" });
   await expect(card.getByText("2026年8月15日 15:00")).toHaveAttribute(
     "datetime",
     detail.completedAt,
@@ -321,25 +336,22 @@ test("branded route motion stays short and coordinates all internal routes", asy
   const insightsHeading = page.getByRole("heading", { name: "いろいろな記録" });
   const wins = page.getByRole("region", { name: "勝利回数ランキング" });
   await expect(insightsScene).toHaveAttribute("data-route-motion", "active");
-  await expect(insightsScene.locator("[data-route-brand]")).toHaveAttribute("aria-hidden", "true");
+  await expect(insightsScene.locator("[data-route-brand]")).toHaveCount(0);
   await expect(insightsHeading).toBeFocused();
   await expect(wins).toBeVisible();
 
   const timing = await insightsScene.evaluate((scene) => {
     const parseSeconds = (value: string) => Number.parseFloat(value) || 0;
     const sceneStyle = getComputedStyle(scene);
-    const brand = scene.querySelector<HTMLElement>("[data-route-brand]")!;
     const panel = scene.querySelector<HTMLElement>("section[aria-labelledby]")!;
     const panelStyle = getComputedStyle(panel);
     return {
-      brandDuration: parseSeconds(getComputedStyle(brand).animationDuration),
       panelTotal:
         parseSeconds(panelStyle.animationDuration) + parseSeconds(panelStyle.animationDelay),
       sceneDuration: parseSeconds(sceneStyle.animationDuration),
     };
   });
   expect(timing.sceneDuration).toBeLessThanOrEqual(0.42);
-  expect(timing.brandDuration).toBeLessThanOrEqual(0.42);
   expect(timing.panelTotal).toBeLessThanOrEqual(0.42);
 
   const panelLayoutBefore = await wins.evaluate((element) => ({
@@ -895,7 +907,7 @@ test("reduced motion skips the long login and logoff transitions", async ({ page
   await page.getByRole("link", { name: /^いろいろ/ }).click();
   const reducedScene = page.locator('[data-route-scene="/insights"]');
   await expect(reducedScene).toHaveCSS("animation-name", "none");
-  await expect(reducedScene.locator("[data-route-brand]")).toHaveCSS("animation-name", "none");
+  await expect(reducedScene.locator("[data-route-brand]")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "勝利回数ランキング" })).toHaveCSS(
     "animation-name",
     "none",

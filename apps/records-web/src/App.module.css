@@ -552,27 +552,8 @@
 }
 
 .routeStage {
-  --route-motion-primary: var(--records-cyan-ink);
-  --route-motion-secondary: var(--records-cyan-500);
-  --route-motion-direction: -10px;
-  --route-motion-ring-x: 68%;
-  --route-motion-ring-y: -58px;
   --route-motion-item-offset: 10px;
   min-width: 0;
-}
-
-.routeStage[data-route-kind="detail"] {
-  --route-motion-secondary: color-mix(in srgb, var(--records-cyan-500) 45%, #8877dc);
-  --route-motion-direction: 10px;
-  --route-motion-ring-x: 8%;
-  --route-motion-ring-y: -74px;
-}
-
-.routeStage[data-route-kind="insights"] {
-  --route-motion-secondary: var(--records-pink-ink);
-  --route-motion-direction: -6px;
-  --route-motion-ring-x: 54%;
-  --route-motion-ring-y: -82px;
 }
 
 .routeScene {
@@ -586,73 +567,8 @@
   min-width: 0;
 }
 
-.routeBrandLayer {
-  position: absolute;
-  z-index: 0;
-  top: -18px;
-  right: 0;
-  left: 0;
-  height: min(360px, 60vh);
-  overflow: clip;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.routeBrandGrid,
-.routeBrandRing,
-.routeBrandDiamond {
-  position: absolute;
-  display: block;
-  pointer-events: none;
-}
-
-.routeBrandGrid {
-  inset: 0;
-  background-image:
-    linear-gradient(
-      color-mix(in srgb, var(--route-motion-primary) 32%, transparent) 1px,
-      transparent 1px
-    ),
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--route-motion-primary) 32%, transparent) 1px,
-      transparent 1px
-    );
-  background-position: 12px 8px;
-  background-size: 38px 38px;
-  mask-image: linear-gradient(100deg, transparent 18%, black 66%, transparent 96%);
-}
-
-.routeBrandRing {
-  top: var(--route-motion-ring-y);
-  left: var(--route-motion-ring-x);
-  width: clamp(190px, 24vw, 320px);
-  aspect-ratio: 1;
-  border: 1px solid var(--route-motion-primary);
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 24px color-mix(in srgb, var(--route-motion-primary) 22%, transparent),
-    0 0 0 58px color-mix(in srgb, var(--route-motion-secondary) 13%, transparent);
-}
-
-.routeBrandDiamond {
-  top: 54px;
-  right: clamp(42px, 9vw, 132px);
-  width: 22px;
-  aspect-ratio: 1;
-  border: 2px solid var(--route-motion-secondary);
-  box-shadow:
-    -86px 52px 0 -5px var(--route-motion-primary),
-    58px 92px 0 -7px var(--route-motion-secondary);
-  transform: rotate(45deg);
-}
-
 .routeScene[data-route-motion="active"] {
   animation: routeSceneEnter 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.routeScene[data-route-motion="active"] .routeBrandLayer {
-  animation: routeBrandEnter 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .routeMotionItem {
@@ -1443,15 +1359,96 @@
 }
 
 .debateCard {
+  position: relative;
   display: flex;
   min-height: 320px;
   height: 100%;
   flex-direction: column;
   padding: 24px;
+  isolation: isolate;
+  overflow: hidden;
   transition:
     border-color 180ms ease,
     box-shadow 180ms ease,
     transform 180ms ease;
+}
+
+.debateCard > :not(.cardDecoration) {
+  position: relative;
+  z-index: 1;
+}
+
+.cardDecoration {
+  position: absolute;
+  z-index: 0;
+  right: calc(-12px + var(--card-decoration-shift-x));
+  bottom: calc(-4px + var(--card-decoration-shift-y));
+  width: 190px;
+  height: 128px;
+  color: var(--records-cyan-500);
+  opacity: 0.42;
+  pointer-events: none;
+  transform: rotate(var(--card-decoration-rotation));
+  transform-origin: 72% 72%;
+}
+
+.cardDecorationGrid,
+.cardDecorationSoft,
+.cardDecorationStrong,
+.cardDecorationGlyph,
+.cardDecorationNode {
+  vector-effect: non-scaling-stroke;
+}
+
+.cardDecorationGrid {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 20%, transparent);
+  stroke-width: 0.7;
+}
+
+.cardDecorationSoft {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 48%, transparent);
+  stroke-width: 1.25;
+}
+
+.cardDecorationStrong {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 82%, transparent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.cardDecorationGlyph {
+  fill: color-mix(in srgb, var(--records-surface-strong) 72%, transparent);
+  stroke: color-mix(in srgb, currentColor 90%, transparent);
+  stroke-width: 1.8;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: rotate(45deg);
+}
+
+.cardDecorationNode {
+  fill: color-mix(in srgb, var(--records-surface-strong) 78%, transparent);
+  stroke: color-mix(in srgb, currentColor 72%, transparent);
+  stroke-width: 1.4;
+}
+
+.cardDecorationDot {
+  fill: color-mix(in srgb, currentColor 86%, transparent);
+}
+
+.cardDecoration[data-card-decoration="grid"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 72%, var(--records-lavender-100));
+}
+
+.cardDecoration[data-card-decoration="constellation"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 76%, var(--records-pink-ink));
+}
+
+.cardDecoration[data-card-decoration="beacon"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 84%, var(--records-cyan-ink));
 }
 
 .debateCardLink:hover .debateCard,
@@ -1854,20 +1851,6 @@
   }
 }
 
-@keyframes routeBrandEnter {
-  0% {
-    opacity: 0;
-    transform: translate3d(var(--route-motion-direction), 4px, 0);
-  }
-  36% {
-    opacity: 0.14;
-  }
-  100% {
-    opacity: 0;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
 @keyframes routeMotionItemEnter {
   from {
     opacity: 0;
@@ -1944,27 +1927,7 @@
     padding: 26px 16px 44px;
   }
   .routeStage {
-    --route-motion-direction: -6px;
     --route-motion-item-offset: 6px;
-    --route-motion-ring-x: 48%;
-  }
-  .routeStage[data-route-kind="detail"] {
-    --route-motion-direction: 6px;
-    --route-motion-ring-x: -12%;
-  }
-  .routeStage[data-route-kind="insights"] {
-    --route-motion-ring-x: 38%;
-  }
-  .routeBrandLayer {
-    height: 260px;
-  }
-  .routeBrandRing {
-    width: 190px;
-  }
-  .routeBrandDiamond {
-    top: 44px;
-    right: 28px;
-    width: 17px;
   }
   .filters,
   .cardGrid,
@@ -1973,6 +1936,13 @@
   }
   .debateCard {
     min-height: 0;
+  }
+  .cardDecoration {
+    right: calc(-22px + var(--card-decoration-shift-x));
+    bottom: calc(-12px + var(--card-decoration-shift-y));
+    width: 164px;
+    height: 112px;
+    opacity: 0.36;
   }
   .recordMeta time {
     width: 100%;
@@ -2120,7 +2090,6 @@
   }
 
   .routeScene[data-route-motion="active"],
-  .routeScene[data-route-motion="active"] .routeBrandLayer,
   .routeScene[data-route-motion="active"] .routeMotionItem,
   ::view-transition-group(*),
   ::view-transition-old(*),
