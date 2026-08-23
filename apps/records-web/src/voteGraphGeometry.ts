@@ -1,4 +1,4 @@
-import type { ParticipantSlot, RecordDetailResponse } from "./api";
+import type { ParticipantSlot, RecordDetailResponse } from "./api/types";
 
 export interface VotePoint {
   readonly x: number;

@@ -1424,6 +1424,19 @@ def _validate_records_workflows(directory: Path) -> None:
         )
     if "docker build" in release or "docker push" in release:
         raise WorkflowPolicyError("Records Release must not build or push a Fargate image")
+    web_publish_block = _workflow_step_block(release, "Publish the attested Records Web artifact")
+    asset_upload = 'aws s3 cp "${web_stage}/assets" "s3://${web_bucket}/assets"'
+    entry_upload = 'aws s3 cp "${web_stage}/index.html" "s3://${web_bucket}/index.html"'
+    if (
+        web_publish_block.count(asset_upload) != 1
+        or web_publish_block.count(entry_upload) != 1
+        or web_publish_block.count("public,max-age=31536000,immutable") != 1
+        or web_publish_block.index(asset_upload) >= web_publish_block.index(entry_upload)
+        or "--delete" in web_publish_block
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must publish immutable assets before index without deleting old hashes"
+        )
 
     backfill_markers = (
         "name: Records Backfill",

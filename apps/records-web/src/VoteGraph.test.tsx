@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { RecordDetailResponse } from "./api";
-import { VoteGraph } from "./VoteGraph";
+import type { RecordDetailResponse } from "./api/types";
+import { VoteGraph } from "./components/VoteGraph";
 
 const participant = (slot: "participant-a" | "participant-b" | "participant-c", name: string) => ({
   slot,

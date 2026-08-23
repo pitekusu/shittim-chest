@@ -2,11 +2,12 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 
 import { assertGeneratedValidatorCurrent } from "./scripts/generate-contract-validator.mjs";
+import { codeSplittingModuleOwnershipGuard } from "./scripts/code-splitting-guard";
 
 assertGeneratedValidatorCurrent();
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), codeSplittingModuleOwnershipGuard()],
   fmt: {
     ignorePatterns: ["dist/**", "node_modules/**", "src/generated/**"],
     semi: true,

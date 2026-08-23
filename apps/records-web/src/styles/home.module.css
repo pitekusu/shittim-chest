@@ -1,0 +1,477 @@
+.filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.7fr) repeat(3, minmax(120px, 1fr));
+  gap: 14px;
+  margin-bottom: 32px;
+  padding: 18px;
+  border: 1px solid var(--records-panel-border-soft);
+  border-radius: 22px;
+  background: var(--records-surface);
+  box-shadow: 0 12px 34px rgb(45 119 148 / 8%);
+}
+
+.filters label,
+.filterField,
+.sortField {
+  display: grid;
+  gap: 7px;
+  color: var(--records-ink-600);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.filters input {
+  min-height: 46px;
+  width: 100%;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 13px;
+  background: var(--records-control-background);
+  color: var(--records-ink-900);
+  font: inherit;
+  padding: 0 12px;
+}
+
+.sortField {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.sortField legend {
+  display: block;
+  margin: 0;
+  padding: 0;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.sortSegment {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  min-height: 46px;
+  margin-top: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 4px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 999px;
+  background: var(--records-cyan-100);
+  overflow: hidden;
+}
+
+.sortSegment::before {
+  position: absolute;
+  z-index: 0;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border: 1px solid var(--records-panel-border);
+  border-radius: 999px;
+  background: var(--records-surface-strong);
+  box-shadow:
+    0 4px 12px rgb(45 119 148 / 13%),
+    0 0 0 1px rgb(88 217 232 / 9%);
+  content: "";
+  transform: translateX(0);
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.sortSegment[data-sort="oldest"]::before {
+  transform: translateX(100%);
+}
+
+.filters .sortOption {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  border-radius: 999px;
+  color: var(--records-ink-600);
+  cursor: pointer;
+  font-family: var(--records-font-display);
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  transition:
+    color 180ms ease,
+    transform 100ms ease;
+}
+
+.filters .sortOption:active {
+  transform: scale(0.97);
+}
+
+.filters .sortOption:has(input:checked) {
+  color: var(--records-ink-900);
+}
+
+.filters .sortOption:has(input:focus-visible) {
+  outline: 2px solid var(--records-cyan-500);
+  outline-offset: -2px;
+}
+
+.avatarSelect {
+  position: relative;
+}
+
+.avatarSelectButton,
+.avatarSelectOption {
+  display: grid;
+  width: 100%;
+  align-items: center;
+  border: 0;
+  color: var(--records-ink-900);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
+.avatarSelectButton {
+  min-height: 46px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 9px;
+  padding: 6px 10px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 13px;
+  background: var(--records-control-background);
+}
+
+.avatarSelectButton:hover,
+.avatarSelectButton:focus-visible {
+  border-color: var(--records-cyan-500);
+  outline: 2px solid rgb(88 217 232 / 20%);
+  outline-offset: 2px;
+}
+
+.filterAvatar,
+.filterAllIcon {
+  width: 28px;
+  height: 28px;
+}
+
+.filterAvatar {
+  display: grid;
+  place-items: center;
+}
+
+.filterAvatar > :first-child {
+  width: 28px;
+  height: 28px;
+  border-width: 2px;
+  box-shadow: 0 0 0 1px var(--records-line-strong);
+}
+
+.filterAvatar > :first-child > span {
+  width: 9px;
+  height: 9px;
+  border-width: 3px;
+}
+
+.filterAllIcon {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--records-cyan-100);
+  color: var(--records-cyan-ink);
+  font-size: 1rem;
+}
+
+.selectChevron {
+  color: var(--records-ink-600);
+  transition: transform 120ms ease;
+}
+
+.avatarSelectButton[aria-expanded="true"] .selectChevron {
+  transform: rotate(180deg);
+}
+
+.avatarSelectMenu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 7px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: 280px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 14px;
+  background: var(--records-menu-background);
+  box-shadow: var(--records-shadow);
+}
+
+.avatarSelectOption {
+  min-height: 44px;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.avatarSelectOption:hover,
+.avatarSelectOption:focus-visible,
+.avatarSelectOption[aria-selected="true"] {
+  background: var(--records-cyan-100);
+  outline: none;
+}
+
+.selectedCheck {
+  color: var(--records-cyan-ink);
+  text-align: center;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.debateCardLink {
+  display: block;
+  min-width: 0;
+  height: 100%;
+  border-radius: var(--records-radius-card);
+  color: inherit;
+  text-decoration: none;
+}
+
+.debateCardLink:focus-visible {
+  outline: none;
+}
+
+.debateCard {
+  border: 1px solid var(--records-panel-border);
+  border-radius: var(--records-radius-card);
+  background: var(--records-surface);
+  box-shadow: var(--records-shadow-soft);
+  backdrop-filter: blur(18px);
+}
+
+.debateCard {
+  position: relative;
+  display: flex;
+  min-height: 320px;
+  height: 100%;
+  flex-direction: column;
+  padding: 24px;
+  isolation: isolate;
+  overflow: hidden;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.debateCard > :not(.cardDecoration) {
+  position: relative;
+  z-index: 1;
+}
+
+.cardDecoration {
+  position: absolute;
+  z-index: 0;
+  right: calc(-12px + var(--card-decoration-shift-x));
+  bottom: calc(-4px + var(--card-decoration-shift-y));
+  width: 190px;
+  height: 128px;
+  color: var(--records-cyan-500);
+  opacity: var(--card-decoration-opacity);
+  pointer-events: none;
+  transform: rotate(var(--card-decoration-rotation)) scale(var(--card-decoration-scale))
+    scaleX(var(--card-decoration-mirror));
+  transform-origin: 72% 72%;
+}
+
+.cardDecorationFrame,
+.cardDecorationSoft,
+.cardDecorationStrong,
+.cardDecorationGlyph,
+.cardDecorationNode {
+  vector-effect: non-scaling-stroke;
+}
+
+.cardDecorationFrame {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 20%, transparent);
+  stroke-linecap: round;
+  stroke-width: 0.7;
+}
+
+.cardDecoration[data-card-decoration-frame="dots"] .cardDecorationFrame {
+  stroke-width: 3;
+}
+
+.cardDecorationSoft {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 48%, transparent);
+  stroke-width: 1.25;
+}
+
+.cardDecorationStrong {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 82%, transparent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.cardDecorationGlyph {
+  fill: color-mix(in srgb, var(--records-surface-strong) 72%, transparent);
+  stroke: color-mix(in srgb, currentColor 90%, transparent);
+  stroke-width: 1.8;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: rotate(45deg);
+}
+
+.cardDecorationNode {
+  fill: color-mix(in srgb, var(--records-surface-strong) 78%, transparent);
+  stroke: color-mix(in srgb, currentColor 72%, transparent);
+  stroke-width: 1.4;
+}
+
+.cardDecorationDot {
+  fill: color-mix(in srgb, currentColor 86%, transparent);
+}
+
+.cardDecoration[data-card-decoration-accent="azure"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 72%, var(--records-cyan-ink));
+}
+
+.cardDecoration[data-card-decoration-accent="pink"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 76%, var(--records-pink-ink));
+}
+
+.cardDecoration[data-card-decoration-accent="lavender"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 70%, var(--records-lavender-100));
+}
+
+.debateCardLink:hover .debateCard,
+.debateCardLink:focus-visible .debateCard {
+  border-color: var(--records-line-strong);
+  box-shadow: var(--records-shadow);
+  transform: translateY(-3px);
+}
+
+.debateCardLink:focus-visible .debateCard {
+  outline: 3px solid var(--records-cyan-500);
+  outline-offset: 3px;
+}
+
+.debateCardLink:active .debateCard {
+  transform: translateY(-1px) scale(0.995);
+}
+
+.cardMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--records-ink-600);
+  font-size: 0.75rem;
+}
+
+.tieBadge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--records-pink-100);
+  color: var(--records-tie-ink);
+  font-weight: 800;
+}
+
+.debateCard h2 {
+  margin: 20px 0 24px;
+  font-size: 1.2rem;
+  line-height: 1.65;
+}
+
+.cardPeople {
+  display: grid;
+  gap: 10px;
+}
+
+.personSummary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.personSummary > :last-child {
+  display: grid;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.personSummary small {
+  color: var(--records-ink-600);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.cardAction {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-top: auto;
+  padding-top: 22px;
+  color: var(--records-link);
+  font-weight: 800;
+}
+
+.cardAction::after {
+  content: " →";
+}
+
+.loadMore {
+  display: grid;
+  min-height: 86px;
+  margin-top: 30px;
+  place-items: center;
+  color: var(--records-ink-600);
+  font-size: 0.78rem;
+}
+
+.loadingLine {
+  padding: 28px;
+  color: var(--records-ink-600);
+  text-align: center;
+}
+
+@media (max-width: 1199px) {
+  .cardGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .filters {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .filters,
+  .cardGrid {
+    grid-template-columns: 1fr;
+  }
+  .debateCard {
+    min-height: 0;
+  }
+  .cardDecoration {
+    right: calc(-22px + var(--card-decoration-shift-x));
+    bottom: calc(-12px + var(--card-decoration-shift-y));
+    width: 164px;
+    height: 112px;
+    opacity: clamp(0.3, var(--card-decoration-opacity), 0.4);
+  }
+}

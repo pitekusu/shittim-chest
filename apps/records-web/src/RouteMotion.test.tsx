@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { describe, expect, it } from "vite-plus/test";
 
 import { BrandedRouteStage, routeMotionKind } from "./RouteMotion";
-import styles from "./App.module.css";
+import styles from "./styles/routeMotion.module.css";
 
 function MotionHarness() {
   const navigate = useNavigate();
@@ -25,9 +25,30 @@ function MotionHarness() {
       </button>
       <BrandedRouteStage>
         <Routes>
-          <Route path="/" element={<h1 tabIndex={-1}>議論の記録</h1>} />
-          <Route path="/insights" element={<h1 tabIndex={-1}>いろいろな記録</h1>} />
-          <Route path="/records/:recordId" element={<h1 tabIndex={-1}>議論詳細</h1>} />
+          <Route
+            path="/"
+            element={
+              <section data-route-motion-ready="">
+                <h1 tabIndex={-1}>議論の記録</h1>
+              </section>
+            }
+          />
+          <Route
+            path="/insights"
+            element={
+              <section data-route-motion-ready="">
+                <h1 tabIndex={-1}>いろいろな記録</h1>
+              </section>
+            }
+          />
+          <Route
+            path="/records/:recordId"
+            element={
+              <section data-route-motion-ready="">
+                <h1 tabIndex={-1}>議論詳細</h1>
+              </section>
+            }
+          />
         </Routes>
       </BrandedRouteStage>
     </>
@@ -127,15 +148,15 @@ describe("BrandedRouteStage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "open detail" }));
     const scene = container.querySelector<HTMLElement>('[data-route-scene^="/records/"]')!;
-    expect(scene).toHaveAttribute("data-route-motion", "active");
+    expect(scene).toHaveAttribute("data-route-motion", "waiting");
 
     fireEvent.animationEnd(scene);
-    expect(scene).toHaveAttribute("data-route-motion", "active");
+    expect(scene).toHaveAttribute("data-route-motion", "waiting");
 
     fireEvent.click(screen.getByRole("button", { name: "finish loading" }));
     const heading = screen.getByRole("heading", { name: "非同期の議論詳細" });
     await waitFor(() => expect(heading).toHaveFocus());
-    expect(scene).toHaveAttribute("data-route-motion", "active");
+    await waitFor(() => expect(scene).toHaveAttribute("data-route-motion", "active"));
 
     fireEvent.animationEnd(scene.querySelector<HTMLElement>("[data-route-motion-terminal]")!);
     await waitFor(() => expect(scene).toHaveAttribute("data-route-motion", "settled"));

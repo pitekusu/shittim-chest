@@ -4,6 +4,25 @@ import { createHash } from "node:crypto";
 
 const RECORD_ID = "r".repeat(43);
 const DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO = 0.0001;
+const AUTHENTICATED_ROUTE_CHUNK_NAMES = ["RecordsHome", "RecordDetail", "RankingsPage"] as const;
+
+function observeAssetRequests(page: Page): Set<string> {
+  const requestedAssets = new Set<string>();
+  page.on("request", (request) => {
+    if (request.resourceType() !== "script" && request.resourceType() !== "stylesheet") return;
+    requestedAssets.add(new URL(request.url()).pathname);
+  });
+  return requestedAssets;
+}
+
+function matchingChunkAssets(requestedAssets: ReadonlySet<string>, chunkName: string): string[] {
+  const chunkPrefix = `/assets/${chunkName}-`;
+  return [...requestedAssets].filter(
+    (assetPath) =>
+      assetPath.startsWith(chunkPrefix) &&
+      (assetPath.endsWith(".js") || assetPath.endsWith(".css")),
+  );
+}
 
 const placeholder = (displayName: string, fallbackVariant: string) => ({
   kind: "placeholder",
@@ -459,17 +478,39 @@ test("branded route motion stays short and coordinates all internal routes", asy
   await expect(archiveHeading).toBeFocused();
 
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
+  const detailScene = page.locator(
+    '[data-route-stage][data-route-kind="detail"] [data-route-scene]',
+  );
+  await expect(detailScene).toHaveAttribute("data-route-motion", "waiting");
+  const detailMotionBecameActive = detailScene.evaluate(
+    (scene) =>
+      new Promise<boolean>((resolve) => {
+        const observe = () => {
+          if (scene.getAttribute("data-route-motion") !== "active") return false;
+          observer.disconnect();
+          resolve(true);
+          return true;
+        };
+        const observer = new MutationObserver(observe);
+        if (observe()) return;
+        observer.observe(scene, {
+          attributeFilter: ["data-route-motion"],
+          attributes: true,
+        });
+        window.setTimeout(() => {
+          observer.disconnect();
+          resolve(false);
+        }, 3_000);
+      }),
+  );
   await page.waitForTimeout(430);
   await expect(page.getByText("議論の記録を開いています。")).toBeVisible();
-  await expect(
-    page.locator('[data-route-stage][data-route-kind="detail"] [data-route-scene]'),
-  ).toHaveAttribute("data-route-motion", "active");
+  await expect(detailScene).toHaveAttribute("data-route-motion", "waiting");
   const detailHeading = page.getByRole("heading", { name: detail.question });
   await expect(page.locator('[data-route-stage][data-route-kind="detail"]')).toBeVisible();
   await expect(detailHeading).toBeFocused();
-  await expect(
-    page.locator('[data-route-stage][data-route-kind="detail"] [data-route-scene]'),
-  ).toHaveAttribute("data-route-motion", "settled");
+  expect(await detailMotionBecameActive).toBe(true);
+  await expect(detailScene).toHaveAttribute("data-route-motion", "settled");
 
   await page.getByRole("link", { name: "← 記録一覧へ" }).click();
   await expect(archiveHeading).toBeVisible();
@@ -1150,3 +1191,57 @@ test("anonymous login page boots under the production CSP without dynamic evalua
   await page.evaluate(() => document.fonts.ready);
   expect(pageErrors).toEqual([]);
 });
+
+test("anonymous login does not request authenticated route assets", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const requestedAssets = observeAssetRequests(page);
+  await page.route("**/api/v1/session", (route) =>
+    route.fulfill({
+      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+    }),
+  );
+
+  await page.goto("/login");
+  await expect(page.getByRole("link", { name: "AUTHENTICATE" })).toBeVisible();
+
+  for (const chunkName of AUTHENTICATED_ROUTE_CHUNK_NAMES) {
+    expect(matchingChunkAssets(requestedAssets, chunkName), chunkName).toEqual([]);
+  }
+});
+
+for (const directRoute of [
+  { path: "/", chunkName: "RecordsHome", heading: "議論の記録" },
+  { path: `/records/${RECORD_ID}`, chunkName: "RecordDetail", heading: detail.question },
+  { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
+] as const) {
+  test(`direct ${directRoute.path} navigation loads its route chunk`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chromium");
+    const requestedAssets = observeAssetRequests(page);
+    await mockAuthenticatedApi(page);
+
+    await page.goto(directRoute.path);
+    await expect(page.getByRole("heading", { name: directRoute.heading })).toBeVisible();
+
+    const requiredRouteAssets = matchingChunkAssets(requestedAssets, directRoute.chunkName);
+    expect(
+      requiredRouteAssets.filter((assetPath) => assetPath.endsWith(".js")),
+      `${directRoute.chunkName} JavaScript`,
+    ).toHaveLength(1);
+    expect(
+      requiredRouteAssets.filter((assetPath) => assetPath.endsWith(".css")),
+      `${directRoute.chunkName} CSS`,
+    ).toHaveLength(1);
+    for (const unrelatedChunkName of AUTHENTICATED_ROUTE_CHUNK_NAMES.filter(
+      (chunkName) => chunkName !== directRoute.chunkName,
+    )) {
+      expect(matchingChunkAssets(requestedAssets, unrelatedChunkName), unrelatedChunkName).toEqual(
+        [],
+      );
+    }
+    await expect(page.getByTestId("vote-graph")).toHaveCount(
+      directRoute.chunkName === "RecordDetail" ? 1 : 0,
+    );
+  });
+}

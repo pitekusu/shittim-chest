@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PropsWithChildren,
@@ -8,7 +9,7 @@ import {
 } from "react";
 import { useLocation } from "react-router-dom";
 
-import styles from "./App.module.css";
+import styles from "./styles/routeMotion.module.css";
 
 export type RouteMotionKind = "archive" | "detail" | "insights" | "other";
 
@@ -29,7 +30,10 @@ function RouteScene({
   readonly animate: boolean;
   readonly sceneRef: RefObject<HTMLDivElement | null>;
 }>) {
-  const [motion, setMotion] = useState<"idle" | "active" | "settled">(animate ? "active" : "idle");
+  const [motion, setMotion] = useState<"idle" | "waiting" | "active" | "settled">(
+    animate ? "waiting" : "idle",
+  );
+  const motionStartedRef = useRef(!animate);
   const sceneFinishedRef = useRef(!animate);
   const contentReadyRef = useRef(!animate);
   const contentFinishedRef = useRef(!animate);
@@ -43,7 +47,7 @@ function RouteScene({
     }
   }, [sceneRef]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!animate) return;
     const scene = sceneRef.current;
     if (!scene) return;
@@ -55,6 +59,7 @@ function RouteScene({
       sceneFinishedRef.current = true;
       contentReadyRef.current = true;
       contentFinishedRef.current = true;
+      motionStartedRef.current = true;
       setMotion("settled");
       return;
     }
@@ -62,6 +67,10 @@ function RouteScene({
     const observeReadiness = () => {
       const ready = scene.querySelector("[data-route-motion-ready]");
       contentReadyRef.current = ready !== null;
+      if (ready && !motionStartedRef.current) {
+        motionStartedRef.current = true;
+        setMotion("active");
+      }
       const terminal = scene.querySelector<HTMLElement>("[data-route-motion-terminal]");
       if (ready && (!terminal || !terminal.classList.contains(styles.routeMotionItem))) {
         contentFinishedRef.current = true;
