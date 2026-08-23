@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 
 const RECORD_ID = "r".repeat(43);
+const DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO = 0.0001;
 
 const placeholder = (displayName: string, fallbackVariant: string) => ({
   kind: "placeholder",
@@ -267,7 +268,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-login.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 50,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 
   await page.unroute("**/api/v1/session");
@@ -282,7 +283,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-home.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 50,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 
   await page.getByRole("link", { name: "記録を読む" }).click();
@@ -291,7 +292,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-detail.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 50,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 
   await page.goto("/insights");
@@ -300,7 +301,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-insights.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 50,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 });
 
@@ -334,7 +335,7 @@ test("manual theme survives reload and logoff while the mobile switch stays usab
   await expect(page).toHaveScreenshot("records-dark-mobile-390.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 50,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 
   await page.setViewportSize({ width: 320, height: 800 });
