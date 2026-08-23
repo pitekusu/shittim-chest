@@ -346,6 +346,13 @@ function RecordsHome() {
         .some((value) => value?.toLocaleLowerCase("ja-JP").includes(needle));
     });
   }, [loadedRecords, requester, search]);
+  useLayoutEffect(() => {
+    const visibleRecordIds = new Set(visibleRecords.map((record) => record.recordId));
+    setAppendMotionIds((current) => {
+      if ([...current].every((recordId) => visibleRecordIds.has(recordId))) return current;
+      return new Set([...current].filter((recordId) => visibleRecordIds.has(recordId)));
+    });
+  }, [visibleRecords]);
   useEffect(() => {
     const sentinel = loadMoreRef.current;
     if (

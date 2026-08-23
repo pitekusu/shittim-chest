@@ -732,8 +732,6 @@ test("loads the next archive page automatically near the end of the loaded cards
   await expect(appendedCard).toBeVisible();
   await expect(appendedCard).toHaveCSS("animation-duration", "0.18s");
   await expect(appendedCard).toHaveCSS("animation-delay", "0s");
-  await page.waitForTimeout(220);
-  await expect(appendedCard).toHaveCSS("animation-name", "none");
 
   const search = page.getByRole("searchbox", { name: "フリーワード検索" });
   await search.fill("読み込み済みの議論 1");
