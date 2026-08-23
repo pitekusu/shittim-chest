@@ -378,7 +378,6 @@ function RecordsHome() {
             </label>
           </div>
         </fieldset>
-        <p>検索対象は現在読み込み済みのカードです。</p>
       </section>
       {records.isPending && (
         <p className={styles.loadingLine} aria-live="polite">

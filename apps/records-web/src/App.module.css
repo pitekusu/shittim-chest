@@ -1091,6 +1091,7 @@
 }
 
 .sortField {
+  display: block;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -1098,7 +1099,11 @@
 }
 
 .sortField legend {
+  display: block;
+  margin: 0;
   padding: 0;
+  font-size: 0.72rem;
+  line-height: 1.2;
 }
 
 .sortSegment {
@@ -1106,6 +1111,7 @@
   isolation: isolate;
   display: grid;
   min-height: 46px;
+  margin-top: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: 4px;
   border: 1px solid var(--records-line-strong);
@@ -1284,13 +1290,6 @@
 .selectedCheck {
   color: var(--records-cyan-ink);
   text-align: center;
-}
-
-.filters p {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--records-ink-600);
-  font-size: 0.72rem;
 }
 
 .cardGrid {
