@@ -3,6 +3,7 @@ import {
   useId,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type PropsWithChildren,
 } from "react";
@@ -368,15 +369,54 @@ export function formatCompletedDateTime(value: string): string {
   return COMPLETED_DATE_TIME_FORMAT.format(new Date(value));
 }
 
-export function DebateCard({ record }: { readonly record: RecordListItem }) {
+export function DebateCard({
+  record,
+  motionDelay,
+  motionTerminal = false,
+  appended = false,
+  onAppendAnimationEnd,
+}: {
+  readonly record: RecordListItem;
+  readonly motionDelay?: number;
+  readonly motionTerminal?: boolean;
+  readonly appended?: boolean;
+  readonly onAppendAnimationEnd?: (recordId: string) => void;
+}) {
+  const linkRef = useRef<HTMLAnchorElement>(null);
   const winner = record.participants.find(
     (participant) => participant.slot === record.result.winner,
   );
+  useEffect(() => {
+    if (!appended || !onAppendAnimationEnd) return;
+    if (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      onAppendAnimationEnd(record.recordId);
+      return;
+    }
+    const link = linkRef.current;
+    if (!link) return;
+    const consume = (event: Event) => {
+      if (event.target === link) onAppendAnimationEnd(record.recordId);
+    };
+    link.addEventListener("animationend", consume);
+    return () => link.removeEventListener("animationend", consume);
+  }, [appended, onAppendAnimationEnd, record.recordId]);
   return (
     <Link
-      className={styles.debateCardLink}
+      className={`${styles.debateCardLink} ${styles.routeMotionItem} ${
+        appended ? styles.routeMotionAppend : ""
+      }`}
       to={`/records/${record.recordId}`}
       aria-label={`「${record.questionPreview}」の記録を読む`}
+      data-route-motion-terminal={motionTerminal ? "" : undefined}
+      ref={linkRef}
+      style={
+        motionDelay === undefined
+          ? undefined
+          : ({ "--route-motion-delay": `${motionDelay}ms` } as CSSProperties)
+      }
     >
       <article className={styles.debateCard}>
         <div className={styles.cardMeta}>
@@ -426,7 +466,7 @@ export function ErrorPanel({
       <span className={styles.errorRing} aria-hidden="true">
         !
       </span>
-      <h1>{title}</h1>
+      <h1 tabIndex={-1}>{title}</h1>
       <p>{message}</p>
       {requestId && <p className={styles.requestId}>照会ID: {requestId}</p>}
       {onRetry && (

@@ -108,7 +108,11 @@ const PRODUCTION_CSP = [
   "style-src 'self'",
 ].join("; ");
 
-async function mockAuthenticatedApi(page: Page, recordDetail = detail): Promise<void> {
+async function mockAuthenticatedApi(
+  page: Page,
+  recordDetail = detail,
+  recordDelayMs = 0,
+): Promise<void> {
   let authenticated = true;
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
@@ -150,9 +154,12 @@ async function mockAuthenticatedApi(page: Page, recordDetail = detail): Promise<
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}`, (route) =>
-    route.fulfill({ json: recordDetail }),
-  );
+  await page.route(`**/api/v1/records/${RECORD_ID}`, async (route) => {
+    if (recordDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, recordDelayMs));
+    }
+    return route.fulfill({ json: recordDetail });
+  });
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
 }
 
@@ -297,6 +304,84 @@ test("record card opens from its native keyboard link", async ({ page }) => {
 
   await expect(page).toHaveURL(`/records/${RECORD_ID}`);
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+});
+
+test("branded route motion stays short and coordinates all internal routes", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await mockAuthenticatedApi(page, detail, 1_200);
+  await page.goto("/");
+
+  const initialScene = page.locator('[data-route-scene="/"]');
+  await expect(initialScene).toHaveAttribute("data-route-motion", "idle");
+
+  await page.getByRole("link", { name: /^いろいろ/ }).click();
+  const insightsScene = page.locator('[data-route-scene="/insights"]');
+  const insightsHeading = page.getByRole("heading", { name: "いろいろな記録" });
+  const wins = page.getByRole("region", { name: "勝利回数ランキング" });
+  await expect(insightsScene).toHaveAttribute("data-route-motion", "active");
+  await expect(insightsScene.locator("[data-route-brand]")).toHaveAttribute("aria-hidden", "true");
+  await expect(insightsHeading).toBeFocused();
+  await expect(wins).toBeVisible();
+
+  const timing = await insightsScene.evaluate((scene) => {
+    const parseSeconds = (value: string) => Number.parseFloat(value) || 0;
+    const sceneStyle = getComputedStyle(scene);
+    const brand = scene.querySelector<HTMLElement>("[data-route-brand]")!;
+    const panel = scene.querySelector<HTMLElement>("section[aria-labelledby]")!;
+    const panelStyle = getComputedStyle(panel);
+    return {
+      brandDuration: parseSeconds(getComputedStyle(brand).animationDuration),
+      panelTotal:
+        parseSeconds(panelStyle.animationDuration) + parseSeconds(panelStyle.animationDelay),
+      sceneDuration: parseSeconds(sceneStyle.animationDuration),
+    };
+  });
+  expect(timing.sceneDuration).toBeLessThanOrEqual(0.42);
+  expect(timing.brandDuration).toBeLessThanOrEqual(0.42);
+  expect(timing.panelTotal).toBeLessThanOrEqual(0.42);
+
+  const panelLayoutBefore = await wins.evaluate((element) => ({
+    height: (element as HTMLElement).offsetHeight,
+    left: (element as HTMLElement).offsetLeft,
+    top: (element as HTMLElement).offsetTop,
+    width: (element as HTMLElement).offsetWidth,
+  }));
+  await page.waitForTimeout(430);
+  await expect(insightsScene).toHaveAttribute("data-route-motion", "settled");
+  expect(
+    await wins.evaluate((element) => ({
+      height: (element as HTMLElement).offsetHeight,
+      left: (element as HTMLElement).offsetLeft,
+      top: (element as HTMLElement).offsetTop,
+      width: (element as HTMLElement).offsetWidth,
+    })),
+  ).toEqual(panelLayoutBefore);
+
+  await page.goBack();
+  const archiveHeading = page.getByRole("heading", { name: "議論の記録" });
+  await expect(page.locator('[data-route-stage][data-route-kind="archive"]')).toBeVisible();
+  await expect(archiveHeading).toBeFocused();
+
+  await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
+  await page.waitForTimeout(430);
+  await expect(page.getByText("議論の記録を開いています。")).toBeVisible();
+  await expect(
+    page.locator('[data-route-stage][data-route-kind="detail"] [data-route-scene]'),
+  ).toHaveAttribute("data-route-motion", "active");
+  const detailHeading = page.getByRole("heading", { name: detail.question });
+  await expect(page.locator('[data-route-stage][data-route-kind="detail"]')).toBeVisible();
+  await expect(detailHeading).toBeFocused();
+  await expect(
+    page.locator('[data-route-stage][data-route-kind="detail"] [data-route-scene]'),
+  ).toHaveAttribute("data-route-motion", "settled");
+
+  await page.getByRole("link", { name: "← 記録一覧へ" }).click();
+  await expect(archiveHeading).toBeVisible();
+  await page.getByRole("link", { name: "いろいろな記録" }).click();
+  await expect(page).toHaveURL("/insights");
+  await expect(page.locator('[data-route-scene="/insights"]')).toHaveCount(1);
 });
 
 test("archive controls remain usable across responsive breakpoints", async ({ page }) => {
@@ -641,7 +726,19 @@ test("loads the next archive page automatically near the end of the loaded cards
   await expect(page.getByText("読み込み済みの議論 12")).toBeVisible();
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
 
-  await expect(page.getByText("自動で追加された議論")).toBeVisible();
+  const appendedCard = page.getByRole("link", {
+    name: "「自動で追加された議論」の記録を読む",
+  });
+  await expect(appendedCard).toBeVisible();
+  await expect(appendedCard).toHaveCSS("animation-duration", "0.18s");
+  await expect(appendedCard).toHaveCSS("animation-delay", "0s");
+
+  const search = page.getByRole("searchbox", { name: "フリーワード検索" });
+  await search.fill("読み込み済みの議論 1");
+  await expect(appendedCard).toHaveCount(0);
+  await search.clear();
+  await expect(appendedCard).toBeVisible();
+  await expect(appendedCard).toHaveCSS("animation-name", "none");
   await expect(page.getByRole("button", { name: "さらに読み込む" })).toHaveCount(0);
 });
 
@@ -795,6 +892,14 @@ test("reduced motion skips the long login and logoff transitions", async ({ page
   await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible({
     timeout: 1_000,
   });
+  await page.getByRole("link", { name: /^いろいろ/ }).click();
+  const reducedScene = page.locator('[data-route-scene="/insights"]');
+  await expect(reducedScene).toHaveCSS("animation-name", "none");
+  await expect(reducedScene.locator("[data-route-brand]")).toHaveCSS("animation-name", "none");
+  await expect(page.getByRole("region", { name: "勝利回数ランキング" })).toHaveCSS(
+    "animation-name",
+    "none",
+  );
   await page.getByRole("button", { name: "LOGOFF" }).first().click();
   await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible({
     timeout: 1_000,

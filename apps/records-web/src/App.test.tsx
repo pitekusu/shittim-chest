@@ -207,6 +207,42 @@ describe("formatCompletedDateTime", () => {
 });
 
 describe("App", () => {
+  it("coordinates branded motion and heading focus across internal routes", async () => {
+    mockApi();
+    const { container } = render(<App />);
+
+    const archiveHeading = await screen.findByRole("heading", { name: "議論の記録" });
+    const initialScene = container.querySelector<HTMLElement>("[data-route-scene]");
+    expect(initialScene).toHaveAttribute("data-route-motion", "idle");
+    expect(initialScene?.parentElement).toHaveAttribute("data-route-kind", "archive");
+    expect(
+      await screen.findByRole("link", { name: "「休日の過ごし方を決める」の記録を読む" }),
+    ).toHaveStyle("--route-motion-delay: 60ms");
+    expect(archiveHeading).not.toHaveFocus();
+
+    fireEvent.click(screen.getByRole("link", { name: "いろいろな記録" }));
+
+    const insightsHeading = await screen.findByRole("heading", { name: "いろいろな記録" });
+    const insightsScene = container.querySelector<HTMLElement>("[data-route-scene]");
+    expect(insightsScene).not.toBe(initialScene);
+    expect(insightsScene).toHaveAttribute("data-route-motion", "active");
+    expect(insightsScene?.parentElement).toHaveAttribute("data-route-kind", "insights");
+    await waitFor(() => expect(insightsHeading).toHaveFocus());
+    expect(screen.getByRole("region", { name: "勝利回数ランキング" })).toHaveStyle(
+      "--route-motion-delay: 60ms",
+    );
+    expect(screen.getByRole("region", { name: "依頼回数ランキング" })).toHaveStyle(
+      "--route-motion-delay: 100ms",
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "議論の記録" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "議論の記録" })).toHaveFocus());
+    expect(container.querySelector("[data-route-scene]")?.parentElement).toHaveAttribute(
+      "data-route-kind",
+      "archive",
+    );
+  });
+
   it("keeps both theme switches synchronized without refetching session or records", async () => {
     installThemeColorMeta();
     const requests = mockApi();

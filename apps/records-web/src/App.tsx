@@ -6,7 +6,15 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   BrowserRouter,
   Link,
@@ -41,6 +49,7 @@ import {
   formatCompletedDateTime,
   Layout,
 } from "./components";
+import { BrandedRouteStage } from "./RouteMotion";
 import { VoteGraph } from "./VoteGraph";
 import styles from "./App.module.css";
 import { useRecordsTheme, type Theme } from "./theme";
@@ -50,6 +59,12 @@ const LOGIN_TRANSITION_KEY = "shittim-records-login-transition";
 const JAPANESE_HEADING_CLASS = `${styles.japaneseText} ${styles.japaneseHeading}`;
 const JAPANESE_PROSE_CLASS = `${styles.japaneseText} ${styles.japaneseProse}`;
 const READABLE_JAPANESE_PROSE_CLASS = `${JAPANESE_PROSE_CLASS} ${styles.readableMeasure}`;
+
+type RouteMotionStyle = CSSProperties & { "--route-motion-delay": string };
+
+function routeMotionDelay(milliseconds: number): RouteMotionStyle {
+  return { "--route-motion-delay": `${milliseconds}ms` };
+}
 
 function useAuthenticationRecovery(error: unknown) {
   const client = useQueryClient();
@@ -195,13 +210,15 @@ function AuthenticatedRoutes({
       theme={theme}
       onThemeToggle={onThemeToggle}
     >
-      <Routes>
-        <Route path="/" element={<RecordsHome />} />
-        <Route path="/records/:recordId" element={<RecordDetail />} />
-        <Route path="/insights" element={<RankingsPage />} />
-        <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      <BrandedRouteStage>
+        <Routes>
+          <Route path="/" element={<RecordsHome />} />
+          <Route path="/records/:recordId" element={<RecordDetail />} />
+          <Route path="/insights" element={<RankingsPage />} />
+          <Route path="/login" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrandedRouteStage>
     </Layout>
   );
 }
@@ -212,6 +229,8 @@ function RecordsHome() {
   const [search, setSearch] = useState("");
   const [requester, setRequester] = useState("");
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const observedPageCountRef = useRef<number | undefined>(undefined);
+  const [appendMotionIds, setAppendMotionIds] = useState<ReadonlySet<string>>(() => new Set());
   const localFiltersActive = search.trim().length > 0 || requester !== "";
   const localFiltersActiveRef = useRef(localFiltersActive);
   localFiltersActiveRef.current = localFiltersActive;
@@ -232,6 +251,39 @@ function RecordsHome() {
     () => records.data?.pages.flatMap((page) => page.items) ?? [],
     [records.data],
   );
+  useLayoutEffect(() => {
+    observedPageCountRef.current = undefined;
+    setAppendMotionIds(new Set());
+  }, [sort, winner]);
+  useLayoutEffect(() => {
+    const pages = records.data?.pages;
+    if (!pages) return;
+    const previousPageCount = observedPageCountRef.current;
+    observedPageCountRef.current = pages.length;
+    if (previousPageCount === undefined) return;
+    if (pages.length < previousPageCount) {
+      setAppendMotionIds(new Set());
+      return;
+    }
+    if (pages.length === previousPageCount) return;
+    const addedRecordIds = pages
+      .slice(previousPageCount)
+      .flatMap((page) => page.items.map((record) => record.recordId));
+    if (addedRecordIds.length === 0) return;
+    setAppendMotionIds((current) => {
+      const next = new Set(current);
+      for (const recordId of addedRecordIds) next.add(recordId);
+      return next;
+    });
+  }, [records.data?.pages]);
+  const consumeAppendMotion = useCallback((recordId: string) => {
+    setAppendMotionIds((current) => {
+      if (!current.has(recordId)) return current;
+      const next = new Set(current);
+      next.delete(recordId);
+      return next;
+    });
+  }, []);
   const requesterOptions = useMemo<readonly AvatarSelectOption<string>[]>(() => {
     const requesters = new Map(
       loadedRecords.map((record) => [record.requester.displayName, record.requester] as const),
@@ -294,6 +346,13 @@ function RecordsHome() {
         .some((value) => value?.toLocaleLowerCase("ja-JP").includes(needle));
     });
   }, [loadedRecords, requester, search]);
+  useLayoutEffect(() => {
+    const visibleRecordIds = new Set(visibleRecords.map((record) => record.recordId));
+    setAppendMotionIds((current) => {
+      if ([...current].every((recordId) => visibleRecordIds.has(recordId))) return current;
+      return new Set([...current].filter((recordId) => visibleRecordIds.has(recordId)));
+    });
+  }, [visibleRecords]);
   useEffect(() => {
     const sentinel = loadMoreRef.current;
     if (
@@ -320,7 +379,11 @@ function RecordsHome() {
   const error = records.error instanceof RecordsApiError ? records.error : undefined;
   return (
     <>
-      <header className={styles.pageHeader}>
+      <header
+        className={`${styles.pageHeader} ${styles.routeMotionItem}`}
+        data-route-motion-ready={records.isPending ? undefined : ""}
+        style={routeMotionDelay(0)}
+      >
         <p className={styles.eyebrow} lang="en">
           RECORDS ARCHIVE
         </p>
@@ -328,7 +391,14 @@ function RecordsHome() {
           議論の記録
         </h1>
       </header>
-      <section className={styles.filters} aria-label="記録の絞り込み">
+      <section
+        className={`${styles.filters} ${styles.routeMotionItem}`}
+        data-route-motion-terminal={
+          !records.isPending && visibleRecords.length === 0 ? "" : undefined
+        }
+        style={routeMotionDelay(40)}
+        aria-label="記録の絞り込み"
+      >
         <label>
           フリーワード検索
           <input
@@ -400,8 +470,15 @@ function RecordsHome() {
         </section>
       )}
       <section className={styles.cardGrid} aria-label="完了した議論">
-        {visibleRecords.map((record) => (
-          <DebateCard key={record.recordId} record={record} />
+        {visibleRecords.map((record, index) => (
+          <DebateCard
+            key={record.recordId}
+            record={record}
+            motionDelay={60 + Math.min(index, 5) * 12}
+            motionTerminal={index === visibleRecords.length - 1}
+            appended={appendMotionIds.has(record.recordId)}
+            onAppendAnimationEnd={consumeAppendMotion}
+          />
         ))}
       </section>
       {records.hasNextPage && (
@@ -459,12 +536,18 @@ function RecordDetail() {
   if (record.isError) {
     const error = record.error instanceof RecordsApiError ? record.error : undefined;
     return (
-      <ErrorPanel
-        title="記録を開けませんでした"
-        message={error?.message ?? "通信状態を確認してください。"}
-        requestId={error?.requestId}
-        onRetry={() => void record.refetch()}
-      />
+      <div
+        className={styles.routeMotionItem}
+        data-route-motion-ready=""
+        data-route-motion-terminal=""
+      >
+        <ErrorPanel
+          title="記録を開けませんでした"
+          message={error?.message ?? "通信状態を確認してください。"}
+          requestId={error?.requestId}
+          onRetry={() => void record.refetch()}
+        />
+      </div>
     );
   }
   return <RecordDocument record={record.data} />;
@@ -476,8 +559,11 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
   const count = (slot: ParticipantSlot) =>
     record.result.voteCounts.find((item) => item.participant === slot)?.count ?? 0;
   return (
-    <article className={styles.recordDocument}>
-      <header className={styles.recordHeader}>
+    <article className={styles.recordDocument} data-route-motion-ready="">
+      <header
+        className={`${styles.recordHeader} ${styles.routeMotionItem}`}
+        style={routeMotionDelay(0)}
+      >
         <Link className={styles.backLink} to="/">
           ← 記録一覧へ
         </Link>
@@ -496,7 +582,11 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
           <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
         </div>
       </header>
-      <section className={styles.detailSection} aria-labelledby="opinions-title">
+      <section
+        className={`${styles.detailSection} ${styles.routeMotionItem}`}
+        style={routeMotionDelay(40)}
+        aria-labelledby="opinions-title"
+      >
         <h2 id="opinions-title" className={JAPANESE_HEADING_CLASS}>
           3人の意見
         </h2>
@@ -527,7 +617,11 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
           })}
         </div>
       </section>
-      <section className={styles.detailSection} aria-labelledby="votes-title">
+      <section
+        className={`${styles.detailSection} ${styles.routeMotionItem}`}
+        style={routeMotionDelay(80)}
+        aria-labelledby="votes-title"
+      >
         <h2 id="votes-title" className={JAPANESE_HEADING_CLASS}>
           投票
         </h2>
@@ -552,7 +646,9 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
         )}
       </section>
       <section
-        className={`${styles.detailSection} ${styles.decisionSection}`}
+        className={`${styles.detailSection} ${styles.decisionSection} ${styles.routeMotionItem}`}
+        data-route-motion-terminal=""
+        style={routeMotionDelay(120)}
         aria-labelledby="decision-title"
       >
         <p className={styles.eyebrow} lang="en">
@@ -607,6 +703,8 @@ function RankingPanel({
   pending,
   error,
   onRetry,
+  motionDelay,
+  motionTerminal = false,
 }: {
   readonly variant: "wins" | "requests";
   readonly title: string;
@@ -615,6 +713,8 @@ function RankingPanel({
   readonly pending: boolean;
   readonly error: unknown;
   readonly onRetry: () => void;
+  readonly motionDelay: number;
+  readonly motionTerminal?: boolean;
 }) {
   const apiError = error instanceof RecordsApiError ? error : undefined;
   const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
@@ -622,9 +722,11 @@ function RankingPanel({
   const total = entries?.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
   return (
     <section
-      className={`${styles.rankingPanel} ${
+      className={`${styles.rankingPanel} ${styles.routeMotionItem} ${
         variant === "wins" ? styles.rankingPanelWins : styles.rankingPanelRequests
       }`}
+      data-route-motion-terminal={motionTerminal ? "" : undefined}
+      style={routeMotionDelay(motionDelay)}
       aria-labelledby={`${title}-title`}
       aria-busy={pending}
     >
@@ -829,7 +931,11 @@ function RankingsPage() {
   useAuthenticationRecovery(rankings.error);
   return (
     <>
-      <header className={styles.pageHeader}>
+      <header
+        className={`${styles.pageHeader} ${styles.routeMotionItem}`}
+        data-route-motion-ready={rankings.isPending ? undefined : ""}
+        style={routeMotionDelay(0)}
+      >
         <p className={styles.eyebrow} lang="en">
           RECORDS INSIGHTS
         </p>
@@ -854,6 +960,7 @@ function RankingsPage() {
           pending={rankings.isPending}
           error={rankings.error}
           onRetry={() => void rankings.refetch()}
+          motionDelay={60}
         />
         <RankingPanel
           variant="requests"
@@ -863,6 +970,8 @@ function RankingsPage() {
           pending={rankings.isPending}
           error={rankings.error}
           onRetry={() => void rankings.refetch()}
+          motionDelay={100}
+          motionTerminal
         />
       </div>
     </>
@@ -871,11 +980,15 @@ function RankingsPage() {
 
 function NotFound() {
   return (
-    <section className={styles.messagePanel}>
+    <section
+      className={`${styles.messagePanel} ${styles.routeMotionItem}`}
+      data-route-motion-ready=""
+      data-route-motion-terminal=""
+    >
       <span className={styles.errorRing} aria-hidden="true">
         ?
       </span>
-      <h1>ページが見つかりません</h1>
+      <h1 tabIndex={-1}>ページが見つかりません</h1>
       <p>指定されたページは存在しないか、閲覧できません。</p>
       <Link className={styles.primaryButton} to="/">
         記録一覧へ戻る

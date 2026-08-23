@@ -551,6 +551,125 @@
   outline: none;
 }
 
+.routeStage {
+  --route-motion-primary: var(--records-cyan-ink);
+  --route-motion-secondary: var(--records-cyan-500);
+  --route-motion-direction: -10px;
+  --route-motion-ring-x: 68%;
+  --route-motion-ring-y: -58px;
+  --route-motion-item-offset: 10px;
+  min-width: 0;
+}
+
+.routeStage[data-route-kind="detail"] {
+  --route-motion-secondary: color-mix(in srgb, var(--records-cyan-500) 45%, #8877dc);
+  --route-motion-direction: 10px;
+  --route-motion-ring-x: 8%;
+  --route-motion-ring-y: -74px;
+}
+
+.routeStage[data-route-kind="insights"] {
+  --route-motion-secondary: var(--records-pink-ink);
+  --route-motion-direction: -6px;
+  --route-motion-ring-x: 54%;
+  --route-motion-ring-y: -82px;
+}
+
+.routeScene {
+  position: relative;
+  min-width: 0;
+}
+
+.routeContent {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.routeBrandLayer {
+  position: absolute;
+  z-index: 0;
+  top: -18px;
+  right: 0;
+  left: 0;
+  height: min(360px, 60vh);
+  overflow: clip;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.routeBrandGrid,
+.routeBrandRing,
+.routeBrandDiamond {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.routeBrandGrid {
+  inset: 0;
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--route-motion-primary) 32%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--route-motion-primary) 32%, transparent) 1px,
+      transparent 1px
+    );
+  background-position: 12px 8px;
+  background-size: 38px 38px;
+  mask-image: linear-gradient(100deg, transparent 18%, black 66%, transparent 96%);
+}
+
+.routeBrandRing {
+  top: var(--route-motion-ring-y);
+  left: var(--route-motion-ring-x);
+  width: clamp(190px, 24vw, 320px);
+  aspect-ratio: 1;
+  border: 1px solid var(--route-motion-primary);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 24px color-mix(in srgb, var(--route-motion-primary) 22%, transparent),
+    0 0 0 58px color-mix(in srgb, var(--route-motion-secondary) 13%, transparent);
+}
+
+.routeBrandDiamond {
+  top: 54px;
+  right: clamp(42px, 9vw, 132px);
+  width: 22px;
+  aspect-ratio: 1;
+  border: 2px solid var(--route-motion-secondary);
+  box-shadow:
+    -86px 52px 0 -5px var(--route-motion-primary),
+    58px 92px 0 -7px var(--route-motion-secondary);
+  transform: rotate(45deg);
+}
+
+.routeScene[data-route-motion="active"] {
+  animation: routeSceneEnter 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.routeScene[data-route-motion="active"] .routeBrandLayer {
+  animation: routeBrandEnter 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.routeMotionItem {
+  --route-motion-delay: 0ms;
+}
+
+.routeScene[data-route-motion="active"] .routeMotionItem {
+  animation: routeMotionItemEnter 220ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: var(--route-motion-delay);
+}
+
+.routeMotionAppend,
+.routeScene[data-route-motion="active"] .routeMotionAppend {
+  animation: routeMotionAppend 180ms ease-out;
+  animation-delay: 0ms;
+}
+
 .pageHeader {
   max-width: 820px;
   margin-bottom: 28px;
@@ -1547,7 +1666,6 @@
 
 .detailSection {
   padding: clamp(24px, 4vw, 44px);
-  animation: sectionEnter 220ms ease both;
 }
 
 .detailSection > h2 {
@@ -1725,10 +1843,48 @@
     transform: scale(1);
   }
 }
-@keyframes sectionEnter {
+@keyframes routeSceneEnter {
+  from {
+    opacity: 0.78;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes routeBrandEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(var(--route-motion-direction), 4px, 0);
+  }
+  36% {
+    opacity: 0.14;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes routeMotionItemEnter {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(var(--route-motion-item-offset)) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes routeMotionAppend {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
@@ -1786,6 +1942,29 @@
   }
   .mainContent {
     padding: 26px 16px 44px;
+  }
+  .routeStage {
+    --route-motion-direction: -6px;
+    --route-motion-item-offset: 6px;
+    --route-motion-ring-x: 48%;
+  }
+  .routeStage[data-route-kind="detail"] {
+    --route-motion-direction: 6px;
+    --route-motion-ring-x: -12%;
+  }
+  .routeStage[data-route-kind="insights"] {
+    --route-motion-ring-x: 38%;
+  }
+  .routeBrandLayer {
+    height: 260px;
+  }
+  .routeBrandRing {
+    width: 190px;
+  }
+  .routeBrandDiamond {
+    top: 44px;
+    right: 28px;
+    width: 17px;
   }
   .filters,
   .cardGrid,
@@ -1938,5 +2117,14 @@
   .primaryButton:hover:active,
   .primaryButton:active {
     transform: none;
+  }
+
+  .routeScene[data-route-motion="active"],
+  .routeScene[data-route-motion="active"] .routeBrandLayer,
+  .routeScene[data-route-motion="active"] .routeMotionItem,
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
