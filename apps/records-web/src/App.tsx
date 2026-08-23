@@ -43,6 +43,7 @@ import {
 } from "./components";
 import { VoteGraph } from "./VoteGraph";
 import styles from "./App.module.css";
+import { useRecordsTheme, type Theme } from "./theme";
 
 const SESSION_QUERY_KEY = ["records-session"] as const;
 const LOGIN_TRANSITION_KEY = "shittim-records-login-transition";
@@ -162,9 +163,13 @@ function BrandTransition({
 function AuthenticatedRoutes({
   session,
   onLogout,
+  theme,
+  onThemeToggle,
 }: {
   readonly session: SessionResponse & { authenticated: true };
   readonly onLogout: () => void;
+  readonly theme: Theme;
+  readonly onThemeToggle: () => void;
 }) {
   const [showTransition, setShowTransition] = useState(
     () => sessionStorage.getItem(LOGIN_TRANSITION_KEY) === "pending",
@@ -183,7 +188,13 @@ function AuthenticatedRoutes({
     );
   }
   return (
-    <Layout displayName={session.user.displayName} avatar={session.user.avatar} onLogout={onLogout}>
+    <Layout
+      displayName={session.user.displayName}
+      avatar={session.user.avatar}
+      onLogout={onLogout}
+      theme={theme}
+      onThemeToggle={onThemeToggle}
+    >
       <Routes>
         <Route path="/" element={<RecordsHome />} />
         <Route path="/records/:recordId" element={<RecordDetail />} />
@@ -779,7 +790,7 @@ function RankingShareAvatar({
       <span
         className={styles.rankingShareRing}
         style={{
-          background: `conic-gradient(var(--ranking-bar-end) ${share * 3.6}deg, rgb(23 50 77 / 8%) 0deg)`,
+          background: `conic-gradient(var(--ranking-bar-end) ${share * 3.6}deg, var(--records-meter-track) 0deg)`,
         }}
       >
         <Avatar avatar={entry.avatar} />
@@ -850,7 +861,13 @@ function NotFound() {
   );
 }
 
-function ApplicationRoutes() {
+function ApplicationRoutes({
+  theme,
+  onThemeToggle,
+}: {
+  readonly theme: Theme;
+  readonly onThemeToggle: () => void;
+}) {
   const session = useQuery({ queryKey: SESSION_QUERY_KEY, queryFn: getSession });
   const location = useLocation();
   const navigate = useNavigate();
@@ -912,11 +929,14 @@ function ApplicationRoutes() {
     <AuthenticatedRoutes
       session={authenticatedSession}
       onLogout={() => logoutMutation.mutate(authenticatedSession.csrfToken)}
+      theme={theme}
+      onThemeToggle={onThemeToggle}
     />
   );
 }
 
 export function App() {
+  const { theme, toggleTheme } = useRecordsTheme();
   const [client] = useState(
     () =>
       new QueryClient({
@@ -926,7 +946,7 @@ export function App() {
   return (
     <QueryClientProvider client={client}>
       <BrowserRouter>
-        <ApplicationRoutes />
+        <ApplicationRoutes theme={theme} onThemeToggle={toggleTheme} />
       </BrowserRouter>
     </QueryClientProvider>
   );
