@@ -1,4 +1,4 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
@@ -21,10 +21,20 @@ if (!entryMatch?.[1]) {
 
 const entryPath = new URL(entryMatch[1], "https://records.invalid/").pathname.replace(/^\//, "");
 const entryFile = new URL(entryPath, outputDirectory);
-if (!(await stat(entryFile)).isFile()) {
-  throw new Error(`code_splitting_entry_chunk_not_found: ${entryPath}`);
+let entryContents;
+try {
+  entryContents = await readFile(entryFile);
+} catch (error) {
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "EISDIR")
+  ) {
+    throw new Error(`code_splitting_entry_chunk_not_found: ${entryPath}`, { cause: error });
+  }
+  throw error;
 }
-const entryGzipBytes = gzipSync(await readFile(entryFile)).byteLength;
+const entryGzipBytes = gzipSync(entryContents).byteLength;
 if (entryGzipBytes >= maximumEntryGzipBytes) {
   throw new Error(
     `code_splitting_entry_gzip_budget: maximum=${maximumEntryGzipBytes - 1} actual=${entryGzipBytes}`,
