@@ -30,7 +30,7 @@ function RouteScene({
   readonly sceneRef: RefObject<HTMLDivElement | null>;
 }>) {
   const [motion, setMotion] = useState<"idle" | "active" | "settled">(animate ? "active" : "idle");
-  const brandFinishedRef = useRef(!animate);
+  const sceneFinishedRef = useRef(!animate);
   const contentReadyRef = useRef(!animate);
   const contentFinishedRef = useRef(!animate);
 
@@ -38,7 +38,7 @@ function RouteScene({
     if (sceneRef.current?.querySelector("[data-route-motion-ready]")) {
       contentReadyRef.current = true;
     }
-    if (brandFinishedRef.current && contentReadyRef.current && contentFinishedRef.current) {
+    if (sceneFinishedRef.current && contentReadyRef.current && contentFinishedRef.current) {
       setMotion("settled");
     }
   }, [sceneRef]);
@@ -52,7 +52,7 @@ function RouteScene({
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
     ) {
-      brandFinishedRef.current = true;
+      sceneFinishedRef.current = true;
       contentReadyRef.current = true;
       contentFinishedRef.current = true;
       setMotion("settled");
@@ -73,9 +73,7 @@ function RouteScene({
     observer.observe(scene, { attributes: true, childList: true, subtree: true });
     const handleRouteAnimation = (event: Event) => {
       const target = event.target as HTMLElement;
-      if (target.hasAttribute("data-route-brand")) {
-        brandFinishedRef.current = true;
-      }
+      if (target === scene) sceneFinishedRef.current = true;
       if (target.hasAttribute("data-route-motion-terminal")) {
         contentFinishedRef.current = true;
       }
@@ -95,11 +93,6 @@ function RouteScene({
       data-route-scene={pathname}
       ref={sceneRef}
     >
-      <div className={styles.routeBrandLayer} data-route-brand="" aria-hidden="true">
-        <span className={styles.routeBrandGrid} />
-        <span className={styles.routeBrandRing} />
-        <span className={styles.routeBrandDiamond} />
-      </div>
       <div className={styles.routeContent}>{children}</div>
     </div>
   );

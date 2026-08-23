@@ -3,7 +3,7 @@ import { focusManager } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
-import { Avatar, formatCompletedDateTime } from "./components";
+import { Avatar, cardDecorationForRecord, formatCompletedDateTime } from "./components";
 import type { SessionResponse } from "./api";
 import { isRecordsApiResponse } from "./contracts";
 import { THEME_STORAGE_KEY } from "./theme";
@@ -203,6 +203,24 @@ describe("formatCompletedDateTime", () => {
     expect(formatCompletedDateTime("2026-08-15T06:00:00Z")).toBe("2026年8月15日 15:00");
     expect(formatCompletedDateTime("2026-12-31T15:00:00Z")).toBe("2027年1月1日 00:00");
     expect(formatCompletedDateTime("2026-08-15T14:59:59Z")).toBe("2026年8月15日 23:59");
+  });
+});
+
+describe("cardDecorationForRecord", () => {
+  it("selects a stable but varied card ornament from the record identity", () => {
+    const identities = ["r", "s", "t", "u"].map((value) => value.repeat(43));
+    const decorations = identities.map(cardDecorationForRecord);
+
+    expect(cardDecorationForRecord(identities[0]!)).toEqual(decorations[0]);
+    expect(new Set(decorations.map(({ variant }) => variant)).size).toBeGreaterThan(1);
+    for (const decoration of decorations) {
+      expect(decoration.rotation).toBeGreaterThanOrEqual(-6);
+      expect(decoration.rotation).toBeLessThanOrEqual(6);
+      expect(decoration.shiftX).toBeGreaterThanOrEqual(-8);
+      expect(decoration.shiftX).toBeLessThanOrEqual(8);
+      expect(decoration.shiftY).toBeGreaterThanOrEqual(-5);
+      expect(decoration.shiftY).toBeLessThanOrEqual(5);
+    }
   });
 });
 
@@ -441,6 +459,7 @@ describe("App", () => {
     });
     expect(cardLink).toContainElement(card);
     expect(within(card).queryByRole("link")).not.toBeInTheDocument();
+    expect(card.querySelector("[data-card-decoration]")).toHaveAttribute("aria-hidden", "true");
     expect(within(card).getByText("記録を読む")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByLabelText("フリーワード検索")).toHaveAttribute(
       "placeholder",

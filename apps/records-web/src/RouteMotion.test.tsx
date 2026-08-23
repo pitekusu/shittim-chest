@@ -127,10 +127,9 @@ describe("BrandedRouteStage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "open detail" }));
     const scene = container.querySelector<HTMLElement>('[data-route-scene^="/records/"]')!;
-    const brand = scene.querySelector<HTMLElement>("[data-route-brand]")!;
     expect(scene).toHaveAttribute("data-route-motion", "active");
 
-    fireEvent.animationEnd(brand);
+    fireEvent.animationEnd(scene);
     expect(scene).toHaveAttribute("data-route-motion", "active");
 
     fireEvent.click(screen.getByRole("button", { name: "finish loading" }));

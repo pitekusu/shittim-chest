@@ -369,6 +369,98 @@ export function formatCompletedDateTime(value: string): string {
   return COMPLETED_DATE_TIME_FORMAT.format(new Date(value));
 }
 
+const CARD_DECORATION_VARIANTS = ["orbit", "grid", "constellation", "beacon"] as const;
+
+export function cardDecorationForRecord(recordId: string): {
+  readonly variant: (typeof CARD_DECORATION_VARIANTS)[number];
+  readonly rotation: number;
+  readonly shiftX: number;
+  readonly shiftY: number;
+} {
+  let hash = 2_166_136_261;
+  for (const character of recordId) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  const value = hash >>> 0;
+  return {
+    variant: CARD_DECORATION_VARIANTS[value % CARD_DECORATION_VARIANTS.length]!,
+    rotation: ((value >>> 4) % 13) - 6,
+    shiftX: ((value >>> 9) % 17) - 8,
+    shiftY: ((value >>> 14) % 11) - 5,
+  };
+}
+
+function CardDecoration({ recordId }: { readonly recordId: string }) {
+  const decoration = cardDecorationForRecord(recordId);
+  const style = {
+    "--card-decoration-rotation": `${decoration.rotation}deg`,
+    "--card-decoration-shift-x": `${decoration.shiftX}px`,
+    "--card-decoration-shift-y": `${decoration.shiftY}px`,
+  } as CSSProperties;
+  return (
+    <svg
+      className={styles.cardDecoration}
+      data-card-decoration={decoration.variant}
+      viewBox="0 0 220 140"
+      preserveAspectRatio="xMidYMid meet"
+      aria-hidden="true"
+      focusable="false"
+      style={style}
+    >
+      <path
+        className={styles.cardDecorationGrid}
+        d="M24 18H212M24 42H212M24 66H212M24 90H212M24 114H212M44 6V132M76 6V132M108 6V132M140 6V132M172 6V132M204 6V132"
+      />
+      {decoration.variant === "orbit" && (
+        <>
+          <ellipse className={styles.cardDecorationSoft} cx="145" cy="81" rx="65" ry="32" />
+          <path className={styles.cardDecorationStrong} d="M82 87c18 33 102 38 126-2" />
+          <path className={styles.cardDecorationStrong} d="M101 62c26-27 75-27 102 0" />
+          <rect className={styles.cardDecorationGlyph} x="139" y="72" width="17" height="17" />
+          <circle className={styles.cardDecorationDot} cx="91" cy="72" r="3" />
+          <circle className={styles.cardDecorationDot} cx="205" cy="73" r="2" />
+        </>
+      )}
+      {decoration.variant === "grid" && (
+        <>
+          <path className={styles.cardDecorationSoft} d="m71 118 48-82 80 82Z" />
+          <path className={styles.cardDecorationStrong} d="m104 104 25-43 42 43Z" />
+          <path className={styles.cardDecorationStrong} d="M50 104h155" />
+          <rect className={styles.cardDecorationGlyph} x="157" y="52" width="15" height="15" />
+          <circle className={styles.cardDecorationDot} cx="86" cy="92" r="3" />
+          <circle className={styles.cardDecorationDot} cx="190" cy="106" r="2" />
+        </>
+      )}
+      {decoration.variant === "constellation" && (
+        <>
+          <path className={styles.cardDecorationSoft} d="m61 105 31-51 39 29 38-54 38 33" />
+          <path className={styles.cardDecorationStrong} d="M71 113c31-23 82-27 130-4" />
+          <circle className={styles.cardDecorationNode} cx="92" cy="54" r="7" />
+          <circle className={styles.cardDecorationNode} cx="131" cy="83" r="5" />
+          <circle className={styles.cardDecorationNode} cx="169" cy="29" r="8" />
+          <circle className={styles.cardDecorationDot} cx="61" cy="105" r="3" />
+          <circle className={styles.cardDecorationDot} cx="207" cy="62" r="3" />
+          <rect className={styles.cardDecorationGlyph} x="168" y="89" width="14" height="14" />
+        </>
+      )}
+      {decoration.variant === "beacon" && (
+        <>
+          <circle className={styles.cardDecorationSoft} cx="158" cy="76" r="46" />
+          <path
+            className={styles.cardDecorationStrong}
+            d="M158 15v23M158 114v20M96 76h24M196 76h20"
+          />
+          <path className={styles.cardDecorationStrong} d="M113 58a49 49 0 0 1 87-10" />
+          <rect className={styles.cardDecorationGlyph} x="148" y="66" width="20" height="20" />
+          <circle className={styles.cardDecorationDot} cx="108" cy="107" r="3" />
+          <circle className={styles.cardDecorationDot} cx="202" cy="116" r="2" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export function DebateCard({
   record,
   motionDelay,
@@ -419,6 +511,7 @@ export function DebateCard({
       }
     >
       <article className={styles.debateCard}>
+        <CardDecoration recordId={record.recordId} />
         <div className={styles.cardMeta}>
           <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
           {record.result.tieBreakApplied && <span className={styles.tieBadge}>既定ルール決着</span>}
