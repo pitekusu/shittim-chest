@@ -321,6 +321,88 @@ test("record card opens from its native keyboard link", async ({ page }) => {
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
 });
 
+test("record identities produce varied and stable card ornaments", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.setViewportSize({ width: 1680, height: 950 });
+  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
+  const records = [0, 1, 3, 4, 5, 6].map((identity, index) => {
+    const winnerIndex = index % participants.length;
+    return {
+      schemaVersion: 1,
+      recordId: createHash("sha256").update(`visual-card-${identity}`).digest("base64url"),
+      completedAt: `2026-08-${String(22 - index).padStart(2, "0")}T06:00:00Z`,
+      questionPreview: [
+        "明日の放課後に何をして過ごす？",
+        "三人で選ぶなら、どんな映画がいい？",
+        "夏の夜に似合う飲み物を決めよう",
+        "休日に読む一冊を選ぶなら？",
+        "小さな旅へ持っていくものは何？",
+        "今夜の献立を楽しく決めて",
+      ][index],
+      requester: detail.requester,
+      participants,
+      result: {
+        winner: participants[winnerIndex]!.slot,
+        voteCounts: participants.map(({ slot }, participantIndex) => ({
+          participant: slot,
+          count:
+            participantIndex === winnerIndex
+              ? 2
+              : participantIndex === (winnerIndex + 1) % 3
+                ? 1
+                : 0,
+        })),
+        tieBreakApplied: false,
+      },
+    };
+  });
+  await page.route("**/api/v1/session", (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 1,
+        authenticated: true,
+        user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
+        csrfToken: "csrf-token",
+      },
+    }),
+  );
+  await page.route("**/api/v1/records?*", (route) =>
+    route.fulfill({ json: { schemaVersion: 1, items: records, nextCursor: null } }),
+  );
+
+  await page.goto("/");
+  const decorations = page.locator("[data-card-decoration]");
+  await expect(decorations).toHaveCount(records.length);
+  const beforeReload = await decorations.evaluateAll((elements) =>
+    elements.map((element) => ({
+      accent: element.getAttribute("data-card-decoration-accent"),
+      frame: element.getAttribute("data-card-decoration-frame"),
+      mirrored: element.getAttribute("data-card-decoration-mirrored"),
+      variant: element.getAttribute("data-card-decoration"),
+    })),
+  );
+  expect(new Set(beforeReload.map(({ variant }) => variant)).size).toBe(records.length);
+  expect(new Set(beforeReload.map(({ frame }) => frame)).size).toBeGreaterThanOrEqual(3);
+
+  await page.reload();
+  await expect(decorations).toHaveCount(records.length);
+  expect(
+    await decorations.evaluateAll((elements) =>
+      elements.map((element) => ({
+        accent: element.getAttribute("data-card-decoration-accent"),
+        frame: element.getAttribute("data-card-decoration-frame"),
+        mirrored: element.getAttribute("data-card-decoration-mirrored"),
+        variant: element.getAttribute("data-card-decoration"),
+      })),
+    ),
+  ).toEqual(beforeReload);
+  await expect(page).toHaveScreenshot("records-card-decorations-dark.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixels: 20,
+  });
+});
+
 test("branded route motion stays short and coordinates all internal routes", async ({
   page,
 }, testInfo) => {

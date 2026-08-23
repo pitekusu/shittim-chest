@@ -1386,13 +1386,14 @@
   width: 190px;
   height: 128px;
   color: var(--records-cyan-500);
-  opacity: 0.42;
+  opacity: var(--card-decoration-opacity);
   pointer-events: none;
-  transform: rotate(var(--card-decoration-rotation));
+  transform: rotate(var(--card-decoration-rotation)) scale(var(--card-decoration-scale))
+    scaleX(var(--card-decoration-mirror));
   transform-origin: 72% 72%;
 }
 
-.cardDecorationGrid,
+.cardDecorationFrame,
 .cardDecorationSoft,
 .cardDecorationStrong,
 .cardDecorationGlyph,
@@ -1400,10 +1401,15 @@
   vector-effect: non-scaling-stroke;
 }
 
-.cardDecorationGrid {
+.cardDecorationFrame {
   fill: none;
   stroke: color-mix(in srgb, currentColor 20%, transparent);
+  stroke-linecap: round;
   stroke-width: 0.7;
+}
+
+.cardDecoration[data-card-decoration-frame="dots"] .cardDecorationFrame {
+  stroke-width: 3;
 }
 
 .cardDecorationSoft {
@@ -1439,16 +1445,16 @@
   fill: color-mix(in srgb, currentColor 86%, transparent);
 }
 
-.cardDecoration[data-card-decoration="grid"] {
-  color: color-mix(in srgb, var(--records-cyan-500) 72%, var(--records-lavender-100));
+.cardDecoration[data-card-decoration-accent="azure"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 72%, var(--records-cyan-ink));
 }
 
-.cardDecoration[data-card-decoration="constellation"] {
+.cardDecoration[data-card-decoration-accent="pink"] {
   color: color-mix(in srgb, var(--records-cyan-500) 76%, var(--records-pink-ink));
 }
 
-.cardDecoration[data-card-decoration="beacon"] {
-  color: color-mix(in srgb, var(--records-cyan-500) 84%, var(--records-cyan-ink));
+.cardDecoration[data-card-decoration-accent="lavender"] {
+  color: color-mix(in srgb, var(--records-cyan-500) 70%, var(--records-lavender-100));
 }
 
 .debateCardLink:hover .debateCard,
@@ -1942,7 +1948,7 @@
     bottom: calc(-12px + var(--card-decoration-shift-y));
     width: 164px;
     height: 112px;
-    opacity: 0.36;
+    opacity: clamp(0.3, var(--card-decoration-opacity), 0.4);
   }
   .recordMeta time {
     width: 100%;
