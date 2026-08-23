@@ -369,25 +369,67 @@ export function formatCompletedDateTime(value: string): string {
   return COMPLETED_DATE_TIME_FORMAT.format(new Date(value));
 }
 
-const CARD_DECORATION_VARIANTS = ["orbit", "grid", "constellation", "beacon"] as const;
+const CARD_DECORATION_VARIANTS = [
+  "orbit",
+  "triad",
+  "constellation",
+  "reticle",
+  "prism",
+  "wave",
+  "lattice",
+  "compass",
+  "horizon",
+  "helix",
+  "vector",
+  "portal",
+] as const;
+const CARD_DECORATION_FRAMES = ["grid", "dots", "rays", "axes", "none"] as const;
+const CARD_DECORATION_ACCENTS = ["cyan", "azure", "pink", "lavender"] as const;
+
+function cardDecorationRandom(recordId: string): () => number {
+  let seed = 2_166_136_261;
+  for (const character of recordId) {
+    seed ^= character.codePointAt(0) ?? 0;
+    seed = Math.imul(seed, 16_777_619);
+  }
+  seed ^= seed >>> 16;
+  seed = Math.imul(seed, 2_246_822_507);
+  seed ^= seed >>> 13;
+  seed = Math.imul(seed, 3_266_489_909);
+  seed ^= seed >>> 16;
+  return () => {
+    seed = (seed + 0x6d2b_79f5) | 0;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
 
 export function cardDecorationForRecord(recordId: string): {
   readonly variant: (typeof CARD_DECORATION_VARIANTS)[number];
+  readonly frame: (typeof CARD_DECORATION_FRAMES)[number];
+  readonly accent: (typeof CARD_DECORATION_ACCENTS)[number];
   readonly rotation: number;
   readonly shiftX: number;
   readonly shiftY: number;
+  readonly scale: number;
+  readonly mirrored: boolean;
+  readonly opacity: number;
 } {
-  let hash = 2_166_136_261;
-  for (const character of recordId) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 16_777_619);
-  }
-  const value = hash >>> 0;
+  const random = cardDecorationRandom(recordId);
+  const choose = <Value,>(values: readonly Value[]) =>
+    values[Math.floor(random() * values.length)]!;
   return {
-    variant: CARD_DECORATION_VARIANTS[value % CARD_DECORATION_VARIANTS.length]!,
-    rotation: ((value >>> 4) % 13) - 6,
-    shiftX: ((value >>> 9) % 17) - 8,
-    shiftY: ((value >>> 14) % 11) - 5,
+    variant: choose(CARD_DECORATION_VARIANTS),
+    frame: choose(CARD_DECORATION_FRAMES),
+    accent: choose(CARD_DECORATION_ACCENTS),
+    rotation: Math.round(random() * 24) - 12,
+    shiftX: Math.round(random() * 28) - 14,
+    shiftY: Math.round(random() * 20) - 10,
+    scale: Number((0.9 + random() * 0.2).toFixed(2)),
+    mirrored: random() >= 0.5,
+    opacity: Number((0.34 + random() * 0.12).toFixed(2)),
   };
 }
 
@@ -397,21 +439,47 @@ function CardDecoration({ recordId }: { readonly recordId: string }) {
     "--card-decoration-rotation": `${decoration.rotation}deg`,
     "--card-decoration-shift-x": `${decoration.shiftX}px`,
     "--card-decoration-shift-y": `${decoration.shiftY}px`,
+    "--card-decoration-scale": decoration.scale,
+    "--card-decoration-mirror": decoration.mirrored ? -1 : 1,
+    "--card-decoration-opacity": decoration.opacity,
   } as CSSProperties;
   return (
     <svg
       className={styles.cardDecoration}
       data-card-decoration={decoration.variant}
+      data-card-decoration-frame={decoration.frame}
+      data-card-decoration-accent={decoration.accent}
+      data-card-decoration-mirrored={decoration.mirrored ? "true" : "false"}
       viewBox="0 0 220 140"
       preserveAspectRatio="xMidYMid meet"
       aria-hidden="true"
       focusable="false"
       style={style}
     >
-      <path
-        className={styles.cardDecorationGrid}
-        d="M24 18H212M24 42H212M24 66H212M24 90H212M24 114H212M44 6V132M76 6V132M108 6V132M140 6V132M172 6V132M204 6V132"
-      />
+      {decoration.frame === "grid" && (
+        <path
+          className={styles.cardDecorationFrame}
+          d="M24 18H212M24 42H212M24 66H212M24 90H212M24 114H212M44 6V132M76 6V132M108 6V132M140 6V132M172 6V132M204 6V132"
+        />
+      )}
+      {decoration.frame === "dots" && (
+        <path
+          className={styles.cardDecorationFrame}
+          d="M45 24h.1M77 24h.1M109 24h.1M141 24h.1M173 24h.1M205 24h.1M45 52h.1M77 52h.1M109 52h.1M141 52h.1M173 52h.1M205 52h.1M45 80h.1M77 80h.1M109 80h.1M141 80h.1M173 80h.1M205 80h.1M45 108h.1M77 108h.1M109 108h.1M141 108h.1M173 108h.1M205 108h.1"
+        />
+      )}
+      {decoration.frame === "rays" && (
+        <path
+          className={styles.cardDecorationFrame}
+          d="M214 132 78 10M214 132 120 2M214 132 164 0M214 132 218 18M214 132 78 62M214 132 110 102"
+        />
+      )}
+      {decoration.frame === "axes" && (
+        <path
+          className={styles.cardDecorationFrame}
+          d="M36 108H216M62 132V8M36 100v16M86 102v12M110 102v12M134 102v12M158 102v12M182 102v12M206 100v16M54 28h16M56 52h12M56 76h12"
+        />
+      )}
       {decoration.variant === "orbit" && (
         <>
           <ellipse className={styles.cardDecorationSoft} cx="145" cy="81" rx="65" ry="32" />
@@ -422,7 +490,7 @@ function CardDecoration({ recordId }: { readonly recordId: string }) {
           <circle className={styles.cardDecorationDot} cx="205" cy="73" r="2" />
         </>
       )}
-      {decoration.variant === "grid" && (
+      {decoration.variant === "triad" && (
         <>
           <path className={styles.cardDecorationSoft} d="m71 118 48-82 80 82Z" />
           <path className={styles.cardDecorationStrong} d="m104 104 25-43 42 43Z" />
@@ -444,7 +512,7 @@ function CardDecoration({ recordId }: { readonly recordId: string }) {
           <rect className={styles.cardDecorationGlyph} x="168" y="89" width="14" height="14" />
         </>
       )}
-      {decoration.variant === "beacon" && (
+      {decoration.variant === "reticle" && (
         <>
           <circle className={styles.cardDecorationSoft} cx="158" cy="76" r="46" />
           <path
@@ -455,6 +523,118 @@ function CardDecoration({ recordId }: { readonly recordId: string }) {
           <rect className={styles.cardDecorationGlyph} x="148" y="66" width="20" height="20" />
           <circle className={styles.cardDecorationDot} cx="108" cy="107" r="3" />
           <circle className={styles.cardDecorationDot} cx="202" cy="116" r="2" />
+        </>
+      )}
+      {decoration.variant === "prism" && (
+        <>
+          <path className={styles.cardDecorationSoft} d="m148 18 53 52-53 53-54-53Z" />
+          <path className={styles.cardDecorationStrong} d="m148 18 20 52-20 53-19-53Z" />
+          <path className={styles.cardDecorationStrong} d="m94 70 35 0 19-52 20 52h33" />
+          <path className={styles.cardDecorationSoft} d="M148 18 94 70l54 53 53-53Z" />
+          <circle className={styles.cardDecorationDot} cx="79" cy="96" r="3" />
+          <circle className={styles.cardDecorationDot} cx="210" cy="48" r="2" />
+        </>
+      )}
+      {decoration.variant === "wave" && (
+        <>
+          <path className={styles.cardDecorationSoft} d="M42 45c29-31 53 31 82 0s53 31 82 0" />
+          <path className={styles.cardDecorationStrong} d="M42 76c29-31 53 31 82 0s53 31 82 0" />
+          <path className={styles.cardDecorationSoft} d="M42 107c29-31 53 31 82 0s53 31 82 0" />
+          <circle className={styles.cardDecorationNode} cx="83" cy="76" r="5" />
+          <circle className={styles.cardDecorationNode} cx="165" cy="76" r="5" />
+          <rect className={styles.cardDecorationGlyph} x="119" y="65" width="14" height="14" />
+        </>
+      )}
+      {decoration.variant === "lattice" && (
+        <>
+          <path
+            className={styles.cardDecorationSoft}
+            d="m61 90 30-30 30 30-30 30Zm60 0 30-30 30 30-30 30Zm30-30 26-26 26 26-26 26Z"
+          />
+          <path
+            className={styles.cardDecorationStrong}
+            d="M91 60V28m60 32V17m26 17h31M61 90H32m149 0h31"
+          />
+          <rect className={styles.cardDecorationGlyph} x="84" y="83" width="14" height="14" />
+          <circle className={styles.cardDecorationDot} cx="37" cy="90" r="3" />
+          <circle className={styles.cardDecorationDot} cx="209" cy="90" r="2" />
+        </>
+      )}
+      {decoration.variant === "compass" && (
+        <>
+          <circle className={styles.cardDecorationSoft} cx="151" cy="73" r="51" />
+          <path
+            className={styles.cardDecorationStrong}
+            d="m151 27 13 33 34 13-34 13-13 33-13-33-34-13 34-13Z"
+          />
+          <path className={styles.cardDecorationSoft} d="m151 46 27 27-27 27-27-27Z" />
+          <circle className={styles.cardDecorationNode} cx="151" cy="73" r="6" />
+          <path className={styles.cardDecorationStrong} d="M84 73h16m102 0h16M151 6v12m0 110v10" />
+        </>
+      )}
+      {decoration.variant === "horizon" && (
+        <>
+          <path className={styles.cardDecorationSoft} d="M34 101h180M47 83h155M62 65h126" />
+          <path
+            className={styles.cardDecorationStrong}
+            d="M45 101c32-55 63-55 96 0 22-33 43-33 65 0"
+          />
+          <path className={styles.cardDecorationSoft} d="M67 113c40-22 92-22 133 0" />
+          <rect className={styles.cardDecorationGlyph} x="135" y="48" width="17" height="17" />
+          <circle className={styles.cardDecorationDot} cx="45" cy="101" r="3" />
+          <circle className={styles.cardDecorationDot} cx="206" cy="101" r="2" />
+        </>
+      )}
+      {decoration.variant === "helix" && (
+        <>
+          <path className={styles.cardDecorationStrong} d="M48 27c61 0 61 91 122 91s42-65 42-65" />
+          <path className={styles.cardDecorationSoft} d="M48 118c61 0 61-91 122-91s42 65 42 65" />
+          <path
+            className={styles.cardDecorationSoft}
+            d="m70 43 32 39m-18 23 37-46m2-31 37 45m-20 31 40-49"
+          />
+          <circle className={styles.cardDecorationNode} cx="112" cy="71" r="6" />
+          <circle className={styles.cardDecorationDot} cx="48" cy="27" r="3" />
+          <circle className={styles.cardDecorationDot} cx="212" cy="92" r="3" />
+        </>
+      )}
+      {decoration.variant === "vector" && (
+        <>
+          <path className={styles.cardDecorationSoft} d="M43 103 92 54h70l38-38" />
+          <path className={styles.cardDecorationStrong} d="M58 117 107 68h61l37-37" />
+          <path
+            className={styles.cardDecorationStrong}
+            d="m181 17 20-1-1 20M79 77l13-23 23 13m24 0 23-13 13 23"
+          />
+          <rect className={styles.cardDecorationGlyph} x="124" y="61" width="15" height="15" />
+          <circle className={styles.cardDecorationDot} cx="43" cy="103" r="3" />
+        </>
+      )}
+      {decoration.variant === "portal" && (
+        <>
+          <rect
+            className={styles.cardDecorationSoft}
+            x="70"
+            y="24"
+            width="133"
+            height="92"
+            rx="28"
+          />
+          <rect
+            className={styles.cardDecorationStrong}
+            x="91"
+            y="40"
+            width="91"
+            height="60"
+            rx="20"
+          />
+          <path
+            className={styles.cardDecorationSoft}
+            d="M54 40h33M47 70h25m-14 30h29M203 52h15m-15 36h15"
+          />
+          <path className={styles.cardDecorationStrong} d="m136 48 23 22-23 23-23-23Z" />
+          <circle className={styles.cardDecorationDot} cx="55" cy="70" r="3" />
+          <circle className={styles.cardDecorationDot} cx="211" cy="88" r="2" />
         </>
       )}
     </svg>
