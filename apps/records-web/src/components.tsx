@@ -373,36 +373,40 @@ export function DebateCard({ record }: { readonly record: RecordListItem }) {
     (participant) => participant.slot === record.result.winner,
   );
   return (
-    <article className={styles.debateCard}>
-      <div className={styles.cardMeta}>
-        <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
-        {record.result.tieBreakApplied && <span className={styles.tieBadge}>既定ルール決着</span>}
-      </div>
-      <h2 className={styles.japaneseText}>
-        <Link to={`/records/${record.recordId}`}>{record.questionPreview}</Link>
-      </h2>
-      <div className={styles.cardPeople}>
-        <span className={styles.personSummary}>
-          <Avatar avatar={record.requester.avatar} />
-          <span>
-            <small>依頼者</small>
-            {record.requester.displayName}
-          </span>
-        </span>
-        {winner && (
+    <Link
+      className={styles.debateCardLink}
+      to={`/records/${record.recordId}`}
+      aria-label={`「${record.questionPreview}」の記録を読む`}
+    >
+      <article className={styles.debateCard}>
+        <div className={styles.cardMeta}>
+          <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
+          {record.result.tieBreakApplied && <span className={styles.tieBadge}>既定ルール決着</span>}
+        </div>
+        <h2 className={styles.japaneseText}>{record.questionPreview}</h2>
+        <div className={styles.cardPeople}>
           <span className={styles.personSummary}>
-            <Avatar avatar={winner.avatar} />
+            <Avatar avatar={record.requester.avatar} />
             <span>
-              <small>勝者</small>
-              {winner.displayName}
+              <small>依頼者</small>
+              {record.requester.displayName}
             </span>
           </span>
-        )}
-      </div>
-      <Link className={styles.cardLink} to={`/records/${record.recordId}`}>
-        記録を読む
-      </Link>
-    </article>
+          {winner && (
+            <span className={styles.personSummary}>
+              <Avatar avatar={winner.avatar} />
+              <span>
+                <small>勝者</small>
+                {winner.displayName}
+              </span>
+            </span>
+          )}
+        </div>
+        <span className={styles.cardAction} aria-hidden="true">
+          記録を読む
+        </span>
+      </article>
+    </Link>
   );
 }
 

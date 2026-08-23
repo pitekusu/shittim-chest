@@ -398,7 +398,14 @@ describe("App", () => {
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("開始日")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("終了日")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("並び順")).toHaveValue("newest");
+    expect(screen.getByRole("radio", { name: "新しい順" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "古い順" })).not.toBeChecked();
+    const cardLink = screen.getByRole("link", {
+      name: "「休日の過ごし方を決める」の記録を読む",
+    });
+    expect(cardLink).toContainElement(card);
+    expect(within(card).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(card).getByText("記録を読む")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByLabelText("フリーワード検索")).toHaveAttribute(
       "placeholder",
       "質問文などを入力",
@@ -412,11 +419,28 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "議論の記録" });
 
-    fireEvent.change(screen.getByLabelText("並び順"), { target: { value: "oldest" } });
+    fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
 
     await waitFor(() => {
       expect(requests).toContain("/api/v1/records?limit=12&sort=oldest");
     });
+    expect(screen.getByRole("radio", { name: "古い順" })).toBeChecked();
+  });
+
+  it("keeps the latest choice after rapid sort changes", async () => {
+    const requests = mockApi();
+    render(<App />);
+    await screen.findByRole("heading", { name: "議論の記録" });
+
+    const newest = screen.getByRole("radio", { name: "新しい順" });
+    const oldest = screen.getByRole("radio", { name: "古い順" });
+    fireEvent.click(oldest);
+    fireEvent.click(newest);
+    fireEvent.click(oldest);
+
+    await waitFor(() => expect(oldest).toBeChecked());
+    expect(newest).not.toBeChecked();
+    expect(requests).toContain("/api/v1/records?limit=12&sort=oldest");
   });
 
   it("renders the two ranking panels with competition ranks and no cost placeholder", async () => {
@@ -560,7 +584,7 @@ describe("App", () => {
     expect(winnerOption.firstElementChild).toHaveAttribute("aria-hidden", "true");
     fireEvent.keyDown(winnerOption, { key: "Escape" });
 
-    fireEvent.change(screen.getByLabelText("並び順"), { target: { value: "oldest" } });
+    fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
 
     await waitFor(() => expect(requesterFilter).toHaveTextContent("すべて"));
     expect(await screen.findByText("休日の過ごし方を決める")).toBeVisible();
