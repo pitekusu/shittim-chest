@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
@@ -176,6 +177,7 @@ function mockApi(
 }
 
 afterEach(() => {
+  focusManager.setFocused(undefined);
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -225,11 +227,11 @@ describe("App", () => {
     );
   });
 
-  it("shows the goodbye transition before returning to the login page", async () => {
+  it("finishes goodbye cleanup even if the session refreshes during the transition", async () => {
     vi.spyOn(window, "matchMedia").mockImplementation(
       (query) =>
         ({
-          matches: query === "(prefers-reduced-motion: reduce)",
+          matches: false,
           media: query,
           onchange: null,
           addEventListener: () => undefined,
@@ -243,14 +245,25 @@ describe("App", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "議論の記録" });
+    const staleAt = Date.now() + 31_000;
+    vi.spyOn(Date, "now").mockReturnValue(staleAt);
     fireEvent.click(screen.getAllByRole("button", { name: "LOGOFF" })[0]!);
 
     expect(await screen.findByText("GOODBYE, SENSEI.")).toBeVisible();
     expect(screen.getByLabelText("ログオフしました")).toBeVisible();
     expect(screen.queryByText("WELCOME, SENSEI.")).not.toBeInTheDocument();
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
+      expect(requests.filter((path) => path === "/api/v1/session")).toHaveLength(2);
     });
+    expect(screen.getByText("GOODBYE, SENSEI.")).toBeVisible();
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
+      },
+      { timeout: 2_500 },
+    );
     expect(screen.queryByText("GOODBYE, SENSEI.")).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/logout");
   });

@@ -161,41 +161,18 @@ function BrandTransition({
 
 function AuthenticatedRoutes({
   session,
+  onLogout,
 }: {
   readonly session: SessionResponse & { authenticated: true };
+  readonly onLogout: () => void;
 }) {
-  const navigate = useNavigate();
-  const client = useQueryClient();
   const [showTransition, setShowTransition] = useState(
     () => sessionStorage.getItem(LOGIN_TRANSITION_KEY) === "pending",
   );
-  const [showLogoutTransition, setShowLogoutTransition] = useState(false);
-  const logoutMutation = useMutation({
-    mutationFn: () => logout(session.csrfToken),
-    onSuccess: () => {
-      sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
-      setShowLogoutTransition(true);
-    },
-  });
   const finishLoginTransition = useCallback(() => {
     sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
     setShowTransition(false);
   }, []);
-  const finishLogoutTransition = useCallback(() => {
-    client.removeQueries({
-      predicate: (query) =>
-        query.queryKey[0] === "records" ||
-        query.queryKey[0] === "record" ||
-        query.queryKey[0] === "rankings",
-    });
-    client.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
-      schemaVersion: 1,
-      authenticated: false,
-      user: null,
-      csrfToken: null,
-    });
-    void navigate("/login", { replace: true });
-  }, [client, navigate]);
   if (showTransition) {
     return (
       <BrandTransition
@@ -205,21 +182,8 @@ function AuthenticatedRoutes({
       />
     );
   }
-  if (showLogoutTransition) {
-    return (
-      <BrandTransition
-        accessibleName="ログオフしました"
-        message="GOODBYE, SENSEI."
-        onComplete={finishLogoutTransition}
-      />
-    );
-  }
   return (
-    <Layout
-      displayName={session.user.displayName}
-      avatar={session.user.avatar}
-      onLogout={() => logoutMutation.mutate()}
-    >
+    <Layout displayName={session.user.displayName} avatar={session.user.avatar} onLogout={onLogout}>
       <Routes>
         <Route path="/" element={<RecordsHome />} />
         <Route path="/records/:recordId" element={<RecordDetail />} />
@@ -889,6 +853,36 @@ function NotFound() {
 function ApplicationRoutes() {
   const session = useQuery({ queryKey: SESSION_QUERY_KEY, queryFn: getSession });
   const location = useLocation();
+  const navigate = useNavigate();
+  const client = useQueryClient();
+  const [showLogoutTransition, setShowLogoutTransition] = useState(false);
+  const logoutMutation = useMutation({
+    mutationFn: (csrfToken: string) => logout(csrfToken),
+    onSuccess: () => {
+      sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
+      setShowLogoutTransition(true);
+    },
+  });
+  const finishLogoutTransition = useCallback(() => {
+    client.clear();
+    client.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
+      schemaVersion: 1,
+      authenticated: false,
+      user: null,
+      csrfToken: null,
+    });
+    setShowLogoutTransition(false);
+    void navigate("/login", { replace: true });
+  }, [client, navigate]);
+  if (showLogoutTransition) {
+    return (
+      <BrandTransition
+        accessibleName="ログオフしました"
+        message="GOODBYE, SENSEI."
+        onComplete={finishLogoutTransition}
+      />
+    );
+  }
   if (session.isPending) return <LoadingScreen />;
   if (session.isError) {
     const error = session.error instanceof RecordsApiError ? session.error : undefined;
@@ -913,7 +907,13 @@ function ApplicationRoutes() {
       </Routes>
     );
   }
-  return <AuthenticatedRoutes session={session.data} />;
+  const authenticatedSession = session.data;
+  return (
+    <AuthenticatedRoutes
+      session={authenticatedSession}
+      onLogout={() => logoutMutation.mutate(authenticatedSession.csrfToken)}
+    />
+  );
 }
 
 export function App() {
