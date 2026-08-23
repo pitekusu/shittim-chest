@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 
 const RECORD_ID = "r".repeat(43);
+const DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO = 0.0001;
 
 const placeholder = (displayName: string, fallbackVariant: string) => ({
   kind: "placeholder",
@@ -249,6 +250,100 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("dark theme covers login, archive, detail, and rankings", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.route("**/api/v1/session", (route) =>
+    route.fulfill({
+      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+    }),
+  );
+  await page.goto("/login");
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#071724");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-dark-login.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
+  });
+
+  await page.unroute("**/api/v1/session");
+  await mockAuthenticatedApi(page);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "ダークモード" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-dark-home.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
+  });
+
+  await page.getByRole("link", { name: "記録を読む" }).click();
+  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-dark-detail.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
+  });
+
+  await page.goto("/insights");
+  await expect(page.getByRole("heading", { name: "いろいろな記録" })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-dark-insights.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
+  });
+});
+
+test("manual theme survives reload and logoff while the mobile switch stays usable", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  await page.goto("/");
+
+  const desktopSwitch = page.getByRole("switch", { name: "ダークモード" });
+  await expect(desktopSwitch).toHaveAttribute("aria-checked", "true");
+  await desktopSwitch.focus();
+  await page.keyboard.press("Space");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  expect(await page.evaluate(() => localStorage.getItem("shittim-records-theme-v1"))).toBe("light");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await desktopSwitch.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileNavigation = page.getByRole("navigation", { name: "モバイルナビゲーション" });
+  const mobileSwitch = mobileNavigation.getByRole("switch", { name: "ダークモード" });
+  await expect(mobileSwitch).toBeVisible();
+  expect((await mobileSwitch.boundingBox())?.height).toBeGreaterThanOrEqual(48);
+  await expect(mobileSwitch).toHaveAttribute("aria-checked", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await expect(page).toHaveScreenshot("records-dark-mobile-390.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
+  });
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await expect(mobileSwitch).toBeVisible();
+  await mobileNavigation.getByRole("button", { name: "LOGOFF" }).click();
+  await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 });
 
 test("logoff shows the goodbye transition before returning to login", async ({ page }) => {

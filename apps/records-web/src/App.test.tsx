@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { focusManager } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -6,6 +6,7 @@ import { App } from "./App";
 import { Avatar, formatCompletedDateTime } from "./components";
 import type { SessionResponse } from "./api";
 import { isRecordsApiResponse } from "./contracts";
+import { THEME_STORAGE_KEY } from "./theme";
 
 const RECORD_ID = "r".repeat(43);
 
@@ -141,6 +142,14 @@ function response(value: unknown, status = 200): Response {
   });
 }
 
+function installThemeColorMeta(): HTMLMetaElement {
+  const themeColor = document.createElement("meta");
+  themeColor.name = "theme-color";
+  themeColor.content = "#f5fbff";
+  document.head.append(themeColor);
+  return themeColor;
+}
+
 function mockApi(
   session: SessionResponse = authenticatedSession() as SessionResponse,
   rankings: unknown = rankingsResponse(),
@@ -182,6 +191,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
+  localStorage.clear();
+  delete document.documentElement.dataset.theme;
+  document.documentElement.style.colorScheme = "";
+  document.querySelector('meta[name="theme-color"]')?.remove();
   window.history.replaceState(null, "", "/");
 });
 
@@ -194,6 +207,100 @@ describe("formatCompletedDateTime", () => {
 });
 
 describe("App", () => {
+  it("keeps both theme switches synchronized without refetching session or records", async () => {
+    installThemeColorMeta();
+    const requests = mockApi();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "議論の記録" })).toBeVisible();
+    const switches = screen.getAllByRole("switch", { name: "ダークモード" });
+    expect(switches).toHaveLength(2);
+    expect(switches[0]).toHaveAttribute("aria-checked", "false");
+    const requestsBeforeToggle = [...requests];
+
+    fireEvent.click(switches[0]!);
+
+    expect(switches[0]).toHaveAttribute("aria-checked", "true");
+    expect(switches[1]).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+    expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute(
+      "content",
+      "#071724",
+    );
+    await act(async () => Promise.resolve());
+    expect(requests).toEqual(requestsBeforeToggle);
+  });
+
+  it("follows OS changes only until a manual theme is stored", async () => {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    let matches = false;
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query) =>
+        ({
+          get matches() {
+            return matches;
+          },
+          media: query,
+          onchange: null,
+          addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
+            listeners.add(listener),
+          removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
+            listeners.delete(listener),
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    );
+    mockApi();
+    render(<App />);
+    await screen.findByRole("heading", { name: "議論の記録" });
+
+    matches = true;
+    act(() => {
+      for (const listener of listeners) listener({ matches: true } as MediaQueryListEvent);
+    });
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+
+    fireEvent.click(screen.getAllByRole("switch", { name: "ダークモード" })[0]!);
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
+
+    matches = false;
+    act(() => {
+      for (const listener of listeners) listener({ matches: false } as MediaQueryListEvent);
+    });
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("prefers a saved theme over the OS preference", async () => {
+    localStorage.setItem(THEME_STORAGE_KEY, "light");
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query) =>
+        ({
+          matches: true,
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    );
+    mockApi();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "議論の記録" });
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(screen.getAllByRole("switch", { name: "ダークモード" })[0]).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+  });
+
   it("shows the approved login page for an anonymous Guild visitor", async () => {
     mockApi({ schemaVersion: 1, authenticated: false, user: null, csrfToken: null });
 

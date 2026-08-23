@@ -1,8 +1,8 @@
 .voteGraph {
-  --vote-line: #55b8ce;
-  --vote-line-strong: #2498b5;
-  --vote-arrow: #1687a7;
-  --vote-halo: rgb(223 248 251 / 94%);
+  --vote-line: var(--records-vote-line);
+  --vote-line-strong: var(--records-vote-line-strong);
+  --vote-arrow: var(--records-vote-arrow);
+  --vote-halo: var(--records-vote-halo);
   --vote-glow: rgb(75 194 220 / 25%);
   margin: 0 0 28px;
 }
@@ -67,7 +67,7 @@
 
 .edgeFlow {
   opacity: 0;
-  stroke: rgb(255 255 255 / 92%);
+  stroke: var(--records-vote-flow);
   stroke-dasharray: 0.075 0.925;
   stroke-dashoffset: 1;
   stroke-width: 3;
@@ -87,7 +87,7 @@
 
 .startDot {
   fill: var(--vote-line-strong);
-  stroke: white;
+  stroke: var(--records-avatar-border);
   stroke-width: 2;
   transform-box: fill-box;
   transform-origin: center;
@@ -145,9 +145,9 @@
   padding: 9px;
   border: 3px solid var(--records-line-strong);
   border-radius: 50%;
-  background: rgb(255 255 255 / 94%);
+  background: var(--records-vote-node);
   box-shadow:
-    0 0 0 5px rgb(255 255 255 / 58%),
+    0 0 0 5px var(--records-vote-node-ring),
     0 12px 30px rgb(45 119 148 / 9%);
   color: var(--records-ink-900);
   cursor: pointer;
@@ -181,7 +181,7 @@
   padding: 7px 11px;
   border: 1px solid var(--records-line-strong);
   border-radius: 10px;
-  background: rgb(255 255 255 / 96%);
+  background: var(--records-vote-tooltip);
   box-shadow: var(--records-shadow-soft);
   color: var(--records-ink-900);
   font-size: 0.76rem;
