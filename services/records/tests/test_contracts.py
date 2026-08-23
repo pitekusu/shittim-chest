@@ -237,6 +237,45 @@ def test_versioned_responses_require_the_exact_schema_version() -> None:
         SessionResponse.model_validate({"schemaVersion": 2, "authenticated": False})
 
 
+def test_cost_contract_is_jpy_only_and_rejects_internal_ledger_fields() -> None:
+    payload = {
+        "schemaVersion": 1,
+        "period": "week",
+        "timeZone": "Asia/Tokyo",
+        "startDate": "2026-08-17",
+        "endDate": "2026-08-23",
+        "currency": "JPY",
+        "total": "12.345678",
+        "breakdown": {
+            "fargate": "1.000000",
+            "lambda": "2.000000",
+            "openai": "3.000000",
+            "otherAws": "6.345678",
+        },
+        "conversion": {
+            "source": "frankfurter-v2",
+            "method": "daily-reference-rate",
+            "baseCurrency": "USD",
+            "updatedAt": "2026-08-23T12:17:00+09:00",
+        },
+        "updatedAt": "2026-08-23T12:17:00+09:00",
+        "status": "partial",
+    }
+
+    response = CostsResponse.model_validate(payload)
+
+    assert response.total == "12.345678"
+    for private_field in ("amountUsd", "rate", "projectId", "checkpoint"):
+        with pytest.raises(ValidationError):
+            CostsResponse.model_validate({**payload, private_field: "forbidden"})
+    with pytest.raises(ValidationError):
+        CostsResponse.model_validate({**payload, "currency": "USD"})
+    with pytest.raises(ValidationError):
+        CostsResponse.model_validate({**payload, "total": "12.3456789"})
+    with pytest.raises(ValidationError):
+        CostsResponse.model_validate({**payload, "total": "12"})
+
+
 @pytest.mark.parametrize(
     "payload",
     [

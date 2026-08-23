@@ -49,16 +49,17 @@ describe("RecordsApplicationStack", () => {
     expect(checks.validateScope(stack).success).toBe(true);
   });
 
-  test("creates five Python 3.14 ARM64 functions from one immutable S3 version", () => {
+  test("creates six Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 5);
+    template.resourceCountIs("AWS::Lambda::Function", 6);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
       "shittim-chest-production-records-auth",
       "shittim-chest-production-records-ranking",
+      "shittim-chest-production-records-cost",
       "shittim-chest-production-records-read",
     ]) {
       template.hasResourceProperties("AWS::Lambda::Function", {
@@ -79,12 +80,13 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 6);
+    template.resourceCountIs("AWS::Logs::LogGroup", 7);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
       "shittim-chest-production-records-auth",
       "shittim-chest-production-records-ranking",
+      "shittim-chest-production-records-cost",
       "shittim-chest-production-records-read",
     ]) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
@@ -107,13 +109,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes Auth and Read aliases behind exactly seven HTTP API routes", () => {
+  test("publishes Auth and Read aliases behind exactly eight HTTP API routes", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::Lambda::Version", 2);
     template.resourceCountIs("AWS::Lambda::Alias", 2);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 7);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 8);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -125,7 +127,7 @@ describe("RecordsApplicationStack", () => {
     });
     const serialized = JSON.stringify(template.toJSON());
     expect(serialized).toContain("GET /api/v1/insights/rankings");
-    expect(serialized).not.toContain("/api/v1/insights/costs");
+    expect(serialized).toContain("GET /api/v1/insights/costs");
     expect(template.toJSON().Parameters.RecordsBundleCodeSha256.Default).toBeUndefined();
     for (const alias of Object.values(template.findResources("AWS::Lambda::Alias"))) {
       expect(alias.Properties.Name).toBe("live");
@@ -149,7 +151,7 @@ describe("RecordsApplicationStack", () => {
         },
       },
     });
-    template.resourceCountIs("AWS::Events::Rule", 1);
+    template.resourceCountIs("AWS::Events::Rule", 3);
     template.hasResourceProperties("AWS::Events::Rule", {
       ScheduleExpression: "rate(15 minutes)",
       State: "ENABLED",
@@ -163,7 +165,7 @@ describe("RecordsApplicationStack", () => {
         },
       ],
     });
-    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 1);
+    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 2);
     template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
       FunctionName: {
         Ref: Match.stringLikeRegexp("^RankingFunction"),
@@ -173,7 +175,57 @@ describe("RecordsApplicationStack", () => {
     });
   });
 
-  test("keeps Auth, Read, and Ranking IAM resources exact and disjoint", () => {
+  test("collects AWS, OpenAI, and Frankfurter cost inputs on bounded schedules", () => {
+    const { template } = synthesize();
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-cost",
+      Handler: "shittim_records.lambda_handlers.cost_handler",
+      MemorySize: 512,
+      ReservedConcurrentExecutions: 1,
+      Runtime: "python3.14",
+      Timeout: 300,
+      Environment: {
+        Variables: {
+          OPENAI_ADMIN_KEY_PARAMETER_NAME:
+            "/shittim-chest/production/records/openai/admin-key",
+          OPENAI_PROJECT_ID_PARAMETER_NAME:
+            "/shittim-chest/production/records/openai/project-id",
+          STATISTICS_TABLE_NAME: "shittim-chest-production-records-statistics",
+        },
+      },
+    });
+    template.hasResourceProperties("AWS::Events::Rule", {
+      ScheduleExpression: "cron(17 3 * * ? *)",
+      State: "ENABLED",
+      Targets: [
+        {
+          Arn: {
+            "Fn::GetAtt": [Match.stringLikeRegexp("^CostFunction"), "Arn"],
+          },
+          Id: Match.anyValue(),
+          Input: '{"mode":"aws_fx"}',
+          RetryPolicy: { MaximumRetryAttempts: 0 },
+        },
+      ],
+    });
+    template.hasResourceProperties("AWS::Events::Rule", {
+      ScheduleExpression: "cron(37 * * * ? *)",
+      State: "ENABLED",
+      Targets: [
+        {
+          Arn: {
+            "Fn::GetAtt": [Match.stringLikeRegexp("^CostFunction"), "Arn"],
+          },
+          Id: Match.anyValue(),
+          Input: '{"mode":"openai"}',
+          RetryPolicy: { MaximumRetryAttempts: 0 },
+        },
+      ],
+    });
+  });
+
+  test("keeps Auth, Read, Ranking, and Cost IAM resources exact and disjoint", () => {
     const { template } = synthesize();
     const policies = template.findResources("AWS::IAM::Policy");
     const auth = Object.values(policies).find((policy) =>
@@ -185,13 +237,18 @@ describe("RecordsApplicationStack", () => {
     const ranking = Object.values(policies).find((policy) =>
       JSON.stringify(policy).includes("RankingFunctionRole"),
     );
+    const cost = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("CostFunctionRole"),
+    );
 
     expect(auth).toBeDefined();
     expect(read).toBeDefined();
     expect(ranking).toBeDefined();
+    expect(cost).toBeDefined();
     const authText = JSON.stringify(auth);
     const readText = JSON.stringify(read);
     const rankingText = JSON.stringify(ranking);
+    const costText = JSON.stringify(cost);
     expect(authText).toContain("dynamodb:TransactWriteItems");
     expect(authText).toContain("/requesters/*");
     expect(authText).not.toContain("/participants/*");
@@ -206,6 +263,8 @@ describe("RecordsApplicationStack", () => {
     expect(readText).not.toContain("dynamodb:DeleteItem");
     expect(readText).not.toContain("s3:PutObject");
     expect(readText).toContain("shittim-chest-production-records-statistics");
+    expect(readText).not.toContain("/records/openai/admin-key");
+    expect(readText).not.toContain("/records/openai/project-id");
     expect(rankingText).toContain("/index/gsi1");
     expect(rankingText).toContain("dynamodb:Query");
     expect(rankingText).toContain("dynamodb:PutItem");
@@ -215,6 +274,19 @@ describe("RecordsApplicationStack", () => {
     expect(rankingText).not.toContain("dynamodb:GetItem");
     expect(rankingText).not.toContain("dynamodb:UpdateItem");
     expect(rankingText).not.toContain("dynamodb:DeleteItem");
+    expect(rankingText).not.toContain("/records/openai/");
+    expect(authText).not.toContain("/records/openai/");
+    expect(costText).toContain("ce:GetCostAndUsage");
+    expect(costText).toContain("ssm:GetParameters");
+    expect(costText).toContain("/records/openai/admin-key");
+    expect(costText).toContain("/records/openai/project-id");
+    expect(costText).toContain("dynamodb:GetItem");
+    expect(costText).toContain("dynamodb:PutItem");
+    expect(costText).toContain("COLLECTOR#COST");
+    expect(costText).toContain("COST#DAILY");
+    expect(costText).toContain("FX#DAILY");
+    expect(costText).not.toContain("dynamodb:DeleteItem");
+    expect(costText).not.toContain("dynamodb:Scan");
   });
 
   test("filters completed metadata and bounds every stream retry dimension", () => {

@@ -14,6 +14,10 @@ from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 
 from shittim_records.contracts import (
+    CostBreakdown,
+    CostConversion,
+    CostPeriod,
+    CostsResponse,
     ImageAvatarRef,
     ParticipantSlot,
     PlaceholderAvatarRef,
@@ -22,6 +26,12 @@ from shittim_records.contracts import (
     RecordDetailResponse,
     RecordListItem,
     RecordListResponse,
+)
+from shittim_records.costs import (
+    CostDataInvalid,
+    StoredDailyCost,
+    StoredDailyRate,
+    build_cost_view,
 )
 
 CURSOR_TTL = timedelta(hours=1)
@@ -81,6 +91,10 @@ class RecordsReader(Protocol):
     def load_record(self, *, record_id: str) -> tuple[DynamoItem, ...]: ...
 
     def load_ranking_snapshots(self) -> tuple[DynamoItem, ...]: ...
+
+    def load_cost_ledger(
+        self,
+    ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]: ...
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]: ...
 
@@ -375,6 +389,43 @@ class RecordsReadService:
             requests=tuple(requests),
             generated_at=generated_at,
         )
+
+    def get_costs(self, *, period: CostPeriod, now: datetime) -> CostsResponse:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ReadFailure("REQUEST_INVALID", 400)
+        try:
+            costs, rates = self._reader.load_cost_ledger()
+            view = build_cost_view(
+                costs=costs,
+                rates=rates,
+                period=period,
+                now=now,
+            )
+            return CostsResponse(
+                schema_version=1,
+                period=view.period,
+                time_zone="Asia/Tokyo",
+                start_date=view.start_date,
+                end_date=view.end_date,
+                currency="JPY",
+                total=view.total_jpy,
+                breakdown=CostBreakdown(
+                    fargate=view.amounts_jpy["FARGATE"],
+                    lambda_=view.amounts_jpy["LAMBDA"],
+                    openai=view.amounts_jpy["OPENAI"],
+                    other_aws=view.amounts_jpy["OTHER_AWS"],
+                ),
+                conversion=CostConversion(
+                    source="frankfurter-v2",
+                    method="daily-reference-rate",
+                    base_currency="USD",
+                    updated_at=view.conversion_updated_at,
+                ),
+                updated_at=view.updated_at,
+                status=view.status,
+            )
+        except (CostDataInvalid, ValidationError) as error:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503) from error
 
     def _list_item(
         self,

@@ -60,6 +60,32 @@ export interface RankingsResponse {
   readonly generatedAt: string;
 }
 
+export type CostPeriod = "today" | "week" | "month" | "all";
+
+export interface CostsResponse {
+  readonly schemaVersion: 1;
+  readonly period: CostPeriod;
+  readonly timeZone: "Asia/Tokyo";
+  readonly startDate: string;
+  readonly endDate: string;
+  readonly currency: "JPY";
+  readonly total: string;
+  readonly breakdown: {
+    readonly fargate: string;
+    readonly lambda: string;
+    readonly openai: string;
+    readonly otherAws: string;
+  };
+  readonly conversion: {
+    readonly source: "frankfurter-v2";
+    readonly method: "daily-reference-rate";
+    readonly baseCurrency: "USD";
+    readonly updatedAt: string | null;
+  };
+  readonly updatedAt: string | null;
+  readonly status: "partial" | "final" | "unavailable";
+}
+
 export interface RecordDetailResponse {
   readonly schemaVersion: 1;
   readonly recordId: string;

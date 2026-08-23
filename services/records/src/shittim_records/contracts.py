@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, model_validator
@@ -295,19 +296,34 @@ class RankingsResponse(PublicModel):
     generated_at: AwareDatetime
 
 
+CanonicalJpyAmount = Annotated[str, Field(pattern=r"^[0-9]+\.[0-9]{6}$")]
+
+
 class CostBreakdown(PublicModel):
-    fargate: Annotated[str, Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")]
-    lambda_: Annotated[str, Field(alias="lambda", pattern=r"^[0-9]+(?:\.[0-9]+)?$")]
-    openai: Annotated[str, Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")]
+    fargate: CanonicalJpyAmount
+    lambda_: Annotated[CanonicalJpyAmount, Field(alias="lambda")]
+    openai: CanonicalJpyAmount
+    other_aws: CanonicalJpyAmount
+
+
+class CostConversion(PublicModel):
+    source: Literal["frankfurter-v2"]
+    method: Literal["daily-reference-rate"]
+    base_currency: Literal["USD"]
+    updated_at: AwareDatetime | None
 
 
 class CostsResponse(PublicModel):
     schema_version: Literal[1]
     period: CostPeriod
-    currency: Literal["USD"]
-    total: Annotated[str, Field(pattern=r"^[0-9]+(?:\.[0-9]+)?$")]
+    time_zone: Literal["Asia/Tokyo"]
+    start_date: date
+    end_date: date
+    currency: Literal["JPY"]
+    total: CanonicalJpyAmount
     breakdown: CostBreakdown
-    updated_at: AwareDatetime
+    conversion: CostConversion
+    updated_at: AwareDatetime | None
     status: CostStatus
 
 
@@ -325,6 +341,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordListResponse,
     RecordDetailResponse,
     RankingsResponse,
+    CostsResponse,
     SessionResponse,
     ErrorResponse,
 )

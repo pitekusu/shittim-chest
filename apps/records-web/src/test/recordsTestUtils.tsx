@@ -136,6 +136,32 @@ export function rankingsResponse() {
   };
 }
 
+export function costsResponse(period: "today" | "week" | "month" | "all" = "week") {
+  return {
+    schemaVersion: 1,
+    period,
+    timeZone: "Asia/Tokyo",
+    startDate: period === "today" ? "2026-08-23" : "2026-08-17",
+    endDate: "2026-08-23",
+    currency: "JPY",
+    total: "123.456789",
+    breakdown: {
+      fargate: "0.000001",
+      lambda: "2.000000",
+      openai: "100.000000",
+      otherAws: "21.456788",
+    },
+    conversion: {
+      source: "frankfurter-v2",
+      method: "daily-reference-rate",
+      baseCurrency: "USD",
+      updatedAt: "2026-08-23T12:17:00+09:00",
+    },
+    updatedAt: "2026-08-23T12:17:00+09:00",
+    status: "partial",
+  };
+}
+
 export function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -146,6 +172,7 @@ export function response(value: unknown, status = 200): Response {
 export function mockApi(
   session: SessionResponse = authenticatedSession(),
   rankings: unknown = rankingsResponse(),
+  costs: unknown = costsResponse(),
 ) {
   const requests: string[] = [];
   let currentSession = session;
@@ -171,6 +198,9 @@ export function mockApi(
       }
       if (path === "/api/v1/insights/rankings") {
         return Promise.resolve(response(rankings));
+      }
+      if (path.startsWith("/api/v1/insights/costs?")) {
+        return Promise.resolve(response(costs));
       }
       throw new Error(`Unexpected request: ${path}`);
     }),

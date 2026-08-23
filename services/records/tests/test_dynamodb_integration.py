@@ -6,6 +6,8 @@ import os
 import time
 import uuid
 from collections.abc import Iterator
+from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any, cast
 
 import boto3
@@ -18,6 +20,8 @@ from shittim_records.adapters import ArchiveRepository
 from shittim_records.archive import project_completed_debate
 from shittim_records.auth import AuthFailure, OAuthState, SessionRecord
 from shittim_records.auth_adapters import DynamoAuthStore
+from shittim_records.cost_adapters import DynamoCostLedgerStore
+from shittim_records.costs import ProviderDailyCost, ProviderDailyRate
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
@@ -187,6 +191,56 @@ def test_oauth_claim_session_and_archive_pagination(
     assert ranking.archive_count == 1
     assert sum(entry.count for entry in ranking.wins) == 1
     assert len(reader.load_ranking_snapshots()) == 2
+
+    cost_start = date(2026, 7, 25)
+    cost_end = cost_start + timedelta(days=30)
+    components = tuple(
+        (name, Decimal("1") if name == "residual" else Decimal("0"))
+        for name in (
+            "cloudwatch",
+            "public_ipv4",
+            "dynamodb",
+            "s3",
+            "cloudfront",
+            "api_gateway",
+            "ecr",
+            "inspector",
+            "residual",
+        )
+    )
+    cost_store = DynamoCostLedgerStore(dynamodb_client, statistics_table)
+    cost_store.save_cost_window(
+        source="AWS",
+        costs=tuple(
+            ProviderDailyCost(
+                cost_date=cost_start + timedelta(days=index),
+                category=category,
+                amount_usd=Decimal("1"),
+                estimated=False,
+                components=components if category == "OTHER_AWS" else (),
+            )
+            for index in range(30)
+            for category in ("FARGATE", "LAMBDA", "OTHER_AWS")
+        ),
+        next_date=cost_end,
+        initial_complete=False,
+        collected_at=NOW,
+    )
+    cost_store.save_rate_window(
+        rates=tuple(
+            ProviderDailyRate(cost_start + timedelta(days=index), Decimal("150"))
+            for index in range(30)
+        ),
+        next_date=cost_end,
+        initial_complete=False,
+        collected_at=NOW,
+    )
+    checkpoint = cost_store.load_checkpoint("AWS")
+    assert checkpoint is not None
+    assert checkpoint.next_date == cost_end
+    stored_costs, stored_rates = reader.load_cost_ledger()
+    assert len(stored_costs) == 90
+    assert len(stored_rates) == 30
 
 
 class _NoopS3:

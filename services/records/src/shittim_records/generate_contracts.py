@@ -234,6 +234,26 @@ def build_openapi() -> dict[str, Any]:
                     },
                 }
             },
+            "/api/v1/insights/costs": {
+                "get": {
+                    "operationId": "getCosts",
+                    "parameters": [
+                        _parameter(
+                            "period",
+                            "query",
+                            {
+                                "type": "string",
+                                "enum": ["today", "week", "month", "all"],
+                                "default": "week",
+                            },
+                        )
+                    ],
+                    "responses": {
+                        "200": _response("CostsResponse", "Estimated Records costs in JPY"),
+                        **error_responses,
+                    },
+                }
+            },
         },
         "components": {
             "schemas": _component_schemas(reference_prefix="#/components/schemas/"),

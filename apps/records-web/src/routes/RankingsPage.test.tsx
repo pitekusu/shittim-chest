@@ -1,7 +1,7 @@
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { rankingsResponse, renderRoute, response } from "../test/recordsTestUtils";
+import { costsResponse, rankingsResponse, renderRoute, response } from "../test/recordsTestUtils";
 import RankingsPage from "./RankingsPage";
 
 afterEach(() => {
@@ -10,11 +10,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function requestPath(input: RequestInfo | URL): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
+
 describe("RankingsPage", () => {
-  it("renders the two ranking panels with competition ranks and no cost placeholder", async () => {
+  it("renders rankings and the exact four-part JPY cost dashboard", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve(response(rankingsResponse()))),
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        return Promise.resolve(
+          response(path.includes("/costs?") ? costsResponse() : rankingsResponse()),
+        );
+      }),
     );
 
     renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
@@ -51,7 +60,68 @@ describe("RankingsPage", () => {
       }),
     ).toHaveAttribute("value", "12");
     expect(screen.getByText("最終集計:")).toHaveTextContent("2026年8月22日 09:00");
-    expect(screen.queryByText(/費用|Fargate|OpenAI/)).not.toBeInTheDocument();
+    const costs = await screen.findByRole("region", { name: "概算費用" });
+    expect(within(costs).getByText("¥123.456789")).toBeVisible();
+    expect(within(costs).getByText("¥0.000001")).toBeVisible();
+    for (const category of ["Fargate", "Lambda", "OpenAI", "その他AWS"]) {
+      expect(within(costs).getByText(category)).toBeVisible();
+    }
+    expect(within(costs).getByText("一部集計中")).toBeVisible();
+    expect(within(costs).getByText(/Route 53は含みません/)).toBeVisible();
+    expect(within(costs).getByRole("radio", { name: "直近7日" })).toBeChecked();
+  });
+
+  it("fetches costs independently when the Japanese period changes", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        requests.push(path);
+        const period = path.includes("period=today") ? "today" : "week";
+        return Promise.resolve(
+          response(path.includes("/costs?") ? costsResponse(period) : rankingsResponse()),
+        );
+      }),
+    );
+
+    renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
+    await screen.findByText("¥123.456789");
+    fireEvent.click(screen.getByRole("radio", { name: "今日" }));
+
+    await waitFor(() => expect(requests).toContain("/api/v1/insights/costs?period=today"));
+    expect(requests.filter((request) => request === "/api/v1/insights/rankings")).toHaveLength(1);
+  });
+
+  it("keeps rankings visible when converted costs are unavailable", async () => {
+    const unavailableCosts = {
+      ...costsResponse(),
+      total: "0.000000",
+      breakdown: {
+        fargate: "0.000000",
+        lambda: "0.000000",
+        openai: "0.000000",
+        otherAws: "0.000000",
+      },
+      conversion: { ...costsResponse().conversion, updatedAt: null },
+      updatedAt: null,
+      status: "unavailable",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          response(requestPath(input).includes("/costs?") ? unavailableCosts : rankingsResponse()),
+        ),
+      ),
+    );
+
+    renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
+
+    expect(await screen.findByText("勝利回数ランキング")).toBeVisible();
+    const costs = screen.getByRole("region", { name: "概算費用" });
+    expect(await within(costs).findByText("費用を取得できません")).toBeVisible();
+    expect(within(costs).getByText("有効な日次換算値がまだありません。")).toBeVisible();
   });
 
   it("keeps all winners at the same podium height when every participant is tied", async () => {
@@ -59,7 +129,11 @@ describe("RankingsPage", () => {
     tiedRankings.wins = tiedRankings.wins.map((entry) => ({ ...entry, rank: 1, count: 20 }));
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve(response(tiedRankings))),
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          response(requestPath(input).includes("/costs?") ? costsResponse() : tiedRankings),
+        ),
+      ),
     );
 
     const { container } = renderRoute(<RankingsPage />, {

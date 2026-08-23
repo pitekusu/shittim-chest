@@ -19,6 +19,9 @@ from shittim_records.auth import (
     session_hash as hash_session,
 )
 from shittim_records.contracts import (
+    CostBreakdown,
+    CostConversion,
+    CostsResponse,
     PlaceholderAvatarRef,
     RankingEntry,
     RankingsResponse,
@@ -120,6 +123,31 @@ class FakeRecords:
             ),
             requests=(),
             generated_at=NOW,
+        )
+
+    def get_costs(self, **kwargs: Any) -> CostsResponse:
+        return CostsResponse(
+            schema_version=1,
+            period=kwargs["period"],
+            time_zone="Asia/Tokyo",
+            start_date=NOW.date(),
+            end_date=NOW.date(),
+            currency="JPY",
+            total="1.000000",
+            breakdown=CostBreakdown(
+                fargate="1.000000",
+                lambda_="0.000000",
+                openai="0.000000",
+                other_aws="0.000000",
+            ),
+            conversion=CostConversion(
+                source="frankfurter-v2",
+                method="daily-reference-rate",
+                base_currency="USD",
+                updated_at=NOW,
+            ),
+            updated_at=NOW,
+            status="partial",
         )
 
 
@@ -331,6 +359,33 @@ def test_rankings_route_requires_authentication_and_rejects_query_parameters() -
         "count": 3,
     }
     assert invalid["statusCode"] == 400
+
+
+def test_costs_route_defaults_to_week_and_rejects_unknown_or_duplicate_period() -> None:
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, FakeRecords()),
+    )
+    route = "GET /api/v1/insights/costs"
+    cookies = [f"{SESSION_COOKIE_NAME}=session-token"]
+
+    unauthorized = controller.handle(event(route), now=NOW)
+    default = controller.handle(event(route, cookies=cookies), now=NOW)
+    today = controller.handle(event(route, query="period=today", cookies=cookies), now=NOW)
+    invalid = controller.handle(
+        event(route, query="period=week&period=all", cookies=cookies), now=NOW
+    )
+    extra = controller.handle(
+        event(route, query="period=week&internal=true", cookies=cookies), now=NOW
+    )
+
+    assert unauthorized["statusCode"] == 401
+    assert json.loads(default["body"])["period"] == "week"
+    assert json.loads(today["body"])["period"] == "today"
+    assert invalid["statusCode"] == 400
+    assert extra["statusCode"] == 400
+    assert "amountUsd" not in default["body"]
 
 
 def test_unknown_auth_failure_is_content_free() -> None:

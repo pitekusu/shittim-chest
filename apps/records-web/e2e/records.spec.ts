@@ -115,6 +115,30 @@ const rankings = {
   generatedAt: "2026-08-22T00:00:00Z",
 };
 
+const costs = {
+  schemaVersion: 1,
+  period: "week",
+  timeZone: "Asia/Tokyo",
+  startDate: "2026-08-17",
+  endDate: "2026-08-23",
+  currency: "JPY",
+  total: "123.456789",
+  breakdown: {
+    fargate: "10.000000",
+    lambda: "2.000000",
+    openai: "100.000000",
+    otherAws: "11.456789",
+  },
+  conversion: {
+    source: "frankfurter-v2",
+    method: "daily-reference-rate",
+    baseCurrency: "USD",
+    updatedAt: "2026-08-23T12:17:00+09:00",
+  },
+  updatedAt: "2026-08-23T12:17:00+09:00",
+  status: "partial",
+};
+
 const PRODUCTION_CSP = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -180,6 +204,10 @@ async function mockAuthenticatedApi(
     return route.fulfill({ json: recordDetail });
   });
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
+  await page.route("**/api/v1/insights/costs?*", (route) => {
+    const period = new URL(route.request().url()).searchParams.get("period") ?? "week";
+    return route.fulfill({ json: { ...costs, period } });
+  });
 }
 
 test("authenticated member can browse the completed archive", async ({ page }) => {
@@ -729,7 +757,14 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   ).toContainText("32回");
   await expect(requests.getByRole("meter")).toHaveCount(3);
   await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
-  await expect(page.getByText(/費用|Fargate|OpenAI/)).toHaveCount(0);
+  const costDashboard = page.getByRole("region", { name: "概算費用" });
+  await expect(costDashboard).toContainText("¥123.456789");
+  await expect(costDashboard).toContainText("Fargate");
+  await expect(costDashboard).toContainText("Lambda");
+  await expect(costDashboard).toContainText("OpenAI");
+  await expect(costDashboard).toContainText("その他AWS");
+  await expect(costDashboard).toContainText("一部集計中");
+  await expect(costDashboard).toContainText("Route 53は含みません");
   const podium = wins.locator('[data-podium-layout="ranked"]');
   const podiumBox = await podium.boundingBox();
   const winsBox = await wins.boundingBox();

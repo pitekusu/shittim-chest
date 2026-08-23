@@ -470,6 +470,264 @@
   box-shadow: 0 0 10px rgb(75 194 220 / 20%);
 }
 
+.costPanel {
+  position: relative;
+  min-width: 0;
+  padding: clamp(22px, 3vw, 34px);
+  overflow: hidden;
+  border: 1px solid var(--records-panel-border);
+  border-radius: var(--records-radius-card);
+  background: var(--records-ranking-panel-background);
+  box-shadow: var(--records-shadow-soft);
+  backdrop-filter: blur(18px);
+  grid-column: 1 / -1;
+}
+
+.costPanel::after {
+  position: absolute;
+  right: -46px;
+  bottom: -62px;
+  width: 170px;
+  height: 170px;
+  border: 1px solid rgb(88 217 232 / 16%);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+
+.costHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--records-line);
+}
+
+.costHeader h2 {
+  margin: 5px 0 0;
+  font-size: clamp(1.25rem, 1.7vw, 1.55rem);
+}
+
+.costPeriod {
+  display: grid;
+  min-width: min(100%, 420px);
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--records-panel-border);
+  border-radius: 16px;
+  background: var(--records-meter-track);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.costPeriod label {
+  min-width: 0;
+}
+
+.costPeriod input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.costPeriod span {
+  display: grid;
+  min-height: 44px;
+  place-items: center;
+  padding-inline: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--records-ink-600);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 120ms ease;
+}
+
+.costPeriod input:checked + span {
+  border-color: rgb(88 217 232 / 40%);
+  background: var(--records-ranking-total);
+  box-shadow: 0 6px 16px rgb(45 119 148 / 10%);
+  color: var(--records-ink-900);
+}
+
+.costPeriod input:focus-visible + span {
+  outline: 3px solid var(--records-focus);
+  outline-offset: 2px;
+}
+
+.costPeriod label:active span {
+  transform: scale(0.98);
+}
+
+.costStatus {
+  display: grid;
+  min-height: 190px;
+  margin: 0;
+  place-content: center;
+  place-items: center;
+  gap: 10px;
+  color: var(--records-ink-600);
+  text-align: center;
+}
+
+.costStatus strong {
+  color: var(--records-ink-900);
+}
+
+.costStatus > button {
+  margin-top: 8px;
+}
+
+.costContent {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.72fr) minmax(280px, 1.28fr);
+  gap: 24px 32px;
+  padding-top: 26px;
+}
+
+.costSummary {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+}
+
+.costSummary > span {
+  color: var(--records-ink-600);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.costSummary > strong {
+  color: var(--records-ink-900);
+  font-size: clamp(1.9rem, 4vw, 3.25rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.costSummary small {
+  color: var(--records-ink-600);
+  font-size: 0.74rem;
+}
+
+.costSummary em {
+  width: fit-content;
+  margin-top: 5px;
+  padding: 5px 9px;
+  border: 1px solid rgb(240 164 199 / 30%);
+  border-radius: 999px;
+  background: var(--records-ranking-top-pink);
+  color: var(--records-ink-600);
+  font-size: 0.7rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.costStack {
+  display: flex;
+  min-width: 0;
+  height: 26px;
+  align-self: end;
+  overflow: hidden;
+  border: 1px solid var(--records-panel-border-soft);
+  border-radius: 999px;
+  background: var(--records-meter-track);
+  box-shadow: inset 0 1px 3px var(--records-meter-shadow);
+}
+
+.costStackPart {
+  min-width: 0;
+  background: var(--cost-color);
+  box-shadow: inset -1px 0 rgb(255 255 255 / 46%);
+  transition: inline-size 180ms ease;
+}
+
+.costFargate {
+  --cost-color: #42c7da;
+}
+
+.costLambda {
+  --cost-color: #76aee0;
+}
+
+.costOpenai {
+  --cost-color: #ec8fba;
+}
+
+.costOtherAws {
+  --cost-color: #9d91e2;
+}
+
+.costList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  grid-column: 2;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+}
+
+.costList li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: var(--records-ranking-label-surface);
+  color: var(--records-ink-600);
+  font-size: 0.78rem;
+}
+
+.costList strong {
+  overflow-wrap: anywhere;
+  color: var(--records-ink-900);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.costSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--cost-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cost-color) 18%, transparent);
+}
+
+.costNotes {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--records-line);
+  color: var(--records-ink-600);
+  font-size: 0.73rem;
+  grid-column: 1 / -1;
+}
+
+.costNotes p {
+  margin: 0;
+}
+
+.costNotes p:first-child {
+  max-width: 68ic;
+}
+
+.costNotes p:last-child {
+  flex: none;
+  white-space: nowrap;
+}
+
 @media (max-width: 899px) {
   .rankingsGrid {
     grid-template-columns: 1fr;
@@ -481,6 +739,25 @@
 
   .winPodium {
     min-height: 300px;
+  }
+
+  .costHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .costPeriod {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .costContent {
+    grid-template-columns: 1fr;
+  }
+
+  .costStack,
+  .costList {
+    grid-column: 1;
   }
 }
 
@@ -559,5 +836,40 @@
   .rankingPosition {
     width: 34px;
     height: 34px;
+  }
+
+  .costPanel {
+    padding: 20px 16px;
+  }
+
+  .costPeriod span {
+    padding-inline: 4px;
+    font-size: 0.7rem;
+  }
+
+  .costContent {
+    gap: 18px;
+    padding-top: 20px;
+  }
+
+  .costList {
+    grid-template-columns: 1fr;
+  }
+
+  .costNotes {
+    align-items: start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .costNotes p:last-child {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .costPeriod span,
+  .costStackPart {
+    transition: none;
   }
 }

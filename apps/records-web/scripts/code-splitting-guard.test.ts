@@ -46,6 +46,7 @@ function canonicalChunks(): GuardChunk[] {
       moduleIds: [
         `${root}/src/routes/RankingsPage.tsx`,
         `${root}/src/generated/rankings-response-validator.mjs`,
+        `${root}/src/generated/costs-response-validator.mjs`,
       ],
     },
   ];
