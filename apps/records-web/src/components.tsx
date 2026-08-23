@@ -3,6 +3,7 @@ import {
   useId,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type PropsWithChildren,
 } from "react";
@@ -368,15 +369,30 @@ export function formatCompletedDateTime(value: string): string {
   return COMPLETED_DATE_TIME_FORMAT.format(new Date(value));
 }
 
-export function DebateCard({ record }: { readonly record: RecordListItem }) {
+export function DebateCard({
+  record,
+  motionDelay,
+  appended = false,
+}: {
+  readonly record: RecordListItem;
+  readonly motionDelay?: number;
+  readonly appended?: boolean;
+}) {
   const winner = record.participants.find(
     (participant) => participant.slot === record.result.winner,
   );
   return (
     <Link
-      className={styles.debateCardLink}
+      className={`${styles.debateCardLink} ${styles.routeMotionItem} ${
+        appended ? styles.routeMotionAppend : ""
+      }`}
       to={`/records/${record.recordId}`}
       aria-label={`「${record.questionPreview}」の記録を読む`}
+      style={
+        motionDelay === undefined
+          ? undefined
+          : ({ "--route-motion-delay": `${motionDelay}ms` } as CSSProperties)
+      }
     >
       <article className={styles.debateCard}>
         <div className={styles.cardMeta}>

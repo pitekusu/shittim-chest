@@ -1,0 +1,102 @@
+import { useEffect, useRef, useState, type PropsWithChildren, type RefObject } from "react";
+import { useLocation } from "react-router-dom";
+
+import styles from "./App.module.css";
+
+export type RouteMotionKind = "archive" | "detail" | "insights" | "other";
+
+export function routeMotionKind(pathname: string): RouteMotionKind {
+  if (pathname === "/") return "archive";
+  if (pathname === "/insights") return "insights";
+  if (pathname.startsWith("/records/")) return "detail";
+  return "other";
+}
+
+function RouteScene({
+  pathname,
+  animate,
+  sceneRef,
+  children,
+}: PropsWithChildren<{
+  readonly pathname: string;
+  readonly animate: boolean;
+  readonly sceneRef: RefObject<HTMLDivElement | null>;
+}>) {
+  const [motion, setMotion] = useState<"idle" | "active" | "settled">(animate ? "active" : "idle");
+
+  return (
+    <div
+      className={styles.routeScene}
+      data-route-motion={motion}
+      data-route-scene={pathname}
+      ref={sceneRef}
+    >
+      <div
+        className={styles.routeBrandLayer}
+        data-route-brand=""
+        aria-hidden="true"
+        onAnimationEnd={() => setMotion("settled")}
+      >
+        <span className={styles.routeBrandGrid} />
+        <span className={styles.routeBrandRing} />
+        <span className={styles.routeBrandDiamond} />
+      </div>
+      <div className={styles.routeContent}>{children}</div>
+    </div>
+  );
+}
+
+export function BrandedRouteStage({ children }: PropsWithChildren) {
+  const location = useLocation();
+  const sceneRef = useRef<HTMLDivElement>(null);
+  const previousPathnameRef = useRef(location.pathname);
+  const hasNavigatedRef = useRef(false);
+  const mountedRef = useRef(false);
+
+  if (previousPathnameRef.current !== location.pathname) {
+    previousPathnameRef.current = location.pathname;
+    hasNavigatedRef.current = true;
+  }
+
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
+
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    const focusHeading = () => {
+      const heading = scene.querySelector<HTMLElement>('h1[tabindex="-1"]');
+      if (!heading) return false;
+      heading.focus();
+      return true;
+    };
+
+    if (focusHeading()) return;
+
+    const observer = new MutationObserver(() => {
+      if (focusHeading()) observer.disconnect();
+    });
+    observer.observe(scene, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [location.pathname]);
+
+  return (
+    <div
+      className={styles.routeStage}
+      data-route-kind={routeMotionKind(location.pathname)}
+      data-route-stage=""
+    >
+      <RouteScene
+        pathname={location.pathname}
+        animate={hasNavigatedRef.current}
+        key={location.pathname}
+        sceneRef={sceneRef}
+      >
+        {children}
+      </RouteScene>
+    </div>
+  );
+}
