@@ -28,6 +28,7 @@ export interface RecordsApplicationStackProps extends StackProps {
 
 const BACKFILL_FUNCTION_NAME = "shittim-chest-production-records-backfill";
 const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
+const COST_FUNCTION_NAME = "shittim-chest-production-records-cost";
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 
@@ -35,6 +36,7 @@ export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
   public readonly backfillFunction: lambda.Function;
   public readonly authFunction: lambda.Function;
+  public readonly costFunction: lambda.Function;
   public readonly rankingFunction: lambda.Function;
   public readonly readFunction: lambda.Function;
 
@@ -149,6 +151,20 @@ export class RecordsApplicationStack extends Stack {
       "SessionKeyParameter",
       {
         parameterName: "/shittim-chest/production/records/session-key",
+      },
+    );
+    const openaiAdminKeyParameter = ssm.StringParameter.fromSecureStringParameterAttributes(
+      this,
+      "OpenAiAdminKeyParameter",
+      {
+        parameterName: "/shittim-chest/production/records/openai/admin-key",
+      },
+    );
+    const openaiProjectIdParameter = ssm.StringParameter.fromSecureStringParameterAttributes(
+      this,
+      "OpenAiProjectIdParameter",
+      {
+        parameterName: "/shittim-chest/production/records/openai/project-id",
       },
     );
 
@@ -298,6 +314,81 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    this.costFunction = this.httpFunctionWithRole({
+      id: "CostFunction",
+      functionName: COST_FUNCTION_NAME,
+      handler: "shittim_records.lambda_handlers.cost_handler",
+      code,
+      timeout: Duration.minutes(5),
+      reservedConcurrentExecutions: 1,
+      environment: {
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        OPENAI_ADMIN_KEY_PARAMETER_NAME: openaiAdminKeyParameter.parameterName,
+        OPENAI_PROJECT_ID_PARAMETER_NAME: openaiProjectIdParameter.parameterName,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["ce:GetCostAndUsage"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"],
+          resources: [
+            openaiAdminKeyParameter.parameterArn,
+            openaiProjectIdParameter.parameterArn,
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["COLLECTOR#COST"],
+            },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            StringEquals: {
+              "dynamodb:EnclosingOperation": "TransactWriteItems",
+            },
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["COST#DAILY", "FX#DAILY", "COLLECTOR#COST"],
+            },
+          },
+        }),
+      ],
+    });
+    Validations.of(this.costFunction.role!).acknowledge({
+      id: "AwsSolutions-IAM5[Resource::*]",
+      reason:
+        "Cost Explorer GetCostAndUsage does not support resource-level permissions; every DynamoDB and SSM permission remains bound to exact Records resources and keys.",
+    });
+    this.costFunction.configureAsyncInvoke({
+      retryAttempts: 0,
+    });
+    new events.Rule(this, "AwsFxCostSchedule", {
+      description: "Collect Project-tagged AWS costs and USD/JPY rates daily at 12:17 JST",
+      schedule: events.Schedule.cron({ minute: "17", hour: "3" }),
+      targets: [
+        new eventTargets.LambdaFunction(this.costFunction, {
+          event: events.RuleTargetInput.fromObject({ mode: "aws_fx" }),
+          retryAttempts: 0,
+        }),
+      ],
+    });
+    new events.Rule(this, "OpenAiCostSchedule", {
+      description: "Collect project-scoped OpenAI organization costs hourly at minute 37",
+      schedule: events.Schedule.cron({ minute: "37" }),
+      targets: [
+        new eventTargets.LambdaFunction(this.costFunction, {
+          event: events.RuleTargetInput.fromObject({ mode: "openai" }),
+          retryAttempts: 0,
+        }),
+      ],
+    });
     this.readFunction = this.httpFunctionWithRole({
       id: "ReadFunction",
       functionName: READ_FUNCTION_NAME,
@@ -318,7 +409,7 @@ export class RecordsApplicationStack extends Stack {
           resources: [sessionTable.tableArn],
         }),
         new iam.PolicyStatement({
-          actions: ["dynamodb:GetItem"],
+          actions: ["dynamodb:GetItem", "dynamodb:Query"],
           resources: [statisticsTable.tableArn],
         }),
         new iam.PolicyStatement({
@@ -421,6 +512,11 @@ export class RecordsApplicationStack extends Stack {
     });
     api.addRoutes({
       path: "/api/v1/insights/rankings",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: readIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/insights/costs",
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
     });

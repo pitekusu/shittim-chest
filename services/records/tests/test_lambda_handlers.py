@@ -11,6 +11,11 @@ import pytest
 from botocore.exceptions import ClientError
 
 from shittim_records import lambda_handlers
+from shittim_records.costs import (
+    CollectionSummary,
+    CostCollectionFailed,
+    CostProviderUnavailable,
+)
 from shittim_records.projector import BackfillResult, ProjectionResult
 
 
@@ -76,6 +81,23 @@ class FakeRanking:
             wins=(object(), object(), object()),
             requests=(object(), object()),
         )
+
+
+class FakeCosts:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.modes: list[str] = []
+
+    def refresh(self, *, mode: str, now: object) -> tuple[CollectionSummary, ...]:
+        del now
+        self.modes.append(mode)
+        if self.fail:
+            raise CostCollectionFailed(
+                summaries=(CollectionSummary("FRANKFURTER", 1, 7, True),),
+                failures=(CostProviderUnavailable("AWS", "provider_unavailable"),),
+            )
+        source = "OPENAI" if mode == "openai" else "AWS"
+        return (CollectionSummary(cast(Any, source), 2, 60, True),)
 
 
 class FakeHttpController:
@@ -198,6 +220,37 @@ def test_ranking_handler_returns_only_content_free_counts(monkeypatch: Any) -> N
     result = lambda_handlers.ranking_handler({}, object())
 
     assert result == {"archive_count": 54, "win_entries": 3, "request_entries": 2}
+
+
+def test_cost_handler_returns_only_content_free_counts(monkeypatch: Any) -> None:
+    service = FakeCosts()
+    monkeypatch.setattr(lambda_handlers, "_COSTS", cast(Any, service))
+
+    result = lambda_handlers.cost_handler({"mode": "openai"}, object())
+
+    assert result == {
+        "mode": "openai",
+        "sources": 1,
+        "windows": 2,
+        "days": 60,
+        "complete": True,
+    }
+    assert service.modes == ["openai"]
+
+
+def test_cost_handler_preserves_independent_success_then_raises(monkeypatch: Any) -> None:
+    service = FakeCosts(fail=True)
+    monkeypatch.setattr(lambda_handlers, "_COSTS", cast(Any, service))
+
+    with pytest.raises(CostCollectionFailed):
+        lambda_handlers.cost_handler({"mode": "aws_fx"}, object())
+
+    assert service.modes == ["aws_fx"]
+
+
+def test_cost_handler_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="mode"):
+        lambda_handlers.cost_handler({"mode": "private-identifier"}, object())
 
 
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:

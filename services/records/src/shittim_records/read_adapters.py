@@ -14,6 +14,8 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 
 from shittim_records.auth import AuthFailure
+from shittim_records.cost_adapters import parse_stored_costs, parse_stored_rates
+from shittim_records.costs import StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
     ArchivePage,
     ParticipantSlot,
@@ -137,6 +139,29 @@ class DynamoRecordsReader:
             for raw in response.get("Responses", [])
             if raw.get("Item") is not None
         )
+
+    def load_cost_ledger(
+        self,
+    ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]:
+        items: list[DynamoItem] = []
+        for partition_key in ("COST#DAILY", "FX#DAILY"):
+            start_key: dict[str, AttributeValueTypeDef] | None = None
+            while True:
+                parameters: dict[str, Any] = {
+                    "TableName": self._statistics_table,
+                    "KeyConditionExpression": "PK = :pk",
+                    "ExpressionAttributeValues": marshal_item({":pk": partition_key}),
+                    "ConsistentRead": True,
+                }
+                if start_key is not None:
+                    parameters["ExclusiveStartKey"] = start_key
+                response = self._client.query(**parameters)
+                items.extend(unmarshal_item(item) for item in response.get("Items", []))
+                start_key = response.get("LastEvaluatedKey")
+                if not start_key:
+                    break
+        raw_items = tuple(items)
+        return parse_stored_costs(raw_items), parse_stored_rates(raw_items)
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]:
         if not requester_keys:

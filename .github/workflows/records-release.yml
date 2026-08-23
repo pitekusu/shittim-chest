@@ -200,6 +200,8 @@ jobs:
           IDENTITY_PARAMETER_NAME: /shittim-chest/production/records/identity-hmac-key
           OAUTH_CLIENT_SECRET_PARAMETER_NAME: /shittim-chest/production/records/discord/client-secret
           OAUTH_CONFIG_PARAMETER_NAME: /shittim-chest/production/records/discord/oauth/v0001
+          OPENAI_ADMIN_KEY_PARAMETER_NAME: /shittim-chest/production/records/openai/admin-key
+          OPENAI_PROJECT_ID_PARAMETER_NAME: /shittim-chest/production/records/openai/project-id
           PRESENTATION_PARAMETER_NAME: /shittim-chest/production/records/presentation/v0001
           SESSION_KEY_PARAMETER_NAME: /shittim-chest/production/records/session-key
           SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
@@ -212,14 +214,17 @@ jobs:
             "${PRESENTATION_PARAMETER_NAME}" \
             "${OAUTH_CONFIG_PARAMETER_NAME}" \
             "${OAUTH_CLIENT_SECRET_PARAMETER_NAME}" \
-            "${SESSION_KEY_PARAMETER_NAME}"
+            "${SESSION_KEY_PARAMETER_NAME}" \
+            "${OPENAI_ADMIN_KEY_PARAMETER_NAME}" \
+            "${OPENAI_PROJECT_ID_PARAMETER_NAME}"
           do
             metadata=$(aws ssm describe-parameters \
               --parameter-filters "Key=Name,Option=Equals,Values=${name}" \
               --max-results 1 --output json)
             jq --exit-status --arg name "${name}" \
               '.Parameters | length == 1 and
-               .[0].Name == $name and .[0].Type == "SecureString"' \
+               .[0].Name == $name and .[0].Type == "SecureString" and
+               .[0].Tier == "Standard" and (.[0].Version | type == "number" and . >= 1)' \
               <<< "${metadata}" >/dev/null
           done
       - name: Upload immutable bundle and synthesize standalone templates

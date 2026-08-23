@@ -22,7 +22,10 @@ const ROUTES = {
   },
   RankingsPage: {
     facade: "/src/routes/RankingsPage.tsx",
-    ownedModules: ["/src/generated/rankings-response-validator.mjs"],
+    ownedModules: [
+      "/src/generated/rankings-response-validator.mjs",
+      "/src/generated/costs-response-validator.mjs",
+    ],
   },
 } as const;
 

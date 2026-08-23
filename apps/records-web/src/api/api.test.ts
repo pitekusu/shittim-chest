@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { getCosts } from "./costs";
 import { getRecord } from "./recordDetail";
 import { getRecords } from "./recordList";
 import { getRankings } from "./rankings";
@@ -95,6 +96,32 @@ function rankingsResponse() {
   };
 }
 
+function costsResponse() {
+  return {
+    schemaVersion: 1,
+    period: "week",
+    timeZone: "Asia/Tokyo",
+    startDate: "2026-08-17",
+    endDate: "2026-08-23",
+    currency: "JPY",
+    total: "123.456789",
+    breakdown: {
+      fargate: "10.000000",
+      lambda: "2.000000",
+      openai: "100.000000",
+      otherAws: "11.456789",
+    },
+    conversion: {
+      source: "frankfurter-v2",
+      method: "daily-reference-rate",
+      baseCurrency: "USD",
+      updatedAt: "2026-08-23T12:17:00+09:00",
+    },
+    updatedAt: "2026-08-23T12:17:00+09:00",
+    status: "partial",
+  };
+}
+
 function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -167,6 +194,45 @@ describe("Records API endpoint validation", () => {
     );
 
     await expect(getRankings()).resolves.toEqual(rankingsResponse());
+  });
+
+  it("validates costs with its route-private JPY schema", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(costsResponse()))),
+    );
+
+    await expect(getCosts("week")).resolves.toEqual(costsResponse());
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/insights/costs?period=week",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("rejects internal USD ledger fields in a costs response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(response({ ...costsResponse(), amountUsd: "private-ledger-value" })),
+      ),
+    );
+
+    await expect(getCosts("week")).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+    });
+  });
+
+  it("rejects non-canonical JPY precision in a costs response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response({ ...costsResponse(), total: "123.4567890" }))),
+    );
+
+    await expect(getCosts("week")).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+    });
   });
 
   it("requires error responses to match the generated error schema", async () => {

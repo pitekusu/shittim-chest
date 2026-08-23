@@ -1,8 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
+import { getCosts } from "../api/costs";
 import { RecordsApiError } from "../api/http";
 import { getRankings } from "../api/rankings";
-import type { RankingEntry } from "../api/types";
+import type { CostPeriod, CostsResponse, RankingEntry } from "../api/types";
 import { Avatar } from "../components/Avatar";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import { formatCompletedDateTime } from "../lib/dateTime";
@@ -13,6 +15,22 @@ import routeStyles from "../styles/routeMotion.module.css";
 
 const JAPANESE_HEADING_CLASS = `${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`;
 const JAPANESE_PROSE_CLASS = `${commonStyles.japaneseText} ${commonStyles.japaneseProse}`;
+const COST_PERIODS: readonly { value: CostPeriod; label: string }[] = [
+  { value: "today", label: "今日" },
+  { value: "week", label: "直近7日" },
+  { value: "month", label: "今月" },
+  { value: "all", label: "全期間" },
+];
+const COST_CATEGORIES: readonly {
+  key: keyof CostsResponse["breakdown"];
+  label: string;
+  className: string;
+}[] = [
+  { key: "fargate", label: "Fargate", className: rankingStyles.costFargate },
+  { key: "lambda", label: "Lambda", className: rankingStyles.costLambda },
+  { key: "openai", label: "OpenAI", className: rankingStyles.costOpenai },
+  { key: "otherAws", label: "その他AWS", className: rankingStyles.costOtherAws },
+];
 
 interface RankingPanelProps {
   readonly variant: "wins" | "requests";
@@ -252,9 +270,159 @@ function RankingShareAvatar({
   );
 }
 
+function CostDashboard({
+  costs,
+  period,
+  onPeriodChange,
+}: {
+  readonly costs: UseQueryResult<CostsResponse>;
+  readonly period: CostPeriod;
+  readonly onPeriodChange: (period: CostPeriod) => void;
+}) {
+  const apiError = costs.error instanceof RecordsApiError ? costs.error : undefined;
+  const values = costs.data?.breakdown;
+  const numericTotal = costs.data === undefined ? 0 : Number(costs.data.total);
+  const graphTotal = Number.isFinite(numericTotal) && numericTotal > 0 ? numericTotal : 0;
+
+  return (
+    <section
+      className={[rankingStyles.costPanel, routeStyles.routeMotionItem].join(" ")}
+      data-route-motion-terminal=""
+      style={routeMotionDelay(120)}
+      aria-labelledby="cost-dashboard-title"
+      aria-busy={costs.isPending}
+    >
+      <header className={rankingStyles.costHeader}>
+        <div>
+          <p className={commonStyles.eyebrow} lang="en">
+            ESTIMATED COSTS
+          </p>
+          <h2 id="cost-dashboard-title" className={JAPANESE_HEADING_CLASS}>
+            概算費用
+          </h2>
+        </div>
+        <fieldset className={rankingStyles.costPeriod}>
+          <legend className={commonStyles.visuallyHidden}>費用の集計期間</legend>
+          {COST_PERIODS.map((option) => (
+            <label key={option.value}>
+              <input
+                type="radio"
+                name="cost-period"
+                value={option.value}
+                checked={period === option.value}
+                onChange={() => onPeriodChange(option.value)}
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+        </fieldset>
+      </header>
+
+      {costs.isPending && (
+        <p className={rankingStyles.costStatus} aria-live="polite">
+          費用を読み込んでいます。
+        </p>
+      )}
+      {costs.error && (
+        <div className={rankingStyles.costStatus} role="alert">
+          <strong>費用を取得できません</strong>
+          <span>{apiError?.message ?? "通信状態を確認してください。"}</span>
+          <button
+            className={commonStyles.secondaryButton}
+            type="button"
+            onClick={() => void costs.refetch()}
+          >
+            もう一度試す
+          </button>
+        </div>
+      )}
+      {costs.data?.status === "unavailable" && (
+        <output className={rankingStyles.costStatus}>
+          <strong>費用を取得できません</strong>
+          <span>有効な日次換算値がまだありません。</span>
+        </output>
+      )}
+      {costs.data && costs.data.status !== "unavailable" && values && (
+        <div className={rankingStyles.costContent}>
+          <div className={rankingStyles.costSummary}>
+            <span>概算合計</span>
+            <strong>{formatJpy(costs.data.total)}</strong>
+            <small>
+              {formatCalendarDate(costs.data.startDate)}〜{formatCalendarDate(costs.data.endDate)}
+              （日本時間）
+            </small>
+            {costs.data.status === "partial" && <em>一部集計中</em>}
+          </div>
+          <div className={rankingStyles.costStack} aria-hidden="true">
+            {COST_CATEGORIES.map(({ key, label, className }) => {
+              const numericValue = Number(values[key]);
+              const share =
+                graphTotal > 0 && Number.isFinite(numericValue) && numericValue > 0
+                  ? (numericValue / graphTotal) * 100
+                  : 0;
+              return (
+                <span
+                  className={[rankingStyles.costStackPart, className].join(" ")}
+                  style={{ inlineSize: String(share) + "%" }}
+                  title={label + ": " + formatJpy(values[key])}
+                  key={key}
+                />
+              );
+            })}
+          </div>
+          <ul className={rankingStyles.costList}>
+            {COST_CATEGORIES.map(({ key, label, className }) => (
+              <li key={key}>
+                <span
+                  className={[rankingStyles.costSwatch, className].join(" ")}
+                  aria-hidden="true"
+                />
+                <span>{label}</span>
+                <strong>{formatJpy(values[key])}</strong>
+              </li>
+            ))}
+          </ul>
+          <footer className={[JAPANESE_PROSE_CLASS, rankingStyles.costNotes].join(" ")}>
+            <p>
+              概算・日本時間。Frankfurter v2の日次参照rateでUSD原価を円換算しています。
+              共有固定費のRoute 53は含みません。
+            </p>
+            {costs.data.updatedAt && (
+              <p>
+                最終更新:{" "}
+                <time dateTime={costs.data.updatedAt}>
+                  {formatCompletedDateTime(costs.data.updatedAt)}
+                </time>
+              </p>
+            )}
+          </footer>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function formatJpy(value: string): string {
+  const [integer = "0", fraction] = value.split(".");
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return "¥" + grouped + (fraction === undefined ? "" : "." + fraction);
+}
+
+function formatCalendarDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return value;
+  return Number(match[1]) + "年" + Number(match[2]) + "月" + Number(match[3]) + "日";
+}
+
 export default function RankingsPage() {
+  const [period, setPeriod] = useState<CostPeriod>("week");
   const rankings = useQuery({ queryKey: ["rankings"], queryFn: getRankings });
+  const costs = useQuery({
+    queryKey: ["costs", period],
+    queryFn: () => getCosts(period),
+  });
   useAuthenticationRecovery(rankings.error);
+  useAuthenticationRecovery(costs.error);
 
   return (
     <>
@@ -298,8 +466,8 @@ export default function RankingsPage() {
           error={rankings.error}
           onRetry={() => void rankings.refetch()}
           motionDelay={100}
-          motionTerminal
         />
+        <CostDashboard costs={costs} period={period} onPeriodChange={setPeriod} />
       </div>
     </>
   );

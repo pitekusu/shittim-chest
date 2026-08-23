@@ -195,6 +195,14 @@ class ReadHttpController:
                 if request.raw_query:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.get_rankings(now=now)
+            elif request.route_key == "GET /api/v1/insights/costs":
+                query = _query(request.raw_query)
+                if not set(query).issubset({"period"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.get_costs(
+                    period=_cost_period(_optional_single(query, "period")),
+                    now=now,
+                )
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             return json_response(200, result.model_dump(by_alias=True, mode="json"))
@@ -246,7 +254,7 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "ROUTE_NOT_FOUND": "指定されたAPIは存在しません。",
         "REQUEST_INVALID": "リクエストが正しくありません。",
         "CURSOR_INVALID": "ページ情報が正しくありません。",
-        "INSIGHTS_UNAVAILABLE": "ランキングを準備しています。",
+        "INSIGHTS_UNAVAILABLE": "集計を準備しています。",
     }.get(code, "議事録サービスを利用できません。")
     payload = ErrorResponse(error=ErrorBody(code=code, message=message, request_id=request_id))
     return json_response(status, payload.model_dump(by_alias=True, mode="json"))
@@ -312,6 +320,14 @@ def _sort(value: str | None) -> Any:
     if value is None:
         return "newest"
     if value not in {"newest", "oldest"}:
+        raise ReadFailure("REQUEST_INVALID", 400)
+    return value
+
+
+def _cost_period(value: str | None) -> Any:
+    if value is None:
+        return "week"
+    if value not in {"today", "week", "month", "all"}:
         raise ReadFailure("REQUEST_INVALID", 400)
     return value
 

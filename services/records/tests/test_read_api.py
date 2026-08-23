@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import project_completed_debate
+from shittim_records.costs import CostCategory, StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
     ArchivePage,
     CursorCodec,
@@ -36,6 +38,26 @@ class FakeReader:
         self.page = ArchivePage(items=(self.meta,), last_evaluated_key=None, index_name="gsi1")
         self.list_calls: list[dict[str, Any]] = []
         self.ranking_items = ranking_items()
+        self.costs = tuple(
+            StoredDailyCost(
+                cost_date=date(2026, 8, 14),
+                category=cast(CostCategory, category),
+                amount_usd=Decimal(str(index)),
+                estimated=False,
+                collected_at=NOW,
+            )
+            for index, category in enumerate(
+                ("FARGATE", "LAMBDA", "OPENAI", "OTHER_AWS"),
+                1,
+            )
+        )
+        self.rates = (
+            StoredDailyRate(
+                rate_date=date(2026, 8, 14),
+                usd_jpy=Decimal("150"),
+                collected_at=NOW,
+            ),
+        )
 
     def list_meta(self, **kwargs: Any) -> ArchivePage:
         self.list_calls.append(kwargs)
@@ -46,6 +68,11 @@ class FakeReader:
 
     def load_ranking_snapshots(self) -> tuple[dict[str, Any], ...]:
         return self.ranking_items
+
+    def load_cost_ledger(
+        self,
+    ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]:
+        return self.costs, self.rates
 
     def load_profiles(
         self,
@@ -155,6 +182,36 @@ def test_rankings_fail_closed_on_incomplete_or_malformed_snapshot(mutate: Any) -
 
     with pytest.raises(ReadFailure) as caught:
         records.get_rankings(now=NOW)
+
+    assert (caught.value.code, caught.value.status) == ("INSIGHTS_UNAVAILABLE", 503)
+
+
+def test_costs_return_jpy_breakdown_with_japanese_calendar_dates() -> None:
+    records, _reader = service()
+
+    result = records.get_costs(period="all", now=NOW)
+    payload = result.model_dump(by_alias=True, mode="json")
+
+    assert payload["timeZone"] == "Asia/Tokyo"
+    assert payload["currency"] == "JPY"
+    assert payload["startDate"] == "2026-08-14"
+    assert payload["breakdown"] == {
+        "fargate": "150.000000",
+        "lambda": "300.000000",
+        "openai": "450.000000",
+        "otherAws": "600.000000",
+    }
+    assert payload["total"] == "1500.000000"
+    assert payload["updatedAt"].endswith("+09:00")
+    assert "amountUsd" not in repr(payload)
+
+
+def test_costs_fail_closed_on_duplicate_stored_daily_record() -> None:
+    records, reader = service()
+    reader.costs = (*reader.costs, reader.costs[0])
+
+    with pytest.raises(ReadFailure) as caught:
+        records.get_costs(period="week", now=NOW)
 
     assert (caught.value.code, caught.value.status) == ("INSIGHTS_UNAVAILABLE", 503)
 

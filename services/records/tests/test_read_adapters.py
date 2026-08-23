@@ -93,6 +93,60 @@ def test_rankings_use_one_atomic_read_for_both_snapshots() -> None:
     ]
 
 
+def test_cost_ledger_queries_cost_and_fx_partitions_strongly_consistently() -> None:
+    client = FakeDynamo(
+        [
+            {
+                "Items": [
+                    marshal_item(
+                        {
+                            "PK": "COST#DAILY",
+                            "SK": "2026-08-22#OPENAI",
+                            "schema_version": 1,
+                            "record_type": "daily_cost",
+                            "source": "OPENAI",
+                            "cost_date": "2026-08-22",
+                            "category": "OPENAI",
+                            "amount_usd": "0.25",
+                            "currency": "USD",
+                            "estimated": False,
+                            "collected_at": "2026-08-23T00:00:00+00:00",
+                        }
+                    )
+                ]
+            },
+            {
+                "Items": [
+                    marshal_item(
+                        {
+                            "PK": "FX#DAILY",
+                            "SK": "2026-08-22#USDJPY",
+                            "schema_version": 1,
+                            "record_type": "daily_exchange_rate",
+                            "source": "FRANKFURTER",
+                            "rate_date": "2026-08-22",
+                            "base_currency": "USD",
+                            "quote_currency": "JPY",
+                            "rate": "150",
+                            "collected_at": "2026-08-23T00:00:00+00:00",
+                        }
+                    )
+                ]
+            },
+        ]
+    )
+
+    costs, rates = reader(client).load_cost_ledger()
+
+    assert costs[0].amount_usd.as_tuple().exponent == -2
+    assert rates[0].usd_jpy == 150
+    assert [call["ConsistentRead"] for call in client.queries] == [True, True]
+    assert [call["ExpressionAttributeValues"] for call in client.queries] == [
+        marshal_item({":pk": "COST#DAILY"}),
+        marshal_item({":pk": "FX#DAILY"}),
+    ]
+
+
 @pytest.mark.parametrize(("sort", "scan_forward"), (("newest", False), ("oldest", True)))
 def test_list_uses_selected_gsi_and_sort_without_unused_expression_names(
     sort: str,

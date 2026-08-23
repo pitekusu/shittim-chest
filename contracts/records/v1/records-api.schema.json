@@ -63,6 +63,166 @@
       "title": "AuthenticatedSession",
       "type": "object"
     },
+    "CostBreakdown": {
+      "additionalProperties": false,
+      "properties": {
+        "fargate": {
+          "pattern": "^[0-9]+\\.[0-9]{6}$",
+          "title": "Fargate",
+          "type": "string"
+        },
+        "lambda": {
+          "pattern": "^[0-9]+\\.[0-9]{6}$",
+          "title": "Lambda",
+          "type": "string"
+        },
+        "openai": {
+          "pattern": "^[0-9]+\\.[0-9]{6}$",
+          "title": "Openai",
+          "type": "string"
+        },
+        "otherAws": {
+          "pattern": "^[0-9]+\\.[0-9]{6}$",
+          "title": "Otheraws",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fargate",
+        "lambda",
+        "openai",
+        "otherAws"
+      ],
+      "title": "CostBreakdown",
+      "type": "object"
+    },
+    "CostConversion": {
+      "additionalProperties": false,
+      "properties": {
+        "baseCurrency": {
+          "const": "USD",
+          "title": "Basecurrency",
+          "type": "string"
+        },
+        "method": {
+          "const": "daily-reference-rate",
+          "title": "Method",
+          "type": "string"
+        },
+        "source": {
+          "const": "frankfurter-v2",
+          "title": "Source",
+          "type": "string"
+        },
+        "updatedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Updatedat"
+        }
+      },
+      "required": [
+        "source",
+        "method",
+        "baseCurrency",
+        "updatedAt"
+      ],
+      "title": "CostConversion",
+      "type": "object"
+    },
+    "CostsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "breakdown": {
+          "$ref": "#/$defs/CostBreakdown"
+        },
+        "conversion": {
+          "$ref": "#/$defs/CostConversion"
+        },
+        "currency": {
+          "const": "JPY",
+          "title": "Currency",
+          "type": "string"
+        },
+        "endDate": {
+          "format": "date",
+          "title": "Enddate",
+          "type": "string"
+        },
+        "period": {
+          "enum": [
+            "today",
+            "week",
+            "month",
+            "all"
+          ],
+          "title": "Period",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "startDate": {
+          "format": "date",
+          "title": "Startdate",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "partial",
+            "final",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "timeZone": {
+          "const": "Asia/Tokyo",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "total": {
+          "pattern": "^[0-9]+\\.[0-9]{6}$",
+          "title": "Total",
+          "type": "string"
+        },
+        "updatedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Updatedat"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "period",
+        "timeZone",
+        "startDate",
+        "endDate",
+        "currency",
+        "total",
+        "breakdown",
+        "conversion",
+        "updatedAt",
+        "status"
+      ],
+      "title": "CostsResponse",
+      "type": "object"
+    },
     "ErrorBody": {
       "additionalProperties": false,
       "properties": {
@@ -1172,6 +1332,9 @@
     },
     {
       "$ref": "#/$defs/RankingsResponse"
+    },
+    {
+      "$ref": "#/$defs/CostsResponse"
     },
     {
       "$ref": "#/$defs/SessionResponse"

@@ -31,6 +31,14 @@ from shittim_records.auth_adapters import (
     DynamoAuthStore,
     S3AvatarStore,
 )
+from shittim_records.cost_adapters import (
+    AwsCostExplorerSource,
+    CostConfigurationRepository,
+    DynamoCostLedgerStore,
+    FrankfurterRateSource,
+    OpenAICostSource,
+)
+from shittim_records.costs import CostCollectionFailed, CostCollectionService
 from shittim_records.http_api import AuthHttpController, ReadHttpController
 from shittim_records.projector import BackfillService, ProjectorService
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
@@ -44,6 +52,7 @@ LOGGER.setLevel(logging.INFO)
 _PROJECTOR: ProjectorService | None = None
 _BACKFILL: BackfillService | None = None
 _RANKING: RankingService | None = None
+_COSTS: CostCollectionService | None = None
 _AUTH_CONTROLLER: AuthHttpController | None = None
 _READ_CONTROLLER: ReadHttpController | None = None
 
@@ -126,6 +135,34 @@ def ranking_handler(_event: Mapping[str, Any], _context: object) -> dict[str, ob
     return response
 
 
+def cost_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
+    """Collect one bounded provider mode without logging amounts or identifiers."""
+
+    mode = event.get("mode")
+    if mode not in {"aws_fx", "openai"}:
+        raise ValueError("cost collection mode must be aws_fx or openai")
+    try:
+        summaries = _cost_service().refresh(mode=mode, now=datetime.now(UTC))
+    except CostCollectionFailed as error:
+        _log(
+            event="records_cost_collection_failed",
+            mode=mode,
+            succeeded_sources=len(error.summaries),
+            failed_sources=len(error.failures),
+            failure_codes=sorted(failure.code for failure in error.failures),
+        )
+        raise
+    response = {
+        "mode": mode,
+        "sources": len(summaries),
+        "windows": sum(summary.windows for summary in summaries),
+        "days": sum(summary.days for summary in summaries),
+        "complete": all(summary.initial_complete for summary in summaries),
+    }
+    _log(event="records_cost_collection_completed", **response)
+    return response
+
+
 def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle public OAuth and session routes."""
 
@@ -177,6 +214,32 @@ def _ranking_service() -> RankingService:
             ),
         )
     return _RANKING
+
+
+def _cost_service() -> CostCollectionService:
+    global _COSTS
+    if _COSTS is None:
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        http = httpx.Client(timeout=httpx.Timeout(5.0, connect=2.0), follow_redirects=False)
+        _COSTS = CostCollectionService(
+            aws=AwsCostExplorerSource(
+                boto3.client("ce", region_name="us-east-1", config=SDK_CONFIG)
+            ),
+            openai=OpenAICostSource(
+                http,
+                CostConfigurationRepository(
+                    boto3.client("ssm", config=SDK_CONFIG),
+                    admin_key_parameter_name=_environment("OPENAI_ADMIN_KEY_PARAMETER_NAME"),
+                    project_id_parameter_name=_environment("OPENAI_PROJECT_ID_PARAMETER_NAME"),
+                ),
+            ),
+            exchange=FrankfurterRateSource(http),
+            store=DynamoCostLedgerStore(
+                dynamodb,
+                _environment("STATISTICS_TABLE_NAME"),
+            ),
+        )
+    return _COSTS
 
 
 def _auth_controller() -> AuthHttpController:
