@@ -311,12 +311,15 @@ test("archive controls remain usable across responsive breakpoints", async ({ pa
   ]) {
     await page.setViewportSize(viewport);
     const sortBox = await page.locator("[data-sort]").boundingBox();
+    const sortLegendBox = await page.getByText("並び順", { exact: true }).boundingBox();
     const cardBox = await page
       .getByRole("link", { name: `「${detail.question}」の記録を読む` })
       .boundingBox();
 
     expect(sortBox).not.toBeNull();
+    expect(sortLegendBox).not.toBeNull();
     expect(sortBox!.height).toBeGreaterThanOrEqual(46);
+    expect(sortLegendBox!.y + sortLegendBox!.height + 4).toBeLessThanOrEqual(sortBox!.y);
     expect(sortBox!.x + sortBox!.width).toBeLessThanOrEqual(viewport.width);
     expect(cardBox).not.toBeNull();
     expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(viewport.width);

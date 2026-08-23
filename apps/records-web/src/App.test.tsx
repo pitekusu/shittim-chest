@@ -411,6 +411,7 @@ describe("App", () => {
       "質問文などを入力",
     );
     expect(screen.queryByText("議論記録を閲覧できます。")).not.toBeInTheDocument();
+    expect(screen.queryByText("検索対象は現在読み込み済みのカードです。")).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/records?limit=12&sort=newest");
   });
 
