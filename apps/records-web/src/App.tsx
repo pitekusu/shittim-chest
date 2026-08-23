@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BrowserRouter,
   Link,
@@ -137,16 +137,24 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
   );
 }
 
-function BrandTransition({ onComplete }: { readonly onComplete: () => void }) {
+function BrandTransition({
+  accessibleName,
+  message,
+  onComplete,
+}: {
+  readonly accessibleName: string;
+  readonly message: string;
+  readonly onComplete: () => void;
+}) {
   useEffect(() => {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const timer = window.setTimeout(onComplete, reduced ? 150 : 2_000);
     return () => window.clearTimeout(timer);
   }, [onComplete]);
   return (
-    <output className={styles.brandTransition} aria-label="ログインしました">
+    <output className={styles.brandTransition} aria-label={accessibleName}>
       <BrandMark />
-      <p lang="en">WELCOME, SENSEI.</p>
+      <p lang="en">{message}</p>
     </output>
   );
 }
@@ -161,21 +169,50 @@ function AuthenticatedRoutes({
   const [showTransition, setShowTransition] = useState(
     () => sessionStorage.getItem(LOGIN_TRANSITION_KEY) === "pending",
   );
+  const [showLogoutTransition, setShowLogoutTransition] = useState(false);
   const logoutMutation = useMutation({
     mutationFn: () => logout(session.csrfToken),
-    onSuccess: async () => {
+    onSuccess: () => {
       sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
-      client.clear();
-      await client.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
-      void navigate("/login", { replace: true });
+      setShowLogoutTransition(true);
     },
   });
-  const finishTransition = () => {
+  const finishLoginTransition = useCallback(() => {
     sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
     setShowTransition(false);
-  };
+  }, []);
+  const finishLogoutTransition = useCallback(() => {
+    client.removeQueries({
+      predicate: (query) =>
+        query.queryKey[0] === "records" ||
+        query.queryKey[0] === "record" ||
+        query.queryKey[0] === "rankings",
+    });
+    client.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
+      schemaVersion: 1,
+      authenticated: false,
+      user: null,
+      csrfToken: null,
+    });
+    void navigate("/login", { replace: true });
+  }, [client, navigate]);
   if (showTransition) {
-    return <BrandTransition onComplete={finishTransition} />;
+    return (
+      <BrandTransition
+        accessibleName="ログインしました"
+        message="WELCOME, SENSEI."
+        onComplete={finishLoginTransition}
+      />
+    );
+  }
+  if (showLogoutTransition) {
+    return (
+      <BrandTransition
+        accessibleName="ログオフしました"
+        message="GOODBYE, SENSEI."
+        onComplete={finishLogoutTransition}
+      />
+    );
   }
   return (
     <Layout

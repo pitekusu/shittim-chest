@@ -145,13 +145,23 @@ function mockApi(
   rankings: unknown = rankingsResponse(),
 ) {
   const requests: string[] = [];
+  let currentSession = session;
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const path =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       requests.push(path);
-      if (path === "/api/v1/session") return Promise.resolve(response(session));
+      if (path === "/api/v1/session") return Promise.resolve(response(currentSession));
+      if (path === "/api/v1/logout") {
+        currentSession = {
+          schemaVersion: 1,
+          authenticated: false,
+          user: null,
+          csrfToken: null,
+        };
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
       if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
       if (path === `/api/v1/records/${RECORD_ID}`) {
         return Promise.resolve(response(recordDetail()));
@@ -167,6 +177,7 @@ function mockApi(
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   window.history.replaceState(null, "", "/");
@@ -212,6 +223,36 @@ describe("App", () => {
       "href",
       "/api/v1/auth/discord/start?returnTo=%2Finsights",
     );
+  });
+
+  it("shows the goodbye transition before returning to the login page", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query) =>
+        ({
+          matches: query === "(prefers-reduced-motion: reduce)",
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    );
+    const requests = mockApi();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "議論の記録" });
+    fireEvent.click(screen.getAllByRole("button", { name: "LOGOFF" })[0]!);
+
+    expect(await screen.findByText("GOODBYE, SENSEI.")).toBeVisible();
+    expect(screen.getByLabelText("ログオフしました")).toBeVisible();
+    expect(screen.queryByText("WELCOME, SENSEI.")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
+    });
+    expect(screen.queryByText("GOODBYE, SENSEI.")).not.toBeInTheDocument();
+    expect(requests).toContain("/api/v1/logout");
   });
 
   it("renders completed records without duration or Evidence", async () => {
