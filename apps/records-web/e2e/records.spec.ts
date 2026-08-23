@@ -193,7 +193,33 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await page.locator("body").click({ position: { x: 4, y: 4 } });
-  await expect(page.getByLabel("並び順")).toHaveValue("newest");
+  const newestSort = page.getByRole("radio", { name: "新しい順" });
+  const oldestSort = page.getByRole("radio", { name: "古い順" });
+  const sortSegment = page.locator("[data-sort]");
+  await expect(newestSort).toBeChecked();
+  await expect(oldestSort).not.toBeChecked();
+  const sortBoxBefore = await sortSegment.boundingBox();
+  const transformBefore = await sortSegment.evaluate(
+    (element) => getComputedStyle(element, "::before").transform,
+  );
+  expect(
+    await sortSegment.evaluate((element) =>
+      getComputedStyle(element, "::before")
+        .transitionDuration.split(",")
+        .map((value) => value.trim()),
+    ),
+  ).toContain("0.2s");
+  await sortSegment.getByText("OLD", { exact: true }).click();
+  await expect(sortSegment).toHaveAttribute("data-sort", "oldest");
+  await page.waitForTimeout(240);
+  expect(
+    await sortSegment.evaluate((element) => getComputedStyle(element, "::before").transform),
+  ).not.toBe(transformBefore);
+  expect(await sortSegment.boundingBox()).toEqual(sortBoxBefore);
+  await oldestSort.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(newestSort).toBeChecked();
+  await expect(sortSegment).toHaveAttribute("data-sort", "newest");
   await expect(page.getByLabel("開始日")).toHaveCount(0);
   await expect(page.getByLabel("終了日")).toHaveCount(0);
   const typographySupport = await page.evaluate(() => ({
@@ -222,7 +248,13 @@ test("authenticated member can browse the completed archive", async ({ page }) =
     fullPage: true,
     maxDiffPixels: 20,
   });
-  await page.getByRole("link", { name: "記録を読む" }).click();
+  const cardLink = page.getByRole("link", {
+    name: `「${detail.question}」の記録を読む`,
+  });
+  await expect(cardLink).toContainText("記録を読む");
+  const cardBox = await card.boundingBox();
+  expect(cardBox).not.toBeNull();
+  await card.click({ position: { x: cardBox!.width - 12, y: cardBox!.height - 12 } });
   const questionHeading = page.getByRole("heading", { name: detail.question });
   const opinionsHeading = page.getByRole("heading", { name: "3人の意見" });
   await expect(questionHeading).toBeVisible();
@@ -250,6 +282,48 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("record card opens from its native keyboard link", async ({ page }) => {
+  await mockAuthenticatedApi(page);
+  await page.goto("/");
+
+  const cardLink = page.getByRole("link", {
+    name: `「${detail.question}」の記録を読む`,
+  });
+  await cardLink.focus();
+  await expect(cardLink).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(`/records/${RECORD_ID}`);
+  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+});
+
+test("archive controls remain usable across responsive breakpoints", async ({ page }) => {
+  await mockAuthenticatedApi(page);
+  await page.goto("/");
+
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 768 },
+    { width: 768, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const sortBox = await page.locator("[data-sort]").boundingBox();
+    const cardBox = await page
+      .getByRole("link", { name: `「${detail.question}」の記録を読む` })
+      .boundingBox();
+
+    expect(sortBox).not.toBeNull();
+    expect(sortBox!.height).toBeGreaterThanOrEqual(46);
+    expect(sortBox!.x + sortBox!.width).toBeLessThanOrEqual(viewport.width);
+    expect(cardBox).not.toBeNull();
+    expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(viewport.width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      viewport.width,
+    );
+  }
 });
 
 test("dark theme covers login, archive, detail, and rankings", async ({ page }, testInfo) => {
@@ -286,7 +360,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
     maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 
-  await page.getByRole("link", { name: "記録を読む" }).click();
+  await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await expect(page).toHaveScreenshot("records-dark-detail.png", {
@@ -315,6 +389,13 @@ test("manual theme survives reload and logoff while the mobile switch stays usab
 
   const desktopSwitch = page.getByRole("switch", { name: "ダークモード" });
   await expect(desktopSwitch).toHaveAttribute("aria-checked", "true");
+  expect(
+    await page.locator("[data-sort]").evaluate((element) =>
+      getComputedStyle(element, "::before")
+        .transitionDuration.split(",")
+        .every((value) => Number.parseFloat(value) <= 0.01),
+    ),
+  ).toBe(true);
   await desktopSwitch.focus();
   await page.keyboard.press("Space");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");

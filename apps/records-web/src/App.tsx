@@ -345,13 +345,39 @@ function RecordsHome() {
           onChange={setRequester}
         />
         <AvatarSelect label="勝者" value={winner} options={winnerOptions} onChange={setWinner} />
-        <label>
-          並び順
-          <select value={sort} onChange={(event) => setSort(event.target.value as SortOrder)}>
-            <option value="newest">新しい順</option>
-            <option value="oldest">古い順</option>
-          </select>
-        </label>
+        <fieldset className={styles.sortField}>
+          <legend>並び順</legend>
+          <div className={styles.sortSegment} data-sort={sort}>
+            <label className={styles.sortOption}>
+              <input
+                className={styles.visuallyHidden}
+                type="radio"
+                name="records-sort"
+                value="newest"
+                checked={sort === "newest"}
+                onChange={() => setSort("newest")}
+              />
+              <span lang="en" aria-hidden="true">
+                NEW
+              </span>
+              <span className={styles.visuallyHidden}>新しい順</span>
+            </label>
+            <label className={styles.sortOption}>
+              <input
+                className={styles.visuallyHidden}
+                type="radio"
+                name="records-sort"
+                value="oldest"
+                checked={sort === "oldest"}
+                onChange={() => setSort("oldest")}
+              />
+              <span lang="en" aria-hidden="true">
+                OLD
+              </span>
+              <span className={styles.visuallyHidden}>古い順</span>
+            </label>
+          </div>
+        </fieldset>
         <p>検索対象は現在読み込み済みのカードです。</p>
       </section>
       {records.isPending && (
