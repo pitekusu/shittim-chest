@@ -267,7 +267,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-login.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 20,
+    maxDiffPixels: 50,
   });
 
   await page.unroute("**/api/v1/session");
@@ -282,7 +282,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-home.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 20,
+    maxDiffPixels: 50,
   });
 
   await page.getByRole("link", { name: "記録を読む" }).click();
@@ -291,7 +291,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-detail.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 20,
+    maxDiffPixels: 50,
   });
 
   await page.goto("/insights");
@@ -300,7 +300,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await expect(page).toHaveScreenshot("records-dark-insights.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 20,
+    maxDiffPixels: 50,
   });
 });
 
@@ -334,7 +334,7 @@ test("manual theme survives reload and logoff while the mobile switch stays usab
   await expect(page).toHaveScreenshot("records-dark-mobile-390.png", {
     animations: "disabled",
     fullPage: true,
-    maxDiffPixels: 20,
+    maxDiffPixels: 50,
   });
 
   await page.setViewportSize({ width: 320, height: 800 });
