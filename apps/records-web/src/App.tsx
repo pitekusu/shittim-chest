@@ -6,7 +6,15 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   BrowserRouter,
   Link,
@@ -221,6 +229,8 @@ function RecordsHome() {
   const [search, setSearch] = useState("");
   const [requester, setRequester] = useState("");
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const observedPageCountRef = useRef<number | undefined>(undefined);
+  const [appendMotionIds, setAppendMotionIds] = useState<ReadonlySet<string>>(() => new Set());
   const localFiltersActive = search.trim().length > 0 || requester !== "";
   const localFiltersActiveRef = useRef(localFiltersActive);
   localFiltersActiveRef.current = localFiltersActive;
@@ -241,10 +251,39 @@ function RecordsHome() {
     () => records.data?.pages.flatMap((page) => page.items) ?? [],
     [records.data],
   );
-  const initialRecordIds = useMemo(
-    () => new Set(records.data?.pages[0]?.items.map((record) => record.recordId) ?? []),
-    [records.data?.pages],
-  );
+  useLayoutEffect(() => {
+    observedPageCountRef.current = undefined;
+    setAppendMotionIds(new Set());
+  }, [sort, winner]);
+  useLayoutEffect(() => {
+    const pages = records.data?.pages;
+    if (!pages) return;
+    const previousPageCount = observedPageCountRef.current;
+    observedPageCountRef.current = pages.length;
+    if (previousPageCount === undefined) return;
+    if (pages.length < previousPageCount) {
+      setAppendMotionIds(new Set());
+      return;
+    }
+    if (pages.length === previousPageCount) return;
+    const addedRecordIds = pages
+      .slice(previousPageCount)
+      .flatMap((page) => page.items.map((record) => record.recordId));
+    if (addedRecordIds.length === 0) return;
+    setAppendMotionIds((current) => {
+      const next = new Set(current);
+      for (const recordId of addedRecordIds) next.add(recordId);
+      return next;
+    });
+  }, [records.data?.pages]);
+  const consumeAppendMotion = useCallback((recordId: string) => {
+    setAppendMotionIds((current) => {
+      if (!current.has(recordId)) return current;
+      const next = new Set(current);
+      next.delete(recordId);
+      return next;
+    });
+  }, []);
   const requesterOptions = useMemo<readonly AvatarSelectOption<string>[]>(() => {
     const requesters = new Map(
       loadedRecords.map((record) => [record.requester.displayName, record.requester] as const),
@@ -335,6 +374,7 @@ function RecordsHome() {
     <>
       <header
         className={`${styles.pageHeader} ${styles.routeMotionItem}`}
+        data-route-motion-ready={records.isPending ? undefined : ""}
         style={routeMotionDelay(0)}
       >
         <p className={styles.eyebrow} lang="en">
@@ -346,6 +386,9 @@ function RecordsHome() {
       </header>
       <section
         className={`${styles.filters} ${styles.routeMotionItem}`}
+        data-route-motion-terminal={
+          !records.isPending && visibleRecords.length === 0 ? "" : undefined
+        }
         style={routeMotionDelay(40)}
         aria-label="記録の絞り込み"
       >
@@ -425,7 +468,9 @@ function RecordsHome() {
             key={record.recordId}
             record={record}
             motionDelay={60 + Math.min(index, 5) * 12}
-            appended={!initialRecordIds.has(record.recordId)}
+            motionTerminal={index === visibleRecords.length - 1}
+            appended={appendMotionIds.has(record.recordId)}
+            onAppendAnimationEnd={consumeAppendMotion}
           />
         ))}
       </section>
@@ -484,12 +529,18 @@ function RecordDetail() {
   if (record.isError) {
     const error = record.error instanceof RecordsApiError ? record.error : undefined;
     return (
-      <ErrorPanel
-        title="記録を開けませんでした"
-        message={error?.message ?? "通信状態を確認してください。"}
-        requestId={error?.requestId}
-        onRetry={() => void record.refetch()}
-      />
+      <div
+        className={styles.routeMotionItem}
+        data-route-motion-ready=""
+        data-route-motion-terminal=""
+      >
+        <ErrorPanel
+          title="記録を開けませんでした"
+          message={error?.message ?? "通信状態を確認してください。"}
+          requestId={error?.requestId}
+          onRetry={() => void record.refetch()}
+        />
+      </div>
     );
   }
   return <RecordDocument record={record.data} />;
@@ -501,7 +552,7 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
   const count = (slot: ParticipantSlot) =>
     record.result.voteCounts.find((item) => item.participant === slot)?.count ?? 0;
   return (
-    <article className={styles.recordDocument}>
+    <article className={styles.recordDocument} data-route-motion-ready="">
       <header
         className={`${styles.recordHeader} ${styles.routeMotionItem}`}
         style={routeMotionDelay(0)}
@@ -589,6 +640,7 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }) {
       </section>
       <section
         className={`${styles.detailSection} ${styles.decisionSection} ${styles.routeMotionItem}`}
+        data-route-motion-terminal=""
         style={routeMotionDelay(120)}
         aria-labelledby="decision-title"
       >
@@ -645,6 +697,7 @@ function RankingPanel({
   error,
   onRetry,
   motionDelay,
+  motionTerminal = false,
 }: {
   readonly variant: "wins" | "requests";
   readonly title: string;
@@ -654,6 +707,7 @@ function RankingPanel({
   readonly error: unknown;
   readonly onRetry: () => void;
   readonly motionDelay: number;
+  readonly motionTerminal?: boolean;
 }) {
   const apiError = error instanceof RecordsApiError ? error : undefined;
   const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
@@ -664,6 +718,7 @@ function RankingPanel({
       className={`${styles.rankingPanel} ${styles.routeMotionItem} ${
         variant === "wins" ? styles.rankingPanelWins : styles.rankingPanelRequests
       }`}
+      data-route-motion-terminal={motionTerminal ? "" : undefined}
       style={routeMotionDelay(motionDelay)}
       aria-labelledby={`${title}-title`}
       aria-busy={pending}
@@ -871,6 +926,7 @@ function RankingsPage() {
     <>
       <header
         className={`${styles.pageHeader} ${styles.routeMotionItem}`}
+        data-route-motion-ready={rankings.isPending ? undefined : ""}
         style={routeMotionDelay(0)}
       >
         <p className={styles.eyebrow} lang="en">
@@ -908,6 +964,7 @@ function RankingsPage() {
           error={rankings.error}
           onRetry={() => void rankings.refetch()}
           motionDelay={100}
+          motionTerminal
         />
       </div>
     </>
@@ -916,7 +973,11 @@ function RankingsPage() {
 
 function NotFound() {
   return (
-    <section className={styles.messagePanel}>
+    <section
+      className={`${styles.messagePanel} ${styles.routeMotionItem}`}
+      data-route-motion-ready=""
+      data-route-motion-terminal=""
+    >
       <span className={styles.errorRing} aria-hidden="true">
         ?
       </span>

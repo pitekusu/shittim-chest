@@ -108,7 +108,11 @@ const PRODUCTION_CSP = [
   "style-src 'self'",
 ].join("; ");
 
-async function mockAuthenticatedApi(page: Page, recordDetail = detail): Promise<void> {
+async function mockAuthenticatedApi(
+  page: Page,
+  recordDetail = detail,
+  recordDelayMs = 0,
+): Promise<void> {
   let authenticated = true;
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
@@ -150,9 +154,12 @@ async function mockAuthenticatedApi(page: Page, recordDetail = detail): Promise<
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}`, (route) =>
-    route.fulfill({ json: recordDetail }),
-  );
+  await page.route(`**/api/v1/records/${RECORD_ID}`, async (route) => {
+    if (recordDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, recordDelayMs));
+    }
+    return route.fulfill({ json: recordDetail });
+  });
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
 }
 
@@ -303,7 +310,7 @@ test("branded route motion stays short and coordinates all internal routes", asy
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
-  await mockAuthenticatedApi(page);
+  await mockAuthenticatedApi(page, detail, 1_200);
   await page.goto("/");
 
   const initialScene = page.locator('[data-route-scene="/"]');
@@ -358,9 +365,17 @@ test("branded route motion stays short and coordinates all internal routes", asy
   await expect(archiveHeading).toBeFocused();
 
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
+  await page.waitForTimeout(430);
+  await expect(page.getByText("議論の記録を開いています。")).toBeVisible();
+  await expect(
+    page.locator('[data-route-stage][data-route-kind="detail"] [data-route-scene]'),
+  ).toHaveAttribute("data-route-motion", "active");
   const detailHeading = page.getByRole("heading", { name: detail.question });
   await expect(page.locator('[data-route-stage][data-route-kind="detail"]')).toBeVisible();
   await expect(detailHeading).toBeFocused();
+  await expect(
+    page.locator('[data-route-stage][data-route-kind="detail"] [data-route-scene]'),
+  ).toHaveAttribute("data-route-motion", "settled");
 
   await page.getByRole("link", { name: "← 記録一覧へ" }).click();
   await expect(archiveHeading).toBeVisible();
@@ -717,6 +732,15 @@ test("loads the next archive page automatically near the end of the loaded cards
   await expect(appendedCard).toBeVisible();
   await expect(appendedCard).toHaveCSS("animation-duration", "0.18s");
   await expect(appendedCard).toHaveCSS("animation-delay", "0s");
+  await page.waitForTimeout(220);
+  await expect(appendedCard).toHaveCSS("animation-name", "none");
+
+  const search = page.getByRole("searchbox", { name: "フリーワード検索" });
+  await search.fill("読み込み済みの議論 1");
+  await expect(appendedCard).toHaveCount(0);
+  await search.clear();
+  await expect(appendedCard).toBeVisible();
+  await expect(appendedCard).toHaveCSS("animation-name", "none");
   await expect(page.getByRole("button", { name: "さらに読み込む" })).toHaveCount(0);
 });
 
