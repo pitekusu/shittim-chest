@@ -108,16 +108,28 @@ const PRODUCTION_CSP = [
 ].join("; ");
 
 async function mockAuthenticatedApi(page: Page, recordDetail = detail): Promise<void> {
+  let authenticated = true;
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
-      json: {
-        schemaVersion: 1,
-        authenticated: true,
-        user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
-        csrfToken: "csrf-token",
-      },
+      json: authenticated
+        ? {
+            schemaVersion: 1,
+            authenticated: true,
+            user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
+            csrfToken: "csrf-token",
+          }
+        : {
+            schemaVersion: 1,
+            authenticated: false,
+            user: null,
+            csrfToken: null,
+          },
     }),
   );
+  await page.route("**/api/v1/logout", (route) => {
+    authenticated = false;
+    return route.fulfill({ status: 204 });
+  });
   await page.route("**/api/v1/records?*", (route) =>
     route.fulfill({
       json: {
@@ -237,6 +249,22 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("logoff shows the goodbye transition before returning to login", async ({ page }) => {
+  await mockAuthenticatedApi(page);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "LOGOFF" }).first().click();
+
+  const transition = page.getByLabel("ログオフしました");
+  await expect(transition).toBeVisible();
+  await expect(transition.getByText("GOODBYE, SENSEI.")).toHaveCSS("font-family", /Delogy/);
+  await expect(transition).toHaveCSS("animation-duration", "2s");
+  await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible({
+    timeout: 3_000,
+  });
+  await expect(transition).toHaveCount(0);
 });
 
 test("authenticated member can review responsive rankings", async ({ page }) => {
@@ -577,7 +605,7 @@ test("touch activation keeps a vote selection until the same target is tapped ag
   await expect(route.locator("..")).toHaveAttribute("data-relation", "default");
 });
 
-test("reduced motion skips the long login transition", async ({ page }) => {
+test("reduced motion skips the long login and logoff transitions", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAuthenticatedApi(page);
   await page.addInitScript(() =>
@@ -586,6 +614,10 @@ test("reduced motion skips the long login transition", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible({
+    timeout: 1_000,
+  });
+  await page.getByRole("button", { name: "LOGOFF" }).first().click();
+  await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible({
     timeout: 1_000,
   });
 });

@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
@@ -145,13 +146,23 @@ function mockApi(
   rankings: unknown = rankingsResponse(),
 ) {
   const requests: string[] = [];
+  let currentSession = session;
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const path =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       requests.push(path);
-      if (path === "/api/v1/session") return Promise.resolve(response(session));
+      if (path === "/api/v1/session") return Promise.resolve(response(currentSession));
+      if (path === "/api/v1/logout") {
+        currentSession = {
+          schemaVersion: 1,
+          authenticated: false,
+          user: null,
+          csrfToken: null,
+        };
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
       if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
       if (path === `/api/v1/records/${RECORD_ID}`) {
         return Promise.resolve(response(recordDetail()));
@@ -166,7 +177,9 @@ function mockApi(
 }
 
 afterEach(() => {
+  focusManager.setFocused(undefined);
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   window.history.replaceState(null, "", "/");
@@ -212,6 +225,47 @@ describe("App", () => {
       "href",
       "/api/v1/auth/discord/start?returnTo=%2Finsights",
     );
+  });
+
+  it("finishes goodbye cleanup even if the session refreshes during the transition", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (query) =>
+        ({
+          matches: false,
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }) as MediaQueryList,
+    );
+    const requests = mockApi();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "議論の記録" });
+    const staleAt = Date.now() + 31_000;
+    vi.spyOn(Date, "now").mockReturnValue(staleAt);
+    fireEvent.click(screen.getAllByRole("button", { name: "LOGOFF" })[0]!);
+
+    expect(await screen.findByText("GOODBYE, SENSEI.")).toBeVisible();
+    expect(screen.getByLabelText("ログオフしました")).toBeVisible();
+    expect(screen.queryByText("WELCOME, SENSEI.")).not.toBeInTheDocument();
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => {
+      expect(requests.filter((path) => path === "/api/v1/session")).toHaveLength(2);
+    });
+    expect(screen.getByText("GOODBYE, SENSEI.")).toBeVisible();
+    await waitFor(
+      () => {
+        expect(screen.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
+      },
+      { timeout: 2_500 },
+    );
+    expect(screen.queryByText("GOODBYE, SENSEI.")).not.toBeInTheDocument();
+    expect(requests).toContain("/api/v1/logout");
   });
 
   it("renders completed records without duration or Evidence", async () => {

@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BrowserRouter,
   Link,
@@ -137,52 +137,53 @@ function LoginPage({ session }: { readonly session: SessionResponse }) {
   );
 }
 
-function BrandTransition({ onComplete }: { readonly onComplete: () => void }) {
+function BrandTransition({
+  accessibleName,
+  message,
+  onComplete,
+}: {
+  readonly accessibleName: string;
+  readonly message: string;
+  readonly onComplete: () => void;
+}) {
   useEffect(() => {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const timer = window.setTimeout(onComplete, reduced ? 150 : 2_000);
     return () => window.clearTimeout(timer);
   }, [onComplete]);
   return (
-    <output className={styles.brandTransition} aria-label="ログインしました">
+    <output className={styles.brandTransition} aria-label={accessibleName}>
       <BrandMark />
-      <p lang="en">WELCOME, SENSEI.</p>
+      <p lang="en">{message}</p>
     </output>
   );
 }
 
 function AuthenticatedRoutes({
   session,
+  onLogout,
 }: {
   readonly session: SessionResponse & { authenticated: true };
+  readonly onLogout: () => void;
 }) {
-  const navigate = useNavigate();
-  const client = useQueryClient();
   const [showTransition, setShowTransition] = useState(
     () => sessionStorage.getItem(LOGIN_TRANSITION_KEY) === "pending",
   );
-  const logoutMutation = useMutation({
-    mutationFn: () => logout(session.csrfToken),
-    onSuccess: async () => {
-      sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
-      client.clear();
-      await client.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
-      void navigate("/login", { replace: true });
-    },
-  });
-  const finishTransition = () => {
+  const finishLoginTransition = useCallback(() => {
     sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
     setShowTransition(false);
-  };
+  }, []);
   if (showTransition) {
-    return <BrandTransition onComplete={finishTransition} />;
+    return (
+      <BrandTransition
+        accessibleName="ログインしました"
+        message="WELCOME, SENSEI."
+        onComplete={finishLoginTransition}
+      />
+    );
   }
   return (
-    <Layout
-      displayName={session.user.displayName}
-      avatar={session.user.avatar}
-      onLogout={() => logoutMutation.mutate()}
-    >
+    <Layout displayName={session.user.displayName} avatar={session.user.avatar} onLogout={onLogout}>
       <Routes>
         <Route path="/" element={<RecordsHome />} />
         <Route path="/records/:recordId" element={<RecordDetail />} />
@@ -852,6 +853,36 @@ function NotFound() {
 function ApplicationRoutes() {
   const session = useQuery({ queryKey: SESSION_QUERY_KEY, queryFn: getSession });
   const location = useLocation();
+  const navigate = useNavigate();
+  const client = useQueryClient();
+  const [showLogoutTransition, setShowLogoutTransition] = useState(false);
+  const logoutMutation = useMutation({
+    mutationFn: (csrfToken: string) => logout(csrfToken),
+    onSuccess: () => {
+      sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
+      setShowLogoutTransition(true);
+    },
+  });
+  const finishLogoutTransition = useCallback(() => {
+    client.clear();
+    client.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
+      schemaVersion: 1,
+      authenticated: false,
+      user: null,
+      csrfToken: null,
+    });
+    setShowLogoutTransition(false);
+    void navigate("/login", { replace: true });
+  }, [client, navigate]);
+  if (showLogoutTransition) {
+    return (
+      <BrandTransition
+        accessibleName="ログオフしました"
+        message="GOODBYE, SENSEI."
+        onComplete={finishLogoutTransition}
+      />
+    );
+  }
   if (session.isPending) return <LoadingScreen />;
   if (session.isError) {
     const error = session.error instanceof RecordsApiError ? session.error : undefined;
@@ -876,7 +907,13 @@ function ApplicationRoutes() {
       </Routes>
     );
   }
-  return <AuthenticatedRoutes session={session.data} />;
+  const authenticatedSession = session.data;
+  return (
+    <AuthenticatedRoutes
+      session={authenticatedSession}
+      onLogout={() => logoutMutation.mutate(authenticatedSession.csrfToken)}
+    />
+  );
 }
 
 export function App() {
