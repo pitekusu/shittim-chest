@@ -32,7 +32,7 @@ def test_runtime_image_or_validation_changes_require_container_gates(path: str) 
 @pytest.mark.parametrize(
     "path",
     (
-        "apps/records-web/src/App.module.css",
+        "apps/records-web/src/styles/home.module.css",
         "services/records/src/shittim_records/contracts.py",
         "contracts/records/v1/openapi.json",
         ".github/workflows/records-ci.yml",
@@ -49,7 +49,7 @@ def test_records_changes_require_records_ci(path: str) -> None:
 
 
 def test_records_css_does_not_rebuild_the_fargate_images() -> None:
-    classification = classify_paths(("apps/records-web/src/App.module.css",))
+    classification = classify_paths(("apps/records-web/src/styles/home.module.css",))
 
     assert classification == {"runtime_container": False, "records": True}
 

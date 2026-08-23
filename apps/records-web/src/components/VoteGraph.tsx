@@ -8,7 +8,7 @@ import {
   type CSSProperties,
 } from "react";
 
-import type { ParticipantSlot, RecordDetailResponse } from "./api";
+import type { ParticipantSlot, RecordDetailResponse } from "../api/types";
 import styles from "./VoteGraph.module.css";
 import {
   COMPACT_VOTE_LAYOUT,
@@ -17,7 +17,7 @@ import {
   PARTICIPANT_SLOTS,
   WIDE_VOTE_LAYOUT,
   type VoteRoute,
-} from "./voteGraphGeometry";
+} from "../voteGraphGeometry";
 
 const COMPACT_QUERY = "(max-width: 899px)";
 

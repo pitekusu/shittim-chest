@@ -1,0 +1,186 @@
+.loginShell {
+  position: relative;
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+  overflow: hidden;
+  background: var(--records-login-background);
+}
+
+.loginVisual {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.loginVisual::before,
+.loginVisual::after {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border: 1px solid rgb(88 217 232 / 28%);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.loginVisual::after {
+  width: 540px;
+  height: 540px;
+  border-color: rgb(253 171 208 / 18%);
+}
+
+.orbit {
+  position: absolute;
+  width: min(58vw, 620px);
+  aspect-ratio: 1;
+  border: 1px solid rgb(88 217 232 / 24%);
+  border-radius: 50%;
+  animation: rotate 28s linear infinite;
+}
+
+.orbit span {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 3px solid var(--records-cyan-500);
+  background: var(--records-avatar-border);
+  transform: rotate(45deg);
+}
+
+.orbit span:nth-child(1) {
+  top: 5%;
+  left: 32%;
+}
+.orbit span:nth-child(2) {
+  right: 8%;
+  bottom: 27%;
+}
+.orbit span:nth-child(3) {
+  bottom: 2%;
+  left: 38%;
+}
+
+.loginPanel {
+  z-index: 1;
+  align-self: center;
+  width: min(100% - 48px, 520px);
+  margin: 24px;
+  padding: clamp(36px, 6vw, 68px);
+  border: 1px solid var(--records-panel-border);
+  border-radius: 32px;
+  background: var(--records-surface);
+  box-shadow: var(--records-shadow);
+  text-align: center;
+  backdrop-filter: blur(24px);
+}
+
+.loginPanel h1 {
+  margin: 0 0 24px;
+}
+
+.loginProductName {
+  color: var(--records-ink-900);
+  font-size: clamp(0.95rem, 2vw, 1.6rem);
+  letter-spacing: 0.02em;
+  line-height: 1.24;
+  text-align: center;
+}
+
+.loginAuthButton {
+  min-width: 124px;
+  padding: 9px 16px;
+  font-family: var(--records-font-display);
+  font-size: 0.66rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+.loginPanel > p:not(.eyebrow, .loginNote) {
+  margin: 0 0 32px;
+  color: var(--records-ink-600);
+  font-size: 0.92rem;
+  line-height: 1.9;
+}
+
+.loginNote {
+  margin: 18px 0 0;
+  color: var(--records-ink-600);
+  font-size: 0.75rem;
+}
+
+.loadingScreen,
+.errorShell,
+.brandTransition {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  place-items: center;
+  gap: 28px;
+  background: var(--records-transition-background);
+  color: var(--records-ink-900);
+}
+
+.loadingScreen p,
+.brandTransition p {
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+
+.brandTransition p {
+  font-family: var(--records-font-display);
+  font-weight: 400;
+}
+
+.brandTransition {
+  animation: transitionFade 2s ease both;
+}
+
+.brandTransition > :first-child {
+  animation: transitionMark 2s ease both;
+}
+
+@keyframes rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes transitionFade {
+  0%,
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes transitionMark {
+  0% {
+    transform: scale(0.72);
+  }
+  42%,
+  82% {
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 899px) {
+  .loginShell {
+    grid-template-columns: 1fr;
+  }
+
+  .loginVisual {
+    min-height: 36vh;
+  }
+
+  .loginPanel {
+    width: auto;
+    margin: -30px 16px 24px;
+  }
+
+  .orbit {
+    width: 80vw;
+  }
+}

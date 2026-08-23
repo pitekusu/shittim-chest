@@ -11,7 +11,7 @@
     "check": "vp check",
     "test": "vp test",
     "test:e2e": "playwright test",
-    "build": "vp build",
+    "build": "vp build && node scripts/check-code-splitting.mjs",
     "audit": "pnpm audit --audit-level=low",
     "verify": "pnpm run check && pnpm run test && pnpm run build && pnpm run test:e2e && pnpm run audit"
   },

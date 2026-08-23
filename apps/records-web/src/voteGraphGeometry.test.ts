@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { ParticipantSlot, RecordDetailResponse } from "./api";
+import type { ParticipantSlot, RecordDetailResponse } from "./api/types";
 import {
   COMPACT_VOTE_LAYOUT,
   createVoteRoutes,

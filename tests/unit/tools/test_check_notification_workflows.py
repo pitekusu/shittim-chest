@@ -315,6 +315,24 @@ def test_records_release_requires_read_only_api_smoke(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_records_release_preserves_old_hashed_web_assets(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "            --recursive \\\n"
+            '            --cache-control "public,max-age=31536000,immutable"',
+            "            --recursive --delete \\\n"
+            '            --cache-control "public,max-age=31536000,immutable"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="without deleting old hashes"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW

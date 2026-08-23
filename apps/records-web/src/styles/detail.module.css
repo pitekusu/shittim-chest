@@ -1,0 +1,242 @@
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.opinionCard,
+.detailSection {
+  border: 1px solid var(--records-panel-border);
+  border-radius: var(--records-radius-card);
+  background: var(--records-surface);
+  box-shadow: var(--records-shadow-soft);
+  backdrop-filter: blur(18px);
+}
+
+.recordMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.recordMeta > span:last-of-type {
+  display: grid;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.recordMeta small,
+.winnerPanel small {
+  color: var(--records-ink-600);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.recordDocument {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+}
+
+.recordDocument > * {
+  min-inline-size: 0;
+}
+
+.recordHeader {
+  max-width: 1000px;
+  padding-bottom: 16px;
+}
+
+.backLink {
+  margin-bottom: 30px;
+  color: var(--records-ink-600);
+}
+
+.recordMeta {
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+
+.recordMeta time {
+  margin-left: auto;
+  color: var(--records-ink-600);
+  font-size: 0.82rem;
+}
+
+.detailSection {
+  padding: clamp(24px, 4vw, 44px);
+}
+
+.detailSection > h2 {
+  margin: 0 0 28px;
+  font-size: clamp(1.5rem, 3vw, 2.3rem);
+}
+
+.opinionGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.opinionCard {
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.opinionCard > header,
+.opinionCard > div {
+  padding: 20px;
+}
+
+.opinionCard > header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  border-bottom: 1px solid var(--records-line);
+}
+
+.opinionCard h3,
+.opinionCard h4,
+.voteCard h3 {
+  margin: 0;
+}
+
+.opinionCard h4 {
+  margin-bottom: 10px;
+  color: var(--records-ink-600);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+}
+
+.opinionCard p,
+.voteCard p,
+.decisionText,
+.decisionColumns li {
+  line-height: 1.85;
+  white-space: pre-wrap;
+}
+
+.finalProposal {
+  background: var(--records-final-proposal);
+}
+
+.voteList {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.voteCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--records-line);
+  border-radius: 18px;
+  background: var(--records-control-background-soft);
+}
+
+.voteCard h3 {
+  font-size: 0.9rem;
+}
+
+.voteCard p {
+  margin-bottom: 0;
+  color: var(--records-ink-600);
+  font-size: 0.86rem;
+}
+
+.tieNotice {
+  margin: 22px 0 0;
+  padding: 14px 18px;
+  border-left: 4px solid #e894b8;
+  background: var(--records-pink-100);
+  color: var(--records-pink-ink);
+  font-weight: 700;
+}
+
+.decisionSection {
+  position: relative;
+  overflow: hidden;
+  background: var(--records-decision-background);
+}
+
+.winnerPanel {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 26px;
+}
+
+.winnerPanel > :first-child {
+  width: 72px;
+  height: 72px;
+}
+
+.winnerPanel h3 {
+  margin: 3px 0 12px;
+  font-size: 1.45rem;
+}
+
+.winnerPanel blockquote {
+  margin: 0;
+  padding-left: 16px;
+  border-left: 3px solid var(--records-cyan-500);
+  color: var(--records-ink-600);
+  line-height: 1.8;
+}
+
+.decisionText {
+  max-width: 940px;
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
+.decisionColumns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 28px;
+}
+
+.decisionColumns > div {
+  padding: 22px;
+  border: 1px solid var(--records-line);
+  border-radius: 18px;
+  background: var(--records-control-background-soft);
+}
+
+.decisionColumns h3 {
+  margin-top: 0;
+}
+
+.decisionColumns ul {
+  margin-bottom: 0;
+  padding-left: 1.25rem;
+}
+
+@media (max-width: 1199px) {
+  .opinionGrid,
+  .voteList {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .decisionColumns {
+    grid-template-columns: 1fr;
+  }
+  .recordMeta time {
+    width: 100%;
+    margin: 10px 0 0;
+  }
+  .detailSection {
+    border-radius: 20px;
+  }
+}

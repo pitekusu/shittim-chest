@@ -1,0 +1,87 @@
+.routeStage {
+  --route-motion-item-offset: 10px;
+  min-width: 0;
+}
+
+.routeScene {
+  position: relative;
+  min-width: 0;
+}
+
+.routeContent {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.routeScene[data-route-motion="active"] {
+  animation: routeSceneEnter 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.routeMotionItem {
+  --route-motion-delay: 0ms;
+}
+
+.routeScene[data-route-motion="active"] .routeMotionItem {
+  animation: routeMotionItemEnter 220ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: var(--route-motion-delay);
+}
+
+.routeMotionAppend,
+.routeScene[data-route-motion="active"] .routeMotionAppend {
+  animation: routeMotionAppend 180ms ease-out;
+  animation-delay: 0ms;
+}
+
+.routeLoading {
+  padding: 28px;
+  color: var(--records-ink-600);
+  text-align: center;
+}
+
+@keyframes routeSceneEnter {
+  from {
+    opacity: 0.78;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes routeMotionItemEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--route-motion-item-offset)) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes routeMotionAppend {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 767px) {
+  .routeStage {
+    --route-motion-item-offset: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .routeScene[data-route-motion="active"],
+  .routeScene[data-route-motion="active"] .routeMotionItem,
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

@@ -1,0 +1,198 @@
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { getRecord } from "./recordDetail";
+import { getRecords } from "./recordList";
+import { getRankings } from "./rankings";
+import { getSession } from "./session";
+
+const RECORD_ID = "r".repeat(43);
+
+function placeholder(displayName: string, fallbackVariant: "cyan" | "pink" | "lavender") {
+  return {
+    kind: "placeholder",
+    url: null,
+    alt: `${displayName}のアバター`,
+    fallbackVariant,
+  };
+}
+
+function recordDetail() {
+  const participants = [
+    ["participant-a", "アロナ", "cyan"],
+    ["participant-b", "プラナ", "pink"],
+    ["participant-c", "安倍晋三AI", "lavender"],
+  ].map(([slot, displayName, fallbackVariant]) => ({
+    slot,
+    displayName,
+    avatar: placeholder(displayName!, fallbackVariant as "cyan" | "pink" | "lavender"),
+  }));
+  return {
+    schemaVersion: 1,
+    recordId: RECORD_ID,
+    completedAt: "2026-08-15T06:00:00Z",
+    question: "休日の過ごし方を決める",
+    requester: { displayName: "依頼者", avatar: placeholder("依頼者", "cyan") },
+    participants,
+    initialOpinions: participants.map(({ slot }) => ({
+      participant: slot,
+      summary: "要約",
+      proposal: "初回意見",
+    })),
+    finalProposals: participants.map(({ slot }) => ({
+      participant: slot,
+      title: "最終案",
+      proposal: "完成した提案",
+    })),
+    votes: [
+      { voter: "participant-a", candidate: "participant-b", reason: "理由A" },
+      { voter: "participant-b", candidate: "participant-a", reason: "理由B" },
+      { voter: "participant-c", candidate: "participant-a", reason: "理由C" },
+    ],
+    result: {
+      winner: "participant-a",
+      voteCounts: [
+        { participant: "participant-a", count: 2 },
+        { participant: "participant-b", count: 1 },
+        { participant: "participant-c", count: 0 },
+      ],
+      tieBreakApplied: false,
+    },
+    finalDecision: {
+      winner: "participant-a",
+      victoryMessage: "勝利しました",
+      decision: "最終決定",
+      actions: ["実行する"],
+      caveats: ["注意する"],
+    },
+  };
+}
+
+function listResponse() {
+  const detail = recordDetail();
+  return {
+    schemaVersion: 1,
+    items: [
+      {
+        schemaVersion: 1,
+        recordId: detail.recordId,
+        completedAt: detail.completedAt,
+        questionPreview: detail.question,
+        requester: detail.requester,
+        participants: detail.participants,
+        result: detail.result,
+      },
+    ],
+    nextCursor: null,
+  };
+}
+
+function rankingsResponse() {
+  return {
+    schemaVersion: 1,
+    wins: [],
+    requests: [],
+    generatedAt: "2026-08-22T00:00:00Z",
+  };
+}
+
+function response(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("Records API endpoint validation", () => {
+  it("accepts the response type assigned to the requested endpoint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(listResponse()))),
+    );
+
+    await expect(getRecords({ sort: "newest" })).resolves.toEqual(listResponse());
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/records?limit=12&sort=newest",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("rejects a different endpoint's otherwise valid response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(rankingsResponse()))),
+    );
+
+    await expect(getSession()).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+      requestId: "local-validation",
+    });
+  });
+
+  it("applies record invariants after record-detail schema validation", async () => {
+    const conflictingWinner = recordDetail();
+    conflictingWinner.finalDecision.winner = "participant-b";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(conflictingWinner))),
+    );
+
+    await expect(getRecord(RECORD_ID)).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+    });
+  });
+
+  it("rejects unknown fields in an otherwise valid endpoint response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response({ ...recordDetail(), privateId: "forbidden" }))),
+    );
+
+    await expect(getRecord(RECORD_ID)).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+      requestId: "local-validation",
+    });
+  });
+
+  it("validates rankings with only the rankings endpoint schema", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(rankingsResponse()))),
+    );
+
+    await expect(getRankings()).resolves.toEqual(rankingsResponse());
+  });
+
+  it("requires error responses to match the generated error schema", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          response(
+            {
+              error: {
+                code: "FORBIDDEN",
+                message: "Forbidden",
+                requestId: "request-id",
+                privateId: "must-not-pass",
+              },
+            },
+            403,
+          ),
+        ),
+      ),
+    );
+
+    await expect(getSession()).rejects.toMatchObject({
+      status: 403,
+      code: "INVALID_ERROR_RESPONSE",
+      requestId: "local-validation",
+    });
+  });
+});
