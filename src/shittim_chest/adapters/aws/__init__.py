@@ -11,10 +11,12 @@ from shittim_chest.adapters.aws.clients import (
     create_runtime_reconciler_ecs_client,
     create_runtime_reconciler_lambda_client,
     create_ssm_client,
+    create_startup_ssm_client,
     create_status_dynamodb_client,
     create_status_ssm_client,
     ingress_sdk_config,
     runtime_reconciler_sdk_config,
+    startup_sdk_config,
     status_sdk_config,
 )
 from shittim_chest.adapters.aws.ecs import EcsServiceRuntimeControl
@@ -44,10 +46,12 @@ __all__ = (
     "create_runtime_reconciler_ecs_client",
     "create_runtime_reconciler_lambda_client",
     "create_ssm_client",
+    "create_startup_ssm_client",
     "create_status_dynamodb_client",
     "create_status_ssm_client",
     "ecs_task_instance_id",
     "ingress_sdk_config",
     "runtime_reconciler_sdk_config",
+    "startup_sdk_config",
     "status_sdk_config",
 )

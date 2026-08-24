@@ -303,7 +303,7 @@ async def test_runtime_prompt_environment_absence_skips_ssm_and_uses_legacy(
     def _unexpected_client(**_kwargs: object) -> object:
         raise AssertionError("legacy startup must not create an SSM client")
 
-    monkeypatch.setattr(bootstrap, "create_ssm_client", _unexpected_client)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", _unexpected_client)
 
     resolved = await bootstrap._resolve_runtime_prompt_revision(legacy)
 
@@ -319,7 +319,7 @@ async def test_runtime_prompt_pointer_absence_uses_legacy_prompts(
     environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = _active_parameter()
     legacy = load_bootstrap_config(environment)
     client = _PromptSsmClient(None)
-    monkeypatch.setattr(bootstrap, "create_ssm_client", lambda **_kwargs: client)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
 
     resolved = await bootstrap._resolve_runtime_prompt_revision(legacy)
 
@@ -337,7 +337,7 @@ async def test_runtime_prompt_revision_is_loaded_once_and_overlays_legacy_person
     legacy = load_bootstrap_config(environment)
     values = _prompt_parameter_values()
     client = _PromptSsmClient(PROMPT_REVISION, values)
-    monkeypatch.setattr(bootstrap, "create_ssm_client", lambda **_kwargs: client)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
 
     resolved = await bootstrap._resolve_runtime_prompt_revision(legacy)
 
@@ -361,7 +361,7 @@ async def test_present_runtime_prompt_pointer_fails_closed_for_incomplete_revisi
     values = _prompt_parameter_values()
     values.pop(next(name for name in values if name.endswith("/participant-c")))
     client = _PromptSsmClient(PROMPT_REVISION, values)
-    monkeypatch.setattr(bootstrap, "create_ssm_client", lambda **_kwargs: client)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
 
     with pytest.raises(StartupConfigurationError) as captured:
         await bootstrap._resolve_runtime_prompt_revision(load_bootstrap_config(environment))
@@ -377,7 +377,7 @@ async def test_present_runtime_prompt_pointer_fails_closed_for_invalid_revision(
     environment = _environment()
     environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = _active_parameter()
     client = _PromptSsmClient("latest")
-    monkeypatch.setattr(bootstrap, "create_ssm_client", lambda **_kwargs: client)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
 
     with pytest.raises(StartupConfigurationError) as captured:
         await bootstrap._resolve_runtime_prompt_revision(load_bootstrap_config(environment))
@@ -399,7 +399,7 @@ async def test_prompt_snapshot_stays_fixed_until_the_next_task_start(
         PROMPT_REVISION,
         _prompt_parameter_values(revision=PROMPT_REVISION, suffix="first"),
     )
-    monkeypatch.setattr(bootstrap, "create_ssm_client", lambda **_kwargs: client)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
 
     first_task = await bootstrap._resolve_runtime_prompt_revision(legacy)
     client.revision = NEXT_PROMPT_REVISION

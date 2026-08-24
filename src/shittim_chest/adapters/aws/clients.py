@@ -33,6 +33,9 @@ INGRESS_TOTAL_MAX_ATTEMPTS = 1
 STATUS_CONNECT_TIMEOUT_SECONDS = 1.0
 STATUS_READ_TIMEOUT_SECONDS = 2.0
 STATUS_TOTAL_MAX_ATTEMPTS = 3
+STARTUP_CONNECT_TIMEOUT_SECONDS = 2.0
+STARTUP_READ_TIMEOUT_SECONDS = 5.0
+STARTUP_TOTAL_MAX_ATTEMPTS = 3
 RECONCILER_CONNECT_TIMEOUT_SECONDS = 1.0
 RECONCILER_READ_TIMEOUT_SECONDS = 3.0
 RECONCILER_TOTAL_MAX_ATTEMPTS = 3
@@ -118,6 +121,19 @@ def status_sdk_config() -> Config:
     )
 
 
+def startup_sdk_config() -> Config:
+    """Return bounded retries for configuration reads during task startup."""
+
+    return Config(
+        connect_timeout=STARTUP_CONNECT_TIMEOUT_SECONDS,
+        read_timeout=STARTUP_READ_TIMEOUT_SECONDS,
+        max_pool_connections=2,
+        retries={"mode": "standard", "total_max_attempts": STARTUP_TOTAL_MAX_ATTEMPTS},
+        tcp_keepalive=True,
+        user_agent_extra="shittim-chest-runtime-startup",
+    )
+
+
 def runtime_reconciler_sdk_config() -> Config:
     """Return bounded standard retries for scheduled runtime reconciliation."""
 
@@ -184,6 +200,17 @@ def create_ssm_client(*, region_name: str) -> SSMClient:
         "ssm",
         region_name=region_name,
         config=ingress_sdk_config(),
+    )
+
+
+def create_startup_ssm_client(*, region_name: str) -> SSMClient:
+    """Create one startup-scoped SSM client without retaining a default session."""
+
+    _require_region(region_name)
+    return boto3.Session().client(
+        "ssm",
+        region_name=region_name,
+        config=startup_sdk_config(),
     )
 
 

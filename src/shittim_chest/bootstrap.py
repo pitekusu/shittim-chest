@@ -20,7 +20,7 @@ from shittim_chest.adapters.aws import (
     LambdaStatusPublicationTrigger,
     SsmParameterReader,
     create_lambda_client,
-    create_ssm_client,
+    create_startup_ssm_client,
     ecs_task_instance_id,
 )
 from shittim_chest.adapters.discord import (
@@ -374,7 +374,7 @@ async def _resolve_runtime_prompt_revision(config: BootstrapConfig) -> Bootstrap
     active_parameter = config.runtime_prompts_active_parameter
     if active_parameter is None:
         return config
-    client = create_ssm_client(region_name=config.aws_region)
+    client = create_startup_ssm_client(region_name=config.aws_region)
     reader = SsmParameterReader(client=client)
     try:
         revision = await reader.get_optional_parameter(active_parameter)
