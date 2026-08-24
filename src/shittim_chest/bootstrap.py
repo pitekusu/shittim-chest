@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.aws import (
     LambdaStatusPublicationTrigger,
+    SsmParameterReader,
     create_lambda_client,
+    create_startup_ssm_client,
     ecs_task_instance_id,
 )
 from shittim_chest.adapters.discord import (
@@ -48,10 +50,20 @@ from shittim_chest.adapters.openai import (
     ParticipantProfiles,
     create_openai_client,
 )
-from shittim_chest.application import DebateApplication, IngressCommandAdapter
+from shittim_chest.application import (
+    DebateApplication,
+    IngressCommandAdapter,
+)
 from shittim_chest.application.ingress_drain import IngressDrainer, RuntimeIngressDrainGate
+from shittim_chest.application.ports import ParameterReadUnavailable
 from shittim_chest.application.runtime_instance import RuntimeInstanceState
-from shittim_chest.config import BootstrapConfig, load_bootstrap_config
+from shittim_chest.config import (
+    BootstrapConfig,
+    StartupConfigurationError,
+    load_bootstrap_config,
+    parse_runtime_prompt_revision,
+    runtime_prompt_parameter_names,
+)
 from shittim_chest.domain import PARTICIPANTS
 from shittim_chest.runtime import (
     CloudWatchEmfMetrics,
@@ -232,12 +244,15 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         limiter=limiter,
         config=openai_config,
         recorder=telemetry,
+        system_prompt=config.system_prompt,
     )
     evidence_service = OpenAIWebEvidenceService(
         client=openai_client,
         limiter=limiter,
         config=openai_config,
         recorder=telemetry,
+        system_prompt=config.system_prompt,
+        moderator_prompt=config.moderator_prompt,
     )
     farewell = IdleFarewellCoordinator(
         clock=clock,
@@ -248,6 +263,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
             limiter=limiter,
             config=openai_config,
             recorder=telemetry,
+            system_prompt=config.system_prompt,
         ),
         sender=DiscordFarewellSender(
             clients=clients,
@@ -300,6 +316,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         clock=clock,
         repository=runtime_state_repository,
         runtime_instance_id=owner_id,
+        runtime_prompt_revision=config.runtime_prompt_revision,
     )
     drainer = IngressDrainer(
         clock=clock,
@@ -344,7 +361,38 @@ async def run_from_environment(environ: Mapping[str, str] | None = None) -> None
     """Validate injected environment values before creating any external SDK client."""
 
     config = load_bootstrap_config(os.environ if environ is None else environ)
+    config = await _resolve_runtime_prompt_revision(config)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     _LOGGER.setLevel(getattr(logging, config.log_level))
     runtime = build_production_runtime(config)
     await runtime.run()
+
+
+async def _resolve_runtime_prompt_revision(config: BootstrapConfig) -> BootstrapConfig:
+    """Resolve one immutable prompt snapshot or retain the legacy injected prompts."""
+
+    active_parameter = config.runtime_prompts_active_parameter
+    if active_parameter is None:
+        return config
+    client = create_startup_ssm_client(region_name=config.aws_region)
+    reader = SsmParameterReader(client=client)
+    try:
+        revision = await reader.get_optional_parameter(active_parameter)
+        if revision is None:
+            return config
+        parameter_names = runtime_prompt_parameter_names(revision)
+        values = await reader.get_parameters(tuple(parameter_names.values()))
+        prompt_revision = parse_runtime_prompt_revision(
+            revision=revision,
+            manifest_json=values[parameter_names["manifest"]],
+            prompts={
+                name: values[parameter_names[name]]
+                for name in parameter_names
+                if name != "manifest"
+            },
+        )
+        return config.with_runtime_prompt_revision(prompt_revision)
+    except ParameterReadUnavailable, StartupConfigurationError:
+        raise StartupConfigurationError from None
+    finally:
+        client.close()

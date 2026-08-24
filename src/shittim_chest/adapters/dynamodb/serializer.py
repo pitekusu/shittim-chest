@@ -1468,6 +1468,7 @@ def serialize_runtime_state(state: RuntimeState) -> DynamoItem:
     }
     for field, value in (
         ("runtime_instance_id", state.runtime_instance_id),
+        ("runtime_prompt_revision", state.runtime_prompt_revision),
         ("wake_started_at", _optional_timestamp(state.wake_started_at)),
         ("last_request_at", _optional_timestamp(state.last_request_at)),
         ("started_at", _optional_timestamp(state.started_at)),
@@ -1496,6 +1497,7 @@ def deserialize_runtime_state(raw_item: Mapping[str, DynamoValue]) -> RuntimeSta
             version=_integer(item, "version"),
             updated_at=_datetime(item, "updated_at"),
             runtime_instance_id=_optional_text(item, "runtime_instance_id"),
+            runtime_prompt_revision=_optional_text(item, "runtime_prompt_revision"),
             wake_started_at=_optional_datetime(item, "wake_started_at"),
             last_request_at=_optional_datetime(item, "last_request_at"),
             started_at=_optional_datetime(item, "started_at"),

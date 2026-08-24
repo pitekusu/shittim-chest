@@ -70,6 +70,7 @@ _RUNTIME_STATE_ATTRIBUTES = (
     "version",
     "updated_at",
     "runtime_instance_id",
+    "runtime_prompt_revision",
     "wake_started_at",
     "last_request_at",
     "started_at",

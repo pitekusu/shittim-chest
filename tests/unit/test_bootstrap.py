@@ -5,9 +5,11 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Any, cast
 
 import pytest
+from botocore.exceptions import ClientError
 
 import shittim_chest.bootstrap as bootstrap
 from shittim_chest.bootstrap import (
@@ -18,6 +20,9 @@ from shittim_chest.bootstrap import (
 )
 from shittim_chest.config import StartupConfigurationError, load_bootstrap_config
 from shittim_chest.runtime.lifecycle import DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+
+PROMPT_REVISION = "r" + "0" * 26
+NEXT_PROMPT_REVISION = "r" + "1" * 26
 
 
 @pytest.mark.asyncio
@@ -255,6 +260,165 @@ def test_duplicate_participant_names_fail_before_client_construction() -> None:
         load_bootstrap_config(environment)
 
 
+@dataclass(slots=True)
+class _PromptSsmClient:
+    revision: str | None
+    values: dict[str, str] = field(default_factory=dict)
+    close_calls: int = 0
+    get_parameter_calls: int = 0
+    get_parameters_calls: int = 0
+
+    def get_parameter(self, **kwargs: object) -> dict[str, object]:
+        del kwargs
+        self.get_parameter_calls += 1
+        if self.revision is None:
+            raise ClientError(
+                {"Error": {"Code": "ParameterNotFound", "Message": "private"}},
+                "GetParameter",
+            )
+        return {"Parameter": {"Name": _active_parameter(), "Value": self.revision}}
+
+    def get_parameters(self, **kwargs: object) -> dict[str, object]:
+        self.get_parameters_calls += 1
+        names = cast(list[str], kwargs["Names"])
+        return {
+            "Parameters": [
+                {"Name": name, "Value": self.values[name]}
+                for name in reversed(names)
+                if name in self.values
+            ],
+            "InvalidParameters": [name for name in names if name not in self.values],
+        }
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_prompt_environment_absence_skips_ssm_and_uses_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = load_bootstrap_config(_environment())
+
+    def _unexpected_client(**_kwargs: object) -> object:
+        raise AssertionError("legacy startup must not create an SSM client")
+
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", _unexpected_client)
+
+    resolved = await bootstrap._resolve_runtime_prompt_revision(legacy)
+
+    assert resolved is legacy
+    assert resolved.runtime_prompt_revision is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_prompt_pointer_absence_uses_legacy_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = _environment()
+    environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = _active_parameter()
+    legacy = load_bootstrap_config(environment)
+    client = _PromptSsmClient(None)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
+
+    resolved = await bootstrap._resolve_runtime_prompt_revision(legacy)
+
+    assert resolved is legacy
+    assert resolved.runtime_prompt_revision is None
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_prompt_revision_is_loaded_once_and_overlays_legacy_personas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = _environment()
+    environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = _active_parameter()
+    legacy = load_bootstrap_config(environment)
+    values = _prompt_parameter_values()
+    client = _PromptSsmClient(PROMPT_REVISION, values)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
+
+    resolved = await bootstrap._resolve_runtime_prompt_revision(legacy)
+
+    assert resolved.runtime_prompt_revision == PROMPT_REVISION
+    assert resolved.system_prompt == "Runtime system prompt."
+    assert resolved.moderator_prompt == "Moderator evidence prompt."
+    assert set(resolved.participant_prompts().values()) == {
+        "Persona prompt A.",
+        "Persona prompt B.",
+        "Persona prompt C.",
+    }
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_present_runtime_prompt_pointer_fails_closed_for_incomplete_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = _environment()
+    environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = _active_parameter()
+    values = _prompt_parameter_values()
+    values.pop(next(name for name in values if name.endswith("/participant-c")))
+    client = _PromptSsmClient(PROMPT_REVISION, values)
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        await bootstrap._resolve_runtime_prompt_revision(load_bootstrap_config(environment))
+
+    assert str(captured.value) == "startup_configuration_invalid"
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_present_runtime_prompt_pointer_fails_closed_for_invalid_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = _environment()
+    environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = _active_parameter()
+    client = _PromptSsmClient("latest")
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        await bootstrap._resolve_runtime_prompt_revision(load_bootstrap_config(environment))
+
+    assert str(captured.value) == "startup_configuration_invalid"
+    assert client.get_parameter_calls == 1
+    assert client.get_parameters_calls == 0
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_snapshot_stays_fixed_until_the_next_task_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = _environment()
+    environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = _active_parameter()
+    legacy = load_bootstrap_config(environment)
+    client = _PromptSsmClient(
+        PROMPT_REVISION,
+        _prompt_parameter_values(revision=PROMPT_REVISION, suffix="first"),
+    )
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
+
+    first_task = await bootstrap._resolve_runtime_prompt_revision(legacy)
+    client.revision = NEXT_PROMPT_REVISION
+    client.values = _prompt_parameter_values(revision=NEXT_PROMPT_REVISION, suffix="next")
+
+    assert first_task.runtime_prompt_revision == PROMPT_REVISION
+    assert first_task.system_prompt == "Runtime system prompt first."
+    assert client.get_parameter_calls == 1
+    assert client.get_parameters_calls == 1
+
+    next_task = await bootstrap._resolve_runtime_prompt_revision(legacy)
+
+    assert next_task.runtime_prompt_revision == NEXT_PROMPT_REVISION
+    assert next_task.system_prompt == "Runtime system prompt next."
+    assert first_task.system_prompt == "Runtime system prompt first."
+    assert client.get_parameter_calls == 2
+    assert client.get_parameters_calls == 2
+
+
 def test_process_client_close_rejects_non_positive_timeout() -> None:
     with pytest.raises(ValueError, match="positive"):
         ProductionRuntime(
@@ -312,3 +476,39 @@ def _environment() -> dict[str, str]:
             }
         )
     return values
+
+
+def _active_parameter() -> str:
+    return "/shittim-chest/production/runtime-prompts/active"
+
+
+def _prompt_parameter_values(
+    *,
+    revision: str = PROMPT_REVISION,
+    suffix: str | None = None,
+) -> dict[str, str]:
+    root = f"/shittim-chest/production/runtime-prompts/{revision}"
+    marker = "" if suffix is None else f" {suffix}"
+    prompts = {
+        "system": f"Runtime system prompt{marker}.",
+        "moderator": f"Moderator evidence prompt{marker}.",
+        "participant-a": f"Persona prompt A{marker}.",
+        "participant-b": f"Persona prompt B{marker}.",
+        "participant-c": f"Persona prompt C{marker}.",
+    }
+    manifest = json.dumps(
+        {
+            "schema_version": "1",
+            "revision": revision,
+            "created_at": "2026-08-24T00:00:00Z",
+            "action": "publish",
+            "base_revision": None,
+            "checksums": {
+                name: sha256(value.encode("utf-8")).hexdigest() for name, value in prompts.items()
+            },
+        }
+    )
+    return {
+        **{f"{root}/{name}": value for name, value in prompts.items()},
+        f"{root}/manifest": manifest,
+    }

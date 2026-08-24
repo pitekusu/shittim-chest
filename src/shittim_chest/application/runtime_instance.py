@@ -41,6 +41,7 @@ class RuntimeInstanceState:
         clock: Clock,
         repository: _RuntimeStateStore,
         runtime_instance_id: str,
+        runtime_prompt_revision: str | None = None,
         cas_attempts: int = DEFAULT_RUNTIME_STATE_CAS_ATTEMPTS,
     ) -> None:
         if not runtime_instance_id.strip():
@@ -52,6 +53,7 @@ class RuntimeInstanceState:
         self._clock = clock
         self._repository = repository
         self._runtime_instance_id = runtime_instance_id
+        self._runtime_prompt_revision = runtime_prompt_revision
         self._cas_attempts = cas_attempts
         self._owned_generation: int | None = None
 
@@ -98,6 +100,7 @@ class RuntimeInstanceState:
             updated = current.mark_started(
                 at=max(self._clock.now(), current.updated_at),
                 runtime_instance_id=self._runtime_instance_id,
+                runtime_prompt_revision=self._runtime_prompt_revision,
             )
             try:
                 persisted = await self._repository.replace(expected=current, updated=updated)
@@ -230,6 +233,8 @@ class RuntimeInstanceState:
 
     def _remember_owned_generation(self, state: RuntimeState) -> RuntimeState:
         self._require_current_instance(state)
+        if state.runtime_prompt_revision != self._runtime_prompt_revision:
+            raise RuntimeNotReady("runtime prompt revision does not match this instance")
         self._owned_generation = state.generation
         return state
 

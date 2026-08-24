@@ -70,6 +70,7 @@ class OpenAIFarewellGenerator:
     limiter: OpenAIRequestLimiter
     config: OpenAIAdapterConfig = field(default_factory=OpenAIAdapterConfig)
     recorder: OpenAIUsageRecorder = field(default_factory=NullOpenAIUsageRecorder)
+    system_prompt: str | None = field(default=None, repr=False)
 
     async def generate(
         self,
@@ -179,7 +180,8 @@ class OpenAIFarewellGenerator:
             return await self.client.responses.parse(
                 model=self.config.model,
                 instructions=farewell_instructions(
-                    self.profiles.for_participant(participant).system_prompt
+                    self.profiles.for_participant(participant).system_prompt,
+                    system_prompt=self.system_prompt,
                 ),
                 input=farewell_input(
                     local_datetime=time_context.local_datetime,

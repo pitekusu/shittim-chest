@@ -517,6 +517,7 @@ class _RuntimeStateSpec:
             {
                 *self.install_item,
                 "runtime_instance_id",
+                "runtime_prompt_revision",
                 "wake_started_at",
                 "last_request_at",
                 "started_at",

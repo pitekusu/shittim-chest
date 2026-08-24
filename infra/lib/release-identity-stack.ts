@@ -480,6 +480,15 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.recordsPlanRole.addToPolicy(
       new iam.PolicyStatement({
+        actions: ["cloudformation:DescribeStacks"],
+        conditions: {
+          StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID },
+        },
+        resources: this.stackArns(["ShittimChest-Prod-Runtime"]),
+      }),
+    );
+    this.recordsPlanRole.addToPolicy(
+      new iam.PolicyStatement({
         actions: [
           "cloudformation:CreateChangeSet",
           "cloudformation:DeleteChangeSet",
@@ -526,6 +535,7 @@ export class ReleaseIdentityStack extends Stack {
     );
     this.acknowledgeRoleWildcards(this.recordsPlanRole, [
       "AwsSolutions-IAM5[Resource::*]",
+      ...this.stackWildcardAcknowledgments(["ShittimChest-Prod-Runtime"]),
       ...this.stackWildcardAcknowledgments(RECORDS_STACK_NAMES),
     ]);
     this.acknowledgeRecordsAssetWildcards(

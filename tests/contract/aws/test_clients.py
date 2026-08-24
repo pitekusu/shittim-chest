@@ -23,6 +23,9 @@ from shittim_chest.adapters.aws.clients import (
     RECONCILER_CONNECT_TIMEOUT_SECONDS,
     RECONCILER_READ_TIMEOUT_SECONDS,
     RECONCILER_TOTAL_MAX_ATTEMPTS,
+    STARTUP_CONNECT_TIMEOUT_SECONDS,
+    STARTUP_READ_TIMEOUT_SECONDS,
+    STARTUP_TOTAL_MAX_ATTEMPTS,
     STATUS_CONNECT_TIMEOUT_SECONDS,
     STATUS_READ_TIMEOUT_SECONDS,
     STATUS_TOTAL_MAX_ATTEMPTS,
@@ -36,11 +39,13 @@ from shittim_chest.adapters.aws.clients import (
     create_runtime_reconciler_ecs_client,
     create_runtime_reconciler_lambda_client,
     create_ssm_client,
+    create_startup_ssm_client,
     create_status_dynamodb_client,
     create_status_ssm_client,
     current_ingress_sdk_cancellation_gate,
     ingress_sdk_config,
     runtime_reconciler_sdk_config,
+    startup_sdk_config,
     status_sdk_config,
 )
 from shittim_chest.application.ports import IngressExecutionDeadlineExceeded
@@ -91,6 +96,19 @@ def test_status_sdk_config_has_bounded_standard_retries() -> None:
         "total_max_attempts": STATUS_TOTAL_MAX_ATTEMPTS,
     }
     assert STATUS_TOTAL_MAX_ATTEMPTS == 3
+    assert config.tcp_keepalive is True
+
+
+def test_startup_sdk_config_has_bounded_standard_retries() -> None:
+    config = config_view(startup_sdk_config())
+
+    assert config.connect_timeout == STARTUP_CONNECT_TIMEOUT_SECONDS
+    assert config.read_timeout == STARTUP_READ_TIMEOUT_SECONDS
+    assert config.retries == {
+        "mode": "standard",
+        "total_max_attempts": STARTUP_TOTAL_MAX_ATTEMPTS,
+    }
+    assert STARTUP_TOTAL_MAX_ATTEMPTS == 3
     assert config.tcp_keepalive is True
 
 
@@ -152,6 +170,24 @@ def test_ingress_ssm_client_does_not_retain_a_default_boto3_session(
     client = create_ssm_client(region_name=DEFAULT_AWS_REGION)
 
     assert client.meta.region_name == DEFAULT_AWS_REGION
+    assert boto3.DEFAULT_SESSION is None
+
+
+def test_startup_ssm_client_uses_startup_policy_without_a_default_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)
+
+    client = create_startup_ssm_client(region_name=DEFAULT_AWS_REGION)
+
+    config = config_view(client.meta.config)
+    assert client.meta.region_name == DEFAULT_AWS_REGION
+    assert config.connect_timeout == STARTUP_CONNECT_TIMEOUT_SECONDS
+    assert config.read_timeout == STARTUP_READ_TIMEOUT_SECONDS
+    assert config.retries["total_max_attempts"] == STARTUP_TOTAL_MAX_ATTEMPTS
     assert boto3.DEFAULT_SESSION is None
 
 
@@ -310,6 +346,7 @@ def test_control_records_factory_uses_tokyo_and_the_bounded_policy(
         create_runtime_reconciler_ecs_client,
         create_runtime_reconciler_lambda_client,
         create_ssm_client,
+        create_startup_ssm_client,
         create_status_dynamodb_client,
         create_status_ssm_client,
     ],

@@ -97,3 +97,77 @@ async def test_reader_rejects_an_empty_or_padded_name_before_the_sdk_call() -> N
 
     with pytest.raises(ValueError, match="parameter name"):
         await reader.get_parameter(f" {PARAMETER_NAME}")
+
+
+@pytest.mark.asyncio
+async def test_optional_reader_distinguishes_only_parameter_not_found() -> None:
+    sdk = client()
+    reader = SsmParameterReader(client=sdk)
+    with Stubber(sdk) as stubber:
+        stubber.add_client_error(
+            "get_parameter",
+            service_error_code="ParameterNotFound",
+            service_message="private-name-must-not-escape",
+            http_status_code=400,
+            expected_params={"Name": PARAMETER_NAME, "WithDecryption": True},
+        )
+
+        assert await reader.get_optional_parameter(PARAMETER_NAME) is None
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_batch_reader_requires_every_exact_named_parameter() -> None:
+    sdk = client()
+    reader = SsmParameterReader(client=sdk)
+    names = (f"{PARAMETER_NAME}/system", f"{PARAMETER_NAME}/manifest")
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_parameters",
+            {
+                "Parameters": [
+                    {
+                        "Name": name,
+                        "Type": "SecureString",
+                        "Value": f"configured-{index}",
+                        "Version": 1,
+                        "DataType": "text",
+                    }
+                    for index, name in enumerate(reversed(names))
+                ],
+            },
+            {"Names": list(names), "WithDecryption": True},
+        )
+
+        values = await reader.get_parameters(names)
+
+        assert set(values) == set(names)
+        assert values[names[0]] == "configured-1"
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_batch_reader_fails_closed_when_one_parameter_is_missing() -> None:
+    sdk = client()
+    reader = SsmParameterReader(client=sdk)
+    names = (f"{PARAMETER_NAME}/system", f"{PARAMETER_NAME}/manifest")
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_parameters",
+            {
+                "Parameters": [
+                    {
+                        "Name": names[0],
+                        "Type": "SecureString",
+                        "Value": "configured-value",
+                        "Version": 1,
+                        "DataType": "text",
+                    }
+                ],
+                "InvalidParameters": [names[1]],
+            },
+            {"Names": list(names), "WithDecryption": True},
+        )
+
+        with pytest.raises(ParameterReadUnavailable):
+            await reader.get_parameters(names)

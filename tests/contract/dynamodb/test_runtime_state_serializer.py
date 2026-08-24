@@ -21,6 +21,7 @@ from shittim_chest.application import (
 )
 
 NOW = datetime(2026, 7, 26, 5, 0, tzinfo=UTC)
+PROMPT_REVISION = "r" + "0" * 26
 
 
 def ready_state() -> RuntimeState:
@@ -61,6 +62,26 @@ def test_runtime_state_previous_shared_schema_is_upconverted() -> None:
     previous = {**serialize_runtime_state(source), "schema_version": 6}
 
     assert deserialize_runtime_state(previous) == source
+
+
+def test_runtime_prompt_revision_round_trips_as_optional_content_free_state() -> None:
+    source = replace(ready_state(), runtime_prompt_revision=PROMPT_REVISION)
+
+    item = serialize_runtime_state(source)
+
+    assert item["runtime_prompt_revision"] == PROMPT_REVISION
+    assert deserialize_runtime_state(item) == source
+    legacy = {key: value for key, value in item.items() if key != "runtime_prompt_revision"}
+    assert deserialize_runtime_state(legacy).runtime_prompt_revision is None
+
+
+def test_runtime_prompt_revision_rejects_invalid_or_unbound_values() -> None:
+    with pytest.raises(PersistenceFormatError, match="invalid runtime state"):
+        deserialize_runtime_state(
+            {**serialize_runtime_state(ready_state()), "runtime_prompt_revision": "invalid"}
+        )
+    with pytest.raises(ValueError, match="bound runtime"):
+        replace(RuntimeState.stopped(at=NOW), runtime_prompt_revision=PROMPT_REVISION)
 
 
 def test_persisted_timestamps_are_fixed_width_and_lexically_ordered() -> None:

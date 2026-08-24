@@ -17,6 +17,7 @@ STATUS_PUBLICATION_CLAIM_SECONDS = 180
 STARTUP_TIMEOUT = timedelta(minutes=3)
 TERMINAL_TIMEOUT = timedelta(minutes=15)
 IDLE_TIMEOUT = timedelta(minutes=30)
+RUNTIME_PROMPT_REVISION_PATTERN = r"^r[0-9a-hjkmnp-tv-z]{26}$"
 
 
 def _require_text(value: str, *, label: str) -> None:
@@ -982,6 +983,7 @@ class RuntimeState:
     version: int
     updated_at: datetime
     runtime_instance_id: str | None = None
+    runtime_prompt_revision: str | None = None
     wake_started_at: datetime | None = None
     last_request_at: datetime | None = None
     started_at: datetime | None = None
@@ -1004,6 +1006,11 @@ class RuntimeState:
             raise ValueError("runtime version must be a non-negative integer")
         if self.runtime_instance_id is not None:
             _require_text(self.runtime_instance_id, label="runtime instance ID")
+        if self.runtime_prompt_revision is not None:
+            if re.fullmatch(RUNTIME_PROMPT_REVISION_PATTERN, self.runtime_prompt_revision) is None:
+                raise ValueError("runtime prompt revision is invalid")
+            if self.runtime_instance_id is None:
+                raise ValueError("runtime prompt revision requires a bound runtime instance")
         if self.last_error_code is not None:
             _require_text(self.last_error_code, label="runtime error code")
         _require_utc(self.updated_at, label="runtime update timestamp")
@@ -1117,23 +1124,48 @@ class RuntimeState:
             ready_at=None if restarting else self.ready_at,
             busy_since=None if restarting else self.busy_since,
             runtime_instance_id=None if requires_fresh_instance else self.runtime_instance_id,
+            runtime_prompt_revision=(
+                None if requires_fresh_instance else self.runtime_prompt_revision
+            ),
             started_at=None if requires_fresh_instance else self.started_at,
         )
 
-    def mark_started(self, *, at: datetime, runtime_instance_id: str) -> RuntimeState:
+    def mark_started(
+        self,
+        *,
+        at: datetime,
+        runtime_instance_id: str,
+        runtime_prompt_revision: str | None = None,
+    ) -> RuntimeState:
         """Bind the STARTING generation to one physical runtime instance."""
 
         _require_utc(at, label="runtime start timestamp")
         _require_text(runtime_instance_id, label="runtime instance ID")
+        if (
+            runtime_prompt_revision is not None
+            and re.fullmatch(
+                RUNTIME_PROMPT_REVISION_PATTERN,
+                runtime_prompt_revision,
+            )
+            is None
+        ):
+            raise ValueError("runtime prompt revision is invalid")
         if self.status is not RuntimeStatus.STARTING:
             raise ValueError("only STARTING runtime may bind an instance")
         if at < self.updated_at:
             raise ValueError("runtime start timestamp cannot precede runtime update")
         if self.runtime_instance_id not in {None, runtime_instance_id}:
             raise ValueError("runtime generation is already bound to another instance")
+        if (
+            self.runtime_instance_id == runtime_instance_id
+            and self.started_at is not None
+            and self.runtime_prompt_revision != runtime_prompt_revision
+        ):
+            raise ValueError("bound runtime prompt revision cannot change")
         return replace(
             self,
             runtime_instance_id=runtime_instance_id,
+            runtime_prompt_revision=runtime_prompt_revision,
             started_at=self.started_at or at,
             version=self.version + 1,
             updated_at=at,
@@ -1158,6 +1190,7 @@ class RuntimeState:
             version=self.version + 1,
             updated_at=at,
             runtime_instance_id=None,
+            runtime_prompt_revision=None,
             wake_started_at=at,
             started_at=None,
             ready_at=None,
@@ -1192,6 +1225,7 @@ class RuntimeState:
             version=self.version + 1,
             updated_at=at,
             runtime_instance_id=None,
+            runtime_prompt_revision=None,
             wake_started_at=at,
             started_at=None,
             ready_at=None,
@@ -1256,6 +1290,7 @@ class RuntimeState:
             values["stopping_at"] = None
             values["stopped_at"] = None
             values["runtime_instance_id"] = None
+            values["runtime_prompt_revision"] = None
             values["started_at"] = None
             values["ready_at"] = None
             values["busy_since"] = None
@@ -1269,6 +1304,7 @@ class RuntimeState:
             values["desired_count"] = 0
             values["stopped_at"] = at
             values["runtime_instance_id"] = None
+            values["runtime_prompt_revision"] = None
             values["stopping_at"] = None
         return replace(self, **values)
 
