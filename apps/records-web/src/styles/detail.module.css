@@ -81,10 +81,14 @@
 .opinionGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-rows: repeat(3, auto);
+  column-gap: 18px;
 }
 
 .opinionCard {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
   overflow: hidden;
   box-shadow: none;
 }
@@ -222,7 +226,17 @@
 }
 
 @media (max-width: 1199px) {
-  .opinionGrid,
+  .opinionGrid {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    gap: 18px;
+  }
+
+  .opinionCard {
+    display: block;
+    grid-row: auto;
+  }
+
   .voteList {
     grid-template-columns: 1fr;
   }
