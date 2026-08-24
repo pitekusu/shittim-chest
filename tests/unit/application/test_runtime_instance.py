@@ -13,6 +13,7 @@ from shittim_chest.application.runtime_instance import RuntimeInstanceState
 from shittim_chest.application.scale_to_zero import RuntimeState, RuntimeStatus
 
 NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+PROMPT_REVISION = "r" + "0" * 26
 
 
 @dataclass(slots=True)
@@ -68,12 +69,14 @@ def session(
     repository: FakeRuntimeRepository,
     *,
     owner: str = "runtime-a",
+    prompt_revision: str | None = None,
     cas_attempts: int = 5,
 ) -> RuntimeInstanceState:
     return RuntimeInstanceState(
         clock=FakeClock(),
         repository=repository,
         runtime_instance_id=owner,
+        runtime_prompt_revision=prompt_revision,
         cas_attempts=cas_attempts,
     )
 
@@ -119,6 +122,53 @@ async def test_start_and_ready_bind_one_runtime_after_recovery() -> None:
     assert ready.status is RuntimeStatus.READY
     assert ready.runtime_instance_id == "runtime-a"
     assert ready.ready_at is not None
+
+
+@pytest.mark.asyncio
+async def test_start_atomically_records_the_loaded_prompt_revision() -> None:
+    repository = FakeRuntimeRepository(starting())
+    runtime = session(repository, prompt_revision=PROMPT_REVISION)
+
+    started = await runtime.mark_started()
+    ready = await runtime.mark_ready(active=False)
+
+    assert started.runtime_prompt_revision == PROMPT_REVISION
+    assert ready.runtime_prompt_revision == PROMPT_REVISION
+    assert repository.replacements[0][0].runtime_prompt_revision is None
+    assert repository.replacements[0][1].runtime_prompt_revision == PROMPT_REVISION
+
+
+@pytest.mark.asyncio
+async def test_same_owner_cannot_silently_change_its_loaded_prompt_revision() -> None:
+    bound = starting().mark_started(
+        at=NOW,
+        runtime_instance_id="runtime-a",
+        runtime_prompt_revision=PROMPT_REVISION,
+    )
+
+    with pytest.raises(RuntimeNotReady, match="prompt revision"):
+        await session(FakeRuntimeRepository(bound)).mark_started()
+
+
+def test_fresh_generation_clears_the_previous_prompt_revision() -> None:
+    ready = (
+        starting()
+        .mark_started(
+            at=NOW,
+            runtime_instance_id="runtime-a",
+            runtime_prompt_revision=PROMPT_REVISION,
+        )
+        .transition(
+            RuntimeStatus.READY,
+            at=NOW + timedelta(seconds=1),
+            runtime_instance_id="runtime-a",
+        )
+    )
+
+    fenced = ready.fence_stale_instance(at=NOW + timedelta(seconds=2))
+
+    assert fenced.runtime_instance_id is None
+    assert fenced.runtime_prompt_revision is None
 
 
 @pytest.mark.asyncio

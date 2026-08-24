@@ -542,6 +542,14 @@ describe("RuntimeStack", () => {
     ]);
     expect(JSON.stringify(secrets)).toContain("/shittim-chest/production/runtime/");
     expect(JSON.stringify(secrets)).toContain("RuntimeConfigVersion");
+    const environment = normal?.Properties.ContainerDefinitions[0].Environment as Array<{
+      Name: string;
+      Value: string;
+    }>;
+    expect(environment).toContainEqual({
+      Name: "SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER",
+      Value: "/shittim-chest/production/runtime-prompts/active",
+    });
   });
 
   test("keeps normal task permissions bounded and break-glass access isolated", () => {
@@ -566,7 +574,16 @@ describe("RuntimeStack", () => {
     expect(JSON.stringify(normal)).toContain("dynamodb:UpdateItem");
     expect(JSON.stringify(normal)).not.toContain("dynamodb:TransactGetItems");
     expect(JSON.stringify(normal)).not.toContain("dynamodb:TransactWriteItems");
-    expect(JSON.stringify(normal)).not.toContain("ssm:");
+    expect(JSON.stringify(normal)).toContain("ssm:GetParameter");
+    expect(JSON.stringify(normal)).toContain("ssm:GetParameters");
+    expect(JSON.stringify(normal)).toContain(
+      "/shittim-chest/production/runtime-prompts/active",
+    );
+    expect(JSON.stringify(normal)).toContain(
+      "/shittim-chest/production/runtime-prompts/*",
+    );
+    expect(JSON.stringify(normal)).not.toContain("ssm:GetParametersByPath");
+    expect(JSON.stringify(normal)).not.toContain("ssm:DescribeParameters");
     expect(JSON.stringify(normal)).not.toContain("ssmmessages:");
     for (const policy of [normal, breakGlass]) {
       const invokeStatements = policy?.Properties.PolicyDocument.Statement.filter(

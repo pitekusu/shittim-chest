@@ -124,6 +124,14 @@ describe("ReleaseIdentityStack", () => {
     const backfill = policyFor("RecordsBackfillRole");
     const drift = policyFor("RecordsDriftRole");
     const recordsPolicies = [plan, deploy, backfill, drift].join("\n");
+    const planPolicy = policies.find((policy) =>
+      JSON.stringify(policy.Properties.Roles).includes("RecordsPlanRole"),
+    );
+    const runtimeReadStatements =
+      planPolicy?.Properties.PolicyDocument.Statement.filter(
+        (statement: { Resource?: string | string[] }) =>
+          JSON.stringify(statement.Resource).includes("ShittimChest-Prod-Runtime"),
+      ) ?? [];
     const deployPolicy = policies.find((policy) =>
       JSON.stringify(policy.Properties.Roles).includes("RecordsDeployRole"),
     );
@@ -139,6 +147,19 @@ describe("ReleaseIdentityStack", () => {
     expect(plan).toContain("cdk-hnb659fds-cfn-exec-role");
     expect(plan).toContain("us-east-1");
     expect(plan).toContain("ssm:DescribeParameters");
+    expect(runtimeReadStatements).toEqual([
+      {
+        Action: "cloudformation:DescribeStacks",
+        Condition: {
+          StringEquals: {
+            "aws:ResourceAccount": { Ref: "AWS::AccountId" },
+          },
+        },
+        Effect: "Allow",
+        Resource:
+          "arn:aws:cloudformation:ap-northeast-1:*:stack/ShittimChest-Prod-Runtime/*",
+      },
+    ]);
     expect(plan).not.toContain('"ssm:GetParameter"');
     expect(plan).not.toContain('"ssm:GetParameters"');
     expect(plan).not.toContain("cloudformation:ExecuteChangeSet");

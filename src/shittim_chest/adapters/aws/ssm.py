@@ -1,9 +1,10 @@
-"""Narrow Parameter Store reader for ingress configuration values."""
+"""Narrow exact-name Parameter Store reader for startup configuration values."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -25,11 +26,39 @@ class SsmParameterReader:
     async def get_parameter(self, name: str, *, with_decryption: bool = True) -> str:
         """Return a parameter value without blocking the event loop."""
 
-        if not name or name != name.strip():
-            raise ValueError("parameter name must not be empty or padded")
+        self._validate_name(name)
         if not isinstance(with_decryption, bool):
             raise TypeError("with_decryption must be a boolean")
         return await asyncio.to_thread(self._get_parameter, name, with_decryption)
+
+    async def get_optional_parameter(
+        self,
+        name: str,
+        *,
+        with_decryption: bool = True,
+    ) -> str | None:
+        """Return ``None`` only when the explicitly named parameter is absent."""
+
+        self._validate_name(name)
+        if not isinstance(with_decryption, bool):
+            raise TypeError("with_decryption must be a boolean")
+        return await asyncio.to_thread(self._get_optional_parameter, name, with_decryption)
+
+    async def get_parameters(
+        self,
+        names: tuple[str, ...],
+        *,
+        with_decryption: bool = True,
+    ) -> Mapping[str, str]:
+        """Return one complete exact-name batch or fail without exposing values."""
+
+        if not 1 <= len(names) <= 10 or len(set(names)) != len(names):
+            raise ValueError("parameter names must be one unique SSM batch")
+        for name in names:
+            self._validate_name(name)
+        if not isinstance(with_decryption, bool):
+            raise TypeError("with_decryption must be a boolean")
+        return await asyncio.to_thread(self._get_parameters, names, with_decryption)
 
     def _get_parameter(self, name: str, with_decryption: bool) -> str:
         try:
@@ -39,10 +68,70 @@ class SsmParameterReader:
             )
         except BotoCoreError, ClientError:
             raise ParameterReadUnavailable from None
+        return self._parameter_value(response, expected_name=name)
+
+    def _get_optional_parameter(self, name: str, with_decryption: bool) -> str | None:
+        try:
+            response = self._client.get_parameter(
+                Name=name,
+                WithDecryption=with_decryption,
+            )
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
+                return None
+            raise ParameterReadUnavailable from None
+        except BotoCoreError:
+            raise ParameterReadUnavailable from None
+        return self._parameter_value(response, expected_name=name)
+
+    def _get_parameters(
+        self,
+        names: tuple[str, ...],
+        with_decryption: bool,
+    ) -> Mapping[str, str]:
+        try:
+            response = self._client.get_parameters(
+                Names=list(names),
+                WithDecryption=with_decryption,
+            )
+        except BotoCoreError, ClientError:
+            raise ParameterReadUnavailable from None
+        invalid = response.get("InvalidParameters")
+        parameters = response.get("Parameters")
+        if invalid not in (None, []) or not isinstance(parameters, list):
+            raise ParameterReadUnavailable
+        values: dict[str, str] = {}
+        for parameter in parameters:
+            if not isinstance(parameter, Mapping):
+                raise ParameterReadUnavailable
+            name = parameter.get("Name")
+            value = parameter.get("Value")
+            if (
+                not isinstance(name, str)
+                or name not in names
+                or name in values
+                or not isinstance(value, str)
+                or not value
+            ):
+                raise ParameterReadUnavailable
+            values[name] = value
+        if set(values) != set(names):
+            raise ParameterReadUnavailable
+        return MappingProxyType(values)
+
+    @staticmethod
+    def _parameter_value(response: Mapping[str, object], *, expected_name: str) -> str:
         parameter = response.get("Parameter")
         if not isinstance(parameter, Mapping):
+            raise ParameterReadUnavailable
+        if parameter.get("Name") != expected_name:
             raise ParameterReadUnavailable
         value = parameter.get("Value")
         if not isinstance(value, str) or not value:
             raise ParameterReadUnavailable
         return value
+
+    @staticmethod
+    def _validate_name(name: str) -> None:
+        if not isinstance(name, str) or not name or name != name.strip():
+            raise ValueError("parameter name must not be empty or padded")

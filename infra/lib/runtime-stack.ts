@@ -7,6 +7,7 @@ import {
   RemovalPolicy,
   Stack,
   StackProps,
+  Token,
   Validations,
   aws_apigatewayv2 as apigatewayv2,
   aws_apigatewayv2_integrations as apigatewayv2Integrations,
@@ -32,6 +33,8 @@ const LAMBDA_BUNDLE_CODE_SHA256_PATTERN = "^[A-Za-z0-9+/]{43}=$";
 const PARAMETER_ROOT = "/shittim-chest/production";
 const DISCORD_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/public-key`;
 const MODERATOR_TOKEN_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/token`;
+const RUNTIME_PROMPTS_ROOT = `${PARAMETER_ROOT}/runtime-prompts`;
+const RUNTIME_PROMPTS_ACTIVE_PARAMETER = `${RUNTIME_PROMPTS_ROOT}/active`;
 const RUNTIME_CLUSTER_NAME = "shittim-chest-production";
 const RUNTIME_SERVICE_NAME = "shittim-chest-production";
 const NORMAL_TASK_DEFINITION_FAMILY = "shittim-chest-production-normal";
@@ -276,6 +279,7 @@ export class RuntimeStack extends Stack {
           resources: [statusPublisherArn],
         }),
       );
+      this.grantRuntimePromptRead(role);
     }
     this.grantBreakGlassAccess(breakGlassTaskRole);
 
@@ -1015,11 +1019,39 @@ export class RuntimeStack extends Stack {
     });
   }
 
+  private grantRuntimePromptRead(role: iam.Role): void {
+    const activeArn = this.parameterArn(RUNTIME_PROMPTS_ACTIVE_PARAMETER);
+    const revisionArn = this.parameterArn(`${RUNTIME_PROMPTS_ROOT}/*`);
+    const nagRegion = Token.isUnresolved(this.region) ? "<AWS::Region>" : this.region;
+    const nagAccount = Token.isUnresolved(this.account) ? "<AWS::AccountId>" : this.account;
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: [activeArn],
+      }),
+    );
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameters"],
+        resources: [revisionArn],
+      }),
+    );
+    role.node.addMetadata(
+      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+      Object.fromEntries(
+        ["arn:aws", "arn:<AWS::Partition>"].map((partition) => [
+          `AwsSolutions-IAM5[Resource::${partition}:ssm:${nagRegion}:${nagAccount}:parameter${RUNTIME_PROMPTS_ROOT}/*]`,
+          "The active pointer selects an immutable ULID revision at task startup; GetParameters remains confined to the dedicated runtime-prompts subtree and runtime validation requires the exact manifest and five checksummed prompt names.",
+        ]),
+      ),
+    );
+  }
+
   private acknowledgeStaticEnvironment(definition: ecs.FargateTaskDefinition): void {
     Validations.of(definition).acknowledge({
       id: "AwsSolutions-ECS2",
       reason:
-        "Only non-secret immutable deployment metadata is set directly; all credentials and private runtime/persona values use SSM SecureString task secrets.",
+        "Only non-secret immutable deployment metadata and the content-free prompt pointer name are set directly; all credentials and private runtime/persona values stay in SSM.",
     });
   }
 
@@ -1109,6 +1141,7 @@ export class RuntimeStack extends Stack {
         SHITTIM_DYNAMODB_TABLE: "shittim-chest-production",
         SHITTIM_ENVIRONMENT: "production",
         SHITTIM_LOG_LEVEL: "INFO",
+        SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER: RUNTIME_PROMPTS_ACTIVE_PARAMETER,
         SHITTIM_STATUS_PUBLISHER_FUNCTION: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
       },
       healthCheck: {

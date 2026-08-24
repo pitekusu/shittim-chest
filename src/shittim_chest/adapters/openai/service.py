@@ -100,6 +100,7 @@ class OpenAIResponsesService:
     limiter: OpenAIRequestLimiter
     config: OpenAIAdapterConfig = field(default_factory=OpenAIAdapterConfig)
     recorder: OpenAIUsageRecorder = field(default_factory=NullOpenAIUsageRecorder)
+    system_prompt: str | None = field(default=None, repr=False)
 
     async def generate_initial_opinion(
         self,
@@ -111,7 +112,11 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="initial_opinion",
             schema=OpinionOutputV1,
-            instructions=participant_instructions(self.profiles, participant),
+            instructions=participant_instructions(
+                self.profiles,
+                participant,
+                system_prompt=self.system_prompt,
+            ),
             input_text=initial_opinion_input(question, evidence),
             settings=self.config.initial_opinion,
         )
@@ -128,7 +133,11 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="final_proposal",
             schema=FinalProposalOutputV1,
-            instructions=final_proposal_instructions(self.profiles, participant),
+            instructions=final_proposal_instructions(
+                self.profiles,
+                participant,
+                system_prompt=self.system_prompt,
+            ),
             input_text=final_proposal_input(question, evidence, initial_opinions),
             settings=self.config.final_proposal,
         )
@@ -146,7 +155,8 @@ class OpenAIResponsesService:
             operation="vote",
             schema=VoteOutputV1,
             instructions=private_participant_instructions(
-                self.profiles.for_participant(voter).system_prompt
+                self.profiles.for_participant(voter).system_prompt,
+                system_prompt=self.system_prompt,
             ),
             input_text=vote_input(question, evidence, candidates),
             settings=self.config.vote,
@@ -171,7 +181,11 @@ class OpenAIResponsesService:
         output = await self._parse(
             operation="decision",
             schema=DecisionOutputV1,
-            instructions=winner_decision_instructions(self.profiles, voting_result.winner),
+            instructions=winner_decision_instructions(
+                self.profiles,
+                voting_result.winner,
+                system_prompt=self.system_prompt,
+            ),
             input_text=decision_input(question, evidence, proposals, voting_result),
             settings=self.config.decision,
         )

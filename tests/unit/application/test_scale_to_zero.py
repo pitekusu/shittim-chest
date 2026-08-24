@@ -19,6 +19,8 @@ from shittim_chest.application import (
 )
 
 NOW = datetime(2026, 7, 26, 1, 2, 3, tzinfo=UTC)
+PROMPT_REVISION = "r" + "0" * 26
+OTHER_PROMPT_REVISION = "r" + "1" * 26
 
 
 def request() -> IngressRequest:
@@ -160,6 +162,56 @@ def test_runtime_transition_graph_rejects_invalid_edge() -> None:
 
     with pytest.raises(ValueError, match="invalid runtime transition"):
         stopped.transition(RuntimeStatus.BUSY, at=NOW + timedelta(seconds=1))
+
+
+def test_runtime_prompt_revision_requires_a_valid_bound_instance() -> None:
+    stopped = RuntimeState.stopped(at=NOW)
+
+    with pytest.raises(ValueError, match="runtime prompt revision is invalid"):
+        replace(
+            stopped,
+            runtime_instance_id="runtime-1",
+            runtime_prompt_revision="invalid-revision",
+        )
+    with pytest.raises(ValueError, match="requires a bound runtime instance"):
+        replace(stopped, runtime_prompt_revision=PROMPT_REVISION)
+
+
+def test_runtime_start_pins_one_prompt_revision_to_the_bound_instance() -> None:
+    starting = RuntimeState.stopped(at=NOW).request_wake(at=NOW + timedelta(seconds=1))
+
+    with pytest.raises(ValueError, match="cannot precede runtime update"):
+        starting.mark_started(
+            at=NOW,
+            runtime_instance_id="runtime-1",
+            runtime_prompt_revision=PROMPT_REVISION,
+        )
+    with pytest.raises(ValueError, match="runtime prompt revision is invalid"):
+        starting.mark_started(
+            at=NOW + timedelta(seconds=2),
+            runtime_instance_id="runtime-1",
+            runtime_prompt_revision="invalid-revision",
+        )
+
+    started = starting.mark_started(
+        at=NOW + timedelta(seconds=2),
+        runtime_instance_id="runtime-1",
+        runtime_prompt_revision=PROMPT_REVISION,
+    )
+
+    assert started.runtime_prompt_revision == PROMPT_REVISION
+    with pytest.raises(ValueError, match="already bound to another instance"):
+        started.mark_started(
+            at=NOW + timedelta(seconds=3),
+            runtime_instance_id="runtime-2",
+            runtime_prompt_revision=PROMPT_REVISION,
+        )
+    with pytest.raises(ValueError, match="bound runtime prompt revision cannot change"):
+        started.mark_started(
+            at=NOW + timedelta(seconds=3),
+            runtime_instance_id="runtime-1",
+            runtime_prompt_revision=OTHER_PROMPT_REVISION,
+        )
 
 
 def test_idle_timestamp_is_fixed_and_stop_requires_complete_activity() -> None:

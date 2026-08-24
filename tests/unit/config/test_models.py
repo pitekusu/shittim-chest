@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 
 import pytest
 
 from shittim_chest.application import DiscordBotSlot
-from shittim_chest.config import StartupConfigurationError, load_bootstrap_config
+from shittim_chest.config import (
+    RUNTIME_PROMPT_NAMES,
+    RUNTIME_PROMPTS_ACTIVE_PARAMETER,
+    StartupConfigurationError,
+    load_bootstrap_config,
+    parse_runtime_prompt_revision,
+    runtime_prompt_parameter_names,
+)
 from shittim_chest.domain import ParticipantSlot
+
+PROMPT_REVISION = "r" + "0" * 26
 
 
 def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
@@ -140,6 +150,89 @@ def test_load_bootstrap_config_requires_one_matching_version_for_all_payloads() 
         load_bootstrap_config(environment)
 
 
+def test_runtime_prompt_revision_overlays_text_without_changing_display_names() -> None:
+    prompts = {name: f"Canonical prompt for {name}." for name in RUNTIME_PROMPT_NAMES}
+    revision = parse_runtime_prompt_revision(
+        revision=PROMPT_REVISION,
+        manifest_json=_prompt_manifest(prompts),
+        prompts=prompts,
+    )
+
+    config = load_bootstrap_config(_valid_environment()).with_runtime_prompt_revision(revision)
+
+    assert config.runtime_prompt_revision == PROMPT_REVISION
+    assert config.system_prompt == prompts["system"]
+    assert config.moderator_prompt == prompts["moderator"]
+    assert config.participant_prompts() == {
+        ParticipantSlot.PARTICIPANT_A: prompts["participant-a"],
+        ParticipantSlot.PARTICIPANT_B: prompts["participant-b"],
+        ParticipantSlot.PARTICIPANT_C: prompts["participant-c"],
+    }
+    assert config.participant_display_names()[ParticipantSlot.PARTICIPANT_A] == (
+        "Generic participant-a"
+    )
+    assert "Canonical prompt" not in repr(config)
+
+
+@pytest.mark.parametrize(
+    "invalid_prompt",
+    [" ", "line one\r\nline two", "e\u0301", "x" * 3_501],
+)
+def test_runtime_prompt_revision_rejects_noncanonical_or_oversized_text(
+    invalid_prompt: str,
+) -> None:
+    prompts = {name: f"Canonical prompt for {name}." for name in RUNTIME_PROMPT_NAMES}
+    manifest = _prompt_manifest(prompts)
+    prompts["system"] = invalid_prompt
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        parse_runtime_prompt_revision(
+            revision=PROMPT_REVISION,
+            manifest_json=manifest,
+            prompts=prompts,
+        )
+
+    assert str(captured.value) == "startup_configuration_invalid"
+    assert invalid_prompt not in str(captured.value)
+
+
+def test_runtime_prompt_revision_requires_exact_checksum_verified_manifest() -> None:
+    prompts = {name: f"Canonical prompt for {name}." for name in RUNTIME_PROMPT_NAMES}
+    manifest = json.loads(_prompt_manifest(prompts))
+    manifest["checksums"]["participant-c"] = "f" * 64
+
+    with pytest.raises(StartupConfigurationError):
+        parse_runtime_prompt_revision(
+            revision=PROMPT_REVISION,
+            manifest_json=json.dumps(manifest),
+            prompts=prompts,
+        )
+
+    missing_base = json.loads(_prompt_manifest(prompts))
+    missing_base.pop("base_revision")
+    with pytest.raises(StartupConfigurationError):
+        parse_runtime_prompt_revision(
+            revision=PROMPT_REVISION,
+            manifest_json=json.dumps(missing_base),
+            prompts=prompts,
+        )
+
+
+def test_runtime_prompt_pointer_environment_is_optional_but_exact() -> None:
+    legacy = load_bootstrap_config(_valid_environment())
+    assert legacy.runtime_prompts_active_parameter is None
+
+    environment = _valid_environment()
+    environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] = RUNTIME_PROMPTS_ACTIVE_PARAMETER
+    configured = load_bootstrap_config(environment)
+    assert configured.runtime_prompts_active_parameter == RUNTIME_PROMPTS_ACTIVE_PARAMETER
+    assert runtime_prompt_parameter_names(PROMPT_REVISION)["manifest"].endswith("/manifest")
+
+    environment["SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"] += "/wrong"
+    with pytest.raises(StartupConfigurationError):
+        load_bootstrap_config(environment)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -209,3 +302,19 @@ def _valid_environment() -> dict[str, str]:
             }
         )
     return environment
+
+
+def _prompt_manifest(prompts: dict[str, str]) -> str:
+    return json.dumps(
+        {
+            "schema_version": "1",
+            "revision": PROMPT_REVISION,
+            "created_at": "2026-08-24T00:00:00Z",
+            "action": "publish",
+            "base_revision": None,
+            "checksums": {
+                name: sha256(prompts[name].encode("utf-8")).hexdigest()
+                for name in RUNTIME_PROMPT_NAMES
+            },
+        }
+    )

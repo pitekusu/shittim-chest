@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from hashlib import sha256
 from types import MappingProxyType
 from typing import Literal
+from unicodedata import normalize
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -23,6 +26,17 @@ PRODUCTION_ENVIRONMENT = "production"
 DEFAULT_AWS_REGION = "ap-northeast-1"
 
 _RUNTIME_CONFIG_ENV = "SHITTIM_RUNTIME_CONFIG_JSON"
+RUNTIME_PROMPTS_ACTIVE_PARAMETER = "/shittim-chest/production/runtime-prompts/active"
+_RUNTIME_PROMPTS_ACTIVE_ENV = "SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"
+RUNTIME_PROMPT_NAMES = (
+    "system",
+    "moderator",
+    "participant-a",
+    "participant-b",
+    "participant-c",
+)
+_RUNTIME_PROMPT_REVISION_PATTERN = r"^r[0-9a-hjkmnp-tv-z]{26}$"
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _PERSONA_ENV = {
     DiscordBotSlot.MODERATOR: "SHITTIM_PERSONA_MODERATOR_JSON",
     DiscordBotSlot.PARTICIPANT_A: "SHITTIM_PERSONA_PARTICIPANT_A_JSON",
@@ -96,6 +110,29 @@ class PersonaConfigPayload(_StrictModel):
         return value
 
 
+class RuntimePromptChecksumsPayload(_StrictModel):
+    system: str = Field(pattern=_SHA256_PATTERN)
+    moderator: str = Field(pattern=_SHA256_PATTERN)
+    participant_a: str = Field(alias="participant-a", pattern=_SHA256_PATTERN)
+    participant_b: str = Field(alias="participant-b", pattern=_SHA256_PATTERN)
+    participant_c: str = Field(alias="participant-c", pattern=_SHA256_PATTERN)
+
+
+class RuntimePromptManifestPayload(_StrictModel):
+    schema_version: Literal["1"]
+    revision: str = Field(pattern=_RUNTIME_PROMPT_REVISION_PATTERN)
+    created_at: str = Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+    action: Literal["publish", "rollback"]
+    base_revision: str | None = Field(pattern=_RUNTIME_PROMPT_REVISION_PATTERN)
+    checksums: RuntimePromptChecksumsPayload
+
+    @field_validator("created_at")
+    @classmethod
+    def _require_valid_utc_seconds(cls, value: str) -> str:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        return value
+
+
 @dataclass(frozen=True, slots=True)
 class PersonaConfig:
     """Validated private display and instruction settings for one Bot slot."""
@@ -105,6 +142,16 @@ class PersonaConfig:
     slot: DiscordBotSlot
     display_name: str = field(repr=False)
     system_prompt: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimePromptRevision:
+    """One checksum-verified immutable runtime prompt snapshot."""
+
+    revision: str
+    system_prompt: str = field(repr=False)
+    moderator_prompt: str = field(repr=False)
+    participant_prompts: Mapping[ParticipantSlot, str] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +169,10 @@ class BootstrapConfig:
     discord_tokens: Mapping[DiscordBotSlot, str] = field(repr=False)
     openai_api_key: str = field(repr=False)
     previous_command_schema_hash: str | None = None
+    runtime_prompts_active_parameter: str | None = None
+    runtime_prompt_revision: str | None = None
+    system_prompt: str | None = field(default=None, repr=False)
+    moderator_prompt: str | None = field(default=None, repr=False)
 
     def participant_prompts(self) -> Mapping[ParticipantSlot, str]:
         """Map private participant slots to their validated prompt text."""
@@ -141,6 +192,27 @@ class BootstrapConfig:
                 participant: self.personas[DiscordBotSlot(participant.value)].display_name
                 for participant in PARTICIPANTS
             }
+        )
+
+    def with_runtime_prompt_revision(
+        self,
+        revision: RuntimePromptRevision,
+    ) -> BootstrapConfig:
+        """Overlay prompt text while retaining legacy identity and display configuration."""
+
+        personas = dict(self.personas)
+        for participant in PARTICIPANTS:
+            slot = DiscordBotSlot(participant.value)
+            personas[slot] = replace(
+                personas[slot],
+                system_prompt=revision.participant_prompts[participant],
+            )
+        return replace(
+            self,
+            personas=MappingProxyType(personas),
+            runtime_prompt_revision=revision.revision,
+            system_prompt=revision.system_prompt,
+            moderator_prompt=revision.moderator_prompt,
         )
 
 
@@ -218,6 +290,12 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
                 or any(character not in "0123456789abcdef" for character in previous_hash)
             ):
                 raise ValueError("invalid command schema hash")
+        runtime_prompts_active_parameter = environ.get(_RUNTIME_PROMPTS_ACTIVE_ENV)
+        if (
+            runtime_prompts_active_parameter is not None
+            and runtime_prompts_active_parameter != RUNTIME_PROMPTS_ACTIVE_PARAMETER
+        ):
+            raise ValueError("invalid runtime prompts active parameter")
 
         return BootstrapConfig(
             environment=environment,
@@ -231,6 +309,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             discord_tokens=MappingProxyType(tokens),
             openai_api_key=_required(environ, "OPENAI_API_KEY"),
             previous_command_schema_hash=previous_hash,
+            runtime_prompts_active_parameter=runtime_prompts_active_parameter,
         )
     except KeyError, TypeError, ValueError, ValidationError:
         raise StartupConfigurationError from None
@@ -252,3 +331,61 @@ def _persona_from_json(raw: str) -> PersonaConfig:
         display_name=payload.display_name,
         system_prompt=payload.system_prompt,
     )
+
+
+def runtime_prompt_parameter_names(revision: str) -> Mapping[str, str]:
+    """Return exact immutable parameter names only for a valid revision identifier."""
+
+    if re.fullmatch(_RUNTIME_PROMPT_REVISION_PATTERN, revision) is None:
+        raise StartupConfigurationError
+    root = f"/shittim-chest/production/runtime-prompts/{revision}"
+    return MappingProxyType(
+        {name: f"{root}/{name}" for name in (*RUNTIME_PROMPT_NAMES, "manifest")}
+    )
+
+
+def parse_runtime_prompt_revision(
+    *,
+    revision: str,
+    manifest_json: str,
+    prompts: Mapping[str, str],
+) -> RuntimePromptRevision:
+    """Validate one immutable prompt revision without exposing its private text."""
+
+    try:
+        if re.fullmatch(_RUNTIME_PROMPT_REVISION_PATTERN, revision) is None:
+            raise ValueError("invalid revision")
+        if set(prompts) != set(RUNTIME_PROMPT_NAMES):
+            raise ValueError("incomplete prompt set")
+        manifest = RuntimePromptManifestPayload.model_validate_json(manifest_json)
+        if manifest.revision != revision:
+            raise ValueError("manifest revision mismatch")
+        checksums = manifest.checksums.model_dump(by_alias=True)
+        validated = {
+            name: _validated_runtime_prompt(prompts[name]) for name in RUNTIME_PROMPT_NAMES
+        }
+        if any(
+            sha256(validated[name].encode("utf-8")).hexdigest() != checksums[name]
+            for name in RUNTIME_PROMPT_NAMES
+        ):
+            raise ValueError("prompt checksum mismatch")
+        return RuntimePromptRevision(
+            revision=revision,
+            system_prompt=validated["system"],
+            moderator_prompt=validated["moderator"],
+            participant_prompts=MappingProxyType(
+                {participant: validated[participant.value] for participant in PARTICIPANTS}
+            ),
+        )
+    except KeyError, TypeError, ValueError, ValidationError:
+        raise StartupConfigurationError from None
+
+
+def _validated_runtime_prompt(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("runtime prompt is blank")
+    if "\r" in value or normalize("NFC", value) != value:
+        raise ValueError("runtime prompt is not canonical")
+    if len(value.encode("utf-8")) > 3_500:
+        raise ValueError("runtime prompt exceeds private configuration limit")
+    return value
