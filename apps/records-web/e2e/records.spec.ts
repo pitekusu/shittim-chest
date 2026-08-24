@@ -368,6 +368,33 @@ test("record card opens from its native keyboard link", async ({ page }) => {
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
 });
 
+test("final proposals align when initial opinions have different lengths", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const unevenDetail = {
+    ...detail,
+    initialOpinions: detail.initialOpinions.map((opinion, index) =>
+      index === 0
+        ? {
+            ...opinion,
+            proposal: `${opinion.proposal}\n${"文章量が異なっても、最終案の開始位置は三人で揃います。".repeat(8)}`,
+          }
+        : opinion,
+    ),
+  };
+  await mockAuthenticatedApi(page, unevenDetail);
+  await page.goto(`/records/${RECORD_ID}`);
+  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+
+  const finalProposalTops = await page
+    .getByRole("heading", { name: "最終案" })
+    .evaluateAll((headings) => headings.map((heading) => heading.getBoundingClientRect().top));
+
+  expect(finalProposalTops).toHaveLength(3);
+  expect(Math.max(...finalProposalTops) - Math.min(...finalProposalTops)).toBeLessThanOrEqual(1);
+});
+
 test("record identities produce varied and stable card ornaments", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.setViewportSize({ width: 1680, height: 950 });
