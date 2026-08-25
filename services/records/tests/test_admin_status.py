@@ -62,7 +62,8 @@ class CloudWatch:
     def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
         return {
             "MetricDataResults": [
-                {"Id": query["Id"], "Values": [1.0]} for query in kwargs["MetricDataQueries"]
+                {"Id": query["Id"], "StatusCode": "Complete", "Values": [1.0]}
+                for query in kwargs["MetricDataQueries"]
             ]
         }
 
@@ -153,6 +154,28 @@ def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
         assert values[f"{label}_read_throttles"] == 1
         assert values[f"{label}_write_throttles"] == 1
         assert configuration().tables[label] not in section.model_dump_json()
+
+
+def test_dynamodb_preserves_unknown_throttles_for_incomplete_metric_data() -> None:
+    class CloudWatchWithIncompleteData(CloudWatch):
+        def get_metric_data(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "MetricDataResults": [
+                    {"Id": "d0", "StatusCode": "Complete", "Values": [2.0]},
+                    {"Id": "d1", "StatusCode": "PartialData", "Values": [3.0]},
+                    {"Id": "d2", "StatusCode": "Complete", "Values": []},
+                    {"Id": "d3", "StatusCode": "InternalError", "Values": [4.0]},
+                ]
+            }
+
+    throttles = source(cloudwatch=CloudWatchWithIncompleteData())._dynamodb_throttles(NOW)
+
+    assert throttles[("debate", "read")] == 2
+    assert throttles[("debate", "write")] is None
+    assert throttles[("archive", "read")] is None
+    assert throttles[("archive", "write")] is None
+    assert throttles[("statistics", "read")] is None
+    assert throttles[("session", "write")] is None
 
 
 def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:

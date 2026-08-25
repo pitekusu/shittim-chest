@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -459,6 +460,7 @@ class AwsAdminStatusSource:
         metrics: list[AdminStatusMetric] = []
         warning = False
         throttles = self._dynamodb_throttles(now)
+        throttles_unknown = any(value is None for value in throttles.values())
         for label in _TABLE_LABELS:
             name = self._config.tables[label]
             table = self._dynamodb.describe_table(TableName=name).get("Table", {})
@@ -504,12 +506,14 @@ class AwsAdminStatusSource:
                 )
         return AdminStatusSection(
             service="dynamodb",
-            state="warning" if warning else "healthy",
-            summary="Table状態と保護設定を確認しました。",
+            state="unknown" if throttles_unknown else "warning" if warning else "healthy",
+            summary="一部の指標を取得できませんでした。"
+            if throttles_unknown
+            else "Table状態と保護設定を確認しました。",
             metrics=tuple(metrics),
         )
 
-    def _dynamodb_throttles(self, now: datetime) -> dict[tuple[str, str], int]:
+    def _dynamodb_throttles(self, now: datetime) -> dict[tuple[str, str], int | None]:
         queries: list[dict[str, object]] = []
         identities: dict[str, tuple[str, str]] = {}
         counter = 0
@@ -543,14 +547,28 @@ class AwsAdminStatusSource:
             EndTime=now,
             ScanBy="TimestampDescending",
         )
-        values = {identity: 0 for identity in identities.values()}
+        values: dict[tuple[str, str], int | None] = {
+            identity: None for identity in identities.values()
+        }
         for result in response.get("MetricDataResults", []):
             identity = identities.get(result.get("Id"))
             samples = result.get("Values", [])
-            if identity is not None and isinstance(samples, list):
-                values[identity] = sum(
-                    int(value) for value in samples if isinstance(value, (int, float))
+            if (
+                identity is None
+                or result.get("StatusCode") != "Complete"
+                or not isinstance(samples, list)
+                or not samples
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or value < 0
+                    or not float(value).is_integer()
+                    for value in samples
                 )
+            ):
+                continue
+            values[identity] = sum(int(value) for value in samples)
         return values
 
     def _lambda_section(self, now: datetime) -> AdminStatusSection:
