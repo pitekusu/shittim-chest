@@ -532,8 +532,9 @@ class AwsAdminStatusSource:
                 warning = warning or ttl_status != "ENABLED"
             stream = table.get("StreamSpecification", {})
             stream_enabled = stream.get("StreamEnabled") is True
+            stream_view_type = stream.get("StreamViewType") if stream_enabled else None
             if label == "debate":
-                warning = warning or not stream_enabled
+                warning = warning or not stream_enabled or stream_view_type != "NEW_IMAGE"
             metrics.extend(
                 (
                     _metric(f"{label}_status", status or "unknown"),
@@ -549,10 +550,7 @@ class AwsAdminStatusSource:
                 metrics.extend(
                     (
                         _metric("debate_stream_enabled", stream_enabled),
-                        _metric(
-                            "debate_stream_view_type",
-                            stream.get("StreamViewType") if stream_enabled else None,
-                        ),
+                        _metric("debate_stream_view_type", stream_view_type),
                     )
                 )
         return AdminStatusSection(
@@ -653,12 +651,19 @@ class AwsAdminStatusSource:
             )
         provider_metrics, provider_metrics_complete = self._lambda_metrics(now)
         metrics.extend(provider_metrics)
+        provider_warning = any(
+            metric.name.endswith(("_hour_errors", "_hour_throttles"))
+            and isinstance(metric.value, int)
+            and not isinstance(metric.value, bool)
+            and metric.value > 0
+            for metric in provider_metrics
+        )
         return AdminStatusSection(
             service="lambda",
             state="unknown"
             if not provider_metrics_complete
             else "warning"
-            if warning
+            if warning or provider_warning
             else "healthy",
             summary="一部の指標を取得できませんでした。"
             if not provider_metrics_complete

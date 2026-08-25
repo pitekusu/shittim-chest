@@ -269,6 +269,60 @@ def test_dynamodb_preserves_unknown_throttles_for_incomplete_metric_data() -> No
     assert throttles[("session", "write")] is None
 
 
+@pytest.mark.parametrize(
+    ("stream_view_type", "expected_state"),
+    [
+        ("NEW_IMAGE", "healthy"),
+        ("KEYS_ONLY", "warning"),
+        ("OLD_IMAGE", "warning"),
+        ("NEW_AND_OLD_IMAGES", "warning"),
+    ],
+)
+def test_dynamodb_requires_new_image_stream_view(
+    stream_view_type: str,
+    expected_state: str,
+) -> None:
+    class Dynamo:
+        def describe_table(self, *, TableName: str) -> dict[str, Any]:
+            stream = (
+                {"StreamEnabled": True, "StreamViewType": stream_view_type}
+                if TableName == configuration().tables["debate"]
+                else {}
+            )
+            return {
+                "Table": {
+                    "TableStatus": "ACTIVE",
+                    "DeletionProtectionEnabled": True,
+                    "ItemCount": 0,
+                    "StreamSpecification": stream,
+                }
+            }
+
+        def describe_continuous_backups(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "ContinuousBackupsDescription": {
+                    "PointInTimeRecoveryDescription": {"PointInTimeRecoveryStatus": "ENABLED"}
+                }
+            }
+
+        def describe_time_to_live(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"TimeToLiveDescription": {"TimeToLiveStatus": "ENABLED"}}
+
+    class ZeroCloudWatch(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "MetricDataResults": [
+                    {"Id": query["Id"], "StatusCode": "Complete", "Values": [0.0]}
+                    for query in kwargs["MetricDataQueries"]
+                ]
+            }
+
+    section = source(dynamodb=Dynamo(), cloudwatch=ZeroCloudWatch())._dynamodb_section(NOW)
+
+    assert section.state == expected_state
+    assert metrics(section)["debate_stream_view_type"] == stream_view_type
+
+
 def test_dynamodb_requires_session_ttl_to_be_enabled() -> None:
     class Dynamo:
         def describe_table(self, *, TableName: str) -> dict[str, Any]:
@@ -639,6 +693,49 @@ def test_lambda_section_is_unknown_for_incomplete_provider_metrics(failure: str)
         values[f"auth_hour_{metric}"] is None
         for metric in ("invocations", "errors", "throttles", "duration")
     )
+
+
+@pytest.mark.parametrize(
+    ("failing_metric", "expected_state"),
+    [
+        (None, "healthy"),
+        ("Errors", "warning"),
+        ("Throttles", "warning"),
+    ],
+)
+def test_lambda_section_warns_for_errors_and_throttles(
+    failing_metric: str | None,
+    expected_state: str,
+) -> None:
+    class Lambda:
+        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "State": "Active",
+                "LastUpdateStatus": "Successful",
+                "Runtime": "python3.14",
+                "Architectures": ["arm64"],
+            }
+
+        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"ReservedConcurrentExecutions": 1}
+
+    class LambdaCloudWatch(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            results = []
+            for query in kwargs["MetricDataQueries"]:
+                metric_name = query["MetricStat"]["Metric"]["MetricName"]
+                value = 1.0 if metric_name == failing_metric else 0.0
+                if metric_name == "Duration":
+                    value = 12.5
+                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": [value]})
+            return {"MetricDataResults": results}
+
+    section = source(
+        lambda_client=Lambda(),
+        cloudwatch=LambdaCloudWatch(),
+    )._lambda_section(NOW)
+
+    assert section.state == expected_state
 
 
 def test_lambda_section_propagates_reserved_concurrency_provider_failure() -> None:
