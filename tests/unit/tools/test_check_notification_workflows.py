@@ -315,6 +315,43 @@ def test_records_release_requires_read_only_api_smoke(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_records_release_requires_anonymous_admin_boundary_smoke(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '"${endpoint}/api/v1/admin/status"',
+            '"${endpoint}/api/v1/session"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_anonymous_session_to_be_non_admin(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(".isAdmin == false", ".isAdmin == true", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_does_not_freeze_runtime_digests(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    release = (directory / RECORDS_RELEASE_WORKFLOW).read_text(encoding="utf-8")
+
+    assert "RuntimeImageDigest" not in release
+    assert "BreakGlassImageDigest" not in release
+    validate_notification_workflows(directory)
+
+
 def test_records_release_preserves_old_hashed_web_assets(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
@@ -346,6 +383,31 @@ def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Pat
     )
 
     with pytest.raises(WorkflowPolicyError, match=r"plan/deploy boundary|code checksum"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "/shittim-chest/production/records/admin/discord-user-id",
+        "RecordsPublicHostname",
+    ],
+)
+def test_records_release_binds_admin_and_status_inputs(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "REMOVED"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        WorkflowPolicyError,
+        match=r"plan/deploy boundary|pre-existing distribution",
+    ):
         validate_notification_workflows(directory)
 
 
@@ -496,6 +558,26 @@ def test_records_release_rejects_deletion_time_as_stack_absence(
     )
 
     with pytest.raises(WorkflowPolicyError, match="stack absence from DeletionTime"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_does_not_require_a_pre_existing_edge_distribution(
+    tmp_path: Path,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "          api_endpoint=$(aws cloudformation describe-stacks \\\n",
+            "          records_distribution_id=$(aws cloudformation describe-stacks \\\n"
+            "            --stack-name ShittimChest-Prod-RecordsEdge)\n"
+            "          api_endpoint=$(aws cloudformation describe-stacks \\\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="pre-existing distribution"):
         validate_notification_workflows(directory)
 
 

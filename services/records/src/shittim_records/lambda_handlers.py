@@ -24,6 +24,14 @@ from shittim_records.adapters import (
     SourceDebateRepository,
     StatisticsRepository,
 )
+from shittim_records.admin import AdminAuthorizer
+from shittim_records.admin_adapters import AdminSecurityConfigurationRepository
+from shittim_records.admin_http import AdminStatusHttpController
+from shittim_records.admin_status import AdminStatusService
+from shittim_records.admin_status_adapters import (
+    AwsAdminStatusConfiguration,
+    AwsAdminStatusSource,
+)
 from shittim_records.auth import AuthService
 from shittim_records.auth_adapters import (
     AuthConfigurationRepository,
@@ -39,7 +47,7 @@ from shittim_records.cost_adapters import (
     OpenAICostSource,
 )
 from shittim_records.costs import CostCollectionFailed, CostCollectionService
-from shittim_records.http_api import AuthHttpController, ReadHttpController
+from shittim_records.http_api import AuthHttpController, ReadHttpController, error_response
 from shittim_records.projector import BackfillService, ProjectorService
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
@@ -55,6 +63,7 @@ _RANKING: RankingService | None = None
 _COSTS: CostCollectionService | None = None
 _AUTH_CONTROLLER: AuthHttpController | None = None
 _READ_CONTROLLER: ReadHttpController | None = None
+_ADMIN_STATUS_CONTROLLER: AdminStatusHttpController | None = None
 
 SDK_CONFIG = Config(
     retries={"total_max_attempts": 2, "mode": "standard"},
@@ -166,13 +175,35 @@ def cost_handler(event: Mapping[str, Any], _context: object) -> dict[str, object
 def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle public OAuth and session routes."""
 
-    return _auth_controller().handle(event, now=datetime.now(UTC))
+    try:
+        return _auth_controller().handle(event, now=datetime.now(UTC))
+    except Exception as error:
+        return _content_free_http_failure(
+            event,
+            code="RECORDS_UNAVAILABLE",
+            log_event="records_auth_request_failed",
+            error=error,
+        )
 
 
 def read_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle authenticated Archive list and detail routes."""
 
     return _read_controller().handle(event, now=datetime.now(UTC))
+
+
+def admin_status_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
+    """Handle authenticated, sanitized read-only AWS status requests."""
+
+    try:
+        return _admin_status_controller().handle(event, now=datetime.now(UTC))
+    except Exception as error:
+        return _content_free_http_failure(
+            event,
+            code="ADMIN_STATUS_UNAVAILABLE",
+            log_event="records_admin_status_request_failed",
+            error=error,
+        )
 
 
 def _projector_service() -> ProjectorService:
@@ -252,6 +283,7 @@ def _auth_controller() -> AuthHttpController:
             oauth_parameter_name=_environment("OAUTH_CONFIG_PARAMETER_NAME"),
             client_secret_parameter_name=_environment("OAUTH_CLIENT_SECRET_PARAMETER_NAME"),
             session_key_parameter_name=_environment("SESSION_KEY_PARAMETER_NAME"),
+            admin_user_id_parameter_name=_environment("ADMIN_DISCORD_USER_ID_PARAMETER_NAME"),
         ).load()
         service = AuthService(
             store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
@@ -290,6 +322,77 @@ def _read_controller() -> ReadHttpController:
             records=RecordsReadService(reader=reader, cursor_codec=CursorCodec(session_key)),
         )
     return _READ_CONTROLLER
+
+
+def _admin_status_controller() -> AdminStatusHttpController:
+    global _ADMIN_STATUS_CONTROLLER
+    if _ADMIN_STATUS_CONTROLLER is None:
+        region = _environment("AWS_REGION")
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        ssm = boto3.client("ssm", config=SDK_CONFIG)
+        configuration = AwsAdminStatusConfiguration(
+            aws_account_id=_environment("ADMIN_AWS_ACCOUNT_ID"),
+            cluster_name=_environment("ECS_CLUSTER_NAME"),
+            service_name=_environment("ECS_SERVICE_NAME"),
+            ecr_repository_name=_environment("ECR_REPOSITORY_NAME"),
+            runtime_stack_name=_environment("RUNTIME_STACK_NAME"),
+            buckets={
+                "web": _environment("WEB_BUCKET_NAME"),
+                "media": _environment("MEDIA_BUCKET_NAME"),
+                "release": _environment("RELEASE_BUNDLE_BUCKET_NAME"),
+            },
+            tables={
+                "debate": _environment("SOURCE_TABLE_NAME"),
+                "archive": _environment("ARCHIVE_TABLE_NAME"),
+                "statistics": _environment("STATISTICS_TABLE_NAME"),
+                "session": _environment("SESSION_TABLE_NAME"),
+            },
+            functions=_environment_mapping("ADMIN_STATUS_FUNCTIONS_JSON"),
+            records_public_hostname=_environment("RECORDS_PUBLIC_HOSTNAME"),
+            projector_dlq_url=_environment("PROJECTOR_DLQ_URL"),
+            alarm_prefix=_environment("ADMIN_ALARM_PREFIX"),
+        )
+        source = AwsAdminStatusSource(
+            configuration=configuration,
+            ecs=boto3.client("ecs", region_name=region, config=SDK_CONFIG),
+            cloudformation=boto3.client(
+                "cloudformation",
+                region_name=region,
+                config=SDK_CONFIG,
+            ),
+            ecr=boto3.client("ecr", region_name=region, config=SDK_CONFIG),
+            inspector=boto3.client("inspector2", region_name=region, config=SDK_CONFIG),
+            s3=_regional_s3_client(),
+            dynamodb=dynamodb,
+            lambda_client=boto3.client("lambda", region_name=region, config=SDK_CONFIG),
+            cloudfront=boto3.client("cloudfront", region_name="us-east-1", config=SDK_CONFIG),
+            acm=boto3.client("acm", region_name="us-east-1", config=SDK_CONFIG),
+            sqs=boto3.client("sqs", region_name=region, config=SDK_CONFIG),
+            cloudwatch=boto3.client("cloudwatch", region_name=region, config=SDK_CONFIG),
+            cloudwatch_global=boto3.client(
+                "cloudwatch",
+                region_name="us-east-1",
+                config=SDK_CONFIG,
+            ),
+        )
+        _ADMIN_STATUS_CONTROLLER = AdminStatusHttpController(
+            authorizer=AdminAuthorizer(
+                store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
+                configuration=_admin_security_configuration(ssm),
+            ),
+            status=AdminStatusService(source),
+        )
+    return _ADMIN_STATUS_CONTROLLER
+
+
+def _admin_security_configuration(ssm: Any) -> Any:
+    return AdminSecurityConfigurationRepository(
+        ssm,
+        identity_parameter_name=_environment("IDENTITY_HMAC_PARAMETER_NAME"),
+        session_key_parameter_name=_environment("SESSION_KEY_PARAMETER_NAME"),
+        oauth_parameter_name=_environment("OAUTH_CONFIG_PARAMETER_NAME"),
+        admin_user_id_parameter_name=_environment("ADMIN_DISCORD_USER_ID_PARAMETER_NAME"),
+    ).load()
 
 
 def _build_projector(
@@ -382,6 +485,40 @@ def _environment(name: str) -> str:
     if not value:
         raise RuntimeError(f"required environment variable is missing: {name}")
     return value
+
+
+def _environment_mapping(name: str) -> dict[str, str]:
+    try:
+        value = json.loads(_environment(name))
+    except TypeError, ValueError, json.JSONDecodeError:
+        raise RuntimeError(f"required environment variable is invalid: {name}") from None
+    if (
+        not isinstance(value, dict)
+        or not value
+        or any(
+            not isinstance(key, str) or not key or not isinstance(item, str) or not item
+            for key, item in value.items()
+        )
+    ):
+        raise RuntimeError(f"required environment variable is invalid: {name}")
+    return value
+
+
+def _content_free_http_failure(
+    event: Mapping[str, Any],
+    *,
+    code: str,
+    log_event: str,
+    error: Exception,
+) -> dict[str, Any]:
+    """Return a stable boundary error without serializing exception inputs or causes."""
+
+    _log(event=log_event, error_type=type(error).__name__)
+    context = event.get("requestContext")
+    request_id = context.get("requestId") if isinstance(context, Mapping) else None
+    if not isinstance(request_id, str) or not request_id:
+        request_id = "unavailable"
+    return error_response(503, code, request_id)
 
 
 def _regional_s3_client() -> Any:

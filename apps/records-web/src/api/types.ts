@@ -122,18 +122,53 @@ export type SessionResponse =
   | {
       readonly schemaVersion: 1;
       readonly authenticated: false;
+      readonly isAdmin?: false;
       readonly user: null;
       readonly csrfToken: null;
     }
   | {
       readonly schemaVersion: 1;
       readonly authenticated: true;
+      readonly isAdmin?: boolean;
       readonly user: {
         readonly displayName: string;
         readonly avatar: AvatarRef;
       };
       readonly csrfToken: string;
     };
+
+export type AdminService =
+  | "ecs"
+  | "ecr"
+  | "inspector"
+  | "s3"
+  | "dynamodb"
+  | "lambda"
+  | "cloudfront"
+  | "sqs";
+export type AdminHealthState = "healthy" | "warning" | "critical" | "unknown";
+
+export interface AdminStatusResponse {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly expiresAt: string;
+  readonly stale: boolean;
+  readonly overall: {
+    readonly state: AdminHealthState;
+    readonly criticalAlarms: number;
+    readonly warningAlarms: number;
+    readonly partial: boolean;
+  };
+  readonly sections: readonly {
+    readonly service: AdminService;
+    readonly state: AdminHealthState;
+    readonly summary: string;
+    readonly metrics: readonly {
+      readonly name: string;
+      readonly value: string | number | boolean | null;
+    }[];
+  }[];
+}
 
 export interface RecordListFilters {
   readonly cursor?: string;

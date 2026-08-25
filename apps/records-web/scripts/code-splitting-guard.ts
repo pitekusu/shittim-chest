@@ -27,6 +27,10 @@ const ROUTES = {
       "/src/generated/costs-response-validator.mjs",
     ],
   },
+  AdminPage: {
+    facade: "/src/routes/AdminPage.tsx",
+    ownedModules: ["/src/generated/admin-status-response-validator.mjs"],
+  },
 } as const;
 
 const INITIAL_MODULES = [

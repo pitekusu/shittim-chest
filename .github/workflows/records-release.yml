@@ -197,6 +197,7 @@ jobs:
           action-timeout-s: 60
       - name: Verify Records deployment account and parameter metadata
         env:
+          ADMIN_DISCORD_ID_PARAMETER_NAME: /shittim-chest/production/records/admin/discord-user-id
           IDENTITY_PARAMETER_NAME: /shittim-chest/production/records/identity-hmac-key
           OAUTH_CLIENT_SECRET_PARAMETER_NAME: /shittim-chest/production/records/discord/client-secret
           OAUTH_CONFIG_PARAMETER_NAME: /shittim-chest/production/records/discord/oauth/v0001
@@ -210,6 +211,7 @@ jobs:
           stream_account=$(cut -d: -f5 <<< "${SOURCE_STREAM_ARN}")
           test "${stream_account}" = "${account}"
           for name in \
+            "${ADMIN_DISCORD_ID_PARAMETER_NAME}" \
             "${IDENTITY_PARAMETER_NAME}" \
             "${PRESENTATION_PARAMETER_NAME}" \
             "${OAUTH_CONFIG_PARAMETER_NAME}" \
@@ -345,7 +347,8 @@ jobs:
                 --expected-parameter "RecordsBundleBucketName=${ASSET_BUCKET}" \
                 --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
                 --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}" \
-                --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}"
+                --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}" \
+                --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}"
             elif [ "${logical_name}" = edge ]; then
               uv run --project services/records --frozen python \
                 tools/release_supply_chain.py validate-change-set \
@@ -416,7 +419,8 @@ jobs:
               ParameterKey=RecordsBundleBucketName,ParameterValue="${ASSET_BUCKET}" \
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
               ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}" \
-              ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}"
+              ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}" \
+              ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}"
           create_plan edge ShittimChest-Prod-RecordsEdge \
             "${EDGE_CHANGE_SET}" "${edge_region}" "${EDGE_EXECUTION_ROLE_ARN}" \
             "${edge_bucket}" "${edge_key}" \
@@ -755,11 +759,11 @@ jobs:
             --dump-header "${RUNNER_TEMP}/records-session.headers" \
             --output "${RUNNER_TEMP}/records-session.json" \
             --write-out '%{http_code}' \
-            "${endpoint}/api/v1/session")
+            "${endpoint}/api/v1/session?contract=admin-v1")
           test "${session_status}" = 200
           jq --exit-status \
             '.schemaVersion == 1 and .authenticated == false and
-             .user == null and .csrfToken == null' \
+             .user == null and .csrfToken == null and .isAdmin == false' \
             "${RUNNER_TEMP}/records-session.json" >/dev/null
           grep --ignore-case --quiet '^cache-control: private, no-store' \
             "${RUNNER_TEMP}/records-session.headers"
@@ -776,6 +780,16 @@ jobs:
           test "${records_status}" = 401
           jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
             "${RUNNER_TEMP}/records-list.json" >/dev/null
+          admin_status=$(curl --silent --show-error \
+            --dump-header "${RUNNER_TEMP}/records-admin-status.headers" \
+            --output "${RUNNER_TEMP}/records-admin-status.json" \
+            --write-out '%{http_code}' \
+            "${endpoint}/api/v1/admin/status")
+          test "${admin_status}" = 401
+          jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
+            "${RUNNER_TEMP}/records-admin-status.json" >/dev/null
+          grep --ignore-case --quiet '^cache-control: private, no-store' \
+            "${RUNNER_TEMP}/records-admin-status.headers"
       - name: Restore the previous Records entry point after a post-publish failure
         if: failure()
         continue-on-error: true

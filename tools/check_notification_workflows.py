@@ -1298,6 +1298,13 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError("Records Release must reject an active ROLLBACK_COMPLETE stack")
     if any(marker not in plan_step for marker in stack_status_markers):
         raise WorkflowPolicyError("Records Release must classify a named stack by StackStatus")
+    if (
+        "records_distribution_id=" in plan_step
+        or '--expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}"' not in plan_step
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must allow Edge recovery without a pre-existing distribution"
+        )
 
     release_markers = (
         "name: Records Release",
@@ -1323,6 +1330,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "/shittim-chest/production/records/session-key",
         "/shittim-chest/production/records/openai/admin-key",
         "/shittim-chest/production/records/openai/project-id",
+        "/shittim-chest/production/records/admin/discord-user-id",
         '.[0].Name == $name and .[0].Type == "SecureString" and',
         '.[0].Tier == "Standard" and (.[0].Version | type == "number" and . >= 1)',
         "records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful",
@@ -1369,11 +1377,15 @@ def _validate_records_workflows(directory: Path) -> None:
         "Clean up only unexecuted Records Change Sets",
         "Confirm this Records release has no unexecuted Change Sets",
         "RecordsBundleCodeSha256",
+        "RecordsPublicHostname",
+        'ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}"',
         "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w0)",
         '--expected-parameter "RecordsBundleCodeSha256=${bundle_code_sha256}"',
         "Verify anonymous and protected Records API boundaries",
-        '"${endpoint}/api/v1/session"',
+        '"${endpoint}/api/v1/session?contract=admin-v1"',
         '"${endpoint}/api/v1/records"',
+        '"${endpoint}/api/v1/admin/status"',
+        ".isAdmin == false",
         '.error.code == "AUTHENTICATION_REQUIRED"',
     )
     if any(marker not in release for marker in release_markers):

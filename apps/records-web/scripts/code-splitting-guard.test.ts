@@ -49,6 +49,16 @@ function canonicalChunks(): GuardChunk[] {
         `${root}/src/generated/costs-response-validator.mjs`,
       ],
     },
+    {
+      facadeModuleId: `${root}/src/routes/AdminPage.tsx`,
+      fileName: "assets/AdminPage.js",
+      imports: ["assets/index.js"],
+      isEntry: false,
+      moduleIds: [
+        `${root}/src/routes/AdminPage.tsx`,
+        `${root}/src/generated/admin-status-response-validator.mjs`,
+      ],
+    },
   ];
 }
 
@@ -82,6 +92,16 @@ describe("code splitting module ownership", () => {
 
     expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
       "code_splitting_module_graph_shared_route_module",
+    );
+  });
+
+  test("rejects an Admin validator hoisted into the initial entry", () => {
+    const chunks = canonicalChunks();
+    chunks[0]?.moduleIds.push(`${root}/src/generated/admin-status-response-validator.mjs`);
+    chunks[4]?.moduleIds.splice(1, 1);
+
+    expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
+      "code_splitting_module_graph_wrong_owner",
     );
   });
 });

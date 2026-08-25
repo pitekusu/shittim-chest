@@ -125,6 +125,7 @@ def configuration() -> AuthConfiguration:
     return AuthConfiguration(
         identity_hmac_key=IDENTITY_KEY,
         session_hmac_key=SESSION_KEY,
+        admin_requester_key=derive_requester_key(IDENTITY_KEY, USER_ID),
         oauth=RecordsOAuthConfig(
             schema_version=1,
             client_id=CLIENT_ID,
@@ -186,6 +187,10 @@ def test_return_to_rejects_paths_outside_the_spa_allowlist(value: str) -> None:
         validate_return_to(value)
 
     assert caught.value.code == "return_to_invalid"
+
+
+def test_admin_route_is_a_valid_oauth_return_path() -> None:
+    assert validate_return_to("/admin") == "/admin"
 
 
 def test_callback_claims_once_and_stores_only_hashed_session_values() -> None:

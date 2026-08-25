@@ -7,7 +7,7 @@ function isSessionResponse(value: unknown): value is SessionResponse {
 }
 
 export async function getSession(): Promise<SessionResponse> {
-  return requestJson("/api/v1/session", isSessionResponse);
+  return requestJson("/api/v1/session?contract=admin-v1", isSessionResponse);
 }
 
 export async function logout(csrfToken: string): Promise<void> {

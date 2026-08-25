@@ -71,10 +71,11 @@ export function recordDetail() {
   };
 }
 
-export function authenticatedSession(): SessionResponse & { authenticated: true } {
+export function authenticatedSession(isAdmin = false): SessionResponse & { authenticated: true } {
   return {
     schemaVersion: 1,
     authenticated: true,
+    isAdmin,
     user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
     csrfToken: "csrf-token",
   };
@@ -182,11 +183,14 @@ export function mockApi(
       const path =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       requests.push(path);
-      if (path === "/api/v1/session") return Promise.resolve(response(currentSession));
+      if (path === "/api/v1/session?contract=admin-v1") {
+        return Promise.resolve(response(currentSession));
+      }
       if (path === "/api/v1/logout") {
         currentSession = {
           schemaVersion: 1,
           authenticated: false,
+          isAdmin: false,
           user: null,
           csrfToken: null,
         };

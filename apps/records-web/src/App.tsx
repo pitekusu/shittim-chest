@@ -27,6 +27,7 @@ import { useRecordsTheme, type Theme } from "./theme";
 const RecordsHome = lazy(() => import("./routes/RecordsHome"));
 const RecordDetail = lazy(() => import("./routes/RecordDetail"));
 const RankingsPage = lazy(() => import("./routes/RankingsPage"));
+const AdminPage = lazy(() => import("./routes/AdminPage"));
 
 function LoadingScreen(): React.JSX.Element {
   return (
@@ -82,6 +83,12 @@ function AuthenticatedRoutes({
               <Route path="/" element={<RecordsHome />} />
               <Route path="/records/:recordId" element={<RecordDetail />} />
               <Route path="/insights" element={<RankingsPage />} />
+              <Route
+                path="/admin"
+                element={
+                  <AdminPage isAdmin={session.isAdmin === true} csrfToken={session.csrfToken} />
+                }
+              />
               <Route path="/login" element={<Navigate to="/" replace />} />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
@@ -116,6 +123,7 @@ function ApplicationRoutes({
     client.setQueryData<SessionResponse>(SESSION_QUERY_KEY, {
       schemaVersion: 1,
       authenticated: false,
+      isAdmin: false,
       user: null,
       csrfToken: null,
     });

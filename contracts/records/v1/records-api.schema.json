@@ -1,5 +1,172 @@
 {
   "$defs": {
+    "AdminStatusMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "AdminStatusMetric",
+      "type": "object"
+    },
+    "AdminStatusOverall": {
+      "additionalProperties": false,
+      "properties": {
+        "criticalAlarms": {
+          "minimum": 0,
+          "title": "Criticalalarms",
+          "type": "integer"
+        },
+        "partial": {
+          "title": "Partial",
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "healthy",
+            "warning",
+            "critical",
+            "unknown"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "warningAlarms": {
+          "minimum": 0,
+          "title": "Warningalarms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "criticalAlarms",
+        "warningAlarms",
+        "partial"
+      ],
+      "title": "AdminStatusOverall",
+      "type": "object"
+    },
+    "AdminStatusResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "generatedAt": {
+          "format": "date-time",
+          "title": "Generatedat",
+          "type": "string"
+        },
+        "overall": {
+          "$ref": "#/$defs/AdminStatusOverall"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/AdminStatusSection"
+          },
+          "title": "Sections",
+          "type": "array"
+        },
+        "stale": {
+          "title": "Stale",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "generatedAt",
+        "expiresAt",
+        "stale",
+        "overall",
+        "sections"
+      ],
+      "title": "AdminStatusResponse",
+      "type": "object"
+    },
+    "AdminStatusSection": {
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/AdminStatusMetric"
+          },
+          "title": "Metrics",
+          "type": "array"
+        },
+        "service": {
+          "enum": [
+            "ecs",
+            "ecr",
+            "inspector",
+            "s3",
+            "dynamodb",
+            "lambda",
+            "cloudfront",
+            "sqs"
+          ],
+          "title": "Service",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "healthy",
+            "warning",
+            "critical",
+            "unknown"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "state",
+        "summary",
+        "metrics"
+      ],
+      "title": "AdminStatusSection",
+      "type": "object"
+    },
     "AnonymousSession": {
       "additionalProperties": false,
       "properties": {
@@ -12,6 +179,12 @@
           "default": null,
           "title": "Csrftoken",
           "type": "null"
+        },
+        "isAdmin": {
+          "const": false,
+          "default": false,
+          "title": "Isadmin",
+          "type": "boolean"
         },
         "schemaVersion": {
           "const": 1,
@@ -44,6 +217,11 @@
           "pattern": "\\S",
           "title": "Csrftoken",
           "type": "string"
+        },
+        "isAdmin": {
+          "default": false,
+          "title": "Isadmin",
+          "type": "boolean"
         },
         "schemaVersion": {
           "const": 1,
@@ -1338,6 +1516,9 @@
     },
     {
       "$ref": "#/$defs/SessionResponse"
+    },
+    {
+      "$ref": "#/$defs/AdminStatusResponse"
     },
     {
       "$ref": "#/$defs/ErrorResponse"

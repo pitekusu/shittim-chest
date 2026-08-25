@@ -84,20 +84,34 @@ export function Layout({
           <BrandMark compact />
           <ProductName />
         </Link>
-        <nav>
-          <NavLink
-            className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
-            to="/"
-            end
-          >
-            議論の記録
-          </NavLink>
-          <NavLink
-            className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
-            to="/insights"
-          >
-            いろいろな記録
-          </NavLink>
+        <nav className={styles.sidebarNavigation}>
+          <div className={styles.primaryNavigation}>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/"
+              end
+            >
+              議論の記録
+            </NavLink>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/insights"
+            >
+              いろいろな記録
+            </NavLink>
+          </div>
+          <section className={styles.systemAccess} aria-labelledby="system-access-label">
+            <p className={styles.systemAccessLabel} id="system-access-label" lang="en">
+              SYSTEM ACCESS
+            </p>
+            <NavLink
+              aria-label="管理コンソール"
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/admin"
+            >
+              管理コンソール
+            </NavLink>
+          </section>
         </nav>
         <div className={styles.sidebarFooter}>
           <ThemeSwitch theme={theme} onToggle={onThemeToggle} />
@@ -126,6 +140,15 @@ export function Layout({
           to="/insights"
         >
           いろいろ
+        </NavLink>
+        <NavLink
+          aria-label="管理コンソール"
+          className={({ isActive }) =>
+            `${isActive ? styles.navActive : styles.navLink} ${styles.mobileAdminLink}`
+          }
+          to="/admin"
+        >
+          <span>管理コンソール</span>
         </NavLink>
         <ThemeSwitch compact theme={theme} onToggle={onThemeToggle} />
         <button className={styles.mobileLogout} type="button" lang="en" onClick={onLogout}>
