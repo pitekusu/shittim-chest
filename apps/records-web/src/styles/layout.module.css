@@ -43,7 +43,8 @@
   line-height: 1.45;
 }
 
-.sidebar nav {
+.sidebarNavigation,
+.primaryNavigation {
   display: grid;
   gap: 8px;
 }
@@ -65,23 +66,49 @@
   color: var(--records-ink-900);
 }
 
-.adminLink {
+.systemAccess {
+  display: grid;
   gap: 9px;
-  font-family: var(--records-font-display);
-  font-size: 0.7rem;
-  font-weight: 400;
-  letter-spacing: 0.11em;
+  margin-top: 26px;
 }
 
-.adminLink svg {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.55;
+.systemAccessLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 5px;
+  color: var(--records-ink-600);
+  font-family: var(--records-font-display);
+  font-size: 0.56rem;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  opacity: 0.74;
+  white-space: nowrap;
+}
+
+.systemAccessLabel::before,
+.systemAccessLabel::after {
+  height: 8px;
+  flex: 1 1 auto;
+  background: var(--records-cyan-ink);
+  clip-path: polygon(
+    0 44%,
+    calc(100% - 14px) 44%,
+    calc(100% - 10px) 0,
+    calc(100% - 6px) 44%,
+    100% 44%,
+    100% 56%,
+    calc(100% - 6px) 56%,
+    calc(100% - 10px) 100%,
+    calc(100% - 14px) 56%,
+    0 56%
+  );
+  content: "";
+  opacity: 0.52;
+}
+
+.systemAccessLabel::after {
+  transform: scaleX(-1);
 }
 
 .sidebarFooter {
@@ -310,17 +337,11 @@
     font-size: 0.7rem;
     white-space: nowrap;
   }
-  .mobileNav .adminLink {
-    display: grid;
-    gap: 1px;
-    align-content: center;
-    justify-items: center;
-    font-size: 0.52rem;
-    letter-spacing: 0.06em;
-  }
-  .mobileNav .adminLink svg {
-    width: 18px;
-    height: 18px;
+  .mobileNav .mobileAdminLink {
+    padding-inline: 2px;
+    font-size: 0.62rem;
+    line-height: 1.25;
+    white-space: normal;
   }
   .mobileNav .themeSwitchCompact {
     width: 100%;

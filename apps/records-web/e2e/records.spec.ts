@@ -1316,7 +1316,7 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   }
 });
 
-test("ADMIN remains reachable in the five-column 320px mobile navigation", async ({
+test("management console remains reachable in the five-column 320px mobile navigation", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
@@ -1331,7 +1331,9 @@ test("ADMIN remains reachable in the five-column 320px mobile navigation", async
   });
   await expect(mobileNavigation).toBeVisible();
   await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(5);
-  await expect(mobileNavigation.getByRole("link", { name: "ADMIN" })).toBeVisible();
+  const adminLink = mobileNavigation.getByRole("link", { name: "管理コンソール" });
+  await expect(adminLink).toBeVisible();
+  await expect(adminLink).toHaveText("管理コンソール");
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,

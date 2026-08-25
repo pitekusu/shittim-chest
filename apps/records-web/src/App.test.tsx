@@ -36,7 +36,14 @@ describe("App shell", () => {
 
     expect(await screen.findByRole("heading", { name: "ACCESS DENIED" })).toBeVisible();
     expect(screen.getByText("この画面を利用する権限がありません。")).toBeVisible();
-    expect(screen.getAllByRole("link", { name: "ADMIN" })).toHaveLength(2);
+    const adminLinks = screen.getAllByRole("link", { name: "管理コンソール" });
+    expect(adminLinks).toHaveLength(2);
+    for (const link of adminLinks) {
+      expect(link).toHaveTextContent("管理コンソール");
+      expect(link).not.toHaveTextContent("ACTIVE");
+      expect(link).not.toHaveTextContent("ADMIN");
+    }
+    expect(screen.getByText("SYSTEM ACCESS")).toBeVisible();
     expect(requests).toEqual(["/api/v1/session"]);
   });
 

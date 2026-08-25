@@ -25,16 +25,6 @@ function MoonIcon() {
   );
 }
 
-function AdminIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M12 2.75 21.25 12 12 21.25 2.75 12 12 2.75Z" />
-      <circle cx="12" cy="10.25" r="2.15" />
-      <path d="M12 12.4v4.15" />
-    </svg>
-  );
-}
-
 export function ThemeSwitch({
   theme,
   compact = false,
@@ -94,30 +84,34 @@ export function Layout({
           <BrandMark compact />
           <ProductName />
         </Link>
-        <nav>
-          <NavLink
-            className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
-            to="/"
-            end
-          >
-            議論の記録
-          </NavLink>
-          <NavLink
-            className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
-            to="/insights"
-          >
-            いろいろな記録
-          </NavLink>
-          <NavLink
-            className={({ isActive }) =>
-              `${isActive ? styles.navActive : styles.navLink} ${styles.adminLink}`
-            }
-            to="/admin"
-            lang="en"
-          >
-            <AdminIcon />
-            <span>ADMIN</span>
-          </NavLink>
+        <nav className={styles.sidebarNavigation}>
+          <div className={styles.primaryNavigation}>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/"
+              end
+            >
+              議論の記録
+            </NavLink>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/insights"
+            >
+              いろいろな記録
+            </NavLink>
+          </div>
+          <section className={styles.systemAccess} aria-labelledby="system-access-label">
+            <p className={styles.systemAccessLabel} id="system-access-label" lang="en">
+              SYSTEM ACCESS
+            </p>
+            <NavLink
+              aria-label="管理コンソール"
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/admin"
+            >
+              管理コンソール
+            </NavLink>
+          </section>
         </nav>
         <div className={styles.sidebarFooter}>
           <ThemeSwitch theme={theme} onToggle={onThemeToggle} />
@@ -148,14 +142,13 @@ export function Layout({
           いろいろ
         </NavLink>
         <NavLink
+          aria-label="管理コンソール"
           className={({ isActive }) =>
-            `${isActive ? styles.navActive : styles.navLink} ${styles.adminLink}`
+            `${isActive ? styles.navActive : styles.navLink} ${styles.mobileAdminLink}`
           }
           to="/admin"
-          lang="en"
         >
-          <AdminIcon />
-          <span>ADMIN</span>
+          <span>管理コンソール</span>
         </NavLink>
         <ThemeSwitch compact theme={theme} onToggle={onThemeToggle} />
         <button className={styles.mobileLogout} type="button" lang="en" onClick={onLogout}>
