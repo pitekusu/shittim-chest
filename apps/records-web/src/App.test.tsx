@@ -28,6 +28,18 @@ afterEach(() => {
 });
 
 describe("App shell", () => {
+  it("shows ADMIN to every member and renders a branded denial without Admin API calls", async () => {
+    window.history.replaceState(null, "", "/admin");
+    const requests = mockApi();
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "ACCESS DENIED" })).toBeVisible();
+    expect(screen.getByText("この画面を利用する権限がありません。")).toBeVisible();
+    expect(screen.getAllByRole("link", { name: "ADMIN" })).toHaveLength(2);
+    expect(requests).toEqual(["/api/v1/session"]);
+  });
+
   it("coordinates branded motion and heading focus across internal routes", async () => {
     mockApi();
     const { container } = render(<App />);
@@ -159,7 +171,13 @@ describe("App shell", () => {
   });
 
   it("shows the approved login page for an anonymous Guild visitor", async () => {
-    mockApi({ schemaVersion: 1, authenticated: false, user: null, csrfToken: null });
+    mockApi({
+      schemaVersion: 1,
+      authenticated: false,
+      isAdmin: false,
+      user: null,
+      csrfToken: null,
+    });
 
     render(<App />);
 
@@ -181,7 +199,13 @@ describe("App shell", () => {
 
   it("returns an anonymous visitor to the requested insights page after login", async () => {
     window.history.replaceState(null, "", "/insights");
-    mockApi({ schemaVersion: 1, authenticated: false, user: null, csrfToken: null });
+    mockApi({
+      schemaVersion: 1,
+      authenticated: false,
+      isAdmin: false,
+      user: null,
+      csrfToken: null,
+    });
 
     render(<App />);
 
@@ -230,6 +254,7 @@ describe("App shell", () => {
     );
     expect(screen.queryByText("GOODBYE, SENSEI.")).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/logout");
+    expect(sessionStorage).toHaveLength(0);
   });
 
   it("returns to login when a protected request reports an expired session", async () => {
@@ -244,7 +269,13 @@ describe("App shell", () => {
           const session =
             sessionRequests === 1
               ? authenticatedSession()
-              : { schemaVersion: 1, authenticated: false, user: null, csrfToken: null };
+              : {
+                  schemaVersion: 1,
+                  authenticated: false,
+                  isAdmin: false,
+                  user: null,
+                  csrfToken: null,
+                };
           return Promise.resolve(response(session));
         }
         if (path.startsWith("/api/v1/records?")) {

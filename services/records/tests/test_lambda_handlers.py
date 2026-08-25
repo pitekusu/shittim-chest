@@ -5,10 +5,11 @@ from __future__ import annotations
 import subprocess
 import sys
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pytest
 from botocore.exceptions import ClientError
+from pydantic import BaseModel, Field, ValidationError
 
 from shittim_records import lambda_handlers
 from shittim_records.costs import (
@@ -267,6 +268,52 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
         "statusCode": 200,
         "event": event,
     }
+
+
+@pytest.mark.parametrize(
+    ("factory_name", "handler_name", "expected_code"),
+    (
+        ("_auth_controller", "auth_handler", "RECORDS_UNAVAILABLE"),
+        (
+            "_admin_status_controller",
+            "admin_status_handler",
+            "ADMIN_STATUS_UNAVAILABLE",
+        ),
+    ),
+)
+def test_http_handler_controller_validation_failure_is_content_free(
+    monkeypatch: Any,
+    caplog: pytest.LogCaptureFixture,
+    factory_name: str,
+    handler_name: str,
+    expected_code: str,
+) -> None:
+    private_user_id = "123456789" + "01234567"
+
+    class PrivateConfiguration(BaseModel):
+        admin_id: Annotated[str, Field(max_length=1)]
+
+    with pytest.raises(ValidationError) as validation:
+        PrivateConfiguration.model_validate({"admin_id": private_user_id})
+
+    def fail() -> None:
+        raise validation.value
+
+    monkeypatch.setattr(lambda_handlers, factory_name, fail)
+    handler = getattr(lambda_handlers, handler_name)
+
+    response = handler(
+        {
+            "routeKey": "GET /api/v1/admin/status",
+            "requestContext": {"requestId": "opaque-request"},
+        },
+        object(),
+    )
+
+    assert response["statusCode"] == 503
+    assert expected_code in response["body"]
+    assert private_user_id not in response["body"]
+    assert private_user_id not in caplog.text
 
 
 def test_s3_presigning_client_uses_the_lambda_region_endpoint(monkeypatch: Any) -> None:

@@ -65,6 +65,25 @@
   color: var(--records-ink-900);
 }
 
+.adminLink {
+  gap: 9px;
+  font-family: var(--records-font-display);
+  font-size: 0.7rem;
+  font-weight: 400;
+  letter-spacing: 0.11em;
+}
+
+.adminLink svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.55;
+}
+
 .sidebarFooter {
   display: grid;
   gap: 14px;
@@ -275,8 +294,8 @@
     bottom: 10px;
     left: 12px;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 52px auto;
-    gap: 8px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
     padding: 7px;
     border: 1px solid var(--records-panel-border-soft);
     border-radius: 18px;
@@ -287,20 +306,37 @@
   .mobileNav .navLink,
   .mobileNav .navActive {
     justify-content: center;
-    padding-inline: 6px;
-    font-size: 0.78rem;
+    padding-inline: 3px;
+    font-size: 0.7rem;
     white-space: nowrap;
+  }
+  .mobileNav .adminLink {
+    display: grid;
+    gap: 1px;
+    align-content: center;
+    justify-items: center;
+    font-size: 0.52rem;
+    letter-spacing: 0.06em;
+  }
+  .mobileNav .adminLink svg {
+    width: 18px;
+    height: 18px;
+  }
+  .mobileNav .themeSwitchCompact {
+    width: 100%;
+    min-width: 0;
   }
   .mobileLogout {
     min-height: 48px;
-    padding: 0 16px;
+    min-width: 0;
+    padding: 0 3px;
     border: 1px solid var(--records-line);
     border-radius: 14px;
     background: var(--records-control-background-quiet);
     color: var(--records-ink-600);
     cursor: pointer;
     font-family: var(--records-font-display);
-    font-size: 0.65rem;
+    font-size: 0.55rem;
     font-weight: 400;
     letter-spacing: 0.1em;
   }

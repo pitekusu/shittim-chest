@@ -22,7 +22,8 @@ export function useAuthenticationRecovery(error: unknown): void {
         predicate: (query) =>
           query.queryKey[0] === "records" ||
           query.queryKey[0] === "record" ||
-          query.queryKey[0] === "rankings",
+          query.queryKey[0] === "rankings" ||
+          query.queryKey[0] === "admin",
       });
     });
   }, [client, error]);

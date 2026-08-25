@@ -92,6 +92,7 @@ describe("routeMotionKind", () => {
   it("maps every Records route to its branded motion kind", () => {
     expect(routeMotionKind("/")).toBe("archive");
     expect(routeMotionKind("/insights")).toBe("insights");
+    expect(routeMotionKind("/admin")).toBe("admin");
     expect(routeMotionKind(`/records/${"r".repeat(43)}`)).toBe("detail");
     expect(routeMotionKind("/missing")).toBe("other");
   });

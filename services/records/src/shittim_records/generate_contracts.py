@@ -90,6 +90,26 @@ def _parameter(
     }
 
 
+def _admin_write_headers() -> list[dict[str, Any]]:
+    return [
+        _parameter(
+            "X-CSRF-Token",
+            "header",
+            {"type": "string", "minLength": 1},
+            required=True,
+        ),
+        _parameter(
+            "X-Idempotency-Key",
+            "header",
+            {
+                "type": "string",
+                "pattern": r"^[A-Za-z0-9._~-]{16,128}$",
+            },
+            required=True,
+        ),
+    ]
+
+
 def build_openapi() -> dict[str, Any]:
     error_responses = {
         code: _response("ErrorResponse", description)
@@ -250,6 +270,31 @@ def build_openapi() -> dict[str, Any]:
                     ],
                     "responses": {
                         "200": _response("CostsResponse", "Estimated Records costs in JPY"),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/admin/status": {
+                "get": {
+                    "operationId": "getAdminStatus",
+                    "responses": {
+                        "200": _response(
+                            "AdminStatusResponse",
+                            "Sanitized allowlisted AWS status",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/admin/status/refresh": {
+                "post": {
+                    "operationId": "refreshAdminStatus",
+                    "parameters": _admin_write_headers(),
+                    "responses": {
+                        "200": _response(
+                            "AdminStatusResponse",
+                            "Sanitized allowlisted AWS status",
+                        ),
                         **error_responses,
                     },
                 }

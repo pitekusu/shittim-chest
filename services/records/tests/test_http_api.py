@@ -81,6 +81,9 @@ class FakeAuthService:
     def avatar_url(self, *, asset_key: str) -> str:
         return f"https://media.example.invalid/{asset_key}"
 
+    def is_admin(self, session: SessionRecord) -> bool:
+        return session.requester_key == "requester"
+
     def logout(self, **kwargs: Any) -> tuple[str, str]:
         assert kwargs["origin"] == self.allowed_origin
         return "session-clear", "csrf-clear"
@@ -178,6 +181,7 @@ def test_anonymous_session_is_always_200_no_store_without_cookie() -> None:
         "authenticated": False,
         "user": None,
         "csrfToken": None,
+        "isAdmin": False,
     }
 
 
@@ -197,6 +201,7 @@ def test_authenticated_session_returns_csrf_and_short_lived_avatar_url() -> None
 
     payload = json.loads(response["body"])
     assert payload["authenticated"] is True
+    assert payload["isAdmin"] is True
     assert payload["csrfToken"] == "csrf-token"
     assert payload["user"]["avatar"]["kind"] == "image"
     assert "requesterKey" not in repr(payload)

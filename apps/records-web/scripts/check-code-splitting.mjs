@@ -5,10 +5,12 @@ import { gzipSync } from "node:zlib";
 const projectDirectory = fileURLToPath(new URL("..", import.meta.url));
 const outputDirectory = new URL("../dist/", import.meta.url);
 const indexPath = new URL("index.html", outputDirectory);
-const expectedRouteChunks = ["RecordsHome", "RecordDetail", "RankingsPage"];
+const expectedRouteChunks = ["RecordsHome", "RecordDetail", "RankingsPage", "AdminPage"];
 const maximumEntryGzipBytes = 113_560;
 const voteGraphJavaScriptMarker = "vote-graph";
 const voteGraphStyleMarker = "--vote-line";
+const adminJavaScriptMarkers = ["/api/v1/admin/status", "criticalAlarms"];
+const adminStyleMarker = "--admin-panel-marker";
 
 const indexHtml = await readFile(indexPath, "utf8");
 const entryMatch = indexHtml.match(
@@ -103,6 +105,21 @@ if (
   voteGraphStyleOwners[0] !== routeStyleFiles[1]
 ) {
   throw new Error("code_splitting_vote_graph_leaked_outside_record_detail");
+}
+
+for (const marker of adminJavaScriptMarkers) {
+  const owners = [...emittedJavaScript.entries()]
+    .filter(([, contents]) => contents.includes(marker))
+    .map(([fileName]) => fileName);
+  if (owners.length !== 1 || owners[0] !== routeChunkFiles[3]) {
+    throw new Error(`code_splitting_admin_javascript_leaked: ${marker}`);
+  }
+}
+const adminStyleOwners = [...emittedStyles.entries()]
+  .filter(([, contents]) => contents.includes(adminStyleMarker))
+  .map(([fileName]) => fileName);
+if (adminStyleOwners.length !== 1 || adminStyleOwners[0] !== routeStyleFiles[3]) {
+  throw new Error("code_splitting_admin_styles_leaked_outside_admin");
 }
 
 console.log(

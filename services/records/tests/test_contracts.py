@@ -99,6 +99,7 @@ def test_public_contracts_use_camel_case_and_reject_unknown_fields() -> None:
                 },
             },
             "csrfToken": "csrf-example",
+            "isAdmin": True,
         }
     )
 

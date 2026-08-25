@@ -12,6 +12,17 @@ RECORDS_API_SCHEMA_VERSION = 1
 ParticipantSlot = Literal["participant-a", "participant-b", "participant-c"]
 CostStatus = Literal["partial", "final", "unavailable"]
 CostPeriod = Literal["today", "week", "month", "all"]
+AdminHealthState = Literal["healthy", "warning", "critical", "unknown"]
+AdminServiceName = Literal[
+    "ecs",
+    "ecr",
+    "inspector",
+    "s3",
+    "dynamodb",
+    "lambda",
+    "cloudfront",
+    "sqs",
+]
 
 NonEmptyText = Annotated[str, Field(min_length=1, pattern=r"\S")]
 RecordId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
@@ -266,6 +277,7 @@ class AuthenticatedSession(PublicModel):
     authenticated: Literal[True]
     user: SessionUser
     csrf_token: NonEmptyText
+    is_admin: bool
 
 
 class AnonymousSession(PublicModel):
@@ -273,6 +285,7 @@ class AnonymousSession(PublicModel):
     authenticated: Literal[False]
     user: None = None
     csrf_token: None = None
+    is_admin: Literal[False] = False
 
 
 SessionState = AuthenticatedSession | AnonymousSession
@@ -327,6 +340,34 @@ class CostsResponse(PublicModel):
     status: CostStatus
 
 
+class AdminStatusMetric(PublicModel):
+    name: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")]
+    value: str | int | bool | None
+
+
+class AdminStatusSection(PublicModel):
+    service: AdminServiceName
+    state: AdminHealthState
+    summary: Annotated[str, Field(min_length=1, max_length=160, pattern=r"\S")]
+    metrics: tuple[AdminStatusMetric, ...]
+
+
+class AdminStatusOverall(PublicModel):
+    state: AdminHealthState
+    critical_alarms: Annotated[int, Field(ge=0)]
+    warning_alarms: Annotated[int, Field(ge=0)]
+    partial: bool
+
+
+class AdminStatusResponse(PublicModel):
+    schema_version: Literal[1]
+    generated_at: AwareDatetime
+    expires_at: AwareDatetime
+    stale: bool
+    overall: AdminStatusOverall
+    sections: tuple[AdminStatusSection, ...]
+
+
 class ErrorBody(PublicModel):
     code: NonEmptyText
     message: NonEmptyText
@@ -343,5 +384,6 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RankingsResponse,
     CostsResponse,
     SessionResponse,
+    AdminStatusResponse,
     ErrorResponse,
 )

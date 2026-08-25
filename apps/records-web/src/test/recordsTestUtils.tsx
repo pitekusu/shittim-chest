@@ -71,10 +71,11 @@ export function recordDetail() {
   };
 }
 
-export function authenticatedSession(): SessionResponse & { authenticated: true } {
+export function authenticatedSession(isAdmin = false): SessionResponse & { authenticated: true } {
   return {
     schemaVersion: 1,
     authenticated: true,
+    isAdmin,
     user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
     csrfToken: "csrf-token",
   };
@@ -187,6 +188,7 @@ export function mockApi(
         currentSession = {
           schemaVersion: 1,
           authenticated: false,
+          isAdmin: false,
           user: null,
           csrfToken: null,
         };

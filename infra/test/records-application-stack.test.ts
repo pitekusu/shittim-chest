@@ -49,11 +49,11 @@ describe("RecordsApplicationStack", () => {
     expect(checks.validateScope(stack).success).toBe(true);
   });
 
-  test("creates six Python 3.14 ARM64 functions from one immutable S3 version", () => {
+  test("creates seven Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 6);
+    template.resourceCountIs("AWS::Lambda::Function", 7);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
@@ -61,6 +61,7 @@ describe("RecordsApplicationStack", () => {
       "shittim-chest-production-records-ranking",
       "shittim-chest-production-records-cost",
       "shittim-chest-production-records-read",
+      "shittim-chest-production-records-admin-status",
     ]) {
       template.hasResourceProperties("AWS::Lambda::Function", {
         Architectures: ["arm64"],
@@ -80,7 +81,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 7);
+    template.resourceCountIs("AWS::Logs::LogGroup", 8);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
@@ -88,6 +89,7 @@ describe("RecordsApplicationStack", () => {
       "shittim-chest-production-records-ranking",
       "shittim-chest-production-records-cost",
       "shittim-chest-production-records-read",
+      "shittim-chest-production-records-admin-status",
     ]) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
         ([, resource]) =>
@@ -109,13 +111,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes Auth and Read aliases behind exactly eight HTTP API routes", () => {
+  test("publishes three isolated aliases behind exactly ten HTTP API routes", () => {
     const { template } = synthesize();
 
-    template.resourceCountIs("AWS::Lambda::Version", 2);
-    template.resourceCountIs("AWS::Lambda::Alias", 2);
+    template.resourceCountIs("AWS::Lambda::Version", 3);
+    template.resourceCountIs("AWS::Lambda::Alias", 3);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 8);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 10);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -128,6 +130,9 @@ describe("RecordsApplicationStack", () => {
     const serialized = JSON.stringify(template.toJSON());
     expect(serialized).toContain("GET /api/v1/insights/rankings");
     expect(serialized).toContain("GET /api/v1/insights/costs");
+    expect(serialized).not.toContain("/api/v1/admin/prompts");
+    expect(serialized).toContain("GET /api/v1/admin/status");
+    expect(serialized).toContain("POST /api/v1/admin/status/refresh");
     expect(template.toJSON().Parameters.RecordsBundleCodeSha256.Default).toBeUndefined();
     for (const alias of Object.values(template.findResources("AWS::Lambda::Alias"))) {
       expect(alias.Properties.Name).toBe("live");
@@ -287,6 +292,87 @@ describe("RecordsApplicationStack", () => {
     expect(costText).toContain("FX#DAILY");
     expect(costText).not.toContain("dynamodb:DeleteItem");
     expect(costText).not.toContain("dynamodb:Scan");
+  });
+
+  test("keeps ADMIN status access read-only and least privilege", () => {
+    const { template } = synthesize();
+    const policies = template.findResources("AWS::IAM::Policy");
+    const statusPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("AdminStatusFunctionRole"),
+    );
+
+    expect(statusPolicy).toBeDefined();
+    const statusText = JSON.stringify(statusPolicy);
+
+    for (const action of [
+      "acm:DescribeCertificate",
+      "cloudfront:GetDistribution",
+      "cloudwatch:GetMetricData",
+      "cloudwatch:GetMetricStatistics",
+      "dynamodb:DescribeTable",
+      "ecr:DescribeImages",
+      "ecs:DescribeServices",
+      "inspector2:ListCoverage",
+      "inspector2:ListFindings",
+      "lambda:GetFunctionConcurrency",
+      "s3:GetEncryptionConfiguration",
+      "sqs:GetQueueAttributes",
+    ]) {
+      expect(statusText).toContain(action);
+    }
+    expect(statusText).toContain("/records/admin/discord-user-id");
+    expect(statusText).not.toContain("ssm:PutParameter");
+    expect(statusText).not.toContain("dynamodb:PutItem");
+    expect(statusText).not.toContain("dynamodb:UpdateItem");
+    expect(statusText).not.toContain("dynamodb:DeleteItem");
+    expect(statusText).not.toContain("sqs:ReceiveMessage");
+    expect(statusText).not.toContain("lambda:InvokeFunction");
+    expect(statusText).not.toContain("ecs:UpdateService");
+
+    const statusStatements = statusPolicy?.Properties.PolicyDocument.Statement as Array<{
+      readonly Action: string | string[];
+      readonly Condition?: Record<string, unknown>;
+      readonly Resource: unknown;
+    }>;
+    const statusActionsOf = (statement: (typeof statusStatements)[number]) =>
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const statusSessionRead = statusStatements.find(
+      (statement) =>
+        statusActionsOf(statement).includes("dynamodb:GetItem") &&
+        JSON.stringify(statement.Resource).includes(
+          "table/shittim-chest-production-records-sessions",
+        ),
+    );
+    expect(statusSessionRead?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["SESSION#*"] },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+    const statusControlRead = statusStatements.find(
+      (statement) =>
+        statusActionsOf(statement).includes("dynamodb:GetItem") &&
+        statement.Condition !== undefined &&
+        Object.hasOwn(statement.Condition, "ForAllValues:StringEquals"),
+    );
+    expect(statusControlRead?.Condition).toEqual({
+      "ForAllValues:StringEquals": {
+        "dynamodb:LeadingKeys": [
+          "CONTROL#RUNTIME",
+          "CONTROL#DEBATE",
+          "CONTROL#OUTBOX",
+        ],
+      },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+
+    const parameters = template.toJSON().Parameters;
+    for (const name of [
+      "RuntimeImageDigest",
+      "BreakGlassImageDigest",
+      "RecordsDistributionId",
+      "RecordsCertificateArn",
+    ]) {
+      expect(parameters[name].Default).toBeUndefined();
+    }
   });
 
   test("filters completed metadata and bounds every stream retry dimension", () => {

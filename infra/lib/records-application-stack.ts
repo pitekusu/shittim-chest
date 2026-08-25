@@ -23,10 +23,10 @@ import {
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
 
-export interface RecordsApplicationStackProps extends StackProps {
-}
+export interface RecordsApplicationStackProps extends StackProps {}
 
 const BACKFILL_FUNCTION_NAME = "shittim-chest-production-records-backfill";
+const ADMIN_STATUS_FUNCTION_NAME = "shittim-chest-production-records-admin-status";
 const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
 const COST_FUNCTION_NAME = "shittim-chest-production-records-cost";
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
@@ -35,6 +35,7 @@ const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
   public readonly backfillFunction: lambda.Function;
+  public readonly adminStatusFunction: lambda.Function;
   public readonly authFunction: lambda.Function;
   public readonly costFunction: lambda.Function;
   public readonly rankingFunction: lambda.Function;
@@ -73,6 +74,27 @@ export class RecordsApplicationStack extends Stack {
       type: "String",
       allowedPattern: "^[A-Za-z0-9+/]{43}=$",
       description: "Base64-encoded SHA-256 of the immutable Records Lambda bundle",
+    });
+    const recordsDistributionId = new CfnParameter(this, "RecordsDistributionId", {
+      type: "String",
+      allowedPattern: "^[A-Z0-9]{10,30}$",
+      description: "Exact deployed Records CloudFront distribution ID for read-only status",
+    });
+    const recordsCertificateArn = new CfnParameter(this, "RecordsCertificateArn", {
+      type: "String",
+      allowedPattern:
+        "^arn:[^:]+:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]{36}$",
+      description: "Exact deployed Records public certificate ARN for read-only status",
+    });
+    const runtimeImageDigest = new CfnParameter(this, "RuntimeImageDigest", {
+      type: "String",
+      allowedPattern: "^sha256:[0-9a-f]{64}$",
+      description: "Exact production image digest currently bound to the Runtime stack",
+    });
+    const breakGlassImageDigest = new CfnParameter(this, "BreakGlassImageDigest", {
+      type: "String",
+      allowedPattern: "^sha256:[0-9a-f]{64}$",
+      description: "Exact break-glass image digest currently bound to the Runtime stack",
     });
 
     const sourceTable = dynamodb.Table.fromTableAttributes(this, "SourceDebateTable", {
@@ -167,6 +189,13 @@ export class RecordsApplicationStack extends Stack {
         parameterName: "/shittim-chest/production/records/openai/project-id",
       },
     );
+    const adminDiscordIdParameter = ssm.StringParameter.fromSecureStringParameterAttributes(
+      this,
+      "AdminDiscordIdParameter",
+      {
+        parameterName: "/shittim-chest/production/records/admin/discord-user-id",
+      },
+    );
 
     this.projectorFunction = this.functionWithRole({
       id: "ProjectorFunction",
@@ -235,6 +264,7 @@ export class RecordsApplicationStack extends Stack {
         SESSION_TABLE_NAME: sessionTable.tableName,
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         IDENTITY_HMAC_PARAMETER_NAME: identityParameter.parameterName,
+        ADMIN_DISCORD_USER_ID_PARAMETER_NAME: adminDiscordIdParameter.parameterName,
         OAUTH_CONFIG_PARAMETER_NAME: oauthConfigParameter.parameterName,
         OAUTH_CLIENT_SECRET_PARAMETER_NAME: oauthClientSecretParameter.parameterName,
         SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
@@ -254,6 +284,7 @@ export class RecordsApplicationStack extends Stack {
           actions: ["ssm:GetParameters"],
           resources: [
             identityParameter.parameterArn,
+            adminDiscordIdParameter.parameterArn,
             oauthConfigParameter.parameterArn,
             oauthClientSecretParameter.parameterArn,
             sessionKeyParameter.parameterArn,
@@ -446,12 +477,197 @@ export class RecordsApplicationStack extends Stack {
       ),
     );
 
+    const webBucketArn = this.formatArn({
+      service: "s3",
+      region: "",
+      account: "",
+      resource: `shittim-chest-production-records-web-${this.account}`,
+    });
+    const repositoryArn = this.formatArn({
+      service: "ecr",
+      resource: "repository",
+      resourceName: "shittim-chest",
+    });
+    const statusFunctionNames = {
+      image_admission: "shittim-chest-production-image-admission",
+      discord_status: "shittim-chest-production-discord-status-publisher",
+      runtime_reconciler: "shittim-chest-production-runtime-reconciler",
+      discord_ingress: "shittim-chest-production-discord-ingress",
+      records_projector: "shittim-chest-production-records-projector",
+      records_backfill: BACKFILL_FUNCTION_NAME,
+      records_auth: AUTH_FUNCTION_NAME,
+      records_ranking: RANKING_FUNCTION_NAME,
+      records_cost: COST_FUNCTION_NAME,
+      records_read: READ_FUNCTION_NAME,
+      records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
+    } as const;
+    const statusFunctionArns = Object.values(statusFunctionNames).map((functionName) =>
+      this.formatArn({ service: "lambda", resource: "function", resourceName: functionName }),
+    );
+    const ecsServiceArn = this.formatArn({
+      service: "ecs",
+      resource: "service",
+      resourceName: "shittim-chest-production/shittim-chest-production",
+    });
+    this.adminStatusFunction = this.httpFunctionWithRole({
+      id: "AdminStatusFunction",
+      functionName: ADMIN_STATUS_FUNCTION_NAME,
+      handler: "shittim_records.lambda_handlers.admin_status_handler",
+      code,
+      timeout: Duration.seconds(30),
+      reservedConcurrentExecutions: 1,
+      environment: {
+        SOURCE_TABLE_NAME: sourceTable.tableName,
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        SESSION_TABLE_NAME: sessionTable.tableName,
+        IDENTITY_HMAC_PARAMETER_NAME: identityParameter.parameterName,
+        ADMIN_DISCORD_USER_ID_PARAMETER_NAME: adminDiscordIdParameter.parameterName,
+        OAUTH_CONFIG_PARAMETER_NAME: oauthConfigParameter.parameterName,
+        SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
+        MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+        WEB_BUCKET_NAME: `shittim-chest-production-records-web-${this.account}`,
+        RELEASE_BUNDLE_BUCKET_NAME: bundleBucket.bucketName,
+        RECORDS_DISTRIBUTION_ID: recordsDistributionId.valueAsString,
+        RECORDS_CERTIFICATE_ARN: recordsCertificateArn.valueAsString,
+        PROJECTOR_DLQ_URL: projectorDlq.queueUrl,
+        ECS_CLUSTER_NAME: "shittim-chest-production",
+        ECS_SERVICE_NAME: "shittim-chest-production",
+        ECR_REPOSITORY_NAME: "shittim-chest",
+        RUNTIME_IMAGE_DIGEST: runtimeImageDigest.valueAsString,
+        BREAK_GLASS_IMAGE_DIGEST: breakGlassImageDigest.valueAsString,
+        ADMIN_STATUS_FUNCTIONS_JSON: JSON.stringify(statusFunctionNames),
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["SESSION#*"],
+            },
+            Null: {
+              "dynamodb:LeadingKeys": "false",
+            },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": [
+                "CONTROL#RUNTIME",
+                "CONTROL#DEBATE",
+                "CONTROL#OUTBOX",
+              ],
+            },
+            Null: {
+              "dynamodb:LeadingKeys": "false",
+            },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"],
+          resources: [
+            identityParameter.parameterArn,
+            adminDiscordIdParameter.parameterArn,
+            oauthConfigParameter.parameterArn,
+            sessionKeyParameter.parameterArn,
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: [
+            "cloudwatch:DescribeAlarms",
+            "cloudwatch:GetMetricData",
+            "cloudwatch:GetMetricStatistics",
+          ],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ecs:DescribeServices"],
+          resources: [ecsServiceArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ecr:DescribeImages"],
+          resources: [repositoryArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ecr:DescribeRepositories"],
+          resources: [repositoryArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["inspector2:ListCoverage", "inspector2:ListFindings"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          actions: [
+            "s3:GetEncryptionConfiguration",
+            "s3:GetBucketPublicAccessBlock",
+            "s3:GetBucketVersioning",
+          ],
+          resources: [mediaBucket.bucketArn, webBucketArn, bundleBucket.bucketArn],
+        }),
+        new iam.PolicyStatement({
+          actions: [
+            "dynamodb:DescribeContinuousBackups",
+            "dynamodb:DescribeTable",
+            "dynamodb:DescribeTimeToLive",
+          ],
+          resources: [
+            sourceTable.tableArn,
+            archiveTable.tableArn,
+            statisticsTable.tableArn,
+            sessionTable.tableArn,
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["lambda:GetFunctionConcurrency", "lambda:GetFunctionConfiguration"],
+          resources: statusFunctionArns,
+        }),
+        new iam.PolicyStatement({
+          actions: ["cloudfront:GetDistribution", "cloudfront:ListInvalidations"],
+          resources: [
+            this.formatArn({
+              service: "cloudfront",
+              region: "",
+              resource: "distribution",
+              resourceName: recordsDistributionId.valueAsString,
+            }),
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["acm:DescribeCertificate"],
+          resources: [recordsCertificateArn.valueAsString],
+        }),
+        new iam.PolicyStatement({
+          actions: ["sqs:GetQueueAttributes"],
+          resources: [projectorDlq.queueArn],
+        }),
+      ],
+    });
+    for (const [function_, reason] of [
+      [
+        this.adminStatusFunction,
+        "CloudWatch, ECS, ECR repository discovery, and Inspector status APIs do not support complete resource-level scoping; all remaining reads use exact production resources.",
+      ],
+    ] as const) {
+      Validations.of(function_.role!).acknowledge({
+        id: "AwsSolutions-IAM5[Resource::*]",
+        reason,
+      });
+    }
+
     const authVersion = new lambda.Version(this, "AuthVersion", {
       lambda: this.authFunction,
       codeSha256: bundleCodeSha256.valueAsString,
     });
     const readVersion = new lambda.Version(this, "ReadVersion", {
       lambda: this.readFunction,
+      codeSha256: bundleCodeSha256.valueAsString,
+    });
+    const adminStatusVersion = new lambda.Version(this, "AdminStatusVersion", {
+      lambda: this.adminStatusFunction,
       codeSha256: bundleCodeSha256.valueAsString,
     });
     const authAlias = new lambda.Alias(this, "AuthLiveAlias", {
@@ -461,6 +677,10 @@ export class RecordsApplicationStack extends Stack {
     const readAlias = new lambda.Alias(this, "ReadLiveAlias", {
       aliasName: "live",
       version: readVersion,
+    });
+    const adminStatusAlias = new lambda.Alias(this, "AdminStatusLiveAlias", {
+      aliasName: "live",
+      version: adminStatusVersion,
     });
 
     const accessLogs = new logs.LogGroup(this, "RecordsApiAccessLogs", {
@@ -486,6 +706,11 @@ export class RecordsApplicationStack extends Stack {
     const readIntegration = new integrations.HttpLambdaIntegration(
       "ReadIntegration",
       readAlias,
+      { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+    );
+    const adminStatusIntegration = new integrations.HttpLambdaIntegration(
+      "AdminStatusIntegration",
+      adminStatusAlias,
       { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
     );
     for (const path of [
@@ -519,6 +744,16 @@ export class RecordsApplicationStack extends Stack {
       path: "/api/v1/insights/costs",
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/admin/status",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: adminStatusIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/admin/status/refresh",
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: adminStatusIntegration,
     });
     const stage = api.addStage("DefaultStage", {
       stageName: "$default",

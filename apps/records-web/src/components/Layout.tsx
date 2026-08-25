@@ -25,6 +25,16 @@ function MoonIcon() {
   );
 }
 
+function AdminIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 2.75 21.25 12 12 21.25 2.75 12 12 2.75Z" />
+      <circle cx="12" cy="10.25" r="2.15" />
+      <path d="M12 12.4v4.15" />
+    </svg>
+  );
+}
+
 export function ThemeSwitch({
   theme,
   compact = false,
@@ -98,6 +108,16 @@ export function Layout({
           >
             いろいろな記録
           </NavLink>
+          <NavLink
+            className={({ isActive }) =>
+              `${isActive ? styles.navActive : styles.navLink} ${styles.adminLink}`
+            }
+            to="/admin"
+            lang="en"
+          >
+            <AdminIcon />
+            <span>ADMIN</span>
+          </NavLink>
         </nav>
         <div className={styles.sidebarFooter}>
           <ThemeSwitch theme={theme} onToggle={onThemeToggle} />
@@ -126,6 +146,16 @@ export function Layout({
           to="/insights"
         >
           いろいろ
+        </NavLink>
+        <NavLink
+          className={({ isActive }) =>
+            `${isActive ? styles.navActive : styles.navLink} ${styles.adminLink}`
+          }
+          to="/admin"
+          lang="en"
+        >
+          <AdminIcon />
+          <span>ADMIN</span>
         </NavLink>
         <ThemeSwitch compact theme={theme} onToggle={onThemeToggle} />
         <button className={styles.mobileLogout} type="button" lang="en" onClick={onLogout}>

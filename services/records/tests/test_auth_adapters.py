@@ -7,8 +7,10 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from botocore.exceptions import ClientError
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
+from shittim_records.archive import derive_requester_key
 from shittim_records.auth import (
     AuthConfiguration,
     AuthFailure,
@@ -36,6 +38,13 @@ class FakeSsm:
     def get_parameters(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         return self.response
+
+
+def _client_error(code: str, message: str) -> ClientError:
+    return ClientError(
+        {"Error": {"Code": code, "Message": message}},
+        "GetParameters",
+    )
 
 
 class FakeDynamo:
@@ -77,14 +86,15 @@ def oauth_config() -> RecordsOAuthConfig:
     )
 
 
-def test_configuration_repository_loads_exact_four_parameters_once() -> None:
-    names = ("identity", "oauth", "secret", "session")
+def test_configuration_repository_loads_exact_five_parameters_once() -> None:
+    names = ("identity", "oauth", "secret", "session", "admin")
     response = {
         "Parameters": [
             {"Name": "identity", "Value": "i" * 32},
             {"Name": "oauth", "Value": oauth_config().model_dump_json()},
             {"Name": "secret", "Value": "client-secret"},
             {"Name": "session", "Value": "s" * 32},
+            {"Name": "admin", "Value": USER_ID},
         ]
     }
     client = FakeSsm(response)
@@ -94,6 +104,7 @@ def test_configuration_repository_loads_exact_four_parameters_once() -> None:
         oauth_parameter_name=names[1],
         client_secret_parameter_name=names[2],
         session_key_parameter_name=names[3],
+        admin_user_id_parameter_name=names[4],
     )
 
     first = repository.load()
@@ -101,6 +112,7 @@ def test_configuration_repository_loads_exact_four_parameters_once() -> None:
 
     assert first is second
     assert first.oauth == oauth_config()
+    assert first.admin_requester_key == derive_requester_key(b"i" * 32, USER_ID)
     assert client.calls == [{"Names": list(names), "WithDecryption": True}]
 
 
@@ -113,6 +125,7 @@ def test_configuration_repository_rejects_missing_or_extra_oauth_fields() -> Non
                 {"Name": "oauth", "Value": invalid},
                 {"Name": "secret", "Value": "client-secret"},
                 {"Name": "session", "Value": "s" * 32},
+                {"Name": "admin", "Value": USER_ID},
             ]
         }
     )
@@ -122,11 +135,62 @@ def test_configuration_repository_rejects_missing_or_extra_oauth_fields() -> Non
         oauth_parameter_name="oauth",
         client_secret_parameter_name="secret",  # noqa: S106 - parameter name, not a value.
         session_key_parameter_name="session",
+        admin_user_id_parameter_name="admin",
     )
 
     with pytest.raises(AuthFailure) as caught:
         repository.load()
     assert caught.value.code == "configuration_invalid"
+
+
+def test_configuration_repository_hides_provider_and_validation_inputs() -> None:
+    private_user_id = "123456789" + "01234567"
+
+    class InvalidSsm(FakeSsm):
+        def get_parameters(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Parameters": [
+                    {"Name": "identity", "Value": "i" * 32},
+                    {"Name": "oauth", "Value": json.dumps({"client_id": private_user_id})},
+                    {"Name": "secret", "Value": "client-secret"},
+                    {"Name": "session", "Value": "s" * 32},
+                    {"Name": "admin", "Value": private_user_id},
+                ]
+            }
+
+    repository = AuthConfigurationRepository(
+        cast(Any, InvalidSsm({})),
+        identity_parameter_name="identity",
+        oauth_parameter_name="oauth",
+        client_secret_parameter_name="secret",  # noqa: S106 - parameter name only.
+        session_key_parameter_name="session",
+        admin_user_id_parameter_name="admin",
+    )
+
+    with pytest.raises(AuthFailure) as caught:
+        repository.load()
+
+    assert caught.value.__cause__ is None
+    assert private_user_id not in repr(caught.value)
+
+    class FailingSsm(FakeSsm):
+        def get_parameters(self, **_kwargs: Any) -> dict[str, Any]:
+            raise _client_error("AccessDeniedException", private_user_id)
+
+    provider_repository = AuthConfigurationRepository(
+        cast(Any, FailingSsm({})),
+        identity_parameter_name="identity",
+        oauth_parameter_name="oauth",
+        client_secret_parameter_name="secret",  # noqa: S106 - parameter name only.
+        session_key_parameter_name="session",
+        admin_user_id_parameter_name="admin",
+    )
+
+    with pytest.raises(AuthFailure) as provider_caught:
+        provider_repository.load()
+
+    assert provider_caught.value.__cause__ is None
+    assert private_user_id not in repr(provider_caught.value)
 
 
 def test_oauth_state_claim_uses_strong_read_and_conditional_update() -> None:
@@ -186,6 +250,7 @@ def test_discord_oauth_uses_form_token_exchange_and_guild_member_endpoint() -> N
     configuration = AuthConfiguration(
         identity_hmac_key=b"i" * 32,
         session_hmac_key=b"s" * 32,
+        admin_requester_key=derive_requester_key(b"i" * 32, USER_ID),
         oauth=oauth_config(),
         client_secret="client-secret",  # noqa: S106 - inert test credential.
     )

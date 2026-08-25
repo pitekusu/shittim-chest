@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
+from shittim_records.archive import derive_requester_key
 from shittim_records.auth import (
     AuthConfiguration,
     AuthFailure,
@@ -32,7 +33,7 @@ MAX_AVATAR_BYTES = 512 * 1024
 
 
 class AuthConfigurationRepository:
-    """Load and validate the four private values used by the Auth Lambda."""
+    """Load and validate the five private values used by the Auth Lambda."""
 
     def __init__(
         self,
@@ -42,6 +43,7 @@ class AuthConfigurationRepository:
         oauth_parameter_name: str,
         client_secret_parameter_name: str,
         session_key_parameter_name: str,
+        admin_user_id_parameter_name: str,
     ) -> None:
         self._client = client
         self._names = (
@@ -49,13 +51,20 @@ class AuthConfigurationRepository:
             oauth_parameter_name,
             client_secret_parameter_name,
             session_key_parameter_name,
+            admin_user_id_parameter_name,
         )
         self._cached: AuthConfiguration | None = None
 
     def load(self) -> AuthConfiguration:
         if self._cached is not None:
             return self._cached
-        response = self._client.get_parameters(Names=list(self._names), WithDecryption=True)
+        try:
+            response = self._client.get_parameters(
+                Names=list(self._names),
+                WithDecryption=True,
+            )
+        except ClientError:
+            raise AuthFailure("configuration_unavailable") from None
         if response.get("InvalidParameters"):
             raise AuthFailure("configuration_unavailable")
         values = {
@@ -65,17 +74,28 @@ class AuthConfigurationRepository:
         if set(values) != set(self._names):
             raise AuthFailure("configuration_unavailable")
         try:
-            identity_key = values[self._names[0]].encode()
-            oauth = RecordsOAuthConfig.model_validate_json(values[self._names[1]])
-            client_secret = values[self._names[2]]
-            session_key = values[self._names[3]].encode()
-        except (KeyError, ValueError, json.JSONDecodeError) as error:
-            raise AuthFailure("configuration_invalid") from error
-        if len(identity_key) < 32 or len(session_key) < 32 or not client_secret:
+            raw_values = tuple(values[name] for name in self._names)
+            if any(not isinstance(value, str) for value in raw_values):
+                raise TypeError
+            identity_key = raw_values[0].encode()
+            oauth = RecordsOAuthConfig.model_validate_json(raw_values[1])
+            client_secret = raw_values[2]
+            session_key = raw_values[3].encode()
+            admin_user_id = raw_values[4]
+        except KeyError, TypeError, ValueError, json.JSONDecodeError:
+            raise AuthFailure("configuration_invalid") from None
+        if (
+            len(identity_key) < 32
+            or len(session_key) < 32
+            or not client_secret
+            or not 17 <= len(admin_user_id) <= 20
+            or not admin_user_id.isdecimal()
+        ):
             raise AuthFailure("configuration_invalid")
         self._cached = AuthConfiguration(
             identity_hmac_key=identity_key,
             session_hmac_key=session_key,
+            admin_requester_key=derive_requester_key(identity_key, admin_user_id),
             oauth=oauth,
             client_secret=client_secret,
         )

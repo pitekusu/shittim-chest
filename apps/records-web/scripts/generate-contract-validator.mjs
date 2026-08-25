@@ -15,6 +15,7 @@ const validators = [
   ["RecordDetailResponse", "record-detail-response-validator.mjs"],
   ["RankingsResponse", "rankings-response-validator.mjs"],
   ["CostsResponse", "costs-response-validator.mjs"],
+  ["AdminStatusResponse", "admin-status-response-validator.mjs"],
 ];
 const expectedOutputFilenames = new Set(
   validators.flatMap(([, filename]) => [filename, filename.replace(/\.mjs$/, ".d.mts")]),

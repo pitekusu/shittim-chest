@@ -197,6 +197,7 @@ jobs:
           action-timeout-s: 60
       - name: Verify Records deployment account and parameter metadata
         env:
+          ADMIN_DISCORD_ID_PARAMETER_NAME: /shittim-chest/production/records/admin/discord-user-id
           IDENTITY_PARAMETER_NAME: /shittim-chest/production/records/identity-hmac-key
           OAUTH_CLIENT_SECRET_PARAMETER_NAME: /shittim-chest/production/records/discord/client-secret
           OAUTH_CONFIG_PARAMETER_NAME: /shittim-chest/production/records/discord/oauth/v0001
@@ -210,6 +211,7 @@ jobs:
           stream_account=$(cut -d: -f5 <<< "${SOURCE_STREAM_ARN}")
           test "${stream_account}" = "${account}"
           for name in \
+            "${ADMIN_DISCORD_ID_PARAMETER_NAME}" \
             "${IDENTITY_PARAMETER_NAME}" \
             "${PRESENTATION_PARAMETER_NAME}" \
             "${OAUTH_CONFIG_PARAMETER_NAME}" \
@@ -345,7 +347,11 @@ jobs:
                 --expected-parameter "RecordsBundleBucketName=${ASSET_BUCKET}" \
                 --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
                 --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}" \
-                --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}"
+                --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}" \
+                --expected-parameter "RuntimeImageDigest=${runtime_image_digest}" \
+                --expected-parameter "BreakGlassImageDigest=${break_glass_image_digest}" \
+                --expected-parameter "RecordsDistributionId=${records_distribution_id}" \
+                --expected-parameter "RecordsCertificateArn=${records_certificate_arn}"
             elif [ "${logical_name}" = edge ]; then
               uv run --project services/records --frozen python \
                 tools/release_supply_chain.py validate-change-set \
@@ -396,6 +402,26 @@ jobs:
           edge_key=$(awk '$1 == "RecordsEdge" {print $4}' \
             "${RUNNER_TEMP}/template-assets.txt")
           account=$(aws sts get-caller-identity --query Account --output text)
+          runtime_image_digest=$(aws cloudformation describe-stacks \
+            --stack-name ShittimChest-Prod-Runtime \
+            --query "Stacks[0].Parameters[?ParameterKey=='RuntimeImageDigest'].ParameterValue | [0]" \
+            --output text)
+          [[ "${runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          break_glass_image_digest=$(aws cloudformation describe-stacks \
+            --stack-name ShittimChest-Prod-Runtime \
+            --query "Stacks[0].Parameters[?ParameterKey=='BreakGlassImageDigest'].ParameterValue | [0]" \
+            --output text)
+          [[ "${break_glass_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          records_distribution_id=$(aws cloudformation describe-stacks --region us-east-1 \
+            --stack-name ShittimChest-Prod-RecordsEdge \
+            --query "Stacks[0].Outputs[?OutputKey=='RecordsDistributionId'].OutputValue | [0]" \
+            --output text)
+          [[ "${records_distribution_id}" =~ ^[A-Z0-9]{10,30}$ ]]
+          records_certificate_arn=$(aws cloudformation describe-stacks --region us-east-1 \
+            --stack-name ShittimChest-Prod-RecordsEdge \
+            --query "Stacks[0].Outputs[?OutputKey=='RecordsCertificateArn'].OutputValue | [0]" \
+            --output text)
+          [[ "${records_certificate_arn}" =~ ^arn:[^:]+:acm:us-east-1:${account}:certificate/[0-9a-f-]{36}$ ]]
           api_endpoint=$(aws cloudformation describe-stacks \
             --stack-name ShittimChest-Prod-RecordsApplication \
             --query "Stacks[0].Outputs[?OutputKey=='RecordsApiEndpoint'].OutputValue | [0]" \
@@ -416,7 +442,11 @@ jobs:
               ParameterKey=RecordsBundleBucketName,ParameterValue="${ASSET_BUCKET}" \
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
               ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}" \
-              ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}"
+              ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}" \
+              ParameterKey=RuntimeImageDigest,ParameterValue="${runtime_image_digest}" \
+              ParameterKey=BreakGlassImageDigest,ParameterValue="${break_glass_image_digest}" \
+              ParameterKey=RecordsDistributionId,ParameterValue="${records_distribution_id}" \
+              ParameterKey=RecordsCertificateArn,ParameterValue="${records_certificate_arn}"
           create_plan edge ShittimChest-Prod-RecordsEdge \
             "${EDGE_CHANGE_SET}" "${edge_region}" "${EDGE_EXECUTION_ROLE_ARN}" \
             "${edge_bucket}" "${edge_key}" \
@@ -759,7 +789,7 @@ jobs:
           test "${session_status}" = 200
           jq --exit-status \
             '.schemaVersion == 1 and .authenticated == false and
-             .user == null and .csrfToken == null' \
+             .user == null and .csrfToken == null and .isAdmin == false' \
             "${RUNNER_TEMP}/records-session.json" >/dev/null
           grep --ignore-case --quiet '^cache-control: private, no-store' \
             "${RUNNER_TEMP}/records-session.headers"
@@ -776,6 +806,16 @@ jobs:
           test "${records_status}" = 401
           jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
             "${RUNNER_TEMP}/records-list.json" >/dev/null
+          admin_status=$(curl --silent --show-error \
+            --dump-header "${RUNNER_TEMP}/records-admin-status.headers" \
+            --output "${RUNNER_TEMP}/records-admin-status.json" \
+            --write-out '%{http_code}' \
+            "${endpoint}/api/v1/admin/status")
+          test "${admin_status}" = 401
+          jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
+            "${RUNNER_TEMP}/records-admin-status.json" >/dev/null
+          grep --ignore-case --quiet '^cache-control: private, no-store' \
+            "${RUNNER_TEMP}/records-admin-status.headers"
       - name: Restore the previous Records entry point after a post-publish failure
         if: failure()
         continue-on-error: true

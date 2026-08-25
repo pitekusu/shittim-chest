@@ -116,7 +116,9 @@ class AuthHttpController:
         raw_csrf = request.cookies.get(CSRF_COOKIE_NAME)
         session = self._service.authenticate(raw_session=raw_session, now=now)
         if session is None or raw_csrf is None:
-            payload = SessionResponse(root=AnonymousSession(schema_version=1, authenticated=False))
+            payload = SessionResponse(
+                root=AnonymousSession(schema_version=1, authenticated=False, is_admin=False)
+            )
         else:
             expected = csrf_hash(self._service.session_hmac_key, raw_csrf)
             if not hmac.compare_digest(expected, session.csrf_hash):
@@ -143,6 +145,7 @@ class AuthHttpController:
                         authenticated=True,
                         user=SessionUser(display_name=session.display_name, avatar=avatar),
                         csrf_token=raw_csrf,
+                        is_admin=self._service.is_admin(session),
                     )
                 )
         return json_response(200, payload.model_dump(by_alias=True, mode="json"))
@@ -255,6 +258,9 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "REQUEST_INVALID": "リクエストが正しくありません。",
         "CURSOR_INVALID": "ページ情報が正しくありません。",
         "INSIGHTS_UNAVAILABLE": "集計を準備しています。",
+        "ADMIN_ACCESS_DENIED": "この画面を利用する権限がありません。",
+        "ADMIN_STATUS_UNAVAILABLE": "稼働状況を取得できません。",
+        "ADMIN_STATUS_INVALID": "稼働状況を確認できません。",
     }.get(code, "議事録サービスを利用できません。")
     payload = ErrorResponse(error=ErrorBody(code=code, message=message, request_id=request_id))
     return json_response(status, payload.model_dump(by_alias=True, mode="json"))

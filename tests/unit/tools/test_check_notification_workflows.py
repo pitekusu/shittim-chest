@@ -315,6 +315,50 @@ def test_records_release_requires_read_only_api_smoke(tmp_path: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_records_release_requires_anonymous_admin_boundary_smoke(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '"${endpoint}/api/v1/admin/status"',
+            '"${endpoint}/api/v1/session"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_requires_anonymous_session_to_be_non_admin(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(".isAdmin == false", ".isAdmin == true", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_binds_each_runtime_digest_to_its_exact_parameter(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            'ParameterKey=BreakGlassImageDigest,ParameterValue="${break_glass_image_digest}"',
+            'ParameterKey=BreakGlassImageDigest,ParameterValue="${runtime_image_digest}"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_preserves_old_hashed_web_assets(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW
@@ -346,6 +390,31 @@ def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Pat
     )
 
     with pytest.raises(WorkflowPolicyError, match=r"plan/deploy boundary|code checksum"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "/shittim-chest/production/records/admin/discord-user-id",
+        "RuntimeImageDigest",
+        "BreakGlassImageDigest",
+        "RecordsDistributionId",
+        "RecordsCertificateArn",
+    ],
+)
+def test_records_release_binds_admin_and_runtime_status_inputs(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "REMOVED"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
         validate_notification_workflows(directory)
 
 

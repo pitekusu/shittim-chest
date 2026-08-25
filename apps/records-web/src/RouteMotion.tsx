@@ -11,11 +11,12 @@ import { useLocation } from "react-router-dom";
 
 import styles from "./styles/routeMotion.module.css";
 
-export type RouteMotionKind = "archive" | "detail" | "insights" | "other";
+export type RouteMotionKind = "archive" | "detail" | "insights" | "admin" | "other";
 
 export function routeMotionKind(pathname: string): RouteMotionKind {
   if (pathname === "/") return "archive";
   if (pathname === "/insights") return "insights";
+  if (pathname === "/admin") return "admin";
   if (pathname.startsWith("/records/")) return "detail";
   return "other";
 }

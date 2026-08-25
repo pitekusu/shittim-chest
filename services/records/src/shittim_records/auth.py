@@ -76,6 +76,7 @@ class RecordsOAuthConfig(BaseModel):
 class AuthConfiguration:
     identity_hmac_key: bytes = field(repr=False)
     session_hmac_key: bytes = field(repr=False)
+    admin_requester_key: str = field(repr=False)
     oauth: RecordsOAuthConfig
     client_secret: str = field(repr=False)
 
@@ -303,6 +304,14 @@ class AuthService:
             raise AuthFailure("session_record_invalid")
         return self._avatars.requester_avatar_url(object_key=asset_key)
 
+    def is_admin(self, session: SessionRecord) -> bool:
+        """Compare only opaque HMAC-derived requester keys."""
+
+        return hmac.compare_digest(
+            self._configuration.admin_requester_key,
+            session.requester_key,
+        )
+
     def logout(
         self,
         *,
@@ -355,7 +364,7 @@ class AuthService:
 def validate_return_to(value: str | None) -> str:
     """Allow only the three SPA route shapes owned by Records."""
 
-    if value in (None, "", "/", "/insights"):
+    if value in (None, "", "/", "/insights", "/admin"):
         return value if value else "/"
     prefix = "/records/"
     if value.startswith(prefix) and _is_record_id(value.removeprefix(prefix)):

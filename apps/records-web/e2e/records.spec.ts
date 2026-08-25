@@ -4,7 +4,12 @@ import { createHash } from "node:crypto";
 
 const RECORD_ID = "r".repeat(43);
 const DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO = 0.0001;
-const AUTHENTICATED_ROUTE_CHUNK_NAMES = ["RecordsHome", "RecordDetail", "RankingsPage"] as const;
+const AUTHENTICATED_ROUTE_CHUNK_NAMES = [
+  "RecordsHome",
+  "RecordDetail",
+  "RankingsPage",
+  "AdminPage",
+] as const;
 
 function observeAssetRequests(page: Page): Set<string> {
   const requestedAssets = new Set<string>();
@@ -163,12 +168,14 @@ async function mockAuthenticatedApi(
         ? {
             schemaVersion: 1,
             authenticated: true,
+            isAdmin: false,
             user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
             csrfToken: "csrf-token",
           }
         : {
             schemaVersion: 1,
             authenticated: false,
+            isAdmin: false,
             user: null,
             csrfToken: null,
           },
@@ -435,6 +442,7 @@ test("record identities produce varied and stable card ornaments", async ({ page
       json: {
         schemaVersion: 1,
         authenticated: true,
+        isAdmin: false,
         user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
         csrfToken: "csrf-token",
       },
@@ -609,7 +617,13 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await page.emulateMedia({ colorScheme: "dark" });
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
-      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+      json: {
+        schemaVersion: 1,
+        authenticated: false,
+        isAdmin: false,
+        user: null,
+        csrfToken: null,
+      },
     }),
   );
   await page.goto("/login");
@@ -817,7 +831,13 @@ test("English login product name keeps the approved two-line break at narrow wid
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
-      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+      json: {
+        schemaVersion: 1,
+        authenticated: false,
+        isAdmin: false,
+        user: null,
+        csrfToken: null,
+      },
     }),
   );
   await page.goto("/");
@@ -903,6 +923,7 @@ test("loads the next archive page automatically near the end of the loaded cards
       json: {
         schemaVersion: 1,
         authenticated: true,
+        isAdmin: false,
         user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
         csrfToken: "csrf-token",
       },
@@ -1109,7 +1130,13 @@ test("English display copy uses Delogy while Japanese copy keeps LINE Seed JP", 
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
-      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+      json: {
+        schemaVersion: 1,
+        authenticated: false,
+        isAdmin: false,
+        user: null,
+        csrfToken: null,
+      },
     }),
   );
   await page.goto("/");
@@ -1157,7 +1184,13 @@ test("publishes complete Open Graph metadata and a 1200 by 630 preview image", a
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
-      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+      json: {
+        schemaVersion: 1,
+        authenticated: false,
+        isAdmin: false,
+        user: null,
+        csrfToken: null,
+      },
     }),
   );
   await page.goto("/");
@@ -1224,7 +1257,13 @@ test("anonymous login page boots under the production CSP without dynamic evalua
     const url = new URL(route.request().url());
     if (url.pathname === "/api/v1/session") {
       await route.fulfill({
-        json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+        json: {
+          schemaVersion: 1,
+          authenticated: false,
+          isAdmin: false,
+          user: null,
+          csrfToken: null,
+        },
       });
       return;
     }
@@ -1259,7 +1298,13 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   const requestedAssets = observeAssetRequests(page);
   await page.route("**/api/v1/session", (route) =>
     route.fulfill({
-      json: { schemaVersion: 1, authenticated: false, user: null, csrfToken: null },
+      json: {
+        schemaVersion: 1,
+        authenticated: false,
+        isAdmin: false,
+        user: null,
+        csrfToken: null,
+      },
     }),
   );
 
@@ -1271,10 +1316,35 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   }
 });
 
+test("ADMIN remains reachable in the five-column 320px mobile navigation", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.setViewportSize({ width: 320, height: 720 });
+  await mockAuthenticatedApi(page);
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "ACCESS DENIED" })).toBeVisible();
+
+  const mobileNavigation = page.getByRole("navigation", {
+    name: "モバイルナビゲーション",
+  });
+  await expect(mobileNavigation).toBeVisible();
+  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(5);
+  await expect(mobileNavigation.getByRole("link", { name: "ADMIN" })).toBeVisible();
+  const viewport = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
 for (const directRoute of [
   { path: "/", chunkName: "RecordsHome", heading: "議論の記録" },
   { path: `/records/${RECORD_ID}`, chunkName: "RecordDetail", heading: detail.question },
   { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
+  { path: "/admin", chunkName: "AdminPage", heading: "ACCESS DENIED" },
 ] as const) {
   test(`direct ${directRoute.path} navigation loads its route chunk`, async ({
     page,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { getCosts } from "./costs";
+import { getAdminStatus, refreshAdminStatus } from "./admin";
 import { getRecord } from "./recordDetail";
 import { getRecords } from "./recordList";
 import { getRankings } from "./rankings";
@@ -119,6 +120,24 @@ function costsResponse() {
     },
     updatedAt: "2026-08-23T12:17:00+09:00",
     status: "partial",
+  };
+}
+
+function adminStatusResponse() {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-08-24T03:00:00Z",
+    expiresAt: "2026-08-24T03:01:00Z",
+    stale: false,
+    overall: { state: "healthy", criticalAlarms: 0, warningAlarms: 0, partial: false },
+    sections: [
+      {
+        service: "ecs",
+        state: "healthy",
+        summary: "Scale-to-Zeroで待機しています。",
+        metrics: [{ name: "running", value: 0 }],
+      },
+    ],
   };
 }
 
@@ -260,5 +279,33 @@ describe("Records API endpoint validation", () => {
       code: "INVALID_ERROR_RESPONSE",
       requestId: "local-validation",
     });
+  });
+
+  it("rejects private fields in Admin responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(response({ ...adminStatusResponse(), resourceArn: "must-not-pass" })),
+      ),
+    );
+
+    await expect(getAdminStatus()).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+      requestId: "local-validation",
+    });
+  });
+
+  it("refreshes Admin status without a request body", async () => {
+    const status = adminStatusResponse();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(status))),
+    );
+
+    await expect(refreshAdminStatus("csrf-token", "idempotency-key")).resolves.toEqual(status);
+    const init = vi.mocked(fetch).mock.calls[0]?.[1];
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeUndefined();
   });
 });
