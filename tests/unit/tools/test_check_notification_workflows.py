@@ -406,7 +406,7 @@ def test_records_release_binds_admin_and_status_inputs(
 
     with pytest.raises(
         WorkflowPolicyError,
-        match="plan/deploy boundary|pre-existing distribution",
+        match=r"plan/deploy boundary|pre-existing distribution",
     ):
         validate_notification_workflows(directory)
 
