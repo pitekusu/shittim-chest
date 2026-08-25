@@ -149,6 +149,67 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
     assert configuration().service_name not in section.model_dump_json()
 
 
+@pytest.mark.parametrize(
+    ("include_controls", "include_heartbeat", "expected_state"),
+    [
+        (True, True, "healthy"),
+        (False, True, "unknown"),
+        (True, False, "unknown"),
+    ],
+)
+def test_ecs_requires_runtime_telemetry_while_tasks_are_active(
+    *,
+    include_controls: bool,
+    include_heartbeat: bool,
+    expected_state: str,
+) -> None:
+    class Ecs:
+        def describe_services(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "services": [
+                    {
+                        "desiredCount": 1,
+                        "runningCount": 1,
+                        "pendingCount": 0,
+                        "deployments": [{}],
+                    }
+                ]
+            }
+
+    class Dynamo:
+        def get_item(self, *, Key: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            if not include_controls:
+                return {}
+            key = status_adapters.unmarshal_item(Key)
+            if key["SK"] == "ACTIVE_ATTEMPT_COUNT":
+                item = {**key, "active_attempt_count": 1}
+            elif key["SK"] == "ACTIVITY":
+                item = {**key, "pending_count": 0, "claimed_count": 0}
+            else:
+                return {}
+            return {"Item": status_adapters.marshal_item(item)}
+
+    class RuntimeCloudWatch(CloudWatch):
+        def get_metric_statistics(self, **kwargs: Any) -> dict[str, Any]:
+            self.statistics_calls.append(kwargs)
+            return (
+                {"Datapoints": [{"Timestamp": NOW, "Maximum": 42.0}]}
+                if include_heartbeat
+                else {"Datapoints": []}
+            )
+
+    section = source(
+        ecs=Ecs(),
+        dynamodb=Dynamo(),
+        cloudwatch=RuntimeCloudWatch(),
+    )._ecs_section(NOW)
+
+    assert section.state == expected_state
+    assert section.summary == (
+        "稼働中" if expected_state == "healthy" else "状態を取得できません。"
+    )
+
+
 def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
     class Dynamo:
         def describe_table(self, *, TableName: str) -> dict[str, Any]:

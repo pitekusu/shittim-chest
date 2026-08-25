@@ -224,10 +224,25 @@ class AwsAdminStatusSource:
         if not isinstance(deployments, list):
             raise ValueError("ECS deployments are invalid")
         controls = self._runtime_controls()
+        heartbeat_age = self._runtime_heartbeat(now)
         idle = desired == running == pending == 0
-        state: AdminHealthState = (
-            "healthy" if idle or (desired == running and pending == 0) else "warning"
+        telemetry_complete = all(
+            value is not None
+            for value in (
+                controls.get("active_debates"),
+                controls.get("outbox_pending"),
+                heartbeat_age,
+            )
         )
+        state: AdminHealthState
+        if idle:
+            state = "healthy"
+        elif desired != running or pending != 0:
+            state = "warning"
+        elif not telemetry_complete:
+            state = "unknown"
+        else:
+            state = "healthy"
         metrics = [
             _metric("desired_count", desired),
             _metric("running_count", running),
@@ -236,12 +251,20 @@ class AwsAdminStatusSource:
             _metric("active_debates", controls.get("active_debates")),
             _metric("outbox_pending", controls.get("outbox_pending")),
             _metric("runtime_prompt_revision", controls.get("runtime_prompt_revision")),
-            _metric("heartbeat_age_seconds", self._runtime_heartbeat(now)),
+            _metric("heartbeat_age_seconds", heartbeat_age),
         ]
         return AdminStatusSection(
             service="ecs",
             state=state,
-            summary="IDLE" if idle else "稼働中" if state == "healthy" else "確認が必要です。",
+            summary=(
+                "IDLE"
+                if idle
+                else "稼働中"
+                if state == "healthy"
+                else "状態を取得できません。"
+                if state == "unknown"
+                else "確認が必要です。"
+            ),
             metrics=tuple(metrics),
         )
 
