@@ -400,7 +400,6 @@ def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Pat
         "RuntimeImageDigest",
         "BreakGlassImageDigest",
         "RecordsDistributionId",
-        "RecordsCertificateArn",
     ],
 )
 def test_records_release_binds_admin_and_runtime_status_inputs(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import suppress
@@ -24,10 +25,12 @@ _TABLE_LABELS = ("debate", "archive", "statistics", "session")
 _BUCKET_LABELS = ("web", "media", "release")
 _MAX_PAGINATOR_PAGES = 20
 _STATUS_COLLECTION_TIMEOUT_SECONDS = 20.0
+_PRODUCTION_ALARM_PREFIX = "shittim-chest-production-"
 
 
 @dataclass(frozen=True, slots=True)
 class AwsAdminStatusConfiguration:
+    aws_account_id: str
     cluster_name: str
     service_name: str
     ecr_repository_name: str
@@ -37,9 +40,8 @@ class AwsAdminStatusConfiguration:
     tables: Mapping[str, str]
     functions: Mapping[str, str]
     distribution_id: str
-    certificate_arn: str
     projector_dlq_url: str
-    alarm_prefix: str = "ShittimChest"
+    alarm_prefix: str = _PRODUCTION_ALARM_PREFIX
 
     def __post_init__(self) -> None:
         if set(self.buckets) != set(_BUCKET_LABELS):
@@ -57,13 +59,17 @@ class AwsAdminStatusConfiguration:
             self.runtime_image_digest,
             self.break_glass_image_digest,
             self.distribution_id,
-            self.certificate_arn,
             self.projector_dlq_url,
             self.alarm_prefix,
         )
-        if any(not value for value in required) or any(
-            not value.startswith("sha256:") or len(value) != 71
-            for value in (self.runtime_image_digest, self.break_glass_image_digest)
+        if (
+            any(not value for value in required)
+            or len(self.aws_account_id) != 12
+            or not self.aws_account_id.isdecimal()
+            or any(
+                not value.startswith("sha256:") or len(value) != 71
+                for value in (self.runtime_image_digest, self.break_glass_image_digest)
+            )
         ):
             raise ValueError("ADMIN status configuration is incomplete")
 
@@ -320,16 +326,15 @@ class AwsAdminStatusSource:
             if image is None:
                 missing = True
                 metrics.extend(
-                    (_metric(f"{label}_digest", None), _metric(f"{label}_pushed_at", None))
+                    (
+                        _metric(f"{label}_image_present", False),
+                        _metric(f"{label}_pushed_at", None),
+                    )
                 )
                 continue
-            digest = image.get("imageDigest")
             metrics.extend(
                 (
-                    _metric(
-                        f"{label}_digest",
-                        digest[:19] if isinstance(digest, str) else None,
-                    ),
+                    _metric(f"{label}_image_present", True),
                     _metric(f"{label}_pushed_at", _timestamp(image.get("imagePushedAt"))),
                     _metric(
                         f"{label}_size_bytes", _optional_integer(image.get("imageSizeInBytes"))
@@ -648,6 +653,10 @@ class AwsAdminStatusSource:
             "Distribution", {}
         )
         config = distribution.get("DistributionConfig", {})
+        certificate_arn = _distribution_certificate_arn(
+            config.get("ViewerCertificate"),
+            account_id=self._config.aws_account_id,
+        )
         invalidations = (
             self._cloudfront.list_invalidations(
                 DistributionId=self._config.distribution_id,
@@ -656,9 +665,9 @@ class AwsAdminStatusSource:
             .get("InvalidationList", {})
             .get("Items", [])
         )
-        certificate = self._acm.describe_certificate(
-            CertificateArn=self._config.certificate_arn
-        ).get("Certificate", {})
+        certificate = self._acm.describe_certificate(CertificateArn=certificate_arn).get(
+            "Certificate", {}
+        )
         enabled = config.get("Enabled") is True
         deployed = distribution.get("Status") == "Deployed"
         metrics = [
@@ -868,3 +877,16 @@ def _queue_name(queue_url: str) -> str:
     if not name or "/" in name:
         raise ValueError("ADMIN status queue URL is invalid")
     return name
+
+
+def _distribution_certificate_arn(value: object, *, account_id: str) -> str:
+    if not isinstance(value, Mapping):
+        raise ValueError("ADMIN status viewer certificate is invalid")
+    arn = value.get("ACMCertificateArn")
+    pattern = (
+        rf"arn:aws:acm:us-east-1:{re.escape(account_id)}:"
+        r"certificate/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    )
+    if not isinstance(arn, str) or re.fullmatch(pattern, arn) is None:
+        raise ValueError("ADMIN status viewer certificate is invalid")
+    return arn

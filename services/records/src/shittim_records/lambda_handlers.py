@@ -331,6 +331,7 @@ def _admin_status_controller() -> AdminStatusHttpController:
         dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
         ssm = boto3.client("ssm", config=SDK_CONFIG)
         configuration = AwsAdminStatusConfiguration(
+            aws_account_id=_environment("ADMIN_AWS_ACCOUNT_ID"),
             cluster_name=_environment("ECS_CLUSTER_NAME"),
             service_name=_environment("ECS_SERVICE_NAME"),
             ecr_repository_name=_environment("ECR_REPOSITORY_NAME"),
@@ -349,9 +350,8 @@ def _admin_status_controller() -> AdminStatusHttpController:
             },
             functions=_environment_mapping("ADMIN_STATUS_FUNCTIONS_JSON"),
             distribution_id=_environment("RECORDS_DISTRIBUTION_ID"),
-            certificate_arn=_environment("RECORDS_CERTIFICATE_ARN"),
             projector_dlq_url=_environment("PROJECTOR_DLQ_URL"),
-            alarm_prefix=os.environ.get("ADMIN_ALARM_PREFIX", "ShittimChest"),
+            alarm_prefix=_environment("ADMIN_ALARM_PREFIX"),
         )
         source = AwsAdminStatusSource(
             configuration=configuration,

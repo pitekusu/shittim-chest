@@ -80,12 +80,6 @@ export class RecordsApplicationStack extends Stack {
       allowedPattern: "^[A-Z0-9]{10,30}$",
       description: "Exact deployed Records CloudFront distribution ID for read-only status",
     });
-    const recordsCertificateArn = new CfnParameter(this, "RecordsCertificateArn", {
-      type: "String",
-      allowedPattern:
-        "^arn:[^:]+:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]{36}$",
-      description: "Exact deployed Records public certificate ARN for read-only status",
-    });
     const runtimeImageDigest = new CfnParameter(this, "RuntimeImageDigest", {
       type: "String",
       allowedPattern: "^sha256:[0-9a-f]{64}$",
@@ -517,6 +511,8 @@ export class RecordsApplicationStack extends Stack {
       timeout: Duration.seconds(30),
       reservedConcurrentExecutions: 1,
       environment: {
+        ADMIN_AWS_ACCOUNT_ID: this.account,
+        ADMIN_ALARM_PREFIX: "shittim-chest-production-",
         SOURCE_TABLE_NAME: sourceTable.tableName,
         ARCHIVE_TABLE_NAME: archiveTable.tableName,
         STATISTICS_TABLE_NAME: statisticsTable.tableName,
@@ -529,7 +525,6 @@ export class RecordsApplicationStack extends Stack {
         WEB_BUCKET_NAME: `shittim-chest-production-records-web-${this.account}`,
         RELEASE_BUNDLE_BUCKET_NAME: bundleBucket.bucketName,
         RECORDS_DISTRIBUTION_ID: recordsDistributionId.valueAsString,
-        RECORDS_CERTIFICATE_ARN: recordsCertificateArn.valueAsString,
         PROJECTOR_DLQ_URL: projectorDlq.queueUrl,
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
@@ -638,7 +633,14 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["acm:DescribeCertificate"],
-          resources: [recordsCertificateArn.valueAsString],
+          resources: [
+            this.formatArn({
+              service: "acm",
+              region: "us-east-1",
+              resource: "certificate",
+              resourceName: "*",
+            }),
+          ],
         }),
         new iam.PolicyStatement({
           actions: ["sqs:GetQueueAttributes"],
@@ -649,13 +651,24 @@ export class RecordsApplicationStack extends Stack {
     for (const [function_, reason] of [
       [
         this.adminStatusFunction,
-        "CloudWatch, ECS, ECR repository discovery, and Inspector status APIs do not support complete resource-level scoping; all remaining reads use exact production resources.",
+        "CloudWatch, ECS, ECR repository discovery, and Inspector status APIs do not support complete resource-level scoping. ACM requires a certificate wildcard because the current certificate is derived at runtime from the exact allowlisted CloudFront distribution and can be replaced by the Edge stack; all other reads use exact production resources.",
       ],
     ] as const) {
       Validations.of(function_.role!).acknowledge({
         id: "AwsSolutions-IAM5[Resource::*]",
         reason,
       });
+      const nagAccount = Token.isUnresolved(this.account) ? "<AWS::AccountId>" : this.account;
+      function_.role!.node.addMetadata(
+        Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+        Object.fromEntries(
+          ["arn:aws", "arn:<AWS::Partition>"].map((partition) => [
+            `AwsSolutions-IAM5[Resource::${partition}:acm:us-east-1:` +
+              `${nagAccount}:certificate/*]`,
+            reason,
+          ]),
+        ),
+      );
     }
 
     const authVersion = new lambda.Version(this, "AuthVersion", {

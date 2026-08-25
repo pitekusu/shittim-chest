@@ -296,6 +296,15 @@ describe("RecordsApplicationStack", () => {
 
   test("keeps ADMIN status access read-only and least privilege", () => {
     const { template } = synthesize();
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-admin-status",
+      Environment: {
+        Variables: {
+          ADMIN_ALARM_PREFIX: "shittim-chest-production-",
+          ADMIN_AWS_ACCOUNT_ID: "000000000000",
+        },
+      },
+    });
     const policies = template.findResources("AWS::IAM::Policy");
     const statusPolicy = Object.values(policies).find((policy) =>
       JSON.stringify(policy).includes("AdminStatusFunctionRole"),
@@ -369,10 +378,10 @@ describe("RecordsApplicationStack", () => {
       "RuntimeImageDigest",
       "BreakGlassImageDigest",
       "RecordsDistributionId",
-      "RecordsCertificateArn",
     ]) {
       expect(parameters[name].Default).toBeUndefined();
     }
+    expect(parameters.RecordsCertificateArn).toBeUndefined();
   });
 
   test("filters completed metadata and bounds every stream retry dimension", () => {

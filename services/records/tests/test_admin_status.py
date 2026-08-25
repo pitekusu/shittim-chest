@@ -22,6 +22,7 @@ AWS_ACCOUNT_ID = "123456" + "789012"
 
 def configuration() -> AwsAdminStatusConfiguration:
     return AwsAdminStatusConfiguration(
+        aws_account_id=AWS_ACCOUNT_ID,
         cluster_name="private-cluster-name",
         service_name="private-service-name",
         ecr_repository_name="private-repository-name",
@@ -40,7 +41,6 @@ def configuration() -> AwsAdminStatusConfiguration:
         },
         functions={"auth": "auth-function"},
         distribution_id="distribution",
-        certificate_arn="certificate",
         projector_dlq_url=(
             f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/projector-dlq"
         ),
@@ -191,7 +191,72 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
         {"imageDigest": configuration().runtime_image_digest},
         {"imageDigest": configuration().break_glass_image_digest},
     ]
-    assert configuration().runtime_image_digest not in section.model_dump_json()
+    values = metrics(section)
+    assert values["normal_image_present"] is True
+    assert values["break_glass_image_present"] is True
+    assert "sha256:" not in section.model_dump_json()
+    assert configuration().runtime_image_digest[:19] not in section.model_dump_json()
+
+
+def test_alarm_query_uses_the_exact_deployed_production_prefix() -> None:
+    alarms = Paginator([{"MetricAlarms": [], "CompositeAlarms": []}])
+
+    class Alarms:
+        def get_paginator(self, _name: str) -> Paginator:
+            return alarms
+
+    result = source(cloudwatch=Alarms())._alarm_counts()
+
+    assert result == (0, 0, False)
+    assert alarms.calls == [
+        {
+            "AlarmNamePrefix": "shittim-chest-production-",
+            "StateValue": "ALARM",
+        }
+    ]
+
+
+def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution() -> None:
+    certificate_arn = (
+        f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
+    )
+
+    class CloudFront:
+        def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Distribution": {
+                    "Status": "Deployed",
+                    "DistributionConfig": {
+                        "Enabled": True,
+                        "ViewerCertificate": {
+                            "ACMCertificateArn": certificate_arn,
+                            "MinimumProtocolVersion": "TLSv1.3_2025",
+                        },
+                    },
+                }
+            }
+
+        def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"InvalidationList": {"Items": []}}
+
+    class Acm:
+        requested_arn: str | None = None
+
+        def describe_certificate(self, *, CertificateArn: str) -> dict[str, Any]:
+            self.requested_arn = CertificateArn
+            return {
+                "Certificate": {
+                    "KeyAlgorithm": "EC_prime256v1",
+                    "NotAfter": NOW + timedelta(days=300),
+                }
+            }
+
+    acm = Acm()
+    section = source(cloudfront=CloudFront(), acm=acm)._cloudfront_section(NOW)
+
+    assert section.state == "healthy"
+    assert acm.requested_arn == certificate_arn
+    assert certificate_arn not in section.model_dump_json()
 
 
 class Paginator:
