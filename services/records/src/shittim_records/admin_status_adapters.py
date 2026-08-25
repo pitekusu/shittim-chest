@@ -27,6 +27,7 @@ _BUCKET_LABELS = ("web", "media", "release")
 _MAX_PAGINATOR_PAGES = 20
 _STATUS_COLLECTION_TIMEOUT_SECONDS = 20.0
 _PRODUCTION_ALARM_PREFIX = "shittim-chest-production-"
+_PROJECTOR_DLQ_RETENTION_SECONDS = 14 * 24 * 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +40,7 @@ class AwsAdminStatusConfiguration:
     buckets: Mapping[str, str]
     tables: Mapping[str, str]
     functions: Mapping[str, str]
-    distribution_id: str
+    records_public_hostname: str
     projector_dlq_url: str
     alarm_prefix: str = _PRODUCTION_ALARM_PREFIX
 
@@ -57,7 +58,7 @@ class AwsAdminStatusConfiguration:
             self.service_name,
             self.ecr_repository_name,
             self.runtime_stack_name,
-            self.distribution_id,
+            self.records_public_hostname,
             self.projector_dlq_url,
             self.alarm_prefix,
         )
@@ -65,6 +66,12 @@ class AwsAdminStatusConfiguration:
             any(not value for value in required)
             or len(self.aws_account_id) != 12
             or not self.aws_account_id.isdecimal()
+            or re.fullmatch(
+                r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+                self.records_public_hostname,
+            )
+            is None
         ):
             raise ValueError("ADMIN status configuration is incomplete")
 
@@ -339,10 +346,12 @@ class AwsAdminStatusSource:
             )
         return AdminStatusSection(
             service="ecr",
-            state="warning" if missing else "healthy",
-            summary="承認済みイメージを確認しました。"
-            if not missing
-            else "イメージ確認が必要です。",
+            state="warning"
+            if missing or repository[0].get("imageTagMutability") != "IMMUTABLE"
+            else "healthy",
+            summary="承認済みイメージとrepository保護を確認しました。"
+            if not missing and repository[0].get("imageTagMutability") == "IMMUTABLE"
+            else "イメージまたはrepository保護の確認が必要です。",
             metrics=tuple(metrics),
         )
 
@@ -628,12 +637,9 @@ class AwsAdminStatusSource:
         )
 
     def _reserved_concurrency(self, name: str) -> int | None:
-        try:
-            value = self._lambda.get_function_concurrency(FunctionName=name).get(
-                "ReservedConcurrentExecutions"
-            )
-        except Exception:
-            return None
+        value = self._lambda.get_function_concurrency(FunctionName=name).get(
+            "ReservedConcurrentExecutions"
+        )
         return _optional_integer(value)
 
     def _lambda_metrics(self, now: datetime) -> tuple[tuple[AdminStatusMetric, ...], bool]:
@@ -719,9 +725,8 @@ class AwsAdminStatusSource:
         return result_metrics, provider_complete and len(values) == len(identities)
 
     def _cloudfront_section(self, now: datetime) -> AdminStatusSection:
-        distribution = self._cloudfront.get_distribution(Id=self._config.distribution_id).get(
-            "Distribution", {}
-        )
+        distribution_id = self._cloudfront_distribution_id()
+        distribution = self._cloudfront.get_distribution(Id=distribution_id).get("Distribution", {})
         config = distribution.get("DistributionConfig", {})
         certificate_arn = _distribution_certificate_arn(
             config.get("ViewerCertificate"),
@@ -729,7 +734,7 @@ class AwsAdminStatusSource:
         )
         invalidations = (
             self._cloudfront.list_invalidations(
-                DistributionId=self._config.distribution_id,
+                DistributionId=distribution_id,
                 MaxItems="1",
             )
             .get("InvalidationList", {})
@@ -767,21 +772,64 @@ class AwsAdminStatusSource:
             _metric("certificate_status", certificate_status or "unknown"),
             _metric("certificate_expires_at", _timestamp(certificate_expires_at)),
         ]
-        metrics.extend(self._cloudfront_metrics(now))
+        provider_metrics, provider_metrics_complete = self._cloudfront_metrics(
+            now,
+            distribution_id=distribution_id,
+        )
+        metrics.extend(provider_metrics)
         return AdminStatusSection(
             service="cloudfront",
             state="unknown"
-            if not certificate_complete
+            if not certificate_complete or not provider_metrics_complete
             else "healthy"
             if enabled and deployed and certificate_healthy
             else "warning",
-            summary="証明書の状態を取得できませんでした。"
-            if not certificate_complete
+            summary="証明書または一部の指標を取得できませんでした。"
+            if not certificate_complete or not provider_metrics_complete
             else "Distributionと証明書を確認しました。",
             metrics=tuple(metrics),
         )
 
-    def _cloudfront_metrics(self, now: datetime) -> tuple[AdminStatusMetric, ...]:
+    def _cloudfront_distribution_id(self) -> str:
+        matches: list[str] = []
+        paginator = self._cloudfront.get_paginator("list_distributions")
+        for page in _bounded_pages(paginator.paginate()):
+            distribution_list = page.get("DistributionList", {})
+            if not isinstance(distribution_list, Mapping):
+                raise ValueError("CloudFront distribution list is invalid")
+            items = distribution_list.get("Items", [])
+            if not isinstance(items, list):
+                raise ValueError("CloudFront distribution list is invalid")
+            for item in items:
+                if not isinstance(item, Mapping):
+                    raise ValueError("CloudFront distribution summary is invalid")
+                aliases = item.get("Aliases", {})
+                if not isinstance(aliases, Mapping):
+                    raise ValueError("CloudFront aliases are invalid")
+                alias_items = aliases.get("Items", [])
+                if not isinstance(alias_items, list) or any(
+                    not isinstance(alias, str) for alias in alias_items
+                ):
+                    raise ValueError("CloudFront aliases are invalid")
+                if self._config.records_public_hostname not in alias_items:
+                    continue
+                distribution_id = item.get("Id")
+                if (
+                    not isinstance(distribution_id, str)
+                    or re.fullmatch(r"[A-Z0-9]{10,30}", distribution_id) is None
+                ):
+                    raise ValueError("CloudFront distribution ID is invalid")
+                matches.append(distribution_id)
+        if len(matches) != 1:
+            raise ValueError("Records CloudFront distribution is unavailable")
+        return matches[0]
+
+    def _cloudfront_metrics(
+        self,
+        now: datetime,
+        *,
+        distribution_id: str,
+    ) -> tuple[tuple[AdminStatusMetric, ...], bool]:
         queries = []
         identifiers: dict[str, str] = {}
         for index, metric in enumerate(("4xxErrorRate", "5xxErrorRate", "CacheHitRate")):
@@ -795,7 +843,7 @@ class AwsAdminStatusSource:
                             "Namespace": "AWS/CloudFront",
                             "MetricName": metric,
                             "Dimensions": [
-                                {"Name": "DistributionId", "Value": self._config.distribution_id},
+                                {"Name": "DistributionId", "Value": distribution_id},
                                 {"Name": "Region", "Value": "Global"},
                             ],
                         },
@@ -812,16 +860,47 @@ class AwsAdminStatusSource:
             ScanBy="TimestampDescending",
         )
         values: dict[str, str | None] = {value: None for value in identifiers.values()}
-        for result in response.get("MetricDataResults", []):
-            metric = identifiers.get(result.get("Id"))
+        results = response.get("MetricDataResults")
+        provider_complete = (
+            isinstance(results, list)
+            and len(results) == len(identifiers)
+            and not response.get("NextToken")
+        )
+        seen_ids: set[str] = set()
+        for result in results if isinstance(results, list) else []:
+            if not isinstance(result, Mapping):
+                provider_complete = False
+                continue
+            result_id = result.get("Id")
+            metric = identifiers.get(result_id)
             samples = result.get("Values", [])
-            if metric is not None and isinstance(samples, list) and samples:
-                values[metric] = f"{samples[0]:.3f}"
-        return (
+            if (
+                metric is None
+                or not isinstance(result_id, str)
+                or result_id in seen_ids
+                or result.get("StatusCode") != "Complete"
+                or not isinstance(samples, list)
+                or not samples
+            ):
+                provider_complete = False
+                continue
+            seen_ids.add(result_id)
+            value = samples[0]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                provider_complete = False
+                continue
+            values[metric] = f"{value:.3f}"
+        metrics = (
             _metric("hour_4xx_rate", values["4xxErrorRate"]),
             _metric("hour_5xx_rate", values["5xxErrorRate"]),
             _metric("hour_cache_hit_rate", values["CacheHitRate"]),
         )
+        return metrics, provider_complete and len(seen_ids) == len(identifiers)
 
     def _sqs_section(self, now: datetime) -> AdminStatusSection:
         response = self._sqs.get_queue_attributes(
@@ -842,7 +921,16 @@ class AwsAdminStatusSource:
         encrypted = bool(attributes.get("KmsMasterKeyId")) or (
             attributes.get("SqsManagedSseEnabled") == "true"
         )
-        state: AdminHealthState = "warning" if visible or inflight or delayed else "healthy"
+        retention_seconds = _decimal_integer(attributes.get("MessageRetentionPeriod"))
+        state: AdminHealthState = (
+            "warning"
+            if visible
+            or inflight
+            or delayed
+            or not encrypted
+            or retention_seconds != _PROJECTOR_DLQ_RETENTION_SECONDS
+            else "healthy"
+        )
         oldest_age = self._latest_metric(
             namespace="AWS/SQS",
             metric_name="ApproximateAgeOfOldestMessage",
@@ -858,7 +946,9 @@ class AwsAdminStatusSource:
         return AdminStatusSection(
             service="sqs",
             state=state,
-            summary="DLQにメッセージがあります。" if state == "warning" else "DLQは空です。",
+            summary="DLQのメッセージまたは保護設定を確認してください。"
+            if state == "warning"
+            else "DLQは空で保護設定も正常です。",
             metrics=(
                 _metric("visible_messages", visible),
                 _metric("inflight_messages", inflight),
@@ -867,7 +957,7 @@ class AwsAdminStatusSource:
                 _metric("encrypted", encrypted),
                 _metric(
                     "retention_seconds",
-                    _decimal_integer(attributes.get("MessageRetentionPeriod")),
+                    retention_seconds,
                 ),
             ),
         )

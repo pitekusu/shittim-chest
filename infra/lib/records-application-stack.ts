@@ -76,10 +76,10 @@ export class RecordsApplicationStack extends Stack {
       allowedPattern: "^[A-Za-z0-9+/]{43}=$",
       description: "Base64-encoded SHA-256 of the immutable Records Lambda bundle",
     });
-    const recordsDistributionId = new CfnParameter(this, "RecordsDistributionId", {
+    const recordsPublicHostname = new CfnParameter(this, "RecordsPublicHostname", {
       type: "String",
-      allowedPattern: "^[A-Z0-9]{10,30}$",
-      description: "Exact deployed Records CloudFront distribution ID for read-only status",
+      allowedPattern: "^[a-z0-9.-]+$",
+      description: "Exact Records public hostname used for read-only distribution discovery",
     });
 
     const sourceTable = dynamodb.Table.fromTableAttributes(this, "SourceDebateTable", {
@@ -515,7 +515,7 @@ export class RecordsApplicationStack extends Stack {
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         WEB_BUCKET_NAME: `shittim-chest-production-records-web-${this.account}`,
         RELEASE_BUNDLE_BUCKET_NAME: bundleBucket.bucketName,
-        RECORDS_DISTRIBUTION_ID: recordsDistributionId.valueAsString,
+        RECORDS_PUBLIC_HOSTNAME: recordsPublicHostname.valueAsString,
         PROJECTOR_DLQ_URL: projectorDlq.queueUrl,
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
@@ -622,13 +622,17 @@ export class RecordsApplicationStack extends Stack {
           resources: statusFunctionArns,
         }),
         new iam.PolicyStatement({
+          actions: ["cloudfront:ListDistributions"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
           actions: ["cloudfront:GetDistribution", "cloudfront:ListInvalidations"],
           resources: [
             this.formatArn({
               service: "cloudfront",
               region: "",
               resource: "distribution",
-              resourceName: recordsDistributionId.valueAsString,
+              resourceName: "*",
             }),
           ],
         }),
@@ -652,7 +656,7 @@ export class RecordsApplicationStack extends Stack {
     for (const [function_, reason] of [
       [
         this.adminStatusFunction,
-        "CloudWatch, ECS, ECR repository discovery, and Inspector status APIs do not support complete resource-level scoping. ACM requires a certificate wildcard because the current certificate is derived at runtime from the exact allowlisted CloudFront distribution and can be replaced by the Edge stack. CloudFormation is restricted to the immutable Runtime stack name; its ARN suffix is assigned by CloudFormation and cannot be predicted. All other reads use exact production resources.",
+        "CloudWatch, ECS, ECR repository discovery, Inspector status, and CloudFront distribution discovery APIs do not support complete resource-level scoping. CloudFront and ACM require resource wildcards because the current resources are resolved at runtime from the exact allowlisted public hostname and can be replaced by the Edge stack. CloudFormation is restricted to the immutable Runtime stack name; its ARN suffix is assigned by CloudFormation and cannot be predicted. All other reads use exact production resources.",
       ],
     ] as const) {
       Validations.of(function_.role!).acknowledge({
@@ -672,6 +676,11 @@ export class RecordsApplicationStack extends Stack {
             [
               `AwsSolutions-IAM5[Resource::${partition}:cloudformation:${this.region}:` +
                 `${nagAccount}:stack/ShittimChest-Prod-Runtime/*]`,
+              reason,
+            ],
+            [
+              `AwsSolutions-IAM5[Resource::${partition}:cloudfront::` +
+                `${nagAccount}:distribution/*]`,
               reason,
             ],
           ]),

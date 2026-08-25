@@ -390,7 +390,7 @@ def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Pat
     "marker",
     [
         "/shittim-chest/production/records/admin/discord-user-id",
-        "RecordsDistributionId",
+        "RecordsPublicHostname",
     ],
 )
 def test_records_release_binds_admin_and_status_inputs(
@@ -404,7 +404,10 @@ def test_records_release_binds_admin_and_status_inputs(
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+    with pytest.raises(
+        WorkflowPolicyError,
+        match="plan/deploy boundary|pre-existing distribution",
+    ):
         validate_notification_workflows(directory)
 
 
@@ -555,6 +558,26 @@ def test_records_release_rejects_deletion_time_as_stack_absence(
     )
 
     with pytest.raises(WorkflowPolicyError, match="stack absence from DeletionTime"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_does_not_require_a_pre_existing_edge_distribution(
+    tmp_path: Path,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "          api_endpoint=$(aws cloudformation describe-stacks \\\n",
+            "          records_distribution_id=$(aws cloudformation describe-stacks \\\n"
+            "            --stack-name ShittimChest-Prod-RecordsEdge)\n"
+            "          api_endpoint=$(aws cloudformation describe-stacks \\\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="pre-existing distribution"):
         validate_notification_workflows(directory)
 
 

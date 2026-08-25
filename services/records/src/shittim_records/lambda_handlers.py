@@ -348,7 +348,7 @@ def _admin_status_controller() -> AdminStatusHttpController:
                 "session": _environment("SESSION_TABLE_NAME"),
             },
             functions=_environment_mapping("ADMIN_STATUS_FUNCTIONS_JSON"),
-            distribution_id=_environment("RECORDS_DISTRIBUTION_ID"),
+            records_public_hostname=_environment("RECORDS_PUBLIC_HOSTNAME"),
             projector_dlq_url=_environment("PROJECTOR_DLQ_URL"),
             alarm_prefix=_environment("ADMIN_ALARM_PREFIX"),
         )

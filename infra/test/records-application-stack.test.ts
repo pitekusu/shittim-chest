@@ -302,6 +302,7 @@ describe("RecordsApplicationStack", () => {
         Variables: {
           ADMIN_ALARM_PREFIX: "shittim-chest-production-",
           ADMIN_AWS_ACCOUNT_ID: "000000000000",
+          RECORDS_PUBLIC_HOSTNAME: { Ref: "RecordsPublicHostname" },
           RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
         },
       },
@@ -317,6 +318,7 @@ describe("RecordsApplicationStack", () => {
     for (const action of [
       "acm:DescribeCertificate",
       "cloudfront:GetDistribution",
+      "cloudfront:ListDistributions",
       "cloudformation:DescribeStacks",
       "cloudwatch:GetMetricData",
       "cloudwatch:GetMetricStatistics",
@@ -378,7 +380,7 @@ describe("RecordsApplicationStack", () => {
     });
 
     const parameters = template.toJSON().Parameters;
-    for (const name of ["RecordsDistributionId"]) {
+    for (const name of ["RecordsPublicHostname"]) {
       expect(parameters[name].Default).toBeUndefined();
     }
     expect(parameters.RuntimeImageDigest).toBeUndefined();

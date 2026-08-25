@@ -1298,6 +1298,13 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError("Records Release must reject an active ROLLBACK_COMPLETE stack")
     if any(marker not in plan_step for marker in stack_status_markers):
         raise WorkflowPolicyError("Records Release must classify a named stack by StackStatus")
+    if (
+        "records_distribution_id=" in plan_step
+        or '--expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}"' not in plan_step
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must allow Edge recovery without a pre-existing distribution"
+        )
 
     release_markers = (
         "name: Records Release",
@@ -1370,8 +1377,8 @@ def _validate_records_workflows(directory: Path) -> None:
         "Clean up only unexecuted Records Change Sets",
         "Confirm this Records release has no unexecuted Change Sets",
         "RecordsBundleCodeSha256",
-        "RecordsDistributionId",
-        'ParameterKey=RecordsDistributionId,ParameterValue="${records_distribution_id}"',
+        "RecordsPublicHostname",
+        'ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}"',
         "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w0)",
         '--expected-parameter "RecordsBundleCodeSha256=${bundle_code_sha256}"',
         "Verify anonymous and protected Records API boundaries",

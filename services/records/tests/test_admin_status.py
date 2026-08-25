@@ -41,7 +41,7 @@ def configuration() -> AwsAdminStatusConfiguration:
             "session": "private-session-table",
         },
         functions={"auth": "auth-function"},
-        distribution_id="distribution",
+        records_public_hostname="records.example.com",
         projector_dlq_url=(
             f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/projector-dlq"
         ),
@@ -67,6 +67,33 @@ class CloudWatch:
                 for query in kwargs["MetricDataQueries"]
             ]
         }
+
+
+class Paginator:
+    def __init__(self, pages: list[dict[str, Any]]) -> None:
+        self.pages = pages
+        self.calls: list[dict[str, Any]] = []
+
+    def paginate(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(kwargs)
+        return self.pages
+
+
+def distribution_pages() -> Paginator:
+    return Paginator(
+        [
+            {
+                "DistributionList": {
+                    "Items": [
+                        {
+                            "Id": "E123456789AB",
+                            "Aliases": {"Items": [configuration().records_public_hostname]},
+                        }
+                    ]
+                }
+            }
+        ]
+    )
 
 
 def source(**clients: Any) -> AwsAdminStatusSource:
@@ -291,6 +318,51 @@ def test_ecr_rejects_missing_runtime_stack_digest_without_using_stale_configurat
         source(cloudformation=CloudFormation())._runtime_image_digests()
 
 
+def test_ecr_state_includes_tag_immutability() -> None:
+    class CloudFormation:
+        def describe_stacks(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Stacks": [
+                    {
+                        "Parameters": [
+                            {
+                                "ParameterKey": "RuntimeImageDigest",
+                                "ParameterValue": RUNTIME_DIGEST,
+                            },
+                            {
+                                "ParameterKey": "BreakGlassImageDigest",
+                                "ParameterValue": BREAK_GLASS_DIGEST,
+                            },
+                        ]
+                    }
+                ]
+            }
+
+    class Ecr:
+        def describe_repositories(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "repositories": [
+                    {
+                        "imageTagMutability": "MUTABLE",
+                        "encryptionConfiguration": {"encryptionType": "AES256"},
+                    }
+                ]
+            }
+
+        def describe_images(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "imageDetails": [
+                    {"imageDigest": image["imageDigest"], "imagePushedAt": NOW}
+                    for image in kwargs["imageIds"]
+                ]
+            }
+
+    section = source(ecr=Ecr(), cloudformation=CloudFormation())._ecr_section()
+
+    assert section.state == "warning"
+    assert metrics(section)["tag_mutability"] == "MUTABLE"
+
+
 def test_alarm_query_uses_the_exact_deployed_production_prefix() -> None:
     alarms = Paginator([{"MetricAlarms": [], "CompositeAlarms": []}])
 
@@ -336,7 +408,13 @@ def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution(
     )
 
     class CloudFront:
-        def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
+        requested_distribution: str | None = None
+
+        def get_paginator(self, _name: str) -> Paginator:
+            return distribution_pages()
+
+        def get_distribution(self, *, Id: str) -> dict[str, Any]:
+            self.requested_distribution = Id
             return {
                 "Distribution": {
                     "Status": "Deployed",
@@ -367,9 +445,11 @@ def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution(
             }
 
     acm = Acm()
-    section = source(cloudfront=CloudFront(), acm=acm)._cloudfront_section(NOW)
+    cloudfront = CloudFront()
+    section = source(cloudfront=cloudfront, acm=acm)._cloudfront_section(NOW)
 
     assert section.state == "healthy"
+    assert cloudfront.requested_distribution == "E123456789AB"
     assert acm.requested_arn == certificate_arn
     assert certificate_arn not in section.model_dump_json()
 
@@ -390,6 +470,9 @@ def test_cloudfront_state_includes_certificate_health(
     )
 
     class CloudFront:
+        def get_paginator(self, _name: str) -> Paginator:
+            return distribution_pages()
+
         def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
             return {
                 "Distribution": {
@@ -411,16 +494,6 @@ def test_cloudfront_state_includes_certificate_health(
     section = source(cloudfront=CloudFront(), acm=Acm())._cloudfront_section(NOW)
 
     assert section.state == expected_state
-
-
-class Paginator:
-    def __init__(self, pages: list[dict[str, Any]]) -> None:
-        self.pages = pages
-        self.calls: list[dict[str, Any]] = []
-
-    def paginate(self, **kwargs: Any) -> list[dict[str, Any]]:
-        self.calls.append(kwargs)
-        return self.pages
 
 
 def test_inspector_includes_repository_coverage_and_last_scan() -> None:
@@ -506,6 +579,72 @@ def test_lambda_section_is_unknown_for_incomplete_provider_metrics(failure: str)
     )
 
 
+def test_lambda_section_propagates_reserved_concurrency_provider_failure() -> None:
+    class Lambda:
+        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "State": "Active",
+                "LastUpdateStatus": "Successful",
+                "Runtime": "python3.14",
+                "Architectures": ["arm64"],
+            }
+
+        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("provider failure")
+
+    with pytest.raises(RuntimeError, match="provider failure"):
+        source(lambda_client=Lambda())._lambda_section(NOW)
+
+
+def test_cloudfront_section_is_unknown_for_incomplete_provider_metrics() -> None:
+    certificate_arn = (
+        f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
+    )
+
+    class CloudFront:
+        def get_paginator(self, _name: str) -> Paginator:
+            return distribution_pages()
+
+        def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Distribution": {
+                    "Status": "Deployed",
+                    "DistributionConfig": {
+                        "Enabled": True,
+                        "ViewerCertificate": {"ACMCertificateArn": certificate_arn},
+                    },
+                }
+            }
+
+        def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"InvalidationList": {"Items": []}}
+
+    class Acm:
+        def describe_certificate(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Certificate": {
+                    "Status": "ISSUED",
+                    "KeyAlgorithm": "EC_prime256v1",
+                    "NotAfter": NOW + timedelta(days=30),
+                }
+            }
+
+    class IncompleteCloudWatch(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            results = super().get_metric_data(**kwargs)["MetricDataResults"]
+            results[0] = {**results[0], "StatusCode": "PartialData"}
+            return {"MetricDataResults": results}
+
+    section = source(
+        cloudfront=CloudFront(),
+        acm=Acm(),
+        cloudwatch_global=IncompleteCloudWatch(),
+    )._cloudfront_section(NOW)
+
+    assert section.state == "unknown"
+    assert metrics(section)["hour_4xx_rate"] is None
+
+
 def test_sqs_includes_oldest_age_without_reading_messages_or_returning_queue_name() -> None:
     class Sqs:
         def __init__(self) -> None:
@@ -534,6 +673,31 @@ def test_sqs_includes_oldest_age_without_reading_messages_or_returning_queue_nam
     assert cloudwatch.statistics_calls[0]["Dimensions"] == [
         {"Name": "QueueName", "Value": "projector-dlq"}
     ]
+
+
+@pytest.mark.parametrize(
+    ("encrypted", "retention"),
+    ((False, "1209600"), (True, "345600")),
+)
+def test_sqs_state_includes_encryption_and_retention(
+    encrypted: bool,
+    retention: str,
+) -> None:
+    class Sqs:
+        def get_queue_attributes(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Attributes": {
+                    "ApproximateNumberOfMessages": "0",
+                    "ApproximateNumberOfMessagesNotVisible": "0",
+                    "ApproximateNumberOfMessagesDelayed": "0",
+                    "SqsManagedSseEnabled": "true" if encrypted else "false",
+                    "MessageRetentionPeriod": retention,
+                }
+            }
+
+    section = source(sqs=Sqs())._sqs_section(NOW)
+
+    assert section.state == "warning"
 
 
 def test_status_service_reuses_warm_cache_for_sixty_seconds() -> None:

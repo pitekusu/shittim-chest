@@ -348,7 +348,7 @@ jobs:
                 --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
                 --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}" \
                 --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}" \
-                --expected-parameter "RecordsDistributionId=${records_distribution_id}"
+                --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}"
             elif [ "${logical_name}" = edge ]; then
               uv run --project services/records --frozen python \
                 tools/release_supply_chain.py validate-change-set \
@@ -399,11 +399,6 @@ jobs:
           edge_key=$(awk '$1 == "RecordsEdge" {print $4}' \
             "${RUNNER_TEMP}/template-assets.txt")
           account=$(aws sts get-caller-identity --query Account --output text)
-          records_distribution_id=$(aws cloudformation describe-stacks --region us-east-1 \
-            --stack-name ShittimChest-Prod-RecordsEdge \
-            --query "Stacks[0].Outputs[?OutputKey=='RecordsDistributionId'].OutputValue | [0]" \
-            --output text)
-          [[ "${records_distribution_id}" =~ ^[A-Z0-9]{10,30}$ ]]
           api_endpoint=$(aws cloudformation describe-stacks \
             --stack-name ShittimChest-Prod-RecordsApplication \
             --query "Stacks[0].Outputs[?OutputKey=='RecordsApiEndpoint'].OutputValue | [0]" \
@@ -425,7 +420,7 @@ jobs:
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
               ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}" \
               ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}" \
-              ParameterKey=RecordsDistributionId,ParameterValue="${records_distribution_id}"
+              ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}"
           create_plan edge ShittimChest-Prod-RecordsEdge \
             "${EDGE_CHANGE_SET}" "${edge_region}" "${EDGE_EXECUTION_ROLE_ARN}" \
             "${edge_bucket}" "${edge_key}" \
