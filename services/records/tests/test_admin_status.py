@@ -177,6 +177,7 @@ def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
     section = source(dynamodb=Dynamo())._dynamodb_section(NOW)
     values = metrics(section)
 
+    assert section.state == "warning"
     assert values["debate_stream_enabled"] is True
     assert values["debate_stream_view_type"] == "NEW_IMAGE"
     for label in ("debate", "archive", "statistics", "session"):

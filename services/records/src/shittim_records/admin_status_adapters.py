@@ -486,6 +486,7 @@ class AwsAdminStatusSource:
         warning = False
         throttles = self._dynamodb_throttles(now)
         throttles_unknown = any(value is None for value in throttles.values())
+        throttled = any(value is not None and value > 0 for value in throttles.values())
         for label in _TABLE_LABELS:
             name = self._config.tables[label]
             table = self._dynamodb.describe_table(TableName=name).get("Table", {})
@@ -533,9 +534,15 @@ class AwsAdminStatusSource:
                 )
         return AdminStatusSection(
             service="dynamodb",
-            state="unknown" if throttles_unknown else "warning" if warning else "healthy",
+            state="unknown"
+            if throttles_unknown
+            else "warning"
+            if warning or throttled
+            else "healthy",
             summary="一部の指標を取得できませんでした。"
             if throttles_unknown
+            else "直近1時間にDynamoDB throttleを検出しました。"
+            if throttled
             else "Table状態と保護設定を確認しました。",
             metrics=tuple(metrics),
         )
