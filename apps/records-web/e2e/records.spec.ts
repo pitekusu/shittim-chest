@@ -162,7 +162,7 @@ async function mockAuthenticatedApi(
   recordDelayMs = 0,
 ): Promise<void> {
   let authenticated = true;
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: authenticated
         ? {
@@ -437,7 +437,7 @@ test("record identities produce varied and stable card ornaments", async ({ page
       },
     };
   });
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: {
         schemaVersion: 1,
@@ -615,7 +615,7 @@ test("archive controls remain usable across responsive breakpoints", async ({ pa
 test("dark theme covers login, archive, detail, and rankings", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.emulateMedia({ colorScheme: "dark" });
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: {
         schemaVersion: 1,
@@ -637,7 +637,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
     maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 
-  await page.unroute("**/api/v1/session");
+  await page.unroute("**/api/v1/session?*");
   await mockAuthenticatedApi(page);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible();
@@ -829,7 +829,7 @@ test("English login product name keeps the approved two-line break at narrow wid
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: {
         schemaVersion: 1,
@@ -918,7 +918,7 @@ test("loads the next archive page automatically near the end of the loaded cards
     recordId: "Z".repeat(43),
     questionPreview: "自動で追加された議論",
   };
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: {
         schemaVersion: 1,
@@ -1128,7 +1128,7 @@ test("English display copy uses Delogy while Japanese copy keeps LINE Seed JP", 
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: {
         schemaVersion: 1,
@@ -1159,7 +1159,7 @@ test("English display copy uses Delogy while Japanese copy keeps LINE Seed JP", 
     maxDiffPixels: 20,
   });
 
-  await page.unroute("**/api/v1/session");
+  await page.unroute("**/api/v1/session?*");
   await mockAuthenticatedApi(page);
   await page.addInitScript(() =>
     sessionStorage.setItem("shittim-records-login-transition", "pending"),
@@ -1182,7 +1182,7 @@ test("publishes complete Open Graph metadata and a 1200 by 630 preview image", a
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: {
         schemaVersion: 1,
@@ -1296,7 +1296,7 @@ test("anonymous login page boots under the production CSP without dynamic evalua
 test("anonymous login does not request authenticated route assets", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   const requestedAssets = observeAssetRequests(page);
-  await page.route("**/api/v1/session", (route) =>
+  await page.route("**/api/v1/session?*", (route) =>
     route.fulfill({
       json: {
         schemaVersion: 1,

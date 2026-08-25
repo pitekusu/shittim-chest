@@ -302,6 +302,7 @@ describe("RecordsApplicationStack", () => {
         Variables: {
           ADMIN_ALARM_PREFIX: "shittim-chest-production-",
           ADMIN_AWS_ACCOUNT_ID: "000000000000",
+          RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
         },
       },
     });
@@ -316,6 +317,7 @@ describe("RecordsApplicationStack", () => {
     for (const action of [
       "acm:DescribeCertificate",
       "cloudfront:GetDistribution",
+      "cloudformation:DescribeStacks",
       "cloudwatch:GetMetricData",
       "cloudwatch:GetMetricStatistics",
       "dynamodb:DescribeTable",
@@ -337,6 +339,8 @@ describe("RecordsApplicationStack", () => {
     expect(statusText).not.toContain("sqs:ReceiveMessage");
     expect(statusText).not.toContain("lambda:InvokeFunction");
     expect(statusText).not.toContain("ecs:UpdateService");
+    expect(statusText).not.toContain("cloudformation:UpdateStack");
+    expect(statusText).toContain("stack/ShittimChest-Prod-Runtime/*");
 
     const statusStatements = statusPolicy?.Properties.PolicyDocument.Statement as Array<{
       readonly Action: string | string[];
@@ -374,13 +378,11 @@ describe("RecordsApplicationStack", () => {
     });
 
     const parameters = template.toJSON().Parameters;
-    for (const name of [
-      "RuntimeImageDigest",
-      "BreakGlassImageDigest",
-      "RecordsDistributionId",
-    ]) {
+    for (const name of ["RecordsDistributionId"]) {
       expect(parameters[name].Default).toBeUndefined();
     }
+    expect(parameters.RuntimeImageDigest).toBeUndefined();
+    expect(parameters.BreakGlassImageDigest).toBeUndefined();
     expect(parameters.RecordsCertificateArn).toBeUndefined();
   });
 

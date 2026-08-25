@@ -220,6 +220,7 @@
             "type": "string"
           },
           "isAdmin": {
+            "default": false,
             "title": "Isadmin",
             "type": "boolean"
           },
@@ -236,8 +237,7 @@
           "schemaVersion",
           "authenticated",
           "user",
-          "csrfToken",
-          "isAdmin"
+          "csrfToken"
         ],
         "title": "AuthenticatedSession",
         "type": "object"
@@ -2281,6 +2281,19 @@
     "/api/v1/session": {
       "get": {
         "operationId": "getSession",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "admin-v1"
+              ],
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

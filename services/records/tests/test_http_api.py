@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import pytest
+
 from shittim_records.auth import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
@@ -181,7 +183,6 @@ def test_anonymous_session_is_always_200_no_store_without_cookie() -> None:
         "authenticated": False,
         "user": None,
         "csrfToken": None,
-        "isAdmin": False,
     }
 
 
@@ -191,6 +192,7 @@ def test_authenticated_session_returns_csrf_and_short_lived_avatar_url() -> None
     response = controller.handle(
         event(
             "GET /api/v1/session",
+            query="contract=admin-v1",
             cookies=[
                 f"{SESSION_COOKIE_NAME}=session-token",
                 f"{CSRF_COOKIE_NAME}=csrf-token",
@@ -205,6 +207,40 @@ def test_authenticated_session_returns_csrf_and_short_lived_avatar_url() -> None
     assert payload["csrfToken"] == "csrf-token"
     assert payload["user"]["avatar"]["kind"] == "image"
     assert "requesterKey" not in repr(payload)
+
+
+def test_authenticated_legacy_session_response_omits_admin_capability() -> None:
+    controller = AuthHttpController(cast(Any, FakeAuthService(session())))
+
+    response = controller.handle(
+        event(
+            "GET /api/v1/session",
+            cookies=[
+                f"{SESSION_COOKIE_NAME}=session-token",
+                f"{CSRF_COOKIE_NAME}=csrf-token",
+            ],
+        ),
+        now=NOW,
+    )
+
+    assert "isAdmin" not in json.loads(response["body"])
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "contract=unknown",
+        "contract=admin-v1&contract=admin-v1",
+        "unexpected=value",
+    ),
+)
+def test_session_rejects_unknown_or_ambiguous_contract_negotiation(query: str) -> None:
+    controller = AuthHttpController(cast(Any, FakeAuthService()))
+
+    response = controller.handle(event("GET /api/v1/session", query=query), now=NOW)
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
 
 
 def test_callback_requires_exactly_one_code_and_state() -> None:

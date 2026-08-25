@@ -167,6 +167,13 @@ def build_openapi() -> dict[str, Any]:
                 "get": {
                     "operationId": "getSession",
                     "security": [],
+                    "parameters": [
+                        _parameter(
+                            "contract",
+                            "query",
+                            {"type": "string", "enum": ["admin-v1"]},
+                        )
+                    ],
                     "responses": {
                         "200": _response("SessionResponse", "Current browser session"),
                         **error_responses,

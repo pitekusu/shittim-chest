@@ -107,6 +107,23 @@ def test_public_contracts_use_camel_case_and_reject_unknown_fields() -> None:
 
     assert payload["schemaVersion"] == 1
     assert payload["user"]["displayName"] == "利用者"
+
+    legacy_response = SessionResponse.model_validate(
+        {
+            "schemaVersion": 1,
+            "authenticated": True,
+            "user": {
+                "displayName": "利用者",
+                "avatar": {
+                    "kind": "placeholder",
+                    "alt": "利用者のアバター",
+                    "fallbackVariant": "cyan",
+                },
+            },
+            "csrfToken": "csrf-example",
+        }
+    )
+    assert legacy_response.root.is_admin is False
     with pytest.raises(ValidationError):
         SessionResponse.model_validate({"authenticated": False, "privateId": "forbidden"})
 

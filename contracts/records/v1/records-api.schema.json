@@ -219,6 +219,7 @@
           "type": "string"
         },
         "isAdmin": {
+          "default": false,
           "title": "Isadmin",
           "type": "boolean"
         },
@@ -235,8 +236,7 @@
         "schemaVersion",
         "authenticated",
         "user",
-        "csrfToken",
-        "isAdmin"
+        "csrfToken"
       ],
       "title": "AuthenticatedSession",
       "type": "object"

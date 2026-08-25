@@ -343,20 +343,13 @@ def test_records_release_requires_anonymous_session_to_be_non_admin(tmp_path: Pa
         validate_notification_workflows(directory)
 
 
-def test_records_release_binds_each_runtime_digest_to_its_exact_parameter(tmp_path: Path) -> None:
+def test_records_release_does_not_freeze_runtime_digests(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
-    path = directory / RECORDS_RELEASE_WORKFLOW
-    path.write_text(
-        path.read_text(encoding="utf-8").replace(
-            'ParameterKey=BreakGlassImageDigest,ParameterValue="${break_glass_image_digest}"',
-            'ParameterKey=BreakGlassImageDigest,ParameterValue="${runtime_image_digest}"',
-            1,
-        ),
-        encoding="utf-8",
-    )
+    release = (directory / RECORDS_RELEASE_WORKFLOW).read_text(encoding="utf-8")
 
-    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
-        validate_notification_workflows(directory)
+    assert "RuntimeImageDigest" not in release
+    assert "BreakGlassImageDigest" not in release
+    validate_notification_workflows(directory)
 
 
 def test_records_release_preserves_old_hashed_web_assets(tmp_path: Path) -> None:
@@ -397,12 +390,10 @@ def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Pat
     "marker",
     [
         "/shittim-chest/production/records/admin/discord-user-id",
-        "RuntimeImageDigest",
-        "BreakGlassImageDigest",
         "RecordsDistributionId",
     ],
 )
-def test_records_release_binds_admin_and_runtime_status_inputs(
+def test_records_release_binds_admin_and_status_inputs(
     tmp_path: Path,
     marker: str,
 ) -> None:

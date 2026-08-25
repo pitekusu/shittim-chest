@@ -85,7 +85,9 @@ function AuthenticatedRoutes({
               <Route path="/insights" element={<RankingsPage />} />
               <Route
                 path="/admin"
-                element={<AdminPage isAdmin={session.isAdmin} csrfToken={session.csrfToken} />}
+                element={
+                  <AdminPage isAdmin={session.isAdmin === true} csrfToken={session.csrfToken} />
+                }
               />
               <Route path="/login" element={<Navigate to="/" replace />} />
               <Route path="*" element={<NotFoundPage />} />

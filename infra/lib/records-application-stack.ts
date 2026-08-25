@@ -1,4 +1,5 @@
 import {
+  ArnFormat,
   CfnParameter,
   CfnOutput,
   Duration,
@@ -79,16 +80,6 @@ export class RecordsApplicationStack extends Stack {
       type: "String",
       allowedPattern: "^[A-Z0-9]{10,30}$",
       description: "Exact deployed Records CloudFront distribution ID for read-only status",
-    });
-    const runtimeImageDigest = new CfnParameter(this, "RuntimeImageDigest", {
-      type: "String",
-      allowedPattern: "^sha256:[0-9a-f]{64}$",
-      description: "Exact production image digest currently bound to the Runtime stack",
-    });
-    const breakGlassImageDigest = new CfnParameter(this, "BreakGlassImageDigest", {
-      type: "String",
-      allowedPattern: "^sha256:[0-9a-f]{64}$",
-      description: "Exact break-glass image digest currently bound to the Runtime stack",
     });
 
     const sourceTable = dynamodb.Table.fromTableAttributes(this, "SourceDebateTable", {
@@ -529,8 +520,7 @@ export class RecordsApplicationStack extends Stack {
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
         ECR_REPOSITORY_NAME: "shittim-chest",
-        RUNTIME_IMAGE_DIGEST: runtimeImageDigest.valueAsString,
-        BREAK_GLASS_IMAGE_DIGEST: breakGlassImageDigest.valueAsString,
+        RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
         ADMIN_STATUS_FUNCTIONS_JSON: JSON.stringify(statusFunctionNames),
       },
       policyStatements: [
@@ -582,6 +572,17 @@ export class RecordsApplicationStack extends Stack {
         new iam.PolicyStatement({
           actions: ["ecs:DescribeServices"],
           resources: [ecsServiceArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["cloudformation:DescribeStacks"],
+          resources: [
+            this.formatArn({
+              service: "cloudformation",
+              resource: "stack",
+              resourceName: "ShittimChest-Prod-Runtime/*",
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+          ],
         }),
         new iam.PolicyStatement({
           actions: ["ecr:DescribeImages"],
@@ -651,7 +652,7 @@ export class RecordsApplicationStack extends Stack {
     for (const [function_, reason] of [
       [
         this.adminStatusFunction,
-        "CloudWatch, ECS, ECR repository discovery, and Inspector status APIs do not support complete resource-level scoping. ACM requires a certificate wildcard because the current certificate is derived at runtime from the exact allowlisted CloudFront distribution and can be replaced by the Edge stack; all other reads use exact production resources.",
+        "CloudWatch, ECS, ECR repository discovery, and Inspector status APIs do not support complete resource-level scoping. ACM requires a certificate wildcard because the current certificate is derived at runtime from the exact allowlisted CloudFront distribution and can be replaced by the Edge stack. CloudFormation is restricted to the immutable Runtime stack name; its ARN suffix is assigned by CloudFormation and cannot be predicted. All other reads use exact production resources.",
       ],
     ] as const) {
       Validations.of(function_.role!).acknowledge({
@@ -662,10 +663,17 @@ export class RecordsApplicationStack extends Stack {
       function_.role!.node.addMetadata(
         Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
         Object.fromEntries(
-          ["arn:aws", "arn:<AWS::Partition>"].map((partition) => [
-            `AwsSolutions-IAM5[Resource::${partition}:acm:us-east-1:` +
-              `${nagAccount}:certificate/*]`,
-            reason,
+          ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
+            [
+              `AwsSolutions-IAM5[Resource::${partition}:acm:us-east-1:` +
+                `${nagAccount}:certificate/*]`,
+              reason,
+            ],
+            [
+              `AwsSolutions-IAM5[Resource::${partition}:cloudformation:${this.region}:` +
+                `${nagAccount}:stack/ShittimChest-Prod-Runtime/*]`,
+              reason,
+            ],
           ]),
         ),
       );

@@ -277,7 +277,7 @@ class AuthenticatedSession(PublicModel):
     authenticated: Literal[True]
     user: SessionUser
     csrf_token: NonEmptyText
-    is_admin: bool
+    is_admin: bool = False
 
 
 class AnonymousSession(PublicModel):

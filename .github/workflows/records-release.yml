@@ -348,8 +348,6 @@ jobs:
                 --expected-parameter "RecordsBundleObjectKey=${BUNDLE_KEY}" \
                 --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}" \
                 --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}" \
-                --expected-parameter "RuntimeImageDigest=${runtime_image_digest}" \
-                --expected-parameter "BreakGlassImageDigest=${break_glass_image_digest}" \
                 --expected-parameter "RecordsDistributionId=${records_distribution_id}"
             elif [ "${logical_name}" = edge ]; then
               uv run --project services/records --frozen python \
@@ -401,16 +399,6 @@ jobs:
           edge_key=$(awk '$1 == "RecordsEdge" {print $4}' \
             "${RUNNER_TEMP}/template-assets.txt")
           account=$(aws sts get-caller-identity --query Account --output text)
-          runtime_image_digest=$(aws cloudformation describe-stacks \
-            --stack-name ShittimChest-Prod-Runtime \
-            --query "Stacks[0].Parameters[?ParameterKey=='RuntimeImageDigest'].ParameterValue | [0]" \
-            --output text)
-          [[ "${runtime_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          break_glass_image_digest=$(aws cloudformation describe-stacks \
-            --stack-name ShittimChest-Prod-Runtime \
-            --query "Stacks[0].Parameters[?ParameterKey=='BreakGlassImageDigest'].ParameterValue | [0]" \
-            --output text)
-          [[ "${break_glass_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           records_distribution_id=$(aws cloudformation describe-stacks --region us-east-1 \
             --stack-name ShittimChest-Prod-RecordsEdge \
             --query "Stacks[0].Outputs[?OutputKey=='RecordsDistributionId'].OutputValue | [0]" \
@@ -437,8 +425,6 @@ jobs:
               ParameterKey=RecordsBundleObjectKey,ParameterValue="${BUNDLE_KEY}" \
               ParameterKey=RecordsBundleObjectVersion,ParameterValue="${BUNDLE_VERSION}" \
               ParameterKey=RecordsBundleCodeSha256,ParameterValue="${BUNDLE_CODE_SHA256}" \
-              ParameterKey=RuntimeImageDigest,ParameterValue="${runtime_image_digest}" \
-              ParameterKey=BreakGlassImageDigest,ParameterValue="${break_glass_image_digest}" \
               ParameterKey=RecordsDistributionId,ParameterValue="${records_distribution_id}"
           create_plan edge ShittimChest-Prod-RecordsEdge \
             "${EDGE_CHANGE_SET}" "${edge_region}" "${EDGE_EXECUTION_ROLE_ARN}" \
@@ -778,7 +764,7 @@ jobs:
             --dump-header "${RUNNER_TEMP}/records-session.headers" \
             --output "${RUNNER_TEMP}/records-session.json" \
             --write-out '%{http_code}' \
-            "${endpoint}/api/v1/session")
+            "${endpoint}/api/v1/session?contract=admin-v1")
           test "${session_status}" = 200
           jq --exit-status \
             '.schemaVersion == 1 and .authenticated == false and

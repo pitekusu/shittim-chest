@@ -18,6 +18,8 @@ from shittim_records.contracts import AdminStatusOverall, AdminStatusSection
 
 NOW = datetime(2026, 8, 24, 3, 0, tzinfo=UTC)
 AWS_ACCOUNT_ID = "123456" + "789012"
+RUNTIME_DIGEST = "sha256:" + "a" * 64
+BREAK_GLASS_DIGEST = "sha256:" + "b" * 64
 
 
 def configuration() -> AwsAdminStatusConfiguration:
@@ -26,8 +28,7 @@ def configuration() -> AwsAdminStatusConfiguration:
         cluster_name="private-cluster-name",
         service_name="private-service-name",
         ecr_repository_name="private-repository-name",
-        runtime_image_digest="sha256:" + "a" * 64,
-        break_glass_image_digest="sha256:" + "b" * 64,
+        runtime_stack_name="ShittimChest-Prod-Runtime",
         buckets={
             "web": "private-web-bucket",
             "media": "private-media-bucket",
@@ -74,6 +75,7 @@ def source(**clients: Any) -> AwsAdminStatusSource:
     return AwsAdminStatusSource(
         configuration=configuration(),
         ecs=clients.get("ecs", empty),
+        cloudformation=clients.get("cloudformation", empty),
         ecr=clients.get("ecr", empty),
         inspector=clients.get("inspector", empty),
         s3=clients.get("s3", empty),
@@ -178,7 +180,64 @@ def test_dynamodb_preserves_unknown_throttles_for_incomplete_metric_data() -> No
     assert throttles[("session", "write")] is None
 
 
+def test_dynamodb_requires_session_ttl_to_be_enabled() -> None:
+    class Dynamo:
+        def describe_table(self, *, TableName: str) -> dict[str, Any]:
+            stream = (
+                {"StreamEnabled": True, "StreamViewType": "NEW_IMAGE"}
+                if TableName == configuration().tables["debate"]
+                else {}
+            )
+            return {
+                "Table": {
+                    "TableStatus": "ACTIVE",
+                    "DeletionProtectionEnabled": True,
+                    "ItemCount": 0,
+                    "StreamSpecification": stream,
+                }
+            }
+
+        def describe_continuous_backups(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "ContinuousBackupsDescription": {
+                    "PointInTimeRecoveryDescription": {"PointInTimeRecoveryStatus": "ENABLED"}
+                }
+            }
+
+        def describe_time_to_live(self, *, TableName: str) -> dict[str, Any]:
+            status = "DISABLED" if TableName == configuration().tables["session"] else "ENABLED"
+            return {"TimeToLiveDescription": {"TimeToLiveStatus": status}}
+
+    section = source(dynamodb=Dynamo())._dynamodb_section(NOW)
+
+    assert section.state == "warning"
+    assert metrics(section)["session_ttl"] == "DISABLED"
+
+
 def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
+    class CloudFormation:
+        def __init__(self) -> None:
+            self.stack_names: list[str] = []
+
+        def describe_stacks(self, *, StackName: str) -> dict[str, Any]:
+            self.stack_names.append(StackName)
+            return {
+                "Stacks": [
+                    {
+                        "Parameters": [
+                            {
+                                "ParameterKey": "RuntimeImageDigest",
+                                "ParameterValue": RUNTIME_DIGEST,
+                            },
+                            {
+                                "ParameterKey": "BreakGlassImageDigest",
+                                "ParameterValue": BREAK_GLASS_DIGEST,
+                            },
+                        ]
+                    }
+                ]
+            }
+
     class Ecr:
         def __init__(self) -> None:
             self.image_ids: list[dict[str, str]] = []
@@ -207,18 +266,29 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
             }
 
     ecr = Ecr()
-    section = source(ecr=ecr)._ecr_section()
+    cloudformation = CloudFormation()
+    section = source(ecr=ecr, cloudformation=cloudformation)._ecr_section()
 
     assert section.state == "healthy"
     assert ecr.image_ids == [
-        {"imageDigest": configuration().runtime_image_digest},
-        {"imageDigest": configuration().break_glass_image_digest},
+        {"imageDigest": RUNTIME_DIGEST},
+        {"imageDigest": BREAK_GLASS_DIGEST},
     ]
+    assert cloudformation.stack_names == [configuration().runtime_stack_name]
     values = metrics(section)
     assert values["normal_image_present"] is True
     assert values["break_glass_image_present"] is True
     assert "sha256:" not in section.model_dump_json()
-    assert configuration().runtime_image_digest[:19] not in section.model_dump_json()
+    assert RUNTIME_DIGEST[:19] not in section.model_dump_json()
+
+
+def test_ecr_rejects_missing_runtime_stack_digest_without_using_stale_configuration() -> None:
+    class CloudFormation:
+        def describe_stacks(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"Stacks": [{"Parameters": []}]}
+
+    with pytest.raises(ValueError, match="Runtime image digest is invalid"):
+        source(cloudformation=CloudFormation())._runtime_image_digests()
 
 
 def test_alarm_query_uses_the_exact_deployed_production_prefix() -> None:
@@ -234,9 +304,30 @@ def test_alarm_query_uses_the_exact_deployed_production_prefix() -> None:
     assert alarms.calls == [
         {
             "AlarmNamePrefix": "shittim-chest-production-",
+            "AlarmTypes": ["CompositeAlarm"],
             "StateValue": "ALARM",
         }
     ]
+
+
+def test_alarm_counts_only_severity_bearing_composites() -> None:
+    alarms = Paginator(
+        [
+            {
+                "MetricAlarms": [{"AlarmName": "shittim-chest-production-heartbeat-stale"}],
+                "CompositeAlarms": [
+                    {"AlarmName": "shittim-chest-production-critical"},
+                    {"AlarmName": "shittim-chest-production-warning"},
+                ],
+            }
+        ]
+    )
+
+    class Alarms:
+        def get_paginator(self, _name: str) -> Paginator:
+            return alarms
+
+    assert source(cloudwatch=Alarms())._alarm_counts() == (1, 1, False)
 
 
 def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution() -> None:
@@ -269,6 +360,7 @@ def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution(
             self.requested_arn = CertificateArn
             return {
                 "Certificate": {
+                    "Status": "ISSUED",
                     "KeyAlgorithm": "EC_prime256v1",
                     "NotAfter": NOW + timedelta(days=300),
                 }
@@ -280,6 +372,45 @@ def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution(
     assert section.state == "healthy"
     assert acm.requested_arn == certificate_arn
     assert certificate_arn not in section.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("certificate", "expected_state"),
+    (
+        ({"Status": "PENDING_VALIDATION", "NotAfter": NOW + timedelta(days=30)}, "warning"),
+        ({"Status": "ISSUED", "NotAfter": NOW - timedelta(seconds=1)}, "warning"),
+        ({"Status": "ISSUED"}, "unknown"),
+    ),
+)
+def test_cloudfront_state_includes_certificate_health(
+    certificate: dict[str, Any], expected_state: str
+) -> None:
+    certificate_arn = (
+        f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
+    )
+
+    class CloudFront:
+        def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Distribution": {
+                    "Status": "Deployed",
+                    "DistributionConfig": {
+                        "Enabled": True,
+                        "ViewerCertificate": {"ACMCertificateArn": certificate_arn},
+                    },
+                }
+            }
+
+        def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"InvalidationList": {"Items": []}}
+
+    class Acm:
+        def describe_certificate(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"Certificate": certificate}
+
+    section = source(cloudfront=CloudFront(), acm=Acm())._cloudfront_section(NOW)
+
+    assert section.state == expected_state
 
 
 class Paginator:
@@ -322,6 +453,57 @@ def test_inspector_includes_repository_coverage_and_last_scan() -> None:
     assert values["last_scanned_at"] == NOW.isoformat()
     assert "private-resource" not in section.model_dump_json()
     assert AWS_ACCOUNT_ID not in section.model_dump_json()
+
+
+def test_inspector_treats_untriaged_findings_as_warning() -> None:
+    finding_pages = Paginator([{"findings": [{"severity": "UNTRIAGED"}]}])
+    coverage_pages = Paginator(
+        [{"coveredResources": [{"scanStatus": {"statusCode": "ACTIVE"}, "lastScannedAt": NOW}]}]
+    )
+
+    class Inspector:
+        def get_paginator(self, name: str) -> Paginator:
+            return finding_pages if name == "list_findings" else coverage_pages
+
+    section = source(inspector=Inspector())._inspector_section()
+
+    assert section.state == "warning"
+    assert metrics(section)["active_untriaged"] == 1
+
+
+@pytest.mark.parametrize("failure", ("partial", "missing", "empty"))
+def test_lambda_section_is_unknown_for_incomplete_provider_metrics(failure: str) -> None:
+    class Lambda:
+        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "State": "Active",
+                "LastUpdateStatus": "Successful",
+                "Runtime": "python3.14",
+                "Architectures": ["arm64"],
+            }
+
+        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"ReservedConcurrentExecutions": 1}
+
+    class IncompleteCloudWatch(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            results = super().get_metric_data(**kwargs)["MetricDataResults"]
+            if failure == "partial":
+                results[1] = {**results[1], "StatusCode": "PartialData"}
+            elif failure == "missing":
+                results.pop()
+            else:
+                results[1] = {**results[1], "Values": []}
+            return {"MetricDataResults": results}
+
+    section = source(lambda_client=Lambda(), cloudwatch=IncompleteCloudWatch())._lambda_section(NOW)
+
+    assert section.state == "unknown"
+    values = metrics(section)
+    assert any(
+        values[f"auth_hour_{metric}"] is None
+        for metric in ("invocations", "errors", "throttles", "duration")
+    )
 
 
 def test_sqs_includes_oldest_age_without_reading_messages_or_returning_queue_name() -> None:

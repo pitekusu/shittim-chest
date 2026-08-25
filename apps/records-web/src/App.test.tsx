@@ -44,7 +44,7 @@ describe("App shell", () => {
       expect(link).not.toHaveTextContent("ADMIN");
     }
     expect(screen.getByText("SYSTEM ACCESS")).toBeVisible();
-    expect(requests).toEqual(["/api/v1/session"]);
+    expect(requests).toEqual(["/api/v1/session?contract=admin-v1"]);
   });
 
   it("coordinates branded motion and heading focus across internal routes", async () => {
@@ -250,7 +250,9 @@ describe("App shell", () => {
     focusManager.setFocused(false);
     focusManager.setFocused(true);
     await waitFor(() => {
-      expect(requests.filter((path) => path === "/api/v1/session")).toHaveLength(2);
+      expect(requests.filter((path) => path === "/api/v1/session?contract=admin-v1")).toHaveLength(
+        2,
+      );
     });
     expect(screen.getByText("GOODBYE, SENSEI.")).toBeVisible();
     await waitFor(
@@ -271,7 +273,7 @@ describe("App shell", () => {
       vi.fn((input: RequestInfo | URL) => {
         const path =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (path === "/api/v1/session") {
+        if (path === "/api/v1/session?contract=admin-v1") {
           sessionRequests += 1;
           const session =
             sessionRequests === 1

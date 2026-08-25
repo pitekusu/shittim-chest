@@ -122,14 +122,14 @@ export type SessionResponse =
   | {
       readonly schemaVersion: 1;
       readonly authenticated: false;
-      readonly isAdmin: false;
+      readonly isAdmin?: false;
       readonly user: null;
       readonly csrfToken: null;
     }
   | {
       readonly schemaVersion: 1;
       readonly authenticated: true;
-      readonly isAdmin: boolean;
+      readonly isAdmin?: boolean;
       readonly user: {
         readonly displayName: string;
         readonly avatar: AvatarRef;

@@ -95,6 +95,16 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     ):
         assert re.search(return_to_pattern, unsafe_return_to) is None
     assert openapi["paths"]["/api/v1/session"]["get"]["security"] == []
+    assert openapi["paths"]["/api/v1/session"]["get"]["parameters"] == [
+        {
+            "name": "contract",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string", "enum": ["admin-v1"]},
+        }
+    ]
+    for session_schema in ("AuthenticatedSession", "AnonymousSession"):
+        assert "isAdmin" not in json_schema["$defs"][session_schema]["required"]
     assert [
         parameter["name"] for parameter in openapi["paths"]["/api/v1/records"]["get"]["parameters"]
     ] == ["cursor", "limit", "sort", "winner"]

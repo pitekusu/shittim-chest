@@ -179,6 +179,25 @@ describe("Records API endpoint validation", () => {
     });
   });
 
+  it("negotiates the ADMIN session contract while accepting a legacy response", async () => {
+    const legacySession = {
+      schemaVersion: 1,
+      authenticated: false,
+      user: null,
+      csrfToken: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(legacySession))),
+    );
+
+    await expect(getSession()).resolves.toEqual(legacySession);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/session?contract=admin-v1",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("applies record invariants after record-detail schema validation", async () => {
     const conflictingWinner = recordDetail();
     conflictingWinner.finalDecision.winner = "participant-b";

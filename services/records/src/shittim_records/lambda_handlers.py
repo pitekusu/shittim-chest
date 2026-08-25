@@ -335,8 +335,7 @@ def _admin_status_controller() -> AdminStatusHttpController:
             cluster_name=_environment("ECS_CLUSTER_NAME"),
             service_name=_environment("ECS_SERVICE_NAME"),
             ecr_repository_name=_environment("ECR_REPOSITORY_NAME"),
-            runtime_image_digest=_environment("RUNTIME_IMAGE_DIGEST"),
-            break_glass_image_digest=_environment("BREAK_GLASS_IMAGE_DIGEST"),
+            runtime_stack_name=_environment("RUNTIME_STACK_NAME"),
             buckets={
                 "web": _environment("WEB_BUCKET_NAME"),
                 "media": _environment("MEDIA_BUCKET_NAME"),
@@ -356,6 +355,11 @@ def _admin_status_controller() -> AdminStatusHttpController:
         source = AwsAdminStatusSource(
             configuration=configuration,
             ecs=boto3.client("ecs", region_name=region, config=SDK_CONFIG),
+            cloudformation=boto3.client(
+                "cloudformation",
+                region_name=region,
+                config=SDK_CONFIG,
+            ),
             ecr=boto3.client("ecr", region_name=region, config=SDK_CONFIG),
             inspector=boto3.client("inspector2", region_name=region, config=SDK_CONFIG),
             s3=_regional_s3_client(),

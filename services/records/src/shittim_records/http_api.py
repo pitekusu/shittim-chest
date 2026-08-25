@@ -112,6 +112,13 @@ class AuthHttpController:
             return error_response(status, _public_error_code(error.code), request.request_id)
 
     def _session(self, *, request: Request, now: datetime) -> dict[str, Any]:
+        query = _query(request.raw_query)
+        if not set(query).issubset({"contract"}):
+            raise AuthFailure("oauth_request_invalid")
+        contract = _optional_single(query, "contract")
+        if contract not in {None, "admin-v1"}:
+            raise AuthFailure("oauth_request_invalid")
+        include_admin = contract == "admin-v1"
         raw_session = request.cookies.get(SESSION_COOKIE_NAME)
         raw_csrf = request.cookies.get(CSRF_COOKIE_NAME)
         session = self._service.authenticate(raw_session=raw_session, now=now)
@@ -145,10 +152,13 @@ class AuthHttpController:
                         authenticated=True,
                         user=SessionUser(display_name=session.display_name, avatar=avatar),
                         csrf_token=raw_csrf,
-                        is_admin=self._service.is_admin(session),
+                        is_admin=self._service.is_admin(session) if include_admin else False,
                     )
                 )
-        return json_response(200, payload.model_dump(by_alias=True, mode="json"))
+        response_payload = payload.model_dump(by_alias=True, mode="json")
+        if not include_admin:
+            response_payload.pop("isAdmin", None)
+        return json_response(200, response_payload)
 
 
 class ReadHttpController:

@@ -35,8 +35,7 @@ class AwsAdminStatusConfiguration:
     cluster_name: str
     service_name: str
     ecr_repository_name: str
-    runtime_image_digest: str
-    break_glass_image_digest: str
+    runtime_stack_name: str
     buckets: Mapping[str, str]
     tables: Mapping[str, str]
     functions: Mapping[str, str]
@@ -57,8 +56,7 @@ class AwsAdminStatusConfiguration:
             self.cluster_name,
             self.service_name,
             self.ecr_repository_name,
-            self.runtime_image_digest,
-            self.break_glass_image_digest,
+            self.runtime_stack_name,
             self.distribution_id,
             self.projector_dlq_url,
             self.alarm_prefix,
@@ -67,10 +65,6 @@ class AwsAdminStatusConfiguration:
             any(not value for value in required)
             or len(self.aws_account_id) != 12
             or not self.aws_account_id.isdecimal()
-            or any(
-                not value.startswith("sha256:") or len(value) != 71
-                for value in (self.runtime_image_digest, self.break_glass_image_digest)
-            )
         ):
             raise ValueError("ADMIN status configuration is incomplete")
 
@@ -83,6 +77,7 @@ class AwsAdminStatusSource:
         *,
         configuration: AwsAdminStatusConfiguration,
         ecs: Any,
+        cloudformation: Any,
         ecr: Any,
         inspector: Any,
         s3: Any,
@@ -96,6 +91,7 @@ class AwsAdminStatusSource:
     ) -> None:
         self._config = configuration
         self._ecs = ecs
+        self._cloudformation = cloudformation
         self._ecr = ecr
         self._inspector = inspector
         self._s3 = s3
@@ -185,25 +181,23 @@ class AwsAdminStatusSource:
             paginator = self._cloudwatch.get_paginator("describe_alarms")
             critical = 0
             warning = 0
+            unknown = False
             for page in _bounded_pages(
                 paginator.paginate(
                     AlarmNamePrefix=self._config.alarm_prefix,
+                    AlarmTypes=["CompositeAlarm"],
                     StateValue="ALARM",
                 )
             ):
-                for alarm in page.get("MetricAlarms", []):
-                    name = str(alarm.get("AlarmName", "")).casefold()
-                    if "critical" in name:
-                        critical += 1
-                    else:
-                        warning += 1
                 for alarm in page.get("CompositeAlarms", []):
                     name = str(alarm.get("AlarmName", "")).casefold()
                     if "critical" in name:
                         critical += 1
-                    else:
+                    elif "warning" in name:
                         warning += 1
-            return critical, warning, False
+                    else:
+                        unknown = True
+            return critical, warning, unknown
         except Exception:
             return 0, 0, True
 
@@ -293,6 +287,7 @@ class AwsAdminStatusSource:
         )
 
     def _ecr_section(self) -> AdminStatusSection:
+        runtime_image_digest, break_glass_image_digest = self._runtime_image_digests()
         repository = self._ecr.describe_repositories(
             repositoryNames=[self._config.ecr_repository_name]
         ).get("repositories", [])
@@ -301,8 +296,8 @@ class AwsAdminStatusSource:
         details = self._ecr.describe_images(
             repositoryName=self._config.ecr_repository_name,
             imageIds=[
-                {"imageDigest": self._config.runtime_image_digest},
-                {"imageDigest": self._config.break_glass_image_digest},
+                {"imageDigest": runtime_image_digest},
+                {"imageDigest": break_glass_image_digest},
             ],
         ).get("imageDetails", [])
         by_digest = {
@@ -320,8 +315,8 @@ class AwsAdminStatusSource:
         ]
         missing = False
         for label, digest in (
-            ("normal", self._config.runtime_image_digest),
-            ("break_glass", self._config.break_glass_image_digest),
+            ("normal", runtime_image_digest),
+            ("break_glass", break_glass_image_digest),
         ):
             image = by_digest.get(digest)
             if image is None:
@@ -351,8 +346,26 @@ class AwsAdminStatusSource:
             metrics=tuple(metrics),
         )
 
+    def _runtime_image_digests(self) -> tuple[str, str]:
+        response = self._cloudformation.describe_stacks(StackName=self._config.runtime_stack_name)
+        stacks = response.get("Stacks", [])
+        if not isinstance(stacks, list) or len(stacks) != 1:
+            raise ValueError("Runtime stack is unavailable")
+        parameters = stacks[0].get("Parameters", [])
+        if not isinstance(parameters, list):
+            raise ValueError("Runtime stack parameters are invalid")
+        values = {
+            item.get("ParameterKey"): item.get("ParameterValue")
+            for item in parameters
+            if isinstance(item, Mapping)
+        }
+        return (
+            _image_digest(values.get("RuntimeImageDigest")),
+            _image_digest(values.get("BreakGlassImageDigest")),
+        )
+
     def _inspector_section(self) -> AdminStatusSection:
-        counts = {severity: 0 for severity in ("critical", "high", "medium", "low")}
+        counts = {severity: 0 for severity in ("critical", "high", "medium", "low", "untriaged")}
         paginator = self._inspector.get_paginator("list_findings")
         for page in _bounded_pages(
             paginator.paginate(
@@ -368,6 +381,8 @@ class AwsAdminStatusSource:
                 severity = str(finding.get("severity", "")).casefold()
                 if severity in counts:
                     counts[severity] += 1
+                elif severity != "informational":
+                    counts["untriaged"] += 1
         coverage_count = 0
         active_coverage = 0
         last_scanned_at: datetime | None = None
@@ -396,6 +411,7 @@ class AwsAdminStatusSource:
             else "warning"
             if counts["high"]
             or counts["medium"]
+            or counts["untriaged"]
             or coverage_count == 0
             or active_coverage != coverage_count
             else "healthy"
@@ -479,6 +495,8 @@ class AwsAdminStatusSource:
             protected = table.get("DeletionProtectionEnabled") is True
             ttl_status = ttl.get("TimeToLiveStatus")
             warning = warning or status != "ACTIVE" or pitr != "ENABLED" or not protected
+            if label == "session":
+                warning = warning or ttl_status != "ENABLED"
             stream = table.get("StreamSpecification", {})
             stream_enabled = stream.get("StreamEnabled") is True
             if label == "debate":
@@ -594,11 +612,18 @@ class AwsAdminStatusSource:
                     ),
                 )
             )
-        metrics.extend(self._lambda_metrics(now))
+        provider_metrics, provider_metrics_complete = self._lambda_metrics(now)
+        metrics.extend(provider_metrics)
         return AdminStatusSection(
             service="lambda",
-            state="warning" if warning else "healthy",
-            summary="Lambda状態と直近1時間の指標を確認しました。",
+            state="unknown"
+            if not provider_metrics_complete
+            else "warning"
+            if warning
+            else "healthy",
+            summary="一部の指標を取得できませんでした。"
+            if not provider_metrics_complete
+            else "Lambda状態と直近1時間の指標を確認しました。",
             metrics=tuple(metrics),
         )
 
@@ -611,7 +636,7 @@ class AwsAdminStatusSource:
             return None
         return _optional_integer(value)
 
-    def _lambda_metrics(self, now: datetime) -> tuple[AdminStatusMetric, ...]:
+    def _lambda_metrics(self, now: datetime) -> tuple[tuple[AdminStatusMetric, ...], bool]:
         queries: list[dict[str, object]] = []
         identities: dict[str, tuple[str, str]] = {}
         counter = 0
@@ -641,7 +666,7 @@ class AwsAdminStatusSource:
                     }
                 )
         if not queries:
-            return ()
+            return (), False
         response = self._cloudwatch.get_metric_data(
             MetricDataQueries=queries,
             StartTime=now - timedelta(hours=1),
@@ -649,22 +674,49 @@ class AwsAdminStatusSource:
             ScanBy="TimestampDescending",
         )
         values: dict[tuple[str, str], int | str | None] = {}
-        for result in response.get("MetricDataResults", []):
-            identity = identities.get(result.get("Id"))
-            if identity is None:
+        results = response.get("MetricDataResults")
+        provider_complete = (
+            isinstance(results, list)
+            and len(results) == len(identities)
+            and not response.get("NextToken")
+        )
+        seen_ids: set[str] = set()
+        for result in results if isinstance(results, list) else []:
+            if not isinstance(result, Mapping):
+                provider_complete = False
                 continue
+            result_id = result.get("Id")
+            identity = identities.get(result_id)
             samples = result.get("Values", [])
-            value = samples[0] if isinstance(samples, list) and samples else None
-            if value is not None and identity[1] != "duration":
-                value = int(value)
-            elif value is not None:
-                value = f"{value:.3f}"
+            if (
+                identity is None
+                or not isinstance(result_id, str)
+                or result_id in seen_ids
+                or result.get("StatusCode") != "Complete"
+                or not isinstance(samples, list)
+                or not samples
+            ):
+                provider_complete = False
+                continue
+            seen_ids.add(result_id)
+            value = samples[0]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+                or (identity[1] != "duration" and not float(value).is_integer())
+            ):
+                provider_complete = False
+                continue
+            value = int(value) if identity[1] != "duration" else f"{value:.3f}"
             values[identity] = value
-        return tuple(
+        result_metrics = tuple(
             _metric(f"{label}_hour_{metric}", values.get((label, metric)))
             for label in sorted(self._config.functions)
             for metric in ("invocations", "errors", "throttles", "duration")
         )
+        return result_metrics, provider_complete and len(values) == len(identities)
 
     def _cloudfront_section(self, now: datetime) -> AdminStatusSection:
         distribution = self._cloudfront.get_distribution(Id=self._config.distribution_id).get(
@@ -688,6 +740,19 @@ class AwsAdminStatusSource:
         )
         enabled = config.get("Enabled") is True
         deployed = distribution.get("Status") == "Deployed"
+        certificate_status = certificate.get("Status")
+        certificate_expires_at = certificate.get("NotAfter")
+        certificate_complete = (
+            isinstance(certificate_status, str)
+            and isinstance(certificate_expires_at, datetime)
+            and certificate_expires_at.tzinfo is not None
+            and certificate_expires_at.utcoffset() is not None
+        )
+        certificate_healthy = (
+            certificate_complete
+            and certificate_status == "ISSUED"
+            and certificate_expires_at.astimezone(UTC) > now
+        )
         metrics = [
             _metric("enabled", enabled),
             _metric("deployment_status", distribution.get("Status") or "unknown"),
@@ -699,13 +764,20 @@ class AwsAdminStatusSource:
                 config.get("ViewerCertificate", {}).get("MinimumProtocolVersion") or "unknown",
             ),
             _metric("certificate_key_algorithm", certificate.get("KeyAlgorithm") or "unknown"),
-            _metric("certificate_expires_at", _timestamp(certificate.get("NotAfter"))),
+            _metric("certificate_status", certificate_status or "unknown"),
+            _metric("certificate_expires_at", _timestamp(certificate_expires_at)),
         ]
         metrics.extend(self._cloudfront_metrics(now))
         return AdminStatusSection(
             service="cloudfront",
-            state="healthy" if enabled and deployed else "warning",
-            summary="Distributionと証明書を確認しました。",
+            state="unknown"
+            if not certificate_complete
+            else "healthy"
+            if enabled and deployed and certificate_healthy
+            else "warning",
+            summary="証明書の状態を取得できませんでした。"
+            if not certificate_complete
+            else "Distributionと証明書を確認しました。",
             metrics=tuple(metrics),
         )
 
@@ -885,6 +957,12 @@ def _timestamp(value: object) -> str | None:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         return None
     return value.astimezone(UTC).isoformat()
+
+
+def _image_digest(value: object) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+        raise ValueError("Runtime image digest is invalid")
+    return value
 
 
 def _queue_name(queue_url: str) -> str:
