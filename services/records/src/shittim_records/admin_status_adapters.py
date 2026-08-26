@@ -754,7 +754,11 @@ class AwsAdminStatusSource:
             value = int(value) if identity[1] != "duration" else f"{value:.3f}"
             values[identity] = value
         for label in sorted(self._config.functions):
-            if values.get((label, "duration")) is None and values.get((label, "invocations")) != 0:
+            invocations = values.get((label, "invocations"))
+            duration = values.get((label, "duration"))
+            if (invocations == 0 and duration is not None) or (
+                invocations != 0 and duration is None
+            ):
                 provider_complete = False
         result_metrics = tuple(
             _metric(f"{label}_hour_{metric}", values.get((label, metric)))
@@ -912,6 +916,7 @@ class AwsAdminStatusSource:
             and not response.get("NextToken")
         )
         seen_ids: set[str] = set()
+        sampled_metrics: set[str] = set()
         for result in results if isinstance(results, list) else []:
             if not isinstance(result, Mapping):
                 provider_complete = False
@@ -932,6 +937,7 @@ class AwsAdminStatusSource:
             if not samples:
                 values[metric] = 0 if metric == "Requests" else None
                 continue
+            sampled_metrics.add(metric)
             value = samples[0]
             if (
                 isinstance(value, bool)
@@ -951,6 +957,10 @@ class AwsAdminStatusSource:
                         values[metric] = "0.000"
                     else:
                         provider_complete = False
+                elif requests == 0 and (
+                    "Requests" not in sampled_metrics or values[metric] != "0.000"
+                ):
+                    provider_complete = False
         else:
             provider_complete = False
         metrics = (

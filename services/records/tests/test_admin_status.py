@@ -756,6 +756,39 @@ def test_lambda_section_requires_duration_when_invocations_exist() -> None:
     assert metrics(section)["auth_hour_duration"] is None
 
 
+def test_lambda_section_rejects_duration_when_invocations_are_empty() -> None:
+    class Lambda:
+        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "State": "Active",
+                "LastUpdateStatus": "Successful",
+                "Runtime": "python3.14",
+                "Architectures": ["arm64"],
+            }
+
+        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"ReservedConcurrentExecutions": 1}
+
+    class MismatchedCloudWatch(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            results = []
+            for query in kwargs["MetricDataQueries"]:
+                metric_name = query["MetricStat"]["Metric"]["MetricName"]
+                values = [12.5] if metric_name == "Duration" else []
+                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": values})
+            return {"MetricDataResults": results}
+
+    section = source(
+        lambda_client=Lambda(),
+        cloudwatch=MismatchedCloudWatch(),
+    )._lambda_section(NOW)
+
+    assert section.state == "unknown"
+    values = metrics(section)
+    assert values["auth_hour_invocations"] == 0
+    assert values["auth_hour_duration"] == "12.500"
+
+
 @pytest.mark.parametrize(
     ("failing_metric", "expected_state"),
     [
@@ -785,7 +818,7 @@ def test_lambda_section_warns_for_errors_and_throttles(
             results = []
             for query in kwargs["MetricDataQueries"]:
                 metric_name = query["MetricStat"]["Metric"]["MetricName"]
-                value = 1.0 if metric_name == failing_metric else 0.0
+                value = 1.0 if metric_name in {"Invocations", failing_metric} else 0.0
                 if metric_name == "Duration":
                     value = 12.5
                 results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": [value]})
@@ -949,6 +982,27 @@ def test_cloudfront_metrics_require_error_rates_when_requests_exist() -> None:
     assert values["hour_requests"] == 5
     assert values["hour_4xx_rate"] is None
     assert values["hour_5xx_rate"] is None
+
+
+def test_cloudfront_metrics_reject_rate_samples_when_requests_are_empty() -> None:
+    class MismatchedCloudWatch(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            results = []
+            for query in kwargs["MetricDataQueries"]:
+                metric_name = query["MetricStat"]["Metric"]["MetricName"]
+                samples = [1.5] if metric_name == "4xxErrorRate" else []
+                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": samples})
+            return {"MetricDataResults": results}
+
+    provider_metrics, provider_complete = source(
+        cloudwatch_global=MismatchedCloudWatch()
+    )._cloudfront_metrics(NOW, distribution_id="E123456789AB")
+    values = {metric.name: metric.value for metric in provider_metrics}
+
+    assert provider_complete is False
+    assert values["hour_requests"] == 0
+    assert values["hour_4xx_rate"] == "1.500"
+    assert values["hour_5xx_rate"] == "0.000"
 
 
 def test_sqs_includes_oldest_age_without_reading_messages_or_returning_queue_name() -> None:
