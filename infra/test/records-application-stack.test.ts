@@ -351,6 +351,46 @@ describe("RecordsApplicationStack", () => {
     }>;
     const statusActionsOf = (statement: (typeof statusStatements)[number]) =>
       Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const statusLambdaRead = statusStatements.find((statement) =>
+      statusActionsOf(statement).includes("lambda:GetFunctionConfiguration"),
+    );
+    expect(Array.isArray(statusLambdaRead?.Resource)).toBe(true);
+    const statusLambdaArns = (
+      statusLambdaRead?.Resource as Array<{
+        readonly "Fn::Join": readonly [
+          string,
+          ReadonlyArray<string | { readonly Ref: string }>,
+        ];
+      }>
+    ).map((resource) => {
+      const [separator, parts] = resource["Fn::Join"];
+      expect(separator).toBe("");
+      return parts
+        .map((part) => {
+          if (typeof part === "string") {
+            return part;
+          }
+          expect(part).toEqual({ Ref: "AWS::Partition" });
+          return "aws";
+        })
+        .join("");
+    });
+    expect(statusLambdaArns.sort()).toEqual(
+      [
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-discord-ingress",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-discord-status-publisher",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-image-admission",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-admin-status",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-auth",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-backfill",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-cost",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-projector",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-ranking",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-read",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-runtime-reconciler",
+      ].sort(),
+    );
+    expect(JSON.stringify(statusLambdaArns)).not.toContain(":function/");
     const statusSessionRead = statusStatements.find(
       (statement) =>
         statusActionsOf(statement).includes("dynamodb:GetItem") &&

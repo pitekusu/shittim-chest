@@ -487,7 +487,12 @@ export class RecordsApplicationStack extends Stack {
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
     const statusFunctionArns = Object.values(statusFunctionNames).map((functionName) =>
-      this.formatArn({ service: "lambda", resource: "function", resourceName: functionName }),
+      this.formatArn({
+        service: "lambda",
+        resource: "function",
+        resourceName: functionName,
+        arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+      }),
     );
     const ecsServiceArn = this.formatArn({
       service: "ecs",
