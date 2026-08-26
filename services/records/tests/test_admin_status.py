@@ -756,7 +756,20 @@ def test_lambda_section_requires_duration_when_invocations_exist() -> None:
     assert metrics(section)["auth_hour_duration"] is None
 
 
-def test_lambda_section_rejects_duration_when_invocations_are_empty() -> None:
+@pytest.mark.parametrize(
+    ("sampled_metric", "sample_value", "expected_state", "expected_value"),
+    (
+        ("Duration", 12.5, "unknown", "12.500"),
+        ("Errors", 1.0, "unknown", 1),
+        ("Throttles", 1.0, "warning", 1),
+    ),
+)
+def test_lambda_section_validates_idle_metric_relationships(
+    sampled_metric: str,
+    sample_value: float,
+    expected_state: str,
+    expected_value: str | int,
+) -> None:
     class Lambda:
         def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
             return {
@@ -774,7 +787,7 @@ def test_lambda_section_rejects_duration_when_invocations_are_empty() -> None:
             results = []
             for query in kwargs["MetricDataQueries"]:
                 metric_name = query["MetricStat"]["Metric"]["MetricName"]
-                values = [12.5] if metric_name == "Duration" else []
+                values = [sample_value] if metric_name == sampled_metric else []
                 results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": values})
             return {"MetricDataResults": results}
 
@@ -783,10 +796,10 @@ def test_lambda_section_rejects_duration_when_invocations_are_empty() -> None:
         cloudwatch=MismatchedCloudWatch(),
     )._lambda_section(NOW)
 
-    assert section.state == "unknown"
+    assert section.state == expected_state
     values = metrics(section)
     assert values["auth_hour_invocations"] == 0
-    assert values["auth_hour_duration"] == "12.500"
+    assert values[f"auth_hour_{sampled_metric.casefold()}"] == expected_value
 
 
 @pytest.mark.parametrize(

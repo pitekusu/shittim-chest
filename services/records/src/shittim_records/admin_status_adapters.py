@@ -755,10 +755,13 @@ class AwsAdminStatusSource:
             values[identity] = value
         for label in sorted(self._config.functions):
             invocations = values.get((label, "invocations"))
+            errors = values.get((label, "errors"))
             duration = values.get((label, "duration"))
             if (invocations == 0 and duration is not None) or (
                 invocations != 0 and duration is None
             ):
+                provider_complete = False
+            if isinstance(invocations, int) and isinstance(errors, int) and errors > invocations:
                 provider_complete = False
         result_metrics = tuple(
             _metric(f"{label}_hour_{metric}", values.get((label, metric)))
