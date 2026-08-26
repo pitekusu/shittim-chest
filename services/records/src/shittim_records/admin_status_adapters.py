@@ -612,7 +612,6 @@ class AwsAdminStatusSource:
                 identity is None
                 or result.get("StatusCode") != "Complete"
                 or not isinstance(samples, list)
-                or not samples
                 or any(
                     isinstance(value, bool)
                     or not isinstance(value, (int, float))
@@ -735,11 +734,13 @@ class AwsAdminStatusSource:
                 or result_id in seen_ids
                 or result.get("StatusCode") != "Complete"
                 or not isinstance(samples, list)
-                or not samples
             ):
                 provider_complete = False
                 continue
             seen_ids.add(result_id)
+            if not samples:
+                values[identity] = None if identity[1] == "duration" else 0
+                continue
             value = samples[0]
             if (
                 isinstance(value, bool)
@@ -752,6 +753,16 @@ class AwsAdminStatusSource:
                 continue
             value = int(value) if identity[1] != "duration" else f"{value:.3f}"
             values[identity] = value
+        for label in sorted(self._config.functions):
+            invocations = values.get((label, "invocations"))
+            errors = values.get((label, "errors"))
+            duration = values.get((label, "duration"))
+            if (invocations == 0 and duration is not None) or (
+                invocations != 0 and duration is None
+            ):
+                provider_complete = False
+            if isinstance(invocations, int) and isinstance(errors, int) and errors > invocations:
+                provider_complete = False
         result_metrics = tuple(
             _metric(f"{label}_hour_{metric}", values.get((label, metric)))
             for label in sorted(self._config.functions)
@@ -821,7 +832,7 @@ class AwsAdminStatusSource:
             else "warning",
             summary="証明書または一部の指標を取得できませんでした。"
             if not certificate_complete or not provider_metrics_complete
-            else "Distributionと証明書を確認しました。",
+            else "Distributionと証明書を確認しました。CacheHitRate追加指標は未収集です。",
             metrics=tuple(metrics),
         )
 
@@ -867,7 +878,13 @@ class AwsAdminStatusSource:
     ) -> tuple[tuple[AdminStatusMetric, ...], bool]:
         queries = []
         identifiers: dict[str, str] = {}
-        for index, metric in enumerate(("4xxErrorRate", "5xxErrorRate", "CacheHitRate")):
+        for index, (metric, stat) in enumerate(
+            (
+                ("Requests", "Sum"),
+                ("4xxErrorRate", "Average"),
+                ("5xxErrorRate", "Average"),
+            )
+        ):
             identifier = f"c{index}"
             identifiers[identifier] = metric
             queries.append(
@@ -883,7 +900,7 @@ class AwsAdminStatusSource:
                             ],
                         },
                         "Period": 3600,
-                        "Stat": "Average",
+                        "Stat": stat,
                     },
                     "ReturnData": True,
                 }
@@ -894,7 +911,7 @@ class AwsAdminStatusSource:
             EndTime=now,
             ScanBy="TimestampDescending",
         )
-        values: dict[str, str | None] = {value: None for value in identifiers.values()}
+        values: dict[str, int | str | None] = {value: None for value in identifiers.values()}
         results = response.get("MetricDataResults")
         provider_complete = (
             isinstance(results, list)
@@ -902,6 +919,7 @@ class AwsAdminStatusSource:
             and not response.get("NextToken")
         )
         seen_ids: set[str] = set()
+        sampled_metrics: set[str] = set()
         for result in results if isinstance(results, list) else []:
             if not isinstance(result, Mapping):
                 provider_complete = False
@@ -915,25 +933,44 @@ class AwsAdminStatusSource:
                 or result_id in seen_ids
                 or result.get("StatusCode") != "Complete"
                 or not isinstance(samples, list)
-                or not samples
             ):
                 provider_complete = False
                 continue
             seen_ids.add(result_id)
+            if not samples:
+                values[metric] = 0 if metric == "Requests" else None
+                continue
+            sampled_metrics.add(metric)
             value = samples[0]
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
                 or not math.isfinite(value)
                 or value < 0
+                or (metric == "Requests" and not float(value).is_integer())
             ):
                 provider_complete = False
                 continue
-            values[metric] = f"{value:.3f}"
+            values[metric] = int(value) if metric == "Requests" else f"{value:.3f}"
+        requests = values["Requests"]
+        if isinstance(requests, int) and not isinstance(requests, bool):
+            for metric in ("4xxErrorRate", "5xxErrorRate"):
+                if values[metric] is None:
+                    if requests == 0:
+                        values[metric] = "0.000"
+                    else:
+                        provider_complete = False
+                elif requests == 0 and (
+                    "Requests" not in sampled_metrics or values[metric] != "0.000"
+                ):
+                    provider_complete = False
+        else:
+            provider_complete = False
         metrics = (
+            _metric("hour_requests", requests),
             _metric("hour_4xx_rate", values["4xxErrorRate"]),
             _metric("hour_5xx_rate", values["5xxErrorRate"]),
-            _metric("hour_cache_hit_rate", values["CacheHitRate"]),
+            _metric("hour_cache_hit_rate", "DISABLED"),
         )
         return metrics, provider_complete and len(seen_ids) == len(identifiers)
 

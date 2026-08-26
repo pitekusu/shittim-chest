@@ -362,7 +362,7 @@ def _admin_status_controller() -> AdminStatusHttpController:
             ),
             ecr=boto3.client("ecr", region_name=region, config=SDK_CONFIG),
             inspector=boto3.client("inspector2", region_name=region, config=SDK_CONFIG),
-            s3=_regional_s3_client(),
+            s3=_admin_status_s3_client(),
             dynamodb=dynamodb,
             lambda_client=boto3.client("lambda", region_name=region, config=SDK_CONFIG),
             cloudfront=boto3.client("cloudfront", region_name="us-east-1", config=SDK_CONFIG),
@@ -527,6 +527,15 @@ def _regional_s3_client() -> Any:
         "s3",
         region_name=region,
         endpoint_url=f"https://s3.{region}.amazonaws.com",
+        config=S3_SDK_CONFIG,
+    )
+
+
+def _admin_status_s3_client() -> Any:
+    region = _environment("AWS_REGION")
+    return boto3.client(
+        "s3",
+        region_name=region,
         config=S3_SDK_CONFIG,
     )
 
