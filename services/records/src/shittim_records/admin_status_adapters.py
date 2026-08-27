@@ -1589,9 +1589,9 @@ class AwsAdminStatusSource:
         pages = paginator.paginate(
             ParameterFilters=[
                 {
-                    "Key": "Path",
-                    "Option": "Recursive",
-                    "Values": ["/shittim-chest/production"],
+                    "Key": "Name",
+                    "Option": "Equals",
+                    "Values": sorted(labels_by_name),
                 }
             ],
             PaginationConfig={"PageSize": 50},

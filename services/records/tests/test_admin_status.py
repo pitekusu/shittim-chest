@@ -1465,8 +1465,8 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
                 ]
             }
 
-    expected_names = set(configuration().static_parameters.values())
-    expected_names.update(
+    configured_names = set(configuration().static_parameters.values())
+    configured_names.update(
         {
             "/shittim-chest/production/runtime/v0001",
             "/shittim-chest/production/personas/v0001/moderator",
@@ -1475,7 +1475,7 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
             "/shittim-chest/production/personas/v0001/participant-c",
         }
     )
-    expected_names.remove("/shittim-chest/production/runtime-prompts/active")
+    expected_names = configured_names - {"/shittim-chest/production/runtime-prompts/active"}
     metadata = [
         {
             "Name": name,
@@ -1490,10 +1490,9 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
         def __init__(self) -> None:
             self.paginator = Paginator(
                 [
-                    {"Parameters": metadata[:10]},
                     {
                         "Parameters": [
-                            *metadata[10:],
+                            *metadata,
                             {
                                 "Name": "/shittim-chest/production/unrelated",
                                 "Type": "SecureString",
@@ -1523,9 +1522,9 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
         {
             "ParameterFilters": [
                 {
-                    "Key": "Path",
-                    "Option": "Recursive",
-                    "Values": ["/shittim-chest/production"],
+                    "Key": "Name",
+                    "Option": "Equals",
+                    "Values": sorted(configured_names),
                 }
             ],
             "PaginationConfig": {"PageSize": 50},
