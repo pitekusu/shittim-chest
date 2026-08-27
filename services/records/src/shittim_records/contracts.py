@@ -22,6 +22,14 @@ AdminServiceName = Literal[
     "lambda",
     "cloudfront",
     "sqs",
+    "apigateway",
+    "eventbridge",
+    "cloudformation",
+    "sns",
+    "ssm",
+    "cost_governance",
+    "signer",
+    "external",
 ]
 
 NonEmptyText = Annotated[str, Field(min_length=1, pattern=r"\S")]

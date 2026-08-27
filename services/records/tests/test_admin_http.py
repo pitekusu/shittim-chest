@@ -63,7 +63,24 @@ class Authorizer:
 
 
 def status_response() -> AdminStatusResponse:
-    services = ("ecs", "ecr", "inspector", "s3", "dynamodb", "lambda", "cloudfront", "sqs")
+    services = (
+        "ecs",
+        "ecr",
+        "inspector",
+        "s3",
+        "dynamodb",
+        "lambda",
+        "cloudfront",
+        "sqs",
+        "apigateway",
+        "eventbridge",
+        "cloudformation",
+        "sns",
+        "ssm",
+        "cost_governance",
+        "signer",
+        "external",
+    )
     return AdminStatusResponse(
         schema_version=1,
         generated_at=NOW,

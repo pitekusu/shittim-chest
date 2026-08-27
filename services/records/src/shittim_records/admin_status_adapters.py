@@ -9,6 +9,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 
@@ -28,6 +29,43 @@ _MAX_PAGINATOR_PAGES = 20
 _STATUS_COLLECTION_TIMEOUT_SECONDS = 20.0
 _PRODUCTION_ALARM_PREFIX = "shittim-chest-production-"
 _PROJECTOR_DLQ_RETENTION_SECONDS = 14 * 24 * 60 * 60
+_GLOBAL_STACK_LABELS = frozenset({"records_edge", "cost_governance"})
+_STACK_LABELS = (
+    "stateful",
+    "release_identity",
+    "runtime",
+    "operations",
+    "cost_governance",
+    "records_stateful",
+    "records_application",
+    "records_edge",
+)
+_STATIC_PARAMETER_LABELS = (
+    "discord_public_key",
+    "moderator_token",
+    "participant_a_token",
+    "participant_b_token",
+    "participant_c_token",
+    "openai_api_key",
+    "runtime_prompts_active",
+    "records_identity",
+    "records_presentation",
+    "records_oauth",
+    "records_client_secret",
+    "records_session_key",
+    "records_openai_admin_key",
+    "records_openai_project_id",
+    "records_admin_user_id",
+)
+_EVENT_RULE_DESCRIPTIONS = {
+    "ranking": "Rebuild the Records ranking snapshots every 15 minutes",
+    "aws_fx": "Collect Project-tagged AWS costs and USD/JPY rates daily at 12:17 JST",
+    "openai": "Collect project-scoped OpenAI organization costs hourly at minute 37",
+    "abnormal_stop": "Notify only abnormal singleton runtime task stops",
+}
+_STABLE_STACK_STATUSES = frozenset({"CREATE_COMPLETE", "IMPORT_COMPLETE", "UPDATE_COMPLETE"})
+_CRITICAL_STACK_STATUS_PARTS = ("FAILED", "ROLLBACK_IN_PROGRESS", "DELETE_")
+_CHECKPOINT_SOURCES = ("AWS", "OPENAI", "FRANKFURTER")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +80,13 @@ class AwsAdminStatusConfiguration:
     functions: Mapping[str, str]
     records_public_hostname: str
     projector_dlq_url: str
+    stacks: Mapping[str, str]
+    static_parameters: Mapping[str, str]
+    runtime_scheduler_name: str
+    sns_topic_arn: str
+    signing_profile_name: str
+    budgets: Mapping[str, str]
+    anomaly_subscription_name: str
     alarm_prefix: str = _PRODUCTION_ALARM_PREFIX
 
     def __post_init__(self) -> None:
@@ -53,6 +98,19 @@ class AwsAdminStatusConfiguration:
             not label or not name for label, name in self.functions.items()
         ):
             raise ValueError("ADMIN status Lambda allowlist is invalid")
+        if set(self.stacks) != set(_STACK_LABELS) or any(
+            not value for value in self.stacks.values()
+        ):
+            raise ValueError("ADMIN status stack allowlist is invalid")
+        if set(self.static_parameters) != set(_STATIC_PARAMETER_LABELS) or any(
+            not value.startswith("/shittim-chest/production/")
+            for value in self.static_parameters.values()
+        ):
+            raise ValueError("ADMIN status parameter allowlist is invalid")
+        if set(self.budgets) != {"project", "account"} or any(
+            not value for value in self.budgets.values()
+        ):
+            raise ValueError("ADMIN status budget allowlist is invalid")
         required = (
             self.cluster_name,
             self.service_name,
@@ -60,6 +118,10 @@ class AwsAdminStatusConfiguration:
             self.runtime_stack_name,
             self.records_public_hostname,
             self.projector_dlq_url,
+            self.runtime_scheduler_name,
+            self.sns_topic_arn,
+            self.signing_profile_name,
+            self.anomaly_subscription_name,
             self.alarm_prefix,
         )
         if (
@@ -93,8 +155,17 @@ class AwsAdminStatusSource:
         cloudfront: Any,
         acm: Any,
         sqs: Any,
+        apigateway: Any,
+        events: Any,
+        scheduler: Any,
+        sns: Any,
+        ssm: Any,
+        budgets: Any,
+        cost_explorer: Any,
+        signer: Any,
         cloudwatch: Any,
         cloudwatch_global: Any,
+        cloudformation_global: Any,
     ) -> None:
         self._config = configuration
         self._ecs = ecs
@@ -107,8 +178,17 @@ class AwsAdminStatusSource:
         self._cloudfront = cloudfront
         self._acm = acm
         self._sqs = sqs
+        self._apigateway = apigateway
+        self._events = events
+        self._scheduler = scheduler
+        self._sns = sns
+        self._ssm = ssm
+        self._budgets = budgets
+        self._cost_explorer = cost_explorer
+        self._signer = signer
         self._cloudwatch = cloudwatch
         self._cloudwatch_global = cloudwatch_global
+        self._cloudformation_global = cloudformation_global
 
     def collect(self, *, now: datetime) -> AdminStatusCollection:
         now = now.astimezone(UTC)
@@ -121,6 +201,14 @@ class AwsAdminStatusSource:
             ("lambda", lambda: self._lambda_section(now)),
             ("cloudfront", lambda: self._cloudfront_section(now)),
             ("sqs", lambda: self._sqs_section(now)),
+            ("apigateway", lambda: self._apigateway_section(now)),
+            ("eventbridge", lambda: self._eventbridge_section(now)),
+            ("cloudformation", self._cloudformation_section),
+            ("sns", lambda: self._sns_section(now)),
+            ("ssm", self._ssm_section),
+            ("cost_governance", self._cost_governance_section),
+            ("signer", self._signer_section),
+            ("external", lambda: self._external_section(now)),
         )
         executor = ThreadPoolExecutor(
             max_workers=len(collectors) + 1,
@@ -1034,6 +1122,717 @@ class AwsAdminStatusSource:
             ),
         )
 
+    def _apigateway_section(self, now: datetime) -> AdminStatusSection:
+        api_definitions = (
+            (
+                "discord",
+                "runtime",
+                "shittim-chest-production-discord-interactions",
+            ),
+            ("records", "records_application", "shittim-chest-production-records"),
+        )
+        metrics: list[AdminStatusMetric] = []
+        api_ids: dict[str, str] = {}
+        warning = False
+        for label, stack_label, expected_name in api_definitions:
+            api_id = _single(self._stack_resources(stack_label, "AWS::ApiGatewayV2::Api"))
+            api = self._apigateway.get_api(ApiId=api_id)
+            stages = self._apigateway.get_stages(ApiId=api_id, MaxResults="50")
+            stage_items = stages.get("Items", [])
+            if (
+                api.get("Name") != expected_name
+                or api.get("ProtocolType") != "HTTP"
+                or stages.get("NextToken")
+                or not isinstance(stage_items, list)
+                or len(stage_items) != 1
+                or stage_items[0].get("StageName") != "$default"
+            ):
+                raise ValueError("allowlisted HTTP API is invalid")
+            auto_deploy = stage_items[0].get("AutoDeploy") is True
+            warning = warning or not auto_deploy
+            api_ids[label] = api_id
+            metrics.extend(
+                (
+                    _metric(f"{label}_protocol", "HTTP"),
+                    _metric(f"{label}_auto_deploy", auto_deploy),
+                )
+            )
+
+        queries: list[dict[str, object]] = []
+        identities: dict[str, tuple[str, str]] = {}
+        counter = 0
+        for label, api_id in api_ids.items():
+            for metric_name, stat, output_name in (
+                ("Count", "Sum", "requests"),
+                ("4XXError", "Sum", "4xx"),
+                ("5XXError", "Sum", "5xx"),
+                ("Latency", "p95", "latency"),
+                ("IntegrationLatency", "p95", "integration_latency"),
+            ):
+                identifier = f"a{counter}"
+                counter += 1
+                identities[identifier] = (label, output_name)
+                queries.append(
+                    {
+                        "Id": identifier,
+                        "MetricStat": {
+                            "Metric": {
+                                "Namespace": "AWS/ApiGateway",
+                                "MetricName": metric_name,
+                                "Dimensions": [{"Name": "ApiId", "Value": api_id}],
+                            },
+                            "Period": 3600,
+                            "Stat": stat,
+                        },
+                        "ReturnData": True,
+                    }
+                )
+        samples, complete = self._metric_data_samples(queries=queries, now=now, hours=1)
+        values: dict[tuple[str, str], int | str | None] = {}
+        for identifier, identity in identities.items():
+            metric_samples = samples.get(identifier, ())
+            if identity[1] in {"requests", "4xx", "5xx"}:
+                total = sum(metric_samples)
+                if not total.is_integer():
+                    complete = False
+                    continue
+                values[identity] = int(total)
+            else:
+                values[identity] = None if not metric_samples else f"{max(metric_samples):.3f}"
+        for label in api_ids:
+            requests = values.get((label, "requests"))
+            errors_4xx = values.get((label, "4xx"))
+            errors_5xx = values.get((label, "5xx"))
+            if (
+                not isinstance(requests, int)
+                or not isinstance(errors_4xx, int)
+                or not isinstance(errors_5xx, int)
+                or errors_4xx + errors_5xx > requests
+                or (
+                    requests > 0
+                    and (
+                        values.get((label, "latency")) is None
+                        or values.get((label, "integration_latency")) is None
+                    )
+                )
+            ):
+                complete = False
+            warning = warning or (isinstance(errors_5xx, int) and errors_5xx > 0)
+            metrics.extend(
+                _metric(f"{label}_hour_{name}", values.get((label, name)))
+                for name in ("requests", "4xx", "5xx", "latency", "integration_latency")
+            )
+        return AdminStatusSection(
+            service="apigateway",
+            state="unknown" if not complete else "warning" if warning else "healthy",
+            summary=(
+                "一部のAPI指標を取得できませんでした。"
+                if not complete
+                else "HTTP APIと直近1時間の応答を確認しました。"
+            ),
+            metrics=tuple(metrics),
+        )
+
+    def _eventbridge_section(self, now: datetime) -> AdminStatusSection:
+        rules_by_description: dict[str, Mapping[str, object]] = {}
+        for stack_label in ("records_application", "operations"):
+            for rule_name in self._stack_resources(stack_label, "AWS::Events::Rule"):
+                rule = self._events.describe_rule(Name=rule_name)
+                description = rule.get("Description")
+                if not isinstance(description, str) or description in rules_by_description:
+                    raise ValueError("allowlisted EventBridge rule is invalid")
+                rules_by_description[description] = rule
+        expected_descriptions = set(_EVENT_RULE_DESCRIPTIONS.values())
+        if set(rules_by_description) != expected_descriptions:
+            raise ValueError("allowlisted EventBridge rules are incomplete")
+
+        runtime_schedule = self._scheduler.get_schedule(
+            GroupName="default",
+            Name=self._config.runtime_scheduler_name,
+        )
+        if runtime_schedule.get("Name") != self._config.runtime_scheduler_name:
+            raise ValueError("runtime scheduler is invalid")
+        runtime_state = runtime_schedule.get("State")
+        runtime_expression = runtime_schedule.get("ScheduleExpression")
+        retry_attempts = (
+            runtime_schedule.get("Target", {}).get("RetryPolicy", {}).get("MaximumRetryAttempts")
+        )
+        metrics: list[AdminStatusMetric] = [
+            _metric("runtime_state", runtime_state or "unknown"),
+            _metric("runtime_expression", runtime_expression or "unknown"),
+            _metric("runtime_retry_attempts", _optional_integer(retry_attempts)),
+        ]
+        warning = runtime_state != "ENABLED"
+        queries: list[dict[str, object]] = []
+        identities: dict[str, tuple[str, str]] = {}
+        rule_states: dict[str, object] = {}
+        counter = 0
+        for label, description in _EVENT_RULE_DESCRIPTIONS.items():
+            rule = rules_by_description[description]
+            rule_name = rule.get("Name")
+            if not isinstance(rule_name, str) or not rule_name:
+                raise ValueError("EventBridge rule name is invalid")
+            rule_states[label] = rule.get("State")
+            warning = warning or rule.get("State") != "ENABLED"
+            metrics.extend(
+                (
+                    _metric(f"{label}_state", rule.get("State") or "unknown"),
+                    _metric(
+                        f"{label}_expression",
+                        rule.get("ScheduleExpression") or "event pattern",
+                    ),
+                )
+            )
+            for metric_name, output_name in (
+                ("Invocations", "invocations"),
+                ("FailedInvocations", "failures"),
+            ):
+                identifier = f"e{counter}"
+                counter += 1
+                identities[identifier] = (label, output_name)
+                queries.append(
+                    {
+                        "Id": identifier,
+                        "MetricStat": {
+                            "Metric": {
+                                "Namespace": "AWS/Events",
+                                "MetricName": metric_name,
+                                "Dimensions": [{"Name": "RuleName", "Value": rule_name}],
+                            },
+                            "Period": 86400,
+                            "Stat": "Sum",
+                        },
+                        "ReturnData": True,
+                    }
+                )
+        samples, complete = self._metric_data_samples(queries=queries, now=now, hours=24)
+        for identifier, (label, output_name) in identities.items():
+            total = sum(samples.get(identifier, ()))
+            value: int | None = int(total) if total.is_integer() else None
+            if value is None:
+                complete = False
+            metrics.append(_metric(f"{label}_day_{output_name}", value))
+            if output_name == "failures" and value:
+                warning = True
+        return AdminStatusSection(
+            service="eventbridge",
+            state="unknown" if not complete else "warning" if warning else "healthy",
+            summary=(
+                "一部の配信指標を取得できませんでした。"
+                if not complete
+                else "定期実行とイベント配信を確認しました。"
+            ),
+            metrics=tuple(metrics),
+        )
+
+    def _cloudformation_section(self) -> AdminStatusSection:
+        metrics: list[AdminStatusMetric] = []
+        warning = False
+        critical = False
+        unknown = False
+        for label in _STACK_LABELS:
+            client = self._stack_client(label)
+            response = client.describe_stacks(StackName=self._config.stacks[label])
+            stacks = response.get("Stacks", [])
+            if response.get("NextToken") or not isinstance(stacks, list) or len(stacks) != 1:
+                raise ValueError("allowlisted CloudFormation stack is unavailable")
+            stack = stacks[0]
+            status = stack.get("StackStatus")
+            drift = stack.get("DriftInformation", {}).get("StackDriftStatus")
+            protected = stack.get("EnableTerminationProtection") is True
+            updated_at = stack.get("LastUpdatedTime") or stack.get("CreationTime")
+            if not isinstance(status, str) or not isinstance(drift, str):
+                unknown = True
+            else:
+                critical = critical or any(part in status for part in _CRITICAL_STACK_STATUS_PARTS)
+                warning = (
+                    warning
+                    or status not in _STABLE_STACK_STATUSES
+                    or drift
+                    in {
+                        "MODIFIED",
+                        "DELETED",
+                    }
+                )
+                unknown = unknown or drift in {"NOT_CHECKED", "UNKNOWN", "CHECK_IN_PROGRESS"}
+            metrics.extend(
+                (
+                    _metric(f"{label}_status", status or "unknown"),
+                    _metric(f"{label}_drift", drift or "unknown"),
+                    _metric(f"{label}_termination_protection", protected),
+                    _metric(f"{label}_updated_at", _timestamp(updated_at)),
+                )
+            )
+        state: AdminHealthState = (
+            "critical"
+            if critical
+            else "unknown"
+            if unknown
+            else "warning"
+            if warning
+            else "healthy"
+        )
+        return AdminStatusSection(
+            service="cloudformation",
+            state=state,
+            summary=(
+                "最後に記録されたdriftまたはStack状態を確認してください。"
+                if state != "healthy"
+                else "8 Stackの状態と最後のdrift結果を確認しました。"
+            ),
+            metrics=tuple(metrics),
+        )
+
+    def _sns_section(self, now: datetime) -> AdminStatusSection:
+        attributes = self._sns.get_topic_attributes(TopicArn=self._config.sns_topic_arn).get(
+            "Attributes", {}
+        )
+        confirmed = _decimal_integer(attributes.get("SubscriptionsConfirmed"))
+        pending = _decimal_integer(attributes.get("SubscriptionsPending"))
+        topic_name = _sns_topic_name(
+            self._config.sns_topic_arn,
+            account_id=self._config.aws_account_id,
+        )
+        queries: list[dict[str, object]] = [
+            {
+                "Id": identifier,
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/SNS",
+                        "MetricName": metric_name,
+                        "Dimensions": [{"Name": "TopicName", "Value": topic_name}],
+                    },
+                    "Period": 86400,
+                    "Stat": "Sum",
+                },
+                "ReturnData": True,
+            }
+            for identifier, metric_name in (
+                ("sns_delivered", "NumberOfNotificationsDelivered"),
+                ("sns_failed", "NumberOfNotificationsFailed"),
+            )
+        ]
+        samples, complete = self._metric_data_samples(queries=queries, now=now, hours=24)
+        delivered_total = sum(samples.get("sns_delivered", ()))
+        failed_total = sum(samples.get("sns_failed", ()))
+        delivered = int(delivered_total) if delivered_total.is_integer() else None
+        failed = int(failed_total) if failed_total.is_integer() else None
+        complete = complete and delivered is not None and failed is not None
+        warning = confirmed < 1 or pending > 0 or bool(failed)
+        return AdminStatusSection(
+            service="sns",
+            state="unknown" if not complete else "warning" if warning else "healthy",
+            summary=(
+                "一部の通知指標を取得できませんでした。"
+                if not complete
+                else "運用通知の購読と直近24時間の配信を確認しました。"
+            ),
+            metrics=(
+                _metric("confirmed_subscriptions", confirmed),
+                _metric("pending_subscriptions", pending),
+                _metric("day_delivered", delivered),
+                _metric("day_failed", failed),
+            ),
+        )
+
+    def _ssm_section(self) -> AdminStatusSection:
+        runtime_parameters = self._runtime_stack_parameters()
+        config_version = runtime_parameters.get("RuntimeConfigVersion")
+        if (
+            not isinstance(config_version, str)
+            or re.fullmatch(r"v[0-9]{4}", config_version) is None
+        ):
+            raise ValueError("runtime configuration version is invalid")
+        parameters = dict(self._config.static_parameters)
+        parameters.update(
+            {
+                "runtime_config": f"/shittim-chest/production/runtime/{config_version}",
+                "persona_moderator": (
+                    f"/shittim-chest/production/personas/{config_version}/moderator"
+                ),
+                "persona_participant_a": (
+                    f"/shittim-chest/production/personas/{config_version}/participant-a"
+                ),
+                "persona_participant_b": (
+                    f"/shittim-chest/production/personas/{config_version}/participant-b"
+                ),
+                "persona_participant_c": (
+                    f"/shittim-chest/production/personas/{config_version}/participant-c"
+                ),
+            }
+        )
+        present: set[str] = set()
+        modified: list[datetime] = []
+        for label, name in parameters.items():
+            response = self._ssm.describe_parameters(
+                ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [name]}],
+                MaxResults=1,
+            )
+            metadata = response.get("Parameters", [])
+            if response.get("NextToken") or not isinstance(metadata, list) or len(metadata) > 1:
+                raise ValueError("SSM metadata response is invalid")
+            if not metadata:
+                continue
+            item = metadata[0]
+            modified_at = item.get("LastModifiedDate")
+            if (
+                item.get("Name") != name
+                or item.get("Type") != "SecureString"
+                or not isinstance(item.get("Version"), int)
+                or item["Version"] < 1
+                or not isinstance(modified_at, datetime)
+                or modified_at.tzinfo is None
+                or modified_at.utcoffset() is None
+            ):
+                continue
+            present.add(label)
+            modified.append(modified_at)
+
+        groups = {
+            "discord": {
+                "discord_public_key",
+                "moderator_token",
+                "participant_a_token",
+                "participant_b_token",
+                "participant_c_token",
+            },
+            "runtime": {
+                "openai_api_key",
+                "runtime_config",
+                "persona_moderator",
+                "persona_participant_a",
+                "persona_participant_b",
+                "persona_participant_c",
+            },
+            "records": {
+                "records_identity",
+                "records_presentation",
+                "records_oauth",
+                "records_client_secret",
+                "records_session_key",
+                "records_admin_user_id",
+            },
+            "cost": {"records_openai_admin_key", "records_openai_project_id"},
+        }
+        metrics: list[AdminStatusMetric] = []
+        ready = True
+        for group, required in groups.items():
+            ready_count = len(required & present)
+            ready = ready and ready_count == len(required)
+            metrics.extend(
+                (
+                    _metric(f"{group}_ready", ready_count),
+                    _metric(f"{group}_required", len(required)),
+                )
+            )
+        metrics.extend(
+            (
+                _metric(
+                    "runtime_prompt_pointer_present",
+                    "runtime_prompts_active" in present,
+                ),
+                _metric("latest_modified_at", _timestamp(max(modified) if modified else None)),
+            )
+        )
+        return AdminStatusSection(
+            service="ssm",
+            state="healthy" if ready else "warning",
+            summary=(
+                "必要な設定metadataを確認しました。"
+                if ready
+                else "不足または形式不一致の設定があります。"
+            ),
+            metrics=tuple(metrics),
+        )
+
+    def _cost_governance_section(self) -> AdminStatusSection:
+        metrics: list[AdminStatusMetric] = []
+        warning = False
+        critical = False
+        for label in ("project", "account"):
+            budget = self._budgets.describe_budget(
+                AccountId=self._config.aws_account_id,
+                BudgetName=self._config.budgets[label],
+                ShowFilterExpression=False,
+            ).get("Budget", {})
+            limit = _decimal_amount(budget.get("BudgetLimit"))
+            spend = budget.get("CalculatedSpend", {})
+            actual = _decimal_amount(spend.get("ActualSpend"))
+            forecast = (
+                _decimal_amount(spend.get("ForecastedSpend"))
+                if spend.get("ForecastedSpend") is not None
+                else None
+            )
+            actual_percent = _percent(actual, limit)
+            forecast_percent = _percent(forecast, limit) if forecast is not None else None
+            health = budget.get("HealthStatus", {}).get("Status") or "unknown"
+            critical = critical or actual_percent >= Decimal("100")
+            warning = (
+                warning
+                or actual_percent >= Decimal("80")
+                or (forecast_percent is not None and forecast_percent >= Decimal("100"))
+                or health == "UNHEALTHY"
+            )
+            metrics.extend(
+                (
+                    _metric(f"{label}_actual_percent", _decimal_text(actual_percent)),
+                    _metric(
+                        f"{label}_forecast_percent",
+                        _decimal_text(forecast_percent) if forecast_percent is not None else None,
+                    ),
+                    _metric(f"{label}_health", health),
+                )
+            )
+
+        matches: list[Mapping[str, object]] = []
+        token: str | None = None
+        for _page in range(_MAX_PAGINATOR_PAGES):
+            request: dict[str, object] = {"MaxResults": 100}
+            if token is not None:
+                request["NextPageToken"] = token
+            response = self._cost_explorer.get_anomaly_subscriptions(**request)
+            subscriptions = response.get("AnomalySubscriptions", [])
+            if not isinstance(subscriptions, list):
+                raise ValueError("cost anomaly subscriptions are invalid")
+            matches.extend(
+                item
+                for item in subscriptions
+                if isinstance(item, Mapping)
+                and item.get("SubscriptionName") == self._config.anomaly_subscription_name
+            )
+            next_token = response.get("NextPageToken")
+            if next_token is None:
+                break
+            if not isinstance(next_token, str) or not next_token:
+                raise ValueError("cost anomaly pagination is invalid")
+            token = next_token
+        else:
+            raise ValueError("cost anomaly pagination exceeded its bounded page count")
+        subscription = _single(matches)
+        subscribers = subscription.get("Subscribers", [])
+        if not isinstance(subscribers, list):
+            raise ValueError("cost anomaly subscribers are invalid")
+        confirmed = sum(
+            1
+            for subscriber in subscribers
+            if isinstance(subscriber, Mapping) and subscriber.get("Status") == "CONFIRMED"
+        )
+        warning = warning or not subscribers or confirmed != len(subscribers)
+        metrics.extend(
+            (
+                _metric("anomaly_subscription", True),
+                _metric("anomaly_frequency", subscription.get("Frequency") or "unknown"),
+                _metric("anomaly_subscribers", len(subscribers)),
+                _metric("anomaly_confirmed_subscribers", confirmed),
+            )
+        )
+        return AdminStatusSection(
+            service="cost_governance",
+            state="critical" if critical else "warning" if warning else "healthy",
+            summary="予算使用率とCost Anomaly通知を確認しました。",
+            metrics=tuple(metrics),
+        )
+
+    def _signer_section(self) -> AdminStatusSection:
+        profile = self._signer.get_signing_profile(
+            profileName=self._config.signing_profile_name,
+            profileOwner=self._config.aws_account_id,
+        )
+        if profile.get("profileName") != self._config.signing_profile_name:
+            raise ValueError("signing profile is invalid")
+        status = profile.get("status")
+        platform = profile.get("platformId")
+        validity = profile.get("signatureValidityPeriod", {})
+        state: AdminHealthState = (
+            "healthy"
+            if status == "Active" and platform == "Notation-OCI-SHA384-ECDSA"
+            else "warning"
+        )
+        return AdminStatusSection(
+            service="signer",
+            state=state,
+            summary="コンテナ署名profileを確認しました。",
+            metrics=(
+                _metric("status", status or "unknown"),
+                _metric("platform", platform or "unknown"),
+                _metric("validity_value", _optional_integer(validity.get("value"))),
+                _metric("validity_unit", validity.get("type") or "unknown"),
+            ),
+        )
+
+    def _external_section(self, now: datetime) -> AdminStatusSection:
+        metrics: list[AdminStatusMetric] = []
+        warning = False
+        for source in _CHECKPOINT_SOURCES:
+            response = self._dynamodb.get_item(
+                TableName=self._config.tables["statistics"],
+                Key=marshal_item({"PK": "COLLECTOR#COST", "SK": source}),
+                ConsistentRead=True,
+            )
+            raw = response.get("Item")
+            label = source.casefold()
+            if raw is None:
+                warning = True
+                metrics.extend(
+                    (
+                        _metric(f"{label}_initial_complete", False),
+                        _metric(f"{label}_fresh", False),
+                        _metric(f"{label}_last_success_at", None),
+                        _metric(f"{label}_last_failure_at", None),
+                        _metric(f"{label}_failure_code", None),
+                    )
+                )
+                continue
+            item = unmarshal_item(raw)
+            required = {
+                "PK",
+                "SK",
+                "schema_version",
+                "record_type",
+                "source",
+                "next_date",
+                "initial_complete",
+            }
+            optional = {"last_success_at", "last_failure_at", "last_failure_code"}
+            next_date = item.get("next_date")
+            if (
+                not required <= set(item) <= required | optional
+                or item.get("PK") != "COLLECTOR#COST"
+                or item.get("SK") != source
+                or item.get("schema_version") != 1
+                or item.get("record_type") != "cost_checkpoint"
+                or item.get("source") != source
+                or not isinstance(item.get("initial_complete"), bool)
+                or not isinstance(next_date, str)
+                or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", next_date) is None
+            ):
+                raise ValueError("cost checkpoint metadata is invalid")
+            success = _iso_timestamp(item.get("last_success_at"))
+            failure = _iso_timestamp(item.get("last_failure_at"))
+            failure_code = item.get("last_failure_code")
+            if failure_code is not None and (
+                not isinstance(failure_code, str)
+                or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", failure_code) is None
+                or failure is None
+            ):
+                raise ValueError("cost checkpoint failure metadata is invalid")
+            freshness = timedelta(hours=3 if source == "OPENAI" else 36)
+            fresh = success is not None and now - success <= freshness
+            future_timestamp = any(
+                timestamp is not None and timestamp > now + timedelta(minutes=5)
+                for timestamp in (success, failure)
+            )
+            failed_after_success = failure is not None and (success is None or failure >= success)
+            initial_complete = cast(bool, item["initial_complete"])
+            warning = (
+                warning
+                or not fresh
+                or failed_after_success
+                or future_timestamp
+                or not initial_complete
+            )
+            metrics.extend(
+                (
+                    _metric(f"{label}_initial_complete", initial_complete),
+                    _metric(f"{label}_fresh", fresh),
+                    _metric(f"{label}_last_success_at", _timestamp(success)),
+                    _metric(f"{label}_last_failure_at", _timestamp(failure)),
+                    _metric(f"{label}_failure_code", failure_code),
+                )
+            )
+        return AdminStatusSection(
+            service="external",
+            state="warning" if warning else "healthy",
+            summary=(
+                "外部集計の初期取込、失敗、または鮮度を確認してください。"
+                if warning
+                else "OpenAIとFrankfurterを含む集計鮮度を確認しました。"
+            ),
+            metrics=tuple(metrics),
+        )
+
+    def _stack_client(self, label: str) -> Any:
+        return (
+            self._cloudformation_global if label in _GLOBAL_STACK_LABELS else self._cloudformation
+        )
+
+    def _stack_resources(self, stack_label: str, resource_type: str) -> tuple[str, ...]:
+        client = self._stack_client(stack_label)
+        paginator = client.get_paginator("list_stack_resources")
+        resources: list[str] = []
+        for page in _bounded_pages(paginator.paginate(StackName=self._config.stacks[stack_label])):
+            summaries = page.get("StackResourceSummaries", [])
+            if not isinstance(summaries, list):
+                raise ValueError("CloudFormation stack resources are invalid")
+            for item in summaries:
+                if not isinstance(item, Mapping) or item.get("ResourceType") != resource_type:
+                    continue
+                physical_id = item.get("PhysicalResourceId")
+                if not isinstance(physical_id, str) or not physical_id:
+                    raise ValueError("CloudFormation physical resource ID is invalid")
+                resources.append(physical_id)
+        return tuple(resources)
+
+    def _runtime_stack_parameters(self) -> Mapping[str, object]:
+        response = self._cloudformation.describe_stacks(StackName=self._config.runtime_stack_name)
+        stacks = response.get("Stacks", [])
+        if response.get("NextToken") or not isinstance(stacks, list) or len(stacks) != 1:
+            raise ValueError("Runtime stack is unavailable")
+        parameters = stacks[0].get("Parameters", [])
+        if not isinstance(parameters, list):
+            raise ValueError("Runtime stack parameters are invalid")
+        return {
+            item.get("ParameterKey"): item.get("ParameterValue")
+            for item in parameters
+            if isinstance(item, Mapping)
+        }
+
+    def _metric_data_samples(
+        self,
+        *,
+        queries: list[dict[str, object]],
+        now: datetime,
+        hours: int,
+    ) -> tuple[dict[str, tuple[float, ...]], bool]:
+        response = self._cloudwatch.get_metric_data(
+            MetricDataQueries=queries,
+            StartTime=now - timedelta(hours=hours),
+            EndTime=now,
+            ScanBy="TimestampDescending",
+        )
+        expected = {cast(str, query["Id"]) for query in queries}
+        results = response.get("MetricDataResults")
+        complete = (
+            isinstance(results, list)
+            and len(results) == len(expected)
+            and not response.get("NextToken")
+        )
+        samples: dict[str, tuple[float, ...]] = {}
+        for result in results if isinstance(results, list) else []:
+            if not isinstance(result, Mapping):
+                complete = False
+                continue
+            identifier = result.get("Id")
+            values = result.get("Values", [])
+            if (
+                not isinstance(identifier, str)
+                or identifier not in expected
+                or identifier in samples
+                or result.get("StatusCode") != "Complete"
+                or not isinstance(values, list)
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or value < 0
+                    for value in values
+                )
+            ):
+                complete = False
+                continue
+            samples[identifier] = tuple(float(value) for value in values)
+        return samples, complete and set(samples) == expected
+
     def _latest_metric(
         self,
         *,
@@ -1105,6 +1904,65 @@ def _decimal_integer(value: object) -> int:
     if not isinstance(value, str) or not value.isdecimal():
         raise ValueError("provider decimal count is invalid")
     return int(value)
+
+
+def _decimal_amount(value: object) -> Decimal:
+    if not isinstance(value, Mapping) or value.get("Unit") != "USD":
+        raise ValueError("provider money is invalid")
+    raw_amount = value.get("Amount")
+    if not isinstance(raw_amount, str):
+        raise ValueError("provider money is invalid")
+    try:
+        amount = Decimal(raw_amount)
+    except InvalidOperation as error:
+        raise ValueError("provider money is invalid") from error
+    if not amount.is_finite() or amount < 0:
+        raise ValueError("provider money is invalid")
+    return amount
+
+
+def _percent(amount: Decimal, limit: Decimal) -> Decimal:
+    if limit <= 0:
+        raise ValueError("budget limit is invalid")
+    return amount * Decimal("100") / limit
+
+
+def _decimal_text(value: Decimal) -> str:
+    if not value.is_finite() or value < 0:
+        raise ValueError("provider decimal is invalid")
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _single(values: Iterable[Any]) -> Any:
+    entries = tuple(values)
+    if len(entries) != 1:
+        raise ValueError("allowlisted provider resource is ambiguous")
+    return entries[0]
+
+
+def _sns_topic_name(topic_arn: str, *, account_id: str) -> str:
+    pattern = rf"arn:aws:sns:[a-z0-9-]+:{re.escape(account_id)}:([A-Za-z0-9_-]{{1,256}})"
+    match = re.fullmatch(pattern, topic_arn)
+    if match is None:
+        raise ValueError("ADMIN status SNS topic is invalid")
+    return match.group(1)
+
+
+def _iso_timestamp(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("stored timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("stored timestamp is invalid") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("stored timestamp is invalid")
+    return parsed.astimezone(UTC)
 
 
 def _first_nonnegative_integer(item: Mapping[str, object], *names: str) -> int | None:

@@ -20,6 +20,24 @@ NOW = datetime(2026, 8, 24, 3, 0, tzinfo=UTC)
 AWS_ACCOUNT_ID = "123456" + "789012"
 RUNTIME_DIGEST = "sha256:" + "a" * 64
 BREAK_GLASS_DIGEST = "sha256:" + "b" * 64
+STATUS_COLLECTORS = (
+    ("ecs", "_ecs_section"),
+    ("ecr", "_ecr_section"),
+    ("inspector", "_inspector_section"),
+    ("s3", "_s3_section"),
+    ("dynamodb", "_dynamodb_section"),
+    ("lambda", "_lambda_section"),
+    ("cloudfront", "_cloudfront_section"),
+    ("sqs", "_sqs_section"),
+    ("apigateway", "_apigateway_section"),
+    ("eventbridge", "_eventbridge_section"),
+    ("cloudformation", "_cloudformation_section"),
+    ("sns", "_sns_section"),
+    ("ssm", "_ssm_section"),
+    ("cost_governance", "_cost_governance_section"),
+    ("signer", "_signer_section"),
+    ("external", "_external_section"),
+)
 
 
 def configuration() -> AwsAdminStatusConfiguration:
@@ -45,6 +63,43 @@ def configuration() -> AwsAdminStatusConfiguration:
         projector_dlq_url=(
             f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/projector-dlq"
         ),
+        stacks={
+            "stateful": "ShittimChest-Prod-Stateful",
+            "release_identity": "ShittimChest-Prod-ReleaseIdentity",
+            "runtime": "ShittimChest-Prod-Runtime",
+            "operations": "ShittimChest-Prod-Operations",
+            "cost_governance": "ShittimChest-Prod-CostGovernance",
+            "records_stateful": "ShittimChest-Prod-RecordsStateful",
+            "records_application": "ShittimChest-Prod-RecordsApplication",
+            "records_edge": "ShittimChest-Prod-RecordsEdge",
+        },
+        static_parameters={
+            "discord_public_key": "/shittim-chest/production/discord/moderator/public-key",
+            "moderator_token": "/shittim-chest/production/discord/moderator/token",
+            "participant_a_token": "/shittim-chest/production/discord/participant-a/token",
+            "participant_b_token": "/shittim-chest/production/discord/participant-b/token",
+            "participant_c_token": "/shittim-chest/production/discord/participant-c/token",
+            "openai_api_key": "/shittim-chest/production/openai/api-key",
+            "runtime_prompts_active": "/shittim-chest/production/runtime-prompts/active",
+            "records_identity": "/shittim-chest/production/records/identity-hmac-key",
+            "records_presentation": "/shittim-chest/production/records/presentation/v0001",
+            "records_oauth": "/shittim-chest/production/records/discord/oauth/v0001",
+            "records_client_secret": "/shittim-chest/production/records/discord/client-secret",
+            "records_session_key": "/shittim-chest/production/records/session-key",
+            "records_openai_admin_key": "/shittim-chest/production/records/openai/admin-key",
+            "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
+            "records_admin_user_id": "/shittim-chest/production/records/admin/discord-user-id",
+        },
+        runtime_scheduler_name="shittim-chest-production-runtime-reconciler",
+        sns_topic_arn=(
+            f"arn:aws:sns:ap-northeast-1:{AWS_ACCOUNT_ID}:shittim-chest-production-operations"
+        ),
+        signing_profile_name="shittim_chest_ecr",
+        budgets={
+            "project": "shittim-chest-production-project",
+            "account": "shittim-chest-production-account",
+        },
+        anomaly_subscription_name="shittim-chest-production-cost-anomalies",
     )
 
 
@@ -111,8 +166,17 @@ def source(**clients: Any) -> AwsAdminStatusSource:
         cloudfront=clients.get("cloudfront", empty),
         acm=clients.get("acm", empty),
         sqs=clients.get("sqs", empty),
+        apigateway=clients.get("apigateway", empty),
+        events=clients.get("events", empty),
+        scheduler=clients.get("scheduler", empty),
+        sns=clients.get("sns", empty),
+        ssm=clients.get("ssm", empty),
+        budgets=clients.get("budgets", empty),
+        cost_explorer=clients.get("cost_explorer", empty),
+        signer=clients.get("signer", empty),
         cloudwatch=cloudwatch,
         cloudwatch_global=clients.get("cloudwatch_global", cloudwatch),
+        cloudformation_global=clients.get("cloudformation_global", empty),
     )
 
 
@@ -1073,6 +1137,346 @@ def test_sqs_state_includes_encryption_and_retention(
     assert section.state == "warning"
 
 
+def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
+    class ApiGateway:
+        def get_api(self, *, ApiId: str) -> dict[str, Any]:
+            return {
+                "Name": {
+                    "discord-id": "shittim-chest-production-discord-interactions",
+                    "records-id": "shittim-chest-production-records",
+                }[ApiId],
+                "ProtocolType": "HTTP",
+            }
+
+        def get_stages(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"Items": [{"StageName": "$default", "AutoDeploy": True}]}
+
+    class ApiMetrics(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            values = (10.0, 1.0, 0.0, 125.5, 88.25) * 2
+            return {
+                "MetricDataResults": [
+                    {"Id": query["Id"], "StatusCode": "Complete", "Values": [value]}
+                    for query, value in zip(kwargs["MetricDataQueries"], values, strict=True)
+                ]
+            }
+
+    status_source = source(apigateway=ApiGateway(), cloudwatch=ApiMetrics())
+    cast(Any, status_source)._stack_resources = lambda stack, _type: (
+        "discord-id" if stack == "runtime" else "records-id",
+    )
+
+    section = status_source._apigateway_section(NOW)
+    values = metrics(section)
+
+    assert section.state == "healthy"
+    assert values["discord_hour_requests"] == 10
+    assert values["records_hour_5xx"] == 0
+    assert "discord-id" not in section.model_dump_json()
+    assert "records-id" not in section.model_dump_json()
+
+
+def test_stack_resource_lookup_does_not_reuse_replaced_physical_ids() -> None:
+    class ChangingPaginator:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def paginate(self, **_kwargs: Any) -> list[dict[str, Any]]:
+            self.calls += 1
+            return [
+                {
+                    "StackResourceSummaries": [
+                        {
+                            "ResourceType": "AWS::ApiGatewayV2::Api",
+                            "PhysicalResourceId": f"api-{self.calls}",
+                        }
+                    ]
+                }
+            ]
+
+    paginator = ChangingPaginator()
+
+    class CloudFormation:
+        def get_paginator(self, name: str) -> ChangingPaginator:
+            assert name == "list_stack_resources"
+            return paginator
+
+    status_source = source(cloudformation=CloudFormation())
+
+    first = status_source._stack_resources("runtime", "AWS::ApiGatewayV2::Api")
+    second = status_source._stack_resources("runtime", "AWS::ApiGatewayV2::Api")
+
+    assert first == ("api-1",)
+    assert second == ("api-2",)
+    assert paginator.calls == 2
+
+
+def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
+    descriptions = status_adapters._EVENT_RULE_DESCRIPTIONS
+    rules = {
+        "ranking-rule": descriptions["ranking"],
+        "aws-rule": descriptions["aws_fx"],
+        "openai-rule": descriptions["openai"],
+        "stop-rule": descriptions["abnormal_stop"],
+    }
+
+    class Events:
+        def describe_rule(self, *, Name: str) -> dict[str, Any]:
+            return {
+                "Name": Name,
+                "Description": rules[Name],
+                "State": "ENABLED",
+                "ScheduleExpression": None if Name == "stop-rule" else "rate(15 minutes)",
+            }
+
+    class Scheduler:
+        def get_schedule(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Name": configuration().runtime_scheduler_name,
+                "State": "ENABLED",
+                "ScheduleExpression": "rate(1 minute)",
+                "Target": {"RetryPolicy": {"MaximumRetryAttempts": 2}},
+            }
+
+    class EventMetrics(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "MetricDataResults": [
+                    {
+                        "Id": query["Id"],
+                        "StatusCode": "Complete",
+                        "Values": [
+                            0.0
+                            if query["MetricStat"]["Metric"]["MetricName"] == "FailedInvocations"
+                            else 1.0
+                        ],
+                    }
+                    for query in kwargs["MetricDataQueries"]
+                ]
+            }
+
+    status_source = source(
+        events=Events(),
+        scheduler=Scheduler(),
+        cloudwatch=EventMetrics(),
+    )
+    cast(Any, status_source)._stack_resources = lambda stack, _type: (
+        ("ranking-rule", "aws-rule", "openai-rule")
+        if stack == "records_application"
+        else ("stop-rule",)
+    )
+
+    section = status_source._eventbridge_section(NOW)
+    values = metrics(section)
+
+    assert section.state == "healthy"
+    assert values["runtime_retry_attempts"] == 2
+    assert values["abnormal_stop_expression"] == "event pattern"
+    assert not any(name in section.model_dump_json() for name in rules)
+
+
+def test_cloudformation_uses_last_recorded_drift_for_eight_stacks() -> None:
+    class CloudFormation:
+        def describe_stacks(self, *, StackName: str) -> dict[str, Any]:
+            return {
+                "Stacks": [
+                    {
+                        "StackName": StackName,
+                        "StackStatus": "UPDATE_COMPLETE",
+                        "DriftInformation": {"StackDriftStatus": "IN_SYNC"},
+                        "EnableTerminationProtection": True,
+                        "LastUpdatedTime": NOW,
+                    }
+                ]
+            }
+
+    client = CloudFormation()
+    status_source = source(cloudformation=client, cloudformation_global=client)
+    section = status_source._cloudformation_section()
+    values = metrics(section)
+
+    assert section.state == "healthy"
+    assert values["records_edge_drift"] == "IN_SYNC"
+    assert len(section.metrics) == 8 * 4
+    assert "ShittimChest" not in section.model_dump_json()
+
+
+def test_sns_reports_delivery_counts_without_subscription_addresses() -> None:
+    class Sns:
+        def get_topic_attributes(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Attributes": {
+                    "SubscriptionsConfirmed": "1",
+                    "SubscriptionsPending": "0",
+                    "PrivateAddress": "private-recipient",
+                }
+            }
+
+    class SnsMetrics(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "MetricDataResults": [
+                    {
+                        "Id": query["Id"],
+                        "StatusCode": "Complete",
+                        "Values": [
+                            0.0
+                            if query["MetricStat"]["Metric"]["MetricName"]
+                            == "NumberOfNotificationsFailed"
+                            else 1.0
+                        ],
+                    }
+                    for query in kwargs["MetricDataQueries"]
+                ]
+            }
+
+    section = source(sns=Sns(), cloudwatch=SnsMetrics())._sns_section(NOW)
+    values = metrics(section)
+
+    assert section.state == "healthy"
+    assert values["confirmed_subscriptions"] == 1
+    assert "private-recipient" not in section.model_dump_json()
+
+
+def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
+    class CloudFormation:
+        def describe_stacks(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Stacks": [
+                    {
+                        "Parameters": [
+                            {"ParameterKey": "RuntimeConfigVersion", "ParameterValue": "v0001"}
+                        ]
+                    }
+                ]
+            }
+
+    class Ssm:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def describe_parameters(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            name = kwargs["ParameterFilters"][0]["Values"][0]
+            if name.endswith("runtime-prompts/active"):
+                return {"Parameters": []}
+            return {
+                "Parameters": [
+                    {
+                        "Name": name,
+                        "Type": "SecureString",
+                        "Version": 1,
+                        "LastModifiedDate": NOW,
+                    }
+                ]
+            }
+
+    ssm = Ssm()
+    section = source(cloudformation=CloudFormation(), ssm=ssm)._ssm_section()
+    values = metrics(section)
+
+    assert section.state == "healthy"
+    assert values["discord_ready"] == 5
+    assert values["runtime_ready"] == 6
+    assert values["records_ready"] == 6
+    assert values["cost_ready"] == 2
+    assert values["runtime_prompt_pointer_present"] is False
+    assert len(ssm.calls) == 20
+    assert "/shittim-chest/" not in section.model_dump_json()
+
+
+def test_cost_governance_exposes_percentages_without_amounts_or_addresses() -> None:
+    class Budgets:
+        def describe_budget(self, *, BudgetName: str, **_kwargs: Any) -> dict[str, Any]:
+            actual = "10" if BudgetName.endswith("project") else "15"
+            return {
+                "Budget": {
+                    "BudgetLimit": {"Amount": "20", "Unit": "USD"},
+                    "CalculatedSpend": {
+                        "ActualSpend": {"Amount": actual, "Unit": "USD"},
+                        "ForecastedSpend": {"Amount": "16", "Unit": "USD"},
+                    },
+                    "HealthStatus": {"Status": "HEALTHY"},
+                }
+            }
+
+    class CostExplorer:
+        def get_anomaly_subscriptions(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "AnomalySubscriptions": [
+                    {
+                        "SubscriptionName": configuration().anomaly_subscription_name,
+                        "Frequency": "DAILY",
+                        "Subscribers": [
+                            {
+                                "Address": "private-recipient",
+                                "Type": "EMAIL",
+                                "Status": "CONFIRMED",
+                            }
+                        ],
+                    }
+                ]
+            }
+
+    section = source(
+        budgets=Budgets(),
+        cost_explorer=CostExplorer(),
+    )._cost_governance_section()
+    values = metrics(section)
+
+    assert section.state == "healthy"
+    assert values["project_actual_percent"] == "50"
+    assert values["account_actual_percent"] == "75"
+    serialized = section.model_dump_json()
+    assert "private-recipient" not in serialized
+    assert "shittim-chest-production" not in serialized
+
+
+def test_signer_reports_profile_health_without_arn() -> None:
+    class Signer:
+        def get_signing_profile(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "profileName": configuration().signing_profile_name,
+                "status": "Active",
+                "platformId": "Notation-OCI-SHA384-ECDSA",
+                "signatureValidityPeriod": {"value": 12, "type": "MONTHS"},
+                "arn": "private-profile-arn",
+            }
+
+    section = source(signer=Signer())._signer_section()
+
+    assert section.state == "healthy"
+    assert metrics(section)["validity_value"] == 12
+    assert "private-profile-arn" not in section.model_dump_json()
+
+
+def test_external_reports_checkpoint_freshness_without_keys_or_cursors() -> None:
+    class Dynamo:
+        def get_item(self, *, Key: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            key = status_adapters.unmarshal_item(Key)
+            source_name = cast(str, key["SK"])
+            item = {
+                **key,
+                "schema_version": 1,
+                "record_type": "cost_checkpoint",
+                "source": source_name,
+                "next_date": "2026-08-25",
+                "initial_complete": True,
+                "last_success_at": (NOW - timedelta(hours=1)).isoformat(),
+            }
+            return {"Item": status_adapters.marshal_item(item)}
+
+    section = source(dynamodb=Dynamo())._external_section(NOW)
+    values = metrics(section)
+
+    assert section.state == "healthy"
+    assert values["openai_fresh"] is True
+    assert values["frankfurter_initial_complete"] is True
+    serialized = section.model_dump_json()
+    assert "COLLECTOR#COST" not in serialized
+    assert "next_date" not in serialized
+
+
 def test_status_service_reuses_warm_cache_for_sixty_seconds() -> None:
     sections = tuple(
         AdminStatusSection(
@@ -1081,16 +1485,7 @@ def test_status_service_reuses_warm_cache_for_sixty_seconds() -> None:
             summary="正常です。",
             metrics=(),
         )
-        for service in (
-            "ecs",
-            "ecr",
-            "inspector",
-            "s3",
-            "dynamodb",
-            "lambda",
-            "cloudfront",
-            "sqs",
-        )
+        for service, _method in STATUS_COLLECTORS
     )
 
     class StatusSource:
@@ -1141,16 +1536,11 @@ def test_critical_service_section_promotes_overall_state() -> None:
         summary="確認が必要です。",
         metrics=(),
     )
-    collectors = {
-        "_ecs_section": lambda _now: healthy,
-        "_ecr_section": lambda: healthy.model_copy(update={"service": "ecr"}),
-        "_inspector_section": lambda: critical,
-        "_s3_section": lambda: healthy.model_copy(update={"service": "s3"}),
-        "_dynamodb_section": lambda _now: healthy.model_copy(update={"service": "dynamodb"}),
-        "_lambda_section": lambda _now: healthy.model_copy(update={"service": "lambda"}),
-        "_cloudfront_section": lambda _now: healthy.model_copy(update={"service": "cloudfront"}),
-        "_sqs_section": lambda _now: healthy.model_copy(update={"service": "sqs"}),
+    collectors: dict[str, Any] = {
+        method: (lambda *_args, service=service: healthy.model_copy(update={"service": service}))
+        for service, method in STATUS_COLLECTORS
     }
+    collectors["_inspector_section"] = lambda: critical
     for name, collector in collectors.items():
         setattr(status_source, name, collector)
 
@@ -1161,7 +1551,7 @@ def test_critical_service_section_promotes_overall_state() -> None:
 
 def test_status_sections_are_collected_in_parallel() -> None:
     status_source = source()
-    barrier = threading.Barrier(8)
+    barrier = threading.Barrier(len(STATUS_COLLECTORS))
 
     def collector(service: str) -> Any:
         def collect(*_args: Any) -> AdminStatusSection:
@@ -1176,16 +1566,7 @@ def test_status_sections_are_collected_in_parallel() -> None:
         return collect
 
     cast(Any, status_source)._alarm_counts = lambda: (0, 0, False)
-    for service, name in (
-        ("ecs", "_ecs_section"),
-        ("ecr", "_ecr_section"),
-        ("inspector", "_inspector_section"),
-        ("s3", "_s3_section"),
-        ("dynamodb", "_dynamodb_section"),
-        ("lambda", "_lambda_section"),
-        ("cloudfront", "_cloudfront_section"),
-        ("sqs", "_sqs_section"),
-    ):
+    for service, name in STATUS_COLLECTORS:
         setattr(status_source, name, collector(service))
 
     result = status_source.collect(now=NOW)
@@ -1214,16 +1595,12 @@ def test_status_collection_budget_marks_unfinished_section_unknown(
         release.wait(timeout=2)
         return healthy("ecr")
 
-    for name, collector in {
-        "_ecs_section": lambda _now: healthy("ecs"),
-        "_ecr_section": blocked_ecr,
-        "_inspector_section": lambda: healthy("inspector"),
-        "_s3_section": lambda: healthy("s3"),
-        "_dynamodb_section": lambda _now: healthy("dynamodb"),
-        "_lambda_section": lambda _now: healthy("lambda"),
-        "_cloudfront_section": lambda _now: healthy("cloudfront"),
-        "_sqs_section": lambda _now: healthy("sqs"),
-    }.items():
+    collectors: dict[str, Any] = {
+        method: (lambda *_args, service=service: healthy(service))
+        for service, method in STATUS_COLLECTORS
+    }
+    collectors["_ecr_section"] = blocked_ecr
+    for name, collector in collectors.items():
         setattr(status_source, name, collector)
 
     result = status_source.collect(now=NOW)

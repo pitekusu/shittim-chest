@@ -304,6 +304,9 @@ describe("RecordsApplicationStack", () => {
           ADMIN_AWS_ACCOUNT_ID: "000000000000",
           RECORDS_PUBLIC_HOSTNAME: { Ref: "RecordsPublicHostname" },
           RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
+          RUNTIME_SCHEDULER_NAME: "shittim-chest-production-runtime-reconciler",
+          SIGNING_PROFILE_NAME: "shittim_chest_ecr",
+          COST_ANOMALY_SUBSCRIPTION_NAME: "shittim-chest-production-cost-anomalies",
         },
       },
     });
@@ -317,19 +320,28 @@ describe("RecordsApplicationStack", () => {
 
     for (const action of [
       "acm:DescribeCertificate",
+      "apigateway:GET",
+      "budgets:ViewBudget",
+      "ce:GetAnomalySubscriptions",
       "cloudfront:GetDistribution",
       "cloudfront:ListDistributions",
       "cloudformation:DescribeStacks",
+      "cloudformation:ListStackResources",
       "cloudwatch:GetMetricData",
       "cloudwatch:GetMetricStatistics",
       "dynamodb:DescribeTable",
       "ecr:DescribeImages",
       "ecs:DescribeServices",
+      "events:DescribeRule",
       "inspector2:ListCoverage",
       "inspector2:ListFindings",
       "lambda:GetFunctionConcurrency",
       "s3:GetEncryptionConfiguration",
+      "scheduler:GetSchedule",
+      "signer:GetSigningProfile",
+      "sns:GetTopicAttributes",
       "sqs:GetQueueAttributes",
+      "ssm:DescribeParameters",
     ]) {
       expect(statusText).toContain(action);
     }
@@ -342,7 +354,21 @@ describe("RecordsApplicationStack", () => {
     expect(statusText).not.toContain("lambda:InvokeFunction");
     expect(statusText).not.toContain("ecs:UpdateService");
     expect(statusText).not.toContain("cloudformation:UpdateStack");
-    expect(statusText).toContain("stack/ShittimChest-Prod-Runtime/*");
+    expect(statusText).not.toContain("cloudformation:DetectStackDrift");
+    expect(statusText).not.toContain("sqs:ReceiveMessage");
+    expect(statusText).not.toContain("sns:ListSubscriptions");
+    for (const stackName of [
+      "Stateful",
+      "ReleaseIdentity",
+      "Runtime",
+      "Operations",
+      "CostGovernance",
+      "RecordsStateful",
+      "RecordsApplication",
+      "RecordsEdge",
+    ]) {
+      expect(statusText).toContain(`stack/ShittimChest-Prod-${stackName}/*`);
+    }
 
     const statusStatements = statusPolicy?.Properties.PolicyDocument.Statement as Array<{
       readonly Action: string | string[];
@@ -416,6 +442,18 @@ describe("RecordsApplicationStack", () => {
           "CONTROL#OUTBOX",
         ],
       },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+    const statusCollectorRead = statusStatements.find(
+      (statement) =>
+        statusActionsOf(statement).includes("dynamodb:GetItem") &&
+        JSON.stringify(statement.Resource).includes(
+          "table/shittim-chest-production-records-statistics",
+        ) &&
+        JSON.stringify(statement.Condition).includes("COLLECTOR#COST"),
+    );
+    expect(statusCollectorRead?.Condition).toEqual({
+      "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["COLLECTOR#COST"] },
       Null: { "dynamodb:LeadingKeys": "false" },
     });
 

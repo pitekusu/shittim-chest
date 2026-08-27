@@ -144,6 +144,264 @@ const costs = {
   status: "partial",
 };
 
+const adminFunctionKeys = [
+  "discord_ingress",
+  "discord_status",
+  "image_admission",
+  "runtime_reconciler",
+  "records_projector",
+  "records_backfill",
+  "records_auth",
+  "records_read",
+  "records_ranking",
+  "records_cost",
+  "records_admin_status",
+] as const;
+
+const adminStatus = {
+  schemaVersion: 1,
+  generatedAt: "2026-08-27T01:20:00Z",
+  expiresAt: "2026-08-27T01:21:00Z",
+  stale: false,
+  overall: { state: "warning", criticalAlarms: 0, warningAlarms: 1, partial: false },
+  sections: [
+    {
+      service: "ecs",
+      state: "healthy",
+      summary: "IDLE",
+      metrics: [
+        { name: "running_count", value: 0 },
+        { name: "desired_count", value: 0 },
+        { name: "pending_count", value: 0 },
+        { name: "active_debates", value: 0 },
+        { name: "outbox_pending", value: 0 },
+        { name: "heartbeat_age_seconds", value: null },
+      ],
+    },
+    {
+      service: "ecr",
+      state: "healthy",
+      summary: "承認済みイメージとrepository保護を確認しました。",
+      metrics: [
+        { name: "tag_mutability", value: "IMMUTABLE" },
+        { name: "encryption_type", value: "AES256" },
+        { name: "normal_image_present", value: true },
+        { name: "normal_pushed_at", value: "2026-08-24T14:16:20Z" },
+        { name: "break_glass_image_present", value: true },
+        { name: "break_glass_pushed_at", value: "2026-08-24T14:16:36Z" },
+      ],
+    },
+    {
+      service: "inspector",
+      state: "warning",
+      summary: "検出結果とECR scan coverageを確認しました。",
+      metrics: [
+        { name: "active_critical", value: 0 },
+        { name: "active_high", value: 0 },
+        { name: "active_medium", value: 12 },
+        { name: "active_low", value: 0 },
+        { name: "active_untriaged", value: 6 },
+        { name: "coverage_active", value: 4 },
+        { name: "last_scanned_at", value: "2026-08-27T00:50:00Z" },
+      ],
+    },
+    {
+      service: "s3",
+      state: "healthy",
+      summary: "Bucket保護設定を確認しました。",
+      metrics: ["web", "media", "release"].flatMap((key) => [
+        { name: `${key}_versioning`, value: "Enabled" },
+        { name: `${key}_encrypted`, value: true },
+        { name: `${key}_public_access_blocked`, value: true },
+      ]),
+    },
+    {
+      service: "dynamodb",
+      state: "healthy",
+      summary: "Table状態と保護設定を確認しました。",
+      metrics: [
+        ...["debate", "archive", "statistics", "session"].flatMap((key, index) => [
+          { name: `${key}_status`, value: "ACTIVE" },
+          { name: `${key}_pitr`, value: "ENABLED" },
+          { name: `${key}_deletion_protection`, value: true },
+          { name: `${key}_ttl`, value: key === "session" ? "ENABLED" : "DISABLED" },
+          { name: `${key}_item_count`, value: [2231, 684, 12, 7][index] },
+          { name: `${key}_read_throttles`, value: 0 },
+          { name: `${key}_write_throttles`, value: 0 },
+        ]),
+        { name: "debate_stream_enabled", value: true },
+        { name: "debate_stream_view_type", value: "NEW_IMAGE" },
+      ],
+    },
+    {
+      service: "lambda",
+      state: "healthy",
+      summary: "Lambda状態と直近1時間の指標を確認しました。",
+      metrics: adminFunctionKeys.flatMap((key, index) => [
+        { name: `${key}_state`, value: "Active" },
+        { name: `${key}_update`, value: "Successful" },
+        { name: `${key}_hour_invocations`, value: index % 3 },
+        { name: `${key}_hour_errors`, value: 0 },
+        { name: `${key}_hour_throttles`, value: 0 },
+        { name: `${key}_hour_duration`, value: index % 3 === 0 ? "42.180" : null },
+      ]),
+    },
+    {
+      service: "cloudfront",
+      state: "healthy",
+      summary: "Distributionと証明書を確認しました。",
+      metrics: [
+        { name: "enabled", value: true },
+        { name: "deployment_status", value: "Deployed" },
+        { name: "tls_policy", value: "TLSv1.3_2025" },
+        { name: "certificate_key_algorithm", value: "EC-prime256v1" },
+        { name: "certificate_expires_at", value: "2027-03-07T23:59:59Z" },
+        { name: "hour_requests", value: 28 },
+        { name: "hour_4xx_rate", value: "0.000" },
+        { name: "hour_5xx_rate", value: "0.000" },
+      ],
+    },
+    {
+      service: "sqs",
+      state: "healthy",
+      summary: "DLQは空で保護設定も正常です。",
+      metrics: [
+        { name: "visible_messages", value: 0 },
+        { name: "inflight_messages", value: 0 },
+        { name: "delayed_messages", value: 0 },
+        { name: "oldest_message_age_seconds", value: "0.000" },
+        { name: "encrypted", value: true },
+        { name: "retention_seconds", value: 1_209_600 },
+      ],
+    },
+    {
+      service: "apigateway",
+      state: "healthy",
+      summary: "HTTP APIと直近1時間の応答を確認しました。",
+      metrics: ["discord", "records"].flatMap((key, index) => [
+        { name: `${key}_protocol`, value: "HTTP" },
+        { name: `${key}_auto_deploy`, value: true },
+        { name: `${key}_hour_requests`, value: 12 + index * 8 },
+        { name: `${key}_hour_4xx`, value: 0 },
+        { name: `${key}_hour_5xx`, value: 0 },
+        { name: `${key}_hour_latency`, value: index === 0 ? "44.500" : "86.125" },
+        {
+          name: `${key}_hour_integration_latency`,
+          value: index === 0 ? "31.250" : "62.500",
+        },
+      ]),
+    },
+    {
+      service: "eventbridge",
+      state: "healthy",
+      summary: "定期実行とイベント配信を確認しました。",
+      metrics: [
+        { name: "runtime_state", value: "ENABLED" },
+        { name: "runtime_expression", value: "rate(1 minute)" },
+        { name: "runtime_retry_attempts", value: 2 },
+        ...["ranking", "aws_fx", "openai", "abnormal_stop"].flatMap((key, index) => [
+          { name: `${key}_state`, value: "ENABLED" },
+          {
+            name: `${key}_expression`,
+            value: index === 3 ? "event pattern" : "cron(17 3 * * ? *)",
+          },
+          { name: `${key}_day_invocations`, value: [96, 1, 24, 0][index] },
+          { name: `${key}_day_failures`, value: 0 },
+        ]),
+      ],
+    },
+    {
+      service: "cloudformation",
+      state: "healthy",
+      summary: "8 Stackの状態と最後のdrift結果を確認しました。",
+      metrics: [
+        "stateful",
+        "release_identity",
+        "runtime",
+        "operations",
+        "cost_governance",
+        "records_stateful",
+        "records_application",
+        "records_edge",
+      ].flatMap((key) => [
+        { name: `${key}_status`, value: "UPDATE_COMPLETE" },
+        { name: `${key}_drift`, value: "IN_SYNC" },
+        { name: `${key}_termination_protection`, value: true },
+        { name: `${key}_updated_at`, value: "2026-08-27T00:45:00Z" },
+      ]),
+    },
+    {
+      service: "sns",
+      state: "healthy",
+      summary: "運用通知の購読と直近24時間の配信を確認しました。",
+      metrics: [
+        { name: "confirmed_subscriptions", value: 1 },
+        { name: "pending_subscriptions", value: 0 },
+        { name: "day_delivered", value: 2 },
+        { name: "day_failed", value: 0 },
+      ],
+    },
+    {
+      service: "ssm",
+      state: "healthy",
+      summary: "必要な設定metadataを確認しました。",
+      metrics: [
+        ...[
+          ["discord", 5],
+          ["runtime", 6],
+          ["records", 6],
+          ["cost", 2],
+        ].flatMap(([key, count]) => [
+          { name: `${key}_ready`, value: count },
+          { name: `${key}_required`, value: count },
+        ]),
+        { name: "runtime_prompt_pointer_present", value: false },
+        { name: "latest_modified_at", value: "2026-08-26T21:30:00Z" },
+      ],
+    },
+    {
+      service: "cost_governance",
+      state: "healthy",
+      summary: "予算使用率とCost Anomaly通知を確認しました。",
+      metrics: [
+        { name: "project_actual_percent", value: "24.5" },
+        { name: "project_forecast_percent", value: "31.2" },
+        { name: "project_health", value: "HEALTHY" },
+        { name: "account_actual_percent", value: "19.8" },
+        { name: "account_forecast_percent", value: "27.4" },
+        { name: "account_health", value: "HEALTHY" },
+        { name: "anomaly_subscription", value: true },
+        { name: "anomaly_frequency", value: "DAILY" },
+        { name: "anomaly_subscribers", value: 1 },
+        { name: "anomaly_confirmed_subscribers", value: 1 },
+      ],
+    },
+    {
+      service: "signer",
+      state: "healthy",
+      summary: "コンテナ署名profileを確認しました。",
+      metrics: [
+        { name: "status", value: "Active" },
+        { name: "platform", value: "Notation-OCI-SHA384-ECDSA" },
+        { name: "validity_value", value: 12 },
+        { name: "validity_unit", value: "MONTHS" },
+      ],
+    },
+    {
+      service: "external",
+      state: "healthy",
+      summary: "OpenAIとFrankfurterを含む集計鮮度を確認しました。",
+      metrics: ["aws", "openai", "frankfurter"].flatMap((key, index) => [
+        { name: `${key}_initial_complete`, value: true },
+        { name: `${key}_fresh`, value: true },
+        { name: `${key}_last_success_at`, value: `2026-08-27T0${index}:37:00Z` },
+        { name: `${key}_last_failure_at`, value: null },
+        { name: `${key}_failure_code`, value: null },
+      ]),
+    },
+  ],
+};
+
 const PRODUCTION_CSP = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -160,6 +418,7 @@ async function mockAuthenticatedApi(
   page: Page,
   recordDetail = detail,
   recordDelayMs = 0,
+  isAdmin = false,
 ): Promise<void> {
   let authenticated = true;
   await page.route("**/api/v1/session?*", (route) =>
@@ -168,7 +427,7 @@ async function mockAuthenticatedApi(
         ? {
             schemaVersion: 1,
             authenticated: true,
-            isAdmin: false,
+            isAdmin,
             user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
             csrfToken: "csrf-token",
           }
@@ -215,6 +474,7 @@ async function mockAuthenticatedApi(
     const period = new URL(route.request().url()).searchParams.get("period") ?? "week";
     return route.fulfill({ json: { ...costs, period } });
   });
+  await page.route("**/api/v1/admin/status*", (route) => route.fulfill({ json: adminStatus }));
 }
 
 test("authenticated member can browse the completed archive", async ({ page }) => {
@@ -1334,6 +1594,58 @@ test("management console remains reachable in the five-column 320px mobile navig
   const adminLink = mobileNavigation.getByRole("link", { name: "管理コンソール" });
   await expect(adminLink).toBeVisible();
   await expect(adminLink).toHaveText("管理コンソール");
+  const viewport = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("management console presents localized visual status", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
+  await mockAuthenticatedApi(page, detail, 0, true);
+
+  await page.goto("/admin");
+
+  const heading = page.getByRole("heading", { name: "管理コンソール" });
+  await expect(heading).toBeVisible();
+  expect(
+    await heading.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
+  ).toBeLessThanOrEqual(45);
+  await expect(page.getByText("AWSの稼働状態を、安全な境界の内側で確認します。")).toHaveCount(0);
+  await expect(page.getByText("アクセス", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("desired_count", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("実行中タスク", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "DynamoDBテーブル状態" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Lambda関数状態" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "API Gateway状態" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "定期実行とイベント配信" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "CloudFormation Stack状態" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "予算状態" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "外部集計状態" })).toBeVisible();
+  await expect(page.getByText("Discord連携", { exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("admin-console-dark.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixels: 20,
+  });
+});
+
+test("management console contains wide status tables on mobile", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
+  await mockAuthenticatedApi(page, detail, 0, true);
+
+  await page.goto("/admin");
+
+  await expect(page.getByRole("heading", { name: "管理コンソール" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,

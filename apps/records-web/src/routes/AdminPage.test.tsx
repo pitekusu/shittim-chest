@@ -29,6 +29,89 @@ const statusResponse: AdminStatusResponse = {
       summary: "現在は確認できません。",
       metrics: [{ name: "coverage", value: null }],
     },
+    {
+      service: "apigateway",
+      state: "healthy",
+      summary: "HTTP APIを確認しました。",
+      metrics: [
+        { name: "discord_protocol", value: "HTTP" },
+        { name: "discord_auto_deploy", value: true },
+        { name: "discord_hour_requests", value: 12 },
+        { name: "discord_hour_4xx", value: 0 },
+        { name: "discord_hour_5xx", value: 0 },
+        { name: "discord_hour_latency", value: "44.500" },
+        { name: "discord_hour_integration_latency", value: "31.250" },
+      ],
+    },
+    {
+      service: "eventbridge",
+      state: "healthy",
+      summary: "定期実行を確認しました。",
+      metrics: [
+        { name: "runtime_state", value: "ENABLED" },
+        { name: "runtime_expression", value: "rate(1 minute)" },
+        { name: "runtime_retry_attempts", value: 2 },
+      ],
+    },
+    {
+      service: "cloudformation",
+      state: "healthy",
+      summary: "Stackを確認しました。",
+      metrics: [
+        { name: "runtime_status", value: "UPDATE_COMPLETE" },
+        { name: "runtime_drift", value: "IN_SYNC" },
+        { name: "runtime_termination_protection", value: true },
+        { name: "runtime_updated_at", value: "2026-08-24T03:00:00Z" },
+      ],
+    },
+    {
+      service: "sns",
+      state: "healthy",
+      summary: "通知を確認しました。",
+      metrics: [{ name: "confirmed_subscriptions", value: 1 }],
+    },
+    {
+      service: "ssm",
+      state: "healthy",
+      summary: "設定metadataを確認しました。",
+      metrics: [
+        { name: "discord_ready", value: 5 },
+        { name: "discord_required", value: 5 },
+        { name: "runtime_ready", value: 6 },
+        { name: "runtime_required", value: 6 },
+        { name: "records_ready", value: 6 },
+        { name: "records_required", value: 6 },
+        { name: "cost_ready", value: 2 },
+        { name: "cost_required", value: 2 },
+        { name: "runtime_prompt_pointer_present", value: false },
+      ],
+    },
+    {
+      service: "cost_governance",
+      state: "healthy",
+      summary: "予算と異常通知を確認しました。",
+      metrics: [
+        { name: "project_actual_percent", value: "24.5" },
+        { name: "project_forecast_percent", value: "31.2" },
+        { name: "project_health", value: "HEALTHY" },
+      ],
+    },
+    {
+      service: "signer",
+      state: "healthy",
+      summary: "署名profileを確認しました。",
+      metrics: [{ name: "platform", value: "Notation-OCI-SHA384-ECDSA" }],
+    },
+    {
+      service: "external",
+      state: "healthy",
+      summary: "外部集計を確認しました。",
+      metrics: [
+        { name: "openai_initial_complete", value: true },
+        { name: "openai_fresh", value: true },
+        { name: "openai_last_success_at", value: "2026-08-24T03:00:00Z" },
+      ],
+    },
   ],
 };
 
@@ -72,11 +155,26 @@ describe("AdminPage", () => {
 
     renderAdmin();
 
-    expect(await screen.findByRole("heading", { name: "ADMIN" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "管理コンソール" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "現在の状態" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "サービス状態" })).toBeVisible();
     expect(await screen.findByText("Scale-to-Zeroで待機しています。")).toBeVisible();
     expect(screen.getByText("現在は確認できません。")).toBeVisible();
+    expect(screen.getByText("実行中タスク")).toBeVisible();
+    expect(screen.getByText("検査対象")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "自動反映" })).toBeVisible();
+    expect(screen.getByRole("rowheader", { name: "Runtime調整" })).toBeVisible();
+    expect(screen.getByRole("rowheader", { name: "討論Runtime" })).toBeVisible();
+    expect(screen.getByText("Discord連携")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "実績使用率" })).toBeVisible();
+    expect(screen.getByRole("rowheader", { name: "OpenAI Costs" })).toBeVisible();
+    expect(screen.queryByText("desired_count")).not.toBeInTheDocument();
+    expect(screen.queryByText("coverage")).not.toBeInTheDocument();
+    expect(screen.queryByText("project_actual_percent")).not.toBeInTheDocument();
+    expect(screen.queryByText("アクセス")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("AWSの稼働状態を、安全な境界の内側で確認します。"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "プロンプト管理" })).not.toBeInTheDocument();
     expect(
       screen.getByText(

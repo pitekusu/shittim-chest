@@ -23,6 +23,14 @@ STATUS_SERVICES = (
     "lambda",
     "cloudfront",
     "sqs",
+    "apigateway",
+    "eventbridge",
+    "cloudformation",
+    "sns",
+    "ssm",
+    "cost_governance",
+    "signer",
+    "external",
 )
 
 
