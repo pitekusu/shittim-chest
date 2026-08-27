@@ -473,6 +473,59 @@ export class RecordsApplicationStack extends Stack {
       resource: "repository",
       resourceName: "shittim-chest",
     });
+    const statusStackNames = {
+      stateful: "ShittimChest-Prod-Stateful",
+      release_identity: "ShittimChest-Prod-ReleaseIdentity",
+      runtime: "ShittimChest-Prod-Runtime",
+      operations: "ShittimChest-Prod-Operations",
+      cost_governance: "ShittimChest-Prod-CostGovernance",
+      records_stateful: "ShittimChest-Prod-RecordsStateful",
+      records_application: "ShittimChest-Prod-RecordsApplication",
+      records_edge: "ShittimChest-Prod-RecordsEdge",
+    } as const;
+    const regionalStatusStackArns = Object.entries(statusStackNames)
+      .filter(([label]) => !["cost_governance", "records_edge"].includes(label))
+      .map(([, stackName]) =>
+        this.formatArn({
+          service: "cloudformation",
+          resource: "stack",
+          resourceName: `${stackName}/*`,
+          arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+        }),
+      );
+    const globalStatusStackArns = [
+      statusStackNames.cost_governance,
+      statusStackNames.records_edge,
+    ].map((stackName) =>
+      this.formatArn({
+        service: "cloudformation",
+        region: "us-east-1",
+        resource: "stack",
+        resourceName: `${stackName}/*`,
+        arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+      }),
+    );
+    const statusParameters = {
+      discord_public_key: "/shittim-chest/production/discord/moderator/public-key",
+      moderator_token: "/shittim-chest/production/discord/moderator/token",
+      participant_a_token: "/shittim-chest/production/discord/participant-a/token",
+      participant_b_token: "/shittim-chest/production/discord/participant-b/token",
+      participant_c_token: "/shittim-chest/production/discord/participant-c/token",
+      openai_api_key: "/shittim-chest/production/openai/api-key",
+      runtime_prompts_active: "/shittim-chest/production/runtime-prompts/active",
+      records_identity: identityParameter.parameterName,
+      records_presentation: presentationParameter.parameterName,
+      records_oauth: oauthConfigParameter.parameterName,
+      records_client_secret: oauthClientSecretParameter.parameterName,
+      records_session_key: sessionKeyParameter.parameterName,
+      records_openai_admin_key: openaiAdminKeyParameter.parameterName,
+      records_openai_project_id: openaiProjectIdParameter.parameterName,
+      records_admin_user_id: adminDiscordIdParameter.parameterName,
+    } as const;
+    const statusBudgets = {
+      project: "shittim-chest-production-project",
+      account: "shittim-chest-production-account",
+    } as const;
     const statusFunctionNames = {
       image_admission: "shittim-chest-production-image-admission",
       discord_status: "shittim-chest-production-discord-status-publisher",
@@ -527,6 +580,16 @@ export class RecordsApplicationStack extends Stack {
         ECR_REPOSITORY_NAME: "shittim-chest",
         RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
         ADMIN_STATUS_FUNCTIONS_JSON: JSON.stringify(statusFunctionNames),
+        ADMIN_STACKS_JSON: JSON.stringify(statusStackNames),
+        ADMIN_STATUS_PARAMETERS_JSON: JSON.stringify(statusParameters),
+        RUNTIME_SCHEDULER_NAME: "shittim-chest-production-runtime-reconciler",
+        SNS_TOPIC_ARN: this.formatArn({
+          service: "sns",
+          resource: "shittim-chest-production-operations",
+        }),
+        SIGNING_PROFILE_NAME: "shittim_chest_ecr",
+        ADMIN_BUDGETS_JSON: JSON.stringify(statusBudgets),
+        COST_ANOMALY_SUBSCRIPTION_NAME: "shittim-chest-production-cost-anomalies",
       },
       policyStatements: [
         new iam.PolicyStatement({
@@ -579,15 +642,8 @@ export class RecordsApplicationStack extends Stack {
           resources: [ecsServiceArn],
         }),
         new iam.PolicyStatement({
-          actions: ["cloudformation:DescribeStacks"],
-          resources: [
-            this.formatArn({
-              service: "cloudformation",
-              resource: "stack",
-              resourceName: "ShittimChest-Prod-Runtime/*",
-              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
-            }),
-          ],
+          actions: ["cloudformation:DescribeStacks", "cloudformation:ListStackResources"],
+          resources: [...regionalStatusStackArns, ...globalStatusStackArns],
         }),
         new iam.PolicyStatement({
           actions: ["ecr:DescribeImages"],
@@ -656,12 +712,104 @@ export class RecordsApplicationStack extends Stack {
           actions: ["sqs:GetQueueAttributes"],
           resources: [projectorDlq.queueArn],
         }),
+        new iam.PolicyStatement({
+          actions: ["apigateway:GET"],
+          resources: [
+            this.formatArn({
+              service: "apigateway",
+              account: "",
+              resource: "/apis",
+              resourceName: "*",
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["events:DescribeRule"],
+          resources: [
+            this.formatArn({
+              service: "events",
+              resource: "rule",
+              resourceName: "shittim-chest-production-abnormal-task-stopped",
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+            this.formatArn({
+              service: "events",
+              resource: "rule",
+              resourceName: "ShittimChest-Prod-RecordsApplication-*",
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["scheduler:GetSchedule"],
+          resources: [
+            this.formatArn({
+              service: "scheduler",
+              resource: "schedule",
+              resourceName: "default/shittim-chest-production-runtime-reconciler",
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["sns:GetTopicAttributes"],
+          resources: [
+            this.formatArn({
+              service: "sns",
+              resource: "shittim-chest-production-operations",
+            }),
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:DescribeParameters"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          actions: ["budgets:ViewBudget"],
+          resources: Object.values(statusBudgets).map((budgetName) =>
+            this.formatArn({
+              service: "budgets",
+              region: "",
+              resource: "budget",
+              resourceName: budgetName,
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+          ),
+        }),
+        new iam.PolicyStatement({
+          actions: ["ce:GetAnomalySubscriptions"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          actions: ["signer:GetSigningProfile"],
+          resources: [
+            this.formatArn({
+              service: "signer",
+              resource: "",
+              resourceName: "signing-profiles/shittim_chest_ecr",
+              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+            }),
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["COLLECTOR#COST"],
+            },
+            Null: {
+              "dynamodb:LeadingKeys": "false",
+            },
+          },
+        }),
       ],
     });
     for (const [function_, reason] of [
       [
         this.adminStatusFunction,
-        "CloudWatch, ECS, ECR repository discovery, Inspector status, and CloudFront distribution discovery APIs do not support complete resource-level scoping. CloudFront and ACM require resource wildcards because the current resources are resolved at runtime from the exact allowlisted public hostname and can be replaced by the Edge stack. CloudFormation is restricted to the immutable Runtime stack name; its ARN suffix is assigned by CloudFormation and cannot be predicted. All other reads use exact production resources.",
+        "CloudWatch, Inspector, SSM metadata, Cost Explorer, and CloudFront discovery APIs do not support complete resource-level scoping. API Gateway is restricted to HTTP API resources in the production region, EventBridge to the Records stack-generated rule prefix, and CloudFormation to eight exact production stack names whose immutable ARN suffixes cannot be predicted. CloudFront and ACM resources are resolved from the exact allowlisted public hostname. All remaining reads use exact production resources.",
       ],
     ] as const) {
       Validations.of(function_.role!).acknowledge({
@@ -678,14 +826,24 @@ export class RecordsApplicationStack extends Stack {
                 `${nagAccount}:certificate/*]`,
               reason,
             ],
-            [
-              `AwsSolutions-IAM5[Resource::${partition}:cloudformation:${this.region}:` +
-                `${nagAccount}:stack/ShittimChest-Prod-Runtime/*]`,
+            ...Object.entries(statusStackNames).map(([label, stackName]) => [
+              `AwsSolutions-IAM5[Resource::${partition}:cloudformation:` +
+                `${["cost_governance", "records_edge"].includes(label) ? "us-east-1" : this.region}:` +
+                `${nagAccount}:stack/${stackName}/*]`,
               reason,
-            ],
+            ]),
             [
               `AwsSolutions-IAM5[Resource::${partition}:cloudfront::` +
                 `${nagAccount}:distribution/*]`,
+              reason,
+            ],
+            [
+              `AwsSolutions-IAM5[Resource::${partition}:apigateway:${this.region}::/apis/*]`,
+              reason,
+            ],
+            [
+              `AwsSolutions-IAM5[Resource::${partition}:events:${this.region}:` +
+                `${nagAccount}:rule/ShittimChest-Prod-RecordsApplication-*]`,
               reason,
             ],
           ]),

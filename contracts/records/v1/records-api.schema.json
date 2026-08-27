@@ -135,7 +135,15 @@
             "dynamodb",
             "lambda",
             "cloudfront",
-            "sqs"
+            "sqs",
+            "apigateway",
+            "eventbridge",
+            "cloudformation",
+            "sns",
+            "ssm",
+            "cost_governance",
+            "signer",
+            "external"
           ],
           "title": "Service",
           "type": "string"

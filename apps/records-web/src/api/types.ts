@@ -145,7 +145,15 @@ export type AdminService =
   | "dynamodb"
   | "lambda"
   | "cloudfront"
-  | "sqs";
+  | "sqs"
+  | "apigateway"
+  | "eventbridge"
+  | "cloudformation"
+  | "sns"
+  | "ssm"
+  | "cost_governance"
+  | "signer"
+  | "external";
 export type AdminHealthState = "healthy" | "warning" | "critical" | "unknown";
 
 export interface AdminStatusResponse {
