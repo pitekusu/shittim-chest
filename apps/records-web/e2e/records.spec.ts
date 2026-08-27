@@ -786,26 +786,35 @@ test("branded route motion stays short and coordinates all internal routes", asy
   const initialScene = page.locator('[data-route-scene="/"]');
   await expect(initialScene).toHaveAttribute("data-route-motion", "idle");
 
+  const insightsMotionTiming = page.waitForFunction(
+    (selector) => {
+      const scene = document.querySelector<HTMLElement>(selector);
+      if (scene?.getAttribute("data-route-motion") !== "active") return null;
+      const panel = scene.querySelector<HTMLElement>("section[aria-labelledby]");
+      if (!panel) return null;
+      const parseSeconds = (value: string) => Number.parseFloat(value) || 0;
+      const sceneStyle = getComputedStyle(scene);
+      const panelStyle = getComputedStyle(panel);
+      return {
+        panelTotal:
+          parseSeconds(panelStyle.animationDuration) + parseSeconds(panelStyle.animationDelay),
+        sceneDuration: parseSeconds(sceneStyle.animationDuration),
+      };
+    },
+    '[data-route-scene="/insights"]',
+    { polling: "raf", timeout: 3_000 },
+  );
   await page.getByRole("link", { name: /^いろいろ/ }).click();
+  const timing = await (await insightsMotionTiming).jsonValue();
+  expect(timing).not.toBeNull();
+  if (!timing) throw new Error("insights route motion did not become active");
   const insightsScene = page.locator('[data-route-scene="/insights"]');
   const insightsHeading = page.getByRole("heading", { name: "いろいろな記録" });
   const wins = page.getByRole("region", { name: "勝利回数ランキング" });
-  await expect(insightsScene).toHaveAttribute("data-route-motion", "active");
   await expect(insightsScene.locator("[data-route-brand]")).toHaveCount(0);
   await expect(insightsHeading).toBeFocused();
   await expect(wins).toBeVisible();
 
-  const timing = await insightsScene.evaluate((scene) => {
-    const parseSeconds = (value: string) => Number.parseFloat(value) || 0;
-    const sceneStyle = getComputedStyle(scene);
-    const panel = scene.querySelector<HTMLElement>("section[aria-labelledby]")!;
-    const panelStyle = getComputedStyle(panel);
-    return {
-      panelTotal:
-        parseSeconds(panelStyle.animationDuration) + parseSeconds(panelStyle.animationDelay),
-      sceneDuration: parseSeconds(sceneStyle.animationDuration),
-    };
-  });
   expect(timing.sceneDuration).toBeLessThanOrEqual(0.42);
   expect(timing.panelTotal).toBeLessThanOrEqual(0.42);
 
