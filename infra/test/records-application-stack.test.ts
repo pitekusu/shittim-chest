@@ -311,12 +311,12 @@ describe("RecordsApplicationStack", () => {
       },
     });
     const policies = template.findResources("AWS::IAM::Policy");
-    const statusPolicy = Object.values(policies).find((policy) =>
+    const statusPolicies = Object.values(policies).filter((policy) =>
       JSON.stringify(policy).includes("AdminStatusFunctionRole"),
     );
 
-    expect(statusPolicy).toBeDefined();
-    const statusText = JSON.stringify(statusPolicy);
+    expect(statusPolicies).toHaveLength(2);
+    const statusText = JSON.stringify(statusPolicies);
 
     for (const action of [
       "acm:DescribeCertificate",
@@ -370,13 +370,38 @@ describe("RecordsApplicationStack", () => {
       expect(statusText).toContain(`stack/ShittimChest-Prod-${stackName}/*`);
     }
 
-    const statusStatements = statusPolicy?.Properties.PolicyDocument.Statement as Array<{
+    const statusStatements = statusPolicies.flatMap(
+      (policy) => policy.Properties.PolicyDocument.Statement,
+    ) as Array<{
       readonly Action: string | string[];
       readonly Condition?: Record<string, unknown>;
       readonly Resource: unknown;
     }>;
     const statusActionsOf = (statement: (typeof statusStatements)[number]) =>
       Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const statusEventBridgeRead = statusStatements.find((statement) =>
+      statusActionsOf(statement).includes("events:DescribeRule"),
+    );
+    expect(Array.isArray(statusEventBridgeRead?.Resource)).toBe(true);
+    const statusEventBridgeArns = statusEventBridgeRead?.Resource as unknown[];
+    const eventRules = template.findResources("AWS::Events::Rule");
+    for (const description of [
+      "Rebuild the Records ranking snapshots every 15 minutes",
+      "Collect Project-tagged AWS costs and USD/JPY rates daily at 12:17 JST",
+      "Collect project-scoped OpenAI organization costs hourly at minute 37",
+    ]) {
+      const [logicalId] = Object.entries(eventRules).find(
+        ([, resource]) => resource.Properties.Description === description,
+      ) ?? [undefined];
+      expect(logicalId).toBeDefined();
+      expect(statusEventBridgeArns).toContainEqual({
+        "Fn::GetAtt": [logicalId, "Arn"],
+      });
+    }
+    expect(statusEventBridgeArns).toHaveLength(4);
+    expect(JSON.stringify(statusEventBridgeArns)).not.toContain(
+      "ShittimChest-Prod-RecordsApplication-*",
+    );
     const statusLambdaRead = statusStatements.find((statement) =>
       statusActionsOf(statement).includes("lambda:GetFunctionConfiguration"),
     );
