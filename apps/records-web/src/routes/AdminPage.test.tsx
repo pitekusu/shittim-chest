@@ -21,6 +21,54 @@ const statusResponse: AdminStatusResponse = {
       metrics: [
         { name: "desired_count", value: 0 },
         { name: "running_count", value: 0 },
+        { name: "pending_count", value: 0 },
+        { name: "deployment_count", value: 1 },
+        { name: "service_status", value: "ACTIVE" },
+        { name: "scheduling_strategy", value: "REPLICA" },
+        { name: "launch_mode", value: "FARGATE" },
+        { name: "platform_version", value: "1.4.0" },
+        { name: "task_definition_revision", value: 42 },
+        { name: "rollout_state", value: "COMPLETED" },
+        { name: "failed_task_count", value: 0 },
+        { name: "deployment_updated_at", value: "2026-08-24T03:00:00Z" },
+        { name: "deployment_controller", value: "ECS" },
+        { name: "minimum_healthy_percent", value: 0 },
+        { name: "maximum_percent", value: 100 },
+        { name: "circuit_breaker_enabled", value: true },
+        { name: "circuit_breaker_rollback", value: true },
+        { name: "execute_command_enabled", value: false },
+        { name: "active_debates", value: 0 },
+        { name: "outbox_pending", value: 0 },
+        { name: "runtime_prompt_revision", value: null },
+        { name: "heartbeat_age_seconds", value: "42.000" },
+      ],
+    },
+    {
+      service: "ecr",
+      state: "healthy",
+      summary: "承認済みイメージとrepository保護を確認しました。",
+      metrics: [
+        { name: "tag_mutability", value: "IMMUTABLE" },
+        { name: "encryption_type", value: "KMS" },
+        { name: "repository_created_at", value: "2026-07-24T03:00:00Z" },
+        { name: "scan_on_push", value: false },
+        { name: "repository_image_count", value: 6 },
+        { name: "repository_tagged_image_count", value: 2 },
+        { name: "repository_untagged_image_count", value: 4 },
+        { name: "repository_total_size_bytes", value: 104857600 },
+        { name: "repository_latest_pushed_at", value: "2026-08-24T03:00:00Z" },
+        { name: "normal_image_present", value: true },
+        { name: "normal_pushed_at", value: "2026-08-24T03:00:00Z" },
+        { name: "normal_last_pulled_at", value: "2026-08-24T04:00:00Z" },
+        { name: "normal_size_bytes", value: 52428800 },
+        { name: "normal_tag_count", value: 1 },
+        { name: "normal_media_type", value: "OCI_IMAGE" },
+        { name: "break_glass_image_present", value: true },
+        { name: "break_glass_pushed_at", value: "2026-08-24T02:00:00Z" },
+        { name: "break_glass_last_pulled_at", value: null },
+        { name: "break_glass_size_bytes", value: 52428800 },
+        { name: "break_glass_tag_count", value: 1 },
+        { name: "break_glass_media_type", value: "DOCKER_V2" },
       ],
     },
     {
@@ -160,7 +208,13 @@ describe("AdminPage", () => {
     expect(screen.getByRole("heading", { name: "サービス状態" })).toBeVisible();
     expect(await screen.findByText("Scale-to-Zeroで待機しています。")).toBeVisible();
     expect(screen.getByText("現在は確認できません。")).toBeVisible();
-    expect(screen.getByText("実行中タスク")).toBeVisible();
+    expect(screen.getByText("タスク稼働")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "タスク定義" })).toBeVisible();
+    expect(screen.getByText("Fargate On-Demand")).toBeVisible();
+    expect(screen.getByText("rev. 42")).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "最終取得記録" })).toBeVisible();
+    expect(screen.getByText("合計容量（概算）")).toBeVisible();
+    expect(screen.getByText("100 MiB")).toBeVisible();
     expect(screen.getByText("検査対象")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "自動反映" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "Runtime調整" })).toBeVisible();

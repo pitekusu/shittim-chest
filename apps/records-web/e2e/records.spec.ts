@@ -173,8 +173,24 @@ const adminStatus = {
         { name: "running_count", value: 0 },
         { name: "desired_count", value: 0 },
         { name: "pending_count", value: 0 },
+        { name: "deployment_count", value: 1 },
+        { name: "service_status", value: "ACTIVE" },
+        { name: "scheduling_strategy", value: "REPLICA" },
+        { name: "launch_mode", value: "FARGATE" },
+        { name: "platform_version", value: "1.4.0" },
+        { name: "task_definition_revision", value: 42 },
+        { name: "rollout_state", value: "COMPLETED" },
+        { name: "failed_task_count", value: 0 },
+        { name: "deployment_updated_at", value: "2026-08-27T00:58:00Z" },
+        { name: "deployment_controller", value: "ECS" },
+        { name: "minimum_healthy_percent", value: 0 },
+        { name: "maximum_percent", value: 100 },
+        { name: "circuit_breaker_enabled", value: true },
+        { name: "circuit_breaker_rollback", value: true },
+        { name: "execute_command_enabled", value: false },
         { name: "active_debates", value: 0 },
         { name: "outbox_pending", value: 0 },
+        { name: "runtime_prompt_revision", value: null },
         { name: "heartbeat_age_seconds", value: null },
       ],
     },
@@ -185,10 +201,25 @@ const adminStatus = {
       metrics: [
         { name: "tag_mutability", value: "IMMUTABLE" },
         { name: "encryption_type", value: "AES256" },
+        { name: "repository_created_at", value: "2026-07-10T03:00:00Z" },
+        { name: "scan_on_push", value: false },
+        { name: "repository_image_count", value: 6 },
+        { name: "repository_tagged_image_count", value: 2 },
+        { name: "repository_untagged_image_count", value: 4 },
+        { name: "repository_total_size_bytes", value: 152043520 },
+        { name: "repository_latest_pushed_at", value: "2026-08-24T14:16:36Z" },
         { name: "normal_image_present", value: true },
         { name: "normal_pushed_at", value: "2026-08-24T14:16:20Z" },
+        { name: "normal_last_pulled_at", value: "2026-08-26T07:20:00Z" },
+        { name: "normal_size_bytes", value: 66305166 },
+        { name: "normal_tag_count", value: 1 },
+        { name: "normal_media_type", value: "OCI_IMAGE" },
         { name: "break_glass_image_present", value: true },
         { name: "break_glass_pushed_at", value: "2026-08-24T14:16:36Z" },
+        { name: "break_glass_last_pulled_at", value: null },
+        { name: "break_glass_size_bytes", value: 86497848 },
+        { name: "break_glass_tag_count", value: 1 },
+        { name: "break_glass_media_type", value: "OCI_IMAGE" },
       ],
     },
     {
@@ -1618,7 +1649,13 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(page.getByText("AWSの稼働状態を、安全な境界の内側で確認します。")).toHaveCount(0);
   await expect(page.getByText("アクセス", { exact: true })).toHaveCount(0);
   await expect(page.getByText("desired_count", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("実行中タスク", { exact: true })).toBeVisible();
+  await expect(page.getByText("タスク稼働", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "ECS構成とデプロイ状態" })).toBeVisible();
+  const ecrImageTable = page.getByRole("region", { name: "承認済みECRイメージ" });
+  await expect(ecrImageTable).toBeVisible();
+  expect(
+    await ecrImageTable.evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
   await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
   await expect(page.getByRole("region", { name: "DynamoDBテーブル状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Lambda関数状態" })).toBeVisible();
@@ -1628,6 +1665,18 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(page.getByRole("region", { name: "予算状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "外部集計状態" })).toBeVisible();
   await expect(page.getByText("Discord連携", { exact: true })).toBeVisible();
+  for (const value of ["1.4.0", "rev. 42", "145 MiB"]) {
+    const fontFamily = await page
+      .getByText(value, { exact: true })
+      .evaluate((element) => getComputedStyle(element).fontFamily);
+    expect(fontFamily).toContain("LINE Seed JP");
+    expect(fontFamily).not.toContain("Delogy");
+  }
+  const s3NumericGlyph = page.getByRole("heading", { name: "S3" }).locator("span");
+  await expect(s3NumericGlyph).toHaveText("3");
+  expect(
+    await s3NumericGlyph.evaluate((element) => getComputedStyle(element).fontFamily),
+  ).toContain("LINE Seed JP");
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await expect(page).toHaveScreenshot("admin-console-dark.png", {
     animations: "disabled",

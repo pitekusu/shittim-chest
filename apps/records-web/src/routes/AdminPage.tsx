@@ -44,22 +44,6 @@ const HEALTH_LABELS: Readonly<Record<AdminHealthState, string>> = {
 const SIMPLE_METRICS: Readonly<
   Partial<Record<AdminService, readonly { readonly name: string; readonly label: string }[]>>
 > = {
-  ecs: [
-    { name: "running_count", label: "実行中タスク" },
-    { name: "desired_count", label: "希望タスク" },
-    { name: "pending_count", label: "起動待ちタスク" },
-    { name: "active_debates", label: "進行中の議論" },
-    { name: "outbox_pending", label: "配送待ち" },
-    { name: "heartbeat_age_seconds", label: "最終応答から" },
-  ],
-  ecr: [
-    { name: "tag_mutability", label: "タグ変更" },
-    { name: "encryption_type", label: "暗号化" },
-    { name: "normal_image_present", label: "通常イメージ" },
-    { name: "normal_pushed_at", label: "通常版の登録日時" },
-    { name: "break_glass_image_present", label: "緊急用イメージ" },
-    { name: "break_glass_pushed_at", label: "緊急版の登録日時" },
-  ],
   inspector: [
     { name: "active_critical", label: "重大" },
     { name: "active_high", label: "高" },
@@ -197,12 +181,16 @@ function formatMetricValue(name: string, value: AdminStatusMetric["value"]): str
     return value ? "有効" : "無効";
   }
   if (typeof value === "number") {
+    if (name.endsWith("_size_bytes")) return formatBytes(value);
+    if (name.endsWith("_percent")) return `${value.toLocaleString("ja-JP")}%`;
+    if (name === "task_definition_revision") return `rev. ${value.toLocaleString("ja-JP")}`;
     if (name.endsWith("_seconds")) {
       if (name === "retention_seconds" && value % 86400 === 0) return `${value / 86400}日`;
       return `${value}秒`;
     }
     return value.toLocaleString("ja-JP");
   }
+  if (name === "service_status" && value === "ACTIVE") return "有効";
   if (name.endsWith("_at") && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
     return formatCompletedDateTime(value);
   }
@@ -220,28 +208,59 @@ function formatMetricValue(name: string, value: AdminStatusMetric["value"]): str
     ACTIVE: "稼働中",
     Active: "稼働中",
     AES256: "AES-256",
+    COMPLETED: "完了",
+    CUSTOM_CAPACITY_PROVIDER: "カスタムCapacity Provider",
     Completed: "完了",
+    DOCKER_LIST: "Docker manifest list",
+    DOCKER_V2: "Docker image",
     DISABLED: "無効",
     Deployed: "配信済み",
     Disabled: "無効",
     ENABLED: "有効",
+    ECS: "ECSローリング更新",
     Enabled: "有効",
+    FAILED: "失敗",
+    FARGATE: "Fargate On-Demand",
+    FARGATE_MIXED: "Fargate混在",
+    FARGATE_SPOT: "Fargate Spot",
     HEALTHY: "正常",
     IMMUTABLE: "変更不可",
+    IN_PROGRESS: "反映中",
     IN_SYNC: "一致",
     ISSUED: "発行済み",
+    KMS: "KMS",
+    KMS_DSSE: "KMS二層暗号化",
     MONTHS: "か月",
     MUTABLE: "変更可能",
     NOT_CHECKED: "未検査",
+    OCI_IMAGE: "OCI image",
+    OCI_INDEX: "OCI image index",
+    OTHER: "その他",
+    REPLICA: "タスク数制御",
+    SIGNATURE: "署名artifact",
     Successful: "正常",
     UPDATE_COMPLETE: "更新完了",
     CREATE_COMPLETE: "作成完了",
     UNHEALTHY: "注意",
+    UNKNOWN: "未確認",
     event_pattern: "イベント受信",
     "event pattern": "イベント受信",
     unknown: "未確認",
   };
   return translated[value] ?? value;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "未取得";
+  const units = ["B", "KiB", "MiB", "GiB"] as const;
+  let amount = value;
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+  const digits = unitIndex === 0 || amount >= 100 ? 0 : amount >= 10 ? 1 : 2;
+  return `${amount.toLocaleString("ja-JP", { maximumFractionDigits: digits })} ${units[unitIndex]}`;
 }
 
 function metricLookup(
@@ -565,6 +584,215 @@ function SimpleMetricGrid({
     </dl>
   );
 }
+
+/* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Horizontally scrollable data tables need keyboard focus. */
+function EcsMetrics({
+  metrics: source,
+}: {
+  readonly metrics: readonly AdminStatusMetric[];
+}): React.JSX.Element {
+  const metrics = metricLookup(source);
+  return (
+    <>
+      <dl className={adminStyles.readinessGrid}>
+        <div>
+          <dt>タスク稼働</dt>
+          <dd>
+            <strong>{metricValue(metrics, "running_count")}</strong>
+            <span>／ {metricValue(metrics, "desired_count")} 希望</span>
+          </dd>
+        </div>
+        <div>
+          <dt>起動待ち</dt>
+          <dd>
+            <strong>{metricValue(metrics, "pending_count")}</strong>
+            <span> タスク</span>
+          </dd>
+        </div>
+        <div>
+          <dt>デプロイ</dt>
+          <dd>
+            <strong>{metricValue(metrics, "rollout_state")}</strong>
+            <span>／失敗 {metricValue(metrics, "failed_task_count")}</span>
+          </dd>
+        </div>
+        <div>
+          <dt>進行中の議論</dt>
+          <dd>
+            <strong>{metricValue(metrics, "active_debates")}</strong>
+            <span> 件</span>
+          </dd>
+        </div>
+      </dl>
+      <section
+        className={adminStyles.tableScroller}
+        aria-label="ECS構成とデプロイ状態"
+        tabIndex={0}
+      >
+        <table className={`${adminStyles.resourceTable} ${adminStyles.wideTable}`}>
+          <thead>
+            <tr>
+              <th scope="col">状態</th>
+              <th scope="col">実行基盤</th>
+              <th scope="col">基盤バージョン</th>
+              <th scope="col">タスク定義</th>
+              <th scope="col">制御方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{metricValue(metrics, "service_status")}</td>
+              <td>{metricValue(metrics, "launch_mode")}</td>
+              <td>{metricValue(metrics, "platform_version")}</td>
+              <td>{metricValue(metrics, "task_definition_revision")}</td>
+              <td>{metricValue(metrics, "scheduling_strategy")}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+      <dl className={adminStyles.inlineFacts}>
+        <div>
+          <dt>更新方式</dt>
+          <dd>{metricValue(metrics, "deployment_controller")}</dd>
+        </div>
+        <div>
+          <dt>デプロイ数</dt>
+          <dd>{metricValue(metrics, "deployment_count")}</dd>
+        </div>
+        <div>
+          <dt>正常稼働率</dt>
+          <dd>
+            {metricValue(metrics, "minimum_healthy_percent")}～
+            {metricValue(metrics, "maximum_percent")}
+          </dd>
+        </div>
+        <div>
+          <dt>デプロイ更新</dt>
+          <dd>{metricValue(metrics, "deployment_updated_at")}</dd>
+        </div>
+        <div>
+          <dt>デプロイ障害検知</dt>
+          <dd>{metricValue(metrics, "circuit_breaker_enabled")}</dd>
+        </div>
+        <div>
+          <dt>自動rollback</dt>
+          <dd>{metricValue(metrics, "circuit_breaker_rollback")}</dd>
+        </div>
+        <div>
+          <dt>ECS Exec</dt>
+          <dd>{metricValue(metrics, "execute_command_enabled")}</dd>
+        </div>
+        <div>
+          <dt>配送待ち</dt>
+          <dd>{metricValue(metrics, "outbox_pending")}</dd>
+        </div>
+        <div>
+          <dt>Runtime Prompt版</dt>
+          <dd>{metricValue(metrics, "runtime_prompt_revision")}</dd>
+        </div>
+        <div>
+          <dt>最終応答から</dt>
+          <dd>{metricValue(metrics, "heartbeat_age_seconds")}</dd>
+        </div>
+      </dl>
+    </>
+  );
+}
+
+function EcrMetrics({
+  metrics: source,
+}: {
+  readonly metrics: readonly AdminStatusMetric[];
+}): React.JSX.Element {
+  const metrics = metricLookup(source);
+  return (
+    <>
+      <dl className={adminStyles.readinessGrid}>
+        <div>
+          <dt>格納イメージ等</dt>
+          <dd>
+            <strong>{metricValue(metrics, "repository_image_count")}</strong>
+            <span> 件</span>
+          </dd>
+        </div>
+        <div>
+          <dt>タグ付き</dt>
+          <dd>
+            <strong>{metricValue(metrics, "repository_tagged_image_count")}</strong>
+            <span> 件</span>
+          </dd>
+        </div>
+        <div>
+          <dt>タグなし</dt>
+          <dd>
+            <strong>{metricValue(metrics, "repository_untagged_image_count")}</strong>
+            <span> 件</span>
+          </dd>
+        </div>
+        <div>
+          <dt>合計容量（概算）</dt>
+          <dd>
+            <strong>{metricValue(metrics, "repository_total_size_bytes")}</strong>
+          </dd>
+        </div>
+      </dl>
+      <section className={adminStyles.tableScroller} aria-label="承認済みECRイメージ" tabIndex={0}>
+        <table className={`${adminStyles.resourceTable} ${adminStyles.ecrTable}`}>
+          <thead>
+            <tr>
+              <th scope="col">用途</th>
+              <th scope="col">登録</th>
+              <th scope="col">形式</th>
+              <th scope="col">容量</th>
+              <th scope="col">タグ数</th>
+              <th scope="col">登録日時</th>
+              <th scope="col">最終取得記録</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              { key: "normal", label: "通常版" },
+              { key: "break_glass", label: "緊急版" },
+            ].map((image) => (
+              <tr key={image.key}>
+                <th scope="row">{image.label}</th>
+                <td>{metricValue(metrics, `${image.key}_image_present`)}</td>
+                <td>{metricValue(metrics, `${image.key}_media_type`)}</td>
+                <td>{metricValue(metrics, `${image.key}_size_bytes`)}</td>
+                <td>{metricValue(metrics, `${image.key}_tag_count`)}</td>
+                <td>{metricValue(metrics, `${image.key}_pushed_at`)}</td>
+                <td>{metricValue(metrics, `${image.key}_last_pulled_at`)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+      <dl className={adminStyles.inlineFacts}>
+        <div>
+          <dt>タグ変更</dt>
+          <dd>{metricValue(metrics, "tag_mutability")}</dd>
+        </div>
+        <div>
+          <dt>暗号化</dt>
+          <dd>{metricValue(metrics, "encryption_type")}</dd>
+        </div>
+        <div>
+          <dt>登録時基本スキャン</dt>
+          <dd>{metricValue(metrics, "scan_on_push")}</dd>
+        </div>
+        <div>
+          <dt>保管庫の作成日時</dt>
+          <dd>{metricValue(metrics, "repository_created_at")}</dd>
+        </div>
+        <div>
+          <dt>最新登録</dt>
+          <dd>{metricValue(metrics, "repository_latest_pushed_at")}</dd>
+        </div>
+      </dl>
+    </>
+  );
+}
+/* oxlint-enable jsx-a11y/no-noninteractive-tabindex */
 
 function S3Metrics({
   metrics: source,
@@ -954,6 +1182,8 @@ function ExternalMetrics({
 /* oxlint-enable jsx-a11y/no-noninteractive-tabindex */
 
 function ServiceMetrics({ section }: { readonly section: AdminStatusSection }): React.JSX.Element {
+  if (section.service === "ecs") return <EcsMetrics metrics={section.metrics} />;
+  if (section.service === "ecr") return <EcrMetrics metrics={section.metrics} />;
   if (section.service === "s3") return <S3Metrics metrics={section.metrics} />;
   if (section.service === "dynamodb") return <DynamoDbMetrics metrics={section.metrics} />;
   if (section.service === "lambda") return <LambdaMetrics metrics={section.metrics} />;
@@ -973,6 +1203,8 @@ function ServiceMetrics({ section }: { readonly section: AdminStatusSection }): 
 function ServiceCard({ section }: { readonly section: AdminStatusSection }): React.JSX.Element {
   const presentation = SERVICE_PRESENTATION[section.service];
   const wide =
+    section.service === "ecs" ||
+    section.service === "ecr" ||
     section.service === "inspector" ||
     section.service === "s3" ||
     section.service === "dynamodb" ||
@@ -999,7 +1231,17 @@ function ServiceCard({ section }: { readonly section: AdminStatusSection }): Rea
             <ServiceIcon service={section.service} />
           </span>
           <div>
-            <h3>{presentation.name}</h3>
+            <h3>
+              {presentation.name.split(/(\d+)/u).map((part, index) =>
+                /^\d+$/u.test(part) ? (
+                  <span className={adminStyles.numericGlyph} key={`${part}-${index}`}>
+                    {part}
+                  </span>
+                ) : (
+                  part
+                ),
+              )}
+            </h3>
             <span>{presentation.purpose}</span>
           </div>
         </div>
