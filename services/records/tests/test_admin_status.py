@@ -193,7 +193,29 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
                         "desiredCount": 0,
                         "runningCount": 0,
                         "pendingCount": 0,
-                        "deployments": [],
+                        "status": "ACTIVE",
+                        "schedulingStrategy": "REPLICA",
+                        "launchType": "FARGATE",
+                        "platformVersion": "1.4.0",
+                        "taskDefinition": (
+                            f"arn:aws:ecs:ap-northeast-1:{AWS_ACCOUNT_ID}:"
+                            "task-definition/private-runtime:42"
+                        ),
+                        "deploymentController": {"type": "ECS"},
+                        "deploymentConfiguration": {
+                            "minimumHealthyPercent": 0,
+                            "maximumPercent": 100,
+                            "deploymentCircuitBreaker": {"enable": True, "rollback": True},
+                        },
+                        "enableExecuteCommand": False,
+                        "deployments": [
+                            {
+                                "status": "PRIMARY",
+                                "rolloutState": "COMPLETED",
+                                "failedTasks": 0,
+                                "updatedAt": NOW,
+                            }
+                        ],
                     }
                 ]
             }
@@ -207,6 +229,15 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
 
     assert section.state == "healthy"
     assert metrics(section)["heartbeat_age_seconds"] == "42.000"
+    values = metrics(section)
+    assert values["service_status"] == "ACTIVE"
+    assert values["launch_mode"] == "FARGATE"
+    assert values["platform_version"] == "1.4.0"
+    assert values["task_definition_revision"] == 42
+    assert values["rollout_state"] == "COMPLETED"
+    assert values["circuit_breaker_enabled"] is True
+    assert values["circuit_breaker_rollback"] is True
+    assert values["execute_command_enabled"] is False
     assert cloudwatch.statistics_calls[0]["Namespace"] == "ShittimChest/Prod"
     assert cloudwatch.statistics_calls[0]["MetricName"] == "HeartbeatAgeSeconds"
     assert configuration().cluster_name not in section.model_dump_json()
@@ -272,6 +303,43 @@ def test_ecs_requires_runtime_telemetry_while_tasks_are_active(
     assert section.summary == (
         "稼働中" if expected_state == "healthy" else "状態を取得できません。"
     )
+
+
+def test_ecs_marks_failed_rollout_without_exposing_provider_reason() -> None:
+    private_reason = "deployment failed for private-service-name"
+
+    class Ecs:
+        def describe_services(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "services": [
+                    {
+                        "desiredCount": 0,
+                        "runningCount": 0,
+                        "pendingCount": 0,
+                        "status": "ACTIVE",
+                        "deployments": [
+                            {
+                                "status": "PRIMARY",
+                                "rolloutState": "FAILED",
+                                "rolloutStateReason": private_reason,
+                                "failedTasks": 1,
+                            }
+                        ],
+                    }
+                ]
+            }
+
+    class Dynamo:
+        def get_item(self, **_kwargs: Any) -> dict[str, Any]:
+            return {}
+
+    section = source(ecs=Ecs(), dynamodb=Dynamo())._ecs_section(NOW)
+
+    assert section.state == "warning"
+    assert section.summary == "デプロイ状態の確認が必要です。"
+    assert metrics(section)["rollout_state"] == "FAILED"
+    assert metrics(section)["failed_task_count"] == 1
+    assert private_reason not in section.model_dump_json()
 
 
 def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
@@ -447,7 +515,39 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
 
     class Ecr:
         def __init__(self) -> None:
-            self.image_ids: list[dict[str, str]] = []
+            self.paginator = Paginator(
+                [
+                    {
+                        "imageDetails": [
+                            {
+                                "imageDigest": RUNTIME_DIGEST,
+                                "imageTags": ["approved"],
+                                "imagePushedAt": NOW,
+                                "lastRecordedPullTime": NOW,
+                                "imageSizeInBytes": 128,
+                                "imageManifestMediaType": (
+                                    "application/vnd.oci.image.manifest.v1+json"
+                                ),
+                            },
+                            {
+                                "imageDigest": BREAK_GLASS_DIGEST,
+                                "imageTags": ["break-glass"],
+                                "imagePushedAt": NOW - timedelta(minutes=1),
+                                "imageSizeInBytes": 256,
+                                "imageManifestMediaType": (
+                                    "application/vnd.docker.distribution.manifest.v2+json"
+                                ),
+                            },
+                            {
+                                "imageDigest": "sha256:" + "c" * 64,
+                                "imagePushedAt": NOW - timedelta(minutes=2),
+                                "imageSizeInBytes": 64,
+                                "artifactMediaType": "application/vnd.cncf.notary.signature",
+                            },
+                        ]
+                    }
+                ]
+            )
 
         def describe_repositories(self, **_kwargs: Any) -> dict[str, Any]:
             return {
@@ -455,36 +555,34 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
                     {
                         "imageTagMutability": "IMMUTABLE",
                         "encryptionConfiguration": {"encryptionType": "KMS"},
+                        "imageScanningConfiguration": {"scanOnPush": False},
+                        "createdAt": NOW - timedelta(days=30),
                     }
                 ]
             }
 
-        def describe_images(self, **kwargs: Any) -> dict[str, Any]:
-            self.image_ids = kwargs["imageIds"]
-            return {
-                "imageDetails": [
-                    {
-                        "imageDigest": image["imageDigest"],
-                        "imagePushedAt": NOW,
-                        "imageSizeInBytes": 128,
-                    }
-                    for image in self.image_ids
-                ]
-            }
+        def get_paginator(self, name: str) -> Paginator:
+            assert name == "describe_images"
+            return self.paginator
 
     ecr = Ecr()
     cloudformation = CloudFormation()
     section = source(ecr=ecr, cloudformation=cloudformation)._ecr_section()
 
     assert section.state == "healthy"
-    assert ecr.image_ids == [
-        {"imageDigest": RUNTIME_DIGEST},
-        {"imageDigest": BREAK_GLASS_DIGEST},
-    ]
+    assert ecr.paginator.calls == [{"repositoryName": configuration().ecr_repository_name}]
     assert cloudformation.stack_names == [configuration().runtime_stack_name]
     values = metrics(section)
     assert values["normal_image_present"] is True
     assert values["break_glass_image_present"] is True
+    assert values["repository_image_count"] == 3
+    assert values["repository_tagged_image_count"] == 2
+    assert values["repository_untagged_image_count"] == 1
+    assert values["repository_total_size_bytes"] == 448
+    assert values["normal_tag_count"] == 1
+    assert values["normal_media_type"] == "OCI_IMAGE"
+    assert values["normal_last_pulled_at"] == NOW.isoformat()
+    assert values["break_glass_media_type"] == "DOCKER_V2"
     assert "sha256:" not in section.model_dump_json()
     assert RUNTIME_DIGEST[:19] not in section.model_dump_json()
 
@@ -519,6 +617,22 @@ def test_ecr_state_includes_tag_immutability() -> None:
             }
 
     class Ecr:
+        def __init__(self) -> None:
+            self.paginator = Paginator(
+                [
+                    {
+                        "imageDetails": [
+                            {
+                                "imageDigest": digest,
+                                "imagePushedAt": NOW,
+                                "imageSizeInBytes": 128,
+                            }
+                            for digest in (RUNTIME_DIGEST, BREAK_GLASS_DIGEST)
+                        ]
+                    }
+                ]
+            )
+
         def describe_repositories(self, **_kwargs: Any) -> dict[str, Any]:
             return {
                 "repositories": [
@@ -529,13 +643,9 @@ def test_ecr_state_includes_tag_immutability() -> None:
                 ]
             }
 
-        def describe_images(self, **kwargs: Any) -> dict[str, Any]:
-            return {
-                "imageDetails": [
-                    {"imageDigest": image["imageDigest"], "imagePushedAt": NOW}
-                    for image in kwargs["imageIds"]
-                ]
-            }
+        def get_paginator(self, name: str) -> Paginator:
+            assert name == "describe_images"
+            return self.paginator
 
     section = source(ecr=Ecr(), cloudformation=CloudFormation())._ecr_section()
 

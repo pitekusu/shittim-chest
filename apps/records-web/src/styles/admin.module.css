@@ -1,6 +1,8 @@
 .adminPage {
   --admin-panel-marker: 1;
+  --admin-font-numeric: "LINE Seed JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
   min-width: 0;
+  font-family: var(--admin-font-numeric);
 }
 
 .adminWorkspace {
@@ -341,6 +343,10 @@
   letter-spacing: 0.09em;
 }
 
+.numericGlyph {
+  font-family: var(--admin-font-numeric);
+}
+
 .serviceIdentity > div > span {
   display: block;
   margin-top: 4px;
@@ -462,6 +468,43 @@
   min-width: 780px;
 }
 
+.ecrTable {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.ecrTable th,
+.ecrTable td {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.ecrTable th:nth-child(1) {
+  width: 10%;
+}
+
+.ecrTable th:nth-child(2) {
+  width: 11%;
+}
+
+.ecrTable th:nth-child(3) {
+  width: 15%;
+}
+
+.ecrTable th:nth-child(4) {
+  width: 12%;
+}
+
+.ecrTable th:nth-child(5) {
+  width: 9%;
+}
+
+.ecrTable th:nth-child(6),
+.ecrTable th:nth-child(7) {
+  width: 21.5%;
+}
+
 .resourceTable th,
 .resourceTable td {
   padding: 11px 12px;
@@ -561,9 +604,9 @@
 
 .readinessGrid strong {
   color: var(--records-cyan-ink);
-  font-family: var(--records-font-display);
+  font-family: var(--admin-font-numeric);
   font-size: 1.2rem;
-  font-weight: 400;
+  font-weight: 800;
 }
 
 .readinessGrid span {
@@ -666,7 +709,7 @@
 .accessDenied .deniedCode {
   margin: 20px 0 0;
   color: var(--records-cyan-ink);
-  font-family: var(--records-font-display);
+  font-family: var(--admin-font-numeric);
   font-size: 0.7rem;
   letter-spacing: 0.18em;
 }
@@ -768,6 +811,10 @@
 
   .readinessGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ecrTable {
+    min-width: 720px;
   }
 }
 

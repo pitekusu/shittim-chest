@@ -311,6 +311,26 @@ class AwsAdminStatusSource:
         deployments = service.get("deployments", [])
         if not isinstance(deployments, list):
             raise ValueError("ECS deployments are invalid")
+        primary_deployment = _primary_ecs_deployment(deployments)
+        deployment_configuration = service.get("deploymentConfiguration", {})
+        if not isinstance(deployment_configuration, Mapping):
+            raise ValueError("ECS deployment configuration is invalid")
+        circuit_breaker = deployment_configuration.get("deploymentCircuitBreaker", {})
+        if not isinstance(circuit_breaker, Mapping):
+            raise ValueError("ECS deployment circuit breaker is invalid")
+        service_status = _known_value(service.get("status"), {"ACTIVE", "DRAINING", "INACTIVE"})
+        rollout_state = _known_value(
+            primary_deployment.get("rolloutState"),
+            {"COMPLETED", "FAILED", "IN_PROGRESS"},
+        )
+        failed_tasks = _optional_nonnegative_integer(primary_deployment.get("failedTasks"))
+        task_definition_revision = _ecs_task_definition_revision(
+            primary_deployment.get("taskDefinition", service.get("taskDefinition"))
+        )
+        launch_mode = _ecs_launch_mode(service, primary_deployment)
+        platform_version = _ecs_platform_version(
+            primary_deployment.get("platformVersion", service.get("platformVersion"))
+        )
         controls = self._runtime_controls()
         heartbeat_age = self._runtime_heartbeat(now)
         idle = desired == running == pending == 0
@@ -323,7 +343,14 @@ class AwsAdminStatusSource:
             )
         )
         state: AdminHealthState
-        if idle:
+        deployment_needs_attention = (
+            service_status in {"DRAINING", "INACTIVE"}
+            or rollout_state == "FAILED"
+            or (failed_tasks is not None and failed_tasks > 0 and rollout_state != "COMPLETED")
+        )
+        if deployment_needs_attention:
+            state = "warning"
+        elif idle:
             state = "healthy"
         elif desired != running or pending != 0:
             state = "warning"
@@ -336,6 +363,40 @@ class AwsAdminStatusSource:
             _metric("running_count", running),
             _metric("pending_count", pending),
             _metric("deployment_count", len(deployments)),
+            _metric("service_status", service_status),
+            _metric(
+                "scheduling_strategy",
+                _known_value(service.get("schedulingStrategy"), {"DAEMON", "REPLICA"}),
+            ),
+            _metric("launch_mode", launch_mode),
+            _metric("platform_version", platform_version),
+            _metric("task_definition_revision", task_definition_revision),
+            _metric("rollout_state", rollout_state),
+            _metric("failed_task_count", failed_tasks),
+            _metric("deployment_updated_at", _timestamp(primary_deployment.get("updatedAt"))),
+            _metric(
+                "deployment_controller",
+                _known_value(
+                    _mapping_value(service.get("deploymentController"), "type"),
+                    {"CODE_DEPLOY", "ECS", "EXTERNAL"},
+                ),
+            ),
+            _metric(
+                "minimum_healthy_percent",
+                _optional_nonnegative_integer(
+                    deployment_configuration.get("minimumHealthyPercent")
+                ),
+            ),
+            _metric(
+                "maximum_percent",
+                _optional_nonnegative_integer(deployment_configuration.get("maximumPercent")),
+            ),
+            _metric("circuit_breaker_enabled", _optional_boolean(circuit_breaker.get("enable"))),
+            _metric("circuit_breaker_rollback", _optional_boolean(circuit_breaker.get("rollback"))),
+            _metric(
+                "execute_command_enabled",
+                _optional_boolean(service.get("enableExecuteCommand")),
+            ),
             _metric("active_debates", controls.get("active_debates")),
             _metric("outbox_pending", controls.get("outbox_pending")),
             _metric("runtime_prompt_revision", controls.get("runtime_prompt_revision")),
@@ -345,7 +406,9 @@ class AwsAdminStatusSource:
             service="ecs",
             state=state,
             summary=(
-                "IDLE"
+                "デプロイ状態の確認が必要です。"
+                if deployment_needs_attention
+                else "IDLE"
                 if idle
                 else "稼働中"
                 if state == "healthy"
@@ -406,29 +469,71 @@ class AwsAdminStatusSource:
 
     def _ecr_section(self) -> AdminStatusSection:
         runtime_image_digest, break_glass_image_digest = self._runtime_image_digests()
-        repository = self._ecr.describe_repositories(
+        repositories = self._ecr.describe_repositories(
             repositoryNames=[self._config.ecr_repository_name]
         ).get("repositories", [])
-        if len(repository) != 1:
+        if len(repositories) != 1 or not isinstance(repositories[0], Mapping):
             raise ValueError("ECR repository is unavailable")
-        details = self._ecr.describe_images(
-            repositoryName=self._config.ecr_repository_name,
-            imageIds=[
-                {"imageDigest": runtime_image_digest},
-                {"imageDigest": break_glass_image_digest},
-            ],
-        ).get("imageDetails", [])
-        by_digest = {
-            digest: item for item in details if isinstance((digest := item.get("imageDigest")), str)
-        }
+        repository = repositories[0]
+        paginator = self._ecr.get_paginator("describe_images")
+        image_details: list[Mapping[str, Any]] = []
+        for page in _bounded_pages(
+            paginator.paginate(repositoryName=self._config.ecr_repository_name)
+        ):
+            page_details = page.get("imageDetails", [])
+            if not isinstance(page_details, list) or any(
+                not isinstance(item, Mapping) for item in page_details
+            ):
+                raise ValueError("ECR image inventory is invalid")
+            image_details.extend(cast(list[Mapping[str, Any]], page_details))
+        by_digest: dict[str, Mapping[str, Any]] = {}
+        tagged_count = 0
+        total_size = 0
+        total_size_complete = True
+        pushed_at_values: list[datetime] = []
+        for item in image_details:
+            digest = _image_digest(item.get("imageDigest"))
+            if digest in by_digest:
+                raise ValueError("ECR image inventory contains duplicate digests")
+            by_digest[digest] = item
+            tags = _image_tags(item.get("imageTags"))
+            tagged_count += int(bool(tags))
+            size = _optional_nonnegative_integer(item.get("imageSizeInBytes"))
+            if size is None:
+                total_size_complete = False
+            else:
+                total_size += size
+            pushed_at = item.get("imagePushedAt")
+            if pushed_at is not None:
+                timestamp = _aware_datetime(pushed_at)
+                pushed_at_values.append(timestamp)
+        scanning_configuration = repository.get("imageScanningConfiguration", {})
+        if not isinstance(scanning_configuration, Mapping):
+            raise ValueError("ECR scanning configuration is invalid")
         metrics: list[AdminStatusMetric] = [
             _metric(
                 "tag_mutability",
-                repository[0].get("imageTagMutability", "unknown"),
+                _known_value(repository.get("imageTagMutability"), {"IMMUTABLE", "MUTABLE"}),
             ),
             _metric(
                 "encryption_type",
-                repository[0].get("encryptionConfiguration", {}).get("encryptionType", "unknown"),
+                _known_value(
+                    _mapping_value(repository.get("encryptionConfiguration"), "encryptionType"),
+                    {"AES256", "KMS", "KMS_DSSE"},
+                ),
+            ),
+            _metric("repository_created_at", _timestamp(repository.get("createdAt"))),
+            _metric(
+                "scan_on_push",
+                _optional_boolean(scanning_configuration.get("scanOnPush")),
+            ),
+            _metric("repository_image_count", len(image_details)),
+            _metric("repository_tagged_image_count", tagged_count),
+            _metric("repository_untagged_image_count", len(image_details) - tagged_count),
+            _metric("repository_total_size_bytes", total_size if total_size_complete else None),
+            _metric(
+                "repository_latest_pushed_at",
+                _timestamp(max(pushed_at_values)) if pushed_at_values else None,
             ),
         ]
         missing = False
@@ -443,6 +548,10 @@ class AwsAdminStatusSource:
                     (
                         _metric(f"{label}_image_present", False),
                         _metric(f"{label}_pushed_at", None),
+                        _metric(f"{label}_last_pulled_at", None),
+                        _metric(f"{label}_size_bytes", None),
+                        _metric(f"{label}_tag_count", None),
+                        _metric(f"{label}_media_type", None),
                     )
                 )
                 continue
@@ -451,17 +560,24 @@ class AwsAdminStatusSource:
                     _metric(f"{label}_image_present", True),
                     _metric(f"{label}_pushed_at", _timestamp(image.get("imagePushedAt"))),
                     _metric(
-                        f"{label}_size_bytes", _optional_integer(image.get("imageSizeInBytes"))
+                        f"{label}_last_pulled_at",
+                        _timestamp(image.get("lastRecordedPullTime")),
                     ),
+                    _metric(
+                        f"{label}_size_bytes",
+                        _optional_nonnegative_integer(image.get("imageSizeInBytes")),
+                    ),
+                    _metric(f"{label}_tag_count", len(_image_tags(image.get("imageTags")))),
+                    _metric(f"{label}_media_type", _ecr_media_type(image)),
                 )
             )
         return AdminStatusSection(
             service="ecr",
             state="warning"
-            if missing or repository[0].get("imageTagMutability") != "IMMUTABLE"
+            if missing or repository.get("imageTagMutability") != "IMMUTABLE"
             else "healthy",
             summary="承認済みイメージとrepository保護を確認しました。"
-            if not missing and repository[0].get("imageTagMutability") == "IMMUTABLE"
+            if not missing and repository.get("imageTagMutability") == "IMMUTABLE"
             else "イメージまたはrepository保護の確認が必要です。",
             metrics=tuple(metrics),
         )
@@ -1898,6 +2014,105 @@ def _optional_integer(value: object) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _optional_nonnegative_integer(value: object) -> int | None:
+    parsed = _optional_integer(value)
+    return parsed if parsed is not None and parsed >= 0 else None
+
+
+def _optional_boolean(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _known_value(value: object, allowed: set[str]) -> str | None:
+    return value if isinstance(value, str) and value in allowed else None
+
+
+def _mapping_value(value: object, key: str) -> object:
+    return value.get(key) if isinstance(value, Mapping) else None
+
+
+def _aware_datetime(value: object) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("provider timestamp is invalid")
+    return value.astimezone(UTC)
+
+
+def _primary_ecs_deployment(deployments: list[object]) -> Mapping[str, Any]:
+    if any(not isinstance(item, Mapping) for item in deployments):
+        raise ValueError("ECS deployment is invalid")
+    deployment_mappings = [cast(Mapping[str, Any], item) for item in deployments]
+    primary = [item for item in deployment_mappings if item.get("status") == "PRIMARY"]
+    if len(primary) > 1:
+        raise ValueError("ECS primary deployment is ambiguous")
+    return primary[0] if primary else {}
+
+
+def _ecs_task_definition_revision(value: object) -> int | None:
+    if not isinstance(value, str) or ":task-definition/" not in value:
+        return None
+    revision = value.rsplit(":", 1)[-1]
+    return int(revision) if revision.isdecimal() else None
+
+
+def _ecs_launch_mode(
+    service: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+) -> str | None:
+    launch_type = deployment.get("launchType", service.get("launchType"))
+    known_launch_type = _known_value(
+        launch_type,
+        {"EC2", "EXTERNAL", "FARGATE", "MANAGED_INSTANCES"},
+    )
+    if known_launch_type is not None:
+        return known_launch_type
+    strategy = deployment.get(
+        "capacityProviderStrategy",
+        service.get("capacityProviderStrategy", []),
+    )
+    if not isinstance(strategy, list) or any(not isinstance(item, Mapping) for item in strategy):
+        return None
+    providers = {
+        item.get("capacityProvider")
+        for item in strategy
+        if isinstance(item.get("capacityProvider"), str)
+    }
+    if not providers:
+        return None
+    if providers == {"FARGATE"}:
+        return "FARGATE"
+    if providers == {"FARGATE_SPOT"}:
+        return "FARGATE_SPOT"
+    if providers <= {"FARGATE", "FARGATE_SPOT"}:
+        return "FARGATE_MIXED"
+    return "CUSTOM_CAPACITY_PROVIDER"
+
+
+def _ecs_platform_version(value: object) -> str | None:
+    if not isinstance(value, str) or re.fullmatch(r"(?:LATEST|\d+(?:\.\d+){1,2})", value) is None:
+        return None
+    return value
+
+
+def _image_tags(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        raise ValueError("ECR image tags are invalid")
+    return tuple(value)
+
+
+def _ecr_media_type(image: Mapping[str, Any]) -> str:
+    value = image.get("artifactMediaType") or image.get("imageManifestMediaType")
+    known = {
+        "application/vnd.cncf.notary.signature": "SIGNATURE",
+        "application/vnd.docker.distribution.manifest.list.v2+json": "DOCKER_LIST",
+        "application/vnd.docker.distribution.manifest.v2+json": "DOCKER_V2",
+        "application/vnd.oci.image.index.v1+json": "OCI_INDEX",
+        "application/vnd.oci.image.manifest.v1+json": "OCI_IMAGE",
+    }
+    return known.get(value, "OTHER") if isinstance(value, str) else "UNKNOWN"
 
 
 def _decimal_integer(value: object) -> int:
