@@ -2104,15 +2104,23 @@ def _image_tags(value: object) -> tuple[str, ...]:
 
 
 def _ecr_media_type(image: Mapping[str, Any]) -> str:
-    value = image.get("artifactMediaType") or image.get("imageManifestMediaType")
-    known = {
+    artifact_type = image.get("artifactMediaType")
+    known_artifacts = {
         "application/vnd.cncf.notary.signature": "SIGNATURE",
+    }
+    if isinstance(artifact_type, str) and artifact_type in known_artifacts:
+        return known_artifacts[artifact_type]
+
+    manifest_type = image.get("imageManifestMediaType")
+    known_manifests = {
         "application/vnd.docker.distribution.manifest.list.v2+json": "DOCKER_LIST",
         "application/vnd.docker.distribution.manifest.v2+json": "DOCKER_V2",
         "application/vnd.oci.image.index.v1+json": "OCI_INDEX",
         "application/vnd.oci.image.manifest.v1+json": "OCI_IMAGE",
     }
-    return known.get(value, "OTHER") if isinstance(value, str) else "UNKNOWN"
+    if isinstance(manifest_type, str):
+        return known_manifests.get(manifest_type, "OTHER")
+    return "OTHER" if isinstance(artifact_type, str) else "UNKNOWN"
 
 
 def _decimal_integer(value: object) -> int:

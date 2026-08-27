@@ -525,6 +525,7 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
                                 "imagePushedAt": NOW,
                                 "lastRecordedPullTime": NOW,
                                 "imageSizeInBytes": 128,
+                                "artifactMediaType": "application/vnd.oci.image.config.v1+json",
                                 "imageManifestMediaType": (
                                     "application/vnd.oci.image.manifest.v1+json"
                                 ),
@@ -534,6 +535,9 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
                                 "imageTags": ["break-glass"],
                                 "imagePushedAt": NOW - timedelta(minutes=1),
                                 "imageSizeInBytes": 256,
+                                "artifactMediaType": (
+                                    "application/vnd.docker.container.image.v1+json"
+                                ),
                                 "imageManifestMediaType": (
                                     "application/vnd.docker.distribution.manifest.v2+json"
                                 ),
