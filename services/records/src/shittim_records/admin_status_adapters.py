@@ -10,7 +10,6 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from threading import Lock
 from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 
@@ -190,8 +189,6 @@ class AwsAdminStatusSource:
         self._cloudwatch = cloudwatch
         self._cloudwatch_global = cloudwatch_global
         self._cloudformation_global = cloudformation_global
-        self._stack_resource_cache: dict[tuple[str, str], tuple[str, ...]] = {}
-        self._stack_resource_lock = Lock()
 
     def collect(self, *, now: datetime) -> AdminStatusCollection:
         now = now.astimezone(UTC)
@@ -1760,11 +1757,6 @@ class AwsAdminStatusSource:
         )
 
     def _stack_resources(self, stack_label: str, resource_type: str) -> tuple[str, ...]:
-        cache_key = (stack_label, resource_type)
-        with self._stack_resource_lock:
-            cached = self._stack_resource_cache.get(cache_key)
-        if cached is not None:
-            return cached
         client = self._stack_client(stack_label)
         paginator = client.get_paginator("list_stack_resources")
         resources: list[str] = []
@@ -1779,10 +1771,7 @@ class AwsAdminStatusSource:
                 if not isinstance(physical_id, str) or not physical_id:
                     raise ValueError("CloudFormation physical resource ID is invalid")
                 resources.append(physical_id)
-        result = tuple(resources)
-        with self._stack_resource_lock:
-            self._stack_resource_cache[cache_key] = result
-        return result
+        return tuple(resources)
 
     def _runtime_stack_parameters(self) -> Mapping[str, object]:
         response = self._cloudformation.describe_stacks(StackName=self._config.runtime_stack_name)

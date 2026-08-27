@@ -1176,6 +1176,41 @@ def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
     assert "records-id" not in section.model_dump_json()
 
 
+def test_stack_resource_lookup_does_not_reuse_replaced_physical_ids() -> None:
+    class ChangingPaginator:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def paginate(self, **_kwargs: Any) -> list[dict[str, Any]]:
+            self.calls += 1
+            return [
+                {
+                    "StackResourceSummaries": [
+                        {
+                            "ResourceType": "AWS::ApiGatewayV2::Api",
+                            "PhysicalResourceId": f"api-{self.calls}",
+                        }
+                    ]
+                }
+            ]
+
+    paginator = ChangingPaginator()
+
+    class CloudFormation:
+        def get_paginator(self, name: str) -> ChangingPaginator:
+            assert name == "list_stack_resources"
+            return paginator
+
+    status_source = source(cloudformation=CloudFormation())
+
+    first = status_source._stack_resources("runtime", "AWS::ApiGatewayV2::Api")
+    second = status_source._stack_resources("runtime", "AWS::ApiGatewayV2::Api")
+
+    assert first == ("api-1",)
+    assert second == ("api-2",)
+    assert paginator.calls == 2
+
+
 def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
     descriptions = status_adapters._EVENT_RULE_DESCRIPTIONS
     rules = {
@@ -1501,7 +1536,7 @@ def test_critical_service_section_promotes_overall_state() -> None:
         summary="確認が必要です。",
         metrics=(),
     )
-    collectors = {
+    collectors: dict[str, Any] = {
         method: (lambda *_args, service=service: healthy.model_copy(update={"service": service}))
         for service, method in STATUS_COLLECTORS
     }
@@ -1560,7 +1595,7 @@ def test_status_collection_budget_marks_unfinished_section_unknown(
         release.wait(timeout=2)
         return healthy("ecr")
 
-    collectors = {
+    collectors: dict[str, Any] = {
         method: (lambda *_args, service=service: healthy(service))
         for service, method in STATUS_COLLECTORS
     }
