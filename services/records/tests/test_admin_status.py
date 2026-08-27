@@ -1465,25 +1465,48 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
                 ]
             }
 
+    configured_names = set(configuration().static_parameters.values())
+    configured_names.update(
+        {
+            "/shittim-chest/production/runtime/v0001",
+            "/shittim-chest/production/personas/v0001/moderator",
+            "/shittim-chest/production/personas/v0001/participant-a",
+            "/shittim-chest/production/personas/v0001/participant-b",
+            "/shittim-chest/production/personas/v0001/participant-c",
+        }
+    )
+    expected_names = configured_names - {"/shittim-chest/production/runtime-prompts/active"}
+    metadata = [
+        {
+            "Name": name,
+            "Type": "SecureString",
+            "Version": 1,
+            "LastModifiedDate": NOW,
+        }
+        for name in sorted(expected_names)
+    ]
+
     class Ssm:
         def __init__(self) -> None:
-            self.calls: list[dict[str, Any]] = []
-
-        def describe_parameters(self, **kwargs: Any) -> dict[str, Any]:
-            self.calls.append(kwargs)
-            name = kwargs["ParameterFilters"][0]["Values"][0]
-            if name.endswith("runtime-prompts/active"):
-                return {"Parameters": []}
-            return {
-                "Parameters": [
+            self.paginator = Paginator(
+                [
                     {
-                        "Name": name,
-                        "Type": "SecureString",
-                        "Version": 1,
-                        "LastModifiedDate": NOW,
-                    }
+                        "Parameters": [
+                            *metadata,
+                            {
+                                "Name": "/shittim-chest/production/unrelated",
+                                "Type": "SecureString",
+                                "Version": 1,
+                                "LastModifiedDate": NOW,
+                            },
+                        ]
+                    },
                 ]
-            }
+            )
+
+        def get_paginator(self, name: str) -> Paginator:
+            assert name == "describe_parameters"
+            return self.paginator
 
     ssm = Ssm()
     section = source(cloudformation=CloudFormation(), ssm=ssm)._ssm_section()
@@ -1495,7 +1518,18 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
     assert values["records_ready"] == 6
     assert values["cost_ready"] == 2
     assert values["runtime_prompt_pointer_present"] is False
-    assert len(ssm.calls) == 20
+    assert ssm.paginator.calls == [
+        {
+            "ParameterFilters": [
+                {
+                    "Key": "Name",
+                    "Option": "Equals",
+                    "Values": sorted(configured_names),
+                }
+            ],
+            "PaginationConfig": {"PageSize": 50},
+        }
+    ]
     assert "/shittim-chest/" not in section.model_dump_json()
 
 

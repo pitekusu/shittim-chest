@@ -1577,32 +1577,50 @@ class AwsAdminStatusSource:
                 ),
             }
         )
+        labels_by_name: dict[str, str] = {}
+        for label, name in parameters.items():
+            if name in labels_by_name:
+                raise ValueError("SSM parameter configuration contains a duplicate name")
+            labels_by_name[name] = label
+
         present: set[str] = set()
         modified: list[datetime] = []
-        for label, name in parameters.items():
-            response = self._ssm.describe_parameters(
-                ParameterFilters=[{"Key": "Name", "Option": "Equals", "Values": [name]}],
-                MaxResults=1,
-            )
-            metadata = response.get("Parameters", [])
-            if response.get("NextToken") or not isinstance(metadata, list) or len(metadata) > 1:
+        paginator = self._ssm.get_paginator("describe_parameters")
+        pages = paginator.paginate(
+            ParameterFilters=[
+                {
+                    "Key": "Name",
+                    "Option": "Equals",
+                    "Values": sorted(labels_by_name),
+                }
+            ],
+            PaginationConfig={"PageSize": 50},
+        )
+        for page in _bounded_pages(pages):
+            metadata = page.get("Parameters", [])
+            if not isinstance(metadata, list):
                 raise ValueError("SSM metadata response is invalid")
-            if not metadata:
-                continue
-            item = metadata[0]
-            modified_at = item.get("LastModifiedDate")
-            if (
-                item.get("Name") != name
-                or item.get("Type") != "SecureString"
-                or not isinstance(item.get("Version"), int)
-                or item["Version"] < 1
-                or not isinstance(modified_at, datetime)
-                or modified_at.tzinfo is None
-                or modified_at.utcoffset() is None
-            ):
-                continue
-            present.add(label)
-            modified.append(modified_at)
+            for item in metadata:
+                if not isinstance(item, Mapping):
+                    raise ValueError("SSM metadata item is invalid")
+                name = item.get("Name")
+                label = labels_by_name.get(name) if isinstance(name, str) else None
+                if label is None:
+                    continue
+                modified_at = item.get("LastModifiedDate")
+                if (
+                    item.get("Type") != "SecureString"
+                    or not isinstance(item.get("Version"), int)
+                    or item["Version"] < 1
+                    or not isinstance(modified_at, datetime)
+                    or modified_at.tzinfo is None
+                    or modified_at.utcoffset() is None
+                ):
+                    continue
+                if label in present:
+                    raise ValueError("SSM metadata response contains a duplicate parameter")
+                present.add(label)
+                modified.append(modified_at)
 
         groups = {
             "discord": {
