@@ -321,7 +321,7 @@ export class RecordsApplicationStack extends Stack {
     this.rankingFunction.configureAsyncInvoke({
       retryAttempts: 0,
     });
-    new events.Rule(this, "RankingSchedule", {
+    const rankingSchedule = new events.Rule(this, "RankingSchedule", {
       description: "Rebuild the Records ranking snapshots every 15 minutes",
       schedule: events.Schedule.rate(Duration.minutes(15)),
       targets: [
@@ -385,7 +385,7 @@ export class RecordsApplicationStack extends Stack {
     this.costFunction.configureAsyncInvoke({
       retryAttempts: 0,
     });
-    new events.Rule(this, "AwsFxCostSchedule", {
+    const awsFxCostSchedule = new events.Rule(this, "AwsFxCostSchedule", {
       description: "Collect Project-tagged AWS costs and USD/JPY rates daily at 12:17 JST",
       schedule: events.Schedule.cron({ minute: "17", hour: "3" }),
       targets: [
@@ -395,7 +395,7 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
-    new events.Rule(this, "OpenAiCostSchedule", {
+    const openAiCostSchedule = new events.Rule(this, "OpenAiCostSchedule", {
       description: "Collect project-scoped OpenAI organization costs hourly at minute 37",
       schedule: events.Schedule.cron({ minute: "37" }),
       targets: [
@@ -725,23 +725,6 @@ export class RecordsApplicationStack extends Stack {
           ],
         }),
         new iam.PolicyStatement({
-          actions: ["events:DescribeRule"],
-          resources: [
-            this.formatArn({
-              service: "events",
-              resource: "rule",
-              resourceName: "shittim-chest-production-abnormal-task-stopped",
-              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
-            }),
-            this.formatArn({
-              service: "events",
-              resource: "rule",
-              resourceName: "ShittimChest-Prod-RecordsApplication-*",
-              arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
-            }),
-          ],
-        }),
-        new iam.PolicyStatement({
           actions: ["scheduler:GetSchedule"],
           resources: [
             this.formatArn({
@@ -806,10 +789,30 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    this.adminStatusFunction.role!.attachInlinePolicy(
+      new iam.Policy(this, "AdminStatusEventBridgeReadPolicy", {
+        statements: [
+          new iam.PolicyStatement({
+            actions: ["events:DescribeRule"],
+            resources: [
+              rankingSchedule.ruleArn,
+              awsFxCostSchedule.ruleArn,
+              openAiCostSchedule.ruleArn,
+              this.formatArn({
+                service: "events",
+                resource: "rule",
+                resourceName: "shittim-chest-production-abnormal-task-stopped",
+                arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
     for (const [function_, reason] of [
       [
         this.adminStatusFunction,
-        "CloudWatch, Inspector, SSM metadata, Cost Explorer, and CloudFront discovery APIs do not support complete resource-level scoping. API Gateway is restricted to HTTP API resources in the production region, EventBridge to the Records stack-generated rule prefix, and CloudFormation to eight exact production stack names whose immutable ARN suffixes cannot be predicted. CloudFront and ACM resources are resolved from the exact allowlisted public hostname. All remaining reads use exact production resources.",
+        "CloudWatch, Inspector, SSM metadata, Cost Explorer, and CloudFront discovery APIs do not support complete resource-level scoping. API Gateway is restricted to HTTP API resources in the production region, EventBridge to four exact rule ARNs, and CloudFormation to eight exact production stack names whose immutable ARN suffixes cannot be predicted. CloudFront and ACM resources are resolved from the exact allowlisted public hostname. All remaining reads use exact production resources.",
       ],
     ] as const) {
       Validations.of(function_.role!).acknowledge({
@@ -839,11 +842,6 @@ export class RecordsApplicationStack extends Stack {
             ],
             [
               `AwsSolutions-IAM5[Resource::${partition}:apigateway:${this.region}::/apis/*]`,
-              reason,
-            ],
-            [
-              `AwsSolutions-IAM5[Resource::${partition}:events:${this.region}:` +
-                `${nagAccount}:rule/ShittimChest-Prod-RecordsApplication-*]`,
               reason,
             ],
           ]),
