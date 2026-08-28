@@ -157,6 +157,10 @@ class AwsInspectorDescriptionSource:
                     ],
                     "findingStatus": [{"comparison": "EQUALS", "value": "ACTIVE"}],
                     "resourceType": [{"comparison": "EQUALS", "value": "AWS_ECR_CONTAINER_IMAGE"}],
+                    "severity": [
+                        {"comparison": "EQUALS", "value": "CRITICAL"},
+                        {"comparison": "EQUALS", "value": "HIGH"},
+                    ],
                 },
                 PaginationConfig={"PageSize": 100},
             )

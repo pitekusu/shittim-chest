@@ -214,6 +214,10 @@ def test_aws_source_keeps_only_tagged_active_critical_or_high_descriptions() -> 
     assert inspector_pages.calls[0]["filterCriteria"]["findingStatus"] == [
         {"comparison": "EQUALS", "value": "ACTIVE"}
     ]
+    assert inspector_pages.calls[0]["filterCriteria"]["severity"] == [
+        {"comparison": "EQUALS", "value": "CRITICAL"},
+        {"comparison": "EQUALS", "value": "HIGH"},
+    ]
     assert inspector_pages.calls[0]["PaginationConfig"] == {"PageSize": 100}
 
 
