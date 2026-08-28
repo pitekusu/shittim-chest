@@ -619,7 +619,7 @@
 
 .severityGrid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
 }
@@ -654,6 +654,12 @@
   font-size: 1.05rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+}
+
+.severityGrid > div[data-severity="total"] {
+  border-left-color: var(--records-cyan-ink);
+  background: var(--records-cyan-100);
+  color: var(--records-cyan-ink);
 }
 
 .severityGrid > div[data-severity="critical"] {

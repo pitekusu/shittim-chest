@@ -327,6 +327,56 @@ describe("AdminPage", () => {
     ).toBeVisible();
   });
 
+  it("shows the canonical Inspector total without masking unavailable details", async () => {
+    const responseWithMissingDetails: AdminStatusResponse = {
+      ...statusResponse,
+      sections: statusResponse.sections.map((section) =>
+        section.service === "inspector"
+          ? {
+              ...section,
+              details: {
+                kind: "inspector",
+                images: [
+                  {
+                    tags: ["missing-details"],
+                    scanStatus: "ACTIVE",
+                    lastScannedAt: "2026-08-24T04:10:00Z",
+                    counts: {
+                      total: 3,
+                      critical: 1,
+                      high: 0,
+                      medium: 0,
+                      low: 0,
+                      untriaged: 0,
+                    },
+                    findings: [],
+                  },
+                ],
+              },
+            }
+          : section,
+      ),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(responseWithMissingDetails))),
+    );
+
+    renderAdmin();
+
+    const imageHeading = await screen.findByRole("heading", { name: "missing-details" });
+    const image = imageHeading.closest("section");
+    expect(image).not.toBeNull();
+    const inspectorImage = within(image as HTMLElement);
+    expect(inspectorImage.getByText("合計").parentElement).toHaveTextContent("3");
+    expect(
+      inspectorImage.queryByText("重大・高の脆弱性は検出されていません。"),
+    ).not.toBeInTheDocument();
+    expect(
+      inspectorImage.getByText("重大・高のうち1件はパッケージ詳細を取得できませんでした。"),
+    ).toBeVisible();
+  });
+
   it("refreshes status with the write-boundary headers", async () => {
     const requests: { path: string; init?: RequestInit }[] = [];
     vi.stubGlobal(

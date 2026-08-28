@@ -106,3 +106,25 @@ def test_metadata_check_never_gets_or_decrypts_parameter_values() -> None:
         result = setup.parameter_metadata(sdk)
 
     assert result[setup.API_KEY_PARAMETER].version == 2
+
+
+def test_metadata_output_never_prints_the_parameter_path(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    setup._print_metadata(
+        {
+            setup.API_KEY_PARAMETER: setup.ParameterMetadata(
+                name=setup.API_KEY_PARAMETER,
+                type="SecureString",
+                tier="Standard",
+                version=2,
+            )
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert setup.API_KEY_PARAMETER not in output
+    assert output == (
+        "Records Inspector翻訳 SSM SecureString: "
+        "1/1 設定済み (SecureString / Standard / version 2)\n"
+    )

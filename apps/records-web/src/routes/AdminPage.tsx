@@ -42,6 +42,7 @@ const HEALTH_LABELS: Readonly<Record<AdminHealthState, string>> = {
 };
 
 const INSPECTOR_SEVERITIES = [
+  { key: "total", label: "合計" },
   { key: "critical", label: "重大" },
   { key: "high", label: "高" },
   { key: "medium", label: "中" },
@@ -953,7 +954,7 @@ function InspectorMetrics({
                   </div>
                 </details>
               )}
-              {image.findings.length === 0 && (
+              {image.counts.critical + image.counts.high === 0 && (
                 <p className={adminStyles.noCriticalFindings}>
                   重大・高の脆弱性は検出されていません。
                 </p>

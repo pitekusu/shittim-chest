@@ -244,10 +244,12 @@ def _required_executable(name: str) -> str:
 def _print_metadata(metadata: Mapping[str, ParameterMetadata]) -> None:
     item = metadata.get(API_KEY_PARAMETER)
     if item is None:
-        print(f"{API_KEY_PARAMETER}: 未設定")
+        print("Records Inspector翻訳 SSM SecureString: 0/1 設定済み")
     else:
-        print(f"{item.name}: {item.type} / {item.tier} / version {item.version}")
-    print(f"Records Inspector翻訳 SSM SecureString: {len(metadata)}/1 設定済み")
+        print(
+            "Records Inspector翻訳 SSM SecureString: "
+            f"1/1 設定済み ({item.type} / {item.tier} / version {item.version})"
+        )
 
 
 def _parser() -> argparse.ArgumentParser:
