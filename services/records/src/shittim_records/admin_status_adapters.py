@@ -718,6 +718,17 @@ class AwsAdminStatusSource:
                 ):
                     findings[digest].append(_public_inspector_finding(raw_finding, severity))
 
+        for digest, candidates in findings.items():
+            counts = aggregated.get(digest)
+            critical_limit = counts.critical if counts is not None else 0
+            high_limit = counts.high if counts is not None else 0
+            critical_details = sum(
+                candidate.public.severity == "critical" for candidate in candidates
+            )
+            high_details = sum(candidate.public.severity == "high" for candidate in candidates)
+            if critical_details > critical_limit or high_details > high_limit:
+                raise ValueError("Inspector finding details exceed severity aggregates")
+
         translation_keys = tuple(
             sorted({candidate.source.key for values in findings.values() for candidate in values})
         )

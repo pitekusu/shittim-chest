@@ -1021,6 +1021,48 @@ def test_inspector_treats_untriaged_findings_as_warning() -> None:
     assert metrics(section)["active_untriaged"] == 1
 
 
+@pytest.mark.parametrize("severity", ("CRITICAL", "HIGH"))
+def test_inspector_rejects_details_that_exceed_severity_aggregates(severity: str) -> None:
+    aggregation_pages = Paginator(
+        [
+            {
+                "responses": [
+                    {
+                        "awsEcrContainerAggregation": {
+                            "imageSha": RUNTIME_DIGEST,
+                            "severityCounts": {
+                                "all": 1,
+                                "critical": 0,
+                                "high": 0,
+                                "medium": 1,
+                            },
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    finding_pages = Paginator([{"findings": [inspector_finding(severity=severity)]}])
+
+    class Inspector:
+        def get_paginator(self, name: str) -> Paginator:
+            return {
+                "list_finding_aggregations": aggregation_pages,
+                "list_findings": finding_pages,
+            }[name]
+
+    class Translations:
+        def load(self, _keys: tuple[str, ...]) -> dict[str, InspectorJapaneseSummary]:
+            raise AssertionError("inconsistent findings must fail before cache access")
+
+    with pytest.raises(ValueError, match="details exceed severity aggregates"):
+        source(
+            ecr=EcrInventory([tagged_image_detail()]),
+            inspector=Inspector(),
+            translations=Translations(),
+        )._inspector_section()
+
+
 @pytest.mark.parametrize("failure", ("partial", "missing"))
 def test_lambda_section_is_unknown_for_incomplete_provider_metrics(failure: str) -> None:
     class Lambda:
