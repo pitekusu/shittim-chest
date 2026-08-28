@@ -56,6 +56,31 @@ def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
     assert validate_notification_workflows(_workflow_directory(tmp_path)) == 1
 
 
+@pytest.mark.parametrize(
+    "marker",
+    (
+        "vars.AWS_RECORDS_DRIFT_ROLE_ARN",
+        "Detect Records stack drift without remediation",
+        "ShittimChest-Prod-RecordsStateful",
+        "ShittimChest-Prod-RecordsApplication",
+        "ShittimChest-Prod-RecordsEdge",
+    ),
+)
+def test_drift_requires_records_stacks_and_dedicated_role(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / DRIFT_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, ""),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="Drift lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
 def test_ci_requires_runtime_image_path_isolation(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"

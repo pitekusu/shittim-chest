@@ -1685,7 +1685,7 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(s3NumericGlyph).toHaveText("3");
   expect(
     await s3NumericGlyph.evaluate((element) => getComputedStyle(element).fontFamily),
-  ).toContain("LINE Seed JP");
+  ).toMatch(/^Delogy/u);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await expect(page).toHaveScreenshot("admin-console-dark.png", {
     animations: "disabled",

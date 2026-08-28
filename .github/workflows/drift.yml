@@ -39,10 +39,13 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Validate the read-only role handle
+      - name: Validate the read-only role handles
         env:
           DRIFT_ROLE_ARN: ${{ vars.AWS_RELEASE_DRIFT_ROLE_ARN }}
-        run: test -n "${DRIFT_ROLE_ARN}"
+          RECORDS_DRIFT_ROLE_ARN: ${{ vars.AWS_RECORDS_DRIFT_ROLE_ARN }}
+        run: |
+          test -n "${DRIFT_ROLE_ARN}"
+          test -n "${RECORDS_DRIFT_ROLE_ARN}"
       - name: Acquire read-only AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
@@ -85,6 +88,46 @@ jobs:
           detect ShittimChest-Prod-Runtime "${AWS_REGION}"
           detect ShittimChest-Prod-Operations "${AWS_REGION}"
           detect ShittimChest-Prod-CostGovernance "${COST_REGION}"
+      - name: Acquire read-only Records AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_RECORDS_DRIFT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: records-drift-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 1800
+          mask-aws-account-id: true
+          unset-current-credentials: true
+          retry-max-attempts: 3
+          action-timeout-s: 60
+      - name: Detect Records stack drift without remediation
+        run: |
+          result="${RUNNER_TEMP}/drift-results.tsv"
+          test -f "${result}"
+          detect() {
+            local stack="$1" region="$2" detection status
+            detection=$(aws cloudformation detect-stack-drift \
+              --region "${region}" --stack-name "${stack}" \
+              --query StackDriftDetectionId --output text)
+            for attempt in $(seq 1 60)
+            do
+              status=$(aws cloudformation describe-stack-drift-detection-status \
+                --region "${region}" --stack-drift-detection-id "${detection}" \
+                --query DetectionStatus --output text)
+              case "${status}" in
+                DETECTION_COMPLETE) break ;;
+                DETECTION_FAILED) exit 1 ;;
+              esac
+              test "${attempt}" -lt 60
+              sleep 10
+            done
+            drift=$(aws cloudformation describe-stack-drift-detection-status \
+              --region "${region}" --stack-drift-detection-id "${detection}" \
+              --query StackDriftStatus --output text)
+            printf '%s\t%s\t%s\n' "${stack}" "${region}" "${drift}" >> "${result}"
+          }
+          detect ShittimChest-Prod-RecordsStateful "${AWS_REGION}"
+          detect ShittimChest-Prod-RecordsApplication "${AWS_REGION}"
+          detect ShittimChest-Prod-RecordsEdge "${COST_REGION}"
       - name: Update the single drift issue
         env:
           GH_TOKEN: ${{ github.token }}

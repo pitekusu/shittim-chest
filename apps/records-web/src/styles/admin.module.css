@@ -347,6 +347,10 @@
   font-family: var(--admin-font-numeric);
 }
 
+.displayNumericGlyph {
+  font-family: var(--records-font-display);
+}
+
 .serviceIdentity > div > span {
   display: block;
   margin-top: 4px;

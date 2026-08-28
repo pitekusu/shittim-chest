@@ -1515,8 +1515,13 @@ def _validate_drift(directory: Path) -> None:
         "name: Infrastructure Drift",
         "cancel-in-progress: false",
         "vars.AWS_RELEASE_DRIFT_ROLE_ARN",
+        "vars.AWS_RECORDS_DRIFT_ROLE_ARN",
         "detect-stack-drift",
         "describe-stack-drift-detection-status",
+        "Detect Records stack drift without remediation",
+        "ShittimChest-Prod-RecordsStateful",
+        "ShittimChest-Prod-RecordsApplication",
+        "ShittimChest-Prod-RecordsEdge",
         "--label infrastructure-drift",
         "This workflow never remediates drift.",
     )
