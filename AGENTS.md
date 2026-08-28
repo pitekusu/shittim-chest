@@ -61,7 +61,7 @@ uv run --frozen python tools/check_public_surface.py
 - GitHub write前に`gh auth status`と`gh api user --jq '.login'`でaccountを確認する。
 - `codex/` branch → commit →通常PRの順とし、draft、mainへの直接pushを使わない。
 - mergeはrequired CIとCodeQL確認後のsquash mergeだけとする。
-- image build contextを変えるPRでは、canonical CIのproduction／break-glass両imageについて
+- image build contextを変えるPRでは、canonical CIのproduction imageについて
   config digest、SBOM、VEX、risk gateの対応を確認する。静的baselineやcross-run digest一致は
   required gateにしない。
 - Production Releaseの明示指示は`production` Environment承認待ちまでを許可する。承認は独立工程で、

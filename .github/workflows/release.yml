@@ -413,14 +413,9 @@ jobs:
           "${RUNNER_TEMP}/grype" db update
           normal_base=$(uv run --frozen python tools/check_container_policy.py \
             --print-reference runtime)
-          break_glass_base=$(uv run --frozen python tools/check_container_policy.py \
-            --print-reference builder)
           "${RUNNER_TEMP}/docker-scout" vex get --verify --skip-tlog \
             --platform linux/arm64 --output "${RUNNER_TEMP}/normal.openvex.json" \
             "registry://${normal_base}"
-          "${RUNNER_TEMP}/docker-scout" vex get --verify --skip-tlog \
-            --platform linux/arm64 --output "${RUNNER_TEMP}/break-glass.openvex.json" \
-            "registry://${break_glass_base}"
       - name: Check out the immutable image build context
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -454,61 +449,31 @@ jobs:
           tags: ${{ vars.ECR_REPOSITORY_URI }}:release-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=container-arm64-production
           cache-to: type=gha,mode=max,scope=container-arm64-production,ignore-error=true
-      - name: Build and load the isolated break-glass image once
-        id: build-break-glass
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        env:
-          SOURCE_DATE_EPOCH: "0"
-        with:
-          context: ${{ env.RELEASE_IMAGE_CONTEXT }}
-          file: ${{ env.RELEASE_IMAGE_CONTEXT }}/Dockerfile
-          target: break-glass
-          no-cache-filters: builder,break-glass
-          outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
-          tags: ${{ vars.ECR_REPOSITORY_URI }}:break-glass-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          cache-from: type=gha,scope=container-arm64-break-glass
-          cache-to: type=gha,mode=max,scope=container-arm64-break-glass,ignore-error=true
       - name: Validate release image configs before push
         env:
-          BREAK_GLASS_CONFIG_DIGEST: ${{ steps.build-break-glass.outputs.imageid }}
           NORMAL_CONFIG_DIGEST: ${{ steps.build-normal.outputs.imageid }}
         run: |
           digest_pattern='^sha256:[0-9a-f]{64}$'
           [[ "${NORMAL_CONFIG_DIGEST}" =~ ${digest_pattern} ]]
-          [[ "${BREAK_GLASS_CONFIG_DIGEST}" =~ ${digest_pattern} ]]
-          test "${NORMAL_CONFIG_DIGEST}" != "${BREAK_GLASS_CONFIG_DIGEST}"
           printf '%s\n' "${NORMAL_CONFIG_DIGEST}" > "${RUNNER_TEMP}/normal.config-digest"
-          printf '%s\n' "${BREAK_GLASS_CONFIG_DIGEST}" \
-            > "${RUNNER_TEMP}/break-glass.config-digest"
           uv run --frozen python tools/check_container_risk_acceptance.py \
             --policy security/container-risk-acceptance.json \
             --image-kind production \
             --image-config-digest-file "${RUNNER_TEMP}/normal.config-digest" \
             --config-digest-only
-          uv run --frozen python tools/check_container_risk_acceptance.py \
-            --policy security/container-risk-acceptance.json \
-            --image-kind break-glass \
-            --image-config-digest-file "${RUNNER_TEMP}/break-glass.config-digest" \
-            --config-digest-only
-      - name: Push the prevalidated images once
+      - name: Push the prevalidated image once
         id: push-images
         env:
-          BREAK_GLASS_CONFIG_DIGEST: ${{ steps.build-break-glass.outputs.imageid }}
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           NORMAL_CONFIG_DIGEST: ${{ steps.build-normal.outputs.imageid }}
         run: |
           digest_pattern='^sha256:[0-9a-f]{64}$'
           repository="${ECR_REPOSITORY_URI##*/}"
           normal_tag="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          break_glass_tag="break-glass-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           normal_image="${ECR_REPOSITORY_URI}:${normal_tag}"
-          break_glass_image="${ECR_REPOSITORY_URI}:${break_glass_tag}"
           test "$(docker image inspect "${normal_image}" --format '{{.Id}}')" = \
             "${NORMAL_CONFIG_DIGEST}"
-          test "$(docker image inspect "${break_glass_image}" --format '{{.Id}}')" = \
-            "${BREAK_GLASS_CONFIG_DIGEST}"
           docker image push --quiet "${normal_image}" >/dev/null
-          docker image push --quiet "${break_glass_image}" >/dev/null
           inspect_pushed_image() {
             local mode="$1" tag="$2" expected_config="$3"
             local manifest_digest manifest actual_config
@@ -530,128 +495,83 @@ jobs:
           }
           normal_digest=$(inspect_pushed_image normal "${normal_tag}" \
             "${NORMAL_CONFIG_DIGEST}")
-          break_glass_digest=$(inspect_pushed_image break-glass "${break_glass_tag}" \
-            "${BREAK_GLASS_CONFIG_DIGEST}")
-          test "${normal_digest}" != "${break_glass_digest}"
-          {
-            echo "normal_digest=${normal_digest}"
-            echo "break_glass_digest=${break_glass_digest}"
-          } >> "${GITHUB_OUTPUT}"
+          echo "normal_digest=${normal_digest}" >> "${GITHUB_OUTPUT}"
       - name: Record immutable image references
         env:
-          BREAK_GLASS_DIGEST: ${{ steps.push-images.outputs.break_glass_digest }}
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           NORMAL_DIGEST: ${{ steps.push-images.outputs.normal_digest }}
         run: |
           digest_pattern='^sha256:[0-9a-f]{64}$'
           [[ "${NORMAL_DIGEST}" =~ ${digest_pattern} ]]
-          [[ "${BREAK_GLASS_DIGEST}" =~ ${digest_pattern} ]]
-          test "${NORMAL_DIGEST}" != "${BREAK_GLASS_DIGEST}"
           normal_reference="${ECR_REPOSITORY_URI}@${NORMAL_DIGEST}"
-          break_glass_reference="${ECR_REPOSITORY_URI}@${BREAK_GLASS_DIGEST}"
           normal_config_digest=$(jq --exit-status --raw-output \
             '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))' \
             "${RUNNER_TEMP}/normal.manifest.json")
-          break_glass_config_digest=$(jq --exit-status --raw-output \
-            '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))' \
-            "${RUNNER_TEMP}/break-glass.manifest.json")
-          test "${normal_config_digest}" != "${break_glass_config_digest}"
           printf '%s\n' "${normal_config_digest}" > "${RUNNER_TEMP}/normal.config-digest"
-          printf '%s\n' "${break_glass_config_digest}" \
-            > "${RUNNER_TEMP}/break-glass.config-digest"
           {
             echo "NORMAL_DIGEST=${NORMAL_DIGEST}"
-            echo "BREAK_GLASS_DIGEST=${BREAK_GLASS_DIGEST}"
             echo "NORMAL_REFERENCE=${normal_reference}"
-            echo "BREAK_GLASS_REFERENCE=${break_glass_reference}"
           } >> "${GITHUB_ENV}"
-      - name: Generate pushed-digest SPDX SBOMs
+      - name: Generate the pushed-digest SPDX SBOM
         run: |
           "${RUNNER_TEMP}/syft" "registry:${NORMAL_REFERENCE}" \
             --output "spdx-json=${RUNNER_TEMP}/normal.spdx.json"
-          "${RUNNER_TEMP}/syft" "registry:${BREAK_GLASS_REFERENCE}" \
-            --output "spdx-json=${RUNNER_TEMP}/break-glass.spdx.json"
           uv run --frozen python tools/check_image_sbom.py \
             "${RUNNER_TEMP}/normal.spdx.json"
-          uv run --frozen python tools/check_image_sbom.py \
-            "${RUNNER_TEMP}/break-glass.spdx.json"
       - name: Apply signed vendor VEX and the time-bounded risk policy
         env:
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
           GRYPE_DB_AUTO_UPDATE: "false"
         run: |
           fixable_status=0
-          for mode in normal break-glass
-          do
-            "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
-              --output "json=${RUNNER_TEMP}/${mode}.raw-grype.json"
-            "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
-              --vex "${RUNNER_TEMP}/${mode}.openvex.json" \
-              --output "json=${RUNNER_TEMP}/${mode}.vex-grype.json"
-            "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/${mode}.spdx.json" \
-              --name "${mode}-image-actionable" \
-              --only-fixed \
-              --fail-on high || fixable_status=$?
-          done
+          "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/normal.spdx.json" \
+            --output "json=${RUNNER_TEMP}/normal.raw-grype.json"
+          "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/normal.spdx.json" \
+            --vex "${RUNNER_TEMP}/normal.openvex.json" \
+            --output "json=${RUNNER_TEMP}/normal.vex-grype.json"
+          "${RUNNER_TEMP}/grype" "sbom:${RUNNER_TEMP}/normal.spdx.json" \
+            --name "normal-image-actionable" \
+            --only-fixed \
+            --fail-on high || fixable_status=$?
           if [ "${fixable_status}" -ne 0 ]
           then
             echo "Fixable High/Critical in a rebuilt release image blocks deployment." >&2
             exit "${fixable_status}"
           fi
           printf '%s\n' "${NORMAL_DIGEST}" > "${RUNNER_TEMP}/normal.digest"
-          printf '%s\n' "${BREAK_GLASS_DIGEST}" > "${RUNNER_TEMP}/break-glass.digest"
-          for mode in normal break-glass
-          do
-            case "${mode}" in
-              normal) image_kind=production ;;
-              break-glass) image_kind=break-glass ;;
-            esac
-            uv run --frozen python tools/check_container_risk_acceptance.py \
-              --policy security/container-risk-acceptance.json \
-              --raw-report "${RUNNER_TEMP}/${mode}.raw-grype.json" \
-              --vex-report "${RUNNER_TEMP}/${mode}.vex-grype.json" \
-              --image-kind "${image_kind}" \
-              --image-config-digest-file "${RUNNER_TEMP}/${mode}.config-digest"
-          done
+          uv run --frozen python tools/check_container_risk_acceptance.py \
+            --policy security/container-risk-acceptance.json \
+            --raw-report "${RUNNER_TEMP}/normal.raw-grype.json" \
+            --vex-report "${RUNNER_TEMP}/normal.vex-grype.json" \
+            --image-kind production \
+            --image-config-digest-file "${RUNNER_TEMP}/normal.config-digest"
       - name: Wait for managed signing and enhanced ECR scans
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
         run: |
           repository="${ECR_REPOSITORY_URI##*/}"
-          wait_for_evidence() {
-            local mode="$1" digest="$2"
-            bash tools/wait_release_image_evidence.sh \
-              --repository "${repository}" \
-              --digest "${digest}" \
-              --signing-profile-arn "${SIGNING_PROFILE_ARN}" \
-              --output-dir "${RUNNER_TEMP}" \
-              --mode "${mode}"
-            uv run --frozen python tools/release_supply_chain.py \
-              create-vulnerability-predicate \
-              --digest "${digest}" \
-              --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
-              --scan "${RUNNER_TEMP}/${mode}.scan.json" \
-              --risk-gate-passed \
-              --output "${RUNNER_TEMP}/${mode}.vulnerability.json"
-          }
-          wait_for_evidence normal "${NORMAL_DIGEST}"
-          wait_for_evidence break-glass "${BREAK_GLASS_DIGEST}"
+          bash tools/wait_release_image_evidence.sh \
+            --repository "${repository}" \
+            --digest "${NORMAL_DIGEST}" \
+            --signing-profile-arn "${SIGNING_PROFILE_ARN}" \
+            --output-dir "${RUNNER_TEMP}"
+          uv run --frozen python tools/release_supply_chain.py \
+            create-vulnerability-predicate \
+            --digest "${NORMAL_DIGEST}" \
+            --coverage "${RUNNER_TEMP}/normal.coverage.json" \
+            --scan "${RUNNER_TEMP}/normal.scan.json" \
+            --risk-gate-passed \
+            --output "${RUNNER_TEMP}/normal.vulnerability.json"
       - name: Capture ACTIVE referrer baselines before attestations
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
         run: |
           repository="${ECR_REPOSITORY_URI##*/}"
-          for mode in normal break-glass
-          do
-            digest_variable="${mode^^}_DIGEST"
-            digest_variable="${digest_variable//-/_}"
-            digest="${!digest_variable}"
-            aws ecr list-image-referrers \
-              --repository-name "${repository}" \
-              --subject-id "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.referrers-before.json"
-          done
+          aws ecr list-image-referrers \
+            --repository-name "${repository}" \
+            --subject-id "imageDigest=${NORMAL_DIGEST}" \
+            --output json > "${RUNNER_TEMP}/normal.referrers-before.json"
       - name: Attest normal image provenance
         id: attest_normal_provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -682,37 +602,7 @@ jobs:
           push-to-registry: true
           create-storage-record: false
           show-summary: false
-      - name: Attest break-glass image provenance
-        id: attest_break_glass_provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
-          subject-digest: ${{ steps.push-images.outputs.break_glass_digest }}
-          push-to-registry: true
-          create-storage-record: false
-          show-summary: false
-      - name: Attest break-glass image SBOM
-        id: attest_break_glass_sbom
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
-          subject-digest: ${{ steps.push-images.outputs.break_glass_digest }}
-          sbom-path: ${{ runner.temp }}/break-glass.spdx.json
-          push-to-registry: true
-          create-storage-record: false
-          show-summary: false
-      - name: Attest break-glass vulnerability assessment
-        id: attest_break_glass_vulnerability
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
-        with:
-          subject-name: ${{ vars.ECR_REPOSITORY_URI }}
-          subject-digest: ${{ steps.push-images.outputs.break_glass_digest }}
-          predicate-type: https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
-          predicate-path: ${{ runner.temp }}/break-glass.vulnerability.json
-          push-to-registry: true
-          create-storage-record: false
-          show-summary: false
-      - name: Strictly verify both Signer identities and four referrers
+      - name: Strictly verify the Signer identity and four referrers
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           GH_TOKEN: ${{ github.token }}
@@ -726,52 +616,43 @@ jobs:
             > "${RUNNER_TEMP}/notation-trust-policy.json"
           notation policy import --force "${RUNNER_TEMP}/notation-trust-policy.json"
           notation verify "${NORMAL_REFERENCE}"
-          notation verify "${BREAK_GLASS_REFERENCE}"
           notation inspect --output json "${NORMAL_REFERENCE}" \
             > "${RUNNER_TEMP}/normal.notation.json"
-          notation inspect --output json "${BREAK_GLASS_REFERENCE}" \
-            > "${RUNNER_TEMP}/break-glass.notation.json"
-          for mode in normal break-glass
+          aws ecr list-image-referrers \
+            --repository-name "${repository}" \
+            --subject-id "imageDigest=${NORMAL_DIGEST}" \
+            --output json > "${RUNNER_TEMP}/normal.referrers-after.json"
+          uv run --frozen python tools/release_supply_chain.py \
+            select-release-referrers \
+            --before-referrers "${RUNNER_TEMP}/normal.referrers-before.json" \
+            --after-referrers "${RUNNER_TEMP}/normal.referrers-after.json" \
+            --notation-inspection "${RUNNER_TEMP}/normal.notation.json" \
+            --profile-arn "${SIGNING_PROFILE_ARN}" \
+            --output "${RUNNER_TEMP}/normal.referrers.json"
+          uv run --frozen python tools/release_supply_chain.py verify-image \
+            --digest "${NORMAL_DIGEST}" \
+            --coverage "${RUNNER_TEMP}/normal.coverage.json" \
+            --image-details "${RUNNER_TEMP}/normal.image.json" \
+            --profile-arn "${SIGNING_PROFILE_ARN}" \
+            --signing-status "${RUNNER_TEMP}/normal.signing.json" \
+            --referrers "${RUNNER_TEMP}/normal.referrers.json" \
+            --scan "${RUNNER_TEMP}/normal.scan.json" \
+            --risk-gate-passed \
+            --output "${RUNNER_TEMP}/normal.verification.json"
+          for predicate in \
+            https://slsa.dev/provenance/v1 \
+            https://spdx.dev/Document/v2.3 \
+            https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
           do
-            digest_variable="${mode^^}_DIGEST"
-            digest_variable="${digest_variable//-/_}"
-            digest="${!digest_variable}"
-            aws ecr list-image-referrers \
-              --repository-name "${repository}" \
-              --subject-id "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.referrers-after.json"
-            uv run --frozen python tools/release_supply_chain.py \
-              select-release-referrers \
-              --before-referrers "${RUNNER_TEMP}/${mode}.referrers-before.json" \
-              --after-referrers "${RUNNER_TEMP}/${mode}.referrers-after.json" \
-              --notation-inspection "${RUNNER_TEMP}/${mode}.notation.json" \
-              --profile-arn "${SIGNING_PROFILE_ARN}" \
-              --output "${RUNNER_TEMP}/${mode}.referrers.json"
-            uv run --frozen python tools/release_supply_chain.py verify-image \
-              --digest "${digest}" \
-              --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
-              --image-details "${RUNNER_TEMP}/${mode}.image.json" \
-              --profile-arn "${SIGNING_PROFILE_ARN}" \
-              --signing-status "${RUNNER_TEMP}/${mode}.signing.json" \
-              --referrers "${RUNNER_TEMP}/${mode}.referrers.json" \
-              --scan "${RUNNER_TEMP}/${mode}.scan.json" \
-              --risk-gate-passed \
-              --output "${RUNNER_TEMP}/${mode}.verification.json"
-            for predicate in \
-              https://slsa.dev/provenance/v1 \
-              https://spdx.dev/Document/v2.3 \
-              https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
-            do
-              gh attestation verify "oci://${ECR_REPOSITORY_URI}@${digest}" \
-                --bundle-from-oci \
-                --deny-self-hosted-runners \
-                --repo pitekusu/shittim-chest \
-                --signer-digest "${GITHUB_SHA}" \
-                --signer-workflow pitekusu/shittim-chest/.github/workflows/release.yml \
-                --source-digest "${GITHUB_SHA}" \
-                --source-ref refs/heads/main \
-                --predicate-type "${predicate}" >/dev/null
-            done
+            gh attestation verify "oci://${ECR_REPOSITORY_URI}@${NORMAL_DIGEST}" \
+              --bundle-from-oci \
+              --deny-self-hosted-runners \
+              --repo pitekusu/shittim-chest \
+              --signer-digest "${GITHUB_SHA}" \
+              --signer-workflow pitekusu/shittim-chest/.github/workflows/release.yml \
+              --source-digest "${GITHUB_SHA}" \
+              --source-ref refs/heads/main \
+              --predicate-type "${predicate}" >/dev/null
           done
       - name: Create and publish the content-addressed Lambda bundle
         env:
@@ -934,7 +815,6 @@ jobs:
             "${TOKYO_EXECUTION_ROLE}" \
             --parameters \
               "ParameterKey=RuntimeImageDigest,ParameterValue=${NORMAL_DIGEST}" \
-              "ParameterKey=BreakGlassImageDigest,ParameterValue=${BREAK_GLASS_DIGEST}" \
               "ParameterKey=RuntimeConfigVersion,ParameterValue=${RUNTIME_CONFIG_VERSION}" \
               "ParameterKey=LambdaBundleBucketName,ParameterValue=${ASSET_BUCKET}" \
               "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}" \
@@ -960,7 +840,6 @@ jobs:
           validate_change_set ShittimChest-Prod-Stateful Stateful
           validate_change_set ShittimChest-Prod-Runtime Runtime \
             --expected-parameter "RuntimeImageDigest=${NORMAL_DIGEST}" \
-            --expected-parameter "BreakGlassImageDigest=${BREAK_GLASS_DIGEST}" \
             --expected-parameter "RuntimeConfigVersion=${RUNTIME_CONFIG_VERSION}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
@@ -976,12 +855,6 @@ jobs:
           RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
         run: |
           uv run --frozen python tools/release_supply_chain.py create-manifest \
-            --break-glass-config-digest-file "${RUNNER_TEMP}/break-glass.config-digest" \
-            --break-glass-raw-grype "${RUNNER_TEMP}/break-glass.raw-grype.json" \
-            --break-glass-sbom "${RUNNER_TEMP}/break-glass.spdx.json" \
-            --break-glass-vendor-vex "${RUNNER_TEMP}/break-glass.openvex.json" \
-            --break-glass-verification "${RUNNER_TEMP}/break-glass.verification.json" \
-            --break-glass-vex-grype "${RUNNER_TEMP}/break-glass.vex-grype.json" \
             --cdk-assets "${RUNNER_TEMP}/cdk-assets.json" \
             --change-sets "${RUNNER_TEMP}/change-sets.json" \
             --commit-sha "${GITHUB_SHA}" \
@@ -1007,9 +880,6 @@ jobs:
           NORMAL_PROVENANCE_ID: ${{ steps.attest_normal_provenance.outputs.attestation-id }}
           NORMAL_SBOM_ID: ${{ steps.attest_normal_sbom.outputs.attestation-id }}
           NORMAL_VULNERABILITY_ID: ${{ steps.attest_normal_vulnerability.outputs.attestation-id }}
-          BREAK_GLASS_PROVENANCE_ID: ${{ steps.attest_break_glass_provenance.outputs.attestation-id }}
-          BREAK_GLASS_SBOM_ID: ${{ steps.attest_break_glass_sbom.outputs.attestation-id }}
-          BREAK_GLASS_VULNERABILITY_ID: ${{ steps.attest_break_glass_vulnerability.outputs.attestation-id }}
           RELEASE_MANIFEST_ID: ${{ steps.attest_release_manifest.outputs.attestation-id }}
         run: |
           write_attestation_link() {
@@ -1029,10 +899,6 @@ jobs:
           write_attestation_link "Normal image SBOM" "${NORMAL_SBOM_ID}"
           write_attestation_link "Normal image vulnerability assessment" \
             "${NORMAL_VULNERABILITY_ID}"
-          write_attestation_link "Break-glass image provenance" "${BREAK_GLASS_PROVENANCE_ID}"
-          write_attestation_link "Break-glass image SBOM" "${BREAK_GLASS_SBOM_ID}"
-          write_attestation_link "Break-glass image vulnerability assessment" \
-            "${BREAK_GLASS_VULNERABILITY_ID}"
           write_attestation_link "Release manifest" "${RELEASE_MANIFEST_ID}"
       - name: Record the immutable release evidence name
         id: evidence
@@ -1047,13 +913,9 @@ jobs:
           path: |
             ${{ runner.temp }}/release-manifest.json
             ${{ runner.temp }}/normal.spdx.json
-            ${{ runner.temp }}/break-glass.spdx.json
             ${{ runner.temp }}/normal.*.json
-            ${{ runner.temp }}/break-glass.*.json
             ${{ runner.temp }}/normal.digest
-            ${{ runner.temp }}/break-glass.digest
             ${{ runner.temp }}/normal.config-digest
-            ${{ runner.temp }}/break-glass.config-digest
             ${{ runner.temp }}/cdk.out/Stateful.template.json
             ${{ runner.temp }}/cdk.out/Stateful.assets.json
             ${{ runner.temp }}/cdk.out/Runtime.template.json
@@ -1156,34 +1018,22 @@ jobs:
             local path="$1" expected="$2"
             test "$(sha256sum "${path}" | cut -d ' ' -f 1)" = "${expected}"
           }
-          for mapping in \
-            'normal=normal' \
-            'break_glass=break-glass'
-          do
-            key="${mapping%%=*}"
-            file="${mapping#*=}"
-            case "${file}" in
-              normal) image_kind=production ;;
-              break-glass) image_kind=break-glass ;;
-            esac
-            check_hash "${RUNNER_TEMP}/release/${file}.spdx.json" \
-              "$(jq --raw-output --arg key "${key}" '.images[$key].sbom.sha256' "${manifest}")"
-            check_hash "${RUNNER_TEMP}/release/${file}.raw-grype.json" \
-              "$(jq --raw-output --arg key "${key}" '.images[$key].risk_evidence.grype_raw' "${manifest}")"
-            check_hash "${RUNNER_TEMP}/release/${file}.vex-grype.json" \
-              "$(jq --raw-output --arg key "${key}" '.images[$key].risk_evidence.grype_vex' "${manifest}")"
-            check_hash "${RUNNER_TEMP}/release/${file}.openvex.json" \
-              "$(jq --raw-output --arg key "${key}" '.images[$key].risk_evidence.vendor_vex' "${manifest}")"
-            uv run --frozen python tools/check_container_risk_acceptance.py \
-              --policy security/container-risk-acceptance.json \
-              --raw-report "${RUNNER_TEMP}/release/${file}.raw-grype.json" \
-              --vex-report "${RUNNER_TEMP}/release/${file}.vex-grype.json" \
-              --image-kind "${image_kind}" \
-              --image-config-digest-file "${RUNNER_TEMP}/release/${file}.config-digest"
-            test "$(cat "${RUNNER_TEMP}/release/${file}.config-digest")" = \
-              "$(jq --raw-output --arg key "${key}" '.images[$key].config_digest' \
-                "${manifest}")"
-          done
+          check_hash "${RUNNER_TEMP}/release/normal.spdx.json" \
+            "$(jq --raw-output '.images.normal.sbom.sha256' "${manifest}")"
+          check_hash "${RUNNER_TEMP}/release/normal.raw-grype.json" \
+            "$(jq --raw-output '.images.normal.risk_evidence.grype_raw' "${manifest}")"
+          check_hash "${RUNNER_TEMP}/release/normal.vex-grype.json" \
+            "$(jq --raw-output '.images.normal.risk_evidence.grype_vex' "${manifest}")"
+          check_hash "${RUNNER_TEMP}/release/normal.openvex.json" \
+            "$(jq --raw-output '.images.normal.risk_evidence.vendor_vex' "${manifest}")"
+          uv run --frozen python tools/check_container_risk_acceptance.py \
+            --policy security/container-risk-acceptance.json \
+            --raw-report "${RUNNER_TEMP}/release/normal.raw-grype.json" \
+            --vex-report "${RUNNER_TEMP}/release/normal.vex-grype.json" \
+            --image-kind production \
+            --image-config-digest-file "${RUNNER_TEMP}/release/normal.config-digest"
+          test "$(cat "${RUNNER_TEMP}/release/normal.config-digest")" = \
+            "$(jq --raw-output '.images.normal.config_digest' "${manifest}")"
           for mapping in \
             'ShittimChest-Prod-Stateful=Stateful' \
             'ShittimChest-Prod-Runtime=Runtime' \
@@ -1287,7 +1137,7 @@ jobs:
         run: |
           registry="${ECR_REPOSITORY_URI%%/*}"
           bash tools/install_ecr_credential_helper.sh "${registry}"
-      - name: Cryptographically reverify both image identities
+      - name: Cryptographically reverify the image identity
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           GH_TOKEN: ${{ github.token }}
@@ -1300,29 +1150,24 @@ jobs:
             '{version:"1.0",trustPolicies:[{name:"shittim-chest-release",registryScopes:[$repository],signatureVerification:{level:"strict"},trustStores:["signingAuthority:aws-signer-ts"],trustedIdentities:[$profile]}]}' \
             > "${RUNNER_TEMP}/notation-trust-policy.json"
           notation policy import --force "${RUNNER_TEMP}/notation-trust-policy.json"
-          for key in normal break_glass
+          reference=$(jq --raw-output '.images.normal.reference' "${manifest}")
+          notation verify "${reference}"
+          notation inspect --output json "${reference}" \
+            > "${RUNNER_TEMP}/normal.notation.json"
+          for predicate in \
+            https://slsa.dev/provenance/v1 \
+            https://spdx.dev/Document/v2.3 \
+            https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
           do
-            reference=$(jq --raw-output --arg key "${key}" '.images[$key].reference' \
-              "${manifest}")
-            notation verify "${reference}"
-            mode="${key//_/-}"
-            notation inspect --output json "${reference}" \
-              > "${RUNNER_TEMP}/${mode}.notation.json"
-            for predicate in \
-              https://slsa.dev/provenance/v1 \
-              https://spdx.dev/Document/v2.3 \
-              https://github.com/pitekusu/shittim-chest/attestations/vulnerability-assessment/v1
-            do
-              gh attestation verify "oci://${reference}" \
-                --bundle-from-oci \
-                --deny-self-hosted-runners \
-                --repo pitekusu/shittim-chest \
-                --signer-digest "${GITHUB_SHA}" \
-                --signer-workflow pitekusu/shittim-chest/.github/workflows/release.yml \
-                --source-digest "${GITHUB_SHA}" \
-                --source-ref refs/heads/main \
-                --predicate-type "${predicate}" >/dev/null
-            done
+            gh attestation verify "oci://${reference}" \
+              --bundle-from-oci \
+              --deny-self-hosted-runners \
+              --repo pitekusu/shittim-chest \
+              --signer-digest "${GITHUB_SHA}" \
+              --signer-workflow pitekusu/shittim-chest/.github/workflows/release.yml \
+              --source-digest "${GITHUB_SHA}" \
+              --source-ref refs/heads/main \
+              --predicate-type "${predicate}" >/dev/null
           done
       - name: Reverify AWS evidence and immutable change sets
         env:
@@ -1335,55 +1180,49 @@ jobs:
           repository="${ECR_REPOSITORY_URI##*/}"
           coverage_filter=$(jq --compact-output --null-input --arg repository "${repository}" \
             '{ecrRepositoryName:[{comparison:"EQUALS",value:$repository}]}')
-          for mode in normal break-glass
-          do
-            key="${mode//-/_}"
-            digest=$(jq --raw-output --arg key "${key}" '.images[$key].digest' "${manifest}")
-            aws ecr describe-images \
-              --repository-name "${repository}" --image-ids "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.image.json"
-            aws ecr describe-image-signing-status \
-              --repository-name "${repository}" --image-id "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.signing.json"
-            aws ecr describe-image-scan-findings \
-              --repository-name "${repository}" --image-id "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.scan.json"
-            aws inspector2 list-coverage \
-              --filter-criteria "${coverage_filter}" \
-              --output json > "${RUNNER_TEMP}/${mode}.coverage.json"
-            aws ecr list-image-referrers \
-              --repository-name "${repository}" --subject-id "imageDigest=${digest}" \
-              --output json > "${RUNNER_TEMP}/${mode}.referrers-current.json"
-            uv run --frozen python tools/release_supply_chain.py \
-              select-release-referrers \
-              --before-referrers \
-                "${RUNNER_TEMP}/release/${mode}.referrers-before.json" \
-              --after-referrers "${RUNNER_TEMP}/${mode}.referrers-current.json" \
-              --notation-inspection "${RUNNER_TEMP}/${mode}.notation.json" \
-              --profile-arn "${SIGNING_PROFILE_ARN}" \
-              --output "${RUNNER_TEMP}/${mode}.referrers.json"
-            uv run --frozen python tools/release_supply_chain.py verify-image \
-              --digest "${digest}" --coverage "${RUNNER_TEMP}/${mode}.coverage.json" \
-              --profile-arn "${SIGNING_PROFILE_ARN}" \
-              --image-details "${RUNNER_TEMP}/${mode}.image.json" \
-              --signing-status "${RUNNER_TEMP}/${mode}.signing.json" \
-              --referrers "${RUNNER_TEMP}/${mode}.referrers.json" \
-              --scan "${RUNNER_TEMP}/${mode}.scan.json" --risk-gate-passed \
-              --output "${RUNNER_TEMP}/${mode}.verification.json"
-            jq --exit-status --arg key "${key}" \
-              --slurpfile actual "${RUNNER_TEMP}/${mode}.verification.json" \
-              '.images[$key].digest == $actual[0].image_digest and
-               .images[$key].media_type == $actual[0].media_type and
-               .images[$key].referrers == $actual[0].referrers and
-               (.images[$key].scan | del(.scanned_at)) ==
-                 ($actual[0].scan | del(.scanned_at)) and
-               .images[$key].signing_profile_arn == $actual[0].signing_profile_arn' \
-              "${manifest}" >/dev/null
-          done
+          digest=$(jq --raw-output '.images.normal.digest' "${manifest}")
+          aws ecr describe-images \
+            --repository-name "${repository}" --image-ids "imageDigest=${digest}" \
+            --output json > "${RUNNER_TEMP}/normal.image.json"
+          aws ecr describe-image-signing-status \
+            --repository-name "${repository}" --image-id "imageDigest=${digest}" \
+            --output json > "${RUNNER_TEMP}/normal.signing.json"
+          aws ecr describe-image-scan-findings \
+            --repository-name "${repository}" --image-id "imageDigest=${digest}" \
+            --output json > "${RUNNER_TEMP}/normal.scan.json"
+          aws inspector2 list-coverage \
+            --filter-criteria "${coverage_filter}" \
+            --output json > "${RUNNER_TEMP}/normal.coverage.json"
+          aws ecr list-image-referrers \
+            --repository-name "${repository}" --subject-id "imageDigest=${digest}" \
+            --output json > "${RUNNER_TEMP}/normal.referrers-current.json"
+          uv run --frozen python tools/release_supply_chain.py \
+            select-release-referrers \
+            --before-referrers "${RUNNER_TEMP}/release/normal.referrers-before.json" \
+            --after-referrers "${RUNNER_TEMP}/normal.referrers-current.json" \
+            --notation-inspection "${RUNNER_TEMP}/normal.notation.json" \
+            --profile-arn "${SIGNING_PROFILE_ARN}" \
+            --output "${RUNNER_TEMP}/normal.referrers.json"
+          uv run --frozen python tools/release_supply_chain.py verify-image \
+            --digest "${digest}" --coverage "${RUNNER_TEMP}/normal.coverage.json" \
+            --profile-arn "${SIGNING_PROFILE_ARN}" \
+            --image-details "${RUNNER_TEMP}/normal.image.json" \
+            --signing-status "${RUNNER_TEMP}/normal.signing.json" \
+            --referrers "${RUNNER_TEMP}/normal.referrers.json" \
+            --scan "${RUNNER_TEMP}/normal.scan.json" --risk-gate-passed \
+            --output "${RUNNER_TEMP}/normal.verification.json"
+          jq --exit-status \
+            --slurpfile actual "${RUNNER_TEMP}/normal.verification.json" \
+            '.images.normal.digest == $actual[0].image_digest and
+             .images.normal.media_type == $actual[0].media_type and
+             .images.normal.referrers == $actual[0].referrers and
+             (.images.normal.scan | del(.scanned_at)) ==
+               ($actual[0].scan | del(.scanned_at)) and
+             .images.normal.signing_profile_arn == $actual[0].signing_profile_arn' \
+            "${manifest}" >/dev/null
           runtime_config=$(jq --raw-output .runtime_config_parameter "${manifest}")
           runtime_config="${runtime_config##*/}"
           normal_digest=$(jq --raw-output .images.normal.digest "${manifest}")
-          break_glass_digest=$(jq --raw-output .images.break_glass.digest "${manifest}")
           bundle_key=$(jq --raw-output .lambda_bundle.key "${manifest}")
           bundle_hash=$(jq --raw-output .lambda_bundle.sha256 "${manifest}")
           bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
@@ -1402,7 +1241,6 @@ jobs:
           validate_change_set ShittimChest-Prod-Stateful "${AWS_REGION}" Stateful
           validate_change_set ShittimChest-Prod-Runtime "${AWS_REGION}" Runtime \
             --expected-parameter "RuntimeImageDigest=${normal_digest}" \
-            --expected-parameter "BreakGlassImageDigest=${break_glass_digest}" \
             --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \

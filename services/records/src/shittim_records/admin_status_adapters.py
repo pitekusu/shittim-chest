@@ -469,7 +469,7 @@ class AwsAdminStatusSource:
         )
 
     def _ecr_section(self) -> AdminStatusSection:
-        runtime_image_digest, break_glass_image_digest = self._runtime_image_digests()
+        runtime_image_digest = self._runtime_image_digest()
         repositories = self._ecr.describe_repositories(
             repositoryNames=[self._config.ecr_repository_name]
         ).get("repositories", [])
@@ -537,39 +537,34 @@ class AwsAdminStatusSource:
                 _timestamp(max(pushed_at_values)) if pushed_at_values else None,
             ),
         ]
-        missing = False
-        for label, digest in (
-            ("normal", runtime_image_digest),
-            ("break_glass", break_glass_image_digest),
-        ):
-            image = by_digest.get(digest)
-            if image is None:
-                missing = True
-                metrics.extend(
-                    (
-                        _metric(f"{label}_image_present", False),
-                        _metric(f"{label}_pushed_at", None),
-                        _metric(f"{label}_last_pulled_at", None),
-                        _metric(f"{label}_size_bytes", None),
-                        _metric(f"{label}_tag_count", None),
-                        _metric(f"{label}_media_type", None),
-                    )
-                )
-                continue
+        image = by_digest.get(runtime_image_digest)
+        missing = image is None
+        if image is None:
             metrics.extend(
                 (
-                    _metric(f"{label}_image_present", True),
-                    _metric(f"{label}_pushed_at", _timestamp(image.get("imagePushedAt"))),
+                    _metric("normal_image_present", False),
+                    _metric("normal_pushed_at", None),
+                    _metric("normal_last_pulled_at", None),
+                    _metric("normal_size_bytes", None),
+                    _metric("normal_tag_count", None),
+                    _metric("normal_media_type", None),
+                )
+            )
+        else:
+            metrics.extend(
+                (
+                    _metric("normal_image_present", True),
+                    _metric("normal_pushed_at", _timestamp(image.get("imagePushedAt"))),
                     _metric(
-                        f"{label}_last_pulled_at",
+                        "normal_last_pulled_at",
                         _timestamp(image.get("lastRecordedPullTime")),
                     ),
                     _metric(
-                        f"{label}_size_bytes",
+                        "normal_size_bytes",
                         _optional_nonnegative_integer(image.get("imageSizeInBytes")),
                     ),
-                    _metric(f"{label}_tag_count", len(_image_tags(image.get("imageTags")))),
-                    _metric(f"{label}_media_type", _ecr_media_type(image)),
+                    _metric("normal_tag_count", len(_image_tags(image.get("imageTags")))),
+                    _metric("normal_media_type", _ecr_media_type(image)),
                 )
             )
         return AdminStatusSection(
@@ -583,7 +578,7 @@ class AwsAdminStatusSource:
             metrics=tuple(metrics),
         )
 
-    def _runtime_image_digests(self) -> tuple[str, str]:
+    def _runtime_image_digest(self) -> str:
         response = self._cloudformation.describe_stacks(StackName=self._config.runtime_stack_name)
         stacks = response.get("Stacks", [])
         if not isinstance(stacks, list) or len(stacks) != 1:
@@ -596,10 +591,7 @@ class AwsAdminStatusSource:
             for item in parameters
             if isinstance(item, Mapping)
         }
-        return (
-            _image_digest(values.get("RuntimeImageDigest")),
-            _image_digest(values.get("BreakGlassImageDigest")),
-        )
+        return _image_digest(values.get("RuntimeImageDigest"))
 
     def _inspector_section(self) -> AdminStatusSection:
         counts = {severity: 0 for severity in ("critical", "high", "medium", "low", "untriaged")}

@@ -750,20 +750,15 @@ function EcrMetrics({
             </tr>
           </thead>
           <tbody>
-            {[
-              { key: "normal", label: "通常版" },
-              { key: "break_glass", label: "緊急版" },
-            ].map((image) => (
-              <tr key={image.key}>
-                <th scope="row">{image.label}</th>
-                <td>{metricValue(metrics, `${image.key}_image_present`)}</td>
-                <td>{metricValue(metrics, `${image.key}_media_type`)}</td>
-                <td>{metricValue(metrics, `${image.key}_size_bytes`)}</td>
-                <td>{metricValue(metrics, `${image.key}_tag_count`)}</td>
-                <td>{metricValue(metrics, `${image.key}_pushed_at`)}</td>
-                <td>{metricValue(metrics, `${image.key}_last_pulled_at`)}</td>
-              </tr>
-            ))}
+            <tr>
+              <th scope="row">本番版</th>
+              <td>{metricValue(metrics, "normal_image_present")}</td>
+              <td>{metricValue(metrics, "normal_media_type")}</td>
+              <td>{metricValue(metrics, "normal_size_bytes")}</td>
+              <td>{metricValue(metrics, "normal_tag_count")}</td>
+              <td>{metricValue(metrics, "normal_pushed_at")}</td>
+              <td>{metricValue(metrics, "normal_last_pulled_at")}</td>
+            </tr>
           </tbody>
         </table>
       </section>

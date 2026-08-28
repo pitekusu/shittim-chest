@@ -214,12 +214,6 @@ const adminStatus = {
         { name: "normal_size_bytes", value: 66305166 },
         { name: "normal_tag_count", value: 1 },
         { name: "normal_media_type", value: "OCI_IMAGE" },
-        { name: "break_glass_image_present", value: true },
-        { name: "break_glass_pushed_at", value: "2026-08-24T14:16:36Z" },
-        { name: "break_glass_last_pulled_at", value: null },
-        { name: "break_glass_size_bytes", value: 86497848 },
-        { name: "break_glass_tag_count", value: 1 },
-        { name: "break_glass_media_type", value: "OCI_IMAGE" },
       ],
     },
     {
@@ -1662,6 +1656,8 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(page.getByRole("region", { name: "ECS構成とデプロイ状態" })).toBeVisible();
   const ecrImageTable = page.getByRole("region", { name: "承認済みECRイメージ" });
   await expect(ecrImageTable).toBeVisible();
+  await expect(ecrImageTable.getByRole("rowheader", { name: "本番版" })).toBeVisible();
+  await expect(ecrImageTable.getByRole("rowheader", { name: "緊急版" })).toHaveCount(0);
   expect(
     await ecrImageTable.evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true);

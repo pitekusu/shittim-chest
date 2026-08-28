@@ -313,7 +313,6 @@ def _validate_release(directory: Path) -> None:
         "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
         "create-storage-record: false",
         "target: production",
-        "target: break-glass",
         'SOURCE_DATE_EPOCH: "0"',
         "tools/install_aws_signer_notation.sh",
         "tools/install_ecr_credential_helper.sh",
@@ -328,15 +327,13 @@ def _validate_release(directory: Path) -> None:
         "--image-config-digest-file",
         "--config-digest-only",
         "Validate release image configs before push",
-        "Push the prevalidated images once",
+        "Push the prevalidated image once",
         "docker image inspect",
         "docker image push --quiet",
         "aws ecr batch-get-image",
         'test "${actual_config}" = "${expected_config}"',
         "steps.push-images.outputs.normal_digest",
-        "steps.push-images.outputs.break_glass_digest",
         "--normal-config-digest-file",
-        "--break-glass-config-digest-file",
         "Prepare pinned vulnerability data before image push",
         "create-cdk-assets",
         "bind-cdk-asset-checksums",
@@ -402,9 +399,7 @@ def _validate_release(directory: Path) -> None:
         "Resolve the successful same-SHA main CI run",
         "Download the same-SHA CI image evidence",
         "main-ci-image/production-image-config-digest.txt",
-        "main-ci-image/break-glass-image-config-digest.txt",
         'test "${NORMAL_CONFIG_DIGEST}" = "${ci_normal_config}"',
-        'test "${BREAK_GLASS_CONFIG_DIGEST}" = "${ci_break_glass_config}"',
     )
     if any(marker in text for marker in forbidden_same_sha_config_markers):
         raise WorkflowPolicyError(
@@ -414,9 +409,9 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release deploy and cleanup must consume the exact planned artifact"
         )
-    if text.count('SOURCE_DATE_EPOCH: "0"') != 2:
+    if text.count('SOURCE_DATE_EPOCH: "0"') != 1:
         raise WorkflowPolicyError(
-            "Release must make both image builds reproducible with the Unix epoch"
+            "Release must make the production image build reproducible with the Unix epoch"
         )
     bundle_checksum_conversion = (
         "bundle_code_sha256=$(printf '%s' \"${bundle_hash}\" | xxd -r -p | base64 -w 0)"
@@ -441,10 +436,8 @@ def _validate_release(directory: Path) -> None:
         "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
         "compression-level=6,force-compression=true"
     )
-    if text.count(reproducible_docker_exporter) != 2:
-        raise WorkflowPolicyError(
-            "Release must use the CI-identical deterministic Docker exporter for both images"
-        )
+    if text.count(reproducible_docker_exporter) != 1:
+        raise WorkflowPolicyError("Release must use the CI-identical deterministic Docker exporter")
     if "outputs: type=registry" in text:
         raise WorkflowPolicyError(
             "Release must not rebuild risk-bound images with another exporter"
@@ -452,20 +445,17 @@ def _validate_release(directory: Path) -> None:
     required_cache_scopes = (
         "cache-from: type=gha,scope=container-arm64-production",
         "cache-to: type=gha,mode=max,scope=container-arm64-production,ignore-error=true",
-        "cache-from: type=gha,scope=container-arm64-break-glass",
-        "cache-to: type=gha,mode=max,scope=container-arm64-break-glass,ignore-error=true",
     )
     if any(text.count(marker) != 1 for marker in required_cache_scopes):
         raise WorkflowPolicyError("Release must reuse the exact main CI image cache scopes")
-    if text.count("--config-digest-only") != 2:
-        raise WorkflowPolicyError("Release must validate both local configs before either push")
+    if text.count("--config-digest-only") != 1:
+        raise WorkflowPolicyError("Release must validate the local config before push")
     release_risk_block = _workflow_step_block(
         text, "Apply signed vendor VEX and the time-bounded risk policy"
     )
     required_fixable_gate = (
         'GRYPE_DB_AUTO_UPDATE: "false"',
-        "for mode in normal break-glass",
-        '--name "${mode}-image-actionable"',
+        '--name "normal-image-actionable"',
         "--only-fixed",
         "--fail-on high || fixable_status=$?",
         'if [ "${fixable_status}" -ne 0 ]',
@@ -473,16 +463,13 @@ def _validate_release(directory: Path) -> None:
     )
     if any(marker not in release_risk_block for marker in required_fixable_gate):
         raise WorkflowPolicyError(
-            "Release must gate both rebuilt images on fixable High/Critical findings"
+            "Release must gate the rebuilt image on fixable High/Critical findings"
         )
-    if text.count("docker image push --quiet") != 2:
-        raise WorkflowPolicyError("Release must push each prevalidated loaded image exactly once")
-    if re.search(r"steps\.build-(?:normal|break-glass)\.outputs\.digest", text):
+    if text.count("docker image push --quiet") != 1:
+        raise WorkflowPolicyError("Release must push the prevalidated loaded image exactly once")
+    if "steps.build-normal.outputs.digest" in text:
         raise WorkflowPolicyError("Release must use only registry-confirmed manifest digests")
-    if (
-        text.count("steps.push-images.outputs.normal_digest") != 4
-        or text.count("steps.push-images.outputs.break_glass_digest") != 4
-    ):
+    if text.count("steps.push-images.outputs.normal_digest") != 4:
         raise WorkflowPolicyError(
             "Release manifest, evidence, and attestations must share registry-confirmed digests"
         )
@@ -504,7 +491,7 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Release must revalidate downloaded CDK templates at their preserved artifact paths"
         )
-    if text.count('--slurpfile actual "${RUNNER_TEMP}/${mode}.verification.json"') != 1:
+    if text.count('--slurpfile actual "${RUNNER_TEMP}/normal.verification.json"') != 1:
         raise WorkflowPolicyError(
             "Release must load the regenerated image verification document before comparison"
         )
@@ -512,16 +499,16 @@ def _validate_release(directory: Path) -> None:
         text, "Reverify AWS evidence and immutable change sets"
     )
     forbidden_scan_comparisons = (
-        ".images[$key].scan == $actual[0].scan",
-        ".images[$key].scan.scanned_at == $actual[0].scan.scanned_at",
+        ".images.normal.scan == $actual[0].scan",
+        ".images.normal.scan.scanned_at == $actual[0].scan.scanned_at",
     )
     if any(marker in deploy_reverification for marker in forbidden_scan_comparisons):
         raise WorkflowPolicyError(
             "Release deploy must not compare mutable scan evidence across verification times"
         )
     normalized_scan_comparison = (
-        "(.images[$key].scan | del(.scanned_at)) ==\n"
-        "                 ($actual[0].scan | del(.scanned_at)) and"
+        "(.images.normal.scan | del(.scanned_at)) ==\n"
+        "               ($actual[0].scan | del(.scanned_at)) and"
     )
     if deploy_reverification.count(normalized_scan_comparison) != 1:
         raise WorkflowPolicyError(
@@ -542,7 +529,7 @@ def _validate_release(directory: Path) -> None:
         )
         build_index = text.index("name: Build and load the production image once")
         config_preflight_index = text.index("name: Validate release image configs before push")
-        push_index = text.index("name: Push the prevalidated images once")
+        push_index = text.index("name: Push the prevalidated image once")
         change_set_index = text.index("name: Prepare immutable CloudFormation change sets")
     except ValueError as error:
         raise WorkflowPolicyError("Release CDK asset publication steps are incomplete") from error
@@ -567,9 +554,6 @@ def _validate_release(directory: Path) -> None:
             "name: Require the immutable clean image build context"
         )
         buildx_index = text.index("name: Set up Buildx", vulnerability_data_index)
-        break_glass_build_index = text.index(
-            "name: Build and load the isolated break-glass image once"
-        )
     except ValueError as error:
         raise WorkflowPolicyError("Release immutable image build context is incomplete") from error
     if not (
@@ -578,7 +562,6 @@ def _validate_release(directory: Path) -> None:
         < image_context_check_index
         < buildx_index
         < build_index
-        < break_glass_build_index
         < config_preflight_index
     ):
         raise WorkflowPolicyError(
@@ -618,31 +601,21 @@ def _validate_release(directory: Path) -> None:
             "Release must reserve one dedicated image context exclusively for Docker builds"
         )
     production_build_block = _workflow_step_block(text, "Build and load the production image once")
-    break_glass_build_block = _workflow_step_block(
-        text, "Build and load the isolated break-glass image once"
-    )
     expected_context = f"context: {context_env}"
     expected_dockerfile = f"file: {context_env}/Dockerfile"
-    for block in (production_build_block, break_glass_build_block):
-        if (
-            block.count(expected_context) != 1
-            or block.count(expected_dockerfile) != 1
-            or re.search(r"(?m)^\s+context:\s*\.\s*$", block)
-        ):
-            raise WorkflowPolicyError(
-                "Release production and break-glass builds must share the immutable image context"
-            )
-        if "BUILDKIT_MULTI_PLATFORM" in block:
-            raise WorkflowPolicyError(
-                "Release Docker image exports must not request a manifest-list result"
-            )
+    if (
+        production_build_block.count(expected_context) != 1
+        or production_build_block.count(expected_dockerfile) != 1
+        or re.search(r"(?m)^\s+context:\s*\.\s*$", production_build_block)
+    ):
+        raise WorkflowPolicyError("Release production build must use the immutable image context")
+    if "BUILDKIT_MULTI_PLATFORM" in production_build_block:
+        raise WorkflowPolicyError(
+            "Release Docker image export must not request a manifest-list result"
+        )
     if production_build_block.count("no-cache-filters: builder,runtime-base") != 1:
         raise WorkflowPolicyError(
             "Release production build must regenerate the builder snapshot and final runtime stage"
-        )
-    if break_glass_build_block.count("no-cache-filters: builder,break-glass") != 1:
-        raise WorkflowPolicyError(
-            "Release break-glass build must regenerate the builder snapshot and final stage"
         )
     immutable_context_region = text[image_checkout_index:build_index]
     forbidden_context_gate = re.compile(
@@ -863,7 +836,7 @@ def _validate_release_referrer_delta(text: str) -> None:
         or text.count("--before-referrers") != 2
         or text.count("--after-referrers") != 2
         or text.count("--notation-inspection") != 2
-        or text.count('--referrers "${RUNNER_TEMP}/${mode}.referrers.json"') != 2
+        or text.count('--referrers "${RUNNER_TEMP}/normal.referrers.json"') != 2
     ):
         raise WorkflowPolicyError(
             "Release must pass only the selected current-run referrers to verify-image"
@@ -874,10 +847,10 @@ def _validate_release_referrer_delta(text: str) -> None:
             text, "Capture ACTIVE referrer baselines before attestations"
         )
         plan_verify = _workflow_step_block(
-            text, "Strictly verify both Signer identities and four referrers"
+            text, "Strictly verify the Signer identity and four referrers"
         )
         deploy_identity = _workflow_step_block(
-            text, "Cryptographically reverify both image identities"
+            text, "Cryptographically reverify the image identity"
         )
         deploy_verify = _workflow_step_block(
             text, "Reverify AWS evidence and immutable change sets"
@@ -886,31 +859,31 @@ def _validate_release_referrer_delta(text: str) -> None:
         raise WorkflowPolicyError("Release referrer delta steps are incomplete") from error
     required_baseline = (
         "aws ecr list-image-referrers",
-        '"${RUNNER_TEMP}/${mode}.referrers-before.json"',
+        '"${RUNNER_TEMP}/normal.referrers-before.json"',
     )
     required_plan = (
-        '"${RUNNER_TEMP}/${mode}.referrers-after.json"',
+        '"${RUNNER_TEMP}/normal.referrers-after.json"',
         "select-release-referrers",
-        '--before-referrers "${RUNNER_TEMP}/${mode}.referrers-before.json"',
-        '--after-referrers "${RUNNER_TEMP}/${mode}.referrers-after.json"',
-        '--notation-inspection "${RUNNER_TEMP}/${mode}.notation.json"',
+        '--before-referrers "${RUNNER_TEMP}/normal.referrers-before.json"',
+        '--after-referrers "${RUNNER_TEMP}/normal.referrers-after.json"',
+        '--notation-inspection "${RUNNER_TEMP}/normal.notation.json"',
         '--profile-arn "${SIGNING_PROFILE_ARN}"',
-        '--output "${RUNNER_TEMP}/${mode}.referrers.json"',
-        '--referrers "${RUNNER_TEMP}/${mode}.referrers.json"',
+        '--output "${RUNNER_TEMP}/normal.referrers.json"',
+        '--referrers "${RUNNER_TEMP}/normal.referrers.json"',
     )
     required_deploy_identity = (
         'notation inspect --output json "${reference}"',
-        '> "${RUNNER_TEMP}/${mode}.notation.json"',
+        '> "${RUNNER_TEMP}/normal.notation.json"',
     )
     required_deploy = (
-        '"${RUNNER_TEMP}/${mode}.referrers-current.json"',
+        '"${RUNNER_TEMP}/normal.referrers-current.json"',
         "select-release-referrers",
-        '"${RUNNER_TEMP}/release/${mode}.referrers-before.json"',
-        '--after-referrers "${RUNNER_TEMP}/${mode}.referrers-current.json"',
-        '--notation-inspection "${RUNNER_TEMP}/${mode}.notation.json"',
+        '"${RUNNER_TEMP}/release/normal.referrers-before.json"',
+        '--after-referrers "${RUNNER_TEMP}/normal.referrers-current.json"',
+        '--notation-inspection "${RUNNER_TEMP}/normal.notation.json"',
         '--profile-arn "${SIGNING_PROFILE_ARN}"',
-        '--output "${RUNNER_TEMP}/${mode}.referrers.json"',
-        '--referrers "${RUNNER_TEMP}/${mode}.referrers.json"',
+        '--output "${RUNNER_TEMP}/normal.referrers.json"',
+        '--referrers "${RUNNER_TEMP}/normal.referrers.json"',
     )
     if any(marker not in baseline for marker in required_baseline):
         raise WorkflowPolicyError("Release pre-attestation referrer baseline is incomplete")
@@ -925,8 +898,8 @@ def _validate_release_referrer_delta(text: str) -> None:
         wait_index = text.index("name: Wait for managed signing and enhanced ECR scans")
         baseline_index = text.index("name: Capture ACTIVE referrer baselines before attestations")
         first_attestation_index = text.index("name: Attest normal image provenance")
-        last_attestation_index = text.index("name: Attest break-glass vulnerability assessment")
-        verify_index = text.index("name: Strictly verify both Signer identities and four referrers")
+        last_attestation_index = text.index("name: Attest normal image vulnerability assessment")
+        verify_index = text.index("name: Strictly verify the Signer identity and four referrers")
     except ValueError as error:
         raise WorkflowPolicyError("Release referrer delta step order is incomplete") from error
     if not (
@@ -947,13 +920,10 @@ def _validate_release_attestation_summary(text: str) -> None:
         ("Attest normal image provenance", "attest_normal_provenance"),
         ("Attest normal image SBOM", "attest_normal_sbom"),
         ("Attest normal image vulnerability assessment", "attest_normal_vulnerability"),
-        ("Attest break-glass image provenance", "attest_break_glass_provenance"),
-        ("Attest break-glass image SBOM", "attest_break_glass_sbom"),
-        ("Attest break-glass vulnerability assessment", "attest_break_glass_vulnerability"),
         ("Attest the release manifest", "attest_release_manifest"),
     )
     if text.count(f"uses: {action}") != len(attestation_steps):
-        raise WorkflowPolicyError("Release must create exactly seven attestations")
+        raise WorkflowPolicyError("Release must create exactly four attestations")
     try:
         for name, step_id in attestation_steps:
             block = _workflow_step_block(text, name)
@@ -971,9 +941,6 @@ def _validate_release_attestation_summary(text: str) -> None:
         "steps.attest_normal_provenance.outputs.attestation-id",
         "steps.attest_normal_sbom.outputs.attestation-id",
         "steps.attest_normal_vulnerability.outputs.attestation-id",
-        "steps.attest_break_glass_provenance.outputs.attestation-id",
-        "steps.attest_break_glass_sbom.outputs.attestation-id",
-        "steps.attest_break_glass_vulnerability.outputs.attestation-id",
         "steps.attest_release_manifest.outputs.attestation-id",
         '[[ ! "${attestation_id}" =~ ^[0-9]+$ ]]',
         "https://github.com/pitek&#117;su/shittim-chest/attestations/",
@@ -993,55 +960,37 @@ def _validate_ci_container_risk(directory: Path) -> None:
     text = path.read_text(encoding="utf-8")
     required = (
         "name: Build and load the production image",
-        "name: Build and load the break-glass image for risk validation",
         "steps.build-production.outputs.imageid",
-        "steps.build-break-glass.outputs.imageid",
-        "break-glass-image-sbom-arm64.spdx.json",
-        "dhi-python-builder.openvex.json",
         "--image-kind production",
-        "--image-kind break-glass",
         "--image-config-digest-file",
     )
     for marker in required:
         if marker not in text:
             raise WorkflowPolicyError(f"CI container risk gate lacks required marker: {marker}")
-    if text.count('SOURCE_DATE_EPOCH: "0"') != 3:
-        raise WorkflowPolicyError(
-            "CI must make production, fault, and break-glass image builds reproducible"
-        )
+    if text.count('SOURCE_DATE_EPOCH: "0"') != 2:
+        raise WorkflowPolicyError("CI must make production and fault image builds reproducible")
     reproducible_docker_exporter = (
         "outputs: type=docker,rewrite-timestamp=true,compression=gzip,"
         "compression-level=6,force-compression=true"
     )
-    if text.count(reproducible_docker_exporter) != 3:
+    if text.count(reproducible_docker_exporter) != 2:
         raise WorkflowPolicyError(
-            "CI must deterministically compress all three timestamp-normalized image exports"
+            "CI must deterministically compress both timestamp-normalized image exports"
         )
     production_build_block = _workflow_step_block(text, "Build and load the production image")
     fault_build_block = _workflow_step_block(text, "Build and load the CI-only fault image")
-    break_glass_build_block = _workflow_step_block(
-        text, "Build and load the break-glass image for risk validation"
-    )
-    for block in (production_build_block, fault_build_block, break_glass_build_block):
+    for block in (production_build_block, fault_build_block):
         if "BUILDKIT_MULTI_PLATFORM" in block:
             raise WorkflowPolicyError(
                 "CI Docker image exports must not request a manifest-list result"
             )
-    rootfs_evidence = (
-        "production-image-rootfs-diffids.json",
-        "break-glass-image-rootfs-diffids.json",
-    )
-    if any(text.count(name) != 2 for name in rootfs_evidence):
+    if text.count("production-image-rootfs-diffids.json") != 2:
         raise WorkflowPolicyError(
-            "CI must record and retain both risk-bound image rootfs diff ID lists"
+            "CI must record and retain the risk-bound image rootfs diff ID list"
         )
     if production_build_block.count("no-cache-filters: builder,runtime-base") != 1:
         raise WorkflowPolicyError(
             "CI production build must regenerate the builder snapshot and final runtime stage"
-        )
-    if break_glass_build_block.count("no-cache-filters: builder,break-glass") != 1:
-        raise WorkflowPolicyError(
-            "CI break-glass build must regenerate the builder snapshot and final stage"
         )
     try:
         buildx_index = text.index("name: Set up Docker Buildx")

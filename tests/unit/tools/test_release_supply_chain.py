@@ -28,9 +28,8 @@ from tools.release_supply_chain import (
 )
 
 DIGEST = "sha256:" + "a" * 64
-BREAK_GLASS_DIGEST = "sha256:" + "e" * 64
+OTHER_DIGEST = "sha256:" + "e" * 64
 CONFIG_DIGEST = "sha256:" + "1" * 64
-BREAK_GLASS_CONFIG_DIGEST = "sha256:" + "2" * 64
 PROFILE = "arn:aws:signer:ap-northeast-1:000000000000:/signing-profiles/shittim_chest_ecr"
 REPOSITORY = "000000000000.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest"
 IMAGE_DETAILS = {
@@ -931,7 +930,7 @@ def test_uses_successful_inspector_coverage_timestamp_for_zero_findings() -> Non
 @pytest.mark.parametrize(
     ("coverage", "message"),
     [
-        (inspector_coverage(digest=BREAK_GLASS_DIGEST), "does not resolve"),
+        (inspector_coverage(digest=OTHER_DIGEST), "does not resolve"),
         (inspector_coverage(reason="PENDING_INITIAL_SCAN"), "is not successful"),
         ({"coveredResources": []}, "does not resolve"),
     ],
@@ -967,35 +966,13 @@ def manifest(tmp_path: Path) -> dict[str, object]:
         referrers=referrers,
         scan=scan,
     )
-    break_glass_verification = verify_image_evidence(
-        digest=BREAK_GLASS_DIGEST,
-        image_details={
-            "imageDetails": [
-                {
-                    "imageDigest": BREAK_GLASS_DIGEST,
-                    "imageManifestMediaType": "application/vnd.oci.image.index.v1+json",
-                }
-            ]
-        },
-        profile_arn=PROFILE,
-        signing_status=signing,
-        referrers=referrers,
-        scan=scan,
-    )
     normal_sbom = tmp_path / "normal.spdx.json"
     normal_sbom.write_text('{"spdxVersion":"SPDX-2.3"}\n', encoding="utf-8")
-    break_glass_sbom = tmp_path / "break-glass.spdx.json"
-    break_glass_sbom.write_text(
-        '{"name":"break-glass","spdxVersion":"SPDX-2.3"}\n', encoding="utf-8"
-    )
-    risk_paths: dict[str, dict[str, Path]] = {}
-    for mode in ("normal", "break-glass"):
-        mode_paths: dict[str, Path] = {}
-        for key in ("grype_raw", "grype_vex", "vendor_vex"):
-            path = tmp_path / f"{mode}-{key}.json"
-            path.write_text(f'{{"kind":"{key}","mode":"{mode}"}}\n', encoding="utf-8")
-            mode_paths[key] = path
-        risk_paths[mode] = mode_paths
+    risk_paths: dict[str, Path] = {}
+    for key in ("grype_raw", "grype_vex", "vendor_vex"):
+        path = tmp_path / f"normal-{key}.json"
+        path.write_text(f'{{"kind":"{key}","mode":"normal"}}\n', encoding="utf-8")
+        risk_paths[key] = path
     stacks = (
         "ShittimChest-Prod-Stateful",
         "ShittimChest-Prod-Runtime",
@@ -1010,10 +987,6 @@ def manifest(tmp_path: Path) -> dict[str, object]:
             f"changeSet/release-{stack}/00000000-0000-0000-0000-000000000000"
         )
     return create_manifest(
-        break_glass_config_digest=BREAK_GLASS_CONFIG_DIGEST,
-        break_glass_risk_evidence=risk_paths["break-glass"],
-        break_glass_sbom_path=break_glass_sbom,
-        break_glass_verification=break_glass_verification,
         cdk_assets=cdk_assets(),
         change_sets=changes,
         commit_sha="b" * 40,
@@ -1024,7 +997,7 @@ def manifest(tmp_path: Path) -> dict[str, object]:
         },
         normal_config_digest=CONFIG_DIGEST,
         normal_sbom_path=normal_sbom,
-        normal_risk_evidence=risk_paths["normal"],
+        normal_risk_evidence=risk_paths,
         normal_verification=verification,
         repository_uri=REPOSITORY,
         runtime_config_parameter="/shittim-chest/production/runtime/v0001",
@@ -1056,10 +1029,9 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
         "scan": None,
         "signing_profile_arn": None,
     }
-    assert images["break_glass"]["digest"] == BREAK_GLASS_DIGEST
-    assert images["break_glass"]["config_digest"] == BREAK_GLASS_CONFIG_DIGEST
+    assert tuple(images) == ("normal",)
     assert value["commit_sha"] == "b" * 40
-    assert value["schema_version"] == 3
+    assert value["schema_version"] == 4
     assert value["cdk_assets"] == cdk_assets()
 
 
@@ -1067,6 +1039,10 @@ def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
     "mutation",
     [
         lambda value: value.update(commit_sha="wrong"),
+        lambda value: value.update(schema_version=3),
+        lambda value: value["images"].update(  # type: ignore[index]
+            {"break_glass": value["images"]["normal"]}  # type: ignore[index]
+        ),
         lambda value: value["images"]["normal"].update(  # type: ignore[index]
             reference=f"{REPOSITORY}:latest"
         ),
@@ -1089,17 +1065,15 @@ def test_manifest_validation_rejects_tampering(
         validate_manifest(value)
 
 
-def test_runtime_template_requires_both_exact_digest_images() -> None:
+def test_runtime_template_requires_only_the_exact_production_digest_image() -> None:
     value = {
         "Resources": {
             "Normal": task("application", f"{REPOSITORY}@{DIGEST}"),
-            "BreakGlass": task("break-glass-application", f"{REPOSITORY}@{BREAK_GLASS_DIGEST}"),
         }
     }
 
     validate_runtime_template(
         value,
-        break_glass_digest=BREAK_GLASS_DIGEST,
         normal_digest=DIGEST,
         repository_uri=REPOSITORY,
     )
@@ -1108,7 +1082,17 @@ def test_runtime_template_requires_both_exact_digest_images() -> None:
     with pytest.raises(ValueError, match="exact release digest"):
         validate_runtime_template(
             value,
-            break_glass_digest=BREAK_GLASS_DIGEST,
+            normal_digest=DIGEST,
+            repository_uri=REPOSITORY,
+        )
+
+    value["Resources"]["Normal"] = task("application", f"{REPOSITORY}@{DIGEST}")
+    value["Resources"]["RemovedEmergencyTask"] = task(
+        "break-glass-application", f"{REPOSITORY}@{OTHER_DIGEST}"
+    )
+    with pytest.raises(ValueError, match="exact release digest"):
+        validate_runtime_template(
+            value,
             normal_digest=DIGEST,
             repository_uri=REPOSITORY,
         )

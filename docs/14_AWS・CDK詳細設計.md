@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-15
+updated: 2026-08-28
 ---
 
 # AWS・CDK詳細設計
@@ -30,7 +30,7 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 - DynamoDBはon-demand、PITR 35日、deletion protection、RETAINとする。
 - DebateTableは`NEW_IMAGE` Streamを公開し、Records Projectorは後続Stackで購読する。source tableの
   key、index、retentionは変更しない。
-- ECRはimmutable tag、enhanced continuous scan、暗号化を有効にする。
+- ECRはproduction imageのimmutable tag、enhanced continuous scan、暗号化を有効にする。
 - lifecycleはtagged imageの最新3世代、untagged imageの最新3世代を残す。
 - AWS Signer／Notation用profileとECR referrerをrelease supply chainに用いる。
 
@@ -39,10 +39,10 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 - VPCはpublic subnetのみ、NAT Gateway 0、taskへpublic IPv4を付ける。
 - task security groupはingress 0、HTTPS egressだけを許可する。
 - ECS serviceはARM64 On-Demand Fargate、512 CPU units、1,024 MiB、通常desired 0、最大1 task。
-- normal taskはread-only root filesystem、tmpfs、non-root userを使う。
-- break-glass taskはECS Execに必要なwrite／root境界を明示して別targetとする。
+- production taskはread-only root filesystem、tmpfs、non-root userを使う。
+- ECS Exec用の専用image／task definitionとwrite／root境界はprovisionしない。
 - `stopTimeout=120`秒、Container Insightsは個人規模の費用を考慮して無効とする。
-- normal／break-glass imageは同一source SHAから別targetとしてbuildし、digestでtask definitionへ固定する。
+- production imageはsource SHAからcanonical ARM64条件でbuildし、digestでtask definitionへ固定する。
 
 ## 4. API and Lambda
 

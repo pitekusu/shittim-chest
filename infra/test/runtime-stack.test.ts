@@ -46,11 +46,7 @@ describe("RuntimeStack", () => {
       Description: "Approved production image manifest digest",
       Type: "String",
     });
-    expect(parameters.BreakGlassImageDigest).toEqual({
-      AllowedPattern: "^sha256:[0-9a-f]{64}$",
-      Description: "Approved break-glass image manifest digest",
-      Type: "String",
-    });
+    expect(parameters.BreakGlassImageDigest).toBeUndefined();
     expect(parameters.RuntimeConfigVersion).toMatchObject({
       AllowedPattern: "^v[0-9]{4}$",
       Default: "v0004",
@@ -103,6 +99,7 @@ describe("RuntimeStack", () => {
     const { template } = synthesize();
 
     template.hasResourceProperties("AWS::ECS::Cluster", {
+      Configuration: Match.absent(),
       ClusterSettings: [{ Name: "containerInsights", Value: "disabled" }],
     });
     template.hasResourceProperties("AWS::ECS::Service", {
@@ -462,11 +459,11 @@ describe("RuntimeStack", () => {
     expect(schedule?.DependsOn).toContain(invokePolicyLogicalId);
   });
 
-  test("uses digest-only images and hardened normal and break-glass task definitions", () => {
+  test("uses one digest-only hardened production task definition", () => {
     const { template } = synthesize();
 
     const taskDefinitions = Object.values(template.findResources("AWS::ECS::TaskDefinition"));
-    expect(taskDefinitions).toHaveLength(2);
+    expect(taskDefinitions).toHaveLength(1);
     for (const task of taskDefinitions) {
       const properties = task.Properties as Record<string, unknown>;
       expect(properties).toMatchObject({
@@ -519,12 +516,10 @@ describe("RuntimeStack", () => {
       });
     }
 
-    const normal = taskDefinitions.find((task) => task.Properties.Family.endsWith("-normal"));
-    const breakGlass = taskDefinitions.find((task) =>
-      task.Properties.Family.endsWith("-break-glass"),
-    );
+    const normal = taskDefinitions[0];
+    expect(normal?.Properties.Family).toBe("shittim-chest-production-normal");
+    expect(normal?.Properties.ContainerDefinitions[0].Name).toBe("application");
     expect(normal?.Properties.ContainerDefinitions[0].ReadonlyRootFilesystem).toBe(true);
-    expect(breakGlass?.Properties.ContainerDefinitions[0].ReadonlyRootFilesystem).toBe(false);
   });
 
   test("injects private runtime values from versioned SSM paths", () => {
@@ -562,7 +557,7 @@ describe("RuntimeStack", () => {
     });
   });
 
-  test("keeps normal task permissions bounded and break-glass access isolated", () => {
+  test("keeps production task permissions bounded without interactive access", () => {
     const { template } = synthesize();
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
     const execution = policies.find((policy) =>
@@ -570,9 +565,6 @@ describe("RuntimeStack", () => {
     );
     const normal = policies.find((policy) =>
       JSON.stringify(policy.Properties.Roles).includes("NormalTaskRole"),
-    );
-    const breakGlass = policies.find((policy) =>
-      JSON.stringify(policy.Properties.Roles).includes("BreakGlassTaskRole"),
     );
 
     expect(JSON.stringify(execution)).toContain("ssm:GetParameters");
@@ -595,20 +587,18 @@ describe("RuntimeStack", () => {
     expect(JSON.stringify(normal)).not.toContain("ssm:GetParametersByPath");
     expect(JSON.stringify(normal)).not.toContain("ssm:DescribeParameters");
     expect(JSON.stringify(normal)).not.toContain("ssmmessages:");
-    for (const policy of [normal, breakGlass]) {
-      const invokeStatements = policy?.Properties.PolicyDocument.Statement.filter(
-        (statement: { Action?: string | string[] }) =>
-          [statement.Action].flat().includes("lambda:InvokeFunction"),
-      );
-      expect(invokeStatements).toHaveLength(1);
-      expect(invokeStatements?.[0].Action).toBe("lambda:InvokeFunction");
-      expect(JSON.stringify(invokeStatements?.[0].Resource)).toContain(
-        "shittim-chest-production-discord-status-publisher",
-      );
-      expect(invokeStatements?.[0].Resource).not.toBe("*");
-    }
-    expect(JSON.stringify(breakGlass)).toContain("ssmmessages:OpenControlChannel");
-    expect(JSON.stringify(breakGlass)).toContain("logs:PutLogEvents");
+    const invokeStatements = normal?.Properties.PolicyDocument.Statement.filter(
+      (statement: { Action?: string | string[] }) =>
+        [statement.Action].flat().includes("lambda:InvokeFunction"),
+    );
+    expect(invokeStatements).toHaveLength(1);
+    expect(invokeStatements?.[0].Action).toBe("lambda:InvokeFunction");
+    expect(JSON.stringify(invokeStatements?.[0].Resource)).toContain(
+      "shittim-chest-production-discord-status-publisher",
+    );
+    expect(invokeStatements?.[0].Resource).not.toBe("*");
+    expect(JSON.stringify(policies)).not.toContain("BreakGlassTaskRole");
+    expect(JSON.stringify(policies)).not.toContain("ssmmessages:");
   });
 
   test("grants each application Lambda only its underlying DynamoDB operations", () => {
@@ -716,23 +706,6 @@ describe("RuntimeStack", () => {
           "QUOTA#GUILD#*",
         ],
       ],
-      [
-        "BreakGlassTaskRole",
-        [
-          "CONTROL#DEBATE",
-          "CONTROL#GLOBAL",
-          "CONTROL#INGRESS",
-          "CONTROL#INGRESS#ACTIVE",
-          "CONTROL#OUTBOX",
-          "CONTROL#PANEL_REFRESH",
-          "CONTROL#RUNTIME",
-          "DEBATE#*",
-          "INGRESS_OPERATION#*",
-          "INGRESS_SEMANTIC_OPERATION#*",
-          "OPERATION#*",
-          "QUOTA#GUILD#*",
-        ],
-      ],
     ]);
     const expectedReadsByRole = new Map([
       [
@@ -763,23 +736,6 @@ describe("RuntimeStack", () => {
       ],
       [
         "NormalTaskRole",
-        [
-          "CONTROL#DEBATE",
-          "CONTROL#GLOBAL",
-          "CONTROL#INGRESS",
-          "CONTROL#INGRESS#ACTIVE",
-          "CONTROL#OUTBOX",
-          "CONTROL#PANEL_REFRESH",
-          "CONTROL#RUNTIME",
-          "DEBATE#*",
-          "INGRESS_OPERATION#*",
-          "INGRESS_SEMANTIC_OPERATION#*",
-          "OPERATION#*",
-          "QUOTA#GUILD#*",
-        ],
-      ],
-      [
-        "BreakGlassTaskRole",
         [
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
@@ -837,35 +793,13 @@ describe("RuntimeStack", () => {
           "QUOTA#GUILD#*",
         ],
       ],
-      [
-        "BreakGlassTaskRole",
-        [
-          "CONTROL#DEPLOYMENT",
-          "CONTROL#DEBATE",
-          "CONTROL#GLOBAL",
-          "CONTROL#INGRESS",
-          "CONTROL#INGRESS#ACTIVE",
-          "CONTROL#OUTBOX",
-          "CONTROL#PANEL_REFRESH",
-          "CONTROL#RUNTIME",
-          "DEBATE#*",
-          "INGRESS_OPERATION#*",
-          "INGRESS_SEMANTIC_OPERATION#*",
-          "OPERATION#*",
-          "QUOTA#GUILD#*",
-        ],
-      ],
     ]);
     const writeActions = new Set([
       "dynamodb:DeleteItem",
       "dynamodb:PutItem",
       "dynamodb:UpdateItem",
     ]);
-    const queryRoleIds = new Set([
-      "RuntimeReconcilerFunctionRole",
-      "NormalTaskRole",
-      "BreakGlassTaskRole",
-    ]);
+    const queryRoleIds = new Set(["RuntimeReconcilerFunctionRole", "NormalTaskRole"]);
     for (const [roleId, expectedPartitionPatterns] of expectedPartitionsByRole) {
       const policy = policies.find((resource) =>
         JSON.stringify(resource.Properties.Roles).includes(roleId),
@@ -938,18 +872,16 @@ describe("RuntimeStack", () => {
   test("retains logs after normal deletion but removes them after a failed first create", () => {
     const { template } = synthesize();
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 7);
-    for (const suffix of ["application", "break-glass-exec"]) {
-      template.hasResource("AWS::Logs::LogGroup", {
-        DeletionPolicy: "RetainExceptOnCreate",
-        UpdateReplacePolicy: "Retain",
-        Properties: {
-          DataProtectionPolicy: Match.anyValue(),
-          LogGroupName: `/ecs/shittim-chest/production/${suffix}`,
-          RetentionInDays: 90,
-        },
-      });
-    }
+    template.resourceCountIs("AWS::Logs::LogGroup", 6);
+    template.hasResource("AWS::Logs::LogGroup", {
+      DeletionPolicy: "RetainExceptOnCreate",
+      UpdateReplacePolicy: "Retain",
+      Properties: {
+        DataProtectionPolicy: Match.anyValue(),
+        LogGroupName: "/ecs/shittim-chest/production/application",
+        RetentionInDays: 90,
+      },
+    });
     for (const resource of Object.values(
       template.findResources("AWS::Logs::LogGroup"),
     )) {

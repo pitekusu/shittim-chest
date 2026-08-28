@@ -16,7 +16,7 @@ from tools.check_container_risk_acceptance import (
 )
 
 DIGEST = "sha256:" + "a" * 64
-BREAK_GLASS_DIGEST = "sha256:" + "b" * 64
+SECOND_DIGEST = "sha256:" + "b" * 64
 OTHER_DIGEST = "sha256:" + "c" * 64
 ALTERNATE_DIGEST = "sha256:" + "d" * 64
 TODAY = dt.date(2026, 7, 22)
@@ -27,7 +27,7 @@ def _write_policy(
     path: Path,
     acceptances: list[dict[str, object]],
     *,
-    schema_version: int = 5,
+    schema_version: int = 6,
     extra_root: dict[str, object] | None = None,
 ) -> Path:
     root: dict[str, object] = {
@@ -92,7 +92,7 @@ def test_config_digest_preflight_accepts_the_exact_loaded_image(tmp_path: Path) 
     )
 
 
-def test_schema_v5_empty_policy_accepts_any_valid_production_digest(tmp_path: Path) -> None:
+def test_schema_v6_empty_policy_accepts_any_valid_production_digest(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 
     assert (
@@ -120,18 +120,16 @@ def test_empty_policy_has_no_static_production_digest_baseline(tmp_path: Path) -
     )
 
 
-def test_empty_policy_has_no_static_break_glass_digest_baseline(tmp_path: Path) -> None:
+def test_removed_break_glass_image_kind_is_rejected(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 
-    assert (
+    with pytest.raises(ValueError, match="image kind is unsupported"):
         validate_config_digest_bindings(
             policy,
             image_kind="break-glass",
             image_config_digest=OTHER_DIGEST,
             today=TODAY,
         )
-        == 0
-    )
 
 
 def test_policy_rejects_removed_static_baseline_field(tmp_path: Path) -> None:
@@ -245,7 +243,7 @@ def test_full_validation_with_empty_acceptances_has_no_static_baseline(tmp_path:
                 "image_config_digests": {
                     "production": [
                         DIGEST,
-                        BREAK_GLASS_DIGEST,
+                        SECOND_DIGEST,
                         OTHER_DIGEST,
                         ALTERNATE_DIGEST,
                         "sha256:" + "e" * 64,
@@ -255,6 +253,7 @@ def test_full_validation_with_empty_acceptances_has_no_static_baseline(tmp_path:
             "at most 4",
         ),
         ({"image_config_digests": {"unknown": [DIGEST]}}, "unsupported"),
+        ({"image_config_digests": {"break-glass": [DIGEST]}}, "unsupported"),
         ({"expires_on": "2026-07-21"}, "expired"),
         ({"expires_on": "2026-12-31"}, "within 90 days"),
         ({"status": "not_affected"}, "must not claim"),
@@ -304,37 +303,6 @@ def test_verified_vendor_vex_suppression_needs_no_local_acceptance(tmp_path: Pat
         image_config_digest=DIGEST,
         today=TODAY,
     ) == (1, 0)
-
-
-def test_acceptances_are_scoped_to_one_image_kind(tmp_path: Path) -> None:
-    policy = _write_policy(
-        tmp_path / "policy.json",
-        [
-            _acceptance(
-                image_config_digests={
-                    "production": [DIGEST],
-                    "break-glass": [BREAK_GLASS_DIGEST],
-                }
-            ),
-        ],
-    )
-
-    assert validate_acceptances(
-        policy,
-        findings=(FINDING,),
-        vendor_suppressions=frozenset(),
-        image_kind="production",
-        image_config_digest=DIGEST,
-        today=TODAY,
-    ) == (0, 1)
-    assert validate_acceptances(
-        policy,
-        findings=(FINDING,),
-        vendor_suppressions=frozenset(),
-        image_kind="break-glass",
-        image_config_digest=BREAK_GLASS_DIGEST,
-        today=TODAY,
-    ) == (0, 1)
 
 
 def test_only_explicit_vex_rules_are_recognized(tmp_path: Path) -> None:

@@ -63,12 +63,6 @@ const statusResponse: AdminStatusResponse = {
         { name: "normal_size_bytes", value: 52428800 },
         { name: "normal_tag_count", value: 1 },
         { name: "normal_media_type", value: "OCI_IMAGE" },
-        { name: "break_glass_image_present", value: true },
-        { name: "break_glass_pushed_at", value: "2026-08-24T02:00:00Z" },
-        { name: "break_glass_last_pulled_at", value: null },
-        { name: "break_glass_size_bytes", value: 52428800 },
-        { name: "break_glass_tag_count", value: 1 },
-        { name: "break_glass_media_type", value: "DOCKER_V2" },
       ],
     },
     {

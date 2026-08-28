@@ -184,8 +184,6 @@ def _environment(
 def _run(
     environment: dict[str, str],
     output_directory: Path,
-    *,
-    mode: str = "normal",
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - executable and script are fixed trusted paths.
         [
@@ -199,8 +197,6 @@ def _run(
             PROFILE,
             "--output-dir",
             str(output_directory),
-            "--mode",
-            mode,
         ],
         check=False,
         capture_output=True,
@@ -216,7 +212,7 @@ def _operations(environment: dict[str, str]) -> list[str]:
 def test_pending_evidence_becomes_ready_without_logging_content(tmp_path: Path) -> None:
     environment, output_directory = _environment(tmp_path, "pending-ready")
 
-    result = _run(environment, output_directory, mode="break-glass")
+    result = _run(environment, output_directory)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
@@ -226,7 +222,7 @@ def test_pending_evidence_becomes_ready_without_logging_content(tmp_path: Path) 
     assert _operations(environment).count("ecr/describe-image-scan-findings") == 3
     assert _operations(environment).count("inspector2/list-coverage") == 3
     for kind in ("image", "signing", "scan", "coverage"):
-        evidence = output_directory / f"break-glass.{kind}.json"
+        evidence = output_directory / f"normal.{kind}.json"
         assert isinstance(json.loads(evidence.read_text(encoding="utf-8")), dict)
 
 
