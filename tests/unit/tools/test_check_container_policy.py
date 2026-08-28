@@ -25,7 +25,7 @@ _UV_FROM = re.compile(
     re.MULTILINE,
 )
 _RUNTIME_FROM = re.compile(
-    r"^FROM dhi\.io/python:3\.14\.6-debian13@"
+    r"^FROM dhi\.io/python:3\.14\.7-debian13@"
     r"(?P<digest>sha256:[0-9a-f]{64}) AS runtime-base$",
     re.MULTILINE,
 )
@@ -36,11 +36,11 @@ def test_repository_container_policy_matches_dockerfile() -> None:
 
     assert policy.identity.user_spec == "65532:65532"
     assert policy.heartbeat_tmpfs.path == "/tmp/shittim-chest"  # noqa: S108
-    assert policy.builder_tag == "3.14.6-debian13-dev"
-    assert policy.runtime_tag == "3.14.6-debian13"
+    assert policy.builder_tag == "3.14.7-debian13-dev"
+    assert policy.runtime_tag == "3.14.7-debian13"
     validate_dockerfile(policy, DEFAULT_DOCKERFILE_PATH)
     validate_dockerignore(DEFAULT_DOCKERIGNORE_PATH)
-    assert dockerfile_stage_reference("runtime").startswith("dhi.io/python:3.14.6-debian13@")
+    assert dockerfile_stage_reference("runtime").startswith("dhi.io/python:3.14.7-debian13@")
 
 
 def test_policy_rejects_legacy_runtime_identity(tmp_path: Path) -> None:
@@ -58,11 +58,11 @@ def test_policy_rejects_legacy_schema_with_digests(tmp_path: Path) -> None:
         "schema_version": 1,
         "dhi": {
             "builder": {
-                "reference": "dhi.io/python:3.14.6-debian13-dev@sha256:" + ("a" * 64),
+                "reference": "dhi.io/python:3.14.7-debian13-dev@sha256:" + ("a" * 64),
                 "arm64_manifest_digest": "sha256:" + ("b" * 64),
             },
             "runtime": {
-                "reference": "dhi.io/python:3.14.6-debian13@sha256:" + ("c" * 64),
+                "reference": "dhi.io/python:3.14.7-debian13@sha256:" + ("c" * 64),
                 "arm64_manifest_digest": "sha256:" + ("d" * 64),
             },
         },
@@ -345,7 +345,7 @@ def test_dependabot_dhi_digest_bump_does_not_require_policy_digest(tmp_path: Pat
     assert match is not None
     bumped = source.replace(
         match.group(0),
-        "FROM dhi.io/python:3.14.6-debian13@"
+        "FROM dhi.io/python:3.14.7-debian13@"
         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "
         "AS runtime-base",
         1,
@@ -383,11 +383,11 @@ def test_uv_reference_accepts_allowed_digest_pin() -> None:
 @pytest.mark.parametrize(
     ("reference", "expected_tag", "dev"),
     [
-        ("dhi.io/python:3.14.6-debian13", "3.14.6-debian13", False),
-        ("dhi.io/python:latest@sha256:" + ("a" * 64), "3.14.6-debian13", False),
+        ("dhi.io/python:3.14.7-debian13", "3.14.7-debian13", False),
+        ("dhi.io/python:latest@sha256:" + ("a" * 64), "3.14.7-debian13", False),
         (
-            "dhi.io/python:3.14.6-debian13-dev@sha256:" + ("a" * 64),
-            "3.14.6-debian13",
+            "dhi.io/python:3.14.7-debian13-dev@sha256:" + ("a" * 64),
+            "3.14.7-debian13",
             False,
         ),
     ],

@@ -31,7 +31,7 @@ UV_REFERENCE_PATTERN: Final = re.compile(
 UV_MIN_VERSION: Final = (0, 11, 8)
 UV_MAX_VERSION_EXCLUSIVE: Final = (0, 12, 0)
 DHI_REFERENCE_PATTERN: Final = re.compile(
-    r"^dhi\.io/python:(?P<tag>3\.14\.6-debian13(?P<dev>-dev)?)"
+    r"^dhi\.io/python:(?P<tag>3\.14\.7-debian13(?P<dev>-dev)?)"
     r"@(?P<digest>sha256:[0-9a-f]{64})$"
 )
 STAGE_ALIASES: Final = {
@@ -131,9 +131,9 @@ def load_container_policy(path: Path = DEFAULT_POLICY_PATH) -> ContainerPolicy:
         raise ValueError("dhi requires builder_tag and runtime_tag")
     builder_tag = _string(dhi, "builder_tag", "dhi")
     runtime_tag = _string(dhi, "runtime_tag", "dhi")
-    if builder_tag != "3.14.6-debian13-dev":
+    if builder_tag != "3.14.7-debian13-dev":
         raise ValueError("dhi.builder_tag must be the approved DHI builder tag")
-    if runtime_tag != "3.14.6-debian13":
+    if runtime_tag != "3.14.7-debian13":
         raise ValueError("dhi.runtime_tag must be the approved DHI runtime tag")
 
     identity_data = _object(root["runtime_identity"], "runtime_identity")
