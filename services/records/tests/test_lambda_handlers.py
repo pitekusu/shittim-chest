@@ -254,6 +254,29 @@ def test_cost_handler_rejects_unknown_mode() -> None:
         lambda_handlers.cost_handler({"mode": "private-identifier"}, object())
 
 
+def test_inspector_translation_handler_returns_only_content_free_counts(
+    monkeypatch: Any,
+) -> None:
+    service = SimpleNamespace(
+        refresh=lambda *, now: SimpleNamespace(
+            discovered=54,
+            cached=4,
+            translated=50,
+            remaining=0,
+        )
+    )
+    monkeypatch.setattr(lambda_handlers, "_INSPECTOR_TRANSLATIONS", cast(Any, service))
+
+    result = lambda_handlers.inspector_translation_handler({}, object())
+
+    assert result == {
+        "discovered": 54,
+        "cached": 4,
+        "translated": 50,
+        "remaining": 0,
+    }
+
+
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:
     controller = cast(Any, FakeHttpController())
     monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", controller)

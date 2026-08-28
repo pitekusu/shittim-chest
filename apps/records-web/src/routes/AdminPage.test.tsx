@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -46,7 +46,7 @@ const statusResponse: AdminStatusResponse = {
     {
       service: "ecr",
       state: "healthy",
-      summary: "承認済みイメージとrepository保護を確認しました。",
+      summary: "タグ付きイメージと保管庫の保護を確認しました。",
       metrics: [
         { name: "tag_mutability", value: "IMMUTABLE" },
         { name: "encryption_type", value: "KMS" },
@@ -57,19 +57,97 @@ const statusResponse: AdminStatusResponse = {
         { name: "repository_untagged_image_count", value: 4 },
         { name: "repository_total_size_bytes", value: 104857600 },
         { name: "repository_latest_pushed_at", value: "2026-08-24T03:00:00Z" },
-        { name: "normal_image_present", value: true },
-        { name: "normal_pushed_at", value: "2026-08-24T03:00:00Z" },
-        { name: "normal_last_pulled_at", value: "2026-08-24T04:00:00Z" },
-        { name: "normal_size_bytes", value: 52428800 },
-        { name: "normal_tag_count", value: 1 },
-        { name: "normal_media_type", value: "OCI_IMAGE" },
       ],
+      details: {
+        kind: "ecr",
+        images: [
+          {
+            tags: ["release-2026-08-24", "stable"],
+            mediaType: "OCI_IMAGE",
+            sizeBytes: 52428800,
+            pushedAt: "2026-08-24T03:00:00Z",
+            lastPulledAt: "2026-08-24T04:00:00Z",
+          },
+        ],
+      },
     },
     {
       service: "inspector",
-      state: "unknown",
-      summary: "現在は確認できません。",
-      metrics: [{ name: "coverage", value: null }],
+      state: "critical",
+      summary: "タグ付きコンテナイメージ別の検出結果を確認しました。",
+      metrics: [
+        { name: "active_critical", value: 1 },
+        { name: "active_high", value: 1 },
+        { name: "active_medium", value: 2 },
+        { name: "active_low", value: 3 },
+        { name: "active_untriaged", value: 0 },
+        { name: "coverage_count", value: 1 },
+        { name: "coverage_active", value: 1 },
+        { name: "last_scanned_at", value: "2026-08-24T04:10:00Z" },
+        { name: "translation_cache_count", value: 1 },
+        { name: "translation_missing_count", value: 1 },
+        { name: "translation_last_translated_at", value: "2026-08-24T04:05:00Z" },
+      ],
+      details: {
+        kind: "inspector",
+        images: [
+          {
+            tags: ["release-2026-08-24", "stable"],
+            scanStatus: "ACTIVE",
+            lastScannedAt: "2026-08-24T04:10:00Z",
+            counts: { total: 7, critical: 1, high: 1, medium: 2, low: 3, untriaged: 0 },
+            findings: [
+              {
+                vulnerabilityId: "CVE-2026-12345",
+                severity: "critical",
+                summaryJa:
+                  "入力値の境界確認が不十分なため、遠隔の攻撃者が細工したデータを送ると、対象プロセスが本来の範囲外にあるメモリを読み取る可能性があります。その結果、処理の異常終了や、プロセス内で扱われる情報の一部が意図せず露出するおそれがある脆弱性です。",
+                affectedPackages: [
+                  {
+                    name: "example-package",
+                    installedVersion: "1.2.3-4",
+                    fixedVersion: "1.2.4-1",
+                    packageManager: "OS",
+                  },
+                ],
+                fixAvailable: "YES",
+              },
+              {
+                vulnerabilityId: "CVE-2026-67890",
+                severity: "high",
+                summaryJa: null,
+                affectedPackages: [
+                  {
+                    name: "second-package",
+                    installedVersion: "2.0.0",
+                    fixedVersion: null,
+                    packageManager: "OS",
+                  },
+                ],
+                fixAvailable: "NO",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      service: "dynamodb",
+      state: "healthy",
+      summary: "Table状態と保護設定を確認しました。",
+      metrics: [
+        ...["debate", "archive", "statistics", "session"].flatMap((key, index) => [
+          { name: `${key}_status`, value: "ACTIVE" },
+          { name: `${key}_pitr`, value: "ENABLED" },
+          { name: `${key}_deletion_protection`, value: true },
+          { name: `${key}_ttl`, value: key === "session" ? "ENABLED" : "DISABLED" },
+          { name: `${key}_item_count`, value: [2231, 684, 12, 7][index] ?? 0 },
+          { name: `${key}_read_throttles`, value: 0 },
+          { name: `${key}_write_throttles`, value: 0 },
+        ]),
+        { name: "debate_stream_enabled", value: true },
+        { name: "debate_stream_view_type", value: "NEW_IMAGE" },
+      ],
     },
     {
       service: "apigateway",
@@ -121,8 +199,8 @@ const statusResponse: AdminStatusResponse = {
         { name: "discord_required", value: 5 },
         { name: "runtime_ready", value: 6 },
         { name: "runtime_required", value: 6 },
-        { name: "records_ready", value: 6 },
-        { name: "records_required", value: 6 },
+        { name: "records_ready", value: 7 },
+        { name: "records_required", value: 7 },
         { name: "cost_ready", value: 2 },
         { name: "cost_required", value: 2 },
         { name: "runtime_prompt_pointer_present", value: false },
@@ -201,15 +279,33 @@ describe("AdminPage", () => {
     expect(screen.getByRole("heading", { name: "現在の状態" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "サービス状態" })).toBeVisible();
     expect(await screen.findByText("Scale-to-Zeroで待機しています。")).toBeVisible();
-    expect(screen.getByText("現在は確認できません。")).toBeVisible();
     expect(screen.getByText("タスク稼働")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "タスク定義" })).toBeVisible();
     expect(screen.getByText("Fargate On-Demand")).toBeVisible();
     expect(screen.getByText("rev. 42")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "最終取得記録" })).toBeVisible();
+    expect(screen.getAllByText("release-2026-08-24").length).toBeGreaterThan(0);
+    expect(screen.queryByText("本番版")).not.toBeInTheDocument();
     expect(screen.getByText("合計容量（概算）")).toBeVisible();
     expect(screen.getByText("100 MiB")).toBeVisible();
-    expect(screen.getByText("検査対象")).toBeVisible();
+    expect(screen.getByText("CVE-2026-12345")).toBeVisible();
+    expect(screen.getAllByText("影響を受けるパッケージ")).toHaveLength(2);
+    expect(
+      screen.getByText("Inspectorの説明文をもとに、日本語概要を準備しています。"),
+    ).toBeVisible();
+    expect(screen.getAllByText("example-package").length).toBeGreaterThan(0);
+    expect(screen.getByText("1.2.3-4")).toBeVisible();
+    expect(screen.queryByText("閲覧専用")).not.toBeInTheDocument();
+    const translationCache = screen.getByRole("region", {
+      name: "脆弱性概要翻訳キャッシュ",
+    });
+    expect(
+      within(translationCache).getByText("翻訳キャッシュ件数").parentElement,
+    ).toHaveTextContent("1");
+    expect(within(translationCache).getByText("未翻訳件数").parentElement).toHaveTextContent("1");
+    expect(within(translationCache).getByText("最終翻訳日時").parentElement).toHaveTextContent(
+      "2026年8月24日 13:05",
+    );
     expect(screen.getByRole("columnheader", { name: "自動反映" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "Runtime調整" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "討論Runtime" })).toBeVisible();

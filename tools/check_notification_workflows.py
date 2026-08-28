@@ -1278,6 +1278,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "/shittim-chest/production/records/discord/client-secret",
         "/shittim-chest/production/records/session-key",
         "/shittim-chest/production/records/openai/admin-key",
+        "/shittim-chest/production/records/openai/inspector-translation-api-key",
         "/shittim-chest/production/records/openai/project-id",
         "/shittim-chest/production/records/admin/discord-user-id",
         '.[0].Name == $name and .[0].Type == "SecureString" and',

@@ -202,6 +202,7 @@ jobs:
           OAUTH_CLIENT_SECRET_PARAMETER_NAME: /shittim-chest/production/records/discord/client-secret
           OAUTH_CONFIG_PARAMETER_NAME: /shittim-chest/production/records/discord/oauth/v0001
           OPENAI_ADMIN_KEY_PARAMETER_NAME: /shittim-chest/production/records/openai/admin-key
+          OPENAI_INSPECTOR_TRANSLATION_KEY_PARAMETER_NAME: /shittim-chest/production/records/openai/inspector-translation-api-key
           OPENAI_PROJECT_ID_PARAMETER_NAME: /shittim-chest/production/records/openai/project-id
           PRESENTATION_PARAMETER_NAME: /shittim-chest/production/records/presentation/v0001
           SESSION_KEY_PARAMETER_NAME: /shittim-chest/production/records/session-key
@@ -218,6 +219,7 @@ jobs:
             "${OAUTH_CLIENT_SECRET_PARAMETER_NAME}" \
             "${SESSION_KEY_PARAMETER_NAME}" \
             "${OPENAI_ADMIN_KEY_PARAMETER_NAME}" \
+            "${OPENAI_INSPECTOR_TRANSLATION_KEY_PARAMETER_NAME}" \
             "${OPENAI_PROJECT_ID_PARAMETER_NAME}"
           do
             metadata=$(aws ssm describe-parameters \

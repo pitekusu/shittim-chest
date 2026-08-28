@@ -197,7 +197,7 @@ const adminStatus = {
     {
       service: "ecr",
       state: "healthy",
-      summary: "承認済みイメージとrepository保護を確認しました。",
+      summary: "タグ付きイメージと保管庫の保護を確認しました。",
       metrics: [
         { name: "tag_mutability", value: "IMMUTABLE" },
         { name: "encryption_type", value: "AES256" },
@@ -208,27 +208,94 @@ const adminStatus = {
         { name: "repository_untagged_image_count", value: 4 },
         { name: "repository_total_size_bytes", value: 152043520 },
         { name: "repository_latest_pushed_at", value: "2026-08-24T14:16:36Z" },
-        { name: "normal_image_present", value: true },
-        { name: "normal_pushed_at", value: "2026-08-24T14:16:20Z" },
-        { name: "normal_last_pulled_at", value: "2026-08-26T07:20:00Z" },
-        { name: "normal_size_bytes", value: 66305166 },
-        { name: "normal_tag_count", value: 1 },
-        { name: "normal_media_type", value: "OCI_IMAGE" },
       ],
+      details: {
+        kind: "ecr",
+        images: [
+          {
+            tags: ["release-2026-08-29", "stable"],
+            mediaType: "OCI_IMAGE",
+            sizeBytes: 66305166,
+            pushedAt: "2026-08-29T01:16:20Z",
+            lastPulledAt: "2026-08-29T02:20:00Z",
+          },
+          {
+            tags: ["release-2026-08-24"],
+            mediaType: "OCI_IMAGE",
+            sizeBytes: 65738354,
+            pushedAt: "2026-08-24T14:16:20Z",
+            lastPulledAt: "2026-08-26T07:20:00Z",
+          },
+        ],
+      },
     },
     {
       service: "inspector",
-      state: "warning",
-      summary: "検出結果とECR scan coverageを確認しました。",
+      state: "critical",
+      summary: "タグ付きコンテナイメージ別の検出結果を確認しました。",
       metrics: [
-        { name: "active_critical", value: 0 },
-        { name: "active_high", value: 0 },
+        { name: "active_critical", value: 1 },
+        { name: "active_high", value: 1 },
         { name: "active_medium", value: 12 },
-        { name: "active_low", value: 0 },
-        { name: "active_untriaged", value: 6 },
-        { name: "coverage_active", value: 4 },
+        { name: "active_low", value: 3 },
+        { name: "active_untriaged", value: 1 },
+        { name: "coverage_count", value: 2 },
+        { name: "coverage_active", value: 2 },
         { name: "last_scanned_at", value: "2026-08-27T00:50:00Z" },
+        { name: "translation_cache_count", value: 2 },
+        { name: "translation_missing_count", value: 0 },
+        { name: "translation_last_translated_at", value: "2026-08-29T02:07:00Z" },
       ],
+      details: {
+        kind: "inspector",
+        images: [
+          {
+            tags: ["release-2026-08-29", "stable"],
+            scanStatus: "ACTIVE",
+            lastScannedAt: "2026-08-29T02:25:00Z",
+            counts: { total: 11, critical: 1, high: 1, medium: 5, low: 3, untriaged: 1 },
+            findings: [
+              {
+                vulnerabilityId: "CVE-2026-12345",
+                severity: "critical",
+                summaryJa:
+                  "入力値の境界確認が不十分なため、遠隔の攻撃者が細工したデータを送ると、対象プロセスが本来の範囲外にあるメモリを読み取る可能性があります。その結果、処理の異常終了や、プロセス内で扱われる情報の一部が意図せず露出するおそれがある脆弱性です。",
+                affectedPackages: [
+                  {
+                    name: "libexample",
+                    installedVersion: "1.2.3-4",
+                    fixedVersion: "1.2.4-1",
+                    packageManager: "OS",
+                  },
+                ],
+                fixAvailable: "YES",
+              },
+              {
+                vulnerabilityId: "CVE-2026-67890",
+                severity: "high",
+                summaryJa:
+                  "特別に細工された入力を処理した際、対象ライブラリが想定外の領域へアクセスする可能性があります。これにより処理が停止するほか、同じプロセス内に保持されている情報の一部が外部へ露出するおそれがあるため、利用中の版と修正版の有無を確認する必要があります。",
+                affectedPackages: [
+                  {
+                    name: "runtime-library",
+                    installedVersion: "3.8.1",
+                    fixedVersion: null,
+                    packageManager: "OS",
+                  },
+                ],
+                fixAvailable: "NO",
+              },
+            ],
+          },
+          {
+            tags: ["release-2026-08-24"],
+            scanStatus: "ACTIVE",
+            lastScannedAt: "2026-08-27T00:50:00Z",
+            counts: { total: 7, critical: 0, high: 0, medium: 7, low: 0, untriaged: 0 },
+            findings: [],
+          },
+        ],
+      },
     },
     {
       service: "s3",
@@ -324,15 +391,17 @@ const adminStatus = {
         { name: "runtime_state", value: "ENABLED" },
         { name: "runtime_expression", value: "rate(1 minute)" },
         { name: "runtime_retry_attempts", value: 2 },
-        ...["ranking", "aws_fx", "openai", "abnormal_stop"].flatMap((key, index) => [
-          { name: `${key}_state`, value: "ENABLED" },
-          {
-            name: `${key}_expression`,
-            value: index === 3 ? "event pattern" : "cron(17 3 * * ? *)",
-          },
-          { name: `${key}_day_invocations`, value: [96, 1, 24, 0][index] },
-          { name: `${key}_day_failures`, value: 0 },
-        ]),
+        ...["ranking", "aws_fx", "openai", "inspector_translation", "abnormal_stop"].flatMap(
+          (key, index) => [
+            { name: `${key}_state`, value: "ENABLED" },
+            {
+              name: `${key}_expression`,
+              value: index === 4 ? "event pattern" : "cron(17 3 * * ? *)",
+            },
+            { name: `${key}_day_invocations`, value: [96, 1, 24, 24, 0][index] },
+            { name: `${key}_day_failures`, value: 0 },
+          ],
+        ),
       ],
     },
     {
@@ -1654,15 +1723,27 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(page.getByText("desired_count", { exact: true })).toHaveCount(0);
   await expect(page.getByText("タスク稼働", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "ECS構成とデプロイ状態" })).toBeVisible();
-  const ecrImageTable = page.getByRole("region", { name: "承認済みECRイメージ" });
+  const ecrImageTable = page.getByRole("region", { name: "タグ付きECRイメージ" });
   await expect(ecrImageTable).toBeVisible();
-  await expect(ecrImageTable.getByRole("rowheader", { name: "本番版" })).toBeVisible();
-  await expect(ecrImageTable.getByRole("rowheader", { name: "緊急版" })).toHaveCount(0);
-  expect(
-    await ecrImageTable.evaluate((element) => element.scrollWidth <= element.clientWidth),
-  ).toBe(true);
+  await expect(ecrImageTable.getByText("release-2026-08-29", { exact: true })).toBeVisible();
+  await expect(ecrImageTable.getByText("stable", { exact: true })).toBeVisible();
+  await expect(ecrImageTable.getByText("本番版", { exact: true })).toHaveCount(0);
+  const ecrHorizontalOverflow = await ecrImageTable.evaluate(
+    (element) => element.scrollWidth - element.clientWidth,
+  );
+  expect(ecrHorizontalOverflow).toBeLessThanOrEqual(0);
+  await expect(page.getByText("閲覧専用", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("CVE-2026-12345", { exact: true })).toBeVisible();
+  await expect(page.getByText("libexample", { exact: true })).toBeVisible();
+  await expect(page.getByText("1.2.3-4", { exact: true })).toBeVisible();
+  await expect(page.getByText("重大・高の脆弱性は検出されていません。")).toBeVisible();
   await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
   await expect(page.getByRole("region", { name: "DynamoDBテーブル状態" })).toBeVisible();
+  const translationCache = page.getByRole("region", { name: "脆弱性概要翻訳キャッシュ" });
+  await expect(translationCache).toBeVisible();
+  await expect(translationCache).toContainText("翻訳キャッシュ件数2");
+  await expect(translationCache).toContainText("未翻訳件数0");
+  await expect(translationCache).toContainText("最終翻訳日時2026年8月29日 11:07");
   await expect(page.getByRole("region", { name: "Lambda関数状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "API Gateway状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "定期実行とイベント配信" })).toBeVisible();
@@ -1699,6 +1780,8 @@ test("management console contains wide status tables on mobile", async ({ page }
   await page.goto("/admin");
 
   await expect(page.getByRole("heading", { name: "管理コンソール" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "タグ付きECRイメージ" })).toBeVisible();
+  await expect(page.getByText("CVE-2026-12345", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

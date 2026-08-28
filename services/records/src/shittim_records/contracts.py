@@ -353,11 +353,75 @@ class AdminStatusMetric(PublicModel):
     value: str | int | bool | None
 
 
+AdminImageTag = Annotated[str, Field(min_length=1, max_length=300, pattern=r"\S")]
+AdminPackageText = Annotated[str, Field(min_length=1, max_length=256, pattern=r"\S")]
+
+
+class AdminEcrImage(PublicModel):
+    tags: Annotated[tuple[AdminImageTag, ...], Field(min_length=1, max_length=100)]
+    media_type: Literal["OCI_IMAGE", "OCI_INDEX", "DOCKER_V2", "DOCKER_LIST", "OTHER"]
+    size_bytes: Annotated[int, Field(ge=0)] | None
+    pushed_at: AwareDatetime | None
+    last_pulled_at: AwareDatetime | None
+
+
+class AdminEcrDetails(PublicModel):
+    kind: Literal["ecr"]
+    images: tuple[AdminEcrImage, ...]
+
+
+class AdminInspectorSeverityCounts(PublicModel):
+    total: Annotated[int, Field(ge=0)]
+    critical: Annotated[int, Field(ge=0)]
+    high: Annotated[int, Field(ge=0)]
+    medium: Annotated[int, Field(ge=0)]
+    low: Annotated[int, Field(ge=0)]
+    untriaged: Annotated[int, Field(ge=0)]
+
+
+class AdminInspectorAffectedPackage(PublicModel):
+    name: AdminPackageText
+    installed_version: AdminPackageText
+    fixed_version: AdminPackageText | None
+    package_manager: AdminPackageText | None
+
+
+class AdminInspectorFinding(PublicModel):
+    vulnerability_id: Annotated[
+        str,
+        Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"),
+    ]
+    severity: Literal["critical", "high"]
+    summary_ja: Annotated[str, Field(min_length=100, max_length=300, pattern=r"\S")] | None
+    affected_packages: Annotated[
+        tuple[AdminInspectorAffectedPackage, ...],
+        Field(min_length=1, max_length=100),
+    ]
+    fix_available: Literal["YES", "NO", "PARTIAL"] | None
+
+
+class AdminInspectorImage(PublicModel):
+    tags: Annotated[tuple[AdminImageTag, ...], Field(min_length=1, max_length=100)]
+    scan_status: Literal["ACTIVE", "INACTIVE", "UNKNOWN"]
+    last_scanned_at: AwareDatetime | None
+    counts: AdminInspectorSeverityCounts
+    findings: tuple[AdminInspectorFinding, ...]
+
+
+class AdminInspectorDetails(PublicModel):
+    kind: Literal["inspector"]
+    images: tuple[AdminInspectorImage, ...]
+
+
+AdminStatusDetails = AdminEcrDetails | AdminInspectorDetails
+
+
 class AdminStatusSection(PublicModel):
     service: AdminServiceName
     state: AdminHealthState
     summary: Annotated[str, Field(min_length=1, max_length=160, pattern=r"\S")]
     metrics: tuple[AdminStatusMetric, ...]
+    details: AdminStatusDetails | None = None
 
 
 class AdminStatusOverall(PublicModel):

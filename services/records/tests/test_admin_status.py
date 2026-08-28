@@ -14,11 +14,30 @@ from shittim_records.admin_status_adapters import (
     AwsAdminStatusConfiguration,
     AwsAdminStatusSource,
 )
-from shittim_records.contracts import AdminStatusOverall, AdminStatusSection
+from shittim_records.contracts import (
+    AdminEcrDetails,
+    AdminInspectorDetails,
+    AdminStatusOverall,
+    AdminStatusSection,
+)
+from shittim_records.inspector_translations import (
+    InspectorJapaneseSummary,
+    InspectorTranslationUnavailable,
+    inspector_description,
+)
 
 NOW = datetime(2026, 8, 24, 3, 0, tzinfo=UTC)
 AWS_ACCOUNT_ID = "123456" + "789012"
 RUNTIME_DIGEST = "sha256:" + "a" * 64
+INSPECTOR_DESCRIPTION = (
+    "A boundary validation flaw can allow a remote attacker to submit malformed input and "
+    "cause the affected process to read outside its intended memory region."
+)
+INSPECTOR_SUMMARY_JA = (
+    "入力値の境界確認が不十分なため、遠隔の攻撃者が細工したデータを送ると、対象プロセスが本来の範囲外にある"
+    "メモリを読み取る可能性があります。その結果、処理の異常終了や、プロセス内で扱われる情報の一部が意図せず"
+    "露出するおそれがある脆弱性です。"
+)
 STATUS_COLLECTORS = (
     ("ecs", "_ecs_section"),
     ("ecr", "_ecr_section"),
@@ -87,6 +106,9 @@ def configuration() -> AwsAdminStatusConfiguration:
             "records_session_key": "/shittim-chest/production/records/session-key",
             "records_openai_admin_key": "/shittim-chest/production/records/openai/admin-key",
             "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
+            "records_openai_inspector_translation_key": (
+                "/shittim-chest/production/records/openai/inspector-translation-api-key"
+            ),
             "records_admin_user_id": "/shittim-chest/production/records/admin/discord-user-id",
         },
         runtime_scheduler_name="shittim-chest-production-runtime-reconciler",
@@ -133,6 +155,57 @@ class Paginator:
         return self.pages
 
 
+class EcrInventory:
+    def __init__(self, image_details: list[dict[str, Any]]) -> None:
+        self.paginator = Paginator([{"imageDetails": image_details}])
+
+    def get_paginator(self, name: str) -> Paginator:
+        assert name == "describe_images"
+        return self.paginator
+
+
+def tagged_image_detail(
+    *,
+    digest: str = RUNTIME_DIGEST,
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "imageDigest": digest,
+        "imageTags": tags or ["release-2026-08-24"],
+        "imagePushedAt": NOW,
+        "lastRecordedPullTime": NOW,
+        "imageSizeInBytes": 128,
+        "imageManifestMediaType": "application/vnd.oci.image.manifest.v1+json",
+    }
+
+
+def inspector_finding(*, severity: str, digest: str = RUNTIME_DIGEST) -> dict[str, Any]:
+    return {
+        "description": INSPECTOR_DESCRIPTION,
+        "severity": severity,
+        "fixAvailable": "YES",
+        "resources": [
+            {
+                "type": "AWS_ECR_CONTAINER_IMAGE",
+                "details": {"awsEcrContainerImage": {"imageHash": digest}},
+            }
+        ],
+        "packageVulnerabilityDetails": {
+            "vulnerabilityId": "CVE-2026-12345",
+            "vulnerablePackages": [
+                {
+                    "name": "example-package",
+                    "version": "1.2.3",
+                    "release": "4",
+                    "epoch": 0,
+                    "fixedInVersion": "1.2.4-1",
+                    "packageManager": "OS",
+                }
+            ],
+        },
+    }
+
+
 def distribution_pages() -> Paginator:
     return Paginator(
         [
@@ -176,6 +249,7 @@ def source(**clients: Any) -> AwsAdminStatusSource:
         cloudwatch=cloudwatch,
         cloudwatch_global=clients.get("cloudwatch_global", cloudwatch),
         cloudformation_global=clients.get("cloudformation_global", empty),
+        translations=clients.get("translations"),
     )
 
 
@@ -560,14 +634,15 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
     assert ecr.paginator.calls == [{"repositoryName": configuration().ecr_repository_name}]
     assert cloudformation.stack_names == [configuration().runtime_stack_name]
     values = metrics(section)
-    assert values["normal_image_present"] is True
     assert values["repository_image_count"] == 2
     assert values["repository_tagged_image_count"] == 1
     assert values["repository_untagged_image_count"] == 1
     assert values["repository_total_size_bytes"] == 192
-    assert values["normal_tag_count"] == 1
-    assert values["normal_media_type"] == "OCI_IMAGE"
-    assert values["normal_last_pulled_at"] == NOW.isoformat()
+    assert isinstance(section.details, AdminEcrDetails)
+    assert len(section.details.images) == 1
+    assert section.details.images[0].tags == ("approved",)
+    assert section.details.images[0].media_type == "OCI_IMAGE"
+    assert section.details.images[0].last_pulled_at == NOW
     assert "break_glass" not in values
     assert "sha256:" not in section.model_dump_json()
     assert RUNTIME_DIGEST[:19] not in section.model_dump_json()
@@ -768,13 +843,33 @@ def test_cloudfront_state_includes_certificate_health(
 
 
 def test_inspector_includes_repository_coverage_and_last_scan() -> None:
-    finding_pages = Paginator([{"findings": [{"severity": "HIGH"}]}])
+    aggregation_pages = Paginator(
+        [
+            {
+                "aggregationType": "AWS_ECR_CONTAINER",
+                "responses": [
+                    {
+                        "awsEcrContainerAggregation": {
+                            "imageSha": RUNTIME_DIGEST,
+                            "severityCounts": {
+                                "all": 1,
+                                "critical": 0,
+                                "high": 1,
+                                "medium": 0,
+                            },
+                        }
+                    }
+                ],
+            }
+        ]
+    )
+    finding_pages = Paginator([{"findings": [inspector_finding(severity="HIGH")]}])
     coverage_pages = Paginator(
         [
             {
                 "coveredResources": [
                     {
-                        "resourceId": "private-resource",
+                        "resourceId": RUNTIME_DIGEST,
                         "accountId": AWS_ACCOUNT_ID,
                         "scanStatus": {"statusCode": "ACTIVE"},
                         "lastScannedAt": NOW,
@@ -786,30 +881,141 @@ def test_inspector_includes_repository_coverage_and_last_scan() -> None:
 
     class Inspector:
         def get_paginator(self, name: str) -> Paginator:
-            return finding_pages if name == "list_findings" else coverage_pages
+            return {
+                "list_finding_aggregations": aggregation_pages,
+                "list_findings": finding_pages,
+                "list_coverage": coverage_pages,
+            }[name]
 
-    section = source(inspector=Inspector())._inspector_section()
+    translation_source = inspector_description(
+        vulnerability_id="CVE-2026-12345",
+        description=INSPECTOR_DESCRIPTION,
+    )
+
+    class Translations:
+        def load(self, keys: tuple[str, ...]) -> dict[str, InspectorJapaneseSummary]:
+            assert keys == (translation_source.key,)
+            return {
+                translation_source.key: InspectorJapaneseSummary(
+                    key=translation_source.key,
+                    vulnerability_id=translation_source.vulnerability_id,
+                    source_sha256=translation_source.source_sha256,
+                    summary_ja=INSPECTOR_SUMMARY_JA,
+                    translated_at=NOW,
+                )
+            }
+
+    section = source(
+        ecr=EcrInventory([tagged_image_detail(tags=["release-2026-08-24", "stable"])]),
+        inspector=Inspector(),
+        translations=Translations(),
+    )._inspector_section()
     values = metrics(section)
 
     assert section.state == "warning"
     assert values["coverage_count"] == 1
     assert values["coverage_active"] == 1
     assert values["last_scanned_at"] == NOW.isoformat()
-    assert "private-resource" not in section.model_dump_json()
+    assert values["active_high"] == 1
+    assert values["translation_cache_count"] == 1
+    assert values["translation_missing_count"] == 0
+    assert values["translation_last_translated_at"] == NOW.isoformat()
+    assert isinstance(section.details, AdminInspectorDetails)
+    assert len(section.details.images) == 1
+    image = section.details.images[0]
+    assert image.tags == ("release-2026-08-24", "stable")
+    assert image.counts.high == 1
+    assert image.findings[0].vulnerability_id == "CVE-2026-12345"
+    assert image.findings[0].summary_ja == INSPECTOR_SUMMARY_JA
+    assert image.findings[0].affected_packages[0].installed_version == "1.2.3-4"
+    assert RUNTIME_DIGEST not in section.model_dump_json()
     assert AWS_ACCOUNT_ID not in section.model_dump_json()
+    assert INSPECTOR_DESCRIPTION not in section.model_dump_json()
+    assert aggregation_pages.calls == [
+        {
+            "aggregationType": "AWS_ECR_CONTAINER",
+            "aggregationRequest": {
+                "awsEcrContainerAggregation": {
+                    "repositories": [
+                        {
+                            "comparison": "EQUALS",
+                            "value": configuration().ecr_repository_name,
+                        }
+                    ]
+                }
+            },
+        }
+    ]
+
+    class UnavailableTranslations:
+        def load(self, _keys: tuple[str, ...]) -> dict[str, InspectorJapaneseSummary]:
+            raise InspectorTranslationUnavailable("cache_unavailable")
+
+    pending = source(
+        ecr=EcrInventory([tagged_image_detail(tags=["release-2026-08-24", "stable"])]),
+        inspector=Inspector(),
+        translations=UnavailableTranslations(),
+    )._inspector_section()
+
+    assert isinstance(pending.details, AdminInspectorDetails)
+    assert pending.details.images[0].findings[0].summary_ja is None
+    pending_values = metrics(pending)
+    assert pending_values["translation_cache_count"] is None
+    assert pending_values["translation_missing_count"] is None
+    assert pending_values["translation_last_translated_at"] is None
+
+    uncached = source(
+        ecr=EcrInventory([tagged_image_detail(tags=["release-2026-08-24", "stable"])]),
+        inspector=Inspector(),
+    )._inspector_section()
+    uncached_values = metrics(uncached)
+    assert uncached_values["translation_cache_count"] == 0
+    assert uncached_values["translation_missing_count"] == 1
+    assert uncached_values["translation_last_translated_at"] is None
 
 
 def test_inspector_treats_untriaged_findings_as_warning() -> None:
-    finding_pages = Paginator([{"findings": [{"severity": "UNTRIAGED"}]}])
+    aggregation_pages = Paginator(
+        [
+            {
+                "responses": [
+                    {
+                        "awsEcrContainerAggregation": {
+                            "imageSha": RUNTIME_DIGEST,
+                            "severityCounts": {"all": 1},
+                        }
+                    }
+                ]
+            }
+        ]
+    )
+    finding_pages = Paginator([{"findings": [inspector_finding(severity="UNTRIAGED")]}])
     coverage_pages = Paginator(
-        [{"coveredResources": [{"scanStatus": {"statusCode": "ACTIVE"}, "lastScannedAt": NOW}]}]
+        [
+            {
+                "coveredResources": [
+                    {
+                        "resourceId": RUNTIME_DIGEST,
+                        "scanStatus": {"statusCode": "ACTIVE"},
+                        "lastScannedAt": NOW,
+                    }
+                ]
+            }
+        ]
     )
 
     class Inspector:
         def get_paginator(self, name: str) -> Paginator:
-            return finding_pages if name == "list_findings" else coverage_pages
+            return {
+                "list_finding_aggregations": aggregation_pages,
+                "list_findings": finding_pages,
+                "list_coverage": coverage_pages,
+            }[name]
 
-    section = source(inspector=Inspector())._inspector_section()
+    section = source(
+        ecr=EcrInventory([tagged_image_detail()]),
+        inspector=Inspector(),
+    )._inspector_section()
 
     assert section.state == "warning"
     assert metrics(section)["active_untriaged"] == 1
@@ -1308,6 +1514,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
         "ranking-rule": descriptions["ranking"],
         "aws-rule": descriptions["aws_fx"],
         "openai-rule": descriptions["openai"],
+        "translation-rule": descriptions["inspector_translation"],
         "stop-rule": descriptions["abnormal_stop"],
     }
 
@@ -1352,7 +1559,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
         cloudwatch=EventMetrics(),
     )
     cast(Any, status_source)._stack_resources = lambda stack, _type: (
-        ("ranking-rule", "aws-rule", "openai-rule")
+        ("ranking-rule", "aws-rule", "openai-rule", "translation-rule")
         if stack == "records_application"
         else ("stop-rule",)
     )
@@ -1526,7 +1733,7 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
     assert section.state == "healthy"
     assert values["discord_ready"] == 5
     assert values["runtime_ready"] == 6
-    assert values["records_ready"] == 6
+    assert values["records_ready"] == 7
     assert values["cost_ready"] == 2
     assert values["runtime_prompt_pointer_present"] is False
     assert ssm.paginator.calls == [
@@ -1772,11 +1979,15 @@ def test_status_collection_budget_marks_unfinished_section_unknown(
 
 
 def test_inspector_pagination_is_bounded() -> None:
-    finding_pages = Paginator([{"findings": []}] * 21)
+    aggregation_pages = Paginator([{"responses": []}] * 21)
 
     class Inspector:
-        def get_paginator(self, _name: str) -> Paginator:
-            return finding_pages
+        def get_paginator(self, name: str) -> Paginator:
+            assert name == "list_finding_aggregations"
+            return aggregation_pages
 
     with pytest.raises(ValueError, match="bounded page count"):
-        source(inspector=Inspector())._inspector_section()
+        source(
+            ecr=EcrInventory([tagged_image_detail()]),
+            inspector=Inspector(),
+        )._inspector_section()
