@@ -959,8 +959,8 @@ def test_release_binds_selected_referrers_to_notation_inspection(tmp_path: Path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            '--notation-inspection "${RUNNER_TEMP}/${mode}.notation.json"',
-            '--notation-inspection "${RUNNER_TEMP}/${mode}.referrers-after.json"',
+            '--notation-inspection "${RUNNER_TEMP}/normal.notation.json"',
+            '--notation-inspection "${RUNNER_TEMP}/normal.referrers-after.json"',
             1,
         ),
         encoding="utf-8",
@@ -1094,7 +1094,7 @@ def test_release_requires_reproducible_registry_images(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="reproducible"):
+    with pytest.raises(WorkflowPolicyError, match=r"reproducible|required policy marker"):
         validate_notification_workflows(directory)
 
 
@@ -1128,7 +1128,7 @@ def test_release_image_builds_reject_the_mutated_workspace_context(tmp_path: Pat
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="share the immutable image context"):
+    with pytest.raises(WorkflowPolicyError, match="use the immutable image context"):
         validate_notification_workflows(directory)
 
 
@@ -1142,23 +1142,6 @@ def test_release_image_checkout_is_pinned_to_github_sha(tmp_path: Path) -> None:
     path.write_text(text[:start] + checkout + text[end:], encoding="utf-8")
 
     with pytest.raises(WorkflowPolicyError, match=r"pin github\.sha"):
-        validate_notification_workflows(directory)
-
-
-def test_release_images_share_one_dedicated_context(tmp_path: Path) -> None:
-    directory = _workflow_directory(tmp_path)
-    path = directory / RELEASE_WORKFLOW
-    text = path.read_text(encoding="utf-8")
-    start = text.index("      - name: Build and load the isolated break-glass image once")
-    end = text.index("\n      - name:", start + 1)
-    build = text[start:end].replace(
-        "context: ${{ env.RELEASE_IMAGE_CONTEXT }}",
-        "context: ${{ github.workspace }}/another-context",
-        1,
-    )
-    path.write_text(text[:start] + build + text[end:], encoding="utf-8")
-
-    with pytest.raises(WorkflowPolicyError, match="share the immutable image context"):
         validate_notification_workflows(directory)
 
 
@@ -1212,7 +1195,7 @@ def test_release_reuses_the_exact_main_ci_image_cache_scopes(tmp_path: Path) -> 
         validate_notification_workflows(directory)
 
 
-def test_release_checks_both_config_digests_before_push(tmp_path: Path) -> None:
+def test_release_checks_the_config_digest_before_push(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
@@ -1220,18 +1203,18 @@ def test_release_checks_both_config_digests_before_push(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match="both local configs"):
+    with pytest.raises(WorkflowPolicyError, match=r"local config|required policy marker"):
         validate_notification_workflows(directory)
 
 
-def test_release_gates_both_rebuilt_images_on_fixable_high_findings(
+def test_release_gates_the_rebuilt_image_on_fixable_high_findings(
     tmp_path: Path,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "              --only-fixed \\\n",
+            "            --only-fixed \\\n",
             "",
             1,
         ),
@@ -1276,7 +1259,7 @@ def test_release_attests_only_registry_confirmed_manifest_digests(tmp_path: Path
         validate_notification_workflows(directory)
 
 
-def test_ci_requires_reproducible_production_and_break_glass_images(tmp_path: Path) -> None:
+def test_ci_requires_reproducible_production_and_fault_images(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"
     path.write_text(
@@ -1334,9 +1317,7 @@ def test_image_builds_require_forced_canonical_compression(
     [
         ("ci.yml", "Build and load the production image"),
         ("ci.yml", "Build and load the CI-only fault image"),
-        ("ci.yml", "Build and load the break-glass image for risk validation"),
         (RELEASE_WORKFLOW, "Build and load the production image once"),
-        (RELEASE_WORKFLOW, "Build and load the isolated break-glass image once"),
     ],
 )
 def test_docker_image_builds_reject_manifest_list_output(
@@ -1362,18 +1343,13 @@ def test_docker_image_builds_reject_manifest_list_output(
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "production-image-rootfs-diffids.json",
-        "break-glass-image-rootfs-diffids.json",
-    ],
-)
-def test_ci_requires_rootfs_diff_id_evidence(tmp_path: Path, name: str) -> None:
+def test_ci_requires_rootfs_diff_id_evidence(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"
     path.write_text(
-        path.read_text(encoding="utf-8").replace(name, "missing-rootfs-evidence.json"),
+        path.read_text(encoding="utf-8").replace(
+            "production-image-rootfs-diffids.json", "missing-rootfs-evidence.json"
+        ),
         encoding="utf-8",
     )
 
@@ -1381,16 +1357,14 @@ def test_ci_requires_rootfs_diff_id_evidence(tmp_path: Path, name: str) -> None:
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("filters", ["builder,runtime-base", "builder,break-glass"])
 def test_ci_regenerates_cache_sensitive_final_image_stages(
     tmp_path: Path,
-    filters: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / "ci.yml"
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"          no-cache-filters: {filters}\n",
+            "          no-cache-filters: builder,runtime-base\n",
             "",
             1,
         ),
@@ -1401,16 +1375,14 @@ def test_ci_regenerates_cache_sensitive_final_image_stages(
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("filters", ["builder,runtime-base", "builder,break-glass"])
 def test_release_regenerates_cache_sensitive_final_image_stages(
     tmp_path: Path,
-    filters: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"          no-cache-filters: {filters}\n",
+            "          no-cache-filters: builder,runtime-base\n",
             "",
             1,
         ),
@@ -1422,18 +1394,16 @@ def test_release_regenerates_cache_sensitive_final_image_stages(
 
 
 @pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
-@pytest.mark.parametrize("stage", ["runtime-base", "break-glass"])
 def test_risk_bound_images_reject_cached_builder_snapshots(
     tmp_path: Path,
     workflow: str,
-    stage: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / workflow
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            f"          no-cache-filters: builder,{stage}\n",
-            f"          no-cache-filters: {stage}\n",
+            "          no-cache-filters: builder,runtime-base\n",
+            "          no-cache-filters: runtime-base\n",
             1,
         ),
         encoding="utf-8",
@@ -1605,7 +1575,7 @@ def test_release_loads_regenerated_image_verification_for_comparison(tmp_path: P
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            '--slurpfile actual "${RUNNER_TEMP}/${mode}.verification.json"',
+            '--slurpfile actual "${RUNNER_TEMP}/normal.verification.json"',
             "--slurpfile actual",
             1,
         ),
@@ -1635,8 +1605,8 @@ def test_release_requires_all_current_scan_evidence_except_timestamp(tmp_path: P
 @pytest.mark.parametrize(
     "mutable_comparison",
     [
-        ".images[$key].scan == $actual[0].scan",
-        ".images[$key].scan.scanned_at == $actual[0].scan.scanned_at",
+        ".images.normal.scan == $actual[0].scan",
+        ".images.normal.scan.scanned_at == $actual[0].scan.scanned_at",
     ],
 )
 def test_release_rejects_mutable_scan_evidence_comparisons(
@@ -1647,8 +1617,8 @@ def test_release_rejects_mutable_scan_evidence_comparisons(
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(
-            "(.images[$key].scan | del(.scanned_at)) ==",
-            f"{mutable_comparison} and\n               (.images[$key].scan | del(.scanned_at)) ==",
+            "(.images.normal.scan | del(.scanned_at)) ==",
+            f"{mutable_comparison} and\n             (.images.normal.scan | del(.scanned_at)) ==",
             1,
         ),
         encoding="utf-8",

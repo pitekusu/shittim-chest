@@ -6,7 +6,7 @@ aliases:
 tags: [shittim-chest, git, github, checkpoint, scale-to-zero]
 status: completed
 created: 2026-07-28
-updated: 2026-08-14
+updated: 2026-08-28
 canonical_for: historical-implementation
 related:
   - "[[10_scale-to-zero-goal]]"
@@ -31,7 +31,7 @@ Scale-to-Zeroは次の依存順で導入し、各境界をtestとPRで固定し�
 ## 2. Completion policy
 
 - 実装、test、docs、CI evidenceを同じPR boundaryで整合させる。
-- source変更を含むimageはcanonical CI／Releaseで両targetを実測する。
+- source変更を含むimageはcanonical CI／Releaseでproduction targetを実測する。
 - merge後は新しいmain SHAからProduction Releaseし、failed runをrerunしない。
 - Environment承認、deploy、live acceptanceを独立した明示工程として扱う。
 - failure時は直接原因とsafe stateを確認し、別SHAの修正へ切り替える。

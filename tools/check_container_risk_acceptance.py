@@ -38,7 +38,7 @@ REQUIRED_ACCEPTANCE_FIELDS: Final = frozenset(
         "owner",
     }
 )
-IMAGE_KINDS: Final = frozenset({"production", "break-glass"})
+IMAGE_KINDS: Final = frozenset({"production"})
 REQUIRED_POLICY_FIELDS: Final = frozenset(
     {"schema_version", "maximum_validity_days", "acceptances"}
 )
@@ -170,7 +170,7 @@ def _load_policy(policy_path: Path) -> list[object]:
     root = _object(_read_json(policy_path, "risk acceptance policy"), "risk policy")
     if set(root) != REQUIRED_POLICY_FIELDS:
         raise ValueError("risk acceptance policy has unexpected root fields")
-    if root["schema_version"] != 5 or root["maximum_validity_days"] != 90:
+    if root["schema_version"] != 6 or root["maximum_validity_days"] != 90:
         raise ValueError("risk acceptance policy version or maximum validity is unsupported")
     raw_acceptances = root["acceptances"]
     if not isinstance(raw_acceptances, list):

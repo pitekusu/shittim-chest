@@ -243,8 +243,8 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
 
     text = dockerfile.read_text(encoding="utf-8")
     stages = parse_dockerfile_stages(dockerfile)
-    if len(stages) != 7:
-        raise ValueError("Dockerfile must declare the seven approved stages")
+    if len(stages) != 5:
+        raise ValueError("Dockerfile must declare the five approved stages")
     names = [name for name, _reference in stages]
     if names != [
         "uv",
@@ -252,8 +252,6 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         "runtime-base",
         "production",
         "fault-test",
-        "break-glass-tools",
-        "break-glass",
     ]:
         raise ValueError("Dockerfile stages do not match the approved order")
 
@@ -268,11 +266,10 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         "ARG SOURCE_DATE_EPOCH=0",
         "ARG SOURCE_DATE_EPOCH",
         "ARG SOURCE_DATE_EPOCH",
-        "ARG SOURCE_DATE_EPOCH",
     ]:
         raise ValueError(
             "Dockerfile must default SOURCE_DATE_EPOCH globally and consume it in the builder "
-            "and both risk-bound final stages"
+            "and runtime base"
         )
     first_from = text.index("FROM ")
     if text.index("ARG SOURCE_DATE_EPOCH=0") > first_from:
@@ -302,10 +299,6 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("production stage must derive from runtime-base")
     if stages[4] != ("fault-test", "production"):
         raise ValueError("fault-test stage must derive from production")
-    if stages[5] != ("break-glass-tools", builder_reference):
-        raise ValueError("break-glass tooling stage must reuse the builder image pin")
-    if stages[6] != ("break-glass", "break-glass-tools"):
-        raise ValueError("break-glass final stage must derive from the tooling stage")
     production_start = text.index("FROM runtime-base AS production")
     runtime_text = text[runtime_start:production_start]
     production_venv_transfer = (
@@ -320,30 +313,6 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
         raise ValueError("production stage must transfer the venv without volatile source metadata")
     if "COPY --from=builder" in runtime_text:
         raise ValueError("production stage must not COPY the venv directly from builder")
-    break_glass_tools_start = text.index(f"FROM {builder_reference} AS break-glass-tools")
-    break_glass_start = text.index("FROM break-glass-tools AS break-glass")
-    break_glass_tools_text = text[break_glass_tools_start:break_glass_start]
-    break_glass_text = text[break_glass_start:]
-    deterministic_venv_transfer = (
-        "RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro",
-        "--sort=name",
-        '--mtime="@${SOURCE_DATE_EPOCH}"',
-        "--owner=65532 --group=65532 --numeric-owner --format=gnu .",
-        "--numeric-owner --delay-directory-restore",
-    )
-    if any(marker not in break_glass_text for marker in deterministic_venv_transfer):
-        raise ValueError(
-            "break-glass stage must transfer the venv through a deterministic tar stream"
-        )
-    volatile_apt_cleanup = (
-        "apt-get clean",
-        "rm -rf /var/lib/apt/lists/* /var/log/apt/*",
-        "rm -f /var/log/dpkg.log",
-    )
-    if any(marker not in break_glass_tools_text for marker in volatile_apt_cleanup):
-        raise ValueError("break-glass stage must remove volatile apt and dpkg state")
-    if "apt-get" in break_glass_text:
-        raise ValueError("break-glass final stage must not rerun package installation")
     if f"USER {policy.identity.user_spec}" not in text:
         raise ValueError("Dockerfile USER does not match the DHI runtime identity")
     if "10001" in text:

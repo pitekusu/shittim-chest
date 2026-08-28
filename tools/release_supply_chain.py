@@ -720,10 +720,6 @@ def validate_cdk_asset_evidence_against_assembly(
 
 def create_manifest(
     *,
-    break_glass_config_digest: str,
-    break_glass_risk_evidence: Mapping[str, Path],
-    break_glass_sbom_path: Path,
-    break_glass_verification: object,
     cdk_assets: object,
     change_sets: object,
     commit_sha: str,
@@ -753,18 +749,7 @@ def create_manifest(
             sbom_path=normal_sbom_path,
             verification=normal_verification,
         ),
-        "break_glass": _manifest_image(
-            config_digest=break_glass_config_digest,
-            repository_uri=repository_uri,
-            risk_evidence=break_glass_risk_evidence,
-            sbom_path=break_glass_sbom_path,
-            verification=break_glass_verification,
-        ),
     }
-    if images["normal"]["digest"] == images["break_glass"]["digest"]:
-        raise ValueError("normal and break-glass images must use different digests")
-    if images["normal"]["config_digest"] == images["break_glass"]["config_digest"]:
-        raise ValueError("normal and break-glass images must use different config digests")
     changes = _object(change_sets, "change sets")
     if tuple(changes) != _STACKS:
         raise ValueError("change set order is invalid")
@@ -796,7 +781,7 @@ def create_manifest(
     if not runtime_config_parameter.startswith("/shittim-chest/production/runtime/v"):
         raise ValueError("runtime config parameter is not versioned")
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "repository": "pitekusu/shittim-chest",
         "workflow": ".github/workflows/release.yml",
         "commit_sha": commit_sha,
@@ -827,7 +812,7 @@ def validate_manifest(value: object) -> None:
         "lambda_bundle",
         "runtime_config_parameter",
     }
-    if set(root) != expected or root.get("schema_version") != 3:
+    if set(root) != expected or root.get("schema_version") != 4:
         raise ValueError("release manifest schema is invalid")
     if root.get("repository") != "pitekusu/shittim-chest":
         raise ValueError("release manifest repository is invalid")
@@ -837,7 +822,7 @@ def validate_manifest(value: object) -> None:
     if not isinstance(commit_sha, str) or _SHA.fullmatch(commit_sha) is None:
         raise ValueError("release manifest commit is invalid")
     images = _object(root.get("images"), "release images")
-    if tuple(images) != ("normal", "break_glass"):
+    if tuple(images) != ("normal",):
         raise ValueError("release image order is invalid")
     validated_digests: list[str] = []
     release_account: str | None = None
@@ -899,8 +884,8 @@ def validate_manifest(value: object) -> None:
         if not isinstance(sbom_sha, str) or re.fullmatch(r"[0-9a-f]{64}", sbom_sha) is None:
             raise ValueError("release SBOM hash is invalid")
         _validate_scan_predicate(image.get("scan"), digest=digest)
-    if len(set(validated_digests)) != 2:
-        raise ValueError("release image digests must be distinct")
+    if len(validated_digests) != 1:
+        raise ValueError("release image set is invalid")
     changes = _object(root.get("change_sets"), "release change sets")
     if tuple(changes) != _STACKS:
         raise ValueError("release change set order is invalid")
@@ -947,14 +932,12 @@ def validate_manifest(value: object) -> None:
 def validate_runtime_template(
     value: object,
     *,
-    break_glass_digest: str,
     normal_digest: str,
     repository_uri: str,
 ) -> None:
     """Require every application task image in the runtime template to use one digest."""
 
     _require_digest(normal_digest)
-    _require_digest(break_glass_digest)
     template = _object(value, "runtime template")
     resources = _object(template.get("Resources"), "runtime resources")
     images: dict[str, object] = {}
@@ -965,15 +948,11 @@ def validate_runtime_template(
         properties = _object(record.get("Properties"), "task definition")
         for container in _array(properties.get("ContainerDefinitions"), "containers"):
             container_record = _object(container, "container")
-            if container_record.get("Name") in {"application", "break-glass-application"}:
-                name = _string(container_record, "Name", "container")
-                if name in images:
-                    raise ValueError("runtime task image container is duplicated")
-                images[name] = container_record.get("Image")
-    expected = {
-        "application": f"{repository_uri}@{normal_digest}",
-        "break-glass-application": f"{repository_uri}@{break_glass_digest}",
-    }
+            name = _string(container_record, "Name", "container")
+            if name in images:
+                raise ValueError("runtime task image container is duplicated")
+            images[name] = container_record.get("Image")
+    expected = {"application": f"{repository_uri}@{normal_digest}"}
     if images != expected:
         raise ValueError("runtime task images are not the exact release digest")
 
@@ -1205,12 +1184,6 @@ def _parser() -> argparse.ArgumentParser:
     validate_assets.add_argument("--account", required=True)
     validate_assets.add_argument("--assembly", type=Path, required=True)
     create = commands.add_parser("create-manifest")
-    create.add_argument("--break-glass-config-digest-file", type=Path, required=True)
-    create.add_argument("--break-glass-raw-grype", type=Path, required=True)
-    create.add_argument("--break-glass-vendor-vex", type=Path, required=True)
-    create.add_argument("--break-glass-vex-grype", type=Path, required=True)
-    create.add_argument("--break-glass-sbom", type=Path, required=True)
-    create.add_argument("--break-glass-verification", type=Path, required=True)
     create.add_argument("--change-sets", type=Path, required=True)
     create.add_argument("--cdk-assets", type=Path, required=True)
     create.add_argument("--commit-sha", required=True)
@@ -1231,7 +1204,6 @@ def _parser() -> argparse.ArgumentParser:
     runtime.add_argument("template", type=Path)
     runtime.add_argument("--repository-uri", required=True)
     runtime.add_argument("--normal-digest", required=True)
-    runtime.add_argument("--break-glass-digest", required=True)
     change_set = commands.add_parser("validate-change-set")
     change_set.add_argument("change_set", type=Path)
     change_set.add_argument("--expected-arn", required=True)
@@ -1302,16 +1274,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "create-manifest":
             result = create_manifest(
-                break_glass_config_digest=args.break_glass_config_digest_file.read_text(
-                    encoding="ascii"
-                ).strip(),
-                break_glass_risk_evidence={
-                    "grype_raw": args.break_glass_raw_grype,
-                    "grype_vex": args.break_glass_vex_grype,
-                    "vendor_vex": args.break_glass_vendor_vex,
-                },
-                break_glass_sbom_path=args.break_glass_sbom,
-                break_glass_verification=_read(args.break_glass_verification),
                 cdk_assets=_read(args.cdk_assets),
                 change_sets=_read(args.change_sets),
                 commit_sha=args.commit_sha,
@@ -1336,7 +1298,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "validate-runtime-template":
             validate_runtime_template(
                 _read(args.template),
-                break_glass_digest=args.break_glass_digest,
                 normal_digest=args.normal_digest,
                 repository_uri=args.repository_uri,
             )

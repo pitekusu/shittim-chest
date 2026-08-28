@@ -6,7 +6,7 @@ aliases:
 tags: [shittim-chest, checklist, acceptance, scale-to-zero]
 status: completed
 created: 2026-07-28
-updated: 2026-08-14
+updated: 2026-08-28
 canonical_for: historical-completion
 related:
   - "[[10_scale-to-zero-goal]]"
@@ -54,6 +54,5 @@ related:
 
 - [ ] Bot token rotation
 - [ ] DynamoDB PITR restore to a separate table
-- [ ] break-glass ECS Exec
 
 current stateは[[20_実装・試験・検証記録]]を参照し、このhistorical checklistへ新featureを追加しない。

@@ -39,7 +39,6 @@ const RUNTIME_PROMPTS_ACTIVE_PARAMETER = `${RUNTIME_PROMPTS_ROOT}/active`;
 const RUNTIME_CLUSTER_NAME = "shittim-chest-production";
 const RUNTIME_SERVICE_NAME = "shittim-chest-production";
 const NORMAL_TASK_DEFINITION_FAMILY = "shittim-chest-production-normal";
-const BREAK_GLASS_TASK_DEFINITION_FAMILY = "shittim-chest-production-break-glass";
 const RECONCILER_SCHEDULE_NAME = "shittim-chest-production-runtime-reconciler";
 const DISCORD_STATUS_PUBLISHER_FUNCTION_NAME =
   "shittim-chest-production-discord-status-publisher";
@@ -152,8 +151,6 @@ interface ApplicationLambdaBundle {
 
 export class RuntimeStack extends Stack {
   public readonly applicationLogGroup: logs.LogGroup;
-  public readonly breakGlassLogGroup: logs.LogGroup;
-  public readonly breakGlassTaskDefinition: ecs.FargateTaskDefinition;
   public readonly cluster: ecs.Cluster;
   public readonly discordIngressAlias: lambda.Alias;
   public readonly discordIngressFunction: lambda.Function;
@@ -173,10 +170,6 @@ export class RuntimeStack extends Stack {
     const runtimeImageDigest = this.imageDigestParameter(
       "RuntimeImageDigest",
       "Approved production image manifest digest",
-    );
-    const breakGlassImageDigest = this.imageDigestParameter(
-      "BreakGlassImageDigest",
-      "Approved break-glass image manifest digest",
     );
     const configVersion = new CfnParameter(this, "RuntimeConfigVersion", {
       allowedPattern: CONFIG_VERSION_PATTERN,
@@ -203,13 +196,6 @@ export class RuntimeStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
       retention: logs.RetentionDays.THREE_MONTHS,
     });
-    this.breakGlassLogGroup = new logs.LogGroup(this, "BreakGlassExecLogGroup", {
-      dataProtectionPolicy,
-      logGroupName: "/ecs/shittim-chest/production/break-glass-exec",
-      removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
-      retention: logs.RetentionDays.THREE_MONTHS,
-    });
-
     this.vpc = new ec2.Vpc(this, "Vpc", {
       ipAddresses: ec2.IpAddresses.cidr("10.42.0.0/24"),
       maxAzs: 2,
@@ -245,13 +231,6 @@ export class RuntimeStack extends Stack {
     this.cluster = new ecs.Cluster(this, "Cluster", {
       clusterName: RUNTIME_CLUSTER_NAME,
       containerInsightsV2: ecs.ContainerInsights.DISABLED,
-      executeCommandConfiguration: {
-        logConfiguration: {
-          cloudWatchEncryptionEnabled: false,
-          cloudWatchLogGroup: this.breakGlassLogGroup,
-        },
-        logging: ecs.ExecuteCommandLogging.OVERRIDE,
-      },
       vpc: this.vpc,
     });
     Validations.of(this.cluster).acknowledge({
@@ -262,27 +241,19 @@ export class RuntimeStack extends Stack {
 
     const executionRole = this.executionRole();
     const normalTaskRole = this.taskRole("NormalTaskRole", "ShittimChest-Prod-Task");
-    const breakGlassTaskRole = this.taskRole(
-      "BreakGlassTaskRole",
-      "ShittimChest-Prod-BreakGlassTask",
-    );
     this.grantApplicationData(normalTaskRole, props.debateTable);
-    this.grantApplicationData(breakGlassTaskRole, props.debateTable);
     const statusPublisherArn = this.formatArn({
       resource: "function",
       resourceName: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
       service: "lambda",
     });
-    for (const role of [normalTaskRole, breakGlassTaskRole]) {
-      role.addToPrincipalPolicy(
-        new iam.PolicyStatement({
-          actions: ["lambda:InvokeFunction"],
-          resources: [statusPublisherArn],
-        }),
-      );
-      this.grantRuntimePromptRead(role);
-    }
-    this.grantBreakGlassAccess(breakGlassTaskRole);
+    normalTaskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["lambda:InvokeFunction"],
+        resources: [statusPublisherArn],
+      }),
+    );
+    this.grantRuntimePromptRead(normalTaskRole);
 
     const parameters = this.runtimeParameters(configVersion.valueAsString);
     const logging = ecs.LogDrivers.awsLogs({
@@ -298,23 +269,10 @@ export class RuntimeStack extends Stack {
       imageRepository: props.imageRepository,
       logging,
       parameters,
-      readonlyRootFilesystem: true,
       taskId: "NormalTaskDefinition",
       taskRole: normalTaskRole,
     });
     this.acknowledgeStaticEnvironment(this.normalTaskDefinition);
-    this.breakGlassTaskDefinition = this.taskDefinition({
-      containerName: "break-glass-application",
-      digest: breakGlassImageDigest.valueAsString,
-      executionRole,
-      imageRepository: props.imageRepository,
-      logging,
-      parameters,
-      readonlyRootFilesystem: false,
-      taskId: "BreakGlassTaskDefinition",
-      taskRole: breakGlassTaskRole,
-    });
-    this.acknowledgeStaticEnvironment(this.breakGlassTaskDefinition);
 
     this.service = new ecs.FargateService(this, "Service", {
       assignPublicIp: true,
@@ -990,43 +948,6 @@ export class RuntimeStack extends Stack {
     };
   }
 
-  private grantBreakGlassAccess(role: iam.Role): void {
-    role.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "ssmmessages:CreateControlChannel",
-          "ssmmessages:CreateDataChannel",
-          "ssmmessages:OpenControlChannel",
-          "ssmmessages:OpenDataChannel",
-        ],
-        resources: ["*"],
-      }),
-    );
-    role.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        actions: ["logs:CreateLogStream", "logs:DescribeLogStreams", "logs:PutLogEvents"],
-        resources: [`${this.breakGlassLogGroup.logGroupArn}:*`],
-      }),
-    );
-    role.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        actions: ["logs:DescribeLogGroups"],
-        resources: ["*"],
-      }),
-    );
-    Validations.of(role).acknowledge({
-      id: "AwsSolutions-IAM5[Resource::*]",
-      reason:
-        "ECS Exec channel and DescribeLogGroups APIs do not support resource-level permissions; this inactive break-glass role is never attached to the normal service.",
-    });
-    const breakGlassLogResource = this.breakGlassLogGroup.node.defaultChild as logs.CfnLogGroup;
-    Validations.of(role).acknowledge({
-      id: `AwsSolutions-IAM5[Resource::<${this.getLogicalId(breakGlassLogResource)}.Arn>:*]`,
-      reason:
-        "The break-glass log stream suffix is runtime-generated by ECS Exec and is scoped to the dedicated retained log group.",
-    });
-  }
-
   private grantRuntimePromptRead(role: iam.Role): void {
     const activeArn = this.parameterArn(RUNTIME_PROMPTS_ACTIVE_PARAMETER);
     const revisionArn = this.parameterArn(`${RUNTIME_PROMPTS_ROOT}/*`);
@@ -1121,16 +1042,13 @@ export class RuntimeStack extends Stack {
     readonly imageRepository: ecr.IRepository;
     readonly logging: ecs.LogDriver;
     readonly parameters: RuntimeParameters;
-    readonly readonlyRootFilesystem: boolean;
     readonly taskId: string;
     readonly taskRole: iam.IRole;
   }): ecs.FargateTaskDefinition {
     const definition = new ecs.FargateTaskDefinition(this, options.taskId, {
       cpu: 512,
       executionRole: options.executionRole,
-      family: options.readonlyRootFilesystem
-        ? NORMAL_TASK_DEFINITION_FAMILY
-        : BREAK_GLASS_TASK_DEFINITION_FAMILY,
+      family: NORMAL_TASK_DEFINITION_FAMILY,
       memoryLimitMiB: 1_024,
       runtimePlatform: {
         cpuArchitecture: ecs.CpuArchitecture.ARM64,
@@ -1165,7 +1083,7 @@ export class RuntimeStack extends Stack {
       linuxParameters,
       logging: options.logging,
       privileged: false,
-      readonlyRootFilesystem: options.readonlyRootFilesystem,
+      readonlyRootFilesystem: true,
       secrets: options.parameters.secrets,
       stopTimeout: Duration.seconds(120),
       user: RUNTIME_USER,

@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-20
+updated: 2026-08-28
 ---
 
 # GitHub・CI-CD詳細設計
@@ -29,7 +29,7 @@ updated: 2026-08-20
 | security | secret scan、dependency audit、source SBOM |
 | package | deterministic wheel／sdist |
 | cdk | TypeScript、Vitest、cdk-nag、synth、npm audit |
-| container-arm64 | production／break-glass build、policy、SBOM、config digest |
+| container-arm64 | production build、policy、SBOM、config digest |
 | grype | raw scan、VEX、fixable／residual risk gate |
 | docs-public-safety | mirror、links、public surface、license boundary |
 
@@ -38,14 +38,14 @@ workflow名と一致させ、rerunでflaky failureを隠さない。
 
 ## 3. Container evidence
 
-- canonical ARM64 path contextとDocker exporterでproduction／break-glassを同じSHAからbuildする。
-- 各targetのconfig digest、SBOM、VEX、Grype、risk resultを同一SHA／runに紐づくimage／scan
+- canonical ARM64 path contextとDocker exporterでproduction imageを固定SHAからbuildする。
+- production targetのconfig digest、SBOM、VEX、Grype、risk resultを同一SHA／runに紐づくimage／scan
   artifact間で照合する。artifactごとの保持fieldはworkflow schemaを正とする。
 - PR required gateは静的policy baselineや別runとのconfig digest完全一致を要求しない。
-- risk acceptanceが必要なfindingだけ、対象image kind、承認済みbuild contextごとの
+- risk acceptanceが必要なfindingだけ、production image kind、承認済みbuild contextごとの
   実測config digest、finding key、期限へ束縛する。同kindの独立したCI／Release buildは
   複数digestを一acceptanceに有限数登録できるが、未登録digestは拒否する。
-- `fault-test` imageはproduction／break-glassのbaselineやrisk acceptance対象外とする。
+- `fault-test` imageはproductionのbaselineやrisk acceptance対象外とする。
 - manifest digestからconfig digestを推測せず、別exporterや過去runの値を流用しない。
 
 ## 4. Production Release
@@ -65,8 +65,8 @@ plan
 
 - plan前にrepository identity、OIDC claims、named main checks、CodeQL、private handle metadata、stack、
   active Change Set、deployment lock、runtime activityを確認する。
-- Release内でproduction／break-glassを再buildし、各runのconfig digest、fixable High／Critical、
-  VEX後residual、target-specific risk acceptanceを検証する。
+- Release内でproduction imageを再buildし、各runのconfig digest、fixable High／Critical、
+  VEX後residual、production targetのrisk acceptanceを検証する。
 - push前に既存referrer一覧を保存し、差分から今回追加したprovenance、SBOM、vulnerability
   attestationを各1件特定する。過去referrerを削除しない。
 - Environment承認後にdeployment lockを原子的に取得し、attested Change Setだけを固定順で実行する。

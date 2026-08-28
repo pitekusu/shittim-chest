@@ -11,12 +11,10 @@ repository=""
 digest=""
 signing_profile_arn=""
 output_directory=""
-mode=""
 repository_set="false"
 digest_set="false"
 profile_set="false"
 output_set="false"
-mode_set="false"
 
 while (($#)); do
   if (($# < 2)); then
@@ -43,11 +41,6 @@ while (($#)); do
       output_directory="$2"
       output_set="true"
       ;;
-    --mode)
-      [[ "${mode_set}" == "false" ]] || error "invalid arguments"
-      mode="$2"
-      mode_set="true"
-      ;;
     *)
       error "invalid arguments"
       ;;
@@ -55,8 +48,8 @@ while (($#)); do
   shift 2
 done
 
-if [[ "${repository_set}/${digest_set}/${profile_set}/${output_set}/${mode_set}" != \
-  "true/true/true/true/true" ]]
+if [[ "${repository_set}/${digest_set}/${profile_set}/${output_set}" != \
+  "true/true/true/true" ]]
 then
   error "invalid arguments"
 fi
@@ -69,11 +62,6 @@ fi
 if [[ ! "${signing_profile_arn}" =~ ^arn:aws:signer:[a-z0-9-]+:[0-9]{12}:/signing-profiles/[A-Za-z0-9_]{2,64}$ ]]; then
   error "invalid signing profile"
 fi
-case "${mode}" in
-  normal|break-glass) ;;
-  *) error "invalid mode" ;;
-esac
-
 max_polls="${EVIDENCE_MAX_POLLS:-30}"
 poll_seconds="${EVIDENCE_POLL_SECONDS:-10}"
 if [[ ! "${max_polls}" =~ ^[1-9][0-9]*$ ]]; then
@@ -91,10 +79,10 @@ work_directory=$(mktemp -d "${output_directory}/.release-image-evidence.XXXXXX")
 trap 'rm -rf -- "${work_directory}"' EXIT
 export AWS_PAGER=""
 
-image_file="${work_directory}/${mode}.image.json"
-signing_file="${work_directory}/${mode}.signing.json"
-scan_file="${work_directory}/${mode}.scan.json"
-coverage_file="${work_directory}/${mode}.coverage.json"
+image_file="${work_directory}/normal.image.json"
+signing_file="${work_directory}/normal.signing.json"
+scan_file="${work_directory}/normal.scan.json"
+coverage_file="${work_directory}/normal.coverage.json"
 error_file="${work_directory}/aws.error"
 image_ready="false"
 signing_ready="false"

@@ -19,7 +19,6 @@ from shittim_records.contracts import AdminStatusOverall, AdminStatusSection
 NOW = datetime(2026, 8, 24, 3, 0, tzinfo=UTC)
 AWS_ACCOUNT_ID = "123456" + "789012"
 RUNTIME_DIGEST = "sha256:" + "a" * 64
-BREAK_GLASS_DIGEST = "sha256:" + "b" * 64
 STATUS_COLLECTORS = (
     ("ecs", "_ecs_section"),
     ("ecr", "_ecr_section"),
@@ -504,10 +503,6 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
                                 "ParameterKey": "RuntimeImageDigest",
                                 "ParameterValue": RUNTIME_DIGEST,
                             },
-                            {
-                                "ParameterKey": "BreakGlassImageDigest",
-                                "ParameterValue": BREAK_GLASS_DIGEST,
-                            },
                         ]
                     }
                 ]
@@ -531,20 +526,8 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
                                 ),
                             },
                             {
-                                "imageDigest": BREAK_GLASS_DIGEST,
-                                "imageTags": ["break-glass"],
-                                "imagePushedAt": NOW - timedelta(minutes=1),
-                                "imageSizeInBytes": 256,
-                                "artifactMediaType": (
-                                    "application/vnd.docker.container.image.v1+json"
-                                ),
-                                "imageManifestMediaType": (
-                                    "application/vnd.docker.distribution.manifest.v2+json"
-                                ),
-                            },
-                            {
                                 "imageDigest": "sha256:" + "c" * 64,
-                                "imagePushedAt": NOW - timedelta(minutes=2),
+                                "imagePushedAt": NOW - timedelta(minutes=1),
                                 "imageSizeInBytes": 64,
                                 "artifactMediaType": "application/vnd.cncf.notary.signature",
                             },
@@ -578,15 +561,14 @@ def test_ecr_resolves_release_approved_digests_instead_of_tags() -> None:
     assert cloudformation.stack_names == [configuration().runtime_stack_name]
     values = metrics(section)
     assert values["normal_image_present"] is True
-    assert values["break_glass_image_present"] is True
-    assert values["repository_image_count"] == 3
-    assert values["repository_tagged_image_count"] == 2
+    assert values["repository_image_count"] == 2
+    assert values["repository_tagged_image_count"] == 1
     assert values["repository_untagged_image_count"] == 1
-    assert values["repository_total_size_bytes"] == 448
+    assert values["repository_total_size_bytes"] == 192
     assert values["normal_tag_count"] == 1
     assert values["normal_media_type"] == "OCI_IMAGE"
     assert values["normal_last_pulled_at"] == NOW.isoformat()
-    assert values["break_glass_media_type"] == "DOCKER_V2"
+    assert "break_glass" not in values
     assert "sha256:" not in section.model_dump_json()
     assert RUNTIME_DIGEST[:19] not in section.model_dump_json()
 
@@ -597,7 +579,7 @@ def test_ecr_rejects_missing_runtime_stack_digest_without_using_stale_configurat
             return {"Stacks": [{"Parameters": []}]}
 
     with pytest.raises(ValueError, match="Runtime image digest is invalid"):
-        source(cloudformation=CloudFormation())._runtime_image_digests()
+        source(cloudformation=CloudFormation())._runtime_image_digest()
 
 
 def test_ecr_state_includes_tag_immutability() -> None:
@@ -611,10 +593,6 @@ def test_ecr_state_includes_tag_immutability() -> None:
                                 "ParameterKey": "RuntimeImageDigest",
                                 "ParameterValue": RUNTIME_DIGEST,
                             },
-                            {
-                                "ParameterKey": "BreakGlassImageDigest",
-                                "ParameterValue": BREAK_GLASS_DIGEST,
-                            },
                         ]
                     }
                 ]
@@ -627,11 +605,10 @@ def test_ecr_state_includes_tag_immutability() -> None:
                     {
                         "imageDetails": [
                             {
-                                "imageDigest": digest,
+                                "imageDigest": RUNTIME_DIGEST,
                                 "imagePushedAt": NOW,
                                 "imageSizeInBytes": 128,
                             }
-                            for digest in (RUNTIME_DIGEST, BREAK_GLASS_DIGEST)
                         ]
                     }
                 ]
