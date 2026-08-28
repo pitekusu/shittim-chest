@@ -388,6 +388,16 @@ describe("RuntimeStack", () => {
     const stage = Object.values(
       template.findResources("AWS::ApiGatewayV2::Stage"),
     )[0];
+    const accessLogDestination = JSON.stringify(
+      stage?.Properties.AccessLogSettings.DestinationArn,
+    );
+    expect(accessLogDestination).toContain(":log-group:");
+    expect(accessLogDestination).toContain("DiscordInteractionsAccessLogGroup");
+    expect(accessLogDestination).not.toContain("Fn::GetAtt");
+    expect(accessLogDestination).not.toContain(":*");
+    expect(JSON.stringify(stage?.DependsOn)).toContain(
+      "DiscordInteractionsAccessLogGroup",
+    );
     const accessLogFormat = stage?.Properties.AccessLogSettings.Format;
     expect(accessLogFormat).not.toContain("body");
     expect(accessLogFormat).not.toContain("header");

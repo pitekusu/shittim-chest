@@ -1,4 +1,5 @@
 import {
+  ArnFormat,
   Aws,
   CfnOutput,
   CfnParameter,
@@ -657,6 +658,12 @@ export class RuntimeStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN_ON_UPDATE_OR_DELETE,
       retention: logs.RetentionDays.THREE_MONTHS,
     });
+    const accessLogDestinationArn = this.formatArn({
+      arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+      resource: "log-group",
+      resourceName: accessLogs.logGroupName,
+      service: "logs",
+    });
     const api = new apigatewayv2.HttpApi(this, "DiscordInteractionsApi", {
       apiName: "shittim-chest-production-discord-interactions",
       createDefaultStage: false,
@@ -685,7 +692,7 @@ export class RuntimeStack extends Stack {
     });
     const cfnStage = stage.node.defaultChild as apigatewayv2.CfnStage;
     cfnStage.accessLogSettings = {
-      destinationArn: accessLogs.logGroupArn,
+      destinationArn: accessLogDestinationArn,
       format: JSON.stringify({
         integrationStatus: "$context.integration.status",
         requestId: "$context.requestId",
@@ -694,6 +701,7 @@ export class RuntimeStack extends Stack {
         status: "$context.status",
       }),
     };
+    stage.node.addDependency(accessLogs);
     new CfnOutput(this, "DiscordInteractionsEndpointUrl", {
       description: "Register this URL as the Discord Interactions Endpoint after rollout gates",
       value: `${api.apiEndpoint}/interactions`,
