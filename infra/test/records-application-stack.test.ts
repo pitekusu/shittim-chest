@@ -127,6 +127,17 @@ describe("RecordsApplicationStack", () => {
       },
       StageName: "$default",
     });
+    const stage = Object.values(
+      template.findResources("AWS::ApiGatewayV2::Stage"),
+    )[0];
+    const accessLogDestination = JSON.stringify(
+      stage?.Properties.AccessLogSettings.DestinationArn,
+    );
+    expect(accessLogDestination).toContain(":log-group:");
+    expect(accessLogDestination).toContain("RecordsApiAccessLogs");
+    expect(accessLogDestination).not.toContain("Fn::GetAtt");
+    expect(accessLogDestination).not.toContain(":*");
+    expect(JSON.stringify(stage?.DependsOn)).toContain("RecordsApiAccessLogs");
     const serialized = JSON.stringify(template.toJSON());
     expect(serialized).toContain("GET /api/v1/insights/rankings");
     expect(serialized).toContain("GET /api/v1/insights/costs");

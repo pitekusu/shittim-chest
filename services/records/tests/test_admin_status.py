@@ -1415,6 +1415,40 @@ def test_cloudformation_uses_last_recorded_drift_for_eight_stacks() -> None:
     assert "ShittimChest" not in section.model_dump_json()
 
 
+@pytest.mark.parametrize(
+    ("drift", "expected_state"),
+    (
+        ("DRIFTED", "warning"),
+        ("NOT_CHECKED", "unknown"),
+        ("UNKNOWN", "unknown"),
+        ("CHECK_IN_PROGRESS", "unknown"),
+        ("FUTURE_STATUS", "unknown"),
+    ),
+)
+def test_cloudformation_classifies_stack_drift_status(
+    drift: str,
+    expected_state: str,
+) -> None:
+    class CloudFormation:
+        def describe_stacks(self, *, StackName: str) -> dict[str, Any]:
+            return {
+                "Stacks": [
+                    {
+                        "StackName": StackName,
+                        "StackStatus": "UPDATE_COMPLETE",
+                        "DriftInformation": {"StackDriftStatus": drift},
+                        "EnableTerminationProtection": True,
+                        "LastUpdatedTime": NOW,
+                    }
+                ]
+            }
+
+    client = CloudFormation()
+    section = source(cloudformation=client, cloudformation_global=client)._cloudformation_section()
+
+    assert section.state == expected_state
+
+
 def test_sns_reports_delivery_counts_without_subscription_addresses() -> None:
     class Sns:
         def get_topic_attributes(self, **_kwargs: Any) -> dict[str, Any]:

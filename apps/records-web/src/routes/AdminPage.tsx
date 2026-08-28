@@ -1234,7 +1234,14 @@ function ServiceCard({ section }: { readonly section: AdminStatusSection }): Rea
             <h3>
               {presentation.name.split(/(\d+)/u).map((part, index) =>
                 /^\d+$/u.test(part) ? (
-                  <span className={adminStyles.numericGlyph} key={`${part}-${index}`}>
+                  <span
+                    className={
+                      section.service === "s3"
+                        ? adminStyles.displayNumericGlyph
+                        : adminStyles.numericGlyph
+                    }
+                    key={`${part}-${index}`}
+                  >
                     {part}
                   </span>
                 ) : (

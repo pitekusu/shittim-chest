@@ -65,6 +65,7 @@ _EVENT_RULE_DESCRIPTIONS = {
 }
 _STABLE_STACK_STATUSES = frozenset({"CREATE_COMPLETE", "IMPORT_COMPLETE", "UPDATE_COMPLETE"})
 _CRITICAL_STACK_STATUS_PARTS = ("FAILED", "ROLLBACK_IN_PROGRESS", "DELETE_")
+_UNKNOWN_STACK_DRIFT_STATUSES = frozenset({"NOT_CHECKED", "UNKNOWN", "CHECK_IN_PROGRESS"})
 _CHECKPOINT_SOURCES = ("AWS", "OPENAI", "FRANKFURTER")
 
 
@@ -1461,16 +1462,10 @@ class AwsAdminStatusSource:
                 unknown = True
             else:
                 critical = critical or any(part in status for part in _CRITICAL_STACK_STATUS_PARTS)
-                warning = (
-                    warning
-                    or status not in _STABLE_STACK_STATUSES
-                    or drift
-                    in {
-                        "MODIFIED",
-                        "DELETED",
-                    }
+                warning = warning or status not in _STABLE_STACK_STATUSES or drift == "DRIFTED"
+                unknown = unknown or (
+                    drift in _UNKNOWN_STACK_DRIFT_STATUSES or drift not in {"IN_SYNC", "DRIFTED"}
                 )
-                unknown = unknown or drift in {"NOT_CHECKED", "UNKNOWN", "CHECK_IN_PROGRESS"}
             metrics.extend(
                 (
                     _metric(f"{label}_status", status or "unknown"),

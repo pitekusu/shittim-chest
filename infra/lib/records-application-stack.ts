@@ -879,6 +879,12 @@ export class RecordsApplicationStack extends Stack {
       retention: logs.RetentionDays.THREE_MONTHS,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    const accessLogDestinationArn = this.formatArn({
+      arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+      resource: "log-group",
+      resourceName: accessLogs.logGroupName,
+      service: "logs",
+    });
     const api = new apigatewayv2.HttpApi(this, "RecordsApi", {
       apiName: "shittim-chest-production-records",
       createDefaultStage: false,
@@ -951,7 +957,9 @@ export class RecordsApplicationStack extends Stack {
       autoDeploy: true,
       throttle: { rateLimit: 10, burstLimit: 20 },
       accessLogSettings: {
-        destination: new apigatewayv2.LogGroupLogDestination(accessLogs),
+        destination: {
+          bind: () => ({ destinationArn: accessLogDestinationArn }),
+        },
         format: apigateway.AccessLogFormat.custom(
           JSON.stringify({
             requestId: "$context.requestId",
@@ -963,6 +971,7 @@ export class RecordsApplicationStack extends Stack {
         ),
       },
     });
+    stage.node.addDependency(accessLogs);
     new CfnOutput(this, "RecordsApiEndpoint", { value: stage.url });
   }
 
