@@ -193,7 +193,7 @@ def inspector_translation_handler(_event: Mapping[str, Any], _context: object) -
             event="records_inspector_translation_failed",
             failure_code=error.code,
         )
-        raise
+        raise InspectorTranslationUnavailable(error.code) from None
     response = {
         "discovered": summary.discovered,
         "cached": summary.cached,
