@@ -19,7 +19,7 @@ jobs:
   drift:
     name: drift
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
@@ -52,7 +52,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_RELEASE_DRIFT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: drift-${{ github.run_id }}-${{ github.run_attempt }}
-          role-duration-seconds: 1800
+          role-duration-seconds: 3600
           mask-aws-account-id: true
           unset-current-credentials: true
           retry-max-attempts: 3
@@ -94,7 +94,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_RECORDS_DRIFT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: records-drift-${{ github.run_id }}-${{ github.run_attempt }}
-          role-duration-seconds: 1800
+          role-duration-seconds: 3600
           mask-aws-account-id: true
           unset-current-credentials: true
           retry-max-attempts: 3

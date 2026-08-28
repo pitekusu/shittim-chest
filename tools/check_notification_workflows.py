@@ -1514,6 +1514,7 @@ def _validate_drift(directory: Path) -> None:
     required = (
         "name: Infrastructure Drift",
         "cancel-in-progress: false",
+        "timeout-minutes: 90",
         "vars.AWS_RELEASE_DRIFT_ROLE_ARN",
         "vars.AWS_RECORDS_DRIFT_ROLE_ARN",
         "detect-stack-drift",
@@ -1528,6 +1529,8 @@ def _validate_drift(directory: Path) -> None:
     for marker in required:
         if marker not in text:
             raise WorkflowPolicyError(f"Drift lacks required policy marker: {marker}")
+    if text.count("role-duration-seconds: 3600") != 2:
+        raise WorkflowPolicyError("Drift roles must cover their serial detection windows")
     if re.search(
         r"secrets\.|environment:\s*production|execute-change-set|create-change-set|"
         r"\b(?:update|delete)-stack\b|\bcdk\s+deploy\b|runs-on:\s*self-hosted",

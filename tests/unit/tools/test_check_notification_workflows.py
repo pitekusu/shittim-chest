@@ -59,6 +59,7 @@ def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "marker",
     (
+        "timeout-minutes: 90",
         "vars.AWS_RECORDS_DRIFT_ROLE_ARN",
         "Detect Records stack drift without remediation",
         "ShittimChest-Prod-RecordsStateful",
@@ -78,6 +79,22 @@ def test_drift_requires_records_stacks_and_dedicated_role(
     )
 
     with pytest.raises(WorkflowPolicyError, match="Drift lacks required policy marker"):
+        validate_notification_workflows(directory)
+
+
+def test_drift_roles_cover_their_serial_detection_windows(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / DRIFT_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "role-duration-seconds: 3600",
+            "role-duration-seconds: 1800",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="serial detection windows"):
         validate_notification_workflows(directory)
 
 
