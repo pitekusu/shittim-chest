@@ -1488,9 +1488,12 @@ test("reduced motion skips the long login and logoff transitions", async ({ page
   );
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible({
-    timeout: 1_000,
-  });
+  await expect
+    .poll(() => page.evaluate(() => sessionStorage.getItem("shittim-records-login-transition")), {
+      timeout: 1_000,
+    })
+    .toBeNull();
+  await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible();
   await page.getByRole("link", { name: /^いろいろ/ }).click();
   const reducedScene = page.locator('[data-route-scene="/insights"]');
   await expect(reducedScene).toHaveCSS("animation-name", "none");
