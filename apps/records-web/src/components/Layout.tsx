@@ -105,11 +105,18 @@ export function Layout({
               SYSTEM ACCESS
             </p>
             <NavLink
-              aria-label="管理コンソール"
+              aria-label="サービス状態確認"
               className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
               to="/admin"
+              end
             >
-              管理コンソール
+              サービス状態確認
+            </NavLink>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/admin/prompts"
+            >
+              プロンプト管理
             </NavLink>
           </section>
         </nav>
@@ -142,13 +149,23 @@ export function Layout({
           いろいろ
         </NavLink>
         <NavLink
-          aria-label="管理コンソール"
+          aria-label="サービス状態確認"
           className={({ isActive }) =>
             `${isActive ? styles.navActive : styles.navLink} ${styles.mobileAdminLink}`
           }
           to="/admin"
+          end
         >
-          <span>管理コンソール</span>
+          <span>状態確認</span>
+        </NavLink>
+        <NavLink
+          aria-label="プロンプト管理"
+          className={({ isActive }) =>
+            `${isActive ? styles.navActive : styles.navLink} ${styles.mobileAdminLink}`
+          }
+          to="/admin/prompts"
+        >
+          <span>プロンプト</span>
         </NavLink>
         <ThemeSwitch compact theme={theme} onToggle={onThemeToggle} />
         <button className={styles.mobileLogout} type="button" lang="en" onClick={onLogout}>

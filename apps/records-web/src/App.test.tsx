@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("App shell", () => {
-  it("shows ADMIN to every member and renders a branded denial without Admin API calls", async () => {
+  it("shows both SYSTEM ACCESS links and renders a branded denial without Admin API calls", async () => {
     window.history.replaceState(null, "", "/admin");
     const requests = mockApi();
 
@@ -36,13 +36,8 @@ describe("App shell", () => {
 
     expect(await screen.findByRole("heading", { name: "ACCESS DENIED" })).toBeVisible();
     expect(screen.getByText("この画面を利用する権限がありません。")).toBeVisible();
-    const adminLinks = screen.getAllByRole("link", { name: "管理コンソール" });
-    expect(adminLinks).toHaveLength(2);
-    for (const link of adminLinks) {
-      expect(link).toHaveTextContent("管理コンソール");
-      expect(link).not.toHaveTextContent("ACTIVE");
-      expect(link).not.toHaveTextContent("ADMIN");
-    }
+    expect(screen.getAllByRole("link", { name: "サービス状態確認" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "プロンプト管理" })).toHaveLength(2);
     expect(screen.getByText("SYSTEM ACCESS")).toBeVisible();
     expect(requests).toEqual(["/api/v1/session?contract=admin-v1"]);
   });

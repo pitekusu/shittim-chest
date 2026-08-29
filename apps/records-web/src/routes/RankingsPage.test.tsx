@@ -61,8 +61,11 @@ describe("RankingsPage", () => {
     ).toHaveAttribute("value", "12");
     expect(screen.getByText("最終集計:")).toHaveTextContent("2026年8月22日 09:00");
     const costs = await screen.findByRole("region", { name: "概算費用" });
-    expect(within(costs).getByText("¥123.456789")).toBeVisible();
-    expect(within(costs).getByText("¥0.000001")).toBeVisible();
+    expect(within(costs).getByText("¥124")).toBeVisible();
+    expect(within(costs).getByText("¥1")).toBeVisible();
+    expect(within(costs).getByText("¥2")).toBeVisible();
+    expect(within(costs).getByText("¥100")).toBeVisible();
+    expect(within(costs).getByText("¥22")).toBeVisible();
     for (const category of ["Fargate", "Lambda", "OpenAI", "その他AWS"]) {
       expect(within(costs).getByText(category)).toBeVisible();
     }
@@ -86,7 +89,7 @@ describe("RankingsPage", () => {
     );
 
     renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
-    await screen.findByText("¥123.456789");
+    await screen.findByText("¥124");
     fireEvent.click(screen.getByRole("radio", { name: "今日" }));
 
     await waitFor(() => expect(requests).toContain("/api/v1/insights/costs?period=today"));

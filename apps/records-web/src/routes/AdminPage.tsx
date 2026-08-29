@@ -3,7 +3,12 @@ import { Link } from "react-router-dom";
 
 import { getAdminStatus, refreshAdminStatus } from "../api/admin";
 import { RecordsApiError } from "../api/http";
-import type { AdminHealthState, AdminService, AdminStatusResponse } from "../api/types";
+import type {
+  AdminAlarmCode,
+  AdminHealthState,
+  AdminService,
+  AdminStatusResponse,
+} from "../api/types";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import { formatCompletedDateTime } from "../lib/dateTime";
 import adminStyles from "../styles/admin.module.css";
@@ -39,6 +44,40 @@ const HEALTH_LABELS: Readonly<Record<AdminHealthState, string>> = {
   warning: "注意",
   critical: "異常",
   unknown: "未確認",
+};
+
+const SERVICE_ORDER: readonly AdminService[] = [
+  "ecs",
+  "ecr",
+  "inspector",
+  "s3",
+  "dynamodb",
+  "lambda",
+  "cloudfront",
+  "sqs",
+  "apigateway",
+  "eventbridge",
+  "cloudformation",
+  "sns",
+  "signer",
+  "ssm",
+  "cost_governance",
+  "external",
+];
+
+const SERVICE_ORDER_INDEX = new Map(
+  SERVICE_ORDER.map((service, index) => [service, index] as const),
+);
+
+const ALARM_LABELS: Readonly<Record<AdminAlarmCode, string>> = {
+  "bot-not-ready": "Discord Botの準備未完了",
+  "heartbeat-stale": "Runtime heartbeatの停止",
+  "ingress-runtime-mismatch": "受付待ちとRuntime起動状態の不一致",
+  "idle-still-running": "待機中Runtimeの停止遅延",
+  "reconciler-failure": "Runtime調整処理の失敗",
+  "status-publish-failure": "Discord状態通知の失敗",
+  "outbox-backlog": "送信待ちイベントの滞留",
+  "dynamo-db-throttle": "DynamoDBのスロットリング",
 };
 
 const INSPECTOR_SEVERITIES = [
@@ -85,12 +124,6 @@ const SIMPLE_METRICS: Readonly<
     { name: "pending_subscriptions", label: "確認待ち購読" },
     { name: "day_delivered", label: "24時間の配信" },
     { name: "day_failed", label: "24時間の失敗" },
-  ],
-  signer: [
-    { name: "status", label: "署名profile" },
-    { name: "platform", label: "署名方式" },
-    { name: "validity_value", label: "署名有効期間" },
-    { name: "validity_unit", label: "期間単位" },
   ],
 };
 
@@ -169,6 +202,7 @@ const EXTERNAL_SOURCES = [
 interface AdminPageProps {
   readonly isAdmin: boolean;
   readonly csrfToken: string;
+  readonly view?: "status" | "prompts";
 }
 
 function newIdempotencyKey(): string {
@@ -501,6 +535,38 @@ function PanelState({
   );
 }
 
+function StatusLoadingState(): React.JSX.Element {
+  const stages = ["実行基盤", "データ", "配信", "運用"] as const;
+  return (
+    <div className={adminStyles.statusLoading} aria-busy="true">
+      <output className={commonStyles.visuallyHidden}>
+        AWSの状態を読み込んでいます。16サービスを並列で確認しています。
+      </output>
+      <div className={adminStyles.statusLoadingVisual} aria-hidden="true">
+        <span className={adminStyles.statusLoadingOrbit}>
+          <span />
+        </span>
+        <span className={adminStyles.statusLoadingDiamond} />
+      </div>
+      <div className={adminStyles.statusLoadingContent}>
+        <strong>AWSの状態を読み込んでいます</strong>
+        <span>16サービスを並列で確認しています。完了すると自動的に表示が切り替わります。</span>
+        <div className={adminStyles.statusLoadingTrack} aria-hidden="true">
+          <span />
+        </div>
+        <ol className={adminStyles.statusLoadingStages} aria-hidden="true">
+          {stages.map((stage) => (
+            <li key={stage}>
+              <span />
+              {stage}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
 function StateBadge({ state }: { readonly state: AdminHealthState }): React.JSX.Element {
   return (
     <span className={adminStyles.stateBadge} data-tone={healthTone(state)}>
@@ -516,6 +582,8 @@ function OverviewPanel({
   readonly status: AdminStatusResponse | undefined;
 }): React.JSX.Element {
   const state = status?.overall.state ?? "unknown";
+  const activeAlarms = status?.overall.activeAlarms ?? [];
+  const alarmCount = (status?.overall.criticalAlarms ?? 0) + (status?.overall.warningAlarms ?? 0);
   return (
     <section
       className={`${adminStyles.adminPanel} ${adminStyles.overviewPanel}`}
@@ -578,6 +646,38 @@ function OverviewPanel({
           </div>
         </dl>
       </div>
+      {activeAlarms.length > 0 && (
+        <section className={adminStyles.activeAlarms} aria-labelledby="active-alarms-title">
+          <header>
+            <div>
+              <span className={adminStyles.activeAlarmPulse} aria-hidden="true" />
+              <h3 id="active-alarms-title">発生中のアラーム</h3>
+            </div>
+            <span>{activeAlarms.length}件の原因を確認</span>
+          </header>
+          <ul>
+            {activeAlarms.map((alarm) => {
+              const service = SERVICE_PRESENTATION[alarm.service];
+              return (
+                <li key={`${alarm.severity}-${alarm.code}`} data-severity={alarm.severity}>
+                  <a href={`#admin-service-${alarm.service}`}>
+                    <span className={adminStyles.activeAlarmSeverity}>
+                      {alarm.severity === "critical" ? "重大" : "警告"}
+                    </span>
+                    <strong>{ALARM_LABELS[alarm.code]}</strong>
+                    <span>{service.name}を確認 →</span>
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+      {alarmCount > 0 && activeAlarms.length === 0 && (
+        <output className={adminStyles.alarmDetailsPending}>
+          アラームの対象サービスを確認しています。
+        </output>
+      )}
     </section>
   );
 }
@@ -598,6 +698,49 @@ function SimpleMetricGrid({
           <dd>{metricValue(metrics, definition.name)}</dd>
         </div>
       ))}
+    </dl>
+  );
+}
+
+function signerValidity(metrics: ReadonlyMap<string, AdminStatusMetric>): string {
+  const rawValue = metrics.get("validity_value")?.value;
+  const rawUnit = metrics.get("validity_unit")?.value;
+  if ((typeof rawValue !== "number" && typeof rawValue !== "string") || rawValue === "") {
+    return "未取得";
+  }
+  const value = typeof rawValue === "number" ? rawValue.toLocaleString("ja-JP") : rawValue;
+  const units: Readonly<Record<string, string>> = {
+    DAYS: "日間",
+    MONTHS: "か月間",
+    YEARS: "年間",
+  };
+  const unit = typeof rawUnit === "string" ? units[rawUnit] : undefined;
+  return unit === undefined ? `${value}（単位未取得）` : `署名時から${value}${unit}有効`;
+}
+
+function SignerMetrics({
+  metrics: source,
+}: {
+  readonly metrics: readonly AdminStatusMetric[];
+}): React.JSX.Element {
+  const metrics = metricLookup(source);
+  return (
+    <dl className={`${adminStyles.metricGrid} ${adminStyles.signerMetricGrid}`}>
+      <div className={adminStyles.metricItem}>
+        <span className={adminStyles.metricMarker} aria-hidden="true" />
+        <dt>署名profile</dt>
+        <dd>{metricValue(metrics, "status")}</dd>
+      </div>
+      <div className={adminStyles.metricItem}>
+        <span className={adminStyles.metricMarker} aria-hidden="true" />
+        <dt>署名方式</dt>
+        <dd>{metricValue(metrics, "platform")}</dd>
+      </div>
+      <div className={`${adminStyles.metricItem} ${adminStyles.signerValidity}`}>
+        <span className={adminStyles.metricMarker} aria-hidden="true" />
+        <dt>署名の有効期間</dt>
+        <dd>{signerValidity(metrics)}</dd>
+      </div>
     </dl>
   );
 }
@@ -1422,6 +1565,7 @@ function ServiceMetrics({
   if (section.service === "cost_governance") {
     return <CostGovernanceMetrics metrics={section.metrics} />;
   }
+  if (section.service === "signer") return <SignerMetrics metrics={section.metrics} />;
   if (section.service === "external") return <ExternalMetrics metrics={section.metrics} />;
   return <SimpleMetricGrid section={section} />;
 }
@@ -1454,6 +1598,7 @@ function ServiceCard({
   return (
     <article
       className={adminStyles.statusCard}
+      id={`admin-service-${section.service}`}
       data-layout={wide ? "wide" : "standard"}
       data-service={section.service}
     >
@@ -1510,6 +1655,14 @@ function AwsStatusPanel({
     data?.sections
       .find((section) => section.service === "inspector")
       ?.metrics.filter((metric) => TRANSLATION_CACHE_METRIC_NAMES.has(metric.name)) ?? [];
+  const orderedSections =
+    data === undefined
+      ? []
+      : [...data.sections].sort(
+          (left, right) =>
+            (SERVICE_ORDER_INDEX.get(left.service) ?? Number.MAX_SAFE_INTEGER) -
+            (SERVICE_ORDER_INDEX.get(right.service) ?? Number.MAX_SAFE_INTEGER),
+        );
 
   return (
     <section
@@ -1530,6 +1683,7 @@ function AwsStatusPanel({
             className={`${commonStyles.secondaryButton} ${adminStyles.refreshButton}`}
             type="button"
             disabled={refresh.isPending}
+            data-busy={refresh.isPending || undefined}
             onClick={() => refresh.mutate()}
           >
             <span aria-hidden="true">↻</span>
@@ -1537,13 +1691,13 @@ function AwsStatusPanel({
           </button>
         </div>
       </header>
-      {status.isPending && !data && (
-        <PanelState
-          busy
-          title="AWSの状態を読み込んでいます"
-          message="最大60秒のcacheを利用します。"
-        />
+      {refresh.isPending && data && (
+        <output className={adminStyles.refreshProgress}>
+          <span aria-hidden="true" />
+          最新のAWS状態を確認しています。
+        </output>
       )}
+      {status.isPending && !data && <StatusLoadingState />}
       {status.isError && !data && (
         <PanelState
           title="AWSの状態を読み込めませんでした"
@@ -1567,7 +1721,7 @@ function AwsStatusPanel({
             </output>
           )}
           <div className={adminStyles.statusGrid}>
-            {data.sections.map((section) => (
+            {orderedSections.map((section) => (
               <ServiceCard
                 key={section.service}
                 section={section}
@@ -1589,19 +1743,31 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
     <div className={adminStyles.adminPage} data-route-motion-ready="">
       <header className={`${commonStyles.pageHeader} ${routeStyles.routeMotionItem}`}>
         <p className={commonStyles.eyebrow} lang="en">
-          SHITTIM CHEST CONTROL
+          SERVICE STATUS
         </p>
         <h1
           className={`${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`}
           tabIndex={-1}
         >
-          管理コンソール
+          サービス状態確認
         </h1>
       </header>
       <div className={adminStyles.adminWorkspace}>
         <nav className={adminStyles.sectionNavigation} aria-label="管理画面内ナビゲーション">
-          <a href="#admin-overview">概要</a>
-          <a href="#admin-status">サービス</a>
+          <a className={adminStyles.sectionPrimaryLink} href="#admin-overview">
+            概要
+          </a>
+          <a className={adminStyles.sectionPrimaryLink} href="#admin-status">
+            サービス
+          </a>
+          <div className={adminStyles.serviceAnchorList}>
+            {SERVICE_ORDER.map((service) => (
+              <a href={`#admin-service-${service}`} key={service}>
+                <span aria-hidden="true" />
+                {SERVICE_PRESENTATION[service].name}
+              </a>
+            ))}
+          </div>
         </nav>
         <div className={adminStyles.adminContent}>
           <OverviewPanel status={status.data} />
@@ -1612,6 +1778,49 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
   );
 }
 
-export default function AdminPage({ isAdmin, csrfToken }: AdminPageProps): React.JSX.Element {
-  return isAdmin ? <AuthorizedAdminPage csrfToken={csrfToken} /> : <AdminAccessDenied />;
+function AuthorizedPromptPage(): React.JSX.Element {
+  return (
+    <div className={adminStyles.adminPage} data-route-motion-ready="">
+      <header className={`${commonStyles.pageHeader} ${routeStyles.routeMotionItem}`}>
+        <p className={commonStyles.eyebrow} lang="en">
+          PROMPT MANAGEMENT
+        </p>
+        <h1
+          className={`${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`}
+          tabIndex={-1}
+        >
+          プロンプト管理
+        </h1>
+      </header>
+      <section
+        className={`${adminStyles.adminPanel} ${adminStyles.promptPlaceholder}`}
+        data-route-motion-terminal=""
+        aria-labelledby="prompt-placeholder-title"
+      >
+        <span className={adminStyles.promptPlaceholderMark} aria-hidden="true" />
+        <div>
+          <h2 id="prompt-placeholder-title">プロンプト管理は準備中です</h2>
+          <p className={commonStyles.japaneseText}>
+            現在はサービス状態の確認のみ利用できます。プロンプトの参照・更新機能は、専用の安全な更新契約とともに追加します。
+          </p>
+          <Link className={commonStyles.secondaryButton} to="/admin">
+            サービス状態確認へ
+          </Link>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export default function AdminPage({
+  isAdmin,
+  csrfToken,
+  view = "status",
+}: AdminPageProps): React.JSX.Element {
+  if (!isAdmin) return <AdminAccessDenied />;
+  return view === "prompts" ? (
+    <AuthorizedPromptPage />
+  ) : (
+    <AuthorizedAdminPage csrfToken={csrfToken} />
+  );
 }

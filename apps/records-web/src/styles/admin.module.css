@@ -33,6 +33,8 @@
   top: 28px;
   display: grid;
   gap: 6px;
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
   padding: 10px;
   border: 1px solid var(--records-panel-border);
   border-radius: 18px;
@@ -41,7 +43,7 @@
   backdrop-filter: blur(18px);
 }
 
-.sectionNavigation a {
+.sectionPrimaryLink {
   display: grid;
   min-height: 48px;
   align-content: center;
@@ -56,7 +58,7 @@
     color 150ms ease;
 }
 
-.sectionNavigation a::before {
+.sectionPrimaryLink::before {
   width: 22px;
   height: 2px;
   margin-bottom: 6px;
@@ -64,10 +66,50 @@
   content: "";
 }
 
-.sectionNavigation a:hover,
-.sectionNavigation a:focus-visible {
+.sectionPrimaryLink:hover,
+.sectionPrimaryLink:focus-visible,
+.serviceAnchorList a:hover,
+.serviceAnchorList a:focus-visible {
   background: var(--records-cyan-100);
   color: var(--records-ink-900);
+}
+
+.serviceAnchorList {
+  display: grid;
+  gap: 2px;
+  margin-top: 3px;
+  padding: 8px 5px 3px;
+  border-top: 1px solid var(--records-line);
+}
+
+.serviceAnchorList a {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border-radius: 9px;
+  color: var(--records-ink-600);
+  font-size: 0.67rem;
+  font-weight: 700;
+  text-decoration: none;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+.serviceAnchorList a > span {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border: 1px solid var(--records-cyan-ink);
+  transform: rotate(45deg);
+}
+
+.serviceAnchorList a:hover,
+.serviceAnchorList a:focus-visible {
+  transform: translateX(3px);
 }
 
 .adminContent {
@@ -261,6 +303,117 @@
   line-height: 1.5;
 }
 
+.activeAlarms {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgb(217 109 158 / 42%);
+  border-radius: 18px;
+  background: linear-gradient(120deg, var(--records-pink-100), transparent 76%);
+}
+
+.activeAlarms > header,
+.activeAlarms > header > div {
+  display: flex;
+  align-items: center;
+}
+
+.activeAlarms > header {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.activeAlarms > header > div {
+  gap: 9px;
+}
+
+.activeAlarms h3 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.activeAlarms > header > span {
+  color: var(--records-ink-600);
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.activeAlarmPulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--records-pink-ink);
+  box-shadow: 0 0 0 5px rgb(217 109 158 / 13%);
+  animation: adminAlarmPulse 1.5s ease-in-out infinite;
+}
+
+.activeAlarms ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activeAlarms li a {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--records-line);
+  border-left: 4px solid var(--records-pink-ink);
+  border-radius: 12px;
+  background: var(--records-surface);
+  color: var(--records-ink-900);
+  text-decoration: none;
+  transition:
+    border-color 150ms ease,
+    transform 150ms ease;
+}
+
+.activeAlarms li[data-severity="critical"] a {
+  border-left-color: var(--admin-severity-critical);
+}
+
+.activeAlarms li a:hover,
+.activeAlarms li a:focus-visible {
+  border-color: var(--records-line-strong);
+  transform: translateX(3px);
+}
+
+.activeAlarms li a > span:last-child {
+  color: var(--records-cyan-ink);
+  font-size: 0.67rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.activeAlarmSeverity {
+  display: inline-flex;
+  min-height: 25px;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid rgb(217 109 158 / 42%);
+  border-radius: 999px;
+  background: var(--records-pink-100);
+  color: var(--records-pink-ink);
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
+.alarmDetailsPending {
+  margin: 18px 0 0;
+  padding: 11px 14px;
+  border: 1px solid var(--records-line);
+  border-radius: 12px;
+  background: var(--records-lavender-100);
+  color: var(--records-ink-600);
+  font-size: 0.72rem;
+}
+
 .stateBadge {
   min-height: 30px;
   gap: 7px;
@@ -309,6 +462,7 @@
   padding: 20px;
   overflow: hidden;
   border-radius: 21px;
+  scroll-margin-top: 28px;
 }
 
 .statusCard::after {
@@ -467,6 +621,14 @@
   font-size: 0.78rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+}
+
+.signerMetricGrid {
+  align-self: start;
+}
+
+.signerValidity {
+  grid-column: 1 / -1;
 }
 
 .tableScroller {
@@ -1040,6 +1202,220 @@
   font-size: 0.78rem;
 }
 
+.statusLoading {
+  display: grid;
+  min-height: 250px;
+  grid-template-columns: 128px minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(22px, 4vw, 44px);
+  padding: clamp(28px, 5vw, 48px);
+  border: 1px solid var(--records-line);
+  border-radius: 20px;
+  background:
+    linear-gradient(120deg, var(--records-cyan-100), transparent 48%),
+    var(--records-control-background-soft);
+}
+
+.statusLoadingVisual {
+  position: relative;
+  display: grid;
+  width: 116px;
+  height: 116px;
+  place-items: center;
+}
+
+.statusLoadingOrbit {
+  position: absolute;
+  inset: 7px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 50%;
+  animation: adminLoadingOrbit 2.4s linear infinite;
+}
+
+.statusLoadingOrbit::before,
+.statusLoadingOrbit::after {
+  position: absolute;
+  border: 1px solid var(--records-line);
+  border-radius: 50%;
+  content: "";
+}
+
+.statusLoadingOrbit::before {
+  inset: 13px;
+}
+
+.statusLoadingOrbit::after {
+  inset: 30px;
+}
+
+.statusLoadingOrbit > span {
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--records-cyan-ink);
+  box-shadow: 0 0 0 6px rgb(79 199 220 / 13%);
+}
+
+.statusLoadingDiamond {
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--records-cyan-ink);
+  box-shadow: inset 0 0 0 6px var(--records-surface);
+  transform: rotate(45deg);
+  animation: adminLoadingDiamond 1.2s ease-in-out infinite alternate;
+}
+
+.statusLoadingContent {
+  display: grid;
+  gap: 9px;
+}
+
+.statusLoadingContent > strong {
+  color: var(--records-ink-900);
+  font-size: clamp(1rem, 2vw, 1.3rem);
+}
+
+.statusLoadingContent > span {
+  color: var(--records-ink-600);
+  font-size: 0.78rem;
+  line-height: 1.7;
+}
+
+.statusLoadingTrack {
+  position: relative;
+  height: 7px;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid var(--records-line);
+  border-radius: 999px;
+  background: var(--records-meter-track);
+}
+
+.statusLoadingTrack > span,
+.refreshProgress > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--records-cyan-ink), transparent);
+  animation: adminLoadingSweep 1.5s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.statusLoadingStages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  color: var(--records-ink-600);
+  font-size: 0.65rem;
+  font-weight: 700;
+  list-style: none;
+}
+
+.statusLoadingStages li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.statusLoadingStages li > span {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--records-line-strong);
+  animation: adminLoadingStage 1.6s ease-in-out infinite;
+}
+
+.statusLoadingStages li:nth-child(2) > span {
+  animation-delay: 200ms;
+}
+
+.statusLoadingStages li:nth-child(3) > span {
+  animation-delay: 400ms;
+}
+
+.statusLoadingStages li:nth-child(4) > span {
+  animation-delay: 600ms;
+}
+
+.refreshProgress {
+  position: relative;
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  margin-top: 14px;
+  overflow: hidden;
+  padding: 8px 12px;
+  border: 1px solid var(--records-line);
+  border-radius: 11px;
+  background: var(--records-cyan-100);
+  color: var(--records-ink-600);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.refreshProgress > span {
+  opacity: 0.26;
+  pointer-events: none;
+}
+
+.refreshButton[data-busy="true"] > span {
+  animation: adminRefreshSpin 900ms linear infinite;
+}
+
+@keyframes adminLoadingOrbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes adminLoadingDiamond {
+  to {
+    border-color: var(--records-pink-ink);
+    transform: rotate(135deg) scale(0.82);
+  }
+}
+
+@keyframes adminLoadingSweep {
+  from {
+    transform: translateX(-115%);
+  }
+  to {
+    transform: translateX(310%);
+  }
+}
+
+@keyframes adminLoadingStage {
+  0%,
+  100% {
+    background: var(--records-line-strong);
+    box-shadow: none;
+  }
+  50% {
+    background: var(--records-cyan-ink);
+    box-shadow: 0 0 0 4px rgb(79 199 220 / 12%);
+  }
+}
+
+@keyframes adminRefreshSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes adminAlarmPulse {
+  50% {
+    box-shadow: 0 0 0 9px rgb(217 109 158 / 6%);
+    opacity: 0.72;
+  }
+}
+
 .statusNotice {
   display: block;
   margin: 18px 0 0;
@@ -1051,6 +1427,67 @@
   color: var(--records-ink-600);
   font-size: 0.76rem;
   line-height: 1.7;
+}
+
+.promptPlaceholder {
+  display: grid;
+  min-height: 360px;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 28px;
+}
+
+.promptPlaceholderMark {
+  position: relative;
+  display: grid;
+  width: 82px;
+  height: 82px;
+  place-items: center;
+  border: 1px solid var(--records-line-strong);
+  color: var(--records-cyan-ink);
+  transform: rotate(45deg);
+}
+
+.promptPlaceholderMark::before,
+.promptPlaceholderMark::after {
+  position: absolute;
+  content: "";
+}
+
+.promptPlaceholderMark::before {
+  width: 29px;
+  height: 36px;
+  border: 2px solid currentColor;
+  border-radius: 8px;
+}
+
+.promptPlaceholderMark::after {
+  width: 15px;
+  height: 2px;
+  background: currentColor;
+  box-shadow: 0 8px 0 currentColor;
+}
+
+.promptPlaceholder > div {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.promptPlaceholder h2,
+.promptPlaceholder p {
+  margin: 0;
+}
+
+.promptPlaceholder h2 {
+  font-size: clamp(1.2rem, 2.5vw, 1.65rem);
+}
+
+.promptPlaceholder p {
+  max-width: 720px;
+  color: var(--records-ink-600);
+  font-size: 0.86rem;
+  line-height: 1.8;
 }
 
 .accessDenied {
@@ -1147,17 +1584,32 @@
   .sectionNavigation {
     top: 12px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: none;
+    overflow: hidden;
     padding: 7px;
   }
 
-  .sectionNavigation a {
+  .sectionPrimaryLink {
     justify-items: center;
     padding-inline: 6px;
     text-align: center;
   }
 
-  .sectionNavigation a::before {
+  .sectionPrimaryLink::before {
     margin-inline: auto;
+  }
+
+  .serviceAnchorList {
+    grid-column: 1 / -1;
+    display: flex;
+    overflow-x: auto;
+    padding: 7px 2px 1px;
+    scrollbar-color: var(--records-line-strong) transparent;
+  }
+
+  .serviceAnchorList a {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 }
 
@@ -1183,6 +1635,14 @@
   .overviewStats,
   .statusGrid {
     grid-template-columns: 1fr;
+  }
+
+  .activeAlarms li a {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .activeAlarms li a > span:last-child {
+    grid-column: 2;
   }
 
   .overviewStat {
@@ -1248,10 +1708,30 @@
   .ecrTable {
     min-width: 720px;
   }
+
+  .statusLoading {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .statusLoadingStages li {
+    justify-content: center;
+  }
+
+  .promptPlaceholder {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .promptPlaceholder > div {
+    justify-items: center;
+  }
 }
 
 @media (max-width: 389px) {
-  .sectionNavigation a {
+  .sectionPrimaryLink {
     font-size: 0.68rem;
   }
 
@@ -1285,8 +1765,26 @@
     transition: none;
   }
 
-  .sectionNavigation a,
+  .sectionPrimaryLink,
+  .serviceAnchorList a,
   .resourceTable tbody tr {
     transition: none;
+  }
+
+  .activeAlarmPulse,
+  .refreshButton[data-busy="true"] > span,
+  .statusLoadingDiamond,
+  .statusLoadingOrbit,
+  .statusLoadingStages li > span,
+  .statusLoadingTrack > span,
+  .refreshProgress > span {
+    animation: none;
+  }
+
+  .serviceAnchorList a:hover,
+  .serviceAnchorList a:focus-visible,
+  .activeAlarms li a:hover,
+  .activeAlarms li a:focus-visible {
+    transform: none;
   }
 }
