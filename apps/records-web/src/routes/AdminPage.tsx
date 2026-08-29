@@ -717,13 +717,25 @@ function EcsMetrics({
 }
 
 function ImageTagList({ tags }: { readonly tags: readonly string[] }): React.JSX.Element {
+  const [primaryTag, ...alternateTags] = tags;
   return (
     <span className={adminStyles.imageTagList}>
-      {tags.map((tag) => (
-        <span className={adminStyles.imageTag} key={tag}>
-          {tag}
+      <span className={adminStyles.imageTag}>{primaryTag}</span>
+      {alternateTags.length > 0 && (
+        <span className={adminStyles.alternateImageTags}>
+          <span className={adminStyles.alternateImageTagLabel}>同一イメージの別タグ</span>
+          <span className={adminStyles.alternateImageTagList}>
+            {alternateTags.map((tag) => (
+              <span
+                className={`${adminStyles.imageTag} ${adminStyles.alternateImageTag}`}
+                key={tag}
+              >
+                {tag}
+              </span>
+            ))}
+          </span>
         </span>
-      ))}
+      )}
     </span>
   );
 }

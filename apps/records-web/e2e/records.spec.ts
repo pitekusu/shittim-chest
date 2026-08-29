@@ -1727,6 +1727,8 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(ecrImageTable).toBeVisible();
   await expect(ecrImageTable.getByText("release-2026-08-29", { exact: true })).toBeVisible();
   await expect(ecrImageTable.getByText("stable", { exact: true })).toBeVisible();
+  await expect(ecrImageTable.getByText("同一イメージの別タグ", { exact: true })).toBeVisible();
+  await expect(page.getByText("同一イメージの別タグ", { exact: true })).toHaveCount(2);
   await expect(ecrImageTable.getByText("本番版", { exact: true })).toHaveCount(0);
   const ecrHorizontalOverflow = await ecrImageTable.evaluate(
     (element) => element.scrollWidth - element.clientWidth,

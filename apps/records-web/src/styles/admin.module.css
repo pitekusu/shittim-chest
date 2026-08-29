@@ -529,13 +529,15 @@
 }
 
 .imageTagList {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  display: grid;
+  align-items: start;
+  gap: 6px;
 }
 
 .imageTag {
   display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   min-height: 24px;
   align-items: center;
   padding: 3px 8px;
@@ -546,6 +548,34 @@
   font-size: 0.65rem;
   font-weight: 800;
   overflow-wrap: anywhere;
+}
+
+.alternateImageTags {
+  display: grid;
+  gap: 4px;
+  padding-top: 5px;
+  border-top: 1px solid var(--records-line);
+}
+
+.alternateImageTagLabel {
+  color: var(--records-ink-600);
+  font-size: 0.56rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.alternateImageTagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.alternateImageTag {
+  border-color: var(--records-line);
+  background: transparent;
+  color: var(--records-ink-600);
+  font-size: 0.6rem;
+  font-weight: 700;
 }
 
 .emptyTableCell {
