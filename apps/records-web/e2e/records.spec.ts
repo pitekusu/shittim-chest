@@ -1814,8 +1814,12 @@ test("service status loading presents graphical indeterminate progress", async (
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
   await mockAuthenticatedApi(page, detail, 0, true);
+  let releaseStatusResponse!: () => void;
+  const statusResponseGate = new Promise<void>((resolve) => {
+    releaseStatusResponse = resolve;
+  });
   await page.route("**/api/v1/admin/status*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await statusResponseGate;
     await route.fulfill({ json: adminStatus });
   });
 
@@ -1832,6 +1836,7 @@ test("service status loading presents graphical indeterminate progress", async (
     maxDiffPixels: 20,
   });
 
+  releaseStatusResponse();
   await expect(page.getByText("Scale-to-Zeroで待機しています。", { exact: true })).toBeVisible();
 });
 
