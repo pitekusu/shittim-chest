@@ -910,7 +910,7 @@ def test_inspector_includes_repository_coverage_and_last_scan() -> None:
     aggregation_pages = Paginator(
         [
             {
-                "aggregationType": "AWS_ECR_CONTAINER",
+                "aggregationType": "AWS_CONTAINER",
                 "responses": [
                     {
                         "awsEcrContainerAggregation": {

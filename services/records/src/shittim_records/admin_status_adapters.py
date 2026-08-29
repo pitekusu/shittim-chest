@@ -689,7 +689,7 @@ class AwsAdminStatusSource:
                 },
             )
         ):
-            if page.get("aggregationType") not in (None, "AWS_ECR_CONTAINER"):
+            if page.get("aggregationType") not in (None, "AWS_CONTAINER"):
                 raise ValueError("Inspector aggregation type is invalid")
             responses = page.get("responses", [])
             if not isinstance(responses, list):
