@@ -231,7 +231,7 @@ def test_openai_translator_uses_luna_structured_stateless_output() -> None:
     class Responses:
         def parse(self, **kwargs: Any) -> SimpleNamespace:
             calls.append(kwargs)
-            parsed = adapters._TranslatedBatch.model_validate(
+            parsed = adapters._ProviderTranslatedBatch.model_validate(
                 {"summaries": [{"key": source.key, "summary_ja": SUMMARY_JA}]}
             )
             return SimpleNamespace(output_parsed=parsed)
@@ -251,8 +251,42 @@ def test_openai_translator_uses_luna_structured_stateless_output() -> None:
     assert calls[0]["store"] is False
     assert calls[0]["tools"] == []
     assert calls[0]["reasoning"] == {"effort": "none"}
+    assert calls[0]["text_format"] is adapters._ProviderTranslatedBatch
+    provider_schema = json.dumps(calls[0]["text_format"].model_json_schema())
+    assert all(
+        constraint not in provider_schema
+        for constraint in ("minLength", "maxLength", "minItems", "maxItems", "pattern")
+    )
     payload = json.loads(calls[0]["input"])
     assert payload["items"][0]["description"] == DESCRIPTION
+
+
+def test_openai_translator_rejects_semantically_invalid_structured_output() -> None:
+    source = inspector_description(
+        vulnerability_id="CVE-2026-12345",
+        description=DESCRIPTION,
+    )
+
+    class Responses:
+        def parse(self, **kwargs: Any) -> SimpleNamespace:
+            parsed = kwargs["text_format"].model_validate(
+                {"summaries": [{"key": source.key, "summary_ja": "短すぎます。"}]}
+            )
+            return SimpleNamespace(output_parsed=parsed)
+
+    configuration = InspectorTranslationConfigurationRepository(
+        cast(Any, SimpleNamespace()),
+        "/shittim-chest/production/records/openai/inspector-translation-api-key",
+    )
+    translator = OpenAIInspectorSummaryTranslator(
+        configuration,
+        client=SimpleNamespace(responses=Responses()),
+    )
+
+    with pytest.raises(InspectorTranslationUnavailable) as caught:
+        translator.translate((source,), translated_at=NOW)
+
+    assert caught.value.code == "provider_output_invalid"
 
 
 def test_dynamo_cache_round_trip_never_stores_the_english_description() -> None:

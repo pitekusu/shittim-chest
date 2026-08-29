@@ -87,6 +87,23 @@ class _TranslatedBatch(BaseModel):
     )
 
 
+class _ProviderTranslatedItem(BaseModel):
+    """Structured-output shape without semantic constraints enforced by the provider."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    key: str
+    summary_ja: str
+
+
+class _ProviderTranslatedBatch(BaseModel):
+    """Provider schema kept structural so application validation remains authoritative."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    summaries: tuple[_ProviderTranslatedItem, ...]
+
+
 class InspectorTranslationConfigurationRepository:
     """Load one dedicated OpenAI API key from an exact SecureString."""
 
@@ -273,7 +290,7 @@ class OpenAIInspectorSummaryTranslator:
                 model=INSPECTOR_TRANSLATION_MODEL,
                 instructions=_TRANSLATION_INSTRUCTIONS,
                 input=input_text,
-                text_format=_TranslatedBatch,
+                text_format=_ProviderTranslatedBatch,
                 max_output_tokens=8_000,
                 reasoning={"effort": "none"},
                 store=False,
@@ -282,9 +299,10 @@ class OpenAIInspectorSummaryTranslator:
                 parallel_tool_calls=False,
                 truncation="disabled",
             )
-            parsed = response.output_parsed
-            if not isinstance(parsed, _TranslatedBatch):
+            provider_output = response.output_parsed
+            if not isinstance(provider_output, _ProviderTranslatedBatch):
                 raise InspectorTranslationUnavailable("provider_output_invalid")
+            parsed = _TranslatedBatch.model_validate(provider_output.model_dump())
             source_by_key = {item.key: item for item in descriptions}
             if len(source_by_key) != len(descriptions):
                 raise InspectorTranslationUnavailable("source_identity_conflict")
