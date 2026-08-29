@@ -267,8 +267,12 @@ def test_openai_translator_rejects_semantically_invalid_structured_output() -> N
         description=DESCRIPTION,
     )
 
+    calls = 0
+
     class Responses:
         def parse(self, **kwargs: Any) -> SimpleNamespace:
+            nonlocal calls
+            calls += 1
             parsed = kwargs["text_format"].model_validate(
                 {"summaries": [{"key": source.key, "summary_ja": "短すぎます。"}]}
             )
@@ -287,6 +291,39 @@ def test_openai_translator_rejects_semantically_invalid_structured_output() -> N
         translator.translate((source,), translated_at=NOW)
 
     assert caught.value.code == "provider_output_invalid"
+    assert calls == 2
+
+
+def test_openai_translator_retries_one_semantically_invalid_output() -> None:
+    source = inspector_description(
+        vulnerability_id="CVE-2026-12345",
+        description=DESCRIPTION,
+    )
+    calls = 0
+
+    class Responses:
+        def parse(self, **kwargs: Any) -> SimpleNamespace:
+            nonlocal calls
+            calls += 1
+            summary = "短すぎます。" if calls == 1 else SUMMARY_JA
+            parsed = kwargs["text_format"].model_validate(
+                {"summaries": [{"key": source.key, "summary_ja": summary}]}
+            )
+            return SimpleNamespace(output_parsed=parsed)
+
+    configuration = InspectorTranslationConfigurationRepository(
+        cast(Any, SimpleNamespace()),
+        "/shittim-chest/production/records/openai/inspector-translation-api-key",
+    )
+    translator = OpenAIInspectorSummaryTranslator(
+        configuration,
+        client=SimpleNamespace(responses=Responses()),
+    )
+
+    summaries = translator.translate((source,), translated_at=NOW)
+
+    assert summaries == (summary_for(source),)
+    assert calls == 2
 
 
 def test_dynamo_cache_round_trip_never_stores_the_english_description() -> None:
