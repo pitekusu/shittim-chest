@@ -48,6 +48,10 @@ const statusResponse: AdminStatusResponse = {
         { name: "runtime_prompt_revision", value: null },
         { name: "heartbeat_age_seconds", value: "42.000" },
       ],
+      details: {
+        kind: "ecs",
+        nextTaskImageTags: ["release-2026-08-24", "stable"],
+      },
     },
     {
       service: "ecr",
@@ -312,11 +316,22 @@ describe("AdminPage", () => {
     expect(screen.getByText("タスク稼働")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "タスク定義" })).toBeVisible();
     expect(screen.getByText("Fargate On-Demand")).toBeVisible();
-    expect(screen.getByText("rev. 42")).toBeVisible();
+    expect(screen.getAllByText("rev. 42")).toHaveLength(2);
+    const nextTaskImage = screen.getByRole("region", {
+      name: "次回起動タスクのコンテナイメージ",
+    });
+    expect(nextTaskImage).toHaveTextContent("次回起動時に使用");
+    expect(nextTaskImage).toHaveTextContent("rev. 42");
+    expect(nextTaskImage).toHaveTextContent("release-2026-08-24");
+    expect(nextTaskImage).toHaveTextContent("stable");
+    expect(within(nextTaskImage).getByRole("link", { name: /ECR一覧で確認/ })).toHaveAttribute(
+      "href",
+      "#admin-service-ecr",
+    );
     expect(screen.getByRole("columnheader", { name: "最終取得記録" })).toBeVisible();
     expect(screen.getAllByText("release-2026-08-24").length).toBeGreaterThan(0);
     const alternateTagLabels = screen.getAllByText("同一イメージの別タグ");
-    expect(alternateTagLabels).toHaveLength(2);
+    expect(alternateTagLabels).toHaveLength(3);
     for (const label of alternateTagLabels) {
       expect(label.parentElement).toHaveTextContent("stable");
     }

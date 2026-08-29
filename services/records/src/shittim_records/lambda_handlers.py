@@ -395,6 +395,7 @@ def _admin_status_controller() -> AdminStatusHttpController:
             aws_account_id=_environment("ADMIN_AWS_ACCOUNT_ID"),
             cluster_name=_environment("ECS_CLUSTER_NAME"),
             service_name=_environment("ECS_SERVICE_NAME"),
+            container_name=_environment("ECS_CONTAINER_NAME"),
             ecr_repository_name=_environment("ECR_REPOSITORY_NAME"),
             runtime_stack_name=_environment("RUNTIME_STACK_NAME"),
             buckets={

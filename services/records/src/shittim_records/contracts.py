@@ -357,6 +357,14 @@ AdminImageTag = Annotated[str, Field(min_length=1, max_length=300, pattern=r"\S"
 AdminPackageText = Annotated[str, Field(min_length=1, max_length=256, pattern=r"\S")]
 
 
+class AdminEcsDetails(PublicModel):
+    kind: Literal["ecs"]
+    next_task_image_tags: Annotated[
+        tuple[AdminImageTag, ...],
+        Field(min_length=1, max_length=100),
+    ]
+
+
 class AdminEcrImage(PublicModel):
     tags: Annotated[tuple[AdminImageTag, ...], Field(min_length=1, max_length=100)]
     media_type: Literal["OCI_IMAGE", "OCI_INDEX", "DOCKER_V2", "DOCKER_LIST", "OTHER"]
@@ -413,7 +421,7 @@ class AdminInspectorDetails(PublicModel):
     images: tuple[AdminInspectorImage, ...]
 
 
-AdminStatusDetails = AdminEcrDetails | AdminInspectorDetails
+AdminStatusDetails = AdminEcsDetails | AdminEcrDetails | AdminInspectorDetails
 
 
 class AdminStatusSection(PublicModel):

@@ -746,12 +746,10 @@ function SignerMetrics({
 }
 
 /* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Horizontally scrollable data tables need keyboard focus. */
-function EcsMetrics({
-  metrics: source,
-}: {
-  readonly metrics: readonly AdminStatusMetric[];
-}): React.JSX.Element {
-  const metrics = metricLookup(source);
+function EcsMetrics({ section }: { readonly section: AdminStatusSection }): React.JSX.Element {
+  const metrics = metricLookup(section.metrics);
+  const nextTaskImageTags =
+    section.details?.kind === "ecs" ? section.details.nextTaskImageTags : [];
   return (
     <>
       <dl className={adminStyles.readinessGrid}>
@@ -784,6 +782,30 @@ function EcsMetrics({
           </dd>
         </div>
       </dl>
+      <section className={adminStyles.nextTaskImage} aria-label="次回起動タスクのコンテナイメージ">
+        <header>
+          <span>NEXT TASK IMAGE</span>
+          <strong>次回起動時に使用</strong>
+        </header>
+        <div className={adminStyles.nextTaskImageLink}>
+          <div>
+            <span>タスク定義</span>
+            <strong>{metricValue(metrics, "task_definition_revision")}</strong>
+          </div>
+          <span className={adminStyles.nextTaskImageConnector} aria-hidden="true" />
+          <div>
+            <span>ECRイメージタグ</span>
+            {nextTaskImageTags.length > 0 ? (
+              <a className={adminStyles.nextTaskEcrLink} href="#admin-service-ecr">
+                <ImageTagList tags={nextTaskImageTags} />
+                <span>ECR一覧で確認</span>
+              </a>
+            ) : (
+              <strong>未取得</strong>
+            )}
+          </div>
+        </div>
+      </section>
       <section
         className={adminStyles.tableScroller}
         aria-label="ECS構成とデプロイ状態"
@@ -1548,7 +1570,7 @@ function ServiceMetrics({
   readonly section: AdminStatusSection;
   readonly translationMetrics: readonly AdminStatusMetric[];
 }): React.JSX.Element {
-  if (section.service === "ecs") return <EcsMetrics metrics={section.metrics} />;
+  if (section.service === "ecs") return <EcsMetrics section={section} />;
   if (section.service === "ecr") return <EcrMetrics section={section} />;
   if (section.service === "inspector") return <InspectorMetrics section={section} />;
   if (section.service === "s3") return <S3Metrics metrics={section.metrics} />;

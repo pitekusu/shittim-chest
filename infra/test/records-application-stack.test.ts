@@ -394,6 +394,7 @@ describe("RecordsApplicationStack", () => {
         Variables: {
           ADMIN_ALARM_PREFIX: "shittim-chest-production-",
           ADMIN_AWS_ACCOUNT_ID: "000000000000",
+          ECS_CONTAINER_NAME: "application",
           RECORDS_PUBLIC_HOSTNAME: { Ref: "RecordsPublicHostname" },
           RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
           RUNTIME_SCHEDULER_NAME: "shittim-chest-production-runtime-reconciler",
@@ -424,6 +425,7 @@ describe("RecordsApplicationStack", () => {
       "dynamodb:DescribeTable",
       "ecr:DescribeImages",
       "ecs:DescribeServices",
+      "ecs:DescribeTaskDefinition",
       "events:DescribeRule",
       "inspector2:ListCoverage",
       "inspector2:ListFindingAggregations",
@@ -472,6 +474,13 @@ describe("RecordsApplicationStack", () => {
     }>;
     const statusActionsOf = (statement: (typeof statusStatements)[number]) =>
       Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const statusTaskDefinitionRead = statusStatements.find((statement) =>
+      statusActionsOf(statement).includes("ecs:DescribeTaskDefinition"),
+    );
+    expect(statusTaskDefinitionRead?.Resource).toBe("*");
+    expect(statusTaskDefinitionRead?.Condition).toEqual({
+      StringEquals: { "aws:RequestedRegion": "ap-northeast-1" },
+    });
     const statusEventBridgeRead = statusStatements.find((statement) =>
       statusActionsOf(statement).includes("events:DescribeRule"),
     );

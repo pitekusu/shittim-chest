@@ -171,6 +171,11 @@ export interface AdminActiveAlarm {
   readonly service: AdminService;
 }
 
+export interface AdminEcsDetails {
+  readonly kind: "ecs";
+  readonly nextTaskImageTags: readonly string[];
+}
+
 export interface AdminEcrDetails {
   readonly kind: "ecr";
   readonly images: readonly {
@@ -211,7 +216,7 @@ export interface AdminInspectorDetails {
   }[];
 }
 
-export type AdminStatusDetails = AdminEcrDetails | AdminInspectorDetails;
+export type AdminStatusDetails = AdminEcsDetails | AdminEcrDetails | AdminInspectorDetails;
 
 export interface AdminStatusResponse {
   readonly schemaVersion: 1;
