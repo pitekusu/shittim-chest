@@ -29,6 +29,10 @@ from shittim_records.admin_adapters import AdminSecurityConfigurationRepository
 from shittim_records.admin_http import AdminStatusHttpController
 from shittim_records.admin_status import AdminStatusService
 from shittim_records.admin_status_adapters import (
+    ADMIN_STATUS_BUDGET_NAMES,
+    ADMIN_STATUS_FUNCTION_NAMES,
+    ADMIN_STATUS_PARAMETER_NAMES,
+    ADMIN_STATUS_STACK_NAMES,
     AwsAdminStatusConfiguration,
     AwsAdminStatusSource,
 )
@@ -404,15 +408,15 @@ def _admin_status_controller() -> AdminStatusHttpController:
                 "statistics": _environment("STATISTICS_TABLE_NAME"),
                 "session": _environment("SESSION_TABLE_NAME"),
             },
-            functions=_environment_mapping("ADMIN_STATUS_FUNCTIONS_JSON"),
+            functions=ADMIN_STATUS_FUNCTION_NAMES,
             records_public_hostname=_environment("RECORDS_PUBLIC_HOSTNAME"),
             projector_dlq_url=_environment("PROJECTOR_DLQ_URL"),
-            stacks=_environment_mapping("ADMIN_STACKS_JSON"),
-            static_parameters=_environment_mapping("ADMIN_STATUS_PARAMETERS_JSON"),
+            stacks=ADMIN_STATUS_STACK_NAMES,
+            static_parameters=ADMIN_STATUS_PARAMETER_NAMES,
             runtime_scheduler_name=_environment("RUNTIME_SCHEDULER_NAME"),
             sns_topic_arn=_environment("SNS_TOPIC_ARN"),
             signing_profile_name=_environment("SIGNING_PROFILE_NAME"),
-            budgets=_environment_mapping("ADMIN_BUDGETS_JSON"),
+            budgets=ADMIN_STATUS_BUDGET_NAMES,
             anomaly_subscription_name=_environment("COST_ANOMALY_SUBSCRIPTION_NAME"),
             alarm_prefix=_environment("ADMIN_ALARM_PREFIX"),
         )
@@ -565,23 +569,6 @@ def _environment(name: str) -> str:
     value = os.environ.get(name, "")
     if not value:
         raise RuntimeError(f"required environment variable is missing: {name}")
-    return value
-
-
-def _environment_mapping(name: str) -> dict[str, str]:
-    try:
-        value = json.loads(_environment(name))
-    except TypeError, ValueError, json.JSONDecodeError:
-        raise RuntimeError(f"required environment variable is invalid: {name}") from None
-    if (
-        not isinstance(value, dict)
-        or not value
-        or any(
-            not isinstance(key, str) or not key or not isinstance(item, str) or not item
-            for key, item in value.items()
-        )
-    ):
-        raise RuntimeError(f"required environment variable is invalid: {name}")
     return value
 
 

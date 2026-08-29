@@ -11,6 +11,10 @@ import pytest
 import shittim_records.admin_status_adapters as status_adapters
 from shittim_records.admin_status import AdminStatusCollection, AdminStatusService
 from shittim_records.admin_status_adapters import (
+    ADMIN_STATUS_BUDGET_NAMES,
+    ADMIN_STATUS_FUNCTION_NAMES,
+    ADMIN_STATUS_PARAMETER_NAMES,
+    ADMIN_STATUS_STACK_NAMES,
     AwsAdminStatusConfiguration,
     AwsAdminStatusSource,
 )
@@ -56,6 +60,66 @@ STATUS_COLLECTORS = (
     ("signer", "_signer_section"),
     ("external", "_external_section"),
 )
+
+
+def test_static_admin_status_inventory_is_complete_and_immutable() -> None:
+    assert dict(ADMIN_STATUS_FUNCTION_NAMES) == {
+        "image_admission": "shittim-chest-production-image-admission",
+        "discord_status": "shittim-chest-production-discord-status-publisher",
+        "runtime_reconciler": "shittim-chest-production-runtime-reconciler",
+        "discord_ingress": "shittim-chest-production-discord-ingress",
+        "records_projector": "shittim-chest-production-records-projector",
+        "records_backfill": "shittim-chest-production-records-backfill",
+        "records_auth": "shittim-chest-production-records-auth",
+        "records_ranking": "shittim-chest-production-records-ranking",
+        "records_cost": "shittim-chest-production-records-cost",
+        "records_inspector_translation": ("shittim-chest-production-records-inspector-translation"),
+        "records_read": "shittim-chest-production-records-read",
+        "records_admin_status": "shittim-chest-production-records-admin-status",
+    }
+    assert dict(ADMIN_STATUS_STACK_NAMES) == {
+        "stateful": "ShittimChest-Prod-Stateful",
+        "release_identity": "ShittimChest-Prod-ReleaseIdentity",
+        "runtime": "ShittimChest-Prod-Runtime",
+        "operations": "ShittimChest-Prod-Operations",
+        "cost_governance": "ShittimChest-Prod-CostGovernance",
+        "records_stateful": "ShittimChest-Prod-RecordsStateful",
+        "records_application": "ShittimChest-Prod-RecordsApplication",
+        "records_edge": "ShittimChest-Prod-RecordsEdge",
+    }
+    assert dict(ADMIN_STATUS_PARAMETER_NAMES) == {
+        "discord_public_key": "/shittim-chest/production/discord/moderator/public-key",
+        "moderator_token": "/shittim-chest/production/discord/moderator/token",
+        "participant_a_token": "/shittim-chest/production/discord/participant-a/token",
+        "participant_b_token": "/shittim-chest/production/discord/participant-b/token",
+        "participant_c_token": "/shittim-chest/production/discord/participant-c/token",
+        "openai_api_key": "/shittim-chest/production/openai/api-key",
+        "runtime_prompts_active": "/shittim-chest/production/runtime-prompts/active",
+        "records_identity": "/shittim-chest/production/records/identity-hmac-key",
+        "records_presentation": "/shittim-chest/production/records/presentation/v0001",
+        "records_oauth": "/shittim-chest/production/records/discord/oauth/v0001",
+        "records_client_secret": "/shittim-chest/production/records/discord/client-secret",
+        "records_session_key": "/shittim-chest/production/records/session-key",
+        "records_openai_admin_key": "/shittim-chest/production/records/openai/admin-key",
+        "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
+        "records_openai_inspector_translation_key": (
+            "/shittim-chest/production/records/openai/inspector-translation-api-key"
+        ),
+        "records_admin_user_id": ("/shittim-chest/production/records/admin/discord-user-id"),
+    }
+    assert dict(ADMIN_STATUS_BUDGET_NAMES) == {
+        "project": "shittim-chest-production-project",
+        "account": "shittim-chest-production-account",
+    }
+
+    for inventory in (
+        ADMIN_STATUS_FUNCTION_NAMES,
+        ADMIN_STATUS_STACK_NAMES,
+        ADMIN_STATUS_PARAMETER_NAMES,
+        ADMIN_STATUS_BUDGET_NAMES,
+    ):
+        with pytest.raises(TypeError):
+            cast(Any, inventory)["unexpected"] = "value"
 
 
 def configuration() -> AwsAdminStatusConfiguration:

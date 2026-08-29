@@ -10,6 +10,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
 from typing import Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 
@@ -45,34 +46,64 @@ _STATUS_COLLECTION_TIMEOUT_SECONDS = 20.0
 _PRODUCTION_ALARM_PREFIX = "shittim-chest-production-"
 _PROJECTOR_DLQ_RETENTION_SECONDS = 14 * 24 * 60 * 60
 _GLOBAL_STACK_LABELS = frozenset({"records_edge", "cost_governance"})
-_STACK_LABELS = (
-    "stateful",
-    "release_identity",
-    "runtime",
-    "operations",
-    "cost_governance",
-    "records_stateful",
-    "records_application",
-    "records_edge",
+ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
+    {
+        "image_admission": "shittim-chest-production-image-admission",
+        "discord_status": "shittim-chest-production-discord-status-publisher",
+        "runtime_reconciler": "shittim-chest-production-runtime-reconciler",
+        "discord_ingress": "shittim-chest-production-discord-ingress",
+        "records_projector": "shittim-chest-production-records-projector",
+        "records_backfill": "shittim-chest-production-records-backfill",
+        "records_auth": "shittim-chest-production-records-auth",
+        "records_ranking": "shittim-chest-production-records-ranking",
+        "records_cost": "shittim-chest-production-records-cost",
+        "records_inspector_translation": ("shittim-chest-production-records-inspector-translation"),
+        "records_read": "shittim-chest-production-records-read",
+        "records_admin_status": "shittim-chest-production-records-admin-status",
+    }
 )
-_STATIC_PARAMETER_LABELS = (
-    "discord_public_key",
-    "moderator_token",
-    "participant_a_token",
-    "participant_b_token",
-    "participant_c_token",
-    "openai_api_key",
-    "runtime_prompts_active",
-    "records_identity",
-    "records_presentation",
-    "records_oauth",
-    "records_client_secret",
-    "records_session_key",
-    "records_openai_admin_key",
-    "records_openai_project_id",
-    "records_openai_inspector_translation_key",
-    "records_admin_user_id",
+ADMIN_STATUS_STACK_NAMES: Mapping[str, str] = MappingProxyType(
+    {
+        "stateful": "ShittimChest-Prod-Stateful",
+        "release_identity": "ShittimChest-Prod-ReleaseIdentity",
+        "runtime": "ShittimChest-Prod-Runtime",
+        "operations": "ShittimChest-Prod-Operations",
+        "cost_governance": "ShittimChest-Prod-CostGovernance",
+        "records_stateful": "ShittimChest-Prod-RecordsStateful",
+        "records_application": "ShittimChest-Prod-RecordsApplication",
+        "records_edge": "ShittimChest-Prod-RecordsEdge",
+    }
 )
+ADMIN_STATUS_PARAMETER_NAMES: Mapping[str, str] = MappingProxyType(
+    {
+        "discord_public_key": "/shittim-chest/production/discord/moderator/public-key",
+        "moderator_token": "/shittim-chest/production/discord/moderator/token",
+        "participant_a_token": "/shittim-chest/production/discord/participant-a/token",
+        "participant_b_token": "/shittim-chest/production/discord/participant-b/token",
+        "participant_c_token": "/shittim-chest/production/discord/participant-c/token",
+        "openai_api_key": "/shittim-chest/production/openai/api-key",
+        "runtime_prompts_active": "/shittim-chest/production/runtime-prompts/active",
+        "records_identity": "/shittim-chest/production/records/identity-hmac-key",
+        "records_presentation": "/shittim-chest/production/records/presentation/v0001",
+        "records_oauth": "/shittim-chest/production/records/discord/oauth/v0001",
+        "records_client_secret": "/shittim-chest/production/records/discord/client-secret",
+        "records_session_key": "/shittim-chest/production/records/session-key",
+        "records_openai_admin_key": "/shittim-chest/production/records/openai/admin-key",
+        "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
+        "records_openai_inspector_translation_key": (
+            "/shittim-chest/production/records/openai/inspector-translation-api-key"
+        ),
+        "records_admin_user_id": ("/shittim-chest/production/records/admin/discord-user-id"),
+    }
+)
+ADMIN_STATUS_BUDGET_NAMES: Mapping[str, str] = MappingProxyType(
+    {
+        "project": "shittim-chest-production-project",
+        "account": "shittim-chest-production-account",
+    }
+)
+_STACK_LABELS = tuple(ADMIN_STATUS_STACK_NAMES)
+_STATIC_PARAMETER_LABELS = tuple(ADMIN_STATUS_PARAMETER_NAMES)
 _EVENT_RULE_DESCRIPTIONS = {
     "ranking": "Rebuild the Records ranking snapshots every 15 minutes",
     "aws_fx": "Collect Project-tagged AWS costs and USD/JPY rates daily at 12:17 JST",
