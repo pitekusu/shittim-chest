@@ -846,6 +846,36 @@ def test_alarm_details_require_their_composite_alarm_to_be_active() -> None:
     assert source(cloudwatch=Alarms())._alarm_counts() == (0, 0, (), False)
 
 
+def test_runtime_health_alarm_details_require_the_runtime_active_gate() -> None:
+    alarms = Paginator(
+        [
+            {
+                "MetricAlarms": [
+                    {"AlarmName": "shittim-chest-production-bot-not-ready"},
+                    {"AlarmName": "shittim-chest-production-heartbeat-stale"},
+                    {"AlarmName": "shittim-chest-production-ingress-runtime-mismatch"},
+                ],
+                "CompositeAlarms": [{"AlarmName": "shittim-chest-production-critical"}],
+            }
+        ]
+    )
+
+    class Alarms:
+        def get_paginator(self, _name: str) -> Paginator:
+            return alarms
+
+    critical, warning, active, unknown = source(cloudwatch=Alarms())._alarm_counts()
+
+    assert (critical, warning, unknown) == (1, 0, False)
+    assert [alarm.model_dump(mode="json") for alarm in active] == [
+        {
+            "code": "ingress-runtime-mismatch",
+            "severity": "critical",
+            "service": "ecs",
+        }
+    ]
+
+
 def test_unknown_alarm_names_are_not_exposed() -> None:
     alarms = Paginator(
         [

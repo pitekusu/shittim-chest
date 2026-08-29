@@ -134,6 +134,13 @@ _ALARM_PRESENTATIONS: Mapping[str, tuple[Literal["critical", "warning"], AdminSe
     )
 )
 _KNOWN_ALARM_GATES = frozenset({"runtime-active"})
+_NO_ALARM_GATES: frozenset[str] = frozenset()
+_ALARM_REQUIRED_GATES: Mapping[str, frozenset[str]] = MappingProxyType(
+    {
+        "bot-not-ready": frozenset({"runtime-active"}),
+        "heartbeat-stale": frozenset({"runtime-active"}),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +369,7 @@ class AwsAdminStatusSource:
             warning = 0
             unknown = False
             alarm_candidates: list[AdminActiveAlarm] = []
+            active_alarm_gates: set[str] = set()
             normalized_prefix = self._config.alarm_prefix.casefold()
             for page in _bounded_pages(
                 paginator.paginate(
@@ -385,6 +393,7 @@ class AwsAdminStatusSource:
                         continue
                     code = raw_name.removeprefix(normalized_prefix)
                     if code in _KNOWN_ALARM_GATES:
+                        active_alarm_gates.add(code)
                         continue
                     presentation = _ALARM_PRESENTATIONS.get(code)
                     if presentation is None:
@@ -401,8 +410,13 @@ class AwsAdminStatusSource:
             active_alarms = [
                 alarm
                 for alarm in alarm_candidates
-                if (alarm.severity == "critical" and critical > 0)
-                or (alarm.severity == "warning" and warning > 0)
+                if (
+                    (alarm.severity == "critical" and critical > 0)
+                    or (alarm.severity == "warning" and warning > 0)
+                )
+                and _ALARM_REQUIRED_GATES.get(alarm.code, _NO_ALARM_GATES).issubset(
+                    active_alarm_gates
+                )
             ]
             active_alarms.sort(key=lambda alarm: (alarm.severity, alarm.code))
             if critical and not any(alarm.severity == "critical" for alarm in active_alarms):
