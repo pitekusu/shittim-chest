@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -21,6 +22,7 @@ from shittim_records.admin import (
 from shittim_records.admin_adapters import (
     AdminSecurityConfigurationRepository,
     DynamoPromptAuditStore,
+    SsmLegacyPromptSource,
     SsmPromptRevisionStore,
 )
 
@@ -100,6 +102,36 @@ class FakeDynamo:
 
     def get_item(self, **_kwargs: Any) -> dict[str, Any]:
         return {}
+
+
+def test_legacy_prompt_source_rejects_persona_version_mismatch() -> None:
+    names = tuple(
+        f"/shittim-chest/production/personas/v0001/{slot}"
+        for slot in ("moderator", "participant-a", "participant-b", "participant-c")
+    )
+    client = FakeSsm()
+    for name, slot in zip(
+        names, ("moderator", "participant-a", "participant-b", "participant-c"), strict=True
+    ):
+        client.values[name] = json.dumps(
+            {
+                "schema_version": "1",
+                "config_version": "v0002" if slot == "participant-b" else "v0001",
+                "slot": slot,
+                "display_name": slot,
+                "system_prompt": f"{slot} prompt",
+            }
+        )
+    source = SsmLegacyPromptSource(
+        cast(Any, client),
+        system_prompt="system prompt",
+        persona_parameter_names=cast(tuple[str, str, str, str], names),
+    )
+
+    with pytest.raises(AdminFailure) as caught:
+        source.load()
+
+    assert caught.value.code == "PROMPT_CONFIGURATION_INVALID"
 
 
 def test_active_pointer_retry_is_idempotent_after_pointer_write() -> None:

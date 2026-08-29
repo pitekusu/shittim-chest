@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
@@ -34,6 +35,12 @@ from shittim_records.admin import (
     parse_manifest,
 )
 from shittim_records.auth import RecordsOAuthConfig
+
+_LEGACY_PERSONA_PARAMETER_PATTERN = re.compile(
+    r"^/shittim-chest/production/personas/"
+    r"(?P<version>v[0-9]{4})/"
+    r"(?P<slot>moderator|participant-a|participant-b|participant-c)$"
+)
 
 
 class AdminSecurityConfigurationRepository:
@@ -127,7 +134,13 @@ class SsmLegacyPromptSource:
                 persona = PersonaConfigPayload.model_validate_json(values[name])
             except TypeError, ValueError, json.JSONDecodeError:
                 raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503) from None
-            if persona.slot.value != expected_slot:
+            parameter_match = _LEGACY_PERSONA_PARAMETER_PATTERN.fullmatch(name)
+            if (
+                parameter_match is None
+                or parameter_match.group("slot") != expected_slot
+                or persona.slot.value != expected_slot
+                or persona.config_version != parameter_match.group("version")
+            ):
                 raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
             prompts[expected_slot] = persona.system_prompt
         try:

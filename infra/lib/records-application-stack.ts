@@ -650,10 +650,12 @@ export class RecordsApplicationStack extends Stack {
     });
     this.adminConfigFunction.role!.node.addMetadata(
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
-      {
-        [`AwsSolutions-IAM5[Resource::arn:<AWS::Partition>:ssm:${this.region}:${nagAccount}:parameter/shittim-chest/production/runtime-prompts/r??????????????????????????/*]`]:
+      Object.fromEntries(
+        ["arn:aws", "arn:<AWS::Partition>"].map((partition) => [
+          `AwsSolutions-IAM5[Resource::${partition}:ssm:${this.region}:${nagAccount}:parameter/shittim-chest/production/runtime-prompts/r??????????????????????????/*]`,
           "Prompt revision access is confined to one fixed-length immutable revision subtree; IAM denies overwrite and service validation permits only the exact manifest and five prompt names.",
-      },
+        ]),
+      ),
     );
 
     const webBucketArn = this.formatArn({
