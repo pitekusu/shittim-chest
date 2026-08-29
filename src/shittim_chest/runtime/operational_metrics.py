@@ -65,7 +65,8 @@ class CloudWatchEmfMetrics:
     def __init__(
         self,
         *,
-        logger: logging.Logger,
+        logger: logging.Logger | None = None,
+        writer: Callable[[str], None] | None = None,
         environment: str,
         namespace: str = EMF_NAMESPACE,
     ) -> None:
@@ -73,7 +74,12 @@ class CloudWatchEmfMetrics:
             raise ValueError("operational metrics require the production environment")
         if namespace != EMF_NAMESPACE:
             raise ValueError("operational metric namespace is fixed")
-        self._logger = logger
+        if (logger is None) == (writer is None):
+            raise ValueError("operational metrics require exactly one output sink")
+        sink = logger.info if logger is not None else writer
+        if sink is None:
+            raise ValueError("operational metrics output sink is unavailable")
+        self._write: Callable[[str], None] = sink
         self._environment = environment
         self._namespace = namespace
 
@@ -119,7 +125,8 @@ class CloudWatchEmfMetrics:
             if not math.isfinite(value) or value < 0:
                 raise ValueError("operational metric values must be finite and non-negative")
             payload[metric.value] = value
-        self._logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        self._write(serialized)
 
 
 ReadinessProbe = Callable[[], Awaitable[bool]]

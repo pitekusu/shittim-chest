@@ -247,7 +247,12 @@ class CostCollectionService:
         for start, end, complete in windows:
             try:
                 rates = self._exchange.fetch(start=start, end=end)
-                _validate_rate_window(rates, start=start, end=end)
+                _validate_rate_window(
+                    rates,
+                    start=start,
+                    end=end,
+                    allow_trailing_pending=end == today + timedelta(days=1),
+                )
             except CostProviderUnavailable as error:
                 self._store.save_failure(checkpoint=progress, code=error.code, failed_at=now)
                 raise
@@ -314,7 +319,7 @@ def build_cost_view(
     period: CostPeriod,
     now: datetime,
 ) -> CostView:
-    """Convert stored provider-day USD amounts using exact same-date reference rates."""
+    """Convert USD with same-day rates or the prior rate for the in-progress JST day."""
 
     now = _aware_utc(now)
     today = now.astimezone(JST).date()
@@ -325,6 +330,12 @@ def build_cost_view(
     selected_rates = {rate.rate_date: rate for rate in rate_records}
     if len(selected_rates) != len(rate_records):
         raise CostDataInvalid("duplicate exchange rate")
+    previous_day_rates = tuple(
+        rate for rate in rates if rate.rate_date == today - timedelta(days=1)
+    )
+    if len(previous_day_rates) > 1:
+        raise CostDataInvalid("duplicate exchange rate")
+    previous_day_rate = previous_day_rates[0] if previous_day_rates else None
 
     amount_by_category = {category: Decimal(0) for category in COST_CATEGORIES}
     seen: set[tuple[date, CostCategory]] = set()
@@ -339,6 +350,9 @@ def build_cost_view(
         seen.add(key)
         _nonnegative_decimal(cost.amount_usd, field="stored amount")
         rate = selected_rates.get(cost.cost_date)
+        if rate is None and cost.cost_date == today and previous_day_rate is not None:
+            rate = previous_day_rate
+            partial = True
         if cost.amount_usd != 0 and rate is None:
             partial = True
             continue
@@ -459,6 +473,7 @@ def _validate_rate_window(
     *,
     start: date,
     end: date,
+    allow_trailing_pending: bool = False,
 ) -> None:
     expected = set(_dates(start, end))
     actual: set[date] = set()
@@ -467,7 +482,8 @@ def _validate_rate_window(
             raise CostDataInvalid("provider exchange rate window is incomplete")
         actual.add(rate.rate_date)
         _positive_decimal(rate.usd_jpy, field="provider exchange rate")
-    if actual != expected:
+    missing = expected - actual
+    if missing and not (allow_trailing_pending and missing == {end - timedelta(days=1)}):
         raise CostDataInvalid("provider exchange rate window is incomplete")
 
 

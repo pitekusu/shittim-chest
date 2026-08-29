@@ -164,6 +164,16 @@ def test_handler_does_not_retry_reconciliation_when_metric_sink_fails(
     assert "private provider detail" not in caplog.text
 
 
+def test_lambda_emf_sink_writes_one_unwrapped_json_document(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handler_module._write_emf('{"_aws":{"CloudWatchMetrics":[]}}')
+
+    captured = capsys.readouterr()
+    assert captured.out == '{"_aws":{"CloudWatchMetrics":[]}}\n'
+    assert captured.err == ""
+
+
 @pytest.mark.parametrize(
     "event",
     [

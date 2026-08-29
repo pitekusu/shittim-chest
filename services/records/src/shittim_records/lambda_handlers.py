@@ -70,6 +70,7 @@ from shittim_records.read_api import CursorCodec, RecordsReadService
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
+HTTPX_LOGGER = logging.getLogger("httpx")
 
 _PROJECTOR: ProjectorService | None = None
 _BACKFILL: BackfillService | None = None
@@ -165,6 +166,7 @@ def cost_handler(event: Mapping[str, Any], _context: object) -> dict[str, object
     mode = event.get("mode")
     if mode not in {"aws_fx", "openai"}:
         raise ValueError("cost collection mode must be aws_fx or openai")
+    HTTPX_LOGGER.setLevel(logging.WARNING)
     try:
         summaries = _cost_service().refresh(mode=mode, now=datetime.now(UTC))
     except CostCollectionFailed as error:

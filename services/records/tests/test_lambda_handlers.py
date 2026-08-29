@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import traceback
@@ -249,6 +250,23 @@ def test_cost_handler_preserves_independent_success_then_raises(monkeypatch: Any
         lambda_handlers.cost_handler({"mode": "aws_fx"}, object())
 
     assert service.modes == ["aws_fx"]
+
+
+def test_cost_handler_suppresses_httpx_request_metadata(
+    monkeypatch: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class LoggingCosts(FakeCosts):
+        def refresh(self, *, mode: str, now: object) -> tuple[CollectionSummary, ...]:
+            logging.getLogger("httpx").info("private project query metadata")
+            return super().refresh(mode=mode, now=now)
+
+    monkeypatch.setattr(lambda_handlers, "_COSTS", cast(Any, LoggingCosts()))
+
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        lambda_handlers.cost_handler({"mode": "openai"}, object())
+
+    assert "private project query metadata" not in caplog.text
 
 
 def test_cost_handler_rejects_unknown_mode() -> None:
