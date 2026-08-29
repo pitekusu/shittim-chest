@@ -78,6 +78,29 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
+  test("keeps fixed ADMIN inventory out of the Lambda environment", () => {
+    const { template } = synthesize();
+    const adminStatusFunction = Object.values(
+      template.findResources("AWS::Lambda::Function"),
+    ).find(
+      (resource) =>
+        resource.Properties.FunctionName ===
+        "shittim-chest-production-records-admin-status",
+    );
+    const variables = adminStatusFunction?.Properties.Environment?.Variables;
+
+    expect(variables).toBeDefined();
+    for (const name of [
+      "ADMIN_STATUS_FUNCTIONS_JSON",
+      "ADMIN_STACKS_JSON",
+      "ADMIN_STATUS_PARAMETERS_JSON",
+      "ADMIN_BUDGETS_JSON",
+    ]) {
+      expect(variables).not.toHaveProperty(name);
+    }
+    expect(Buffer.byteLength(JSON.stringify(variables), "utf8")).toBeLessThan(3000);
+  });
+
   test("binds each function to one explicit 90-day log group", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");

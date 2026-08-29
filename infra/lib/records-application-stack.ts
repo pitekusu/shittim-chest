@@ -578,25 +578,6 @@ export class RecordsApplicationStack extends Stack {
         arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
       }),
     );
-    const statusParameters = {
-      discord_public_key: "/shittim-chest/production/discord/moderator/public-key",
-      moderator_token: "/shittim-chest/production/discord/moderator/token",
-      participant_a_token: "/shittim-chest/production/discord/participant-a/token",
-      participant_b_token: "/shittim-chest/production/discord/participant-b/token",
-      participant_c_token: "/shittim-chest/production/discord/participant-c/token",
-      openai_api_key: "/shittim-chest/production/openai/api-key",
-      runtime_prompts_active: "/shittim-chest/production/runtime-prompts/active",
-      records_identity: identityParameter.parameterName,
-      records_presentation: presentationParameter.parameterName,
-      records_oauth: oauthConfigParameter.parameterName,
-      records_client_secret: oauthClientSecretParameter.parameterName,
-      records_session_key: sessionKeyParameter.parameterName,
-      records_openai_admin_key: openaiAdminKeyParameter.parameterName,
-      records_openai_project_id: openaiProjectIdParameter.parameterName,
-      records_openai_inspector_translation_key:
-        inspectorTranslationApiKeyParameter.parameterName,
-      records_admin_user_id: adminDiscordIdParameter.parameterName,
-    } as const;
     const statusBudgets = {
       project: "shittim-chest-production-project",
       account: "shittim-chest-production-account",
@@ -655,16 +636,12 @@ export class RecordsApplicationStack extends Stack {
         ECS_SERVICE_NAME: "shittim-chest-production",
         ECR_REPOSITORY_NAME: "shittim-chest",
         RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
-        ADMIN_STATUS_FUNCTIONS_JSON: JSON.stringify(statusFunctionNames),
-        ADMIN_STACKS_JSON: JSON.stringify(statusStackNames),
-        ADMIN_STATUS_PARAMETERS_JSON: JSON.stringify(statusParameters),
         RUNTIME_SCHEDULER_NAME: "shittim-chest-production-runtime-reconciler",
         SNS_TOPIC_ARN: this.formatArn({
           service: "sns",
           resource: "shittim-chest-production-operations",
         }),
         SIGNING_PROFILE_NAME: "shittim_chest_ecr",
-        ADMIN_BUDGETS_JSON: JSON.stringify(statusBudgets),
         COST_ANOMALY_SUBSCRIPTION_NAME: "shittim-chest-production-cost-anomalies",
       },
       policyStatements: [
