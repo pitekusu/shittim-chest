@@ -10,6 +10,7 @@ import pytest
 
 from shittim_records.costs import (
     COST_CATEGORIES,
+    JST,
     CostCategory,
     CostCheckpoint,
     CostCollectionFailed,
@@ -206,7 +207,8 @@ def test_aws_and_exchange_succeed_independently() -> None:
 def test_incomplete_exchange_window_preserves_a_stable_failure_checkpoint() -> None:
     class IncompleteRates(FakeRateSource):
         def fetch(self, *, start: date, end: date) -> tuple[ProviderDailyRate, ...]:
-            return super().fetch(start=start, end=end)[:-1]
+            rates = super().fetch(start=start, end=end)
+            return (*rates[:-2], rates[-1])
 
     store = FakeStore()
     rates = IncompleteRates()
@@ -228,6 +230,28 @@ def test_incomplete_exchange_window_preserves_a_stable_failure_checkpoint() -> N
             "failed_at": NOW,
         }
     ]
+
+
+def test_current_exchange_rate_may_remain_pending_until_after_collection() -> None:
+    class PendingCurrentRate(FakeRateSource):
+        def fetch(self, *, start: date, end: date) -> tuple[ProviderDailyRate, ...]:
+            return super().fetch(start=start, end=end)[:-1]
+
+    store = FakeStore({"FRANKFURTER": CostCheckpoint("FRANKFURTER", date(2026, 8, 24), True)})
+    costs = CostCollectionService(
+        aws=FakeCostSource("AWS"),
+        openai=FakeCostSource("OPENAI"),
+        exchange=PendingCurrentRate(),
+        store=store,
+    )
+
+    summaries = costs.refresh(mode="aws_fx", now=NOW)
+
+    assert [summary.source for summary in summaries] == ["AWS", "FRANKFURTER"]
+    assert len(store.rate_writes) == 1
+    written_rates = cast(tuple[ProviderDailyRate, ...], store.rate_writes[0]["rates"])
+    assert written_rates[-1].rate_date == date(2026, 8, 22)
+    assert store.failure_writes == []
 
 
 def stored_cost(
@@ -283,6 +307,25 @@ def test_cost_view_does_not_substitute_a_missing_rate() -> None:
     assert result.total_jpy == "0.000000"
     assert result.status == "unavailable"
     assert result.conversion_updated_at is None
+
+
+def test_cost_view_uses_previous_daily_rate_for_in_progress_today_only() -> None:
+    yesterday = TODAY - timedelta(days=1)
+    costs = tuple(stored_cost(TODAY, category, "1") for category in COST_CATEGORIES)
+    rates = (
+        StoredDailyRate(
+            rate_date=yesterday,
+            usd_jpy=Decimal("150.25"),
+            collected_at=datetime(2026, 8, 22, 3, 17, tzinfo=UTC),
+        ),
+    )
+
+    result = build_cost_view(costs=costs, rates=rates, period="today", now=NOW)
+
+    assert result.amounts_jpy == {category: "150.250000" for category in COST_CATEGORIES}
+    assert result.total_jpy == "601.000000"
+    assert result.status == "partial"
+    assert result.conversion_updated_at == rates[0].collected_at.astimezone(JST)
 
 
 def test_cost_view_returns_unavailable_without_valid_cost_records() -> None:

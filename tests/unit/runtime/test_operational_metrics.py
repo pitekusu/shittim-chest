@@ -101,6 +101,36 @@ def test_emf_rejects_non_production_environment_and_naive_timestamp() -> None:
         )
 
 
+def test_emf_requires_exactly_one_output_sink() -> None:
+    logger = logging.Logger("operational-metrics-test")
+
+    with pytest.raises(ValueError, match="exactly one output sink"):
+        CloudWatchEmfMetrics(environment="production")
+    with pytest.raises(ValueError, match="exactly one output sink"):
+        CloudWatchEmfMetrics(
+            environment="production",
+            logger=logger,
+            writer=lambda _: None,
+        )
+
+
+def test_emf_writer_receives_one_root_json_document() -> None:
+    messages: list[str] = []
+    metrics = CloudWatchEmfMetrics(
+        environment="production",
+        writer=messages.append,
+    )
+
+    metrics.emit(
+        service=OperationalMetricService.RECONCILER,
+        values={OperationalMetric.OUTBOX_PENDING: 0},
+        at=NOW,
+    )
+
+    assert len(messages) == 1
+    assert json.loads(messages[0])["_aws"]["CloudWatchMetrics"][0]["Namespace"] == EMF_NAMESPACE
+
+
 @pytest.mark.asyncio
 async def test_runtime_reporter_owns_task_and_emits_readiness_and_heartbeat(
     tmp_path: Path,

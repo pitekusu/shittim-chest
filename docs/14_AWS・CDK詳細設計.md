@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # AWS・CDK詳細設計
@@ -84,7 +84,8 @@ AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはc
 ## 7. Operations and cost
 
 - CloudWatch Logsはdedicated group、retention、data protection policyを持つ。
-- application EMFは固定namespace／dimension／metric allowlistで出力する。
+- application EMFは固定namespace／dimension／metric allowlistで出力する。LambdaのJSON log envelopeへ
+  EMF payloadを文字列として入れず、`_aws`をrootに持つ1行のJSON eventとして標準出力へ直接書く。
 - critical／warning composite alarm、dashboard、abnormal ECS STOPPED EventBridge通知を作る。
 - SNS email subscriptionはoperatorのconfirmationを必要とする。
 - Project budget 20 USD、account budget 30 USD、actual／forecast通知とAWS managed service anomaly

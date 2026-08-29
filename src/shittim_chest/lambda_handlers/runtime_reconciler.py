@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import re
+import sys
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -44,9 +45,6 @@ from shittim_chest.runtime.operational_metrics import (
 from shittim_chest.runtime.primitives import SystemClock
 
 LOGGER = logging.getLogger(__name__)
-EMF_LOGGER = logging.getLogger(f"{__name__}.emf")
-EMF_LOGGER.setLevel(logging.INFO)
-
 _SNOWFLAKE = re.compile(r"[0-9]{1,20}\Z")
 
 
@@ -168,7 +166,7 @@ def _get_handler() -> RuntimeReconcilerLambda:
         )
         _handler = RuntimeReconcilerLambda(
             metrics=CloudWatchEmfMetrics(
-                logger=EMF_LOGGER,
+                writer=_write_emf,
                 environment="production",
             ),
             reconciler=RuntimeReconciler(
@@ -196,6 +194,13 @@ def _get_handler() -> RuntimeReconcilerLambda:
             ),
         )
     return _handler
+
+
+def _write_emf(payload: str) -> None:
+    """Keep the EMF document at the CloudWatch log-event root in Lambda."""
+
+    sys.stdout.write(f"{payload}\n")
+    sys.stdout.flush()
 
 
 def _parse_event(event: object) -> None:
