@@ -12,7 +12,13 @@ const statusResponse: AdminStatusResponse = {
   generatedAt: "2026-08-24T03:00:00Z",
   expiresAt: "2026-08-24T03:01:00Z",
   stale: false,
-  overall: { state: "warning", criticalAlarms: 0, warningAlarms: 1, partial: true },
+  overall: {
+    state: "warning",
+    criticalAlarms: 0,
+    warningAlarms: 1,
+    partial: true,
+    activeAlarms: [{ code: "dynamo-db-throttle", severity: "warning", service: "dynamodb" }],
+  },
   sections: [
     {
       service: "ecs",
@@ -220,7 +226,12 @@ const statusResponse: AdminStatusResponse = {
       service: "signer",
       state: "healthy",
       summary: "署名profileを確認しました。",
-      metrics: [{ name: "platform", value: "Notation-OCI-SHA384-ECDSA" }],
+      metrics: [
+        { name: "status", value: "Active" },
+        { name: "platform", value: "Notation-OCI-SHA384-ECDSA" },
+        { name: "validity_value", value: 12 },
+        { name: "validity_unit", value: "MONTHS" },
+      ],
     },
     {
       service: "external",
@@ -235,14 +246,14 @@ const statusResponse: AdminStatusResponse = {
   ],
 };
 
-function renderAdmin(isAdmin = true) {
+function renderAdmin(isAdmin = true, view: "status" | "prompts" = "status") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <AdminPage isAdmin={isAdmin} csrfToken="csrf-token" />
+        <AdminPage isAdmin={isAdmin} csrfToken="csrf-token" view={view} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -267,18 +278,37 @@ describe("AdminPage", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("keeps prompt management reachable without requesting status data", () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAdmin(true, "prompts");
+
+    expect(screen.getByRole("heading", { name: "プロンプト管理" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "プロンプト管理は準備中です" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "サービス状態確認へ" })).toHaveAttribute(
+      "href",
+      "/admin",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("shows overview and panel-level AWS states", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => Promise.resolve(response(statusResponse))),
     );
 
-    renderAdmin();
+    const { container } = renderAdmin();
 
-    expect(await screen.findByRole("heading", { name: "管理コンソール" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "サービス状態確認" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "現在の状態" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "サービス状態" })).toBeVisible();
+    expect(screen.getByText("SERVICE STATUS")).toBeVisible();
     expect(await screen.findByText("Scale-to-Zeroで待機しています。")).toBeVisible();
+    const alarmLink = screen.getByRole("link", { name: /DynamoDBのスロットリング/ });
+    expect(alarmLink).toHaveAttribute("href", "#admin-service-dynamodb");
+    expect(screen.getByRole("link", { name: "ECS" })).toHaveAttribute("href", "#admin-service-ecs");
     expect(screen.getByText("タスク稼働")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "タスク定義" })).toBeVisible();
     expect(screen.getByText("Fargate On-Demand")).toBeVisible();
@@ -317,6 +347,10 @@ describe("AdminPage", () => {
     expect(screen.getByText("Discord連携")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "実績使用率" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "OpenAI Costs" })).toBeVisible();
+    expect(screen.getByText("署名時から12か月間有効")).toBeVisible();
+    expect(container.querySelector("#admin-service-sns")?.nextElementSibling).toBe(
+      container.querySelector("#admin-service-signer"),
+    );
     expect(screen.queryByText("desired_count")).not.toBeInTheDocument();
     expect(screen.queryByText("coverage")).not.toBeInTheDocument();
     expect(screen.queryByText("project_actual_percent")).not.toBeInTheDocument();
@@ -330,6 +364,19 @@ describe("AdminPage", () => {
         "一部のサービスを確認できませんでした。取得できた状態だけを表示しています。",
       ),
     ).toBeVisible();
+  });
+
+  it("shows animated graphical progress while the AWS snapshot is pending", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+
+    const { container } = renderAdmin();
+
+    expect(screen.getByRole("status")).toHaveTextContent("AWSの状態を読み込んでいます");
+    expect(screen.getByRole("status")).toHaveTextContent("16サービスを並列で確認しています");
+    expect(container.querySelectorAll("ol li")).toHaveLength(4);
   });
 
   it("shows the canonical Inspector total without masking unavailable details", async () => {

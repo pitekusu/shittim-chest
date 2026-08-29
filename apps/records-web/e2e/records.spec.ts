@@ -163,7 +163,13 @@ const adminStatus = {
   generatedAt: "2026-08-27T01:20:00Z",
   expiresAt: "2026-08-27T01:21:00Z",
   stale: false,
-  overall: { state: "warning", criticalAlarms: 0, warningAlarms: 1, partial: false },
+  overall: {
+    state: "warning",
+    criticalAlarms: 0,
+    warningAlarms: 1,
+    partial: false,
+    activeAlarms: [{ code: "dynamo-db-throttle", severity: "warning", service: "dynamodb" }],
+  },
   sections: [
     {
       service: "ecs",
@@ -1162,7 +1168,7 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   await expect(requests.getByRole("meter")).toHaveCount(3);
   await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
   const costDashboard = page.getByRole("region", { name: "概算費用" });
-  await expect(costDashboard).toContainText("¥123.456789");
+  await expect(costDashboard).toContainText("¥124");
   await expect(costDashboard).toContainText("Fargate");
   await expect(costDashboard).toContainText("Lambda");
   await expect(costDashboard).toContainText("OpenAI");
@@ -1679,7 +1685,7 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   }
 });
 
-test("management console remains reachable in the five-column 320px mobile navigation", async ({
+test("SYSTEM ACCESS remains reachable in the six-column 320px mobile navigation", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
@@ -1693,10 +1699,9 @@ test("management console remains reachable in the five-column 320px mobile navig
     name: "モバイルナビゲーション",
   });
   await expect(mobileNavigation).toBeVisible();
-  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(5);
-  const adminLink = mobileNavigation.getByRole("link", { name: "管理コンソール" });
-  await expect(adminLink).toBeVisible();
-  await expect(adminLink).toHaveText("管理コンソール");
+  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(6);
+  await expect(mobileNavigation.getByRole("link", { name: "サービス状態確認" })).toBeVisible();
+  await expect(mobileNavigation.getByRole("link", { name: "プロンプト管理" })).toBeVisible();
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
@@ -1705,7 +1710,7 @@ test("management console remains reachable in the five-column 320px mobile navig
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
-test("management console presents localized visual status", async ({ page }, testInfo) => {
+test("service status page presents localized visual status", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
@@ -1713,7 +1718,7 @@ test("management console presents localized visual status", async ({ page }, tes
 
   await page.goto("/admin");
 
-  const heading = page.getByRole("heading", { name: "管理コンソール" });
+  const heading = page.getByRole("heading", { name: "サービス状態確認" });
   await expect(heading).toBeVisible();
   expect(
     await heading.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
@@ -1722,6 +1727,27 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(page.getByText("アクセス", { exact: true })).toHaveCount(0);
   await expect(page.getByText("desired_count", { exact: true })).toHaveCount(0);
   await expect(page.getByText("タスク稼働", { exact: true })).toBeVisible();
+  const mainNavigation = page.getByRole("complementary", { name: "主要ナビゲーション" });
+  const statusLink = mainNavigation.getByRole("link", { name: "サービス状態確認" });
+  const promptLink = mainNavigation.getByRole("link", { name: "プロンプト管理" });
+  await expect(promptLink).toHaveAttribute("href", "/admin/prompts");
+  const restingTransform = await statusLink.evaluate(
+    (element) => getComputedStyle(element).transform,
+  );
+  await statusLink.hover();
+  await expect
+    .poll(() => statusLink.evaluate((element) => getComputedStyle(element).transform))
+    .not.toBe(restingTransform);
+  await page.mouse.move(0, 0);
+  await expect(page.getByRole("link", { name: /DynamoDBのスロットリング/ })).toHaveAttribute(
+    "href",
+    "#admin-service-dynamodb",
+  );
+  const sectionNavigation = page.getByRole("navigation", { name: "管理画面内ナビゲーション" });
+  await expect(sectionNavigation.getByRole("link", { name: "ECS" })).toHaveAttribute(
+    "href",
+    "#admin-service-ecs",
+  );
   await expect(page.getByRole("region", { name: "ECS構成とデプロイ状態" })).toBeVisible();
   const ecrImageTable = page.getByRole("region", { name: "タグ付きECRイメージ" });
   await expect(ecrImageTable).toBeVisible();
@@ -1752,6 +1778,7 @@ test("management console presents localized visual status", async ({ page }, tes
   await expect(page.getByRole("region", { name: "CloudFormation Stack状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "予算状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "外部集計状態" })).toBeVisible();
+  await expect(page.getByText("署名時から12か月間有効", { exact: true })).toBeVisible();
   await expect(page.getByText("Discord連携", { exact: true })).toBeVisible();
   for (const value of ["1.4.0", "rev. 42", "145 MiB"]) {
     const fontFamily = await page
@@ -1766,6 +1793,13 @@ test("management console presents localized visual status", async ({ page }, tes
     /^Delogy/u,
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  const snsCard = page.locator("#admin-service-sns");
+  const signerCard = page.locator("#admin-service-signer");
+  const [snsBox, signerBox] = await Promise.all([snsCard.boundingBox(), signerCard.boundingBox()]);
+  expect(snsBox).not.toBeNull();
+  expect(signerBox).not.toBeNull();
+  expect(Math.abs((snsBox?.y ?? 0) - (signerBox?.y ?? 0))).toBeLessThanOrEqual(1);
+  expect(signerBox?.x ?? 0).toBeGreaterThan(snsBox?.x ?? 0);
   await expect(page).toHaveScreenshot("admin-console-dark.png", {
     animations: "disabled",
     fullPage: true,
@@ -1773,7 +1807,35 @@ test("management console presents localized visual status", async ({ page }, tes
   });
 });
 
-test("management console contains wide status tables on mobile", async ({ page }, testInfo) => {
+test("service status loading presents graphical indeterminate progress", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
+  await mockAuthenticatedApi(page, detail, 0, true);
+  await page.route("**/api/v1/admin/status*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await route.fulfill({ json: adminStatus });
+  });
+
+  await page.goto("/admin");
+
+  const loadingStatus = page.getByRole("status");
+  await expect(loadingStatus).toContainText("16サービスを並列で確認しています");
+  await expect(page.getByText("実行基盤", { exact: true })).toBeVisible();
+  await expect(page.getByText("運用", { exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("admin-status-loading-dark.png", {
+    animations: "disabled",
+    fullPage: true,
+    maxDiffPixels: 20,
+  });
+
+  await expect(page.getByText("Scale-to-Zeroで待機しています。", { exact: true })).toBeVisible();
+});
+
+test("service status page contains wide status tables on mobile", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
@@ -1781,7 +1843,7 @@ test("management console contains wide status tables on mobile", async ({ page }
 
   await page.goto("/admin");
 
-  await expect(page.getByRole("heading", { name: "管理コンソール" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "サービス状態確認" })).toBeVisible();
   await expect(page.getByRole("region", { name: "タグ付きECRイメージ" })).toBeVisible();
   await expect(page.getByText("CVE-2026-12345", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();

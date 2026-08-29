@@ -403,9 +403,11 @@ function CostDashboard({
 }
 
 function formatJpy(value: string): string {
-  const [integer = "0", fraction] = value.split(".");
-  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return "¥" + grouped + (fraction === undefined ? "" : "." + fraction);
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(value);
+  if (match === null) return `¥${value}`;
+  const [, integer = "0", fraction = ""] = match;
+  const rounded = BigInt(integer) + (/[^0]/u.test(fraction) ? 1n : 0n);
+  return `¥${rounded.toLocaleString("ja-JP")}`;
 }
 
 function formatCalendarDate(value: string): string {

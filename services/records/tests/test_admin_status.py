@@ -782,11 +782,11 @@ def test_alarm_query_uses_the_exact_deployed_production_prefix() -> None:
 
     result = source(cloudwatch=Alarms())._alarm_counts()
 
-    assert result == (0, 0, False)
+    assert result == (0, 0, (), False)
     assert alarms.calls == [
         {
             "AlarmNamePrefix": "shittim-chest-production-",
-            "AlarmTypes": ["CompositeAlarm"],
+            "AlarmTypes": ["CompositeAlarm", "MetricAlarm"],
             "StateValue": "ALARM",
         }
     ]
@@ -796,7 +796,11 @@ def test_alarm_counts_only_severity_bearing_composites() -> None:
     alarms = Paginator(
         [
             {
-                "MetricAlarms": [{"AlarmName": "shittim-chest-production-heartbeat-stale"}],
+                "MetricAlarms": [
+                    {"AlarmName": "shittim-chest-production-runtime-active"},
+                    {"AlarmName": "shittim-chest-production-heartbeat-stale"},
+                    {"AlarmName": "shittim-chest-production-status-publish-failure"},
+                ],
                 "CompositeAlarms": [
                     {"AlarmName": "shittim-chest-production-critical"},
                     {"AlarmName": "shittim-chest-production-warning"},
@@ -809,7 +813,54 @@ def test_alarm_counts_only_severity_bearing_composites() -> None:
         def get_paginator(self, _name: str) -> Paginator:
             return alarms
 
-    assert source(cloudwatch=Alarms())._alarm_counts() == (1, 1, False)
+    critical, warning, active, unknown = source(cloudwatch=Alarms())._alarm_counts()
+
+    assert (critical, warning, unknown) == (1, 1, False)
+    assert [alarm.model_dump(mode="json") for alarm in active] == [
+        {"code": "heartbeat-stale", "severity": "critical", "service": "ecs"},
+        {
+            "code": "status-publish-failure",
+            "severity": "warning",
+            "service": "lambda",
+        },
+    ]
+
+
+def test_alarm_details_require_their_composite_alarm_to_be_active() -> None:
+    alarms = Paginator(
+        [
+            {
+                "MetricAlarms": [
+                    {"AlarmName": "shittim-chest-production-heartbeat-stale"},
+                    {"AlarmName": "shittim-chest-production-status-publish-failure"},
+                ],
+                "CompositeAlarms": [],
+            }
+        ]
+    )
+
+    class Alarms:
+        def get_paginator(self, _name: str) -> Paginator:
+            return alarms
+
+    assert source(cloudwatch=Alarms())._alarm_counts() == (0, 0, (), False)
+
+
+def test_unknown_alarm_names_are_not_exposed() -> None:
+    alarms = Paginator(
+        [
+            {
+                "MetricAlarms": [{"AlarmName": "shittim-chest-production-private-resource-name"}],
+                "CompositeAlarms": [{"AlarmName": "shittim-chest-production-warning"}],
+            }
+        ]
+    )
+
+    class Alarms:
+        def get_paginator(self, _name: str) -> Paginator:
+            return alarms
+
+    assert source(cloudwatch=Alarms())._alarm_counts() == (0, 1, (), True)
 
 
 def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution() -> None:
@@ -2038,7 +2089,7 @@ def test_status_sections_are_collected_in_parallel() -> None:
 
         return collect
 
-    cast(Any, status_source)._alarm_counts = lambda: (0, 0, False)
+    cast(Any, status_source)._alarm_counts = lambda: (0, 0, (), False)
     for service, name in STATUS_COLLECTORS:
         setattr(status_source, name, collector(service))
 

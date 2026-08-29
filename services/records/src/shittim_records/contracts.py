@@ -424,11 +424,30 @@ class AdminStatusSection(PublicModel):
     details: AdminStatusDetails | None = None
 
 
+AdminAlarmCode = Literal[
+    "bot-not-ready",
+    "heartbeat-stale",
+    "ingress-runtime-mismatch",
+    "idle-still-running",
+    "reconciler-failure",
+    "status-publish-failure",
+    "outbox-backlog",
+    "dynamo-db-throttle",
+]
+
+
+class AdminActiveAlarm(PublicModel):
+    code: AdminAlarmCode
+    severity: Literal["critical", "warning"]
+    service: AdminServiceName
+
+
 class AdminStatusOverall(PublicModel):
     state: AdminHealthState
     critical_alarms: Annotated[int, Field(ge=0)]
     warning_alarms: Annotated[int, Field(ge=0)]
     partial: bool
+    active_alarms: tuple[AdminActiveAlarm, ...] = ()
 
 
 class AdminStatusResponse(PublicModel):

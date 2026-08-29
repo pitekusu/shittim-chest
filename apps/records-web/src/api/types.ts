@@ -155,6 +155,21 @@ export type AdminService =
   | "signer"
   | "external";
 export type AdminHealthState = "healthy" | "warning" | "critical" | "unknown";
+export type AdminAlarmCode =
+  | "bot-not-ready"
+  | "heartbeat-stale"
+  | "ingress-runtime-mismatch"
+  | "idle-still-running"
+  | "reconciler-failure"
+  | "status-publish-failure"
+  | "outbox-backlog"
+  | "dynamo-db-throttle";
+
+export interface AdminActiveAlarm {
+  readonly code: AdminAlarmCode;
+  readonly severity: "critical" | "warning";
+  readonly service: AdminService;
+}
 
 export interface AdminEcrDetails {
   readonly kind: "ecr";
@@ -208,6 +223,7 @@ export interface AdminStatusResponse {
     readonly criticalAlarms: number;
     readonly warningAlarms: number;
     readonly partial: boolean;
+    readonly activeAlarms?: readonly AdminActiveAlarm[];
   };
   readonly sections: readonly {
     readonly service: AdminService;

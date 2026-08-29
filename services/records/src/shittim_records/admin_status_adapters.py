@@ -18,6 +18,8 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
 from shittim_records.admin_status import AdminStatusCollection
 from shittim_records.contracts import (
+    AdminActiveAlarm,
+    AdminAlarmCode,
     AdminEcrDetails,
     AdminEcrImage,
     AdminHealthState,
@@ -26,6 +28,7 @@ from shittim_records.contracts import (
     AdminInspectorFinding,
     AdminInspectorImage,
     AdminInspectorSeverityCounts,
+    AdminServiceName,
     AdminStatusMetric,
     AdminStatusOverall,
     AdminStatusSection,
@@ -116,6 +119,21 @@ _CRITICAL_STACK_STATUS_PARTS = ("FAILED", "ROLLBACK_IN_PROGRESS", "DELETE_")
 _UNKNOWN_STACK_DRIFT_STATUSES = frozenset({"NOT_CHECKED", "UNKNOWN", "CHECK_IN_PROGRESS"})
 _CHECKPOINT_SOURCES = ("AWS", "OPENAI", "FRANKFURTER")
 _INSPECTOR_SEVERITIES = ("critical", "high", "medium", "low", "untriaged")
+_ALARM_PRESENTATIONS: Mapping[str, tuple[Literal["critical", "warning"], AdminServiceName]] = (
+    MappingProxyType(
+        {
+            "bot-not-ready": ("critical", "ecs"),
+            "heartbeat-stale": ("critical", "ecs"),
+            "ingress-runtime-mismatch": ("critical", "ecs"),
+            "idle-still-running": ("critical", "ecs"),
+            "reconciler-failure": ("critical", "lambda"),
+            "status-publish-failure": ("warning", "lambda"),
+            "outbox-backlog": ("warning", "ecs"),
+            "dynamo-db-throttle": ("warning", "dynamodb"),
+        }
+    )
+)
+_KNOWN_ALARM_GATES = frozenset({"runtime-active"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,9 +314,10 @@ class AwsAdminStatusSource:
         critical = 0
         warning = 0
         alarms_unknown = True
+        active_alarms: tuple[AdminActiveAlarm, ...] = ()
         if alarm_future in done:
             with suppress(Exception):
-                critical, warning, alarms_unknown = alarm_future.result()
+                critical, warning, active_alarms, alarms_unknown = alarm_future.result()
         sections: list[AdminStatusSection] = []
         for service, _collector in collectors:
             future = section_futures[service]
@@ -331,20 +350,23 @@ class AwsAdminStatusSource:
                 critical_alarms=critical,
                 warning_alarms=warning,
                 partial=partial,
+                active_alarms=active_alarms,
             ),
             sections=tuple(sections),
         )
 
-    def _alarm_counts(self) -> tuple[int, int, bool]:
+    def _alarm_counts(self) -> tuple[int, int, tuple[AdminActiveAlarm, ...], bool]:
         try:
             paginator = self._cloudwatch.get_paginator("describe_alarms")
             critical = 0
             warning = 0
             unknown = False
+            alarm_candidates: list[AdminActiveAlarm] = []
+            normalized_prefix = self._config.alarm_prefix.casefold()
             for page in _bounded_pages(
                 paginator.paginate(
                     AlarmNamePrefix=self._config.alarm_prefix,
-                    AlarmTypes=["CompositeAlarm"],
+                    AlarmTypes=["CompositeAlarm", "MetricAlarm"],
                     StateValue="ALARM",
                 )
             ):
@@ -356,9 +378,40 @@ class AwsAdminStatusSource:
                         warning += 1
                     else:
                         unknown = True
-            return critical, warning, unknown
+                for alarm in page.get("MetricAlarms", []):
+                    raw_name = str(alarm.get("AlarmName", "")).casefold()
+                    if not raw_name.startswith(normalized_prefix):
+                        unknown = True
+                        continue
+                    code = raw_name.removeprefix(normalized_prefix)
+                    if code in _KNOWN_ALARM_GATES:
+                        continue
+                    presentation = _ALARM_PRESENTATIONS.get(code)
+                    if presentation is None:
+                        unknown = True
+                        continue
+                    severity, service = presentation
+                    alarm_candidates.append(
+                        AdminActiveAlarm(
+                            code=cast(AdminAlarmCode, code),
+                            severity=severity,
+                            service=service,
+                        )
+                    )
+            active_alarms = [
+                alarm
+                for alarm in alarm_candidates
+                if (alarm.severity == "critical" and critical > 0)
+                or (alarm.severity == "warning" and warning > 0)
+            ]
+            active_alarms.sort(key=lambda alarm: (alarm.severity, alarm.code))
+            if critical and not any(alarm.severity == "critical" for alarm in active_alarms):
+                unknown = True
+            if warning and not any(alarm.severity == "warning" for alarm in active_alarms):
+                unknown = True
+            return critical, warning, tuple(active_alarms), unknown
         except Exception:
-            return 0, 0, True
+            return 0, 0, (), True
 
     def _ecs_section(self, now: datetime) -> AdminStatusSection:
         response = self._ecs.describe_services(

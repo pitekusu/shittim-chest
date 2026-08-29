@@ -1,6 +1,62 @@
 {
   "components": {
     "schemas": {
+      "AdminActiveAlarm": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "bot-not-ready",
+              "heartbeat-stale",
+              "ingress-runtime-mismatch",
+              "idle-still-running",
+              "reconciler-failure",
+              "status-publish-failure",
+              "outbox-backlog",
+              "dynamo-db-throttle"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "service": {
+            "enum": [
+              "ecs",
+              "ecr",
+              "inspector",
+              "s3",
+              "dynamodb",
+              "lambda",
+              "cloudfront",
+              "sqs",
+              "apigateway",
+              "eventbridge",
+              "cloudformation",
+              "sns",
+              "ssm",
+              "cost_governance",
+              "signer",
+              "external"
+            ],
+            "title": "Service",
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "warning"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "service"
+        ],
+        "title": "AdminActiveAlarm",
+        "type": "object"
+      },
       "AdminEcrDetails": {
         "additionalProperties": false,
         "properties": {
@@ -383,6 +439,14 @@
       "AdminStatusOverall": {
         "additionalProperties": false,
         "properties": {
+          "activeAlarms": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AdminActiveAlarm"
+            },
+            "title": "Activealarms",
+            "type": "array"
+          },
           "criticalAlarms": {
             "minimum": 0,
             "title": "Criticalalarms",
