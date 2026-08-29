@@ -22,6 +22,11 @@ from shittim_records.auth import AuthFailure, OAuthState, SessionRecord
 from shittim_records.auth_adapters import DynamoAuthStore
 from shittim_records.cost_adapters import DynamoCostLedgerStore
 from shittim_records.costs import ProviderDailyCost, ProviderDailyRate
+from shittim_records.inspector_translation_adapters import DynamoInspectorTranslationStore
+from shittim_records.inspector_translations import (
+    InspectorJapaneseSummary,
+    inspector_description,
+)
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
@@ -241,6 +246,40 @@ def test_oauth_claim_session_and_archive_pagination(
     stored_costs, stored_rates = reader.load_cost_ledger()
     assert len(stored_costs) == 90
     assert len(stored_rates) == 30
+
+    description = inspector_description(
+        vulnerability_id="CVE-2026-12345",
+        description=(
+            "A boundary validation flaw can cause the affected process to read outside "
+            "its intended memory region."
+        ),
+    )
+    translation = InspectorJapaneseSummary(
+        key=description.key,
+        vulnerability_id=description.vulnerability_id,
+        source_sha256=description.source_sha256,
+        summary_ja=(
+            "入力値の境界確認が不十分なため、細工されたデータを処理すると、対象プロセスが本来の範囲外にある"
+            "メモリを読み取る可能性があります。その結果、処理の異常終了や、プロセス内で扱われる情報の一部が"
+            "意図せず露出するおそれがある脆弱性です。"
+        ),
+        translated_at=NOW,
+    )
+    translation_store = DynamoInspectorTranslationStore(dynamodb_client, statistics_table)
+    translation_store.save((translation,))
+
+    assert translation_store.load((description.key,)) == {description.key: translation}
+    cached = dynamodb_client.get_item(
+        TableName=statistics_table,
+        Key=marshal_item(
+            {
+                "PK": "ADMIN#INSPECTOR_TRANSLATION",
+                "SK": f"SUMMARY#{description.key}",
+            }
+        ),
+        ConsistentRead=True,
+    )
+    assert description.description not in str(unmarshal_item(cached["Item"]))
 
 
 class _NoopS3:

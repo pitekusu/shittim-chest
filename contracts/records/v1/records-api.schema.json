@@ -1,5 +1,349 @@
 {
   "$defs": {
+    "AdminEcrDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "items": {
+            "$ref": "#/$defs/AdminEcrImage"
+          },
+          "title": "Images",
+          "type": "array"
+        },
+        "kind": {
+          "const": "ecr",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "images"
+      ],
+      "title": "AdminEcrDetails",
+      "type": "object"
+    },
+    "AdminEcrImage": {
+      "additionalProperties": false,
+      "properties": {
+        "lastPulledAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Lastpulledat"
+        },
+        "mediaType": {
+          "enum": [
+            "OCI_IMAGE",
+            "OCI_INDEX",
+            "DOCKER_V2",
+            "DOCKER_LIST",
+            "OTHER"
+          ],
+          "title": "Mediatype",
+          "type": "string"
+        },
+        "pushedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pushedat"
+        },
+        "sizeBytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sizebytes"
+        },
+        "tags": {
+          "items": {
+            "maxLength": 300,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "tags",
+        "mediaType",
+        "sizeBytes",
+        "pushedAt",
+        "lastPulledAt"
+      ],
+      "title": "AdminEcrImage",
+      "type": "object"
+    },
+    "AdminInspectorAffectedPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "fixedVersion": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fixedversion"
+        },
+        "installedVersion": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Installedversion",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Name",
+          "type": "string"
+        },
+        "packageManager": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Packagemanager"
+        }
+      },
+      "required": [
+        "name",
+        "installedVersion",
+        "fixedVersion",
+        "packageManager"
+      ],
+      "title": "AdminInspectorAffectedPackage",
+      "type": "object"
+    },
+    "AdminInspectorDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "items": {
+            "$ref": "#/$defs/AdminInspectorImage"
+          },
+          "title": "Images",
+          "type": "array"
+        },
+        "kind": {
+          "const": "inspector",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "images"
+      ],
+      "title": "AdminInspectorDetails",
+      "type": "object"
+    },
+    "AdminInspectorFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "affectedPackages": {
+          "items": {
+            "$ref": "#/$defs/AdminInspectorAffectedPackage"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Affectedpackages",
+          "type": "array"
+        },
+        "fixAvailable": {
+          "anyOf": [
+            {
+              "enum": [
+                "YES",
+                "NO",
+                "PARTIAL"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fixavailable"
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "summaryJa": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "minLength": 100,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Summaryja"
+        },
+        "vulnerabilityId": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Vulnerabilityid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "vulnerabilityId",
+        "severity",
+        "summaryJa",
+        "affectedPackages",
+        "fixAvailable"
+      ],
+      "title": "AdminInspectorFinding",
+      "type": "object"
+    },
+    "AdminInspectorImage": {
+      "additionalProperties": false,
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/AdminInspectorSeverityCounts"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/AdminInspectorFinding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "lastScannedAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Lastscannedat"
+        },
+        "scanStatus": {
+          "enum": [
+            "ACTIVE",
+            "INACTIVE",
+            "UNKNOWN"
+          ],
+          "title": "Scanstatus",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "maxLength": 300,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "tags",
+        "scanStatus",
+        "lastScannedAt",
+        "counts",
+        "findings"
+      ],
+      "title": "AdminInspectorImage",
+      "type": "object"
+    },
+    "AdminInspectorSeverityCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "critical": {
+          "minimum": 0,
+          "title": "Critical",
+          "type": "integer"
+        },
+        "high": {
+          "minimum": 0,
+          "title": "High",
+          "type": "integer"
+        },
+        "low": {
+          "minimum": 0,
+          "title": "Low",
+          "type": "integer"
+        },
+        "medium": {
+          "minimum": 0,
+          "title": "Medium",
+          "type": "integer"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "untriaged": {
+          "minimum": 0,
+          "title": "Untriaged",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "untriaged"
+      ],
+      "title": "AdminInspectorSeverityCounts",
+      "type": "object"
+    },
     "AdminStatusMetric": {
       "additionalProperties": false,
       "properties": {
@@ -119,6 +463,21 @@
     "AdminStatusSection": {
       "additionalProperties": false,
       "properties": {
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminEcrDetails"
+            },
+            {
+              "$ref": "#/$defs/AdminInspectorDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Details"
+        },
         "metrics": {
           "items": {
             "$ref": "#/$defs/AdminStatusMetric"

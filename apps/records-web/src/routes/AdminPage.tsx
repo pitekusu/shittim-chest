@@ -41,6 +41,15 @@ const HEALTH_LABELS: Readonly<Record<AdminHealthState, string>> = {
   unknown: "未確認",
 };
 
+const INSPECTOR_SEVERITIES = [
+  { key: "total", label: "合計" },
+  { key: "critical", label: "重大" },
+  { key: "high", label: "高" },
+  { key: "medium", label: "中" },
+  { key: "low", label: "低" },
+  { key: "untriaged", label: "未分類" },
+] as const;
+
 const SIMPLE_METRICS: Readonly<
   Partial<Record<AdminService, readonly { readonly name: string; readonly label: string }[]>>
 > = {
@@ -109,8 +118,15 @@ const LAMBDA_RESOURCES = [
   { key: "records_read", label: "閲覧API" },
   { key: "records_ranking", label: "ランキング集計" },
   { key: "records_cost", label: "費用集計" },
+  { key: "records_inspector_translation", label: "脆弱性概要翻訳" },
   { key: "records_admin_status", label: "管理状態API" },
 ] as const;
+
+const TRANSLATION_CACHE_METRIC_NAMES: ReadonlySet<string> = new Set([
+  "translation_cache_count",
+  "translation_missing_count",
+  "translation_last_translated_at",
+]);
 
 const API_RESOURCES = [
   { key: "discord", label: "Discord受付" },
@@ -122,6 +138,7 @@ const EVENT_RESOURCES = [
   { key: "ranking", label: "ランキング集計", hasDeliveryMetrics: true },
   { key: "aws_fx", label: "AWS・為替集計", hasDeliveryMetrics: true },
   { key: "openai", label: "OpenAI集計", hasDeliveryMetrics: true },
+  { key: "inspector_translation", label: "脆弱性概要翻訳", hasDeliveryMetrics: true },
   { key: "abnormal_stop", label: "異常終了通知", hasDeliveryMetrics: true },
 ] as const;
 
@@ -699,12 +716,21 @@ function EcsMetrics({
   );
 }
 
-function EcrMetrics({
-  metrics: source,
-}: {
-  readonly metrics: readonly AdminStatusMetric[];
-}): React.JSX.Element {
-  const metrics = metricLookup(source);
+function ImageTagList({ tags }: { readonly tags: readonly string[] }): React.JSX.Element {
+  return (
+    <span className={adminStyles.imageTagList}>
+      {tags.map((tag) => (
+        <span className={adminStyles.imageTag} key={tag}>
+          {tag}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function EcrMetrics({ section }: { readonly section: AdminStatusSection }): React.JSX.Element {
+  const metrics = metricLookup(section.metrics);
+  const images = section.details?.kind === "ecr" ? section.details.images : [];
   return (
     <>
       <dl className={adminStyles.readinessGrid}>
@@ -736,29 +762,36 @@ function EcrMetrics({
           </dd>
         </div>
       </dl>
-      <section className={adminStyles.tableScroller} aria-label="承認済みECRイメージ" tabIndex={0}>
+      <section className={adminStyles.tableScroller} aria-label="タグ付きECRイメージ" tabIndex={0}>
         <table className={`${adminStyles.resourceTable} ${adminStyles.ecrTable}`}>
           <thead>
             <tr>
-              <th scope="col">用途</th>
-              <th scope="col">登録</th>
+              <th scope="col">タグ</th>
               <th scope="col">形式</th>
               <th scope="col">容量</th>
-              <th scope="col">タグ数</th>
               <th scope="col">登録日時</th>
               <th scope="col">最終取得記録</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <th scope="row">本番版</th>
-              <td>{metricValue(metrics, "normal_image_present")}</td>
-              <td>{metricValue(metrics, "normal_media_type")}</td>
-              <td>{metricValue(metrics, "normal_size_bytes")}</td>
-              <td>{metricValue(metrics, "normal_tag_count")}</td>
-              <td>{metricValue(metrics, "normal_pushed_at")}</td>
-              <td>{metricValue(metrics, "normal_last_pulled_at")}</td>
-            </tr>
+            {images.map((image) => (
+              <tr key={image.tags.join("\u0000")}>
+                <th scope="row">
+                  <ImageTagList tags={image.tags} />
+                </th>
+                <td>{formatMetricValue("image_media_type", image.mediaType)}</td>
+                <td>{formatMetricValue("image_size_bytes", image.sizeBytes)}</td>
+                <td>{formatMetricValue("image_pushed_at", image.pushedAt)}</td>
+                <td>{formatMetricValue("image_last_pulled_at", image.lastPulledAt)}</td>
+              </tr>
+            ))}
+            {images.length === 0 && (
+              <tr>
+                <td className={adminStyles.emptyTableCell} colSpan={5}>
+                  タグ付きイメージはありません。
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>
@@ -785,6 +818,158 @@ function EcrMetrics({
         </div>
       </dl>
     </>
+  );
+}
+
+function inspectorFixLabel(value: "YES" | "NO" | "PARTIAL" | null): string {
+  if (value === "YES") return "修正版あり";
+  if (value === "PARTIAL") return "一部修正可能";
+  if (value === "NO") return "修正版なし";
+  return "修正状況未確認";
+}
+
+function inspectorScanLabel(value: "ACTIVE" | "INACTIVE" | "UNKNOWN"): string {
+  if (value === "ACTIVE") return "有効";
+  if (value === "INACTIVE") return "無効";
+  return "未確認";
+}
+
+function InspectorMetrics({
+  section,
+}: {
+  readonly section: AdminStatusSection;
+}): React.JSX.Element {
+  const details = section.details?.kind === "inspector" ? section.details : null;
+  if (details === null) return <SimpleMetricGrid section={section} />;
+  if (details.images.length === 0) {
+    return <p className={adminStyles.emptyInspector}>タグ付きイメージの検査結果はありません。</p>;
+  }
+  return (
+    <div className={adminStyles.inspectorImages}>
+      {details.images.map((image, imageIndex) => {
+        const missingDetails = image.counts.critical + image.counts.high - image.findings.length;
+        return (
+          <section
+            className={adminStyles.inspectorImage}
+            aria-labelledby={`inspector-image-${imageIndex}`}
+            key={image.tags.join("\u0000")}
+          >
+            <header className={adminStyles.inspectorImageHeader}>
+              <div>
+                <span className={adminStyles.inspectorImageLabel}>コンテナイメージ</span>
+                <h4 id={`inspector-image-${imageIndex}`}>
+                  <ImageTagList tags={image.tags} />
+                </h4>
+              </div>
+              <dl className={adminStyles.inspectorScanMeta}>
+                <div>
+                  <dt>検査状態</dt>
+                  <dd>{inspectorScanLabel(image.scanStatus)}</dd>
+                </div>
+                <div>
+                  <dt>最終検査</dt>
+                  <dd>{formatMetricValue("last_scanned_at", image.lastScannedAt)}</dd>
+                </div>
+              </dl>
+            </header>
+            <dl className={adminStyles.severityGrid}>
+              {INSPECTOR_SEVERITIES.map((severity) => (
+                <div data-severity={severity.key} key={severity.key}>
+                  <dt>
+                    <span aria-hidden="true" />
+                    {severity.label}
+                  </dt>
+                  <dd>{image.counts[severity.key].toLocaleString("ja-JP")}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className={adminStyles.findingList}>
+              {image.findings.length > 0 && (
+                <details
+                  className={adminStyles.findingDisclosure}
+                  open={image.findings.length <= 6}
+                >
+                  <summary>
+                    <span>重大・高の詳細</span>
+                    <strong>{image.findings.length.toLocaleString("ja-JP")}件</strong>
+                  </summary>
+                  <div className={adminStyles.findingCards}>
+                    {image.findings.map((finding, findingIndex) => (
+                      <article
+                        className={adminStyles.findingCard}
+                        data-severity={finding.severity}
+                        key={`${finding.severity}-${finding.vulnerabilityId}-${findingIndex}`}
+                      >
+                        <header className={adminStyles.findingHeader}>
+                          <span
+                            className={adminStyles.severityBadge}
+                            data-severity={finding.severity}
+                          >
+                            {finding.severity === "critical" ? "重大" : "高"}
+                          </span>
+                          <div>
+                            <span>CVE番号／脆弱性ID</span>
+                            <h5>{finding.vulnerabilityId}</h5>
+                          </div>
+                          <span className={adminStyles.fixBadge}>
+                            {inspectorFixLabel(finding.fixAvailable)}
+                          </span>
+                        </header>
+                        <p
+                          className={`${adminStyles.findingSummary} ${commonStyles.japaneseText}`}
+                          data-pending={finding.summaryJa === null ? "true" : undefined}
+                        >
+                          {finding.summaryJa ??
+                            "Inspectorの説明文をもとに、日本語概要を準備しています。"}
+                        </p>
+                        <div className={adminStyles.packageGrid}>
+                          {finding.affectedPackages.map((affectedPackage) => (
+                            <dl
+                              className={adminStyles.packageCard}
+                              key={`${affectedPackage.name}-${affectedPackage.installedVersion}`}
+                            >
+                              <div className={adminStyles.packageName}>
+                                <dt>影響を受けるパッケージ</dt>
+                                <dd>{affectedPackage.name}</dd>
+                              </div>
+                              <div>
+                                <dt>検出バージョン</dt>
+                                <dd>{affectedPackage.installedVersion}</dd>
+                              </div>
+                              <div>
+                                <dt>修正版候補</dt>
+                                <dd>{affectedPackage.fixedVersion ?? "未確認"}</dd>
+                              </div>
+                              {affectedPackage.packageManager !== null && (
+                                <div>
+                                  <dt>パッケージ方式</dt>
+                                  <dd>{affectedPackage.packageManager}</dd>
+                                </div>
+                              )}
+                            </dl>
+                          ))}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {image.counts.critical + image.counts.high === 0 && (
+                <p className={adminStyles.noCriticalFindings}>
+                  重大・高の脆弱性は検出されていません。
+                </p>
+              )}
+              {missingDetails > 0 && (
+                <p className={adminStyles.findingDetailNotice}>
+                  重大・高のうち{missingDetails.toLocaleString("ja-JP")}
+                  件はパッケージ詳細を取得できませんでした。
+                </p>
+              )}
+            </div>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 /* oxlint-enable jsx-a11y/no-noninteractive-tabindex */
@@ -824,10 +1009,12 @@ function S3Metrics({
 
 function DynamoDbMetrics({
   metrics: source,
+  translationMetrics,
 }: {
   readonly metrics: readonly AdminStatusMetric[];
+  readonly translationMetrics: readonly AdminStatusMetric[];
 }): React.JSX.Element {
-  const metrics = metricLookup(source);
+  const metrics = metricLookup([...source, ...translationMetrics]);
   return (
     <>
       {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus. */}
@@ -861,6 +1048,29 @@ function DynamoDbMetrics({
             ))}
           </tbody>
         </table>
+      </section>
+      <section
+        className={adminStyles.translationCacheStatus}
+        aria-labelledby="translation-cache-status-title"
+      >
+        <h4 id="translation-cache-status-title">脆弱性概要翻訳キャッシュ</h4>
+        <dl className={`${adminStyles.metricGrid} ${adminStyles.translationCacheGrid}`}>
+          <div className={adminStyles.metricItem}>
+            <span className={adminStyles.metricMarker} aria-hidden="true" />
+            <dt>翻訳キャッシュ件数</dt>
+            <dd>{metricValue(metrics, "translation_cache_count")}</dd>
+          </div>
+          <div className={adminStyles.metricItem}>
+            <span className={adminStyles.metricMarker} aria-hidden="true" />
+            <dt>未翻訳件数</dt>
+            <dd>{metricValue(metrics, "translation_missing_count")}</dd>
+          </div>
+          <div className={adminStyles.metricItem}>
+            <span className={adminStyles.metricMarker} aria-hidden="true" />
+            <dt>最終翻訳日時</dt>
+            <dd>{metricValue(metrics, "translation_last_translated_at")}</dd>
+          </div>
+        </dl>
       </section>
       <dl className={adminStyles.inlineFacts}>
         <div>
@@ -1176,11 +1386,20 @@ function ExternalMetrics({
 }
 /* oxlint-enable jsx-a11y/no-noninteractive-tabindex */
 
-function ServiceMetrics({ section }: { readonly section: AdminStatusSection }): React.JSX.Element {
+function ServiceMetrics({
+  section,
+  translationMetrics,
+}: {
+  readonly section: AdminStatusSection;
+  readonly translationMetrics: readonly AdminStatusMetric[];
+}): React.JSX.Element {
   if (section.service === "ecs") return <EcsMetrics metrics={section.metrics} />;
-  if (section.service === "ecr") return <EcrMetrics metrics={section.metrics} />;
+  if (section.service === "ecr") return <EcrMetrics section={section} />;
+  if (section.service === "inspector") return <InspectorMetrics section={section} />;
   if (section.service === "s3") return <S3Metrics metrics={section.metrics} />;
-  if (section.service === "dynamodb") return <DynamoDbMetrics metrics={section.metrics} />;
+  if (section.service === "dynamodb") {
+    return <DynamoDbMetrics metrics={section.metrics} translationMetrics={translationMetrics} />;
+  }
   if (section.service === "lambda") return <LambdaMetrics metrics={section.metrics} />;
   if (section.service === "apigateway") return <ApiGatewayMetrics metrics={section.metrics} />;
   if (section.service === "eventbridge") return <EventBridgeMetrics metrics={section.metrics} />;
@@ -1195,7 +1414,13 @@ function ServiceMetrics({ section }: { readonly section: AdminStatusSection }): 
   return <SimpleMetricGrid section={section} />;
 }
 
-function ServiceCard({ section }: { readonly section: AdminStatusSection }): React.JSX.Element {
+function ServiceCard({
+  section,
+  translationMetrics,
+}: {
+  readonly section: AdminStatusSection;
+  readonly translationMetrics: readonly AdminStatusMetric[];
+}): React.JSX.Element {
   const presentation = SERVICE_PRESENTATION[section.service];
   const wide =
     section.service === "ecs" ||
@@ -1250,7 +1475,7 @@ function ServiceCard({ section }: { readonly section: AdminStatusSection }): Rea
         <StateBadge state={section.state} />
       </header>
       <p className={`${adminStyles.serviceSummary} ${commonStyles.japaneseText}`}>{summary}</p>
-      <ServiceMetrics section={section} />
+      <ServiceMetrics section={section} translationMetrics={translationMetrics} />
     </article>
   );
 }
@@ -1269,6 +1494,10 @@ function AwsStatusPanel({
   });
   useAuthenticationRecovery(refresh.error);
   const data = status.data;
+  const translationMetrics =
+    data?.sections
+      .find((section) => section.service === "inspector")
+      ?.metrics.filter((metric) => TRANSLATION_CACHE_METRIC_NAMES.has(metric.name)) ?? [];
 
   return (
     <section
@@ -1285,10 +1514,6 @@ function AwsStatusPanel({
           <h2 id="status-title">サービス状態</h2>
         </div>
         <div className={adminStyles.panelActions}>
-          <span className={adminStyles.readOnlyBadge}>
-            <span aria-hidden="true">◇</span>
-            閲覧専用
-          </span>
           <button
             className={`${commonStyles.secondaryButton} ${adminStyles.refreshButton}`}
             type="button"
@@ -1331,7 +1556,11 @@ function AwsStatusPanel({
           )}
           <div className={adminStyles.statusGrid}>
             {data.sections.map((section) => (
-              <ServiceCard key={section.service} section={section} />
+              <ServiceCard
+                key={section.service}
+                section={section}
+                translationMetrics={translationMetrics}
+              />
             ))}
           </div>
         </>

@@ -194,6 +194,12 @@ ce = [
 dynamodb = [
     { name = "mypy-boto3-dynamodb" },
 ]
+ecr = [
+    { name = "mypy-boto3-ecr" },
+]
+inspector2 = [
+    { name = "mypy-boto3-inspector2" },
+]
 s3 = [
     { name = "mypy-boto3-s3" },
 ]
@@ -680,6 +686,24 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-ecr"
+version = "1.43.73"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/f1/704db62d36b42b8bf5b43a913c1d9ee0a85e9e45c28ce7604e6a28dc8d30/mypy_boto3_ecr-1.43.73.tar.gz", hash = "sha256:d8ec39f4be668aa9e8835c4f36ccc6fe832ee2d24e7de3e261dc69186462c90a", size = 36968, upload-time = "2026-08-17T21:16:49.275Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/50/ac66c5303b061257d5a8f4fe43886ec9707ab67a74fbea80ccfb7c744ec1/mypy_boto3_ecr-1.43.73-py3-none-any.whl", hash = "sha256:d30467573e922cb07762849c1c91d66d981ce8f6fb192c48dc8331ee5496ce87", size = 43091, upload-time = "2026-08-17T21:16:46.297Z" },
+]
+
+[[package]]
+name = "mypy-boto3-inspector2"
+version = "1.43.64"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/d7/f6a7d22d296b7db274b0c9035a58ea2df66973eca958c9eb2587fefd20e6/mypy_boto3_inspector2-1.43.64.tar.gz", hash = "sha256:ef1000d4ec8d1138e76b961e8679f377cbb738917c3f794cb01144d3fd2dc7fe", size = 61141, upload-time = "2026-08-04T21:37:41.291Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/72/9d/2205c0af6a33ba78c7da5eef5cabb513bc8fdf20f044e1ba0065fb2fb13f/mypy_boto3_inspector2-1.43.64-py3-none-any.whl", hash = "sha256:9bc4d2de823c530b0e2392e1864f30cff087d5dd9ed3f33f6a8160e04cbf7cb6", size = 71751, upload-time = "2026-08-04T21:37:39.744Z" },
+]
+
+[[package]]
 name = "mypy-boto3-s3"
 version = "1.43.66"
 source = { registry = "https://pypi.org/simple" }
@@ -1117,13 +1141,14 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "httpx" },
+    { name = "openai" },
     { name = "pydantic" },
     { name = "shittim-chest" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "boto3-stubs", extra = ["ce", "dynamodb", "s3", "ssm"] },
+    { name = "boto3-stubs", extra = ["ce", "dynamodb", "ecr", "inspector2", "s3", "ssm"] },
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -1134,13 +1159,14 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.66,<2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
+    { name = "openai", specifier = ">=2.53.0,<3" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
     { name = "shittim-chest", directory = "../../" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", extras = ["ce", "dynamodb", "s3", "ssm"], specifier = ">=1.43.66,<2" },
+    { name = "boto3-stubs", extras = ["ce", "dynamodb", "ecr", "inspector2", "s3", "ssm"], specifier = ">=1.43.66,<2" },
     { name = "pip-audit", specifier = ">=2.10.1,<3" },
     { name = "pytest", specifier = ">=9.1.1,<10" },
     { name = "ruff", specifier = ">=0.16.2,<0.17" },

@@ -10,17 +10,32 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
 from shittim_records.admin_status import AdminStatusCollection
 from shittim_records.contracts import (
+    AdminEcrDetails,
+    AdminEcrImage,
     AdminHealthState,
+    AdminInspectorAffectedPackage,
+    AdminInspectorDetails,
+    AdminInspectorFinding,
+    AdminInspectorImage,
+    AdminInspectorSeverityCounts,
     AdminStatusMetric,
     AdminStatusOverall,
     AdminStatusSection,
+)
+from shittim_records.inspector_translations import (
+    InspectorDescription,
+    InspectorJapaneseSummary,
+    InspectorTranslationStore,
+    InspectorTranslationUnavailable,
+    NullInspectorTranslationStore,
+    inspector_description,
 )
 
 _TABLE_LABELS = ("debate", "archive", "statistics", "session")
@@ -55,18 +70,33 @@ _STATIC_PARAMETER_LABELS = (
     "records_session_key",
     "records_openai_admin_key",
     "records_openai_project_id",
+    "records_openai_inspector_translation_key",
     "records_admin_user_id",
 )
 _EVENT_RULE_DESCRIPTIONS = {
     "ranking": "Rebuild the Records ranking snapshots every 15 minutes",
     "aws_fx": "Collect Project-tagged AWS costs and USD/JPY rates daily at 12:17 JST",
     "openai": "Collect project-scoped OpenAI organization costs hourly at minute 37",
+    "inspector_translation": "Translate unseen active Inspector descriptions hourly at minute 7",
     "abnormal_stop": "Notify only abnormal singleton runtime task stops",
 }
 _STABLE_STACK_STATUSES = frozenset({"CREATE_COMPLETE", "IMPORT_COMPLETE", "UPDATE_COMPLETE"})
 _CRITICAL_STACK_STATUS_PARTS = ("FAILED", "ROLLBACK_IN_PROGRESS", "DELETE_")
 _UNKNOWN_STACK_DRIFT_STATUSES = frozenset({"NOT_CHECKED", "UNKNOWN", "CHECK_IN_PROGRESS"})
 _CHECKPOINT_SOURCES = ("AWS", "OPENAI", "FRANKFURTER")
+_INSPECTOR_SEVERITIES = ("critical", "high", "medium", "low", "untriaged")
+
+
+@dataclass(frozen=True, slots=True)
+class _TaggedEcrImage:
+    digest: str
+    public: AdminEcrImage
+
+
+@dataclass(frozen=True, slots=True)
+class _InspectorFindingCandidate:
+    source: InspectorDescription
+    public: AdminInspectorFinding
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +197,7 @@ class AwsAdminStatusSource:
         cloudwatch: Any,
         cloudwatch_global: Any,
         cloudformation_global: Any,
+        translations: InspectorTranslationStore | None = None,
     ) -> None:
         self._config = configuration
         self._ecs = ecs
@@ -190,6 +221,7 @@ class AwsAdminStatusSource:
         self._cloudwatch = cloudwatch
         self._cloudwatch_global = cloudwatch_global
         self._cloudformation_global = cloudformation_global
+        self._translations = translations or NullInspectorTranslationStore()
 
     def collect(self, *, now: datetime) -> AdminStatusCollection:
         now = now.astimezone(UTC)
@@ -476,19 +508,8 @@ class AwsAdminStatusSource:
         if len(repositories) != 1 or not isinstance(repositories[0], Mapping):
             raise ValueError("ECR repository is unavailable")
         repository = repositories[0]
-        paginator = self._ecr.get_paginator("describe_images")
-        image_details: list[Mapping[str, Any]] = []
-        for page in _bounded_pages(
-            paginator.paginate(repositoryName=self._config.ecr_repository_name)
-        ):
-            page_details = page.get("imageDetails", [])
-            if not isinstance(page_details, list) or any(
-                not isinstance(item, Mapping) for item in page_details
-            ):
-                raise ValueError("ECR image inventory is invalid")
-            image_details.extend(cast(list[Mapping[str, Any]], page_details))
+        image_details = self._ecr_image_details()
         by_digest: dict[str, Mapping[str, Any]] = {}
-        tagged_count = 0
         total_size = 0
         total_size_complete = True
         pushed_at_values: list[datetime] = []
@@ -497,8 +518,6 @@ class AwsAdminStatusSource:
             if digest in by_digest:
                 raise ValueError("ECR image inventory contains duplicate digests")
             by_digest[digest] = item
-            tags = _image_tags(item.get("imageTags"))
-            tagged_count += int(bool(tags))
             size = _optional_nonnegative_integer(item.get("imageSizeInBytes"))
             if size is None:
                 total_size_complete = False
@@ -511,6 +530,7 @@ class AwsAdminStatusSource:
         scanning_configuration = repository.get("imageScanningConfiguration", {})
         if not isinstance(scanning_configuration, Mapping):
             raise ValueError("ECR scanning configuration is invalid")
+        images = self._tagged_ecr_images(image_details)
         metrics: list[AdminStatusMetric] = [
             _metric(
                 "tag_mutability",
@@ -529,53 +549,75 @@ class AwsAdminStatusSource:
                 _optional_boolean(scanning_configuration.get("scanOnPush")),
             ),
             _metric("repository_image_count", len(image_details)),
-            _metric("repository_tagged_image_count", tagged_count),
-            _metric("repository_untagged_image_count", len(image_details) - tagged_count),
+            _metric("repository_tagged_image_count", len(images)),
+            _metric("repository_untagged_image_count", len(image_details) - len(images)),
             _metric("repository_total_size_bytes", total_size if total_size_complete else None),
             _metric(
                 "repository_latest_pushed_at",
                 _timestamp(max(pushed_at_values)) if pushed_at_values else None,
             ),
         ]
-        image = by_digest.get(runtime_image_digest)
-        missing = image is None
-        if image is None:
-            metrics.extend(
-                (
-                    _metric("normal_image_present", False),
-                    _metric("normal_pushed_at", None),
-                    _metric("normal_last_pulled_at", None),
-                    _metric("normal_size_bytes", None),
-                    _metric("normal_tag_count", None),
-                    _metric("normal_media_type", None),
-                )
-            )
-        else:
-            metrics.extend(
-                (
-                    _metric("normal_image_present", True),
-                    _metric("normal_pushed_at", _timestamp(image.get("imagePushedAt"))),
-                    _metric(
-                        "normal_last_pulled_at",
-                        _timestamp(image.get("lastRecordedPullTime")),
-                    ),
-                    _metric(
-                        "normal_size_bytes",
-                        _optional_nonnegative_integer(image.get("imageSizeInBytes")),
-                    ),
-                    _metric("normal_tag_count", len(_image_tags(image.get("imageTags")))),
-                    _metric("normal_media_type", _ecr_media_type(image)),
-                )
-            )
+        runtime_image = by_digest.get(runtime_image_digest)
+        missing = runtime_image is None or not _image_tags(runtime_image.get("imageTags"))
         return AdminStatusSection(
             service="ecr",
             state="warning"
             if missing or repository.get("imageTagMutability") != "IMMUTABLE"
             else "healthy",
-            summary="承認済みイメージとrepository保護を確認しました。"
+            summary="タグ付きイメージと保管庫の保護を確認しました。"
             if not missing and repository.get("imageTagMutability") == "IMMUTABLE"
-            else "イメージまたはrepository保護の確認が必要です。",
+            else "イメージまたは保管庫の保護の確認が必要です。",
             metrics=tuple(metrics),
+            details=AdminEcrDetails(
+                kind="ecr",
+                images=tuple(image.public for image in images),
+            ),
+        )
+
+    def _ecr_image_details(self) -> tuple[Mapping[str, Any], ...]:
+        paginator = self._ecr.get_paginator("describe_images")
+        image_details: list[Mapping[str, Any]] = []
+        for page in _bounded_pages(
+            paginator.paginate(repositoryName=self._config.ecr_repository_name)
+        ):
+            page_details = page.get("imageDetails", [])
+            if not isinstance(page_details, list) or any(
+                not isinstance(item, Mapping) for item in page_details
+            ):
+                raise ValueError("ECR image inventory is invalid")
+            image_details.extend(cast(list[Mapping[str, Any]], page_details))
+        return tuple(image_details)
+
+    @staticmethod
+    def _tagged_ecr_images(
+        image_details: Iterable[Mapping[str, Any]],
+    ) -> tuple[_TaggedEcrImage, ...]:
+        images: list[_TaggedEcrImage] = []
+        for item in image_details:
+            tags = _image_tags(item.get("imageTags"))
+            if not tags:
+                continue
+            images.append(
+                _TaggedEcrImage(
+                    digest=_image_digest(item.get("imageDigest")),
+                    public=AdminEcrImage(
+                        tags=tags,
+                        media_type=_ecr_media_type(item),
+                        size_bytes=_optional_nonnegative_integer(item.get("imageSizeInBytes")),
+                        pushed_at=_optional_aware_datetime(item.get("imagePushedAt")),
+                        last_pulled_at=_optional_aware_datetime(item.get("lastRecordedPullTime")),
+                    ),
+                )
+            )
+        return tuple(
+            sorted(
+                images,
+                key=lambda image: (
+                    image.public.pushed_at or datetime.min.replace(tzinfo=UTC),
+                    image.public.tags,
+                ),
+                reverse=True,
+            )
         )
 
     def _runtime_image_digest(self) -> str:
@@ -594,7 +636,58 @@ class AwsAdminStatusSource:
         return _image_digest(values.get("RuntimeImageDigest"))
 
     def _inspector_section(self) -> AdminStatusSection:
-        counts = {severity: 0 for severity in ("critical", "high", "medium", "low", "untriaged")}
+        images = self._tagged_ecr_images(self._ecr_image_details())
+        digests = {image.digest for image in images}
+        if len(digests) != len(images):
+            raise ValueError("tagged ECR image inventory contains duplicate digests")
+
+        aggregated: dict[str, AdminInspectorSeverityCounts] = {}
+        aggregation = self._inspector.get_paginator("list_finding_aggregations")
+        for page in _bounded_pages(
+            aggregation.paginate(
+                aggregationType="AWS_ECR_CONTAINER",
+                aggregationRequest={
+                    "awsEcrContainerAggregation": {
+                        "repositories": [
+                            {
+                                "comparison": "EQUALS",
+                                "value": self._config.ecr_repository_name,
+                            }
+                        ]
+                    }
+                },
+            )
+        ):
+            if page.get("aggregationType") not in (None, "AWS_ECR_CONTAINER"):
+                raise ValueError("Inspector aggregation type is invalid")
+            responses = page.get("responses", [])
+            if not isinstance(responses, list):
+                raise ValueError("Inspector aggregation response is invalid")
+            for response in responses:
+                if not isinstance(response, Mapping):
+                    raise ValueError("Inspector aggregation item is invalid")
+                item = response.get("awsEcrContainerAggregation")
+                if not isinstance(item, Mapping):
+                    raise ValueError("Inspector ECR aggregation item is invalid")
+                digest = _image_digest(item.get("imageSha"))
+                if digest not in digests:
+                    continue
+                if digest in aggregated:
+                    raise ValueError("Inspector aggregation contains a duplicate image")
+                severity_counts = item.get("severityCounts", {})
+                if not isinstance(severity_counts, Mapping):
+                    raise ValueError("Inspector severity counts are invalid")
+                aggregated[digest] = AdminInspectorSeverityCounts(
+                    total=_nonnegative_count(severity_counts.get("all")),
+                    critical=_nonnegative_count(severity_counts.get("critical")),
+                    high=_nonnegative_count(severity_counts.get("high")),
+                    medium=_nonnegative_count(severity_counts.get("medium")),
+                    low=0,
+                    untriaged=0,
+                )
+
+        supplemental_counts = {digest: {"low": 0, "untriaged": 0} for digest in digests}
+        findings: dict[str, list[_InspectorFindingCandidate]] = {digest: [] for digest in digests}
         paginator = self._inspector.get_paginator("list_findings")
         for page in _bounded_pages(
             paginator.paginate(
@@ -603,18 +696,61 @@ class AwsAdminStatusSource:
                         {"comparison": "EQUALS", "value": self._config.ecr_repository_name}
                     ],
                     "findingStatus": [{"comparison": "EQUALS", "value": "ACTIVE"}],
+                    "resourceType": [{"comparison": "EQUALS", "value": "AWS_ECR_CONTAINER_IMAGE"}],
                 }
             )
         ):
-            for finding in page.get("findings", []):
-                severity = str(finding.get("severity", "")).casefold()
-                if severity in counts:
-                    counts[severity] += 1
-                elif severity != "informational":
-                    counts["untriaged"] += 1
-        coverage_count = 0
-        active_coverage = 0
-        last_scanned_at: datetime | None = None
+            page_findings = page.get("findings", [])
+            if not isinstance(page_findings, list):
+                raise ValueError("Inspector findings response is invalid")
+            for raw_finding in page_findings:
+                if not isinstance(raw_finding, Mapping):
+                    raise ValueError("Inspector finding is invalid")
+                digest = _finding_image_digest(raw_finding)
+                if digest not in digests:
+                    continue
+                severity = str(raw_finding.get("severity", "")).casefold()
+                if severity in {"low", "untriaged"}:
+                    supplemental_counts[digest][severity] += 1
+                if (
+                    severity in {"critical", "high"}
+                    and raw_finding.get("packageVulnerabilityDetails") is not None
+                ):
+                    findings[digest].append(_public_inspector_finding(raw_finding, severity))
+
+        for digest, candidates in findings.items():
+            counts = aggregated.get(digest)
+            critical_limit = counts.critical if counts is not None else 0
+            high_limit = counts.high if counts is not None else 0
+            critical_details = sum(
+                candidate.public.severity == "critical" for candidate in candidates
+            )
+            high_details = sum(candidate.public.severity == "high" for candidate in candidates)
+            if critical_details > critical_limit or high_details > high_limit:
+                raise ValueError("Inspector finding details exceed severity aggregates")
+
+        translation_keys = tuple(
+            sorted({candidate.source.key for values in findings.values() for candidate in values})
+        )
+        translation_cache_available = True
+        try:
+            translations = self._translations.load(translation_keys)
+        except InspectorTranslationUnavailable:
+            translations = {}
+            translation_cache_available = False
+        if not set(translations) <= set(translation_keys):
+            raise ValueError("Inspector translation cache returned an unexpected item")
+        translation_last_translated_at = (
+            max(summary.translated_at for summary in translations.values())
+            if translations
+            else None
+        )
+
+        coverage_by_digest: dict[str, tuple[str, datetime | None]] = {}
+        tag_pairs = [(tag, image.digest) for image in images for tag in image.public.tags]
+        tags_to_digest = dict(tag_pairs)
+        if len(tags_to_digest) != len(tag_pairs):
+            raise ValueError("tagged ECR image inventory contains a duplicate tag")
         coverage = self._inspector.get_paginator("list_coverage")
         for page in _bounded_pages(
             coverage.paginate(
@@ -625,37 +761,109 @@ class AwsAdminStatusSource:
                 }
             )
         ):
-            for resource in page.get("coveredResources", []):
-                coverage_count += 1
-                if resource.get("scanStatus", {}).get("statusCode") == "ACTIVE":
-                    active_coverage += 1
-                scanned = resource.get("lastScannedAt")
-                if isinstance(scanned, datetime) and (
-                    last_scanned_at is None or scanned > last_scanned_at
-                ):
-                    last_scanned_at = scanned
+            resources = page.get("coveredResources", [])
+            if not isinstance(resources, list):
+                raise ValueError("Inspector coverage response is invalid")
+            for resource in resources:
+                if not isinstance(resource, Mapping):
+                    raise ValueError("Inspector coverage item is invalid")
+                digest = _coverage_image_digest(resource, tags_to_digest=tags_to_digest)
+                if digest not in digests:
+                    continue
+                if digest in coverage_by_digest:
+                    raise ValueError("Inspector coverage contains a duplicate image")
+                raw_status = _mapping_value(resource.get("scanStatus"), "statusCode")
+                scan_status = _known_value(raw_status, {"ACTIVE", "INACTIVE"}) or "UNKNOWN"
+                coverage_by_digest[digest] = (
+                    scan_status,
+                    _optional_aware_datetime(resource.get("lastScannedAt")),
+                )
+
+        image_results: list[AdminInspectorImage] = []
+        for image in images:
+            counts = aggregated.get(
+                image.digest,
+                AdminInspectorSeverityCounts(
+                    total=0,
+                    critical=0,
+                    high=0,
+                    medium=0,
+                    low=0,
+                    untriaged=0,
+                ),
+            )
+            low = supplemental_counts[image.digest]["low"]
+            untriaged = supplemental_counts[image.digest]["untriaged"]
+            if low + untriaged > counts.total - counts.critical - counts.high - counts.medium:
+                raise ValueError("Inspector severity totals are inconsistent")
+            scan_status, last_scanned_at = coverage_by_digest.get(
+                image.digest,
+                ("UNKNOWN", None),
+            )
+            image_results.append(
+                AdminInspectorImage(
+                    tags=image.public.tags,
+                    scan_status=cast(Any, scan_status),
+                    last_scanned_at=last_scanned_at,
+                    counts=counts.model_copy(update={"low": low, "untriaged": untriaged}),
+                    findings=tuple(
+                        sorted(
+                            (
+                                _resolved_inspector_finding(candidate, translations)
+                                for candidate in findings[image.digest]
+                            ),
+                            key=_inspector_finding_sort_key,
+                        )
+                    ),
+                )
+            )
+
+        total_counts = {
+            severity: sum(getattr(image.counts, severity) for image in image_results)
+            for severity in _INSPECTOR_SEVERITIES
+        }
+        last_scanned_values = [
+            image.last_scanned_at for image in image_results if image.last_scanned_at is not None
+        ]
+        active_coverage = sum(image.scan_status == "ACTIVE" for image in image_results)
         state: AdminHealthState = (
             "critical"
-            if counts["critical"]
+            if total_counts["critical"]
             else "warning"
-            if counts["high"]
-            or counts["medium"]
-            or counts["untriaged"]
-            or coverage_count == 0
-            or active_coverage != coverage_count
+            if any(total_counts[severity] for severity in ("high", "medium", "low", "untriaged"))
+            or not image_results
+            or active_coverage != len(image_results)
             else "healthy"
         )
         metrics = [
-            *(_metric(f"active_{key}", value) for key, value in counts.items()),
-            _metric("coverage_count", coverage_count),
+            *(_metric(f"active_{key}", value) for key, value in total_counts.items()),
+            _metric("coverage_count", len(image_results)),
             _metric("coverage_active", active_coverage),
-            _metric("last_scanned_at", _timestamp(last_scanned_at)),
+            _metric(
+                "last_scanned_at",
+                _timestamp(max(last_scanned_values)) if last_scanned_values else None,
+            ),
+            _metric(
+                "translation_cache_count",
+                len(translations) if translation_cache_available else None,
+            ),
+            _metric(
+                "translation_missing_count",
+                len(translation_keys) - len(translations) if translation_cache_available else None,
+            ),
+            _metric(
+                "translation_last_translated_at",
+                _timestamp(translation_last_translated_at)
+                if translation_last_translated_at is not None
+                else None,
+            ),
         ]
         return AdminStatusSection(
             service="inspector",
             state=state,
-            summary="検出結果とECR scan coverageを確認しました。",
+            summary="タグ付きコンテナイメージ別の検出結果を確認しました。",
             metrics=tuple(metrics),
+            details=AdminInspectorDetails(kind="inspector", images=tuple(image_results)),
         )
 
     def _s3_section(self) -> AdminStatusSection:
@@ -1632,6 +1840,7 @@ class AwsAdminStatusSource:
                 "records_client_secret",
                 "records_session_key",
                 "records_admin_user_id",
+                "records_openai_inspector_translation_key",
             },
             "cost": {"records_openai_admin_key", "records_openai_project_id"},
         }
@@ -2030,6 +2239,15 @@ def _optional_boolean(value: object) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+def _nonnegative_count(value: object) -> int:
+    if value is None:
+        return 0
+    parsed = _optional_nonnegative_integer(value)
+    if parsed is None:
+        raise ValueError("provider count is invalid")
+    return parsed
+
+
 def _known_value(value: object, allowed: set[str]) -> str | None:
     return value if isinstance(value, str) and value in allowed else None
 
@@ -2042,6 +2260,10 @@ def _aware_datetime(value: object) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("provider timestamp is invalid")
     return value.astimezone(UTC)
+
+
+def _optional_aware_datetime(value: object) -> datetime | None:
+    return None if value is None else _aware_datetime(value)
 
 
 def _primary_ecs_deployment(deployments: list[object]) -> Mapping[str, Any]:
@@ -2103,29 +2325,190 @@ def _ecs_platform_version(value: object) -> str | None:
 def _image_tags(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
-    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+    if (
+        not isinstance(value, list)
+        or len(value) > 100
+        or any(not isinstance(item, str) or not item.strip() or len(item) > 300 for item in value)
+        or len(set(value)) != len(value)
+    ):
         raise ValueError("ECR image tags are invalid")
-    return tuple(value)
+    return tuple(sorted(value))
 
 
-def _ecr_media_type(image: Mapping[str, Any]) -> str:
-    artifact_type = image.get("artifactMediaType")
-    known_artifacts = {
-        "application/vnd.cncf.notary.signature": "SIGNATURE",
-    }
-    if isinstance(artifact_type, str) and artifact_type in known_artifacts:
-        return known_artifacts[artifact_type]
-
+def _ecr_media_type(
+    image: Mapping[str, Any],
+) -> Literal["OCI_IMAGE", "OCI_INDEX", "DOCKER_V2", "DOCKER_LIST", "OTHER"]:
     manifest_type = image.get("imageManifestMediaType")
-    known_manifests = {
-        "application/vnd.docker.distribution.manifest.list.v2+json": "DOCKER_LIST",
-        "application/vnd.docker.distribution.manifest.v2+json": "DOCKER_V2",
-        "application/vnd.oci.image.index.v1+json": "OCI_INDEX",
-        "application/vnd.oci.image.manifest.v1+json": "OCI_IMAGE",
-    }
-    if isinstance(manifest_type, str):
-        return known_manifests.get(manifest_type, "OTHER")
-    return "OTHER" if isinstance(artifact_type, str) else "UNKNOWN"
+    if manifest_type == "application/vnd.docker.distribution.manifest.list.v2+json":
+        return "DOCKER_LIST"
+    if manifest_type == "application/vnd.docker.distribution.manifest.v2+json":
+        return "DOCKER_V2"
+    if manifest_type == "application/vnd.oci.image.index.v1+json":
+        return "OCI_INDEX"
+    if manifest_type == "application/vnd.oci.image.manifest.v1+json":
+        return "OCI_IMAGE"
+    return "OTHER"
+
+
+def _finding_image_digest(finding: Mapping[str, Any]) -> str:
+    resources = finding.get("resources", [])
+    if not isinstance(resources, list):
+        raise ValueError("Inspector finding resources are invalid")
+    digests: set[str] = set()
+    for resource in resources:
+        if not isinstance(resource, Mapping):
+            raise ValueError("Inspector finding resource is invalid")
+        if resource.get("type") != "AWS_ECR_CONTAINER_IMAGE":
+            continue
+        details = resource.get("details", {})
+        if not isinstance(details, Mapping):
+            raise ValueError("Inspector finding resource details are invalid")
+        image = details.get("awsEcrContainerImage", {})
+        if not isinstance(image, Mapping):
+            raise ValueError("Inspector ECR finding details are invalid")
+        digests.add(_image_digest(image.get("imageHash")))
+    if len(digests) != 1:
+        raise ValueError("Inspector finding image is ambiguous")
+    return next(iter(digests))
+
+
+def _public_inspector_finding(
+    finding: Mapping[str, Any],
+    severity: str,
+) -> _InspectorFindingCandidate:
+    details = finding.get("packageVulnerabilityDetails")
+    if not isinstance(details, Mapping):
+        raise ValueError("Inspector package vulnerability details are invalid")
+    vulnerability_id = _vulnerability_id(details)
+    raw_packages = details.get("vulnerablePackages", [])
+    if not isinstance(raw_packages, list) or not raw_packages or len(raw_packages) > 100:
+        raise ValueError("Inspector vulnerable packages are invalid")
+    packages: list[AdminInspectorAffectedPackage] = []
+    seen: set[tuple[str, str, str | None, str | None]] = set()
+    for raw_package in raw_packages:
+        if not isinstance(raw_package, Mapping):
+            raise ValueError("Inspector vulnerable package is invalid")
+        name = _package_text(raw_package.get("name"))
+        installed_version = _package_version(raw_package)
+        fixed_version = _optional_package_text(raw_package.get("fixedInVersion"))
+        package_manager = _optional_package_text(raw_package.get("packageManager"))
+        identity = (name, installed_version, fixed_version, package_manager)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        packages.append(
+            AdminInspectorAffectedPackage(
+                name=name,
+                installed_version=installed_version,
+                fixed_version=fixed_version,
+                package_manager=package_manager,
+            )
+        )
+    if not packages:
+        raise ValueError("Inspector vulnerable packages are empty")
+    source = inspector_description(
+        vulnerability_id=vulnerability_id,
+        description=finding.get("description"),
+    )
+    fix_available = _known_value(finding.get("fixAvailable"), {"YES", "NO", "PARTIAL"})
+    return _InspectorFindingCandidate(
+        source=source,
+        public=AdminInspectorFinding(
+            vulnerability_id=vulnerability_id,
+            severity=cast(Any, severity),
+            summary_ja=None,
+            affected_packages=tuple(packages),
+            fix_available=cast(Any, fix_available),
+        ),
+    )
+
+
+def _resolved_inspector_finding(
+    candidate: _InspectorFindingCandidate,
+    translations: Mapping[str, InspectorJapaneseSummary],
+) -> AdminInspectorFinding:
+    summary = translations.get(candidate.source.key)
+    if summary is None:
+        return candidate.public
+    if (
+        summary.vulnerability_id != candidate.source.vulnerability_id
+        or summary.source_sha256 != candidate.source.source_sha256
+    ):
+        raise ValueError("Inspector translation cache identity is invalid")
+    return candidate.public.model_copy(update={"summary_ja": summary.summary_ja})
+
+
+def _inspector_finding_sort_key(finding: AdminInspectorFinding) -> tuple[int, str]:
+    return (
+        0 if finding.severity == "critical" else 1,
+        finding.vulnerability_id,
+    )
+
+
+def _vulnerability_id(details: Mapping[str, Any]) -> str:
+    candidates: list[object] = [details.get("vulnerabilityId")]
+    related = details.get("relatedVulnerabilities", [])
+    if isinstance(related, list):
+        candidates.extend(related)
+    for candidate in candidates:
+        if (
+            isinstance(candidate, str)
+            and len(candidate) <= 128
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", candidate) is not None
+        ):
+            return candidate
+    raise ValueError("Inspector vulnerability identifier is invalid")
+
+
+def _package_version(package: Mapping[str, Any]) -> str:
+    version = _package_text(package.get("version"))
+    release = _optional_package_text(package.get("release"))
+    raw_epoch = package.get("epoch")
+    if raw_epoch is None:
+        epoch = None
+    elif isinstance(raw_epoch, int) and not isinstance(raw_epoch, bool) and raw_epoch >= 0:
+        epoch = str(raw_epoch) if raw_epoch > 0 else None
+    else:
+        raise ValueError("Inspector package epoch is invalid")
+    combined = f"{version}-{release}" if release is not None else version
+    if epoch is not None:
+        combined = f"{epoch}:{combined}"
+    if len(combined) > 256:
+        raise ValueError("Inspector package version is too long")
+    return combined
+
+
+def _package_text(value: object) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > 256:
+        raise ValueError("Inspector package metadata is invalid")
+    return value
+
+
+def _optional_package_text(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    return _package_text(value)
+
+
+def _coverage_image_digest(
+    resource: Mapping[str, Any],
+    *,
+    tags_to_digest: Mapping[str, str],
+) -> str | None:
+    resource_id = resource.get("resourceId")
+    if isinstance(resource_id, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", resource_id):
+        return resource_id
+    metadata = resource.get("resourceMetadata", {})
+    if not isinstance(metadata, Mapping):
+        return None
+    ecr_image = metadata.get("ecrImage", {})
+    if not isinstance(ecr_image, Mapping):
+        return None
+    tags = _image_tags(ecr_image.get("tags"))
+    matches = {tags_to_digest[tag] for tag in tags if tag in tags_to_digest}
+    if len(matches) > 1:
+        raise ValueError("Inspector coverage image tags are ambiguous")
+    return next(iter(matches)) if matches else None
 
 
 def _decimal_integer(value: object) -> int:

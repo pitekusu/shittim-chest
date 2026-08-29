@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import traceback
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
@@ -17,6 +18,7 @@ from shittim_records.costs import (
     CostCollectionFailed,
     CostProviderUnavailable,
 )
+from shittim_records.inspector_translations import InspectorTranslationUnavailable
 from shittim_records.projector import BackfillResult, ProjectionResult
 
 
@@ -252,6 +254,59 @@ def test_cost_handler_preserves_independent_success_then_raises(monkeypatch: Any
 def test_cost_handler_rejects_unknown_mode() -> None:
     with pytest.raises(ValueError, match="mode"):
         lambda_handlers.cost_handler({"mode": "private-identifier"}, object())
+
+
+def test_inspector_translation_handler_returns_only_content_free_counts(
+    monkeypatch: Any,
+) -> None:
+    service = SimpleNamespace(
+        refresh=lambda *, now: SimpleNamespace(
+            discovered=54,
+            cached=4,
+            translated=50,
+            remaining=0,
+        )
+    )
+    monkeypatch.setattr(lambda_handlers, "_INSPECTOR_TRANSLATIONS", cast(Any, service))
+
+    result = lambda_handlers.inspector_translation_handler({}, object())
+
+    assert result == {
+        "discovered": 54,
+        "cached": 4,
+        "translated": 50,
+        "remaining": 0,
+    }
+
+
+def test_inspector_translation_handler_suppresses_provider_exception_chain(
+    monkeypatch: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sensitive_output = "untrusted provider output must not reach CloudWatch"
+
+    def fail_refresh(*, now: object) -> object:
+        del now
+        try:
+            raise ValueError(sensitive_output)
+        except ValueError as error:
+            raise InspectorTranslationUnavailable("provider_output_invalid") from error
+
+    monkeypatch.setattr(
+        lambda_handlers,
+        "_INSPECTOR_TRANSLATIONS",
+        cast(Any, SimpleNamespace(refresh=fail_refresh)),
+    )
+
+    with pytest.raises(InspectorTranslationUnavailable) as caught:
+        lambda_handlers.inspector_translation_handler({}, object())
+
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert caught.value.code == "provider_output_invalid"
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
+    assert sensitive_output not in rendered
+    assert sensitive_output not in caplog.text
 
 
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:

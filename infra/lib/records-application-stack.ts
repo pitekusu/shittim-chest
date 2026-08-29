@@ -30,6 +30,8 @@ const BACKFILL_FUNCTION_NAME = "shittim-chest-production-records-backfill";
 const ADMIN_STATUS_FUNCTION_NAME = "shittim-chest-production-records-admin-status";
 const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
 const COST_FUNCTION_NAME = "shittim-chest-production-records-cost";
+const INSPECTOR_TRANSLATION_FUNCTION_NAME =
+  "shittim-chest-production-records-inspector-translation";
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 
@@ -39,6 +41,7 @@ export class RecordsApplicationStack extends Stack {
   public readonly adminStatusFunction: lambda.Function;
   public readonly authFunction: lambda.Function;
   public readonly costFunction: lambda.Function;
+  public readonly inspectorTranslationFunction: lambda.Function;
   public readonly rankingFunction: lambda.Function;
   public readonly readFunction: lambda.Function;
 
@@ -106,6 +109,11 @@ export class RecordsApplicationStack extends Stack {
       "MediaBucket",
       `shittim-chest-production-records-media-${this.account}`,
     );
+    const repositoryArn = this.formatArn({
+      service: "ecr",
+      resource: "repository",
+      resourceName: "shittim-chest",
+    });
     const projectorDlq = sqs.Queue.fromQueueArn(
       this,
       "ProjectorDlq",
@@ -174,6 +182,15 @@ export class RecordsApplicationStack extends Stack {
         parameterName: "/shittim-chest/production/records/openai/project-id",
       },
     );
+    const inspectorTranslationApiKeyParameter =
+      ssm.StringParameter.fromSecureStringParameterAttributes(
+        this,
+        "InspectorTranslationApiKeyParameter",
+        {
+          parameterName:
+            "/shittim-chest/production/records/openai/inspector-translation-api-key",
+        },
+      );
     const adminDiscordIdParameter = ssm.StringParameter.fromSecureStringParameterAttributes(
       this,
       "AdminDiscordIdParameter",
@@ -405,6 +422,67 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    this.inspectorTranslationFunction = this.httpFunctionWithRole({
+      id: "InspectorTranslationFunction",
+      functionName: INSPECTOR_TRANSLATION_FUNCTION_NAME,
+      handler: "shittim_records.lambda_handlers.inspector_translation_handler",
+      code,
+      timeout: Duration.minutes(5),
+      reservedConcurrentExecutions: 1,
+      environment: {
+        ECR_REPOSITORY_NAME: "shittim-chest",
+        INSPECTOR_TRANSLATION_API_KEY_PARAMETER_NAME:
+          inspectorTranslationApiKeyParameter.parameterName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["ecr:DescribeImages"],
+          resources: [repositoryArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["inspector2:ListFindings"],
+          resources: ["*"],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"],
+          resources: [inspectorTranslationApiKeyParameter.parameterArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:BatchGetItem", "dynamodb:PutItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["ADMIN#INSPECTOR_TRANSLATION"],
+            },
+            Null: {
+              "dynamodb:LeadingKeys": "false",
+            },
+          },
+        }),
+      ],
+    });
+    Validations.of(this.inspectorTranslationFunction.role!).acknowledge({
+      id: "AwsSolutions-IAM5[Resource::*]",
+      reason:
+        "Inspector ListFindings does not support resource-level permissions; ECR, SSM, and DynamoDB access remains bound to exact production resources and the translation partition key.",
+    });
+    this.inspectorTranslationFunction.configureAsyncInvoke({
+      retryAttempts: 0,
+    });
+    const inspectorTranslationSchedule = new events.Rule(
+      this,
+      "InspectorTranslationSchedule",
+      {
+        description: "Translate unseen active Inspector descriptions hourly at minute 7",
+        schedule: events.Schedule.cron({ minute: "7" }),
+        targets: [
+          new eventTargets.LambdaFunction(this.inspectorTranslationFunction, {
+            retryAttempts: 0,
+          }),
+        ],
+      },
+    );
     this.readFunction = this.httpFunctionWithRole({
       id: "ReadFunction",
       functionName: READ_FUNCTION_NAME,
@@ -468,11 +546,6 @@ export class RecordsApplicationStack extends Stack {
       account: "",
       resource: `shittim-chest-production-records-web-${this.account}`,
     });
-    const repositoryArn = this.formatArn({
-      service: "ecr",
-      resource: "repository",
-      resourceName: "shittim-chest",
-    });
     const statusStackNames = {
       stateful: "ShittimChest-Prod-Stateful",
       release_identity: "ShittimChest-Prod-ReleaseIdentity",
@@ -520,6 +593,8 @@ export class RecordsApplicationStack extends Stack {
       records_session_key: sessionKeyParameter.parameterName,
       records_openai_admin_key: openaiAdminKeyParameter.parameterName,
       records_openai_project_id: openaiProjectIdParameter.parameterName,
+      records_openai_inspector_translation_key:
+        inspectorTranslationApiKeyParameter.parameterName,
       records_admin_user_id: adminDiscordIdParameter.parameterName,
     } as const;
     const statusBudgets = {
@@ -536,6 +611,7 @@ export class RecordsApplicationStack extends Stack {
       records_auth: AUTH_FUNCTION_NAME,
       records_ranking: RANKING_FUNCTION_NAME,
       records_cost: COST_FUNCTION_NAME,
+      records_inspector_translation: INSPECTOR_TRANSLATION_FUNCTION_NAME,
       records_read: READ_FUNCTION_NAME,
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
@@ -654,7 +730,11 @@ export class RecordsApplicationStack extends Stack {
           resources: [repositoryArn],
         }),
         new iam.PolicyStatement({
-          actions: ["inspector2:ListCoverage", "inspector2:ListFindings"],
+          actions: [
+            "inspector2:ListCoverage",
+            "inspector2:ListFindingAggregations",
+            "inspector2:ListFindings",
+          ],
           resources: ["*"],
         }),
         new iam.PolicyStatement({
@@ -790,6 +870,24 @@ export class RecordsApplicationStack extends Stack {
       ],
     });
     this.adminStatusFunction.role!.attachInlinePolicy(
+      new iam.Policy(this, "AdminStatusInspectorTranslationReadPolicy", {
+        statements: [
+          new iam.PolicyStatement({
+            actions: ["dynamodb:BatchGetItem"],
+            resources: [statisticsTable.tableArn],
+            conditions: {
+              "ForAllValues:StringEquals": {
+                "dynamodb:LeadingKeys": ["ADMIN#INSPECTOR_TRANSLATION"],
+              },
+              Null: {
+                "dynamodb:LeadingKeys": "false",
+              },
+            },
+          }),
+        ],
+      }),
+    );
+    this.adminStatusFunction.role!.attachInlinePolicy(
       new iam.Policy(this, "AdminStatusEventBridgeReadPolicy", {
         statements: [
           new iam.PolicyStatement({
@@ -798,6 +896,7 @@ export class RecordsApplicationStack extends Stack {
               rankingSchedule.ruleArn,
               awsFxCostSchedule.ruleArn,
               openAiCostSchedule.ruleArn,
+              inspectorTranslationSchedule.ruleArn,
               this.formatArn({
                 service: "events",
                 resource: "rule",
@@ -812,7 +911,7 @@ export class RecordsApplicationStack extends Stack {
     for (const [function_, reason] of [
       [
         this.adminStatusFunction,
-        "CloudWatch, Inspector, SSM metadata, Cost Explorer, and CloudFront discovery APIs do not support complete resource-level scoping. API Gateway is restricted to HTTP API resources in the production region, EventBridge to four exact rule ARNs, and CloudFormation to eight exact production stack names whose immutable ARN suffixes cannot be predicted. CloudFront and ACM resources are resolved from the exact allowlisted public hostname. All remaining reads use exact production resources.",
+        "CloudWatch, Inspector, SSM metadata, Cost Explorer, and CloudFront discovery APIs do not support complete resource-level scoping. API Gateway is restricted to HTTP API resources in the production region, EventBridge to five exact rule ARNs, and CloudFormation to eight exact production stack names whose immutable ARN suffixes cannot be predicted. CloudFront and ACM resources are resolved from the exact allowlisted public hostname. All remaining reads use exact production resources.",
       ],
     ] as const) {
       Validations.of(function_.role!).acknowledge({

@@ -48,6 +48,16 @@ from shittim_records.cost_adapters import (
 )
 from shittim_records.costs import CostCollectionFailed, CostCollectionService
 from shittim_records.http_api import AuthHttpController, ReadHttpController, error_response
+from shittim_records.inspector_translation_adapters import (
+    AwsInspectorDescriptionSource,
+    DynamoInspectorTranslationStore,
+    InspectorTranslationConfigurationRepository,
+    OpenAIInspectorSummaryTranslator,
+)
+from shittim_records.inspector_translations import (
+    InspectorTranslationService,
+    InspectorTranslationUnavailable,
+)
 from shittim_records.projector import BackfillService, ProjectorService
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
@@ -61,6 +71,7 @@ _PROJECTOR: ProjectorService | None = None
 _BACKFILL: BackfillService | None = None
 _RANKING: RankingService | None = None
 _COSTS: CostCollectionService | None = None
+_INSPECTOR_TRANSLATIONS: InspectorTranslationService | None = None
 _AUTH_CONTROLLER: AuthHttpController | None = None
 _READ_CONTROLLER: ReadHttpController | None = None
 _ADMIN_STATUS_CONTROLLER: AdminStatusHttpController | None = None
@@ -172,6 +183,27 @@ def cost_handler(event: Mapping[str, Any], _context: object) -> dict[str, object
     return response
 
 
+def inspector_translation_handler(_event: Mapping[str, Any], _context: object) -> dict[str, object]:
+    """Translate a bounded set of unseen Inspector descriptions without logging content."""
+
+    try:
+        summary = _inspector_translation_service().refresh(now=datetime.now(UTC))
+    except InspectorTranslationUnavailable as error:
+        _log(
+            event="records_inspector_translation_failed",
+            failure_code=error.code,
+        )
+        raise InspectorTranslationUnavailable(error.code) from None
+    response = {
+        "discovered": summary.discovered,
+        "cached": summary.cached,
+        "translated": summary.translated,
+        "remaining": summary.remaining,
+    }
+    _log(event="records_inspector_translation_completed", **response)
+    return response
+
+
 def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle public OAuth and session routes."""
 
@@ -271,6 +303,31 @@ def _cost_service() -> CostCollectionService:
             ),
         )
     return _COSTS
+
+
+def _inspector_translation_service() -> InspectorTranslationService:
+    global _INSPECTOR_TRANSLATIONS
+    if _INSPECTOR_TRANSLATIONS is None:
+        region = _environment("AWS_REGION")
+        dynamodb = boto3.client("dynamodb", region_name=region, config=SDK_CONFIG)
+        _INSPECTOR_TRANSLATIONS = InspectorTranslationService(
+            source=AwsInspectorDescriptionSource(
+                ecr=boto3.client("ecr", region_name=region, config=SDK_CONFIG),
+                inspector=boto3.client("inspector2", region_name=region, config=SDK_CONFIG),
+                repository_name=_environment("ECR_REPOSITORY_NAME"),
+            ),
+            translator=OpenAIInspectorSummaryTranslator(
+                InspectorTranslationConfigurationRepository(
+                    boto3.client("ssm", region_name=region, config=SDK_CONFIG),
+                    _environment("INSPECTOR_TRANSLATION_API_KEY_PARAMETER_NAME"),
+                )
+            ),
+            store=DynamoInspectorTranslationStore(
+                dynamodb,
+                _environment("STATISTICS_TABLE_NAME"),
+            ),
+        )
+    return _INSPECTOR_TRANSLATIONS
 
 
 def _auth_controller() -> AuthHttpController:
@@ -393,6 +450,10 @@ def _admin_status_controller() -> AdminStatusHttpController:
                 "cloudformation",
                 region_name="us-east-1",
                 config=SDK_CONFIG,
+            ),
+            translations=DynamoInspectorTranslationStore(
+                dynamodb,
+                _environment("STATISTICS_TABLE_NAME"),
             ),
         )
         _ADMIN_STATUS_CONTROLLER = AdminStatusHttpController(

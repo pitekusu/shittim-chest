@@ -49,17 +49,18 @@ describe("RecordsApplicationStack", () => {
     expect(checks.validateScope(stack).success).toBe(true);
   });
 
-  test("creates seven Python 3.14 ARM64 functions from one immutable S3 version", () => {
+  test("creates eight Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 7);
+    template.resourceCountIs("AWS::Lambda::Function", 8);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
       "shittim-chest-production-records-auth",
       "shittim-chest-production-records-ranking",
       "shittim-chest-production-records-cost",
+      "shittim-chest-production-records-inspector-translation",
       "shittim-chest-production-records-read",
       "shittim-chest-production-records-admin-status",
     ]) {
@@ -81,13 +82,14 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 8);
+    template.resourceCountIs("AWS::Logs::LogGroup", 9);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
       "shittim-chest-production-records-auth",
       "shittim-chest-production-records-ranking",
       "shittim-chest-production-records-cost",
+      "shittim-chest-production-records-inspector-translation",
       "shittim-chest-production-records-read",
       "shittim-chest-production-records-admin-status",
     ]) {
@@ -167,7 +169,7 @@ describe("RecordsApplicationStack", () => {
         },
       },
     });
-    template.resourceCountIs("AWS::Events::Rule", 3);
+    template.resourceCountIs("AWS::Events::Rule", 4);
     template.hasResourceProperties("AWS::Events::Rule", {
       ScheduleExpression: "rate(15 minutes)",
       State: "ENABLED",
@@ -181,7 +183,7 @@ describe("RecordsApplicationStack", () => {
         },
       ],
     });
-    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 2);
+    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 3);
     template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
       FunctionName: {
         Ref: Match.stringLikeRegexp("^RankingFunction"),
@@ -241,7 +243,45 @@ describe("RecordsApplicationStack", () => {
     });
   });
 
-  test("keeps Auth, Read, Ranking, and Cost IAM resources exact and disjoint", () => {
+  test("translates Inspector descriptions hourly with isolated least privilege", () => {
+    const { template } = synthesize();
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-inspector-translation",
+      Handler: "shittim_records.lambda_handlers.inspector_translation_handler",
+      MemorySize: 512,
+      ReservedConcurrentExecutions: 1,
+      Runtime: "python3.14",
+      Timeout: 300,
+      Environment: {
+        Variables: {
+          ECR_REPOSITORY_NAME: "shittim-chest",
+          INSPECTOR_TRANSLATION_API_KEY_PARAMETER_NAME:
+            "/shittim-chest/production/records/openai/inspector-translation-api-key",
+          STATISTICS_TABLE_NAME: "shittim-chest-production-records-statistics",
+        },
+      },
+    });
+    template.hasResourceProperties("AWS::Events::Rule", {
+      Description: "Translate unseen active Inspector descriptions hourly at minute 7",
+      ScheduleExpression: "cron(7 * * * ? *)",
+      State: "ENABLED",
+      Targets: [
+        {
+          Arn: {
+            "Fn::GetAtt": [
+              Match.stringLikeRegexp("^InspectorTranslationFunction"),
+              "Arn",
+            ],
+          },
+          Id: Match.anyValue(),
+          RetryPolicy: { MaximumRetryAttempts: 0 },
+        },
+      ],
+    });
+  });
+
+  test("keeps Auth, Read, Ranking, Cost, and translation IAM exact and disjoint", () => {
     const { template } = synthesize();
     const policies = template.findResources("AWS::IAM::Policy");
     const auth = Object.values(policies).find((policy) =>
@@ -256,15 +296,20 @@ describe("RecordsApplicationStack", () => {
     const cost = Object.values(policies).find((policy) =>
       JSON.stringify(policy).includes("CostFunctionRole"),
     );
+    const translation = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("InspectorTranslationFunctionRole"),
+    );
 
     expect(auth).toBeDefined();
     expect(read).toBeDefined();
     expect(ranking).toBeDefined();
     expect(cost).toBeDefined();
+    expect(translation).toBeDefined();
     const authText = JSON.stringify(auth);
     const readText = JSON.stringify(read);
     const rankingText = JSON.stringify(ranking);
     const costText = JSON.stringify(cost);
+    const translationText = JSON.stringify(translation);
     expect(authText).toContain("dynamodb:TransactWriteItems");
     expect(authText).toContain("/requesters/*");
     expect(authText).not.toContain("/participants/*");
@@ -303,6 +348,19 @@ describe("RecordsApplicationStack", () => {
     expect(costText).toContain("FX#DAILY");
     expect(costText).not.toContain("dynamodb:DeleteItem");
     expect(costText).not.toContain("dynamodb:Scan");
+    expect(translationText).toContain("ecr:DescribeImages");
+    expect(translationText).toContain("inspector2:ListFindings");
+    expect(translationText).toContain("ssm:GetParameters");
+    expect(translationText).toContain(
+      "/records/openai/inspector-translation-api-key",
+    );
+    expect(translationText).toContain("dynamodb:BatchGetItem");
+    expect(translationText).toContain("dynamodb:PutItem");
+    expect(translationText).toContain("ADMIN#INSPECTOR_TRANSLATION");
+    expect(translationText).not.toContain("/records/openai/admin-key");
+    expect(translationText).not.toContain("/records/openai/project-id");
+    expect(translationText).not.toContain("dynamodb:DeleteItem");
+    expect(translationText).not.toContain("dynamodb:Scan");
   });
 
   test("keeps ADMIN status access read-only and least privilege", () => {
@@ -326,7 +384,7 @@ describe("RecordsApplicationStack", () => {
       JSON.stringify(policy).includes("AdminStatusFunctionRole"),
     );
 
-    expect(statusPolicies).toHaveLength(2);
+    expect(statusPolicies).toHaveLength(3);
     const statusText = JSON.stringify(statusPolicies);
 
     for (const action of [
@@ -345,6 +403,7 @@ describe("RecordsApplicationStack", () => {
       "ecs:DescribeServices",
       "events:DescribeRule",
       "inspector2:ListCoverage",
+      "inspector2:ListFindingAggregations",
       "inspector2:ListFindings",
       "lambda:GetFunctionConcurrency",
       "s3:GetEncryptionConfiguration",
@@ -400,6 +459,7 @@ describe("RecordsApplicationStack", () => {
       "Rebuild the Records ranking snapshots every 15 minutes",
       "Collect Project-tagged AWS costs and USD/JPY rates daily at 12:17 JST",
       "Collect project-scoped OpenAI organization costs hourly at minute 37",
+      "Translate unseen active Inspector descriptions hourly at minute 7",
     ]) {
       const [logicalId] = Object.entries(eventRules).find(
         ([, resource]) => resource.Properties.Description === description,
@@ -409,7 +469,7 @@ describe("RecordsApplicationStack", () => {
         "Fn::GetAtt": [logicalId, "Arn"],
       });
     }
-    expect(statusEventBridgeArns).toHaveLength(4);
+    expect(statusEventBridgeArns).toHaveLength(5);
     expect(JSON.stringify(statusEventBridgeArns)).not.toContain(
       "ShittimChest-Prod-RecordsApplication-*",
     );
@@ -446,6 +506,7 @@ describe("RecordsApplicationStack", () => {
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-auth",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-backfill",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-cost",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-inspector-translation",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-projector",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-ranking",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-read",
@@ -490,6 +551,20 @@ describe("RecordsApplicationStack", () => {
     );
     expect(statusCollectorRead?.Condition).toEqual({
       "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["COLLECTOR#COST"] },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+    const statusTranslationRead = statusStatements.find(
+      (statement) =>
+        statusActionsOf(statement).includes("dynamodb:BatchGetItem") &&
+        JSON.stringify(statement.Resource).includes(
+          "table/shittim-chest-production-records-statistics",
+        ) &&
+        JSON.stringify(statement.Condition).includes("ADMIN#INSPECTOR_TRANSLATION"),
+    );
+    expect(statusTranslationRead?.Condition).toEqual({
+      "ForAllValues:StringEquals": {
+        "dynamodb:LeadingKeys": ["ADMIN#INSPECTOR_TRANSLATION"],
+      },
       Null: { "dynamodb:LeadingKeys": "false" },
     });
 

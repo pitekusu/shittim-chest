@@ -156,6 +156,48 @@ export type AdminService =
   | "external";
 export type AdminHealthState = "healthy" | "warning" | "critical" | "unknown";
 
+export interface AdminEcrDetails {
+  readonly kind: "ecr";
+  readonly images: readonly {
+    readonly tags: readonly string[];
+    readonly mediaType: "OCI_IMAGE" | "OCI_INDEX" | "DOCKER_V2" | "DOCKER_LIST" | "OTHER";
+    readonly sizeBytes: number | null;
+    readonly pushedAt: string | null;
+    readonly lastPulledAt: string | null;
+  }[];
+}
+
+export interface AdminInspectorDetails {
+  readonly kind: "inspector";
+  readonly images: readonly {
+    readonly tags: readonly string[];
+    readonly scanStatus: "ACTIVE" | "INACTIVE" | "UNKNOWN";
+    readonly lastScannedAt: string | null;
+    readonly counts: {
+      readonly total: number;
+      readonly critical: number;
+      readonly high: number;
+      readonly medium: number;
+      readonly low: number;
+      readonly untriaged: number;
+    };
+    readonly findings: readonly {
+      readonly vulnerabilityId: string;
+      readonly severity: "critical" | "high";
+      readonly summaryJa: string | null;
+      readonly affectedPackages: readonly {
+        readonly name: string;
+        readonly installedVersion: string;
+        readonly fixedVersion: string | null;
+        readonly packageManager: string | null;
+      }[];
+      readonly fixAvailable: "YES" | "NO" | "PARTIAL" | null;
+    }[];
+  }[];
+}
+
+export type AdminStatusDetails = AdminEcrDetails | AdminInspectorDetails;
+
 export interface AdminStatusResponse {
   readonly schemaVersion: 1;
   readonly generatedAt: string;
@@ -175,6 +217,7 @@ export interface AdminStatusResponse {
       readonly name: string;
       readonly value: string | number | boolean | null;
     }[];
+    readonly details?: AdminStatusDetails | null;
   }[];
 }
 
