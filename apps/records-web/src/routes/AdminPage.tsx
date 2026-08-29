@@ -10,6 +10,7 @@ import type {
   AdminStatusResponse,
 } from "../api/types";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
+import AdminPromptManager from "../components/AdminPromptManager";
 import { formatCompletedDateTime } from "../lib/dateTime";
 import adminStyles from "../styles/admin.module.css";
 import commonStyles from "../styles/common.module.css";
@@ -153,6 +154,7 @@ const LAMBDA_RESOURCES = [
   { key: "records_cost", label: "費用集計" },
   { key: "records_inspector_translation", label: "脆弱性概要翻訳" },
   { key: "records_admin_status", label: "管理状態API" },
+  { key: "records_admin_config", label: "プロンプト管理API" },
 ] as const;
 
 const TRANSLATION_CACHE_METRIC_NAMES: ReadonlySet<string> = new Set([
@@ -1845,7 +1847,7 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
   );
 }
 
-function AuthorizedPromptPage(): React.JSX.Element {
+function AuthorizedPromptPage({ csrfToken }: { readonly csrfToken: string }): React.JSX.Element {
   return (
     <div className={adminStyles.adminPage} data-route-motion-ready="">
       <header className={`${commonStyles.pageHeader} ${routeStyles.routeMotionItem}`}>
@@ -1859,22 +1861,7 @@ function AuthorizedPromptPage(): React.JSX.Element {
           プロンプト管理
         </h1>
       </header>
-      <section
-        className={`${adminStyles.adminPanel} ${adminStyles.promptPlaceholder}`}
-        data-route-motion-terminal=""
-        aria-labelledby="prompt-placeholder-title"
-      >
-        <span className={adminStyles.promptPlaceholderMark} aria-hidden="true" />
-        <div>
-          <h2 id="prompt-placeholder-title">プロンプト管理は準備中です</h2>
-          <p className={commonStyles.japaneseText}>
-            現在はサービス状態の確認のみ利用できます。プロンプトの参照・更新機能は、専用の安全な更新契約とともに追加します。
-          </p>
-          <Link className={commonStyles.secondaryButton} to="/admin">
-            サービス状態確認へ
-          </Link>
-        </div>
-      </section>
+      <AdminPromptManager csrfToken={csrfToken} />
     </div>
   );
 }
@@ -1886,7 +1873,7 @@ export default function AdminPage({
 }: AdminPageProps): React.JSX.Element {
   if (!isAdmin) return <AdminAccessDenied />;
   return view === "prompts" ? (
-    <AuthorizedPromptPage />
+    <AuthorizedPromptPage csrfToken={csrfToken} />
   ) : (
     <AuthorizedAdminPage csrfToken={csrfToken} />
   );

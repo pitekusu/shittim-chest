@@ -271,6 +271,16 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "ADMIN_ACCESS_DENIED": "この画面を利用する権限がありません。",
         "ADMIN_STATUS_UNAVAILABLE": "稼働状況を取得できません。",
         "ADMIN_STATUS_INVALID": "稼働状況を確認できません。",
+        "PROMPT_INVALID": "プロンプトの入力内容が正しくありません。",
+        "PROMPT_REVISION_INVALID": "プロンプトのrevisionが正しくありません。",
+        "PROMPT_REVISION_NOT_FOUND": "指定されたrevisionは見つかりませんでした。",
+        "PROMPT_REVISION_CONFLICT": "別の画面でプロンプトが更新されました。",
+        "PROMPT_CONTENT_UNCHANGED": "プロンプトの内容は変更されていません。",
+        "SYSTEM_PROMPT_CONFIRMATION_REQUIRED": "システムプロンプトの変更確認が必要です。",
+        "IDEMPOTENCY_CONFLICT": "同じ操作識別子を別の変更へ使用できません。",
+        "PROMPT_CONFIGURATION_CONFLICT": "プロンプトの保存内容が競合しました。",
+        "PROMPT_CONFIGURATION_UNAVAILABLE": "プロンプト設定を利用できません。",
+        "PROMPT_CONFIGURATION_INVALID": "プロンプト設定を確認できません。",
     }.get(code, "議事録サービスを利用できません。")
     payload = ErrorResponse(error=ErrorBody(code=code, message=message, request_id=request_id))
     return json_response(status, payload.model_dump(by_alias=True, mode="json"))

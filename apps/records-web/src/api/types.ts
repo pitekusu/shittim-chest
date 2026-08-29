@@ -1,5 +1,11 @@
 export type ParticipantSlot = "participant-a" | "participant-b" | "participant-c";
 export type SortOrder = "newest" | "oldest";
+export type AdminPromptKey =
+  | "system"
+  | "moderator"
+  | "participantA"
+  | "participantB"
+  | "participantC";
 
 export interface AvatarRef {
   readonly kind: "image" | "placeholder";
@@ -136,6 +142,57 @@ export type SessionResponse =
       };
       readonly csrfToken: string;
     };
+
+export type AdminPrompts = Readonly<Record<AdminPromptKey, string>>;
+
+export interface AdminPromptsResponse {
+  readonly schemaVersion: 1;
+  readonly mode: "legacy" | "managed";
+  readonly activeRevision: string | null;
+  readonly createdAt: string | null;
+  readonly action: "publish" | "rollback" | null;
+  readonly prompts: AdminPrompts;
+}
+
+export interface AdminApplyRequest {
+  readonly schemaVersion: 1;
+  readonly baseRevision: string | null;
+  readonly prompts: AdminPrompts;
+  readonly systemConfirmation: string | null;
+}
+
+export interface AdminApplyResponse {
+  readonly schemaVersion: 1;
+  readonly revision: string;
+  readonly state: "saved";
+}
+
+export interface AdminRevisionSummary {
+  readonly revision: string;
+  readonly createdAt: string;
+  readonly action: "publish" | "rollback";
+  readonly baseRevision: string | null;
+  readonly sourceRevision: string | null;
+  readonly checksum: string;
+}
+
+export interface AdminRevisionsResponse {
+  readonly schemaVersion: 1;
+  readonly items: readonly AdminRevisionSummary[];
+  readonly nextCursor: string | null;
+}
+
+export interface AdminRevisionResponse extends AdminRevisionSummary {
+  readonly schemaVersion: 1;
+  readonly prompts: AdminPrompts;
+}
+
+export interface AdminRollbackRequest {
+  readonly schemaVersion: 1;
+  readonly baseRevision: string;
+  readonly sourceRevision: string;
+  readonly systemConfirmation: string | null;
+}
 
 export type AdminService =
   | "ecs"

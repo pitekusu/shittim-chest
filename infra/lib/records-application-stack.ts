@@ -27,6 +27,7 @@ import { Construct } from "constructs";
 export interface RecordsApplicationStackProps extends StackProps {}
 
 const BACKFILL_FUNCTION_NAME = "shittim-chest-production-records-backfill";
+const ADMIN_CONFIG_FUNCTION_NAME = "shittim-chest-production-records-admin-config";
 const ADMIN_STATUS_FUNCTION_NAME = "shittim-chest-production-records-admin-status";
 const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
 const COST_FUNCTION_NAME = "shittim-chest-production-records-cost";
@@ -38,6 +39,7 @@ const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
   public readonly backfillFunction: lambda.Function;
+  public readonly adminConfigFunction: lambda.Function;
   public readonly adminStatusFunction: lambda.Function;
   public readonly authFunction: lambda.Function;
   public readonly costFunction: lambda.Function;
@@ -84,6 +86,15 @@ export class RecordsApplicationStack extends Stack {
       allowedPattern: "^[a-z0-9.-]+$",
       description: "Exact Records public hostname used for read-only distribution discovery",
     });
+    const legacyRuntimeConfigVersion = new CfnParameter(
+      this,
+      "LegacyRuntimeConfigVersion",
+      {
+        type: "String",
+        allowedPattern: "^v[0-9]{4}$",
+        description: "Exact version currently bound to the production Runtime stack",
+      },
+    );
 
     const sourceTable = dynamodb.Table.fromTableAttributes(this, "SourceDebateTable", {
       tableName: sourceTableName.valueAsString,
@@ -540,6 +551,113 @@ export class RecordsApplicationStack extends Stack {
       ),
     );
 
+    const runtimePromptActiveArn = this.formatArn({
+      service: "ssm",
+      resource: "parameter",
+      resourceName: "shittim-chest/production/runtime-prompts/active",
+    });
+    const runtimePromptRevisionArn = this.formatArn({
+      service: "ssm",
+      resource: "parameter",
+      resourceName: "shittim-chest/production/runtime-prompts/r??????????????????????????/*",
+    });
+    this.adminConfigFunction = this.httpFunctionWithRole({
+      id: "AdminConfigFunction",
+      functionName: ADMIN_CONFIG_FUNCTION_NAME,
+      handler: "shittim_records.lambda_handlers.admin_config_handler",
+      code,
+      timeout: Duration.seconds(15),
+      reservedConcurrentExecutions: 1,
+      environment: {
+        SESSION_TABLE_NAME: sessionTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        IDENTITY_HMAC_PARAMETER_NAME: identityParameter.parameterName,
+        ADMIN_DISCORD_USER_ID_PARAMETER_NAME: adminDiscordIdParameter.parameterName,
+        OAUTH_CONFIG_PARAMETER_NAME: oauthConfigParameter.parameterName,
+        SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
+        RUNTIME_PROMPTS_PARAMETER_ROOT: "/shittim-chest/production/runtime-prompts",
+        LEGACY_PERSONA_MODERATOR_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/moderator`,
+        LEGACY_PERSONA_PARTICIPANT_A_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-a`,
+        LEGACY_PERSONA_PARTICIPANT_B_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-b`,
+        LEGACY_PERSONA_PARTICIPANT_C_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-c`,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["SESSION#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:Query"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["ADMIN#PROMPT"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["ADMIN#PROMPT"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"],
+          resources: [
+            identityParameter.parameterArn,
+            adminDiscordIdParameter.parameterArn,
+            oauthConfigParameter.parameterArn,
+            sessionKeyParameter.parameterArn,
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter", "ssm:GetParameters"],
+          resources: [runtimePromptActiveArn, runtimePromptRevisionArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:PutParameter"],
+          resources: [runtimePromptActiveArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:PutParameter"],
+          resources: [runtimePromptRevisionArn],
+          conditions: { StringEquals: { "ssm:Overwrite": "false" } },
+        }),
+        new iam.PolicyStatement({
+          effect: iam.Effect.DENY,
+          actions: ["ssm:PutParameter"],
+          resources: [runtimePromptRevisionArn],
+          conditions: { StringEquals: { "ssm:Overwrite": "true" } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"],
+          resources: ["moderator", "participant-a", "participant-b", "participant-c"].map(
+            (participant) =>
+              this.formatArn({
+                service: "ssm",
+                resource: "parameter",
+                resourceName: `shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/${participant}`,
+              }),
+          ),
+        }),
+      ],
+    });
+    this.adminConfigFunction.role!.node.addMetadata(
+      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+      Object.fromEntries(
+        ["arn:aws", "arn:<AWS::Partition>"].map((partition) => [
+          `AwsSolutions-IAM5[Resource::${partition}:ssm:${this.region}:${nagAccount}:parameter/shittim-chest/production/runtime-prompts/r??????????????????????????/*]`,
+          "Prompt revision access is confined to one fixed-length immutable revision subtree; IAM denies overwrite and service validation permits only the exact manifest and five prompt names.",
+        ]),
+      ),
+    );
+
     const webBucketArn = this.formatArn({
       service: "s3",
       region: "",
@@ -594,6 +712,7 @@ export class RecordsApplicationStack extends Stack {
       records_cost: COST_FUNCTION_NAME,
       records_inspector_translation: INSPECTOR_TRANSLATION_FUNCTION_NAME,
       records_read: READ_FUNCTION_NAME,
+      records_admin_config: ADMIN_CONFIG_FUNCTION_NAME,
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
     const statusFunctionArns = Object.values(statusFunctionNames).map((functionName) =>
@@ -941,6 +1060,10 @@ export class RecordsApplicationStack extends Stack {
       lambda: this.readFunction,
       codeSha256: bundleCodeSha256.valueAsString,
     });
+    const adminConfigVersion = new lambda.Version(this, "AdminConfigVersion", {
+      lambda: this.adminConfigFunction,
+      codeSha256: bundleCodeSha256.valueAsString,
+    });
     const adminStatusVersion = new lambda.Version(this, "AdminStatusVersion", {
       lambda: this.adminStatusFunction,
       codeSha256: bundleCodeSha256.valueAsString,
@@ -952,6 +1075,10 @@ export class RecordsApplicationStack extends Stack {
     const readAlias = new lambda.Alias(this, "ReadLiveAlias", {
       aliasName: "live",
       version: readVersion,
+    });
+    const adminConfigAlias = new lambda.Alias(this, "AdminConfigLiveAlias", {
+      aliasName: "live",
+      version: adminConfigVersion,
     });
     const adminStatusAlias = new lambda.Alias(this, "AdminStatusLiveAlias", {
       aliasName: "live",
@@ -987,6 +1114,11 @@ export class RecordsApplicationStack extends Stack {
     const readIntegration = new integrations.HttpLambdaIntegration(
       "ReadIntegration",
       readAlias,
+      { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+    );
+    const adminConfigIntegration = new integrations.HttpLambdaIntegration(
+      "AdminConfigIntegration",
+      adminConfigAlias,
       { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
     );
     const adminStatusIntegration = new integrations.HttpLambdaIntegration(
@@ -1026,6 +1158,27 @@ export class RecordsApplicationStack extends Stack {
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
     });
+    for (const path of [
+      "/api/v1/admin/prompts",
+      "/api/v1/admin/prompts/revisions",
+      "/api/v1/admin/prompts/revisions/{revision}",
+    ]) {
+      api.addRoutes({
+        path,
+        methods: [apigatewayv2.HttpMethod.GET],
+        integration: adminConfigIntegration,
+      });
+    }
+    for (const path of [
+      "/api/v1/admin/prompts/apply",
+      "/api/v1/admin/prompts/rollback",
+    ]) {
+      api.addRoutes({
+        path,
+        methods: [apigatewayv2.HttpMethod.POST],
+        integration: adminConfigIntegration,
+      });
+    }
     api.addRoutes({
       path: "/api/v1/admin/status",
       methods: [apigatewayv2.HttpMethod.GET],

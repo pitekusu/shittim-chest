@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -17,6 +17,8 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.adapters import ArchiveRepository
+from shittim_records.admin import AdminFailure, PromptRevisionSummary
+from shittim_records.admin_adapters import DynamoPromptAuditStore
 from shittim_records.archive import project_completed_debate
 from shittim_records.auth import AuthFailure, OAuthState, SessionRecord
 from shittim_records.auth_adapters import DynamoAuthStore
@@ -280,6 +282,69 @@ def test_oauth_claim_session_and_archive_pagination(
         ConsistentRead=True,
     )
     assert description.description not in str(unmarshal_item(cached["Item"]))
+
+
+def test_admin_prompt_audit_transactions_recovery_and_pagination(
+    dynamodb_client: DynamoDBClient,
+    table_names: tuple[str, str, str],
+) -> None:
+    statistics_table = table_names[2]
+    store = DynamoPromptAuditStore(dynamodb_client, statistics_table)
+    revisions = tuple(f"r01k3gqp6g0000000000000000{index}" for index in range(4))
+    active_revision: str | None = None
+
+    for index, revision in enumerate(revisions):
+        idempotency_hash = f"{index + 1:x}" * 64
+        request_hash = f"{index + 5:x}" * 64
+        created_at = datetime(2026, 8, 24, 3, index, tzinfo=UTC)
+        operation = store.begin_operation(
+            idempotency_hash=idempotency_hash,
+            request_hash=request_hash,
+            revision=revision,
+            created_at=created_at,
+            action="publish",
+            expected_base_revision=active_revision,
+            source_revision=None,
+        )
+        assert store.get_pending_operation(request_hash) == operation
+
+        if index == 1:
+            with pytest.raises(AdminFailure) as conflict:
+                store.begin_operation(
+                    idempotency_hash="f" * 64,
+                    request_hash="e" * 64,
+                    revision="r01k3gqp6g00000000000000009",
+                    created_at=created_at,
+                    action="publish",
+                    expected_base_revision=active_revision,
+                    source_revision=None,
+                )
+            assert conflict.value.code == "PROMPT_REVISION_CONFLICT"
+            assert store.get_pending_operation(request_hash) == operation
+
+        summary = PromptRevisionSummary(
+            revision=revision,
+            created_at=created_at,
+            action="publish",
+            base_revision=active_revision,
+            source_revision=None,
+            checksum=f"{index + 9:x}" * 64,
+        )
+        store.complete_operation(operation=operation, summary=summary)
+        completed = store.get_operation(idempotency_hash)
+        assert completed is not None
+        assert completed.complete is True
+        assert store.get_summary(revision) == summary
+        assert store.get_pending_operation_any() is None
+        active_revision = revision
+
+    first_page = store.list_summaries(limit=2, cursor=None)
+    assert tuple(item.revision for item in first_page.items) == tuple(reversed(revisions[2:]))
+    assert first_page.next_cursor == revisions[2]
+    second_page = store.list_summaries(limit=2, cursor=first_page.next_cursor)
+    assert tuple(item.revision for item in second_page.items) == tuple(reversed(revisions[:2]))
+    if second_page.next_cursor is not None:
+        assert store.list_summaries(limit=2, cursor=second_page.next_cursor).items == ()
 
 
 class _NoopS3:

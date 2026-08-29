@@ -167,6 +167,19 @@ const statusResponse: AdminStatusResponse = {
       ],
     },
     {
+      service: "lambda",
+      state: "healthy",
+      summary: "Lambda状態と直近1時間の指標を確認しました。",
+      metrics: [
+        { name: "records_admin_config_state", value: "ACTIVE" },
+        { name: "records_admin_config_update", value: "SUCCESSFUL" },
+        { name: "records_admin_config_hour_invocations", value: 0 },
+        { name: "records_admin_config_hour_errors", value: 0 },
+        { name: "records_admin_config_hour_throttles", value: 0 },
+        { name: "records_admin_config_hour_duration", value: null },
+      ],
+    },
+    {
       service: "apigateway",
       state: "healthy",
       summary: "HTTP APIを確認しました。",
@@ -289,19 +302,23 @@ describe("AdminPage", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("keeps prompt management reachable without requesting status data", () => {
+  it("loads prompt management and its independent application-status snapshot", async () => {
     const fetchMock = vi.fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchMock);
 
     renderAdmin(true, "prompts");
 
     expect(screen.getByRole("heading", { name: "プロンプト管理" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "プロンプト管理は準備中です" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "サービス状態確認へ" })).toHaveAttribute(
-      "href",
-      "/admin",
+    expect(screen.getByRole("heading", { name: "プロンプト編集" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "変更履歴" })).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(
+      expect.arrayContaining([
+        "/api/v1/admin/prompts",
+        "/api/v1/admin/prompts/revisions",
+        "/api/v1/admin/status",
+      ]),
     );
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("shows overview and panel-level AWS states", async () => {
@@ -377,7 +394,9 @@ describe("AdminPage", () => {
       "2026年8月24日 13:05",
     );
     expect(screen.getByRole("columnheader", { name: "自動反映" })).toBeVisible();
-    expect(screen.getByRole("rowheader", { name: "Runtime調整" })).toBeVisible();
+    const lambdaTable = screen.getByRole("region", { name: "Lambda関数状態" });
+    expect(within(lambdaTable).getByRole("rowheader", { name: "Runtime調整" })).toBeVisible();
+    expect(within(lambdaTable).getByRole("rowheader", { name: "プロンプト管理API" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "討論Runtime" })).toBeVisible();
     expect(screen.getByText("Discord連携")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "実績使用率" })).toBeVisible();

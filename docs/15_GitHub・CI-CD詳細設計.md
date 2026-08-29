@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # GitHub・CI-CD詳細設計
@@ -76,6 +76,11 @@ plan
 
 ReleaseIdentity自体の更新、failed runのrerun、manual CloudFormation deployは通常Releaseへ暗黙に
 含めない。
+
+Records Releaseはexact Runtime Stackから`RuntimeConfigVersion`を読み、`vNNNN`形式を検証して
+`LegacyRuntimeConfigVersion`としてRecordsApplication Change Setへ渡す。structural smokeでは匿名の
+`GET /api/v1/admin/prompts`が401と`private, no-store`を返すことを確認する。Releaseはruntime promptの
+active pointerや初回管理revisionを自動作成しない。
 
 ## 5. Scheduled workflows
 

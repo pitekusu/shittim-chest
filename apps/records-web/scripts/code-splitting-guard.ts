@@ -29,7 +29,13 @@ const ROUTES = {
   },
   AdminPage: {
     facade: "/src/routes/AdminPage.tsx",
-    ownedModules: ["/src/generated/admin-status-response-validator.mjs"],
+    ownedModules: [
+      "/src/generated/admin-status-response-validator.mjs",
+      "/src/generated/admin-prompts-response-validator.mjs",
+      "/src/generated/admin-apply-response-validator.mjs",
+      "/src/generated/admin-revisions-response-validator.mjs",
+      "/src/generated/admin-revision-response-validator.mjs",
+    ],
   },
 } as const;
 

@@ -18,15 +18,22 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_ssm.client import SSMClient
 
+from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
+
 from shittim_records.adapters import (
     ArchiveRepository,
     ConfigurationRepository,
     SourceDebateRepository,
     StatisticsRepository,
 )
-from shittim_records.admin import AdminAuthorizer
-from shittim_records.admin_adapters import AdminSecurityConfigurationRepository
-from shittim_records.admin_http import AdminStatusHttpController
+from shittim_records.admin import AdminAuthorizer, AdminPromptService
+from shittim_records.admin_adapters import (
+    AdminSecurityConfigurationRepository,
+    DynamoPromptAuditStore,
+    SsmLegacyPromptSource,
+    SsmPromptRevisionStore,
+)
+from shittim_records.admin_http import AdminConfigHttpController, AdminStatusHttpController
 from shittim_records.admin_status import AdminStatusService
 from shittim_records.admin_status_adapters import (
     ADMIN_STATUS_BUDGET_NAMES,
@@ -79,6 +86,7 @@ _COSTS: CostCollectionService | None = None
 _INSPECTOR_TRANSLATIONS: InspectorTranslationService | None = None
 _AUTH_CONTROLLER: AuthHttpController | None = None
 _READ_CONTROLLER: ReadHttpController | None = None
+_ADMIN_CONFIG_CONTROLLER: AdminConfigHttpController | None = None
 _ADMIN_STATUS_CONTROLLER: AdminStatusHttpController | None = None
 
 SDK_CONFIG = Config(
@@ -228,6 +236,20 @@ def read_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle authenticated Archive list and detail routes."""
 
     return _read_controller().handle(event, now=datetime.now(UTC))
+
+
+def admin_config_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
+    """Handle authenticated prompt configuration without logging request content."""
+
+    try:
+        return _admin_config_controller().handle(event, now=datetime.now(UTC))
+    except Exception as error:
+        return _content_free_http_failure(
+            event,
+            code="PROMPT_CONFIGURATION_UNAVAILABLE",
+            log_event="records_admin_config_request_failed",
+            error=error,
+        )
 
 
 def admin_status_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
@@ -385,6 +407,40 @@ def _read_controller() -> ReadHttpController:
             records=RecordsReadService(reader=reader, cursor_codec=CursorCodec(session_key)),
         )
     return _READ_CONTROLLER
+
+
+def _admin_config_controller() -> AdminConfigHttpController:
+    global _ADMIN_CONFIG_CONTROLLER
+    if _ADMIN_CONFIG_CONTROLLER is None:
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        ssm = boto3.client("ssm", config=SDK_CONFIG)
+        _ADMIN_CONFIG_CONTROLLER = AdminConfigHttpController(
+            authorizer=AdminAuthorizer(
+                store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
+                configuration=_admin_security_configuration(ssm),
+            ),
+            prompts=AdminPromptService(
+                revisions=SsmPromptRevisionStore(
+                    ssm,
+                    _environment("RUNTIME_PROMPTS_PARAMETER_ROOT"),
+                ),
+                legacy=SsmLegacyPromptSource(
+                    ssm,
+                    system_prompt=LEGACY_RUNTIME_SYSTEM_PROMPT,
+                    persona_parameter_names=(
+                        _environment("LEGACY_PERSONA_MODERATOR_PARAMETER_NAME"),
+                        _environment("LEGACY_PERSONA_PARTICIPANT_A_PARAMETER_NAME"),
+                        _environment("LEGACY_PERSONA_PARTICIPANT_B_PARAMETER_NAME"),
+                        _environment("LEGACY_PERSONA_PARTICIPANT_C_PARAMETER_NAME"),
+                    ),
+                ),
+                audit=DynamoPromptAuditStore(
+                    dynamodb,
+                    _environment("STATISTICS_TABLE_NAME"),
+                ),
+            ),
+        )
+    return _ADMIN_CONFIG_CONTROLLER
 
 
 def _admin_status_controller() -> AdminStatusHttpController:

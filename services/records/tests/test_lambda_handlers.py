@@ -331,6 +331,7 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
     controller = cast(Any, FakeHttpController())
     monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", controller)
     monkeypatch.setattr(lambda_handlers, "_READ_CONTROLLER", controller)
+    monkeypatch.setattr(lambda_handlers, "_ADMIN_CONFIG_CONTROLLER", controller)
     event = {"routeKey": "GET /api/v1/session"}
 
     assert lambda_handlers.auth_handler(event, object()) == {
@@ -341,12 +342,21 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
         "statusCode": 200,
         "event": event,
     }
+    assert lambda_handlers.admin_config_handler(event, object()) == {
+        "statusCode": 200,
+        "event": event,
+    }
 
 
 @pytest.mark.parametrize(
     ("factory_name", "handler_name", "expected_code"),
     (
         ("_auth_controller", "auth_handler", "RECORDS_UNAVAILABLE"),
+        (
+            "_admin_config_controller",
+            "admin_config_handler",
+            "PROMPT_CONFIGURATION_UNAVAILABLE",
+        ),
         (
             "_admin_status_controller",
             "admin_status_handler",

@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-14
+updated: 2026-08-29
 ---
 
 # DynamoDB・データ整合性詳細設計
@@ -46,6 +46,7 @@ fail closedとする。record固有schemaは次のとおりである。
 | Runtime state／activity | generation、fence、lease、pending／claimed count |
 | Status publication | channel Statusのdesired／observed state |
 | Deployment guard／lock | Release前提、owner、TTL、stack fence |
+| `ADMIN#PROMPT` | current revision、content-free revision audit、hashed idempotency state |
 
 exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正とする。
 
@@ -59,6 +60,8 @@ exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正
 - winner結果、terminal Outbox、activity counterを矛盾なく確定する。
 - deployment lockがclosedならRuntime producer writeを条件式で拒否する。
 - transaction cancellation reasonはrequest action順で分類し、本文をlogへ出さない。
+- prompt publish／rollbackはpending audit、idempotency、`CURRENT`をtransactionで整合させる。SSMの
+  active pointer切替後にaudit完了が失敗した場合は、次回読込でmanifestとpointerを検証して回復する。
 
 ## 5. Lease and fencing
 
@@ -89,6 +92,9 @@ nonretryable error、最大3 delivery attempt、stageから15分のdeadlineで�
 DynamoDBにはrecoveryに必要なquestion／outputを保存するが、CloudWatch logへ本文を複製しない。
 token、signature、Interaction token、persona本文、OpenAI keyをitemへ入れない。operation count、phase、
 stable error codeだけをmetricに用い、Debate ID等をdimensionにしない。
+
+prompt auditにはrevision、時刻、操作、base／source revision、aggregate／request checksum、
+pending／completed状態だけを保存する。prompt本文、差分、idempotency keyそのものは保存しない。
 
 ## 9. 公式資料確認記録
 

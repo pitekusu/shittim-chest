@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from shittim_records.contracts import (
+    PUBLIC_REQUEST_MODELS,
     PUBLIC_RESPONSE_MODELS,
     RECORDS_API_SCHEMA_VERSION,
     ParticipantSlot,
@@ -36,7 +37,7 @@ def _rewrite_refs(value: Any, *, reference_prefix: str) -> Any:
 
 def _component_schemas(*, reference_prefix: str) -> dict[str, Any]:
     components: dict[str, Any] = {}
-    for model in PUBLIC_RESPONSE_MODELS:
+    for model in (*PUBLIC_RESPONSE_MODELS, *PUBLIC_REQUEST_MODELS):
         schema = model.model_json_schema(by_alias=True, mode="serialization")
         definitions = schema.pop("$defs", {})
         rewritten_definitions = _rewrite_refs(
@@ -69,6 +70,15 @@ def build_json_schema() -> dict[str, Any]:
 def _response(schema_name: str, description: str) -> dict[str, Any]:
     return {
         "description": description,
+        "content": {
+            "application/json": {"schema": {"$ref": f"#/components/schemas/{schema_name}"}}
+        },
+    }
+
+
+def _request_body(schema_name: str) -> dict[str, Any]:
+    return {
+        "required": True,
         "content": {
             "application/json": {"schema": {"$ref": f"#/components/schemas/{schema_name}"}}
         },
@@ -277,6 +287,95 @@ def build_openapi() -> dict[str, Any]:
                     ],
                     "responses": {
                         "200": _response("CostsResponse", "Estimated Records costs in JPY"),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/admin/prompts": {
+                "get": {
+                    "operationId": "getAdminPrompts",
+                    "responses": {
+                        "200": _response(
+                            "AdminPromptsResponse",
+                            "Current runtime prompt configuration",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/admin/prompts/apply": {
+                "post": {
+                    "operationId": "applyAdminPrompts",
+                    "parameters": _admin_write_headers(),
+                    "requestBody": _request_body("AdminPromptApplyRequest"),
+                    "responses": {
+                        "200": _response(
+                            "AdminPromptApplyResponse",
+                            "Immutable prompt revision saved",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/admin/prompts/revisions": {
+                "get": {
+                    "operationId": "listAdminPromptRevisions",
+                    "parameters": [
+                        _parameter(
+                            "cursor",
+                            "query",
+                            {"type": "string", "pattern": r"^r[0-9a-hjkmnp-tv-z]{26}$"},
+                        ),
+                        _parameter(
+                            "limit",
+                            "query",
+                            {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 50,
+                                "default": 20,
+                            },
+                        ),
+                    ],
+                    "responses": {
+                        "200": _response(
+                            "AdminPromptRevisionsResponse",
+                            "Content-free prompt revision history",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/admin/prompts/revisions/{revision}": {
+                "get": {
+                    "operationId": "getAdminPromptRevision",
+                    "parameters": [
+                        _parameter(
+                            "revision",
+                            "path",
+                            {"type": "string", "pattern": r"^r[0-9a-hjkmnp-tv-z]{26}$"},
+                            required=True,
+                        )
+                    ],
+                    "responses": {
+                        "200": _response(
+                            "AdminPromptRevisionResponse",
+                            "One immutable prompt revision",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/admin/prompts/rollback": {
+                "post": {
+                    "operationId": "rollbackAdminPrompts",
+                    "parameters": _admin_write_headers(),
+                    "requestBody": _request_body("AdminPromptRollbackRequest"),
+                    "responses": {
+                        "200": _response(
+                            "AdminPromptApplyResponse",
+                            "Rollback content saved as a new revision",
+                        ),
                         **error_responses,
                     },
                 }
