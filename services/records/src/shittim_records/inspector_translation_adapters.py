@@ -46,6 +46,7 @@ from shittim_records.inspector_translations import (
 
 _MAX_PAGINATOR_PAGES = 20
 _MAX_BATCH_GET_ATTEMPTS = 2
+_MAX_PROVIDER_OUTPUT_ATTEMPTS = 2
 _TRANSLATION_PARTITION_KEY = "ADMIN#INSPECTOR_TRANSLATION"
 _TRANSLATION_SORT_PREFIX = "SUMMARY#"
 _DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -285,46 +286,60 @@ class OpenAIInspectorSummaryTranslator:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        source_by_key = {item.key: item for item in descriptions}
+        if len(source_by_key) != len(descriptions):
+            raise InspectorTranslationUnavailable("source_identity_conflict")
         try:
-            response = client.responses.parse(
-                model=INSPECTOR_TRANSLATION_MODEL,
-                instructions=_TRANSLATION_INSTRUCTIONS,
-                input=input_text,
-                text_format=_ProviderTranslatedBatch,
-                max_output_tokens=8_000,
-                reasoning={"effort": "none"},
-                store=False,
-                tools=[],
-                tool_choice="none",
-                parallel_tool_calls=False,
-                truncation="disabled",
-            )
-            provider_output = response.output_parsed
-            if not isinstance(provider_output, _ProviderTranslatedBatch):
-                raise InspectorTranslationUnavailable("provider_output_invalid")
-            parsed = _TranslatedBatch.model_validate(provider_output.model_dump())
-            source_by_key = {item.key: item for item in descriptions}
-            if len(source_by_key) != len(descriptions):
-                raise InspectorTranslationUnavailable("source_identity_conflict")
-            seen: set[str] = set()
-            summaries: list[InspectorJapaneseSummary] = []
-            for output in parsed.summaries:
-                if output.key in seen or output.key not in source_by_key:
-                    raise InspectorTranslationUnavailable("provider_output_invalid")
-                seen.add(output.key)
-                source = source_by_key[output.key]
-                summaries.append(
-                    InspectorJapaneseSummary(
-                        key=source.key,
-                        vulnerability_id=source.vulnerability_id,
-                        source_sha256=source.source_sha256,
-                        summary_ja=output.summary_ja,
-                        translated_at=translated_at.astimezone(UTC),
+            for attempt in range(_MAX_PROVIDER_OUTPUT_ATTEMPTS):
+                try:
+                    response = client.responses.parse(
+                        model=INSPECTOR_TRANSLATION_MODEL,
+                        instructions=_TRANSLATION_INSTRUCTIONS,
+                        input=input_text,
+                        text_format=_ProviderTranslatedBatch,
+                        max_output_tokens=8_000,
+                        reasoning={"effort": "none"},
+                        store=False,
+                        tools=[],
+                        tool_choice="none",
+                        parallel_tool_calls=False,
+                        truncation="disabled",
                     )
-                )
-            if seen != set(source_by_key):
-                raise InspectorTranslationUnavailable("provider_output_invalid")
-            return tuple(summaries)
+                    provider_output = response.output_parsed
+                    if not isinstance(provider_output, _ProviderTranslatedBatch):
+                        raise InspectorTranslationUnavailable("provider_output_invalid")
+                    parsed = _TranslatedBatch.model_validate(provider_output.model_dump())
+                    seen: set[str] = set()
+                    summaries: list[InspectorJapaneseSummary] = []
+                    for output in parsed.summaries:
+                        if output.key in seen or output.key not in source_by_key:
+                            raise InspectorTranslationUnavailable("provider_output_invalid")
+                        seen.add(output.key)
+                        source = source_by_key[output.key]
+                        summaries.append(
+                            InspectorJapaneseSummary(
+                                key=source.key,
+                                vulnerability_id=source.vulnerability_id,
+                                source_sha256=source.source_sha256,
+                                summary_ja=output.summary_ja,
+                                translated_at=translated_at.astimezone(UTC),
+                            )
+                        )
+                    if seen != set(source_by_key):
+                        raise InspectorTranslationUnavailable("provider_output_invalid")
+                    return tuple(summaries)
+                except InspectorTranslationUnavailable as error:
+                    if (
+                        error.code == "provider_output_invalid"
+                        and attempt + 1 < _MAX_PROVIDER_OUTPUT_ATTEMPTS
+                    ):
+                        continue
+                    raise
+                except (TypeError, ValueError, ValidationError) as error:
+                    if attempt + 1 < _MAX_PROVIDER_OUTPUT_ATTEMPTS:
+                        continue
+                    raise InspectorTranslationUnavailable("provider_output_invalid") from error
+            raise InspectorTranslationUnavailable("provider_output_invalid")
         except InspectorTranslationUnavailable:
             raise
         except RateLimitError as error:
@@ -338,8 +353,6 @@ class OpenAIInspectorSummaryTranslator:
                 "provider_unavailable" if error.status_code >= 500 else "provider_request_invalid"
             )
             raise InspectorTranslationUnavailable(code) from error
-        except (TypeError, ValueError, ValidationError) as error:
-            raise InspectorTranslationUnavailable("provider_output_invalid") from error
 
 
 class DynamoInspectorTranslationStore:
