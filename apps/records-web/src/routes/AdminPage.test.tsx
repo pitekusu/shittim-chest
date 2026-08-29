@@ -78,6 +78,13 @@ const statusResponse: AdminStatusResponse = {
             pushedAt: "2026-08-24T03:00:00Z",
             lastPulledAt: "2026-08-24T04:00:00Z",
           },
+          {
+            tags: ["release-2026-08-17"],
+            mediaType: "OCI_IMAGE",
+            sizeBytes: 52428800,
+            pushedAt: "2026-08-17T03:00:00Z",
+            lastPulledAt: "2026-08-20T04:00:00Z",
+          },
         ],
       },
     },
@@ -320,6 +327,8 @@ describe("AdminPage", () => {
     const nextTaskImage = screen.getByRole("region", {
       name: "次回起動タスクのコンテナイメージ",
     });
+    expect(nextTaskImage).toHaveTextContent("NEXT");
+    expect(nextTaskImage).not.toHaveTextContent("NEXT TASK IMAGE");
     expect(nextTaskImage).toHaveTextContent("次回起動時に使用");
     expect(nextTaskImage).toHaveTextContent("rev. 42");
     expect(nextTaskImage).toHaveTextContent("release-2026-08-24");
@@ -330,6 +339,17 @@ describe("AdminPage", () => {
     );
     expect(screen.getByRole("columnheader", { name: "最終取得記録" })).toBeVisible();
     expect(screen.getAllByText("release-2026-08-24").length).toBeGreaterThan(0);
+    const ecrImages = screen.getByRole("region", { name: "タグ付きECRイメージ" });
+    const nextTaskRow = within(ecrImages)
+      .getByText("release-2026-08-24", { exact: true })
+      .closest("tr");
+    const previousTaskRow = within(ecrImages)
+      .getByText("release-2026-08-17", { exact: true })
+      .closest("tr");
+    expect(nextTaskRow).toHaveAttribute("data-next-task-image", "true");
+    expect(nextTaskRow).toHaveTextContent("次回起動時に使用");
+    expect(previousTaskRow).not.toHaveAttribute("data-next-task-image");
+    expect(previousTaskRow).not.toHaveTextContent("次回起動時に使用");
     const alternateTagLabels = screen.getAllByText("同一イメージの別タグ");
     expect(alternateTagLabels).toHaveLength(3);
     for (const label of alternateTagLabels) {

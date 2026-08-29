@@ -646,10 +646,10 @@
 .nextTaskImage {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(105px, 0.27fr) minmax(0, 1fr);
+  gap: 12px;
   align-items: center;
-  padding: 14px 16px;
+  padding: 10px 14px;
   overflow: hidden;
   border: 1px solid var(--records-line-strong);
   border-radius: 15px;
@@ -674,7 +674,7 @@
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 5px;
+  gap: 3px;
 }
 
 .nextTaskImage > header > span {
@@ -692,15 +692,19 @@
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(105px, 0.42fr) 34px minmax(0, 1fr);
+  align-self: stretch;
+  grid-template-columns: minmax(75px, 0.22fr) 24px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
 .nextTaskImageLink > div {
-  display: grid;
+  display: flex;
+  height: 100%;
   min-width: 0;
-  gap: 6px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
 }
 
 .nextTaskImageLink > div > span:first-child {
@@ -714,25 +718,48 @@
   font-size: 0.78rem;
 }
 
-.nextTaskEcrLink {
-  display: flex;
+.nextTaskEcrTarget {
+  display: grid;
+  width: 100%;
   min-width: 0;
-  align-items: center;
-  gap: 9px;
-  color: inherit;
-  text-decoration: none;
+  justify-items: start;
+  gap: 0;
 }
 
-.nextTaskEcrLink > span:last-child {
-  flex: 0 0 auto;
-  color: var(--records-cyan-ink);
-  font-size: 0.62rem;
-  font-weight: 800;
+.nextTaskImageTagScroller {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-color: var(--records-line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.nextTaskImageTagScroller:focus-visible {
+  outline: 2px solid var(--records-focus-ring);
+  outline-offset: 2px;
+}
+
+.nextTaskImageTagScroller .imageTag {
+  max-width: none;
+  font-size: 0.58rem;
+  overflow-wrap: normal;
   white-space: nowrap;
 }
 
-.nextTaskEcrLink:hover > span:last-child,
-.nextTaskEcrLink:focus-visible > span:last-child {
+.nextTaskEcrLink {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  color: var(--records-cyan-ink);
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nextTaskEcrLink:hover,
+.nextTaskEcrLink:focus-visible {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -816,6 +843,28 @@
   width: 21.5%;
 }
 
+.ecrTable tbody tr[data-next-task-image="true"] {
+  background:
+    linear-gradient(105deg, var(--records-cyan-100), transparent 72%),
+    linear-gradient(285deg, var(--records-lavender-100), transparent 76%);
+}
+
+.ecrTable tbody tr[data-next-task-image="true"] > th:first-child {
+  position: relative;
+}
+
+.ecrTable tbody tr[data-next-task-image="true"] > th:first-child::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--records-cyan-500);
+  box-shadow: 0 0 12px var(--records-line-strong);
+  content: "";
+}
+
 .imageTagList {
   display: grid;
   align-items: start;
@@ -864,6 +913,31 @@
   color: var(--records-ink-600);
   font-size: 0.6rem;
   font-weight: 700;
+}
+
+.nextTaskEcrBadge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 5px 9px;
+  border: 1px solid var(--records-cyan-ink);
+  border-radius: 999px;
+  background: var(--records-surface-strong);
+  color: var(--records-cyan-ink);
+  font-size: 0.6rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.nextTaskEcrBadge > span {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border: 1px solid currentcolor;
+  background: var(--records-cyan-100);
+  transform: rotate(45deg);
 }
 
 .emptyTableCell {
@@ -1811,11 +1885,6 @@
 
   .nextTaskImageLink {
     grid-template-columns: 1fr;
-  }
-
-  .nextTaskEcrLink {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .nextTaskImageConnector {

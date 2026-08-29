@@ -784,7 +784,7 @@ function EcsMetrics({ section }: { readonly section: AdminStatusSection }): Reac
       </dl>
       <section className={adminStyles.nextTaskImage} aria-label="次回起動タスクのコンテナイメージ">
         <header>
-          <span>NEXT TASK IMAGE</span>
+          <span>NEXT</span>
           <strong>次回起動時に使用</strong>
         </header>
         <div className={adminStyles.nextTaskImageLink}>
@@ -796,10 +796,18 @@ function EcsMetrics({ section }: { readonly section: AdminStatusSection }): Reac
           <div>
             <span>ECRイメージタグ</span>
             {nextTaskImageTags.length > 0 ? (
-              <a className={adminStyles.nextTaskEcrLink} href="#admin-service-ecr">
-                <ImageTagList tags={nextTaskImageTags} />
-                <span>ECR一覧で確認</span>
-              </a>
+              <div className={adminStyles.nextTaskEcrTarget}>
+                <section
+                  className={adminStyles.nextTaskImageTagScroller}
+                  aria-label="次回起動時に使用するECRイメージタグ"
+                  tabIndex={0}
+                >
+                  <ImageTagList tags={nextTaskImageTags} />
+                </section>
+                <a className={adminStyles.nextTaskEcrLink} href="#admin-service-ecr">
+                  ECR一覧で確認
+                </a>
+              </div>
             ) : (
               <strong>未取得</strong>
             )}
@@ -905,7 +913,19 @@ function ImageTagList({ tags }: { readonly tags: readonly string[] }): React.JSX
   );
 }
 
-function EcrMetrics({ section }: { readonly section: AdminStatusSection }): React.JSX.Element {
+function haveSameImageTags(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length || left.length === 0) return false;
+  const rightTags = new Set(right);
+  return left.every((tag) => rightTags.has(tag));
+}
+
+function EcrMetrics({
+  section,
+  nextTaskImageTags,
+}: {
+  readonly section: AdminStatusSection;
+  readonly nextTaskImageTags: readonly string[];
+}): React.JSX.Element {
   const metrics = metricLookup(section.metrics);
   const images = section.details?.kind === "ecr" ? section.details.images : [];
   return (
@@ -951,17 +971,29 @@ function EcrMetrics({ section }: { readonly section: AdminStatusSection }): Reac
             </tr>
           </thead>
           <tbody>
-            {images.map((image) => (
-              <tr key={image.tags.join("\u0000")}>
-                <th scope="row">
-                  <ImageTagList tags={image.tags} />
-                </th>
-                <td>{formatMetricValue("image_media_type", image.mediaType)}</td>
-                <td>{formatMetricValue("image_size_bytes", image.sizeBytes)}</td>
-                <td>{formatMetricValue("image_pushed_at", image.pushedAt)}</td>
-                <td>{formatMetricValue("image_last_pulled_at", image.lastPulledAt)}</td>
-              </tr>
-            ))}
+            {images.map((image) => {
+              const isNextTaskImage = haveSameImageTags(image.tags, nextTaskImageTags);
+              return (
+                <tr
+                  data-next-task-image={isNextTaskImage || undefined}
+                  key={image.tags.join("\u0000")}
+                >
+                  <th scope="row">
+                    <ImageTagList tags={image.tags} />
+                    {isNextTaskImage && (
+                      <span className={adminStyles.nextTaskEcrBadge}>
+                        <span aria-hidden="true" />
+                        次回起動時に使用
+                      </span>
+                    )}
+                  </th>
+                  <td>{formatMetricValue("image_media_type", image.mediaType)}</td>
+                  <td>{formatMetricValue("image_size_bytes", image.sizeBytes)}</td>
+                  <td>{formatMetricValue("image_pushed_at", image.pushedAt)}</td>
+                  <td>{formatMetricValue("image_last_pulled_at", image.lastPulledAt)}</td>
+                </tr>
+              );
+            })}
             {images.length === 0 && (
               <tr>
                 <td className={adminStyles.emptyTableCell} colSpan={5}>
@@ -1566,12 +1598,16 @@ function ExternalMetrics({
 function ServiceMetrics({
   section,
   translationMetrics,
+  nextTaskImageTags,
 }: {
   readonly section: AdminStatusSection;
   readonly translationMetrics: readonly AdminStatusMetric[];
+  readonly nextTaskImageTags: readonly string[];
 }): React.JSX.Element {
   if (section.service === "ecs") return <EcsMetrics section={section} />;
-  if (section.service === "ecr") return <EcrMetrics section={section} />;
+  if (section.service === "ecr") {
+    return <EcrMetrics section={section} nextTaskImageTags={nextTaskImageTags} />;
+  }
   if (section.service === "inspector") return <InspectorMetrics section={section} />;
   if (section.service === "s3") return <S3Metrics metrics={section.metrics} />;
   if (section.service === "dynamodb") {
@@ -1595,9 +1631,11 @@ function ServiceMetrics({
 function ServiceCard({
   section,
   translationMetrics,
+  nextTaskImageTags,
 }: {
   readonly section: AdminStatusSection;
   readonly translationMetrics: readonly AdminStatusMetric[];
+  readonly nextTaskImageTags: readonly string[];
 }): React.JSX.Element {
   const presentation = SERVICE_PRESENTATION[section.service];
   const wide =
@@ -1654,7 +1692,11 @@ function ServiceCard({
         <StateBadge state={section.state} />
       </header>
       <p className={`${adminStyles.serviceSummary} ${commonStyles.japaneseText}`}>{summary}</p>
-      <ServiceMetrics section={section} translationMetrics={translationMetrics} />
+      <ServiceMetrics
+        section={section}
+        translationMetrics={translationMetrics}
+        nextTaskImageTags={nextTaskImageTags}
+      />
     </article>
   );
 }
@@ -1677,6 +1719,8 @@ function AwsStatusPanel({
     data?.sections
       .find((section) => section.service === "inspector")
       ?.metrics.filter((metric) => TRANSLATION_CACHE_METRIC_NAMES.has(metric.name)) ?? [];
+  const ecsDetails = data?.sections.find((section) => section.service === "ecs")?.details;
+  const nextTaskImageTags = ecsDetails?.kind === "ecs" ? ecsDetails.nextTaskImageTags : [];
   const orderedSections =
     data === undefined
       ? []
@@ -1748,6 +1792,7 @@ function AwsStatusPanel({
                 key={section.service}
                 section={section}
                 translationMetrics={translationMetrics}
+                nextTaskImageTags={nextTaskImageTags}
               />
             ))}
           </div>
