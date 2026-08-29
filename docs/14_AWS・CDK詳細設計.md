@@ -62,9 +62,11 @@ AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはc
 - task roleはDynamoDBの必要partitionとStatus Publisher invokeだけを許可する。
 - execution roleはnormal image pull、exact SSM secret injection、log writeだけを許可する。
 - Lambda roleはhandlerごとに分離し、table leading key、function、service、log groupを限定する。
-- `ecs:DescribeTaskDefinition`はresource-level permission非対応のため、Image AdmissionとRelease Deploy
-  roleで独立statementの`Resource: "*"`を用いる。family、revision、container、digestはapplicationで
-  exact validationする。
+- `ecs:DescribeTaskDefinition`はresource-level permission非対応のため、Image Admission、Release Deploy、
+  Records Admin Status Lambda roleで独立statementの`Resource: "*"`を用いる。Image Admissionと
+  Release Deployはfamily、revision、container、digestをapplicationでexact validationする。Admin Status
+  roleは`aws:RequestedRegion`をproduction regionへ限定し、handlerでexact ECS service task definition ARN、
+  application container、ECR repository、digestを検証してからtagを解決する。
 - Release roleは固定stack／`release-*` Change Set、ECR repository、Signer、artifact bucketへ限定する。
 - Records plan／deploy／backfill／drift roleは既存Runtime Release roleから分離する。plan／driftは
   immutable main subject、deploy／backfillは`production` Environment subjectだけを信頼し、
@@ -101,6 +103,6 @@ AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはc
 |---|---|---|---|
 | 2026-08-14 | Fargate networking | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html | awsvpcとpublic IP |
 | 2026-08-14 | Fargate capacity | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | On-Demand scale-to-zero |
-| 2026-08-14 | ECS IAM | https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html | DescribeTaskDefinition wildcard境界 |
+| 2026-08-29 | ECS IAM | https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html | DescribeTaskDefinition wildcardとAdmin Status application境界 |
 | 2026-08-14 | AWS CDK | https://docs.aws.amazon.com/cdk/v2/guide/home.html | stack ownershipとsynth |
 | 2026-08-14 | AWS Budgets | https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html | budget notification |

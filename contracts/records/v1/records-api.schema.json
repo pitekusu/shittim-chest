@@ -152,6 +152,34 @@
       "title": "AdminEcrImage",
       "type": "object"
     },
+    "AdminEcsDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ecs",
+          "title": "Kind",
+          "type": "string"
+        },
+        "nextTaskImageTags": {
+          "items": {
+            "maxLength": 300,
+            "minLength": 1,
+            "pattern": "\\S",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Nexttaskimagetags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "nextTaskImageTags"
+      ],
+      "title": "AdminEcsDetails",
+      "type": "object"
+    },
     "AdminInspectorAffectedPackage": {
       "additionalProperties": false,
       "properties": {
@@ -529,6 +557,9 @@
       "properties": {
         "details": {
           "anyOf": [
+            {
+              "$ref": "#/$defs/AdminEcsDetails"
+            },
             {
               "$ref": "#/$defs/AdminEcrDetails"
             },

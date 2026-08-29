@@ -20,6 +20,7 @@ from shittim_records.admin_status_adapters import (
 )
 from shittim_records.contracts import (
     AdminEcrDetails,
+    AdminEcsDetails,
     AdminInspectorDetails,
     AdminStatusOverall,
     AdminStatusSection,
@@ -33,6 +34,10 @@ from shittim_records.inspector_translations import (
 NOW = datetime(2026, 8, 24, 3, 0, tzinfo=UTC)
 AWS_ACCOUNT_ID = "123456" + "789012"
 RUNTIME_DIGEST = "sha256:" + "a" * 64
+TASK_DEFINITION_ARN = (
+    f"arn:aws:ecs:ap-northeast-1:{AWS_ACCOUNT_ID}:task-definition/private-runtime:42"
+)
+NEXT_TASK_IMAGE_TAGS = ("release-2026-08-24", "release-short")
 INSPECTOR_DESCRIPTION = (
     "A boundary validation flaw can allow a remote attacker to submit malformed input and "
     "cause the affected process to read outside its intended memory region."
@@ -127,6 +132,7 @@ def configuration() -> AwsAdminStatusConfiguration:
         aws_account_id=AWS_ACCOUNT_ID,
         cluster_name="private-cluster-name",
         service_name="private-service-name",
+        container_name="application",
         ecr_repository_name="private-repository-name",
         runtime_stack_name="ShittimChest-Prod-Runtime",
         buckets={
@@ -228,6 +234,44 @@ class EcrInventory:
         return self.paginator
 
 
+class EcsTaskDefinitionLookup:
+    def __init__(self) -> None:
+        self.task_definition_calls: list[str] = []
+
+    def describe_task_definition(self, *, taskDefinition: str) -> dict[str, Any]:
+        self.task_definition_calls.append(taskDefinition)
+        return {
+            "taskDefinition": {
+                "taskDefinitionArn": TASK_DEFINITION_ARN,
+                "containerDefinitions": [
+                    {
+                        "name": configuration().container_name,
+                        "image": (
+                            f"{AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-1.amazonaws.com/"
+                            f"{configuration().ecr_repository_name}@{RUNTIME_DIGEST}"
+                        ),
+                    }
+                ],
+            }
+        }
+
+
+class EcrNextTaskImage:
+    def __init__(self) -> None:
+        self.describe_calls: list[dict[str, Any]] = []
+
+    def describe_images(self, **kwargs: Any) -> dict[str, Any]:
+        self.describe_calls.append(kwargs)
+        return {
+            "imageDetails": [
+                {
+                    "imageDigest": RUNTIME_DIGEST,
+                    "imageTags": list(NEXT_TASK_IMAGE_TAGS),
+                }
+            ]
+        }
+
+
 def tagged_image_detail(
     *,
     digest: str = RUNTIME_DIGEST,
@@ -322,7 +366,7 @@ def metrics(section: AdminStatusSection) -> dict[str, str | int | bool | None]:
 
 
 def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> None:
-    class Ecs:
+    class Ecs(EcsTaskDefinitionLookup):
         def describe_services(self, **_kwargs: Any) -> dict[str, Any]:
             return {
                 "services": [
@@ -334,10 +378,7 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
                         "schedulingStrategy": "REPLICA",
                         "launchType": "FARGATE",
                         "platformVersion": "1.4.0",
-                        "taskDefinition": (
-                            f"arn:aws:ecs:ap-northeast-1:{AWS_ACCOUNT_ID}:"
-                            "task-definition/private-runtime:42"
-                        ),
+                        "taskDefinition": TASK_DEFINITION_ARN,
                         "deploymentController": {"type": "ECS"},
                         "deploymentConfiguration": {
                             "minimumHealthyPercent": 0,
@@ -362,7 +403,14 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
             return {}
 
     cloudwatch = CloudWatch()
-    section = source(ecs=Ecs(), dynamodb=Dynamo(), cloudwatch=cloudwatch)._ecs_section(NOW)
+    ecs = Ecs()
+    ecr = EcrNextTaskImage()
+    section = source(
+        ecs=ecs,
+        ecr=ecr,
+        dynamodb=Dynamo(),
+        cloudwatch=cloudwatch,
+    )._ecs_section(NOW)
 
     assert section.state == "healthy"
     assert metrics(section)["heartbeat_age_seconds"] == "42.000"
@@ -375,10 +423,52 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
     assert values["circuit_breaker_enabled"] is True
     assert values["circuit_breaker_rollback"] is True
     assert values["execute_command_enabled"] is False
+    assert isinstance(section.details, AdminEcsDetails)
+    assert section.details.next_task_image_tags == NEXT_TASK_IMAGE_TAGS
+    assert ecs.task_definition_calls == [TASK_DEFINITION_ARN]
+    assert ecr.describe_calls == [
+        {
+            "repositoryName": configuration().ecr_repository_name,
+            "imageIds": [{"imageDigest": RUNTIME_DIGEST}],
+        }
+    ]
     assert cloudwatch.statistics_calls[0]["Namespace"] == "ShittimChest/Prod"
     assert cloudwatch.statistics_calls[0]["MetricName"] == "HeartbeatAgeSeconds"
     assert configuration().cluster_name not in section.model_dump_json()
     assert configuration().service_name not in section.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        (
+            f"{AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-1.amazonaws.com/"
+            f"{configuration().ecr_repository_name}:mutable-tag"
+        ),
+        (
+            f"{AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-1.amazonaws.com/"
+            f"other-repository@{RUNTIME_DIGEST}"
+        ),
+    ],
+)
+def test_ecs_rejects_unpinned_or_out_of_repository_next_task_images(image: str) -> None:
+    class Ecs:
+        def describe_task_definition(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "taskDefinition": {
+                    "taskDefinitionArn": TASK_DEFINITION_ARN,
+                    "containerDefinitions": [
+                        {"name": configuration().container_name, "image": image}
+                    ],
+                }
+            }
+
+    class Ecr:
+        def describe_images(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("ECR must not be queried for an untrusted task image")
+
+    with pytest.raises(ValueError, match="ECS task image"):
+        source(ecs=Ecs(), ecr=Ecr())._next_task_image_tags(TASK_DEFINITION_ARN)
 
 
 @pytest.mark.parametrize(
@@ -395,7 +485,7 @@ def test_ecs_requires_runtime_telemetry_while_tasks_are_active(
     include_heartbeat: bool,
     expected_state: str,
 ) -> None:
-    class Ecs:
+    class Ecs(EcsTaskDefinitionLookup):
         def describe_services(self, **_kwargs: Any) -> dict[str, Any]:
             return {
                 "services": [
@@ -403,6 +493,7 @@ def test_ecs_requires_runtime_telemetry_while_tasks_are_active(
                         "desiredCount": 1,
                         "runningCount": 1,
                         "pendingCount": 0,
+                        "taskDefinition": TASK_DEFINITION_ARN,
                         "deployments": [{}],
                     }
                 ]
@@ -432,6 +523,7 @@ def test_ecs_requires_runtime_telemetry_while_tasks_are_active(
 
     section = source(
         ecs=Ecs(),
+        ecr=EcrNextTaskImage(),
         dynamodb=Dynamo(),
         cloudwatch=RuntimeCloudWatch(),
     )._ecs_section(NOW)
@@ -445,7 +537,7 @@ def test_ecs_requires_runtime_telemetry_while_tasks_are_active(
 def test_ecs_marks_failed_rollout_without_exposing_provider_reason() -> None:
     private_reason = "deployment failed for private-service-name"
 
-    class Ecs:
+    class Ecs(EcsTaskDefinitionLookup):
         def describe_services(self, **_kwargs: Any) -> dict[str, Any]:
             return {
                 "services": [
@@ -454,6 +546,7 @@ def test_ecs_marks_failed_rollout_without_exposing_provider_reason() -> None:
                         "runningCount": 0,
                         "pendingCount": 0,
                         "status": "ACTIVE",
+                        "taskDefinition": TASK_DEFINITION_ARN,
                         "deployments": [
                             {
                                 "status": "PRIMARY",
@@ -470,7 +563,11 @@ def test_ecs_marks_failed_rollout_without_exposing_provider_reason() -> None:
         def get_item(self, **_kwargs: Any) -> dict[str, Any]:
             return {}
 
-    section = source(ecs=Ecs(), dynamodb=Dynamo())._ecs_section(NOW)
+    section = source(
+        ecs=Ecs(),
+        ecr=EcrNextTaskImage(),
+        dynamodb=Dynamo(),
+    )._ecs_section(NOW)
 
     assert section.state == "warning"
     assert section.summary == "デプロイ状態の確認が必要です。"

@@ -22,6 +22,7 @@ from shittim_records.contracts import (
     AdminAlarmCode,
     AdminEcrDetails,
     AdminEcrImage,
+    AdminEcsDetails,
     AdminHealthState,
     AdminInspectorAffectedPackage,
     AdminInspectorDetails,
@@ -160,6 +161,7 @@ class AwsAdminStatusConfiguration:
     aws_account_id: str
     cluster_name: str
     service_name: str
+    container_name: str
     ecr_repository_name: str
     runtime_stack_name: str
     buckets: Mapping[str, str]
@@ -201,6 +203,7 @@ class AwsAdminStatusConfiguration:
         required = (
             self.cluster_name,
             self.service_name,
+            self.container_name,
             self.ecr_repository_name,
             self.runtime_stack_name,
             self.records_public_hostname,
@@ -455,9 +458,12 @@ class AwsAdminStatusSource:
             {"COMPLETED", "FAILED", "IN_PROGRESS"},
         )
         failed_tasks = _optional_nonnegative_integer(primary_deployment.get("failedTasks"))
-        task_definition_revision = _ecs_task_definition_revision(
-            primary_deployment.get("taskDefinition", service.get("taskDefinition"))
+        task_definition_arn = _ecs_task_definition_arn(
+            primary_deployment.get("taskDefinition", service.get("taskDefinition")),
+            account_id=self._config.aws_account_id,
         )
+        task_definition_revision = _ecs_task_definition_revision(task_definition_arn)
+        next_task_image_tags = self._next_task_image_tags(task_definition_arn)
         launch_mode = _ecs_launch_mode(service, primary_deployment)
         platform_version = _ecs_platform_version(
             primary_deployment.get("platformVersion", service.get("platformVersion"))
@@ -548,7 +554,51 @@ class AwsAdminStatusSource:
                 else "確認が必要です。"
             ),
             metrics=tuple(metrics),
+            details=AdminEcsDetails(
+                kind="ecs",
+                next_task_image_tags=next_task_image_tags,
+            ),
         )
+
+    def _next_task_image_tags(self, task_definition_arn: str) -> tuple[str, ...]:
+        response = self._ecs.describe_task_definition(taskDefinition=task_definition_arn)
+        task_definition = response.get("taskDefinition")
+        if not isinstance(task_definition, Mapping):
+            raise ValueError("ECS task definition is unavailable")
+        if task_definition.get("taskDefinitionArn") != task_definition_arn:
+            raise ValueError("ECS task definition response is invalid")
+        containers = task_definition.get("containerDefinitions", [])
+        if not isinstance(containers, list) or any(
+            not isinstance(container, Mapping) for container in containers
+        ):
+            raise ValueError("ECS container definitions are invalid")
+        application = [
+            cast(Mapping[str, Any], container)
+            for container in containers
+            if container.get("name") == self._config.container_name
+        ]
+        if len(application) != 1:
+            raise ValueError("ECS application container is unavailable")
+        digest = _runtime_ecr_image_digest(
+            application[0].get("image"),
+            task_definition_arn=task_definition_arn,
+            account_id=self._config.aws_account_id,
+            repository_name=self._config.ecr_repository_name,
+        )
+        image_response = self._ecr.describe_images(
+            repositoryName=self._config.ecr_repository_name,
+            imageIds=[{"imageDigest": digest}],
+        )
+        details = image_response.get("imageDetails", [])
+        if image_response.get("failures") or not isinstance(details, list) or len(details) != 1:
+            raise ValueError("ECR next task image is unavailable")
+        detail = details[0]
+        if not isinstance(detail, Mapping) or _image_digest(detail.get("imageDigest")) != digest:
+            raise ValueError("ECR next task image response is invalid")
+        tags = _image_tags(detail.get("imageTags"))
+        if not tags:
+            raise ValueError("ECR next task image has no tag")
+        return tags
 
     def _runtime_controls(self) -> dict[str, str | int | bool | None]:
         table = self._config.tables["debate"]
@@ -2378,11 +2428,38 @@ def _primary_ecs_deployment(deployments: list[object]) -> Mapping[str, Any]:
     return primary[0] if primary else {}
 
 
-def _ecs_task_definition_revision(value: object) -> int | None:
-    if not isinstance(value, str) or ":task-definition/" not in value:
-        return None
-    revision = value.rsplit(":", 1)[-1]
-    return int(revision) if revision.isdecimal() else None
+def _ecs_task_definition_arn(value: object, *, account_id: str) -> str:
+    pattern = (
+        rf"arn:aws:ecs:[a-z0-9-]+:{re.escape(account_id)}:"
+        r"task-definition/[A-Za-z0-9_-]{1,255}:[1-9][0-9]*"
+    )
+    if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+        raise ValueError("ECS task definition ARN is invalid")
+    return value
+
+
+def _ecs_task_definition_revision(value: str) -> int:
+    return int(value.rsplit(":", 1)[-1])
+
+
+def _runtime_ecr_image_digest(
+    value: object,
+    *,
+    task_definition_arn: str,
+    account_id: str,
+    repository_name: str,
+) -> str:
+    region_match = re.fullmatch(
+        rf"arn:aws:ecs:(?P<region>[a-z0-9-]+):{re.escape(account_id)}:"
+        r"task-definition/[A-Za-z0-9_-]{1,255}:[1-9][0-9]*",
+        task_definition_arn,
+    )
+    if region_match is None or not isinstance(value, str):
+        raise ValueError("ECS task image is invalid")
+    prefix = f"{account_id}.dkr.ecr.{region_match.group('region')}.amazonaws.com/{repository_name}@"
+    if not value.startswith(prefix):
+        raise ValueError("ECS task image is outside the runtime repository")
+    return _image_digest(value.removeprefix(prefix))
 
 
 def _ecs_launch_mode(

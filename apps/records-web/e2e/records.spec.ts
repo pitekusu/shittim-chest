@@ -199,6 +199,10 @@ const adminStatus = {
         { name: "runtime_prompt_revision", value: null },
         { name: "heartbeat_age_seconds", value: null },
       ],
+      details: {
+        kind: "ecs",
+        nextTaskImageTags: ["release-2026-08-29", "stable"],
+      },
     },
     {
       service: "ecr",
@@ -1311,6 +1315,11 @@ test("loads the next archive page automatically near the end of the loaded cards
 
   await page.goto("/");
   await expect(page.getByText("読み込み済みの議論 12")).toBeVisible();
+  const pausedAppendMotionStyle = await page.addStyleTag({
+    content: `a[aria-label="「自動で追加された議論」の記録を読む"] {
+      animation-play-state: paused !important;
+    }`,
+  });
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
 
   const appendedCard = page.getByRole("link", {
@@ -1319,6 +1328,9 @@ test("loads the next archive page automatically near the end of the loaded cards
   await expect(appendedCard).toBeVisible();
   await expect(appendedCard).toHaveCSS("animation-duration", "0.18s");
   await expect(appendedCard).toHaveCSS("animation-delay", "0s");
+  await pausedAppendMotionStyle.evaluate((style) => {
+    style.parentNode?.removeChild(style);
+  });
 
   const search = page.getByRole("searchbox", { name: "フリーワード検索" });
   await search.fill("読み込み済みの議論 1");
@@ -1476,13 +1488,19 @@ test("reduced motion skips the long login and logoff transitions", async ({ page
   );
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible({
-    timeout: 1_000,
-  });
+  await expect
+    .poll(() => page.evaluate(() => sessionStorage.getItem("shittim-records-login-transition")), {
+      timeout: 1_000,
+    })
+    .toBeNull();
+  await expect(page.getByRole("heading", { name: "議論の記録" })).toBeVisible();
   await page.getByRole("link", { name: /^いろいろ/ }).click();
   const reducedScene = page.locator('[data-route-scene="/insights"]');
   await expect(reducedScene).toHaveCSS("animation-name", "none");
   await expect(reducedScene.locator("[data-route-brand]")).toHaveCount(0);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe(
+    "auto",
+  );
   await expect(page.getByRole("region", { name: "勝利回数ランキング" })).toHaveCSS(
     "animation-name",
     "none",
@@ -1734,27 +1752,46 @@ test("service status page presents localized visual status", async ({ page }, te
   const restingTransform = await statusLink.evaluate(
     (element) => getComputedStyle(element).transform,
   );
+  const restingGlassOpacity = await statusLink.evaluate(
+    (element) => getComputedStyle(element, "::before").opacity,
+  );
   await statusLink.hover();
   await expect
     .poll(() => statusLink.evaluate((element) => getComputedStyle(element).transform))
-    .not.toBe(restingTransform);
+    .toBe(restingTransform);
+  await expect
+    .poll(() => statusLink.evaluate((element) => getComputedStyle(element, "::before").opacity))
+    .not.toBe(restingGlassOpacity);
   await page.mouse.move(0, 0);
   await expect(page.getByRole("link", { name: /DynamoDBのスロットリング/ })).toHaveAttribute(
     "href",
     "#admin-service-dynamodb",
   );
   const sectionNavigation = page.getByRole("navigation", { name: "管理画面内ナビゲーション" });
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe(
+    "smooth",
+  );
   await expect(sectionNavigation.getByRole("link", { name: "ECS" })).toHaveAttribute(
     "href",
     "#admin-service-ecs",
   );
   await expect(page.getByRole("region", { name: "ECS構成とデプロイ状態" })).toBeVisible();
+  const nextTaskImage = page.getByRole("region", {
+    name: "次回起動タスクのコンテナイメージ",
+  });
+  await expect(nextTaskImage).toContainText("rev. 42");
+  await expect(nextTaskImage).toContainText("release-2026-08-29");
+  await expect(nextTaskImage).toContainText("stable");
+  await expect(nextTaskImage.getByRole("link", { name: /ECR一覧で確認/ })).toHaveAttribute(
+    "href",
+    "#admin-service-ecr",
+  );
   const ecrImageTable = page.getByRole("region", { name: "タグ付きECRイメージ" });
   await expect(ecrImageTable).toBeVisible();
   await expect(ecrImageTable.getByText("release-2026-08-29", { exact: true })).toBeVisible();
   await expect(ecrImageTable.getByText("stable", { exact: true })).toBeVisible();
   await expect(ecrImageTable.getByText("同一イメージの別タグ", { exact: true })).toBeVisible();
-  await expect(page.getByText("同一イメージの別タグ", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("同一イメージの別タグ", { exact: true })).toHaveCount(3);
   await expect(ecrImageTable.getByText("本番版", { exact: true })).toHaveCount(0);
   const ecrHorizontalOverflow = await ecrImageTable.evaluate(
     (element) => element.scrollWidth - element.clientWidth,
@@ -1781,11 +1818,15 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(page.getByText("署名時から12か月間有効", { exact: true })).toBeVisible();
   await expect(page.getByText("Discord連携", { exact: true })).toBeVisible();
   for (const value of ["1.4.0", "rev. 42", "145 MiB"]) {
-    const fontFamily = await page
-      .getByText(value, { exact: true })
-      .evaluate((element) => getComputedStyle(element).fontFamily);
-    expect(fontFamily).toContain("LINE Seed JP");
-    expect(fontFamily).not.toContain("Delogy");
+    const values = await page.getByText(value, { exact: true }).all();
+    expect(values.length).toBeGreaterThan(0);
+    for (const matchingValue of values) {
+      const fontFamily = await matchingValue.evaluate(
+        (element) => getComputedStyle(element).fontFamily,
+      );
+      expect(fontFamily).toContain("LINE Seed JP");
+      expect(fontFamily).not.toContain("Delogy");
+    }
   }
   const s3NumericGlyph = page.getByRole("heading", { name: "S3" }).locator("span");
   await expect(s3NumericGlyph).toHaveText("3");
@@ -1805,6 +1846,9 @@ test("service status page presents localized visual status", async ({ page }, te
     fullPage: true,
     maxDiffPixels: 20,
   });
+  await sectionNavigation.getByRole("link", { name: "DynamoDB" }).click();
+  await expect(page).toHaveURL(/#admin-service-dynamodb$/u);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
 });
 
 test("service status loading presents graphical indeterminate progress", async ({

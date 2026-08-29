@@ -634,6 +634,7 @@ export class RecordsApplicationStack extends Stack {
         PROJECTOR_DLQ_URL: projectorDlq.queueUrl,
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
+        ECS_CONTAINER_NAME: "application",
         ECR_REPOSITORY_NAME: "shittim-chest",
         RUNTIME_STACK_NAME: "ShittimChest-Prod-Runtime",
         RUNTIME_SCHEDULER_NAME: "shittim-chest-production-runtime-reconciler",
@@ -693,6 +694,13 @@ export class RecordsApplicationStack extends Stack {
         new iam.PolicyStatement({
           actions: ["ecs:DescribeServices"],
           resources: [ecsServiceArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ecs:DescribeTaskDefinition"],
+          resources: ["*"],
+          conditions: {
+            StringEquals: { "aws:RequestedRegion": this.region },
+          },
         }),
         new iam.PolicyStatement({
           actions: ["cloudformation:DescribeStacks", "cloudformation:ListStackResources"],
@@ -888,7 +896,7 @@ export class RecordsApplicationStack extends Stack {
     for (const [function_, reason] of [
       [
         this.adminStatusFunction,
-        "CloudWatch, Inspector, SSM metadata, Cost Explorer, and CloudFront discovery APIs do not support complete resource-level scoping. API Gateway is restricted to HTTP API resources in the production region, EventBridge to five exact rule ARNs, and CloudFormation to eight exact production stack names whose immutable ARN suffixes cannot be predicted. CloudFront and ACM resources are resolved from the exact allowlisted public hostname. All remaining reads use exact production resources.",
+        "CloudWatch, Inspector, SSM metadata, Cost Explorer, CloudFront discovery, and ECS DescribeTaskDefinition APIs do not support complete resource-level scoping. DescribeTaskDefinition is restricted to the production region, and the handler validates the exact service task definition, container name, repository, and digest before resolving its ECR tags. API Gateway is restricted to HTTP API resources in the production region, EventBridge to five exact rule ARNs, and CloudFormation to eight exact production stack names whose immutable ARN suffixes cannot be predicted. CloudFront and ACM resources are resolved from the exact allowlisted public hostname. All remaining reads use exact production resources.",
       ],
     ] as const) {
       Validations.of(function_.role!).acknowledge({
