@@ -906,11 +906,12 @@ def test_cloudfront_state_includes_certificate_health(
     assert section.state == expected_state
 
 
-def test_inspector_includes_repository_coverage_and_last_scan() -> None:
+@pytest.mark.parametrize("aggregation_type", ("AWS_ECR_CONTAINER", "AWS_CONTAINER"))
+def test_inspector_includes_repository_coverage_and_last_scan(aggregation_type: str) -> None:
     aggregation_pages = Paginator(
         [
             {
-                "aggregationType": "AWS_CONTAINER",
+                "aggregationType": aggregation_type,
                 "responses": [
                     {
                         "awsEcrContainerAggregation": {
