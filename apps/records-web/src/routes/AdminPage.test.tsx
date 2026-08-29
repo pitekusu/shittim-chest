@@ -285,6 +285,11 @@ describe("AdminPage", () => {
     expect(screen.getByText("rev. 42")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "最終取得記録" })).toBeVisible();
     expect(screen.getAllByText("release-2026-08-24").length).toBeGreaterThan(0);
+    const alternateTagLabels = screen.getAllByText("同一イメージの別タグ");
+    expect(alternateTagLabels).toHaveLength(2);
+    for (const label of alternateTagLabels) {
+      expect(label.parentElement).toHaveTextContent("stable");
+    }
     expect(screen.queryByText("本番版")).not.toBeInTheDocument();
     expect(screen.getByText("合計容量（概算）")).toBeVisible();
     expect(screen.getByText("100 MiB")).toBeVisible();
