@@ -158,6 +158,8 @@ const adminFunctionKeys = [
   "records_admin_status",
 ] as const;
 
+const nextTaskReleaseTag = "release-b7c975496109a6cf1b343fa1481a8577e999ec41-33177843936-1";
+
 const adminStatus = {
   schemaVersion: 1,
   generatedAt: "2026-08-27T01:20:00Z",
@@ -201,7 +203,7 @@ const adminStatus = {
       ],
       details: {
         kind: "ecs",
-        nextTaskImageTags: ["release-2026-08-29", "stable"],
+        nextTaskImageTags: [nextTaskReleaseTag],
       },
     },
     {
@@ -223,7 +225,7 @@ const adminStatus = {
         kind: "ecr",
         images: [
           {
-            tags: ["release-2026-08-29", "stable"],
+            tags: [nextTaskReleaseTag],
             mediaType: "OCI_IMAGE",
             sizeBytes: 66305166,
             pushedAt: "2026-08-29T01:16:20Z",
@@ -260,7 +262,7 @@ const adminStatus = {
         kind: "inspector",
         images: [
           {
-            tags: ["release-2026-08-29", "stable"],
+            tags: [nextTaskReleaseTag],
             scanStatus: "ACTIVE",
             lastScannedAt: "2026-08-29T02:25:00Z",
             counts: { total: 11, critical: 1, high: 1, medium: 5, low: 3, untriaged: 1 },
@@ -1779,19 +1781,44 @@ test("service status page presents localized visual status", async ({ page }, te
   const nextTaskImage = page.getByRole("region", {
     name: "次回起動タスクのコンテナイメージ",
   });
+  await expect(nextTaskImage.getByText("NEXT", { exact: true })).toBeVisible();
+  await expect(nextTaskImage.getByText("NEXT TASK IMAGE", { exact: true })).toHaveCount(0);
   await expect(nextTaskImage).toContainText("rev. 42");
-  await expect(nextTaskImage).toContainText("release-2026-08-29");
-  await expect(nextTaskImage).toContainText("stable");
-  await expect(nextTaskImage.getByRole("link", { name: /ECR一覧で確認/ })).toHaveAttribute(
-    "href",
-    "#admin-service-ecr",
+  await expect(nextTaskImage).toContainText(nextTaskReleaseTag);
+  const nextTaskEcrLink = nextTaskImage.getByRole("link", { name: /ECR一覧で確認/ });
+  await expect(nextTaskEcrLink).toHaveAttribute("href", "#admin-service-ecr");
+  const nextTaskTagScroller = nextTaskImage.getByRole("region", {
+    name: "次回起動時に使用するECRイメージタグ",
+  });
+  await expect(nextTaskTagScroller).toHaveAttribute("tabindex", "0");
+  const nextTaskTag = nextTaskImage.getByText(nextTaskReleaseTag, { exact: true });
+  const ecrListLabel = nextTaskImage.getByText("ECR一覧で確認", { exact: true });
+  expect(await nextTaskTag.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe(
+    "nowrap",
   );
+  expect(
+    await nextTaskTagScroller.evaluate((element) => element.scrollWidth - element.clientWidth),
+  ).toBeLessThanOrEqual(1);
+  const nextTaskTagBox = await nextTaskTag.boundingBox();
+  const ecrListLabelBox = await ecrListLabel.boundingBox();
+  expect(ecrListLabelBox?.y ?? 0).toBeGreaterThan(
+    (nextTaskTagBox?.y ?? 0) + (nextTaskTagBox?.height ?? 0),
+  );
+  expect(
+    (ecrListLabelBox?.y ?? 0) - ((nextTaskTagBox?.y ?? 0) + (nextTaskTagBox?.height ?? 0)),
+  ).toBeLessThanOrEqual(4);
+  expect(ecrListLabelBox?.height ?? 0).toBeGreaterThanOrEqual(24);
   const ecrImageTable = page.getByRole("region", { name: "タグ付きECRイメージ" });
   await expect(ecrImageTable).toBeVisible();
-  await expect(ecrImageTable.getByText("release-2026-08-29", { exact: true })).toBeVisible();
-  await expect(ecrImageTable.getByText("stable", { exact: true })).toBeVisible();
-  await expect(ecrImageTable.getByText("同一イメージの別タグ", { exact: true })).toBeVisible();
-  await expect(page.getByText("同一イメージの別タグ", { exact: true })).toHaveCount(3);
+  await expect(ecrImageTable.getByText(nextTaskReleaseTag, { exact: true })).toBeVisible();
+  const nextTaskEcrRow = ecrImageTable.locator('tbody tr[data-next-task-image="true"]');
+  await expect(nextTaskEcrRow).toHaveCount(1);
+  await expect(nextTaskEcrRow).toContainText(nextTaskReleaseTag);
+  await expect(nextTaskEcrRow).toContainText("次回起動時に使用");
+  await expect(ecrImageTable.locator('tbody tr:not([data-next-task-image="true"])')).toContainText(
+    "release-2026-08-24",
+  );
+  await expect(page.getByText("同一イメージの別タグ", { exact: true })).toHaveCount(0);
   await expect(ecrImageTable.getByText("本番版", { exact: true })).toHaveCount(0);
   const ecrHorizontalOverflow = await ecrImageTable.evaluate(
     (element) => element.scrollWidth - element.clientWidth,
