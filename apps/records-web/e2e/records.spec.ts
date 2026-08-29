@@ -1315,6 +1315,11 @@ test("loads the next archive page automatically near the end of the loaded cards
 
   await page.goto("/");
   await expect(page.getByText("読み込み済みの議論 12")).toBeVisible();
+  const pausedAppendMotionStyle = await page.addStyleTag({
+    content: `a[aria-label="「自動で追加された議論」の記録を読む"] {
+      animation-play-state: paused !important;
+    }`,
+  });
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
 
   const appendedCard = page.getByRole("link", {
@@ -1323,6 +1328,9 @@ test("loads the next archive page automatically near the end of the loaded cards
   await expect(appendedCard).toBeVisible();
   await expect(appendedCard).toHaveCSS("animation-duration", "0.18s");
   await expect(appendedCard).toHaveCSS("animation-delay", "0s");
+  await pausedAppendMotionStyle.evaluate((style) => {
+    style.parentNode?.removeChild(style);
+  });
 
   const search = page.getByRole("searchbox", { name: "フリーワード検索" });
   await search.fill("読み込み済みの議論 1");
