@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { getCosts } from "./costs";
-import { getAdminStatus, refreshAdminStatus } from "./admin";
+import {
+  applyAdminPrompts,
+  getAdminPrompts,
+  getAdminRevision,
+  getAdminRevisions,
+  getAdminStatus,
+  refreshAdminStatus,
+  rollbackAdminPrompts,
+} from "./admin";
 import { getRecord } from "./recordDetail";
 import { getRecords } from "./recordList";
 import { getRankings } from "./rankings";
@@ -139,6 +147,23 @@ function adminStatusResponse() {
       },
     ],
   };
+}
+
+function adminPromptsResponse() {
+  return {
+    schemaVersion: 1,
+    mode: "managed",
+    activeRevision: `r${"1".repeat(26)}`,
+    createdAt: "2026-08-24T03:00:00Z",
+    action: "publish",
+    prompts: {
+      system: "system prompt",
+      moderator: "moderator prompt",
+      participantA: "arona prompt",
+      participantB: "plana prompt",
+      participantC: "abe prompt",
+    },
+  } as const;
 }
 
 function response(value: unknown, status = 200): Response {
@@ -309,6 +334,107 @@ describe("Records API endpoint validation", () => {
     );
 
     await expect(getAdminStatus()).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+      requestId: "local-validation",
+    });
+  });
+
+  it("validates all prompt responses and sends write-boundary headers", async () => {
+    const prompts = adminPromptsResponse();
+    const revision = {
+      revision: `r${"2".repeat(26)}`,
+      createdAt: "2026-08-23T03:00:00Z",
+      action: "publish",
+      baseRevision: null,
+      sourceRevision: null,
+      checksum: "a".repeat(64),
+    } as const;
+    const saved = { schemaVersion: 1, revision: `r${"3".repeat(26)}`, state: "saved" } as const;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(prompts))
+      .mockResolvedValueOnce(response({ schemaVersion: 1, items: [revision], nextCursor: null }))
+      .mockResolvedValueOnce(response({ schemaVersion: 1, ...revision, prompts: prompts.prompts }))
+      .mockResolvedValueOnce(response(saved))
+      .mockResolvedValueOnce(response(saved));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getAdminPrompts()).resolves.toEqual(prompts);
+    await expect(getAdminRevisions()).resolves.toEqual({
+      schemaVersion: 1,
+      items: [revision],
+      nextCursor: null,
+    });
+    await expect(getAdminRevision(revision.revision)).resolves.toEqual({
+      schemaVersion: 1,
+      ...revision,
+      prompts: prompts.prompts,
+    });
+    await expect(
+      applyAdminPrompts(
+        {
+          schemaVersion: 1,
+          baseRevision: prompts.activeRevision,
+          prompts: prompts.prompts,
+          systemConfirmation: null,
+        },
+        "csrf-token",
+        "apply-idempotency-key",
+      ),
+    ).resolves.toEqual(saved);
+    await expect(
+      rollbackAdminPrompts(
+        {
+          schemaVersion: 1,
+          baseRevision: prompts.activeRevision,
+          sourceRevision: revision.revision,
+          systemConfirmation: null,
+        },
+        "csrf-token",
+        "rollback-idempotency-key",
+      ),
+    ).resolves.toEqual(saved);
+
+    const applyHeaders = new Headers(fetchMock.mock.calls[3]?.[1]?.headers);
+    const rollbackHeaders = new Headers(fetchMock.mock.calls[4]?.[1]?.headers);
+    expect(applyHeaders.get("Content-Type")).toBe("application/json");
+    expect(applyHeaders.get("X-CSRF-Token")).toBe("csrf-token");
+    expect(applyHeaders.get("X-Idempotency-Key")).toBe("apply-idempotency-key");
+    expect(rollbackHeaders.get("X-Idempotency-Key")).toBe("rollback-idempotency-key");
+  });
+
+  it("rejects private fields in a prompt response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(response({ ...adminPromptsResponse(), privateUserId: "must-not-pass" })),
+      ),
+    );
+
+    await expect(getAdminPrompts()).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+      requestId: "local-validation",
+    });
+  });
+
+  it("rejects inconsistent legacy prompt metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          response({
+            ...adminPromptsResponse(),
+            mode: "legacy",
+            createdAt: null,
+            action: null,
+          }),
+        ),
+      ),
+    );
+
+    await expect(getAdminPrompts()).rejects.toMatchObject({
       status: 200,
       code: "INVALID_API_RESPONSE",
       requestId: "local-validation",

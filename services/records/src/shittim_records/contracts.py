@@ -12,6 +12,7 @@ RECORDS_API_SCHEMA_VERSION = 1
 ParticipantSlot = Literal["participant-a", "participant-b", "participant-c"]
 CostStatus = Literal["partial", "final", "unavailable"]
 CostPeriod = Literal["today", "week", "month", "all"]
+AdminPromptAction = Literal["publish", "rollback"]
 AdminHealthState = Literal["healthy", "warning", "critical", "unknown"]
 AdminServiceName = Literal[
     "ecs",
@@ -72,6 +73,39 @@ def _no_self_vote_json_schema() -> dict[str, object]:
                 "then": {"properties": {"candidate": {"not": {"const": slot}}}},
             }
             for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+        ]
+    }
+
+
+def _admin_prompt_mode_json_schema() -> dict[str, object]:
+    return {
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"mode": {"const": "legacy"}},
+                    "required": ["mode"],
+                },
+                "then": {
+                    "properties": {
+                        "activeRevision": {"type": "null"},
+                        "createdAt": {"type": "null"},
+                        "action": {"type": "null"},
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {"mode": {"const": "managed"}},
+                    "required": ["mode"],
+                },
+                "then": {
+                    "properties": {
+                        "activeRevision": {"type": "string"},
+                        "createdAt": {"type": "string"},
+                        "action": {"type": "string"},
+                    }
+                },
+            },
         ]
     }
 
@@ -348,6 +382,88 @@ class CostsResponse(PublicModel):
     status: CostStatus
 
 
+PromptRevisionId = Annotated[
+    str,
+    Field(pattern=r"^r[0-9a-hjkmnp-tv-z]{26}$"),
+]
+PromptText = Annotated[str, Field(min_length=1, max_length=3500, pattern=r"\S")]
+PromptChecksum = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class AdminPromptValues(PublicModel):
+    system: PromptText
+    moderator: PromptText
+    participant_a: PromptText
+    participant_b: PromptText
+    participant_c: PromptText
+
+
+class AdminPromptsResponse(PublicModel):
+    model_config = ConfigDict(json_schema_extra=_admin_prompt_mode_json_schema())
+
+    schema_version: Literal[1]
+    mode: Literal["legacy", "managed"]
+    active_revision: PromptRevisionId | None
+    created_at: AwareDatetime | None
+    action: AdminPromptAction | None
+    prompts: AdminPromptValues
+
+    @model_validator(mode="after")
+    def require_consistent_mode(self) -> AdminPromptsResponse:
+        metadata = (self.active_revision, self.created_at, self.action)
+        if (self.mode == "managed" and any(value is None for value in metadata)) or (
+            self.mode == "legacy" and any(value is not None for value in metadata)
+        ):
+            raise ValueError("managed prompt metadata must be complete")
+        return self
+
+
+class AdminPromptApplyRequest(PublicModel):
+    schema_version: Literal[1]
+    base_revision: PromptRevisionId | None
+    prompts: AdminPromptValues
+    system_confirmation: Annotated[str, Field(max_length=64)] | None
+
+
+class AdminPromptRollbackRequest(PublicModel):
+    schema_version: Literal[1]
+    base_revision: PromptRevisionId
+    source_revision: PromptRevisionId
+    system_confirmation: Annotated[str, Field(max_length=64)] | None
+
+
+class AdminPromptApplyResponse(PublicModel):
+    schema_version: Literal[1]
+    revision: PromptRevisionId
+    state: Literal["saved"]
+
+
+class AdminPromptRevisionSummary(PublicModel):
+    revision: PromptRevisionId
+    created_at: AwareDatetime
+    action: AdminPromptAction
+    base_revision: PromptRevisionId | None
+    source_revision: PromptRevisionId | None
+    checksum: PromptChecksum
+
+
+class AdminPromptRevisionsResponse(PublicModel):
+    schema_version: Literal[1]
+    items: tuple[AdminPromptRevisionSummary, ...]
+    next_cursor: PromptRevisionId | None
+
+
+class AdminPromptRevisionResponse(PublicModel):
+    schema_version: Literal[1]
+    revision: PromptRevisionId
+    created_at: AwareDatetime
+    action: AdminPromptAction
+    base_revision: PromptRevisionId | None
+    source_revision: PromptRevisionId | None
+    checksum: PromptChecksum
+    prompts: AdminPromptValues
+
+
 class AdminStatusMetric(PublicModel):
     name: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")]
     value: str | int | bool | None
@@ -483,6 +599,15 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RankingsResponse,
     CostsResponse,
     SessionResponse,
+    AdminPromptsResponse,
+    AdminPromptApplyResponse,
+    AdminPromptRevisionsResponse,
+    AdminPromptRevisionResponse,
     AdminStatusResponse,
     ErrorResponse,
+)
+
+PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (
+    AdminPromptApplyRequest,
+    AdminPromptRollbackRequest,
 )

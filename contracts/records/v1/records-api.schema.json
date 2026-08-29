@@ -428,6 +428,459 @@
       "title": "AdminInspectorSeverityCounts",
       "type": "object"
     },
+    "AdminPromptApplyRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "baseRevision": {
+          "anyOf": [
+            {
+              "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Baserevision"
+        },
+        "prompts": {
+          "$ref": "#/$defs/AdminPromptValues"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "systemConfirmation": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Systemconfirmation"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "baseRevision",
+        "prompts",
+        "systemConfirmation"
+      ],
+      "title": "AdminPromptApplyRequest",
+      "type": "object"
+    },
+    "AdminPromptApplyResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "state": {
+          "const": "saved",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "revision",
+        "state"
+      ],
+      "title": "AdminPromptApplyResponse",
+      "type": "object"
+    },
+    "AdminPromptRevisionResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "publish",
+            "rollback"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "baseRevision": {
+          "anyOf": [
+            {
+              "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Baserevision"
+        },
+        "checksum": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Checksum",
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "title": "Createdat",
+          "type": "string"
+        },
+        "prompts": {
+          "$ref": "#/$defs/AdminPromptValues"
+        },
+        "revision": {
+          "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "sourceRevision": {
+          "anyOf": [
+            {
+              "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sourcerevision"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "revision",
+        "createdAt",
+        "action",
+        "baseRevision",
+        "sourceRevision",
+        "checksum",
+        "prompts"
+      ],
+      "title": "AdminPromptRevisionResponse",
+      "type": "object"
+    },
+    "AdminPromptRevisionSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "publish",
+            "rollback"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "baseRevision": {
+          "anyOf": [
+            {
+              "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Baserevision"
+        },
+        "checksum": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Checksum",
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "title": "Createdat",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "sourceRevision": {
+          "anyOf": [
+            {
+              "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sourcerevision"
+        }
+      },
+      "required": [
+        "revision",
+        "createdAt",
+        "action",
+        "baseRevision",
+        "sourceRevision",
+        "checksum"
+      ],
+      "title": "AdminPromptRevisionSummary",
+      "type": "object"
+    },
+    "AdminPromptRevisionsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AdminPromptRevisionSummary"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items",
+        "nextCursor"
+      ],
+      "title": "AdminPromptRevisionsResponse",
+      "type": "object"
+    },
+    "AdminPromptRollbackRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "baseRevision": {
+          "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+          "title": "Baserevision",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "sourceRevision": {
+          "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+          "title": "Sourcerevision",
+          "type": "string"
+        },
+        "systemConfirmation": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Systemconfirmation"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "baseRevision",
+        "sourceRevision",
+        "systemConfirmation"
+      ],
+      "title": "AdminPromptRollbackRequest",
+      "type": "object"
+    },
+    "AdminPromptValues": {
+      "additionalProperties": false,
+      "properties": {
+        "moderator": {
+          "maxLength": 3500,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Moderator",
+          "type": "string"
+        },
+        "participantA": {
+          "maxLength": 3500,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Participanta",
+          "type": "string"
+        },
+        "participantB": {
+          "maxLength": 3500,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Participantb",
+          "type": "string"
+        },
+        "participantC": {
+          "maxLength": 3500,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Participantc",
+          "type": "string"
+        },
+        "system": {
+          "maxLength": 3500,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "System",
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "moderator",
+        "participantA",
+        "participantB",
+        "participantC"
+      ],
+      "title": "AdminPromptValues",
+      "type": "object"
+    },
+    "AdminPromptsResponse": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "legacy"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "action": {
+                "type": "null"
+              },
+              "activeRevision": {
+                "type": "null"
+              },
+              "createdAt": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "managed"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "activeRevision": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "enum": [
+                "publish",
+                "rollback"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Action"
+        },
+        "activeRevision": {
+          "anyOf": [
+            {
+              "pattern": "^r[0-9a-hjkmnp-tv-z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Activerevision"
+        },
+        "createdAt": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Createdat"
+        },
+        "mode": {
+          "enum": [
+            "legacy",
+            "managed"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "prompts": {
+          "$ref": "#/$defs/AdminPromptValues"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "mode",
+        "activeRevision",
+        "createdAt",
+        "action",
+        "prompts"
+      ],
+      "title": "AdminPromptsResponse",
+      "type": "object"
+    },
     "AdminStatusMetric": {
       "additionalProperties": false,
       "properties": {
@@ -1978,6 +2431,18 @@
     },
     {
       "$ref": "#/$defs/SessionResponse"
+    },
+    {
+      "$ref": "#/$defs/AdminPromptsResponse"
+    },
+    {
+      "$ref": "#/$defs/AdminPromptApplyResponse"
+    },
+    {
+      "$ref": "#/$defs/AdminPromptRevisionsResponse"
+    },
+    {
+      "$ref": "#/$defs/AdminPromptRevisionResponse"
     },
     {
       "$ref": "#/$defs/AdminStatusResponse"

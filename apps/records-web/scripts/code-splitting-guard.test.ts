@@ -57,6 +57,10 @@ function canonicalChunks(): GuardChunk[] {
       moduleIds: [
         `${root}/src/routes/AdminPage.tsx`,
         `${root}/src/generated/admin-status-response-validator.mjs`,
+        `${root}/src/generated/admin-prompts-response-validator.mjs`,
+        `${root}/src/generated/admin-apply-response-validator.mjs`,
+        `${root}/src/generated/admin-revisions-response-validator.mjs`,
+        `${root}/src/generated/admin-revision-response-validator.mjs`,
       ],
     },
   ];

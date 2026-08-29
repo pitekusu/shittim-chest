@@ -53,6 +53,8 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 | Status Publisher Lambda | desired public StatusをDiscord RESTへ収束 |
 | Runtime Reconciler Lambda | durable stateとECS desired 0／1を収束 |
 | Image Admission Lambda | task definition、image digest、signature／attestationを検証 |
+| Records Admin Status Lambda | allowlist済みAWS／CloudWatch状態のread-only集約 |
+| Records Admin Config Lambda | runtime promptの参照、immutable revision作成、rollback、audit |
 
 EventBridge SchedulerがRuntime Reconcilerを1分間隔で起動する。LambdaはVPC外に置き、external APIと
 AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはconstruct testで固定する。
@@ -62,6 +64,10 @@ AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはc
 - task roleはDynamoDBの必要partitionとStatus Publisher invokeだけを許可する。
 - execution roleはnormal image pull、exact SSM secret injection、log writeだけを許可する。
 - Lambda roleはhandlerごとに分離し、table leading key、function、service、log groupを限定する。
+- Records Admin Config roleはSessionの`SESSION#*`読込、Statisticsの`ADMIN#PROMPT` transaction、
+  exact legacy／管理者parameter読込、runtime prompt subtreeの条件付きPutに限定する。revision Putは
+  `ssm:Overwrite=false`だけを許し、overwriteと削除を明示的に拒否する。Admin StatusのAWS状態取得権限を
+  共有しない。
 - `ecs:DescribeTaskDefinition`はresource-level permission非対応のため、Image Admission、Release Deploy、
   Records Admin Status Lambda roleで独立statementの`Resource: "*"`を用いる。Image Admissionと
   Release Deployはfamily、revision、container、digestをapplicationでexact validationする。Admin Status
@@ -78,6 +84,8 @@ AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはc
 - RuntimeConfig pointerは`v0004`、schemaはv2。4 Bot、Guild、allowed channels、farewell channelを
   exact validationする。
 - PersonaConfig schema v1を4 slot分用意し、本文をCloudFormation parameterやrepositoryへ含めない。
+- RecordsApplicationはReleaseがRuntime Stackから検証した`vNNNN`のlegacy config versionとparameter名だけを
+  Admin Config Lambdaへ渡す。Lambdaはactive pointerがない間だけ、そのversionの5本文をlegacy sourceとして読む。
 - setup toolはv0003からv0004を再構成する場合もsecret本文を表示／local保存しない。
 - CDKはsecret valueをlookupせず、parameter nameとmetadataだけを扱う。
 

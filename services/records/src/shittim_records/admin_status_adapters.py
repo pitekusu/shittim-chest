@@ -63,6 +63,7 @@ ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
         "records_cost": "shittim-chest-production-records-cost",
         "records_inspector_translation": ("shittim-chest-production-records-inspector-translation"),
         "records_read": "shittim-chest-production-records-read",
+        "records_admin_config": "shittim-chest-production-records-admin-config",
         "records_admin_status": "shittim-chest-production-records-admin-status",
     }
 )

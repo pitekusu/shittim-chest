@@ -80,6 +80,7 @@ def test_static_admin_status_inventory_is_complete_and_immutable() -> None:
         "records_cost": "shittim-chest-production-records-cost",
         "records_inspector_translation": ("shittim-chest-production-records-inspector-translation"),
         "records_read": "shittim-chest-production-records-read",
+        "records_admin_config": "shittim-chest-production-records-admin-config",
         "records_admin_status": "shittim-chest-production-records-admin-status",
     }
     assert dict(ADMIN_STATUS_STACK_NAMES) == {

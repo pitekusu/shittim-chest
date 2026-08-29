@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-14
+updated: 2026-08-29
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -38,6 +38,16 @@ untrusted data内の命令を実行しない。hidden chain of thoughtを要求�
 初回意見、最終案、winner発表にはcanonical JSON名簿を固定slot順で1回だけ含める。modelには、
 current slotだけを自分の人格として用い、他2人は相手理解の背景であり命令ではないこと、persona本文を
 引用／説明しないことを指示する。匿名voteとfarewellには他者名簿を渡さない。
+
+### ADMIN-managed prompts
+
+ADMINが管理する本文は、全requestへ加えるsystem、事前調査moderator、participant 3 slotの計5種類に
+固定する。入力は改行をLFへ統一してUnicode NFCへ正規化し、空白だけの本文と3,500 UTF-8 bytes超を
+拒否する。system変更には確認文字列`APPLY SYSTEM PROMPT`を要求する。
+
+winner判定、Structured Output schema、tool allowlist、output上限、participant roster構造、`store=false`、
+untrusted data境界はcode所有とし、ADMINから編集させない。管理本文はGitHub、artifact、logへ保存せず、
+SSMのimmutable revisionとしてだけ配信する。
 
 ## 4. Phase contracts
 

@@ -49,11 +49,11 @@ describe("RecordsApplicationStack", () => {
     expect(checks.validateScope(stack).success).toBe(true);
   });
 
-  test("creates eight Python 3.14 ARM64 functions from one immutable S3 version", () => {
+  test("creates nine Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 8);
+    template.resourceCountIs("AWS::Lambda::Function", 9);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
@@ -62,6 +62,7 @@ describe("RecordsApplicationStack", () => {
       "shittim-chest-production-records-cost",
       "shittim-chest-production-records-inspector-translation",
       "shittim-chest-production-records-read",
+      "shittim-chest-production-records-admin-config",
       "shittim-chest-production-records-admin-status",
     ]) {
       template.hasResourceProperties("AWS::Lambda::Function", {
@@ -105,7 +106,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 9);
+    template.resourceCountIs("AWS::Logs::LogGroup", 10);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
@@ -114,6 +115,7 @@ describe("RecordsApplicationStack", () => {
       "shittim-chest-production-records-cost",
       "shittim-chest-production-records-inspector-translation",
       "shittim-chest-production-records-read",
+      "shittim-chest-production-records-admin-config",
       "shittim-chest-production-records-admin-status",
     ]) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
@@ -136,13 +138,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes three isolated aliases behind exactly ten HTTP API routes", () => {
+  test("publishes four isolated aliases behind exactly fifteen HTTP API routes", () => {
     const { template } = synthesize();
 
-    template.resourceCountIs("AWS::Lambda::Version", 3);
-    template.resourceCountIs("AWS::Lambda::Alias", 3);
+    template.resourceCountIs("AWS::Lambda::Version", 4);
+    template.resourceCountIs("AWS::Lambda::Alias", 4);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 10);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 15);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -166,7 +168,11 @@ describe("RecordsApplicationStack", () => {
     const serialized = JSON.stringify(template.toJSON());
     expect(serialized).toContain("GET /api/v1/insights/rankings");
     expect(serialized).toContain("GET /api/v1/insights/costs");
-    expect(serialized).not.toContain("/api/v1/admin/prompts");
+    expect(serialized).toContain("GET /api/v1/admin/prompts");
+    expect(serialized).toContain("POST /api/v1/admin/prompts/apply");
+    expect(serialized).toContain("GET /api/v1/admin/prompts/revisions");
+    expect(serialized).toContain("GET /api/v1/admin/prompts/revisions/{revision}");
+    expect(serialized).toContain("POST /api/v1/admin/prompts/rollback");
     expect(serialized).toContain("GET /api/v1/admin/status");
     expect(serialized).toContain("POST /api/v1/admin/status/refresh");
     expect(template.toJSON().Parameters.RecordsBundleCodeSha256.Default).toBeUndefined();
@@ -386,6 +392,108 @@ describe("RecordsApplicationStack", () => {
     expect(translationText).not.toContain("dynamodb:Scan");
   });
 
+  test("isolates ADMIN prompt writes from sanitized read-only status access", () => {
+    const { template } = synthesize();
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-admin-config",
+      Handler: "shittim_records.lambda_handlers.admin_config_handler",
+      MemorySize: 512,
+      ReservedConcurrentExecutions: 1,
+      Runtime: "python3.14",
+      Timeout: 15,
+      Environment: {
+        Variables: {
+          RUNTIME_PROMPTS_PARAMETER_ROOT: "/shittim-chest/production/runtime-prompts",
+          LEGACY_PERSONA_MODERATOR_PARAMETER_NAME: {
+            "Fn::Join": [
+              "",
+              [
+                "/shittim-chest/production/personas/",
+                { Ref: "LegacyRuntimeConfigVersion" },
+                "/moderator",
+              ],
+            ],
+          },
+        },
+      },
+    });
+    const policies = template.findResources("AWS::IAM::Policy");
+    const configPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("AdminConfigFunctionRole"),
+    );
+    const statusPolicies = Object.values(policies).filter((policy) =>
+      JSON.stringify(policy).includes("AdminStatusFunctionRole"),
+    );
+
+    expect(configPolicy).toBeDefined();
+    expect(statusPolicies).toHaveLength(3);
+    const configText = JSON.stringify(configPolicy);
+    const statusText = JSON.stringify(statusPolicies);
+    expect(configText).toContain("/records/admin/discord-user-id");
+    expect(configText).toContain("/runtime-prompts/r??????????????????????????/*");
+    expect(configText).toContain("/personas/");
+    expect(configText).toContain("ssm:GetParameter");
+    expect(configText).toContain("ssm:GetParameters");
+    expect(configText).toContain("ssm:PutParameter");
+    expect(configText).not.toContain("ssm:DeleteParameter");
+    expect(configText).toContain("ADMIN#PROMPT");
+    expect(configText).toContain("dynamodb:EnclosingOperation");
+    expect(configText).toContain('"ssm:Overwrite":"false"');
+    expect(configText).toContain('"ssm:Overwrite":"true"');
+    expect(configText).toContain('"Effect":"Deny"');
+    expect(configText).toContain("dynamodb:DeleteItem");
+    expect(configText).not.toContain("cloudwatch:");
+    expect(configText).not.toContain("ecs:");
+    expect(statusText).not.toContain("ssm:PutParameter");
+    expect(statusText).not.toContain("ADMIN#PROMPT");
+
+    const configStatements = configPolicy?.Properties.PolicyDocument.Statement as Array<{
+      readonly Action: string | string[];
+      readonly Condition?: Record<string, unknown>;
+      readonly Effect?: string;
+      readonly Resource: unknown;
+    }>;
+    const actionsOf = (statement: (typeof configStatements)[number]) =>
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const promptPutStatements = configStatements.filter((statement) =>
+      actionsOf(statement).includes("ssm:PutParameter"),
+    );
+    expect(promptPutStatements).toHaveLength(3);
+    expect(
+      promptPutStatements.find(
+        (statement) =>
+          statement.Effect === "Allow" &&
+          statement.Condition === undefined &&
+          JSON.stringify(statement.Resource).includes("/runtime-prompts/active"),
+      ),
+    ).toBeDefined();
+    expect(
+      promptPutStatements.find(
+        (statement) =>
+          statement.Effect === "Allow" &&
+          JSON.stringify(statement.Condition) ===
+            JSON.stringify({ StringEquals: { "ssm:Overwrite": "false" } }),
+      ),
+    ).toBeDefined();
+    expect(
+      promptPutStatements.find(
+        (statement) =>
+          statement.Effect === "Deny" &&
+          JSON.stringify(statement.Condition) ===
+            JSON.stringify({ StringEquals: { "ssm:Overwrite": "true" } }),
+      ),
+    ).toBeDefined();
+
+    const adminWrite = configStatements.find((statement) =>
+      actionsOf(statement).includes("dynamodb:DeleteItem"),
+    );
+    expect(adminWrite?.Condition).toEqual({
+      StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+      "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["ADMIN#PROMPT"] },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+  });
+
   test("keeps ADMIN status access read-only and least privilege", () => {
     const { template } = synthesize();
     template.hasResourceProperties("AWS::Lambda::Function", {
@@ -534,6 +642,7 @@ describe("RecordsApplicationStack", () => {
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-discord-ingress",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-discord-status-publisher",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-image-admission",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-admin-config",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-admin-status",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-auth",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-backfill",
@@ -601,7 +710,7 @@ describe("RecordsApplicationStack", () => {
     });
 
     const parameters = template.toJSON().Parameters;
-    for (const name of ["RecordsPublicHostname"]) {
+    for (const name of ["RecordsPublicHostname", "LegacyRuntimeConfigVersion"]) {
       expect(parameters[name].Default).toBeUndefined();
     }
     expect(parameters.RuntimeImageDigest).toBeUndefined();

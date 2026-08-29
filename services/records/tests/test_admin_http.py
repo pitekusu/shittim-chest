@@ -1,4 +1,4 @@
-"""HTTP API v2 authorization and wire tests for ADMIN status routes."""
+"""HTTP API v2 authorization and wire tests for every ADMIN route."""
 
 from __future__ import annotations
 
@@ -8,16 +8,62 @@ from typing import Any, cast
 
 import pytest
 
-from shittim_records.admin import AdminFailure
-from shittim_records.admin_http import AdminStatusHttpController
+from shittim_records.admin import (
+    AdminFailure,
+    PromptCurrent,
+    PromptHistoryPage,
+    PromptManifest,
+    PromptRevision,
+    PromptRevisionSummary,
+    PromptValues,
+)
+from shittim_records.admin_http import AdminConfigHttpController, AdminStatusHttpController
 from shittim_records.auth import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME, SessionRecord
 from shittim_records.contracts import AdminStatusOverall, AdminStatusResponse, AdminStatusSection
 
 NOW = datetime(2026, 8, 24, 3, 0, tzinfo=UTC)
+REVISION = "r01k3gqp6g00000000000000000"
+SOURCE_REVISION = "r01k3gqp6g00000000000000001"
+CHECKSUM = "a" * 64
 
 
-def event(route: str, *, query: str = "") -> dict[str, Any]:
-    return {
+def prompts() -> PromptValues:
+    return PromptValues.from_mapping(
+        {
+            "system": "system",
+            "moderator": "moderator",
+            "participant-a": "a",
+            "participant-b": "b",
+            "participant-c": "c",
+        }
+    )
+
+
+def summary(*, revision: str = REVISION) -> PromptRevisionSummary:
+    return PromptRevisionSummary(
+        revision=revision,
+        created_at=NOW,
+        action="publish",
+        base_revision=None,
+        source_revision=None,
+        checksum=CHECKSUM,
+    )
+
+
+def event(
+    route: str,
+    *,
+    body: dict[str, Any] | None = None,
+    query: str = "",
+    path: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    headers = {
+        "content-type": "application/json",
+        "origin": "https://records.example.invalid",
+        "x-csrf-token": "csrf-token",
+        "x-idempotency-key": "idempotency-key-1",
+    }
+    value: dict[str, Any] = {
         "routeKey": route,
         "requestContext": {"requestId": "opaque-request"},
         "rawQueryString": query,
@@ -25,13 +71,12 @@ def event(route: str, *, query: str = "") -> dict[str, Any]:
             f"{SESSION_COOKIE_NAME}=session-token",
             f"{CSRF_COOKIE_NAME}=csrf-token",
         ],
-        "headers": {
-            "origin": "https://records.example.invalid",
-            "x-csrf-token": "csrf-token",
-            "x-idempotency-key": "idempotency-key-1",
-        },
-        "pathParameters": {},
+        "headers": headers,
+        "pathParameters": path or {},
     }
+    if body is not None:
+        value["body"] = json.dumps(body)
+    return value
 
 
 class Authorizer:
@@ -62,25 +107,44 @@ class Authorizer:
         return "b" * 64
 
 
+class PromptService:
+    def get_current(self) -> PromptCurrent:
+        return PromptCurrent(mode="legacy", revision=None, prompts=prompts())
+
+    def apply(self, **kwargs: Any) -> PromptRevisionSummary:
+        assert kwargs["idempotency_hash"] == "b" * 64
+        return summary()
+
+    def list_revisions(self, **kwargs: Any) -> PromptHistoryPage:
+        assert kwargs == {"cursor": None, "limit": 20}
+        return PromptHistoryPage(items=(summary(),), next_cursor=None)
+
+    def get_revision(self, revision: str) -> tuple[PromptRevisionSummary, PromptRevision]:
+        assert revision == REVISION
+        value = prompts()
+        metadata = summary()
+        return (
+            metadata,
+            PromptRevision(
+                manifest=PromptManifest(
+                    revision=REVISION,
+                    created_at=NOW,
+                    action="publish",
+                    base_revision=None,
+                    checksums=value.checksums(),
+                ),
+                prompts=value,
+            ),
+        )
+
+    def rollback(self, **kwargs: Any) -> PromptRevisionSummary:
+        assert kwargs["source_revision"] == SOURCE_REVISION
+        assert kwargs["system_confirmation"] is None
+        return summary()
+
+
 def status_response() -> AdminStatusResponse:
-    services = (
-        "ecs",
-        "ecr",
-        "inspector",
-        "s3",
-        "dynamodb",
-        "lambda",
-        "cloudfront",
-        "sqs",
-        "apigateway",
-        "eventbridge",
-        "cloudformation",
-        "sns",
-        "ssm",
-        "cost_governance",
-        "signer",
-        "external",
-    )
+    services = ("ecs", "ecr", "inspector", "s3", "dynamodb", "lambda", "cloudfront", "sqs")
     return AdminStatusResponse(
         schema_version=1,
         generated_at=NOW,
@@ -114,6 +178,59 @@ class StatusService:
         return status_response()
 
 
+APPLY_BODY = {
+    "schemaVersion": 1,
+    "baseRevision": None,
+    "prompts": {
+        "system": "system",
+        "moderator": "moderator",
+        "participantA": "a",
+        "participantB": "b",
+        "participantC": "c",
+    },
+    "systemConfirmation": None,
+}
+ROLLBACK_BODY = {
+    "schemaVersion": 1,
+    "baseRevision": REVISION,
+    "sourceRevision": SOURCE_REVISION,
+    "systemConfirmation": None,
+}
+
+
+@pytest.mark.parametrize(
+    ("route", "body", "path"),
+    [
+        ("GET /api/v1/admin/prompts", None, None),
+        ("POST /api/v1/admin/prompts/apply", APPLY_BODY, None),
+        ("GET /api/v1/admin/prompts/revisions", None, None),
+        (
+            "GET /api/v1/admin/prompts/revisions/{revision}",
+            None,
+            {"revision": REVISION},
+        ),
+        ("POST /api/v1/admin/prompts/rollback", ROLLBACK_BODY, None),
+    ],
+)
+def test_config_routes_authorize_and_return_strict_json(
+    route: str,
+    body: dict[str, Any] | None,
+    path: dict[str, str] | None,
+) -> None:
+    authorizer = Authorizer()
+    controller = AdminConfigHttpController(
+        authorizer=cast(Any, authorizer),
+        prompts=cast(Any, PromptService()),
+    )
+
+    response = controller.handle(event(route, body=body, path=path), now=NOW)
+
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    assert "private" not in response["body"]
+    assert authorizer.writes == (1 if route.startswith("POST") else 0)
+
+
 @pytest.mark.parametrize(
     "route",
     ("GET /api/v1/admin/status", "POST /api/v1/admin/status/refresh"),
@@ -135,21 +252,120 @@ def test_status_routes_authorize_and_return_sanitized_snapshot(route: str) -> No
 @pytest.mark.parametrize(
     "status,code", ((401, "AUTHENTICATION_REQUIRED"), (403, "ADMIN_ACCESS_DENIED"))
 )
-@pytest.mark.parametrize("route", ("GET /api/v1/admin/status", "POST /api/v1/admin/status/refresh"))
+@pytest.mark.parametrize(
+    "route",
+    (
+        "GET /api/v1/admin/prompts",
+        "POST /api/v1/admin/prompts/apply",
+        "GET /api/v1/admin/prompts/revisions",
+        "GET /api/v1/admin/prompts/revisions/{revision}",
+        "POST /api/v1/admin/prompts/rollback",
+        "GET /api/v1/admin/status",
+        "POST /api/v1/admin/status/refresh",
+    ),
+)
 def test_every_admin_route_rejects_unauthorized_sessions(
     route: str,
     status: int,
     code: str,
 ) -> None:
-    controller = AdminStatusHttpController(
-        authorizer=cast(Any, Authorizer(AdminFailure(code, status))),
-        status=cast(Any, StatusService()),
+    authorizer = Authorizer(AdminFailure(code, status))
+    if "status" in route:
+        controller: Any = AdminStatusHttpController(
+            authorizer=cast(Any, authorizer),
+            status=cast(Any, StatusService()),
+        )
+    else:
+        controller = AdminConfigHttpController(
+            authorizer=cast(Any, authorizer),
+            prompts=cast(Any, PromptService()),
+        )
+    body = (
+        APPLY_BODY
+        if route.endswith("apply")
+        else ROLLBACK_BODY
+        if route.endswith("rollback")
+        else None
     )
 
-    response = controller.handle(event(route), now=NOW)
+    response = controller.handle(
+        event(route, body=body, path={"revision": REVISION}),
+        now=NOW,
+    )
 
     assert response["statusCode"] == status
     assert json.loads(response["body"])["error"]["code"] == code
+
+
+def test_invalid_prompt_body_returns_content_free_error() -> None:
+    controller = AdminConfigHttpController(
+        authorizer=cast(Any, Authorizer()),
+        prompts=cast(Any, PromptService()),
+    )
+    private_prompt = "private-prompt-value"
+    invalid_prompts = dict(cast(dict[str, str], APPLY_BODY["prompts"]))
+    invalid_prompts["system"] = private_prompt
+    invalid = {**APPLY_BODY, "prompts": invalid_prompts}
+    invalid["unexpected"] = private_prompt
+
+    response = controller.handle(
+        event("POST /api/v1/admin/prompts/apply", body=invalid),
+        now=NOW,
+    )
+
+    assert response["statusCode"] == 400
+    assert private_prompt not in response["body"]
+    assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
+
+
+@pytest.mark.parametrize(
+    ("route", "query", "body", "path"),
+    [
+        ("GET /api/v1/admin/prompts", "unexpected=1", None, None),
+        ("POST /api/v1/admin/prompts/apply", "unexpected=1", APPLY_BODY, None),
+        ("GET /api/v1/admin/prompts/revisions", "limit=1&limit=2", None, None),
+        (
+            "GET /api/v1/admin/prompts/revisions/{revision}",
+            "unexpected=1",
+            None,
+            {"revision": REVISION},
+        ),
+        ("POST /api/v1/admin/prompts/rollback", "unexpected=1", ROLLBACK_BODY, None),
+    ],
+)
+def test_config_routes_reject_unknown_or_duplicate_query_values(
+    route: str,
+    query: str,
+    body: dict[str, Any] | None,
+    path: dict[str, str] | None,
+) -> None:
+    controller = AdminConfigHttpController(
+        authorizer=cast(Any, Authorizer()),
+        prompts=cast(Any, PromptService()),
+    )
+
+    response = controller.handle(event(route, body=body, query=query, path=path), now=NOW)
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
+
+
+@pytest.mark.parametrize("invalid_body", ["base64", "oversized"])
+def test_prompt_writes_reject_base64_and_bodies_over_64_kib(invalid_body: str) -> None:
+    controller = AdminConfigHttpController(
+        authorizer=cast(Any, Authorizer()),
+        prompts=cast(Any, PromptService()),
+    )
+    request = event("POST /api/v1/admin/prompts/apply", body=APPLY_BODY)
+    if invalid_body == "base64":
+        request["isBase64Encoded"] = True
+    else:
+        request["body"] = json.dumps({"padding": "x" * (64 * 1024)})
+
+    response = controller.handle(request, now=NOW)
+
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
 
 
 def test_invalid_status_snapshot_returns_content_free_503() -> None:

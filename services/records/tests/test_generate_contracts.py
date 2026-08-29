@@ -18,7 +18,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     assert first == expected_documents()
     assert set(first) == {"openapi.json", "records-api.schema.json", "records-invariants.ts"}
     json_schema = json.loads(first["records-api.schema.json"])
-    assert len(json_schema["oneOf"]) == 7
+    assert len(json_schema["oneOf"]) == 11
     assert "#/components/schemas/" not in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/ImageAvatarRef"' in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/PlaceholderAvatarRef"' in first["records-api.schema.json"].decode()
@@ -75,6 +75,11 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "/api/v1/records/{recordId}",
         "/api/v1/insights/rankings",
         "/api/v1/insights/costs",
+        "/api/v1/admin/prompts",
+        "/api/v1/admin/prompts/apply",
+        "/api/v1/admin/prompts/revisions",
+        "/api/v1/admin/prompts/revisions/{revision}",
+        "/api/v1/admin/prompts/rollback",
         "/api/v1/admin/status",
         "/api/v1/admin/status/refresh",
     }
@@ -115,16 +120,51 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "default": "newest",
     }
     assert openapi["paths"]["/api/v1/logout"]["post"]["parameters"][0]["name"] == ("X-CSRF-Token")
+    apply_operation = openapi["paths"]["/api/v1/admin/prompts/apply"]["post"]
+    assert [parameter["name"] for parameter in apply_operation["parameters"]] == [
+        "X-CSRF-Token",
+        "X-Idempotency-Key",
+    ]
+    assert apply_operation["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/AdminPromptApplyRequest"
+    }
+    assert "AdminPromptRollbackRequest" in openapi["components"]["schemas"]
+    prompt_mode_constraints = json_schema["$defs"]["AdminPromptsResponse"]["allOf"]
+    assert prompt_mode_constraints == [
+        {
+            "if": {"properties": {"mode": {"const": "legacy"}}, "required": ["mode"]},
+            "then": {
+                "properties": {
+                    "activeRevision": {"type": "null"},
+                    "createdAt": {"type": "null"},
+                    "action": {"type": "null"},
+                }
+            },
+        },
+        {
+            "if": {"properties": {"mode": {"const": "managed"}}, "required": ["mode"]},
+            "then": {
+                "properties": {
+                    "activeRevision": {"type": "string"},
+                    "createdAt": {"type": "string"},
+                    "action": {"type": "string"},
+                }
+            },
+        },
+    ]
     refresh_operation = openapi["paths"]["/api/v1/admin/status/refresh"]["post"]
     assert [parameter["name"] for parameter in refresh_operation["parameters"]] == [
         "X-CSRF-Token",
         "X-Idempotency-Key",
     ]
     for route in (
+        "/api/v1/admin/prompts",
+        "/api/v1/admin/prompts/apply",
+        "/api/v1/admin/prompts/rollback",
         "/api/v1/admin/status",
         "/api/v1/admin/status/refresh",
     ):
-        method = "post" if route.endswith("refresh") else "get"
+        method = "post" if route.endswith(("apply", "rollback", "refresh")) else "get"
         assert {"401", "403", "409"}.issubset(openapi["paths"][route][method]["responses"])
     costs_period = openapi["paths"]["/api/v1/insights/costs"]["get"]["parameters"][0]
     assert costs_period == {
