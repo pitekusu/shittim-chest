@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 
 # DynamoDB・データ整合性詳細設計
@@ -22,6 +22,12 @@ updated: 2026-08-29
 current shared schemaは**v8**、読み込み可能なprevious schemaは**v7**である。readerは構造を
 検証後にv7をv8へmemory上でup-convertする。v6以前、future version、unknown field／enumは
 fail closedとする。record固有schemaは次のとおりである。
+
+固定Runtime control 11件はRelease境界でも全件が同じshared schemaであることを要求する。
+current v8またはprevious v7の完全なmanifestだけをread-only preflightで受理し、混在、欠落、
+marker hash不一致はfail closedとする。v7からのReleaseでは、10件のcontrol更新、v8のclosed
+deployment lock、immutable acquire auditを1 transactionで書き、v7/openまたはv8/closed以外の
+途中状態を公開しない。
 
 | Record | Current contract |
 |---|---|
@@ -61,6 +67,9 @@ exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正
 - vote 3件確定前に公開Outboxをstageしない。
 - winner結果、terminal Outbox、activity counterを矛盾なく確定する。
 - deployment lockがclosedならRuntime producer writeを条件式で拒否する。
+- v7 controlを移行したReleaseでcandidate Runtimeが有効にならなかった場合は、取得時snapshotとの
+  exact conditionを満たす11件とopen lockを1 transactionでv7へ戻す。candidateの適用状態が曖昧な
+  場合はrollbackもlock解放も行わず、fail closedのままoperator判断へ委ねる。
 - transaction cancellation reasonはrequest action順で分類し、本文をlogへ出さない。
 - prompt publish／rollbackはpending audit、idempotency、`CURRENT`をtransactionで整合させる。SSMの
   active pointer切替後にaudit完了が失敗した場合は、次回読込でmanifestとpointerを検証して回復する。

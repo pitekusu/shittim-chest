@@ -23,6 +23,10 @@ from shittim_chest.adapters.dynamodb.deployment_guard import (
     DeploymentGuardUnavailable,
     DynamoDbDeploymentGuard,
 )
+from shittim_chest.adapters.dynamodb.serializer import (
+    CURRENT_SCHEMA_VERSION,
+    PREVIOUS_SCHEMA_VERSION,
+)
 from shittim_chest.application.deployment_guard import (
     DEPLOYMENT_GUARD_AUDIT_SCHEMA_VERSION,
     BreakGlassReason,
@@ -43,6 +47,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "validate":
         return _validate(args)
+    if args.command == "validate-compatible":
+        return _validate_compatible(args)
     if args.command == "initialize":
         return _initialize(args)
     if args.command == "guard":
@@ -51,6 +57,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _acquire(args)
     if args.command == "release":
         return _release(args)
+    if args.command == "release-decision":
+        return _release_decision(args)
     raise AssertionError("unreachable control-record command")
 
 
@@ -61,6 +69,27 @@ def _validate(args: argparse.Namespace) -> int:
             client=client,
             table_name=args.table_name,
         ).validate()
+    except ControlRecordInitializationError:
+        _print_result({"ok": False, "code": "control_records_invalid"})
+        return 3
+    _print_result(
+        {
+            "ok": True,
+            "status": result.status.value,
+            "manifest_version": result.manifest_version,
+            "manifest_hash": result.manifest_hash,
+        }
+    )
+    return 0
+
+
+def _validate_compatible(args: argparse.Namespace) -> int:
+    client = create_control_records_dynamodb_client(region_name=args.region)
+    try:
+        result = DynamoDbControlRecordInitializer(
+            client=client,
+            table_name=args.table_name,
+        ).validate_compatible()
     except ControlRecordInitializationError:
         _print_result({"ok": False, "code": "control_records_invalid"})
         return 3
@@ -168,6 +197,11 @@ def _acquire(args: argparse.Namespace) -> int:
     audit["guard_id"] = acquisition.lock.guard_id
     audit["lock_fencing_token"] = acquisition.lock.fencing_token
     audit["lock_expires_at"] = _timestamp(acquisition.lock.expires_at or acquired_at)
+    audit["control_schema_before"] = acquisition.control_schema_before
+    audit["control_schema_after"] = acquisition.control_schema_after
+    audit["control_schema_migrated"] = (
+        acquisition.control_schema_before != acquisition.control_schema_after
+    )
     _write_audit(args.audit_output, audit)
     _print_result(
         {
@@ -194,12 +228,65 @@ def _release(args: argparse.Namespace) -> int:
             expected_fencing_token=args.fencing_token,
             actor=args.actor,
             released_at=released_at,
+            rollback_control_schema=args.rollback_control_schema,
         )
     except DeploymentGuardUnavailable, ValueError:
         _print_result({"ok": False, "code": "deployment_lock_release_failed"})
         return 3
     _print_result({"ok": True, "code": "deployment_lock_released"})
     return 0
+
+
+def _release_decision(args: argparse.Namespace) -> int:
+    """Choose keep-v8, rollback-v7, or fail-closed from content-free evidence."""
+
+    migrated = args.control_schema_migrated == "true"
+    candidate_active = args.runtime_candidate_active == "true"
+    evidence_valid = (
+        args.control_schema_after == CURRENT_SCHEMA_VERSION
+        and migrated == (args.control_schema_before == PREVIOUS_SCHEMA_VERSION)
+        and args.control_schema_before in {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+    )
+    rollback = False
+    decision_safe = evidence_valid
+    if not migrated:
+        decision_safe = decision_safe and (
+            args.control_schema_before == CURRENT_SCHEMA_VERSION
+            and args.runtime_stack_status == "not-checked"
+            and not candidate_active
+        )
+    elif candidate_active:
+        decision_safe = decision_safe and args.runtime_stack_status in {
+            "CREATE_COMPLETE",
+            "UPDATE_COMPLETE",
+        }
+    else:
+        rollback = args.runtime_stack_status in {
+            "CREATE_COMPLETE",
+            "UPDATE_COMPLETE",
+            "UPDATE_ROLLBACK_COMPLETE",
+        }
+        decision_safe = decision_safe and rollback
+    audit = {
+        "schema_version": 1,
+        "control_schema_before": args.control_schema_before,
+        "control_schema_after": args.control_schema_after,
+        "control_schema_migrated": migrated,
+        "runtime_stack_status": args.runtime_stack_status,
+        "runtime_candidate_active": candidate_active,
+        "rollback_requested": rollback,
+        "release_decision_safe": decision_safe,
+        "lock_released": False,
+    }
+    _write_audit(args.audit_output, audit)
+    _print_result(
+        {
+            "ok": decision_safe,
+            "code": "release_safe" if decision_safe else "release_ambiguous",
+            "rollback_control_schema": rollback,
+        }
+    )
+    return 0 if decision_safe else 3
 
 
 def _context(args: argparse.Namespace) -> DeploymentGuardContext:
@@ -324,6 +411,11 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="read and validate without writing")
     _add_table_options(validate)
+    compatible = commands.add_parser(
+        "validate-compatible",
+        help="validate a current or immediately previous uniform manifest",
+    )
+    _add_table_options(compatible)
     initialize = commands.add_parser("initialize", help="perform an acknowledged first install")
     _add_table_options(initialize)
     initialize.add_argument("--acknowledge-write", required=True)
@@ -343,7 +435,28 @@ def _parser() -> argparse.ArgumentParser:
     release.add_argument("--guard-id", required=True)
     release.add_argument("--fencing-token", type=int, required=True)
     release.add_argument("--actor", required=True)
+    release.add_argument("--rollback-control-schema", action="store_true")
     release.add_argument("--acknowledge-write", required=True)
+    decision = commands.add_parser(
+        "release-decision",
+        help="derive a fail-closed control-schema release decision",
+    )
+    decision.add_argument(
+        "--control-schema-before",
+        type=int,
+        choices=(PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION),
+        required=True,
+    )
+    decision.add_argument(
+        "--control-schema-after",
+        type=int,
+        choices=(PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION),
+        required=True,
+    )
+    decision.add_argument("--control-schema-migrated", choices=("true", "false"), required=True)
+    decision.add_argument("--runtime-stack-status", required=True)
+    decision.add_argument("--runtime-candidate-active", choices=("true", "false"), required=True)
+    decision.add_argument("--audit-output", type=Path, required=True)
     return parser
 
 

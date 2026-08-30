@@ -15,6 +15,7 @@ from shittim_chest.adapters.dynamodb.control_records import (
     CONTROL_RECORD_MANIFEST,
     CONTROL_RECORD_MANIFEST_HASH,
     CONTROL_RECORD_MANIFEST_VERSION,
+    CONTROL_RECORD_PREVIOUS_MANIFEST_HASH,
     ControlRecordInitializationError,
     ControlRecordInitializationStatus,
     ControlRecordMigrationRequired,
@@ -90,6 +91,19 @@ def _snapshot(*, marker: bool = True) -> tuple[DynamoItem | None, ...]:
     )
 
 
+def _previous_snapshot() -> tuple[DynamoItem | None, ...]:
+    previous = [
+        None if item is None else {**item, "schema_version": PREVIOUS_SCHEMA_VERSION}
+        for item in _snapshot()
+    ]
+    marker = cast(DynamoItem, previous[0])
+    previous[0] = {
+        **marker,
+        "manifest_hash": CONTROL_RECORD_PREVIOUS_MANIFEST_HASH,
+    }
+    return tuple(previous)
+
+
 def _initializer(client: FakeClient) -> DynamoDbControlRecordInitializer:
     return DynamoDbControlRecordInitializer(
         client=cast(DynamoDBClient, client),
@@ -118,6 +132,9 @@ def test_manifest_is_typed_deterministic_and_contains_eleven_records() -> None:
     assert len(CONTROL_RECORD_MANIFEST_HASH) == 64
     assert CONTROL_RECORD_MANIFEST_HASH == (
         "09d78b5d095cf11c964673dc44d070db3ff30f859e1b7e3b187b2b8deba4e121"
+    )
+    assert CONTROL_RECORD_PREVIOUS_MANIFEST_HASH == (
+        "f4679a4946a61faa79ef02e6bbc3305fe98cddcf803dafccf2e1a3ed41711de0"
     )
     assert control_records._manifest_hash() == CONTROL_RECORD_MANIFEST_HASH
     assert CONTROL_RECORD_MANIFEST.initial_runtime_item == {
@@ -300,6 +317,39 @@ def test_validate_is_strictly_read_only_and_requires_the_complete_manifest() -> 
     incomplete[10] = None
     with pytest.raises(ControlRecordInitializationError, match="missing"):
         _initializer(FakeClient(snapshots=[tuple(incomplete)])).validate()
+
+
+def test_compatible_validation_accepts_uniform_previous_manifest_without_writing() -> None:
+    client = FakeClient(snapshots=[_previous_snapshot()])
+
+    result = _initializer(client).validate_compatible()
+
+    assert result.status is ControlRecordInitializationStatus.UPGRADE_REQUIRED
+    assert client.scan_requests == []
+    assert client.transact_write_requests == []
+
+
+def test_strict_validation_rejects_uniform_previous_manifest_without_writing() -> None:
+    client = FakeClient(snapshots=[_previous_snapshot()])
+
+    with pytest.raises(ControlRecordInitializationError, match="upgrade"):
+        _initializer(client).validate()
+
+    assert client.scan_requests == []
+    assert client.transact_write_requests == []
+
+
+def test_compatible_validation_rejects_mixed_or_untrusted_previous_manifest() -> None:
+    mixed = list(_previous_snapshot())
+    mixed[1] = _snapshot()[1]
+    with pytest.raises(ControlRecordInitializationError, match="mixed"):
+        _initializer(FakeClient(snapshots=[tuple(mixed)])).validate_compatible()
+
+    corrupt = list(_previous_snapshot())
+    marker = cast(DynamoItem, corrupt[0])
+    corrupt[0] = {**marker, "manifest_hash": "0" * 64}
+    with pytest.raises(ControlRecordInitializationError, match="schema"):
+        _initializer(FakeClient(snapshots=[tuple(corrupt)])).validate_compatible()
 
 
 def test_installed_marker_rejects_previous_runtime_schema_without_repair() -> None:

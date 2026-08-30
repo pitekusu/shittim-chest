@@ -70,9 +70,16 @@ plan
 - push前に既存referrer一覧を保存し、差分から今回追加したprovenance、SBOM、vulnerability
   attestationを各1件特定する。過去referrerを削除しない。
 - Environment承認後にdeployment lockを原子的に取得し、attested Change Setだけを固定順で実行する。
+- control record preflightはcurrentまたはimmediately previousの均一な11件だけを受理する。previousの
+  場合はlock取得transaction内で全件をcurrentへ移行し、schema before／afterと移行有無をcontent-free
+  evidenceへ残す。preflightだけでproduction recordを書き換えない。
+- Runtime Change Set実行後はRuntime Stackのstable stateとECS serviceが参照するexact candidate imageを
+  照合する。candidateが有効ならcurrent schemaを維持してlockを開き、stableな旧Runtimeのままなら
+  全controlをpreviousへ原子的に戻してlockを開く。stackまたはimageの組合せが曖昧ならlockを保持する。
 - structural smokeはstack state、ECS desired／running、task image、Image Admission Lambdaを
   検証する。Discord／OpenAIのlive討論はRelease後の別受入である。
-- cleanup成功で元のdeploy failureを成功扱いにしない。未実行Change Setを削除し、lockを解放する。
+- cleanup成功で元のdeploy failureを成功扱いにしない。未実行Change Setを削除し、schema判断が確定した
+  場合だけlockを解放する。
 
 ReleaseIdentity自体の更新、failed runのrerun、manual CloudFormation deployは通常Releaseへ暗黙に
 含めない。

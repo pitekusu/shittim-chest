@@ -11,6 +11,8 @@ import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
 
 from shittim_chest.adapters.dynamodb import (
+    CONTROL_RECORD_MANIFEST,
+    CURRENT_SCHEMA_VERSION,
     DynamoDbControlRecordInitializer,
     DynamoDbDeploymentGuard,
     DynamoDbIngressRepository,
@@ -19,11 +21,18 @@ from shittim_chest.adapters.dynamodb import (
     serialize_runtime_state,
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.control_records import (
+    CONTROL_RECORD_MANIFEST_HASH,
+    CONTROL_RECORD_PREVIOUS_MANIFEST_HASH,
+    ControlRecordInitializationError,
+    ControlRecordInitializationStatus,
+)
 from shittim_chest.adapters.dynamodb.deployment_guard import (
     DeploymentGuardUnavailable,
     DeploymentLockAcquisition,
 )
 from shittim_chest.adapters.dynamodb.serializer import (
+    PREVIOUS_SCHEMA_VERSION,
     DynamoItem,
     deserialize_deployment_lock,
     deserialize_runtime_state,
@@ -127,6 +136,121 @@ def _item(client: DynamoDBClient, table_name: str, *, pk: str, sk: str) -> Dynam
         ConsistentRead=True,
     )
     return unmarshal_item(response["Item"])
+
+
+def _fixed_control_items(client: DynamoDBClient, table_name: str) -> tuple[DynamoItem, ...]:
+    keys = (
+        *(spec.key for spec in CONTROL_RECORD_MANIFEST.activity_records),
+        {"PK": "CONTROL#RUNTIME", "SK": "STATE"},
+        {"PK": "CONTROL#DEPLOYMENT", "SK": "LOCK"},
+    )
+    return tuple(
+        _item(
+            client,
+            table_name,
+            pk=cast(str, key["PK"]),
+            sk=cast(str, key["SK"]),
+        )
+        for key in keys
+    )
+
+
+def _seed_previous_controls(client: DynamoDBClient, table_name: str) -> None:
+    controls = [
+        *(spec.install_item for spec in CONTROL_RECORD_MANIFEST.activity_records),
+        CONTROL_RECORD_MANIFEST.initial_runtime_item,
+        CONTROL_RECORD_MANIFEST.initial_deployment_lock_item,
+    ]
+    for index, item in enumerate(controls):
+        previous = {**item, "schema_version": PREVIOUS_SCHEMA_VERSION}
+        if index == 0:
+            previous["manifest_hash"] = CONTROL_RECORD_PREVIOUS_MANIFEST_HASH
+        client.put_item(TableName=table_name, Item=marshal_item(previous))
+
+
+def test_previous_controls_are_migrated_with_lock_and_kept_after_runtime_activation(
+    dynamodb_client: DynamoDBClient,
+    empty_dynamodb_table: str,
+) -> None:
+    _seed_previous_controls(dynamodb_client, empty_dynamodb_table)
+    initializer = DynamoDbControlRecordInitializer(
+        client=dynamodb_client,
+        table_name=empty_dynamodb_table,
+    )
+    assert (
+        initializer.validate_compatible().status
+        is ControlRecordInitializationStatus.UPGRADE_REQUIRED
+    )
+    guard = DynamoDbDeploymentGuard(
+        client=dynamodb_client,
+        table_name=empty_dynamodb_table,
+    )
+
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+
+    locked = _fixed_control_items(dynamodb_client, empty_dynamodb_table)
+    assert acquired.control_schema_before == PREVIOUS_SCHEMA_VERSION
+    assert acquired.control_schema_after == CURRENT_SCHEMA_VERSION
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in locked)
+    assert locked[0]["manifest_hash"] == CONTROL_RECORD_MANIFEST_HASH
+    assert locked[-1]["lock_state"] == "locked"
+
+    guard.release(
+        guard_id=GUARD_ID,
+        expected_fencing_token=acquired.lock.fencing_token,
+        actor="pitekusu",
+        released_at=NOW + timedelta(minutes=1),
+    )
+
+    released = _fixed_control_items(dynamodb_client, empty_dynamodb_table)
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in released)
+    assert released[-1]["lock_state"] == "open"
+    assert initializer.validate().status is ControlRecordInitializationStatus.ALREADY_INITIALIZED
+
+
+def test_previous_controls_are_atomically_restored_when_runtime_candidate_is_not_active(
+    dynamodb_client: DynamoDBClient,
+    empty_dynamodb_table: str,
+) -> None:
+    _seed_previous_controls(dynamodb_client, empty_dynamodb_table)
+    guard = DynamoDbDeploymentGuard(
+        client=dynamodb_client,
+        table_name=empty_dynamodb_table,
+    )
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+
+    guard.release(
+        guard_id=GUARD_ID,
+        expected_fencing_token=acquired.lock.fencing_token,
+        actor="pitekusu",
+        released_at=NOW + timedelta(minutes=1),
+        rollback_control_schema=True,
+    )
+
+    restored = _fixed_control_items(dynamodb_client, empty_dynamodb_table)
+    assert all(item["schema_version"] == PREVIOUS_SCHEMA_VERSION for item in restored)
+    assert restored[0]["manifest_hash"] == CONTROL_RECORD_PREVIOUS_MANIFEST_HASH
+    assert restored[-1]["lock_state"] == "open"
+    initializer = DynamoDbControlRecordInitializer(
+        client=dynamodb_client,
+        table_name=empty_dynamodb_table,
+    )
+    assert (
+        initializer.validate_compatible().status
+        is ControlRecordInitializationStatus.UPGRADE_REQUIRED
+    )
+    with pytest.raises(ControlRecordInitializationError, match="upgrade"):
+        initializer.validate()
 
 
 @pytest.mark.asyncio

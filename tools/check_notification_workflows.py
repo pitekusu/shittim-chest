@@ -355,7 +355,7 @@ def _validate_release(directory: Path) -> None:
         "Remove this release's unexecuted change sets",
         "tools/cleanup_release_change_sets.sh",
         "Capture bounded CloudFormation failure diagnostics",
-        "tools.control_records validate",
+        "tools.control_records validate-compatible",
         "tools.control_records guard",
         "--lock-seconds 3600",
         "validate-change-set",
@@ -368,6 +368,9 @@ def _validate_release(directory: Path) -> None:
         "environment: production",
         "tools.control_records acquire",
         "tools.control_records release",
+        "control_schema_migrated",
+        "--rollback-control-schema",
+        "control-schema-release.json",
         "execute-change-set",
         "describe-task-definition",
         "if: always() && steps.acquire.outputs.acquired == 'true'",
@@ -763,6 +766,55 @@ def _validate_release(directory: Path) -> None:
     if any(marker not in diagnostics for marker in required_diagnostic_isolation):
         raise WorkflowPolicyError(
             "Release diagnostic failure must remain distinct from the original deploy failure"
+        )
+    account_binding = _workflow_step_block(
+        text,
+        "Bind deploy handles to the approved production account",
+    )
+    if "tools.control_records validate-compatible" not in account_binding:
+        raise WorkflowPolicyError(
+            "Release preflight must accept one uniform immediately previous control schema"
+        )
+    if "tools.control_records validate \\\n" in account_binding:
+        raise WorkflowPolicyError(
+            "Release preflight must not require the candidate control schema before locking"
+        )
+    acquire_block = _workflow_step_block(text, "Acquire the fenced production deployment lock")
+    required_acquire_schema_evidence = (
+        ".control_schema_before",
+        ".control_schema_after",
+        ".control_schema_migrated",
+        "control_schema_before=${control_schema_before}",
+        "control_schema_after=${control_schema_after}",
+        "control_schema_migrated=${control_schema_migrated}",
+    )
+    if any(marker not in acquire_block for marker in required_acquire_schema_evidence):
+        raise WorkflowPolicyError(
+            "Release lock acquisition must export the atomic control-schema migration evidence"
+        )
+    release_fence = _workflow_step_block(text, "Release the exact deployment fence")
+    required_release_decision = (
+        "CONTROL_SCHEMA_BEFORE: ${{ steps.acquire.outputs.control_schema_before }}",
+        "CONTROL_SCHEMA_AFTER: ${{ steps.acquire.outputs.control_schema_after }}",
+        "CONTROL_SCHEMA_MIGRATED: ${{ steps.acquire.outputs.control_schema_migrated }}",
+        "aws cloudformation describe-stacks",
+        "aws ecs describe-services",
+        "aws ecs describe-task-definition",
+        "tools.control_records release-decision",
+        "control-schema-release.json",
+        "release_args+=(--rollback-control-schema)",
+        'if [ "${rollback}" = true ]',
+        'if [ "${rollback}" != false ]',
+    )
+    if any(marker not in release_fence for marker in required_release_decision):
+        raise WorkflowPolicyError(
+            "Release fence must prove the candidate Runtime or atomically restore the old schema"
+        )
+    decision_index = release_fence.index("tools.control_records release-decision")
+    release_index = release_fence.index("tools.control_records release \\\n", decision_index)
+    if decision_index >= release_index:
+        raise WorkflowPolicyError(
+            "Release must decide control-schema rollback before opening the deployment fence"
         )
     cleanup_checkout_end = cleanup_job.index(
         "name: Download the exact planned release evidence for cleanup"

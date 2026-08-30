@@ -10,7 +10,7 @@ from enum import StrEnum, unique
 from shittim_chest.application.scale_to_zero import RuntimeActivity, RuntimeState, RuntimeStatus
 
 DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION = 1
-DEPLOYMENT_GUARD_AUDIT_SCHEMA_VERSION = 1
+DEPLOYMENT_GUARD_AUDIT_SCHEMA_VERSION = 2
 _COMMIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
 _ACTOR_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\Z")
 _RUN_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
