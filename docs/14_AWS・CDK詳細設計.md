@@ -53,11 +53,12 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 | Status Publisher Lambda | desired public StatusをDiscord RESTへ収束 |
 | Runtime Reconciler Lambda | durable stateとECS desired 0／1を収束 |
 | Image Admission Lambda | task definition、image digest、signature／attestationを検証 |
-| Records Admin Status Lambda | allowlist済みAWS／CloudWatch状態のread-only集約 |
-| Records Admin Config Lambda | runtime promptの参照、immutable revision作成、rollback、audit |
+| Records Admin Status Lambda | allowlist済みAWS／CloudWatch状態のread-only集約、reserved concurrency 2 |
+| Records Admin Config Lambda | runtime promptの参照、immutable revision作成、rollback、audit、reserved concurrency 2 |
 
 EventBridge SchedulerがRuntime Reconcilerを1分間隔で起動する。LambdaはVPC外に置き、external APIと
-AWS APIへの到達にNATを不要とする。reserved concurrencyとtimeoutはconstruct testで固定する。
+AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管理画面の並行readを受理しつつ、
+下流を保護する上限としてreserved concurrency 2を使う。reserved concurrencyとtimeoutはconstruct testで固定する。
 
 ## 5. IAM boundaries
 

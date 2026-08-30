@@ -1750,7 +1750,7 @@ function AwsStatusPanel({
           <button
             className={`${commonStyles.secondaryButton} ${adminStyles.refreshButton}`}
             type="button"
-            disabled={refresh.isPending}
+            disabled={refresh.isPending || status.isFetching}
             data-busy={refresh.isPending || undefined}
             onClick={() => refresh.mutate()}
           >

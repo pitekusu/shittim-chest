@@ -567,7 +567,7 @@ export class RecordsApplicationStack extends Stack {
       handler: "shittim_records.lambda_handlers.admin_config_handler",
       code,
       timeout: Duration.seconds(15),
-      reservedConcurrentExecutions: 1,
+      reservedConcurrentExecutions: 2,
       environment: {
         SESSION_TABLE_NAME: sessionTable.tableName,
         STATISTICS_TABLE_NAME: statisticsTable.tableName,
@@ -734,7 +734,7 @@ export class RecordsApplicationStack extends Stack {
       handler: "shittim_records.lambda_handlers.admin_status_handler",
       code,
       timeout: Duration.seconds(30),
-      reservedConcurrentExecutions: 1,
+      reservedConcurrentExecutions: 2,
       environment: {
         ADMIN_AWS_ACCOUNT_ID: this.account,
         ADMIN_ALARM_PREFIX: "shittim-chest-production-",

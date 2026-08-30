@@ -398,7 +398,7 @@ describe("RecordsApplicationStack", () => {
       FunctionName: "shittim-chest-production-records-admin-config",
       Handler: "shittim_records.lambda_handlers.admin_config_handler",
       MemorySize: 512,
-      ReservedConcurrentExecutions: 1,
+      ReservedConcurrentExecutions: 2,
       Runtime: "python3.14",
       Timeout: 15,
       Environment: {
@@ -498,6 +498,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-admin-status",
+      ReservedConcurrentExecutions: 2,
       Environment: {
         Variables: {
           ADMIN_ALARM_PREFIX: "shittim-chest-production-",
