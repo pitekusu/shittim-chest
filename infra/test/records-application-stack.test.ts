@@ -138,13 +138,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes four isolated aliases behind exactly fifteen HTTP API routes", () => {
+  test("publishes four isolated aliases behind exactly sixteen HTTP API routes", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::Lambda::Version", 4);
     template.resourceCountIs("AWS::Lambda::Alias", 4);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 15);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 16);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -167,6 +167,7 @@ describe("RecordsApplicationStack", () => {
     expect(JSON.stringify(stage?.DependsOn)).toContain("RecordsApiAccessLogs");
     const serialized = JSON.stringify(template.toJSON());
     expect(serialized).toContain("GET /api/v1/insights/rankings");
+    expect(serialized).toContain("GET /api/v1/insights/affection-rankings");
     expect(serialized).toContain("GET /api/v1/insights/costs");
     expect(serialized).toContain("GET /api/v1/admin/prompts");
     expect(serialized).toContain("POST /api/v1/admin/prompts/apply");
@@ -353,6 +354,10 @@ describe("RecordsApplicationStack", () => {
     expect(readText).not.toContain("dynamodb:DeleteItem");
     expect(readText).not.toContain("s3:PutObject");
     expect(readText).toContain("shittim-chest-production-records-statistics");
+    expect(readText).toContain("RANKING#AFFECTION");
+    expect(readText).toContain("RANKING#AFFECTION#GEN#*");
+    expect(readText).not.toContain("RANKING#AFFECTION#CATALOG");
+    expect(readText).not.toContain("AFFECTION#SEED");
     expect(readText).not.toContain("/records/openai/admin-key");
     expect(readText).not.toContain("/records/openai/project-id");
     expect(rankingText).toContain("/index/gsi1");
@@ -360,10 +365,15 @@ describe("RecordsApplicationStack", () => {
     expect(rankingText).toContain("dynamodb:PutItem");
     expect(rankingText).toContain("dynamodb:EnclosingOperation");
     expect(rankingText).toContain("TransactWriteItems");
+    expect(rankingText).toContain("AFFECTION#PROFILE");
+    expect(rankingText).toContain("RANKING#AFFECTION");
+    expect(rankingText).toContain("RANKING#AFFECTION#GEN#*");
+    expect(rankingText).toContain("RANKING#AFFECTION#CATALOG");
+    expect(rankingText).toContain("dynamodb:BatchGetItem");
+    expect(rankingText).toContain("dynamodb:BatchWriteItem");
+    expect(rankingText).toContain("dynamodb:DeleteItem");
     expect(rankingText).not.toContain("dynamodb:Scan");
-    expect(rankingText).not.toContain("dynamodb:GetItem");
     expect(rankingText).not.toContain("dynamodb:UpdateItem");
-    expect(rankingText).not.toContain("dynamodb:DeleteItem");
     expect(rankingText).not.toContain("/records/openai/");
     expect(authText).not.toContain("/records/openai/");
     expect(costText).toContain("ce:GetCostAndUsage");
@@ -747,6 +757,10 @@ describe("RecordsApplicationStack", () => {
             Pattern:
               '{"eventName":["MODIFY"],"dynamodb":{"NewImage":{"record_type":{"S":["debate_meta"]},"current_phase":{"S":["completed"]}}}}',
           },
+          {
+            Pattern:
+              '{"dynamodb":{"NewImage":{"record_type":{"S":["affection_profile"]},"schema_version":{"N":["8"]}}}}',
+          },
         ],
       },
       FunctionResponseTypes: ["ReportBatchItemFailures"],
@@ -773,7 +787,10 @@ describe("RecordsApplicationStack", () => {
       JSON.stringify(policy).includes("ProjectorFunctionRole"),
     );
     expect(projectorPolicy).toBeDefined();
-    expect(JSON.stringify(projectorPolicy)).not.toContain("dynamodb:Scan");
+    const projectorText = JSON.stringify(projectorPolicy);
+    expect(projectorText).not.toContain("dynamodb:Scan");
+    expect(projectorText).toContain("AFFECTION#REQUESTER#*");
+    expect(projectorText).toContain("AFFECTION#PROFILE");
     expect(serialized).toContain("dynamodb:Query");
     expect(serialized).toContain("dynamodb:PutItem");
     expect(serialized).toContain("ssm:GetParameters");

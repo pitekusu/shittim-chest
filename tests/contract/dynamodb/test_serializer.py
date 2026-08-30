@@ -23,7 +23,11 @@ from shittim_chest.adapters.dynamodb import (
     serialize_panel_operation,
     serialize_snapshot,
 )
-from shittim_chest.adapters.dynamodb.serializer import DynamoItem
+from shittim_chest.adapters.dynamodb.serializer import (
+    DynamoItem,
+    deserialize_affection_profile,
+    serialize_affection_profile,
+)
 from shittim_chest.application import (
     DebateSnapshot,
     DiscordBotSlot,
@@ -36,6 +40,7 @@ from shittim_chest.application import (
 )
 from shittim_chest.domain import (
     PARTICIPANTS,
+    AffectionProfile,
     AttemptId,
     DebateId,
     DebatePhase,
@@ -50,16 +55,17 @@ from shittim_chest.domain import (
     ParticipantSlot,
     SearchRequirement,
     Vote,
+    assess_affection,
 )
 
 NOW = datetime(2026, 7, 17, 1, 2, 3, tzinfo=UTC)
 
 
 def _as_previous_schema(item: DynamoItem) -> DynamoItem:
-    """Build a v6 item from a current snapshot item for migration tests."""
+    """Build a v7 item from a current snapshot item for migration tests."""
 
     migrated: DynamoItem = {key: value for key, value in item.items()}
-    migrated["schema_version"] = 6
+    migrated["schema_version"] = 7
     return migrated
 
 
@@ -67,6 +73,7 @@ def snapshot() -> DebateSnapshot:
     debate_id = DebateId.new()
     attempt_id = AttemptId.new()
     state = DebateState.accepted(debate_id, attempt_id, at=NOW)
+    state = state.transition_to(DebatePhase.SCORING_AFFECTION, at=NOW + timedelta(seconds=1))
     state = state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=NOW + timedelta(seconds=1))
     state = state.transition_to(
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
@@ -452,6 +459,34 @@ def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> Non
         migrate_item({**current[0], "schema_version": 99})
 
 
+def test_affection_assessment_and_private_profile_round_trip_without_reason_text() -> None:
+    source = snapshot()
+    profile = AffectionProfile.initial(
+        requester_id=source.requester_id,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        at=NOW,
+    )
+    updated_profile, assessment = assess_affection(
+        profile,
+        scores=(35, -43, 100),
+        assessed_at=NOW + timedelta(seconds=7),
+    )
+    source = replace(source, affection_assessment=assessment)
+
+    items = serialize_snapshot(source)
+    item = next(value for value in items if value["record_type"] == "affection_assessment")
+    assert item["SK"] == "AFFECTION"
+    assert item["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert "reason" not in item
+    assert deserialize_snapshot(items).affection_assessment == assessment
+
+    profile_item = serialize_affection_profile(updated_profile)
+    assert profile_item["PK"] == f"AFFECTION#REQUESTER#{source.requester_id}"
+    assert profile_item["scores"] == [535, 457, 600]
+    assert deserialize_affection_profile(profile_item) == updated_profile
+
+
 def test_current_debate_meta_requires_requester_name_snapshots() -> None:
     items = list(serialize_snapshot(snapshot()))
     debate_meta = next(item for item in items if item["record_type"] == "debate_meta")
@@ -551,7 +586,7 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
     with pytest.raises(PersistenceFormatError, match="not a panel"):
         deserialize_panel_operation(outbox_item)
 
-    previous_outbox = {**outbox_item, "schema_version": 6}
+    previous_outbox = {**outbox_item, "schema_version": 7}
     assert previous_outbox["bot_slot"] == DiscordBotSlot.MODERATOR.value
     assert deserialize_outbox(previous_outbox) == outbox
     with pytest.raises(PersistenceFormatError, match="unsupported schema"):

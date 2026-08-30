@@ -25,6 +25,7 @@ HEARTBEAT_TMPFS: Final = CONTAINER_POLICY.heartbeat_tmpfs
 MAXIMUM_STOP_SECONDS: Final = 120.0
 NON_TERMINAL_PHASES: Final = (
     "accepted",
+    "scoring_affection",
     "preparing_evidence",
     "collecting_initial_opinions",
     "discussing",

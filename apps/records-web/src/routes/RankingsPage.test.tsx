@@ -1,7 +1,13 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { costsResponse, rankingsResponse, renderRoute, response } from "../test/recordsTestUtils";
+import {
+  affectionRankingsResponse,
+  costsResponse,
+  rankingsResponse,
+  renderRoute,
+  response,
+} from "../test/recordsTestUtils";
 import RankingsPage from "./RankingsPage";
 
 afterEach(() => {
@@ -14,15 +20,20 @@ function requestPath(input: RequestInfo | URL): string {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
+function insightResponse(path: string) {
+  if (path.startsWith("/api/v1/insights/affection-rankings?")) {
+    return affectionRankingsResponse();
+  }
+  return path.includes("/costs?") ? costsResponse() : rankingsResponse();
+}
+
 describe("RankingsPage", () => {
   it("renders rankings and the exact four-part JPY cost dashboard", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const path = requestPath(input);
-        return Promise.resolve(
-          response(path.includes("/costs?") ? costsResponse() : rankingsResponse()),
-        );
+        return Promise.resolve(response(insightResponse(path)));
       }),
     );
 
@@ -59,7 +70,10 @@ describe("RankingsPage", () => {
         name: "パワー系ウナギ: 12回（上位合計の38%、最多12回との比較）",
       }),
     ).toHaveAttribute("value", "12");
-    expect(screen.getByText("最終集計:")).toHaveTextContent("2026年8月22日 09:00");
+    expect(screen.getByText("2026年8月22日 09:00")).toHaveAttribute(
+      "datetime",
+      "2026-08-22T00:00:00Z",
+    );
     const costs = await screen.findByRole("region", { name: "概算費用" });
     expect(within(costs).getByText("¥124")).toBeVisible();
     expect(within(costs).getByText("¥1")).toBeVisible();
@@ -72,6 +86,15 @@ describe("RankingsPage", () => {
     expect(within(costs).getByText("一部集計中")).toBeVisible();
     expect(within(costs).getByText(/Route 53は含みません/)).toBeVisible();
     expect(within(costs).getByRole("radio", { name: "直近7日" })).toBeChecked();
+    const affection = screen.getByRole("region", { name: "親愛度ランキング" });
+    expect(within(affection).getByRole("heading", { name: "アロナ" })).toBeVisible();
+    expect(within(affection).getByRole("heading", { name: "プラナ" })).toBeVisible();
+    expect(within(affection).getByRole("heading", { name: "安倍晋三AI" })).toBeVisible();
+    expect(
+      within(affection).getByRole("meter", {
+        name: "安倍晋三AIからパワー系ウナギへの親愛度 1000点（1000点満点）",
+      }),
+    ).toHaveAttribute("value", "1000");
   });
 
   it("fetches costs independently when the Japanese period changes", async () => {
@@ -81,6 +104,9 @@ describe("RankingsPage", () => {
       vi.fn((input: RequestInfo | URL) => {
         const path = requestPath(input);
         requests.push(path);
+        if (path.startsWith("/api/v1/insights/affection-rankings?")) {
+          return Promise.resolve(response(affectionRankingsResponse()));
+        }
         const period = path.includes("period=today") ? "today" : "week";
         return Promise.resolve(
           response(path.includes("/costs?") ? costsResponse(period) : rankingsResponse()),
@@ -94,6 +120,143 @@ describe("RankingsPage", () => {
 
     await waitFor(() => expect(requests).toContain("/api/v1/insights/costs?period=today"));
     expect(requests.filter((request) => request === "/api/v1/insights/rankings")).toHaveLength(1);
+  });
+
+  it("appends every participant from the next affection page on explicit request", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        requests.push(path);
+        if (path.startsWith("/api/v1/insights/affection-rankings?")) {
+          const first = affectionRankingsResponse();
+          const cursor = new URL(path, "https://records.example").searchParams.get("cursor");
+          return Promise.resolve(
+            response(
+              cursor === "next-page"
+                ? {
+                    ...first,
+                    rankings: first.rankings.map((ranking) => ({
+                      ...ranking,
+                      entries: [
+                        {
+                          rank: 3,
+                          displayName: "追加の質問者",
+                          avatar: {
+                            kind: "placeholder",
+                            url: null,
+                            alt: "追加の質問者のアバター",
+                            fallbackVariant: "lavender",
+                          },
+                          score: 400,
+                        },
+                      ],
+                    })),
+                    nextCursor: null,
+                  }
+                : { ...first, nextCursor: "next-page" },
+            ),
+          );
+        }
+        return Promise.resolve(response(insightResponse(path)));
+      }),
+    );
+
+    renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
+
+    const affection = await screen.findByRole("region", { name: "親愛度ランキング" });
+    expect(await within(affection).findAllByRole("listitem")).toHaveLength(6);
+    fireEvent.click(
+      within(affection).getByRole("button", {
+        name: "親愛度ランキングの続きを読み込む",
+      }),
+    );
+
+    await waitFor(() => expect(within(affection).getAllByRole("listitem")).toHaveLength(9));
+    expect(within(affection).getAllByText("追加の質問者")).toHaveLength(3);
+    expect(
+      within(affection).queryByRole("button", {
+        name: "親愛度ランキングの続きを読み込む",
+      }),
+    ).not.toBeInTheDocument();
+    expect(requests).toContain("/api/v1/insights/affection-rankings?limit=50&cursor=next-page");
+  });
+
+  it("keeps loaded affection entries visible while retrying a failed next page", async () => {
+    let nextPageAttempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        if (path.startsWith("/api/v1/insights/affection-rankings?")) {
+          const first = affectionRankingsResponse();
+          const cursor = new URL(path, "https://records.example").searchParams.get("cursor");
+          if (cursor === null) {
+            return Promise.resolve(response({ ...first, nextCursor: "next-page" }));
+          }
+          nextPageAttempts += 1;
+          if (nextPageAttempts === 1) {
+            return Promise.resolve(
+              response(
+                {
+                  error: {
+                    code: "INTERNAL_ERROR",
+                    message: "続きを取得できませんでした。",
+                    requestId: "request-id",
+                  },
+                },
+                500,
+              ),
+            );
+          }
+          return Promise.resolve(
+            response({
+              ...first,
+              rankings: first.rankings.map((ranking) => ({
+                ...ranking,
+                entries: [
+                  {
+                    rank: 3,
+                    displayName: "再試行で追加",
+                    avatar: {
+                      kind: "placeholder",
+                      url: null,
+                      alt: "再試行で追加のアバター",
+                      fallbackVariant: "cyan",
+                    },
+                    score: 400,
+                  },
+                ],
+              })),
+              nextCursor: null,
+            }),
+          );
+        }
+        return Promise.resolve(response(insightResponse(path)));
+      }),
+    );
+
+    renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
+    const affection = await screen.findByRole("region", { name: "親愛度ランキング" });
+    fireEvent.click(
+      await within(affection).findByRole("button", {
+        name: "親愛度ランキングの続きを読み込む",
+      }),
+    );
+
+    expect(await within(affection).findByRole("alert")).toHaveTextContent(
+      "続きを取得できませんでした。",
+    );
+    expect(within(affection).getAllByRole("listitem")).toHaveLength(6);
+    fireEvent.click(
+      within(affection).getByRole("button", {
+        name: "親愛度ランキングの続きを読み込む",
+      }),
+    );
+
+    await waitFor(() => expect(within(affection).getAllByRole("listitem")).toHaveLength(9));
+    expect(within(affection).getAllByText("再試行で追加")).toHaveLength(3);
   });
 
   it("keeps rankings visible when converted costs are unavailable", async () => {
@@ -114,7 +277,13 @@ describe("RankingsPage", () => {
       "fetch",
       vi.fn((input: RequestInfo | URL) =>
         Promise.resolve(
-          response(requestPath(input).includes("/costs?") ? unavailableCosts : rankingsResponse()),
+          response(
+            requestPath(input).startsWith("/api/v1/insights/affection-rankings?")
+              ? affectionRankingsResponse()
+              : requestPath(input).includes("/costs?")
+                ? unavailableCosts
+                : rankingsResponse(),
+          ),
         ),
       ),
     );
@@ -134,7 +303,13 @@ describe("RankingsPage", () => {
       "fetch",
       vi.fn((input: RequestInfo | URL) =>
         Promise.resolve(
-          response(requestPath(input).includes("/costs?") ? costsResponse() : tiedRankings),
+          response(
+            requestPath(input).startsWith("/api/v1/insights/affection-rankings?")
+              ? affectionRankingsResponse()
+              : requestPath(input).includes("/costs?")
+                ? costsResponse()
+                : tiedRankings,
+          ),
         ),
       ),
     );
@@ -174,6 +349,37 @@ describe("RankingsPage", () => {
     renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
 
     expect(await screen.findAllByText("集計を準備しています")).toHaveLength(2);
-    expect(screen.getAllByRole("status")).toHaveLength(2);
+    expect(screen.getByText("親愛度ランキングを準備しています")).toBeVisible();
+    expect(screen.getAllByRole("status")).toHaveLength(3);
+  });
+
+  it("keeps existing insights visible when affection rankings fail independently", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        if (path.startsWith("/api/v1/insights/affection-rankings?")) {
+          return Promise.resolve(
+            response(
+              {
+                error: {
+                  code: "INTERNAL_ERROR",
+                  message: "親愛度を取得できませんでした。",
+                  requestId: "request-id",
+                },
+              },
+              500,
+            ),
+          );
+        }
+        return Promise.resolve(response(insightResponse(path)));
+      }),
+    );
+
+    renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
+
+    expect(await screen.findByText("親愛度ランキングを読み込めませんでした")).toBeVisible();
+    expect(screen.getByRole("region", { name: "勝利回数ランキング" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "概算費用" })).toBeVisible();
   });
 });

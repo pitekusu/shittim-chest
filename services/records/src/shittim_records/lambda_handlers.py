@@ -18,9 +18,11 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_ssm.client import SSMClient
 
+from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION
 from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
 
 from shittim_records.adapters import (
+    AffectionProjectionRepository,
     ArchiveRepository,
     ConfigurationRepository,
     SourceDebateRepository,
@@ -69,7 +71,7 @@ from shittim_records.inspector_translations import (
     InspectorTranslationService,
     InspectorTranslationUnavailable,
 )
-from shittim_records.projector import BackfillService, ProjectorService
+from shittim_records.projector import AffectionProjectorService, BackfillService, ProjectorService
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
@@ -80,6 +82,7 @@ LOGGER.setLevel(logging.INFO)
 HTTPX_LOGGER = logging.getLogger("httpx")
 
 _PROJECTOR: ProjectorService | None = None
+_AFFECTION_PROJECTOR: AffectionProjectorService | None = None
 _BACKFILL: BackfillService | None = None
 _RANKING: RankingService | None = None
 _COSTS: CostCollectionService | None = None
@@ -100,15 +103,19 @@ S3_SDK_CONFIG = SDK_CONFIG.merge(Config(s3={"addressing_style": "virtual"}))
 def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
     """Handle one DynamoDB Streams batch using partial batch failures."""
 
-    service = _projector_service()
     failures: list[dict[str, str]] = []
     created = 0
     skipped = 0
     for record in event.get("Records", []):
         sequence_number = _stream_sequence_number(record)
         try:
-            partition_key = _completed_meta_partition(record)
-            result = service.project_partition(partition_key, now=datetime.now(UTC))
+            target, partition_key = _projection_target(record)
+            if target == "debate":
+                result = _projector_service().project_partition(
+                    partition_key, now=datetime.now(UTC)
+                )
+            else:
+                result = _affection_projector_service().project_partition(partition_key)
             if result.created:
                 created += 1
             else:
@@ -164,6 +171,8 @@ def ranking_handler(_event: Mapping[str, Any], _context: object) -> dict[str, ob
         "win_entries": len(result.wins),
         "request_entries": len(result.requests),
     }
+    if hasattr(result, "affection_profile_count"):
+        response["affection_profiles"] = result.affection_profile_count
     _log(event="records_rankings_refreshed", **response)
     return response
 
@@ -274,6 +283,26 @@ def _projector_service() -> ProjectorService:
     return _PROJECTOR
 
 
+def _affection_projector_service() -> AffectionProjectorService:
+    global _AFFECTION_PROJECTOR
+    if _AFFECTION_PROJECTOR is None:
+        dynamodb = boto3.client("dynamodb")
+        ssm = boto3.client("ssm")
+        _AFFECTION_PROJECTOR = AffectionProjectorService(
+            source=SourceDebateRepository(dynamodb, _environment("SOURCE_TABLE_NAME")),
+            statistics=AffectionProjectionRepository(
+                dynamodb,
+                _environment("STATISTICS_TABLE_NAME"),
+            ),
+            configuration=ConfigurationRepository(
+                ssm,
+                identity_hmac_parameter_name=_environment("IDENTITY_HMAC_PARAMETER_NAME"),
+                presentation_parameter_name=_environment("PRESENTATION_PARAMETER_NAME"),
+            ),
+        )
+    return _AFFECTION_PROJECTOR
+
+
 def _backfill_service() -> BackfillService:
     global _BACKFILL
     if _BACKFILL is None:
@@ -298,6 +327,7 @@ def _ranking_service() -> RankingService:
             source=DynamoRankingSource(
                 dynamodb,
                 _environment("ARCHIVE_TABLE_NAME"),
+                _environment("STATISTICS_TABLE_NAME"),
             ),
             store=DynamoRankingSnapshotStore(
                 dynamodb,
@@ -580,6 +610,35 @@ def _completed_meta_partition(record: Mapping[str, Any]) -> str:
     if not partition_key.startswith("DEBATE#"):
         raise ValueError("stream record partition is not a debate")
     return partition_key
+
+
+def _projection_target(record: Mapping[str, Any]) -> tuple[str, str]:
+    dynamodb = record.get("dynamodb")
+    if not isinstance(dynamodb, Mapping):
+        raise ValueError("stream record has no DynamoDB payload")
+    image = dynamodb.get("NewImage")
+    if not isinstance(image, Mapping):
+        raise ValueError("stream record has no new image")
+    record_type = image.get("record_type")
+    raw_type = record_type.get("S") if isinstance(record_type, Mapping) else None
+    if raw_type == "debate_meta":
+        return "debate", _completed_meta_partition(record)
+    if raw_type != "affection_profile" or record.get("eventName") not in {"INSERT", "MODIFY"}:
+        raise ValueError("stream record is not projectable")
+    current_schema = image.get("schema_version")
+    sk = image.get("SK")
+    pk = image.get("PK")
+    if (
+        not isinstance(current_schema, Mapping)
+        or current_schema.get("N") != str(CURRENT_SCHEMA_VERSION)
+        or not isinstance(sk, Mapping)
+        or sk.get("S") != "PROFILE"
+        or not isinstance(pk, Mapping)
+        or not isinstance(pk.get("S"), str)
+        or not pk["S"].startswith("AFFECTION#REQUESTER#")
+    ):
+        raise ValueError("stream affection profile identity is invalid")
+    return "affection", pk["S"]
 
 
 def _required_text(record: Mapping[str, Any], field: str) -> str:

@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 
-from shittim_records.rankings import RankingDataInvalid, build_rankings
+from shittim_records.rankings import (
+    AffectionProfileSeed,
+    RankingDataInvalid,
+    RankingService,
+    build_rankings,
+)
 
 NOW = datetime(2026, 8, 22, 0, 0, tzinfo=UTC)
 PARTICIPANTS = {
@@ -53,6 +58,23 @@ def archive_meta(
             "requester_display_name": requester_name,
         },
     )
+
+
+def affection_profile(
+    requester_key: str,
+    display_name: str,
+    scores: tuple[int, int, int],
+) -> DynamoItem:
+    return {
+        "PK": "AFFECTION#PROFILE",
+        "SK": requester_key,
+        "schema_version": 1,
+        "record_type": "affection_profile",
+        "source_version": 1,
+        "display_name": display_name,
+        "scores": dict(zip(PARTICIPANTS, scores, strict=True)),
+        "updated_at": NOW.isoformat(),
+    }
 
 
 def test_build_rankings_uses_competition_ranks_and_latest_requester_name() -> None:
@@ -102,6 +124,87 @@ def test_build_rankings_bounds_requesters_to_ten_with_stable_order() -> None:
     assert all(entry.rank == 1 for entry in snapshot.requests)
 
 
+def test_affection_rankings_include_every_profile_with_competition_ranks() -> None:
+    archives = (
+        archive_meta(1, winner="participant-a", requester_key="alpha", requester_name="Alpha"),
+        archive_meta(2, winner="participant-b", requester_key="beta", requester_name="Beta"),
+    )
+    profiles = (
+        affection_profile("alpha", "Alpha", (700, 500, 100)),
+        affection_profile("beta", "Beta", (700, 600, 900)),
+        affection_profile("gamma", "Gamma", (500, 600, 900)),
+    )
+
+    snapshot = build_rankings(archives, affection_profiles=profiles, generated_at=NOW)
+
+    assert snapshot.affection_profile_count == 3
+    by_participant = {ranking.participant: ranking for ranking in snapshot.affection}
+    assert [
+        (entry.requester_key, entry.score, entry.rank)
+        for entry in by_participant["participant-a"].entries
+    ] == [("alpha", 700, 1), ("beta", 700, 1), ("gamma", 500, 3)]
+    assert [entry.requester_key for entry in by_participant["participant-b"].entries] == [
+        "beta",
+        "gamma",
+        "alpha",
+    ]
+    assert len(by_participant["participant-c"].entries) == 3
+
+
+def test_refresh_seeds_archived_requesters_at_500_without_replacing_real_profiles() -> None:
+    archives = (
+        archive_meta(1, winner="participant-a", requester_key="alpha", requester_name="Alpha"),
+        archive_meta(2, winner="participant-b", requester_key="beta", requester_name="Beta"),
+    )
+
+    class Source:
+        def __init__(self) -> None:
+            self.profiles = [affection_profile("alpha", "Alpha", (700, 600, 500))]
+            self.seeded: list[str] = []
+
+        def list_completed_meta(self) -> tuple[DynamoItem, ...]:
+            return archives
+
+        def list_affection_profiles(self) -> tuple[DynamoItem, ...]:
+            return tuple(self.profiles)
+
+        def seed_default_affection_profiles(
+            self,
+            seeds: tuple[AffectionProfileSeed, ...],
+            *,
+            updated_at: datetime,
+        ) -> None:
+            for seed in seeds:
+                key = seed.requester_key
+                name = seed.display_name
+                self.seeded.append(key)
+                self.profiles.append(
+                    affection_profile(key, name, (500, 500, 500))
+                    | {"source_version": 0, "updated_at": updated_at.isoformat()}
+                )
+
+    class Store:
+        def __init__(self) -> None:
+            self.snapshot: object = None
+
+        def save_rankings(self, snapshot: object) -> None:
+            self.snapshot = snapshot
+
+    source = Source()
+    store = Store()
+
+    snapshot = RankingService(source=cast(Any, source), store=cast(Any, store)).refresh(now=NOW)
+
+    assert source.seeded == ["beta"]
+    participant_a = next(
+        ranking for ranking in snapshot.affection if ranking.participant == "participant-a"
+    )
+    assert [(entry.requester_key, entry.score) for entry in participant_a.entries] == [
+        ("alpha", 700),
+        ("beta", 500),
+    ]
+
+
 def test_build_rankings_returns_an_explicit_empty_snapshot() -> None:
     snapshot = build_rankings((), generated_at=NOW)
 
@@ -121,7 +224,7 @@ def test_build_rankings_rejects_duplicate_or_malformed_archive_metadata() -> Non
         build_rankings((first, dict(first)), generated_at=NOW)
 
     malformed = dict(first)
-    malformed["schema_version"] = 2
+    malformed["schema_version"] = 3
     with pytest.raises(RankingDataInvalid, match="identity"):
         build_rankings((malformed,), generated_at=NOW)
 
@@ -153,6 +256,25 @@ def test_build_rankings_accepts_historical_null_avatar_compatibility_member() ->
     participants = cast(dict[str, dict[str, object]], item["participants"])
     for profile in participants.values():
         profile["avatar_asset_key"] = None
+
+    snapshot = build_rankings((item,), generated_at=NOW)
+
+    assert snapshot.archive_count == 1
+
+
+def test_build_rankings_accepts_archive_v2_metadata() -> None:
+    item = archive_meta(
+        1,
+        winner="participant-a",
+        requester_key="requester-a",
+        requester_name="Requester",
+    )
+    item["schema_version"] = 2
+    item["affection"] = {
+        "status": "applied",
+        "rubric_version": "affection-rubric-v1",
+        "participants": [],
+    }
 
     snapshot = build_rankings((item,), generated_at=NOW)
 

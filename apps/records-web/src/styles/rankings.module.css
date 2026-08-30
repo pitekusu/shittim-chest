@@ -470,6 +470,234 @@
   box-shadow: 0 0 10px rgb(75 194 220 / 20%);
 }
 
+.affectionPanel {
+  position: relative;
+  min-width: 0;
+  padding: clamp(22px, 3vw, 34px);
+  overflow: hidden;
+  border: 1px solid var(--records-panel-border);
+  border-radius: var(--records-radius-card);
+  background:
+    linear-gradient(135deg, rgb(88 217 232 / 6%), transparent 42%),
+    var(--records-ranking-panel-background);
+  box-shadow: var(--records-shadow-soft);
+  backdrop-filter: blur(18px);
+  grid-column: 1 / -1;
+}
+
+.affectionPanel::after {
+  position: absolute;
+  top: -68px;
+  right: 8%;
+  width: 150px;
+  height: 150px;
+  border: 1px solid rgb(170 165 231 / 16%);
+  content: "";
+  pointer-events: none;
+  transform: rotate(45deg);
+}
+
+.affectionHeader {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--records-line);
+}
+
+.affectionHeader h2 {
+  margin: 5px 0 0;
+  font-size: clamp(1.25rem, 1.7vw, 1.55rem);
+}
+
+.affectionGeneratedAt {
+  flex: none;
+  margin: 0;
+  color: var(--records-ink-600);
+  font-size: 0.72rem;
+}
+
+.affectionStatus {
+  display: grid;
+  min-height: 220px;
+  margin: 0;
+  place-content: center;
+  place-items: center;
+  gap: 10px;
+  color: var(--records-ink-600);
+  text-align: center;
+}
+
+.affectionStatus strong {
+  color: var(--records-ink-900);
+}
+
+.affectionStatus > button {
+  margin-top: 8px;
+}
+
+.affectionRankingsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding-top: 22px;
+}
+
+.affectionLoadMore {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding-top: 18px;
+  color: var(--records-ink-600);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.affectionLoadMore > button {
+  min-width: min(100%, 230px);
+}
+
+.affectionRankingCard {
+  --affection-start: #58d9e8;
+  --affection-end: #2498b5;
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid var(--records-panel-border-soft);
+  border-radius: 20px;
+  background: var(--records-control-background-soft);
+}
+
+.affectionPink {
+  --affection-start: #f0a4c7;
+  --affection-end: #d96d9e;
+}
+
+.affectionLavender {
+  --affection-start: #aaa5e7;
+  --affection-end: #7771bf;
+}
+
+.affectionRankingCard > header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--records-line);
+}
+
+.affectionRankingCard h3 {
+  margin: 1px 0 0;
+  font-size: 1rem;
+}
+
+.affectionRankingCard header span:not(.affectionDiamond) {
+  color: var(--records-ink-600);
+  font-size: 0.66rem;
+}
+
+.affectionDiamond {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--affection-end);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--affection-start) 12%, transparent);
+  transform: rotate(45deg);
+}
+
+.affectionRankingList {
+  display: grid;
+  gap: 7px;
+  margin: 13px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.affectionRankingList li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 30px 36px minmax(0, 1fr) auto;
+  grid-template-rows: auto 7px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px 9px;
+  border-radius: 13px;
+  background: var(--records-ranking-label-surface);
+}
+
+.affectionRank {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--affection-end) 34%, transparent);
+  border-radius: 9px;
+  color: var(--affection-end);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.affectionRankingList li > :nth-child(2) {
+  width: 36px;
+  height: 36px;
+}
+
+.affectionName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.affectionScore {
+  color: var(--records-ink-900);
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.affectionRankingMeter {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  height: 7px;
+  grid-column: 3 / -1;
+  appearance: none;
+  border: 1px solid var(--records-panel-border-soft);
+  border-radius: 999px;
+  background: var(--records-meter-track);
+}
+
+.affectionRankingMeter::-webkit-meter-bar {
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.affectionRankingMeter::-webkit-meter-optimum-value,
+.affectionRankingMeter::-moz-meter-bar {
+  border: 0;
+  border-radius: inherit;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 calc(20% - 1px),
+      var(--records-meter-divider) calc(20% - 1px) 20%
+    ),
+    linear-gradient(90deg, var(--affection-start), var(--affection-end));
+}
+
+.affectionEmpty {
+  min-height: 110px;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  color: var(--records-ink-600);
+  font-size: 0.78rem;
+}
+
 .costPanel {
   position: relative;
   min-width: 0;
@@ -755,9 +983,20 @@
     grid-template-columns: 1fr;
   }
 
+  .affectionRankingsGrid {
+    grid-template-columns: 1fr;
+  }
+
   .costStack,
   .costList {
     grid-column: 1;
+  }
+}
+
+@media (max-width: 599px) {
+  .affectionHeader {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

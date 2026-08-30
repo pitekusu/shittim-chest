@@ -85,6 +85,7 @@ def terminal_snapshot() -> DebateSnapshot:
     state = DebateState.accepted(debate_id, attempt_id, at=NOW)
     for index, phase in enumerate(
         (
+            DebatePhase.SCORING_AFFECTION,
             DebatePhase.PREPARING_EVIDENCE,
             DebatePhase.COLLECTING_INITIAL_OPINIONS,
             DebatePhase.DISCUSSING,
@@ -147,6 +148,7 @@ def initial_opinion_snapshot() -> DebateSnapshot:
     debate_id = DebateId.new()
     attempt_id = AttemptId.new()
     state = DebateState.accepted(debate_id, attempt_id, at=NOW)
+    state = state.transition_to(DebatePhase.SCORING_AFFECTION, at=NOW + timedelta(seconds=1))
     state = state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=NOW + timedelta(seconds=1))
     state = state.transition_to(
         DebatePhase.COLLECTING_INITIAL_OPINIONS,

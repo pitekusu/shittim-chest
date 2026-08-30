@@ -44,6 +44,9 @@ from shittim_chest.adapters.openai.observability import (
     OpenAIUsageRecorder,
 )
 from shittim_chest.adapters.openai.prompts import (
+    affection_response_instructions,
+    affection_scoring_input,
+    affection_scoring_instructions,
     decision_input,
     final_proposal_input,
     final_proposal_instructions,
@@ -54,6 +57,7 @@ from shittim_chest.adapters.openai.prompts import (
     winner_decision_instructions,
 )
 from shittim_chest.adapters.openai.schemas import (
+    AffectionScoreOutputV1,
     DecisionOutputV1,
     FinalProposalOutputV1,
     OpinionOutputV1,
@@ -61,6 +65,7 @@ from shittim_chest.adapters.openai.schemas import (
 )
 from shittim_chest.application.generation_policy import ReasoningMode
 from shittim_chest.domain import (
+    DEFAULT_AFFECTION_SCORE,
     EvidenceBundle,
     FinalDecision,
     FinalProposal,
@@ -102,20 +107,43 @@ class OpenAIResponsesService:
     recorder: OpenAIUsageRecorder = field(default_factory=NullOpenAIUsageRecorder)
     system_prompt: str | None = field(default=None, repr=False)
 
+    async def score_affection(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+    ) -> int:
+        """Score one untrusted question independently in one participant persona."""
+
+        output = await self._parse(
+            operation="affection_score",
+            schema=AffectionScoreOutputV1,
+            instructions=affection_scoring_instructions(
+                self.profiles.for_participant(participant).system_prompt,
+            ),
+            input_text=affection_scoring_input(question),
+            settings=self.config.affection,
+        )
+        return output.score
+
     async def generate_initial_opinion(
         self,
         *,
         participant: ParticipantSlot,
         question: str,
         evidence: EvidenceBundle,
+        affection_score: int = DEFAULT_AFFECTION_SCORE,
     ) -> InitialOpinion:
         output = await self._parse(
             operation="initial_opinion",
             schema=OpinionOutputV1,
-            instructions=participant_instructions(
-                self.profiles,
-                participant,
-                system_prompt=self.system_prompt,
+            instructions=(
+                participant_instructions(
+                    self.profiles,
+                    participant,
+                    system_prompt=self.system_prompt,
+                )
+                + affection_response_instructions(affection_score)
             ),
             input_text=initial_opinion_input(question, evidence),
             settings=self.config.initial_opinion,
@@ -129,14 +157,18 @@ class OpenAIResponsesService:
         question: str,
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
+        affection_score: int = DEFAULT_AFFECTION_SCORE,
     ) -> FinalProposal:
         output = await self._parse(
             operation="final_proposal",
             schema=FinalProposalOutputV1,
-            instructions=final_proposal_instructions(
-                self.profiles,
-                participant,
-                system_prompt=self.system_prompt,
+            instructions=(
+                final_proposal_instructions(
+                    self.profiles,
+                    participant,
+                    system_prompt=self.system_prompt,
+                )
+                + affection_response_instructions(affection_score)
             ),
             input_text=final_proposal_input(question, evidence, initial_opinions),
             settings=self.config.final_proposal,
@@ -177,14 +209,18 @@ class OpenAIResponsesService:
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
+        affection_score: int = DEFAULT_AFFECTION_SCORE,
     ) -> FinalDecision:
         output = await self._parse(
             operation="decision",
             schema=DecisionOutputV1,
-            instructions=winner_decision_instructions(
-                self.profiles,
-                voting_result.winner,
-                system_prompt=self.system_prompt,
+            instructions=(
+                winner_decision_instructions(
+                    self.profiles,
+                    voting_result.winner,
+                    system_prompt=self.system_prompt,
+                )
+                + affection_response_instructions(affection_score)
             ),
             input_text=decision_input(question, evidence, proposals, voting_result),
             settings=self.config.decision,

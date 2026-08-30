@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from shittim_records.contracts import (
+    AffectionRankingsResponse,
     AvatarRef,
     CostsResponse,
     ErrorResponse,
@@ -20,6 +22,29 @@ from shittim_records.contracts import (
     SessionResponse,
     VoteView,
 )
+
+
+def test_affection_rankings_require_nullable_next_cursor_property() -> None:
+    payload: dict[str, object] = {
+        "schemaVersion": 1,
+        "generatedAt": datetime(2026, 8, 30, tzinfo=UTC),
+        "defaultScore": 500,
+        "maxScore": 1000,
+        "rankings": tuple(
+            {"participant": slot, "displayName": name, "entries": ()}
+            for slot, name in (
+                ("participant-a", "アロナ"),
+                ("participant-b", "プラナ"),
+                ("participant-c", "安倍晋三AI"),
+            )
+        ),
+        "nextCursor": None,
+    }
+
+    assert AffectionRankingsResponse.model_validate(payload).next_cursor is None
+    payload.pop("nextCursor")
+    with pytest.raises(ValidationError):
+        AffectionRankingsResponse.model_validate(payload)
 
 
 def _record_detail_payload() -> dict[str, object]:
@@ -40,7 +65,7 @@ def _record_detail_payload() -> dict[str, object]:
         )
     )
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "recordId": "r" * 43,
         "completedAt": datetime(2026, 8, 15, tzinfo=UTC),
         "question": "休日の過ごし方を決める",
@@ -82,6 +107,7 @@ def _record_detail_payload() -> dict[str, object]:
             "actions": ("実行する",),
             "caveats": ("注意する",),
         },
+        "affection": None,
     }
 
 
@@ -369,6 +395,50 @@ def test_record_detail_requires_every_participant_slot_once(
 def test_record_detail_requires_one_canonical_winner() -> None:
     payload = _record_detail_payload()
     assert RecordDetailResponse.model_validate(payload).result.winner == "participant-a"
+
+
+def test_record_detail_affection_requires_all_three_consistent_changes() -> None:
+    payload = _record_detail_payload()
+    payload["affection"] = {
+        "status": "applied",
+        "rubricVersion": "affection-rubric-v1",
+        "participants": (
+            {
+                "participant": "participant-a",
+                "before": 500,
+                "questionScore": 35,
+                "appliedDelta": 35,
+                "after": 535,
+            },
+            {
+                "participant": "participant-b",
+                "before": 10,
+                "questionScore": -43,
+                "appliedDelta": -10,
+                "after": 0,
+            },
+            {
+                "participant": "participant-c",
+                "before": 987,
+                "questionScore": 50,
+                "appliedDelta": 13,
+                "after": 1000,
+            },
+        ),
+    }
+
+    result = RecordDetailResponse.model_validate(payload)
+
+    assert result.affection is not None
+    assert result.affection.participants[2].applied_delta == 13
+    invalid = dict(payload)
+    invalid_affection = dict(cast(dict[str, object], payload["affection"]))
+    invalid_entries = list(cast(tuple[dict[str, object], ...], invalid_affection["participants"]))
+    invalid_entries[0] = {**invalid_entries[0], "after": 534}
+    invalid_affection["participants"] = tuple(invalid_entries)
+    invalid["affection"] = invalid_affection
+    with pytest.raises(ValidationError, match="applied_delta"):
+        RecordDetailResponse.model_validate(invalid)
     final_decision = payload["finalDecision"]
     assert isinstance(final_decision, dict)
     final_decision["winner"] = "participant-b"

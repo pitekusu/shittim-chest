@@ -140,6 +140,63 @@ class DynamoRecordsReader:
             if raw.get("Item") is not None
         )
 
+    def load_affection_ranking_pointer(self) -> DynamoItem | None:
+        response = self._client.get_item(
+            TableName=self._statistics_table,
+            Key=marshal_item({"PK": "RANKING#AFFECTION", "SK": "CURRENT"}),
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        return None if raw is None else unmarshal_item(raw)
+
+    def load_affection_ranking_generation(self, *, generation_id: str) -> DynamoItem | None:
+        response = self._client.get_item(
+            TableName=self._statistics_table,
+            Key=marshal_item(
+                {
+                    "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+                    "SK": "META",
+                }
+            ),
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        return None if raw is None else unmarshal_item(raw)
+
+    def load_affection_ranking_pages(
+        self,
+        *,
+        generation_id: str,
+        page_indices: tuple[int, ...],
+    ) -> tuple[DynamoItem, ...]:
+        if not page_indices:
+            return ()
+        request_items: dict[str, Any] = {
+            self._statistics_table: {
+                "Keys": [
+                    marshal_item(
+                        {
+                            "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+                            "SK": f"PAGE#{index:06d}",
+                        }
+                    )
+                    for index in page_indices
+                ],
+                "ConsistentRead": True,
+            }
+        }
+        items: list[dict[str, AttributeValueTypeDef]] = []
+        for _attempt in range(MAX_BATCH_GET_ATTEMPTS):
+            response = self._client.batch_get_item(RequestItems=request_items)
+            items.extend(response.get("Responses", {}).get(self._statistics_table, []))
+            unprocessed = response.get("UnprocessedKeys", {})
+            if not unprocessed:
+                break
+            request_items = cast(dict[str, Any], unprocessed)
+        else:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        return tuple(unmarshal_item(raw) for raw in items)
+
     def load_cost_ledger(
         self,
     ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]:
@@ -166,26 +223,28 @@ class DynamoRecordsReader:
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]:
         if not requester_keys:
             return {}
-        if len(requester_keys) > 50 or len(set(requester_keys)) != len(requester_keys):
+        if len(set(requester_keys)) != len(requester_keys):
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
-        request_items: dict[str, Any] = {
-            self._session_table: {
-                "Keys": [
-                    marshal_item({"PK": "PROFILE#REQUESTER", "SK": key}) for key in requester_keys
-                ],
-                "ConsistentRead": True,
-            }
-        }
         items: list[dict[str, AttributeValueTypeDef]] = []
-        for _attempt in range(MAX_BATCH_GET_ATTEMPTS):
-            response = self._client.batch_get_item(RequestItems=request_items)
-            items.extend(response.get("Responses", {}).get(self._session_table, []))
-            unprocessed = response.get("UnprocessedKeys", {})
-            if not unprocessed:
-                break
-            request_items = cast(dict[str, Any], unprocessed)
-        else:
-            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        for offset in range(0, len(requester_keys), 100):
+            request_items: dict[str, Any] = {
+                self._session_table: {
+                    "Keys": [
+                        marshal_item({"PK": "PROFILE#REQUESTER", "SK": key})
+                        for key in requester_keys[offset : offset + 100]
+                    ],
+                    "ConsistentRead": True,
+                }
+            }
+            for _attempt in range(MAX_BATCH_GET_ATTEMPTS):
+                response = self._client.batch_get_item(RequestItems=request_items)
+                items.extend(response.get("Responses", {}).get(self._session_table, []))
+                unprocessed = response.get("UnprocessedKeys", {})
+                if not unprocessed:
+                    break
+                request_items = cast(dict[str, Any], unprocessed)
+            else:
+                raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         profiles: dict[str, RequesterProfile] = {}
         for raw in items:
             item = unmarshal_item(raw)

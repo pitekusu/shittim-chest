@@ -15,6 +15,7 @@ from uuid import RFC_4122, UUID
 from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason
 from shittim_chest.domain import (
     PARTICIPANTS,
+    AffectionAssessmentStatus,
     AttemptId,
     DebateId,
     DebatePhase,
@@ -524,6 +525,22 @@ def prepare_terminal_outbox_operations(
     if snapshot.thread_id is None:
         raise ValueError("terminal delivery requires a bound Discord thread")
     content = _terminal_content(snapshot, target_phase=target_phase, error_code=error_code)
+    if target_phase is not DebatePhase.COMPLETED and snapshot.affection_assessment is not None:
+        if participant_display_names is None:
+            raise ValueError("settled affection delivery requires participant display names")
+        display_names = dict(participant_display_names)
+        if set(display_names) != set(PARTICIPANTS):
+            raise ValueError(
+                "settled affection delivery requires each participant display name exactly once"
+            )
+        affection_sections = _affection_result_sections(
+            snapshot,
+            participant_display_names={
+                participant: sanitize_discord_model_text(display_names[participant])
+                for participant in PARTICIPANTS
+            },
+        )
+        content = "\n".join((content, "", *affection_sections))
     chunks = split_discord_message(content)
     if target_phase is DebatePhase.COMPLETED:
         decision = snapshot.final_decision
@@ -912,7 +929,33 @@ def _completed_result_content(
     ]
     if len(leaders) > 1:
         sections.append("同票のため、規定の評価基準で勝者を決定しました。")
+    sections.extend(_affection_result_sections(snapshot, participant_display_names=display_names))
     return "\n".join(sections)
+
+
+def _affection_result_sections(
+    snapshot: DebateSnapshot,
+    *,
+    participant_display_names: Mapping[ParticipantSlot, str],
+) -> tuple[str, ...]:
+    """Render the durable effective change without exposing scoring rationale."""
+
+    assessment = snapshot.affection_assessment
+    if assessment is None:
+        return ()
+    if assessment.status is AffectionAssessmentStatus.UNAVAILABLE:
+        return (
+            "**親愛度の変化**",
+            "質問の評価を完了できなかったため、親愛度は変更していません。",
+        )
+    return (
+        "**親愛度の変化**",
+        *(
+            f"- {participant_display_names[item.participant]}: "
+            f"{item.after}点\uff08{item.applied_delta:+d}\uff09"
+            for item in assessment.participants
+        ),
+    )
 
 
 def _derived_uuid7(

@@ -437,7 +437,7 @@ async def test_bind_discord_context_rejects_started_debate(
     repository.current[accepted.debate_id] = replace(
         current,
         state=current.state.transition_to(
-            DebatePhase.PREPARING_EVIDENCE,
+            DebatePhase.SCORING_AFFECTION,
             at=dependencies[0].now(),
         ),
     )
@@ -491,6 +491,7 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert len(openai.evidence_calls) == 10
     assert all(bundle is evidence.bundle for bundle in openai.evidence_calls)
     assert set(openai.initial_calls) == set(ParticipantSlot)
+    assert set(openai.affection_calls) == set(ParticipantSlot)
     assert set(openai.proposal_calls) == set(ParticipantSlot)
     assert len(openai.vote_calls) == 3
     assert (
@@ -519,6 +520,7 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert [item.state.phase for item in repository.history[accepted.debate_id]] == [
         DebatePhase.ACCEPTED,
         DebatePhase.ACCEPTED,
+        DebatePhase.SCORING_AFFECTION,
         DebatePhase.PREPARING_EVIDENCE,
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
@@ -547,6 +549,88 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
         DebatePhase.GENERATING_DECISION,
         DebatePhase.COMPLETED,
     ]
+
+
+@pytest.mark.asyncio
+async def test_affection_scores_are_all_applied_before_persona_responses(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.affection_scores = {
+        ParticipantSlot.PARTICIPANT_A: 35,
+        ParticipantSlot.PARTICIPANT_B: -43,
+        ParticipantSlot.PARTICIPANT_C: 100,
+    }
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = repository.current[accepted.debate_id]
+    assert completed.affection_assessment is not None
+    assert tuple(item.after for item in completed.affection_assessment.participants) == (
+        535,
+        457,
+        600,
+    )
+    assert repository.affection_profiles[completed.requester_id].scores == (535, 457, 600)
+    assert openai.response_affection_scores.count((ParticipantSlot.PARTICIPANT_A, 535)) == 2
+    assert openai.response_affection_scores.count((ParticipantSlot.PARTICIPANT_B, 457)) == 3
+    assert openai.response_affection_scores.count((ParticipantSlot.PARTICIPANT_C, 600)) == 2
+
+
+@pytest.mark.asyncio
+async def test_one_affection_provider_failure_discards_all_scores_and_continues(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    app = make_application(dependencies)
+    openai = dependencies[5]
+    repository = dependencies[6]
+    openai.affection_scores = {
+        ParticipantSlot.PARTICIPANT_A: 100,
+        ParticipantSlot.PARTICIPANT_B: 100,
+        ParticipantSlot.PARTICIPANT_C: 100,
+    }
+    openai.affection_errors[ParticipantSlot.PARTICIPANT_B] = GenerationProviderError(
+        "openai_unavailable",
+        "content-free provider failure",
+        retryable=True,
+    )
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = repository.current[accepted.debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert completed.affection_assessment is not None
+    assert completed.affection_assessment.status.value == "unavailable"
+    assert completed.requester_id not in repository.affection_profiles
+    assert tuple(item.after for item in completed.affection_assessment.participants) == (
+        500,
+        500,
+        500,
+    )
+    assert set(openai.affection_calls) == set(PARTICIPANTS)
+    assert {score for _, score in openai.response_affection_scores} == {500}
 
 
 @pytest.mark.asyncio
@@ -771,6 +855,7 @@ async def test_final_proposal_recovery_uses_one_successor_call_per_participant(
     accepted_at = clock.now()
     state = (
         DebateState.accepted(debate_id, attempt_id, at=accepted_at)
+        .transition_to(DebatePhase.SCORING_AFFECTION, at=clock.now())
         .transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
         .transition_to(DebatePhase.COLLECTING_INITIAL_OPINIONS, at=clock.now())
         .transition_to(DebatePhase.DISCUSSING, at=clock.now())
@@ -993,6 +1078,7 @@ async def test_vote_recovery_uses_one_successor_call_per_participant(
     accepted_at = clock.now()
     state = (
         DebateState.accepted(debate_id, attempt_id, at=accepted_at)
+        .transition_to(DebatePhase.SCORING_AFFECTION, at=clock.now())
         .transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
         .transition_to(DebatePhase.COLLECTING_INITIAL_OPINIONS, at=clock.now())
         .transition_to(DebatePhase.DISCUSSING, at=clock.now())
@@ -1101,6 +1187,7 @@ async def test_vote_generation_exhaustion_stops_before_a_third_logical_call(
     accepted_at = clock.now()
     state = (
         DebateState.accepted(debate_id, attempt_id, at=accepted_at)
+        .transition_to(DebatePhase.SCORING_AFFECTION, at=clock.now())
         .transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
         .transition_to(DebatePhase.COLLECTING_INITIAL_OPINIONS, at=clock.now())
         .transition_to(DebatePhase.DISCUSSING, at=clock.now())
@@ -1188,6 +1275,7 @@ async def test_complete_legacy_ballot_is_delivered_without_regeneration(
     accepted_at = clock.now()
     state = (
         DebateState.accepted(debate_id, attempt_id, at=accepted_at)
+        .transition_to(DebatePhase.SCORING_AFFECTION, at=clock.now())
         .transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
         .transition_to(DebatePhase.COLLECTING_INITIAL_OPINIONS, at=clock.now())
         .transition_to(DebatePhase.DISCUSSING, at=clock.now())
@@ -1312,6 +1400,7 @@ async def test_initial_opinion_generation_recovery_uses_one_successor_call_per_p
     attempt_id = ids.new_attempt_id()
     accepted_at = clock.now()
     state = DebateState.accepted(debate_id, attempt_id, at=accepted_at)
+    state = state.transition_to(DebatePhase.SCORING_AFFECTION, at=clock.now())
     state = state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
     state = state.transition_to(DebatePhase.COLLECTING_INITIAL_OPINIONS, at=clock.now())
     old_lease = LeaseGrant(
@@ -1380,6 +1469,7 @@ async def test_initial_opinion_generation_stops_before_a_third_logical_call(
     attempt_id = ids.new_attempt_id()
     accepted_at = clock.now()
     state = DebateState.accepted(debate_id, attempt_id, at=accepted_at)
+    state = state.transition_to(DebatePhase.SCORING_AFFECTION, at=clock.now())
     state = state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
     state = state.transition_to(DebatePhase.COLLECTING_INITIAL_OPINIONS, at=clock.now())
     first_lease = LeaseGrant(
@@ -2096,8 +2186,7 @@ async def test_external_cancellation_checkpoints_and_propagates_cancelled_error(
     app = make_application(dependencies)
     accepted = await accept_bound_debate(app)
     running = asyncio.create_task(app.run_debate(accepted.debate_id))
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await dependencies[4].called.wait()
 
     running.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -2894,9 +2983,10 @@ async def test_recovery_reuses_every_completed_phase_artifact(
     clock, ids, _, _, evidence_service, openai, repository, orderer = dependencies
     debate_id = ids.new_debate_id()
     attempt_id = ids.new_attempt_id()
-    state = DebateState.accepted(debate_id, attempt_id, at=clock.now()).transition_to(
-        DebatePhase.PREPARING_EVIDENCE,
-        at=clock.now(),
+    state = (
+        DebateState.accepted(debate_id, attempt_id, at=clock.now())
+        .transition_to(DebatePhase.SCORING_AFFECTION, at=clock.now())
+        .transition_to(DebatePhase.PREPARING_EVIDENCE, at=clock.now())
     )
     evidence = EvidenceBundle()
     opinions = tuple(InitialOpinion(slot, "summary", "proposal") for slot in PARTICIPANTS)

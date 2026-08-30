@@ -15,12 +15,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION as SOURCE_SCHEMA_VERSION,
 )
-from shittim_chest.adapters.dynamodb.serializer import DynamoItem, DynamoValue
+from shittim_chest.adapters.dynamodb.serializer import (
+    PREVIOUS_SCHEMA_VERSION,
+    DynamoItem,
+    DynamoValue,
+)
 from shittim_chest.application import DebateSnapshot
 from shittim_chest.domain import PARTICIPANTS, DebatePhase, ParticipantSlot, select_winner
 
-ARCHIVE_SCHEMA_VERSION = 1
-PROJECTION_VERSION = 1
+ARCHIVE_SCHEMA_VERSION = 2
 
 
 class ProjectionRejected(ValueError):
@@ -65,6 +68,7 @@ class ArchiveProjection:
     record_id: str
     source_fingerprint: str
     items: tuple[DynamoItem, ...]
+    schema_version: int = 1
 
 
 def project_completed_debate(
@@ -118,6 +122,14 @@ def project_completed_debate(
     vote_counts = Counter(vote.candidate for vote in snapshot.votes)
     highest_votes = max(vote_counts.values())
     tie_break_applied = sum(count == highest_votes for count in vote_counts.values()) > 1
+    archive_schema_version = (
+        ARCHIVE_SCHEMA_VERSION if snapshot.affection_assessment is not None else 1
+    )
+    source_schema_version = (
+        SOURCE_SCHEMA_VERSION
+        if archive_schema_version == ARCHIVE_SCHEMA_VERSION
+        else PREVIOUS_SCHEMA_VERSION
+    )
 
     participant_snapshot: dict[str, DynamoValue] = {
         slot.value: cast(
@@ -143,8 +155,28 @@ def project_completed_debate(
         )
         for slot in PARTICIPANTS
     }
+    affection: dict[str, DynamoValue] | None = None
+    if snapshot.affection_assessment is not None:
+        assessment = snapshot.affection_assessment
+        affection = {
+            "status": assessment.status.value,
+            "rubric_version": assessment.rules_version,
+            "participants": cast(
+                list[DynamoValue],
+                [
+                    {
+                        "participant": entry.participant.value,
+                        "before": entry.before,
+                        "question_score": entry.question_score,
+                        "applied_delta": entry.applied_delta,
+                        "after": entry.after,
+                    }
+                    for entry in assessment.participants
+                ],
+            ),
+        }
     canonical_source = {
-        "source_schema_version": snapshot.state.schema_version,
+        "source_schema_version": source_schema_version,
         "debate_id": debate_id,
         "attempt_id": attempt_id,
         "completed_at": completed_at,
@@ -188,11 +220,13 @@ def project_completed_debate(
             "caveats": list(snapshot.final_decision.caveats),
         },
     }
+    if affection is not None:
+        canonical_source["affection"] = affection
     fingerprint = hashlib.sha256(_canonical_json(canonical_source)).hexdigest()
     pk = f"RECORD#{record_id}"
     common: DynamoItem = {
         "PK": pk,
-        "schema_version": ARCHIVE_SCHEMA_VERSION,
+        "schema_version": archive_schema_version,
         "record_id": record_id,
     }
     meta_item: DynamoItem = {
@@ -215,6 +249,8 @@ def project_completed_debate(
         "gsi3pk": f"REQUESTER#{requester_key}",
         "gsi3sk": f"{completed_at}#{record_id}",
     }
+    if affection is not None:
+        meta_item["affection"] = affection
     items: list[DynamoItem] = [meta_item]
     items.extend(
         {
@@ -264,9 +300,9 @@ def project_completed_debate(
     }
     marker_item: DynamoItem = {
         **common,
-        "SK": f"PROJECTION#V{PROJECTION_VERSION}",
+        "SK": f"PROJECTION#V{archive_schema_version}",
         "record_type": "projection_marker",
-        "source_schema_version": snapshot.state.schema_version,
+        "source_schema_version": source_schema_version,
         "source_fingerprint": fingerprint,
         "presentation_version": presentation.presentation_version,
         "projected_at": projected_at_text,
@@ -275,7 +311,10 @@ def project_completed_debate(
     if len(items) != 12:
         raise AssertionError("archive projection must contain exactly twelve items")
     return ArchiveProjection(
-        record_id=record_id, source_fingerprint=fingerprint, items=tuple(items)
+        record_id=record_id,
+        source_fingerprint=fingerprint,
+        items=tuple(items),
+        schema_version=archive_schema_version,
     )
 
 

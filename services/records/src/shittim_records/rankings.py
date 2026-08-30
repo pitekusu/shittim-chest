@@ -40,15 +40,47 @@ class RequesterRanking:
 
 
 @dataclass(frozen=True, slots=True)
+class AffectionRankingEntry:
+    requester_key: str
+    display_name: str
+    score: int
+    rank: int
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantAffectionRanking:
+    participant: ParticipantSlot
+    display_name: str
+    entries: tuple[AffectionRankingEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AffectionProfileSeed:
+    requester_key: str
+    display_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class RankingSnapshot:
     generated_at: datetime
     wins: tuple[ParticipantRanking, ...]
     requests: tuple[RequesterRanking, ...]
     archive_count: int
+    affection: tuple[ParticipantAffectionRanking, ...] = ()
+    affection_profile_count: int = 0
 
 
 class RankingSource(Protocol):
     def list_completed_meta(self) -> tuple[DynamoItem, ...]: ...
+
+    def list_affection_profiles(self) -> tuple[DynamoItem, ...]: ...
+
+    def seed_default_affection_profiles(
+        self,
+        seeds: tuple[AffectionProfileSeed, ...],
+        *,
+        updated_at: datetime,
+    ) -> None: ...
 
 
 class RankingSnapshotStore(Protocol):
@@ -66,7 +98,16 @@ class RankingService:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("ranking timestamp must be timezone-aware")
         items = self._source.list_completed_meta()
-        snapshot = build_rankings(items, generated_at=now.astimezone(UTC))
+        generated_at = now.astimezone(UTC)
+        seeds = _missing_profile_seeds(items, self._source.list_affection_profiles())
+        if seeds:
+            self._source.seed_default_affection_profiles(seeds, updated_at=generated_at)
+        profiles = self._source.list_affection_profiles()
+        snapshot = build_rankings(
+            items,
+            affection_profiles=profiles,
+            generated_at=generated_at,
+        )
         self._store.save_rankings(snapshot)
         return snapshot
 
@@ -84,6 +125,7 @@ class _ArchiveRankingRow:
 def build_rankings(
     items: tuple[DynamoItem, ...],
     *,
+    affection_profiles: tuple[DynamoItem, ...] = (),
     generated_at: datetime,
 ) -> RankingSnapshot:
     """Validate all source rows before constructing an all-or-nothing snapshot."""
@@ -94,31 +136,25 @@ def build_rankings(
     record_ids = tuple(row.record_id for row in rows)
     if len(set(record_ids)) != len(record_ids):
         raise RankingDataInvalid("Archive contains duplicate metadata records")
-    if not rows:
-        return RankingSnapshot(
-            generated_at=generated_at.astimezone(UTC),
-            wins=(),
-            requests=(),
-            archive_count=0,
+    wins: tuple[ParticipantRanking, ...] = ()
+    if rows:
+        latest = max(rows, key=lambda row: (row.completed_at, row.record_id))
+        win_counts = Counter(row.winner for row in rows)
+        win_candidates = [
+            (slot, latest.participant_names[slot], win_counts.get(slot, 0))
+            for slot in PARTICIPANT_SLOTS
+        ]
+        ordered_wins = sorted(win_candidates, key=lambda entry: (-entry[2], entry[1], entry[0]))
+        win_ranks = _competition_ranks(tuple(entry[2] for entry in ordered_wins))
+        wins = tuple(
+            ParticipantRanking(
+                participant=slot,
+                display_name=display_name,
+                count=count,
+                rank=rank,
+            )
+            for (slot, display_name, count), rank in zip(ordered_wins, win_ranks, strict=True)
         )
-
-    latest = max(rows, key=lambda row: (row.completed_at, row.record_id))
-    win_counts = Counter(row.winner for row in rows)
-    win_candidates = [
-        (slot, latest.participant_names[slot], win_counts.get(slot, 0))
-        for slot in PARTICIPANT_SLOTS
-    ]
-    ordered_wins = sorted(win_candidates, key=lambda entry: (-entry[2], entry[1], entry[0]))
-    win_ranks = _competition_ranks(tuple(entry[2] for entry in ordered_wins))
-    wins = tuple(
-        ParticipantRanking(
-            participant=slot,
-            display_name=display_name,
-            count=count,
-            rank=rank,
-        )
-        for (slot, display_name, count), rank in zip(ordered_wins, win_ranks, strict=True)
-    )
 
     requester_counts = Counter(row.requester_key for row in rows)
     latest_requester_names: dict[str, tuple[datetime, str, str]] = {}
@@ -148,11 +184,141 @@ def build_rankings(
             strict=True,
         )
     )
+    affection = _build_affection_rankings(
+        affection_profiles,
+        rows=rows,
+    )
     return RankingSnapshot(
         generated_at=generated_at.astimezone(UTC),
         wins=wins,
         requests=requests,
+        affection=affection,
         archive_count=len(rows),
+        affection_profile_count=len(affection_profiles),
+    )
+
+
+def _missing_profile_seeds(
+    archive_items: tuple[DynamoItem, ...],
+    profile_items: tuple[DynamoItem, ...],
+) -> tuple[AffectionProfileSeed, ...]:
+    rows = tuple(_parse_archive_row(item) for item in archive_items)
+    profiles = tuple(_parse_affection_profile(item) for item in profile_items)
+    existing = {profile.requester_key for profile in profiles}
+    latest_names: dict[str, tuple[datetime, str, str]] = {}
+    for row in rows:
+        candidate = (row.completed_at, row.record_id, row.requester_display_name)
+        current = latest_names.get(row.requester_key)
+        if current is None or candidate[:2] > current[:2]:
+            latest_names[row.requester_key] = candidate
+    return tuple(
+        AffectionProfileSeed(requester_key=key, display_name=value[2])
+        for key, value in sorted(latest_names.items())
+        if key not in existing
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _AffectionProfileRow:
+    requester_key: str
+    display_name: str
+    scores: dict[ParticipantSlot, int]
+
+
+def _build_affection_rankings(
+    profile_items: tuple[DynamoItem, ...],
+    *,
+    rows: tuple[_ArchiveRankingRow, ...],
+) -> tuple[
+    ParticipantAffectionRanking,
+    ParticipantAffectionRanking,
+    ParticipantAffectionRanking,
+]:
+    profiles = tuple(_parse_affection_profile(item) for item in profile_items)
+    if len({profile.requester_key for profile in profiles}) != len(profiles):
+        raise RankingDataInvalid("affection profiles contain duplicate requesters")
+    participant_names: dict[ParticipantSlot, str] = {
+        "participant-a": "アロナ",
+        "participant-b": "プラナ",
+        "participant-c": "安倍晋三AI",
+    }
+    if rows:
+        latest = max(rows, key=lambda row: (row.completed_at, row.record_id))
+        participant_names = latest.participant_names
+    rankings: list[ParticipantAffectionRanking] = []
+    for slot in PARTICIPANT_SLOTS:
+        ordered = sorted(
+            profiles,
+            key=lambda profile: (
+                -profile.scores[slot],
+                profile.display_name,
+                profile.requester_key,
+            ),
+        )
+        ranks = _competition_ranks(tuple(profile.scores[slot] for profile in ordered))
+        rankings.append(
+            ParticipantAffectionRanking(
+                participant=slot,
+                display_name=participant_names[slot],
+                entries=tuple(
+                    AffectionRankingEntry(
+                        requester_key=profile.requester_key,
+                        display_name=profile.display_name,
+                        score=profile.scores[slot],
+                        rank=rank,
+                    )
+                    for profile, rank in zip(ordered, ranks, strict=True)
+                ),
+            )
+        )
+    return (rankings[0], rankings[1], rankings[2])
+
+
+def _parse_affection_profile(item: DynamoItem) -> _AffectionProfileRow:
+    expected = {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "source_version",
+        "display_name",
+        "scores",
+        "updated_at",
+    }
+    key = item.get("SK")
+    source_version = item.get("source_version")
+    scores = item.get("scores")
+    if (
+        set(item) != expected
+        or item.get("PK") != "AFFECTION#PROFILE"
+        or item.get("schema_version") != 1
+        or item.get("record_type") != "affection_profile"
+        or not isinstance(key, str)
+        or not key
+        or isinstance(source_version, bool)
+        or not isinstance(source_version, int)
+        or source_version < 0
+        or not isinstance(scores, dict)
+        or set(scores) != set(PARTICIPANT_SLOTS)
+    ):
+        raise RankingDataInvalid("affection profile is invalid")
+    parsed_scores: dict[ParticipantSlot, int] = {}
+    for slot in PARTICIPANT_SLOTS:
+        value = scores[slot]
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1000:
+            raise RankingDataInvalid("affection profile score is invalid")
+        parsed_scores[slot] = value
+    updated_text = _required_text(item, "updated_at")
+    try:
+        updated_at = TypeAdapter(AwareDatetime).validate_python(updated_text).astimezone(UTC)
+    except OverflowError, ValidationError:
+        raise RankingDataInvalid("affection profile timestamp is invalid") from None
+    if updated_at.isoformat() != updated_text:
+        raise RankingDataInvalid("affection profile timestamp is not canonical UTC")
+    return _AffectionProfileRow(
+        requester_key=key,
+        display_name=_required_text(item, "display_name"),
+        scores=parsed_scores,
     )
 
 
@@ -160,7 +326,7 @@ def _parse_archive_row(item: DynamoItem) -> _ArchiveRankingRow:
     record_id = _required_text(item, "record_id")
     completed_text = _required_text(item, "completed_at")
     if (
-        item.get("schema_version") != 1
+        item.get("schema_version") not in {1, 2}
         or item.get("record_type") != "archive_meta"
         or item.get("PK") != f"RECORD#{record_id}"
         or item.get("SK") != "META"

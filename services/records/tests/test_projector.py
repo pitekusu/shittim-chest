@@ -7,7 +7,15 @@ from typing import Any, cast
 from tests.factories import NOW
 
 from shittim_records.adapters import BackfillCheckpoint
-from shittim_records.projector import BackfillService, ProjectionResult
+from shittim_records.archive import derive_requester_key
+from shittim_records.projector import (
+    AffectionProjectorService,
+    BackfillService,
+    ProjectionResult,
+    project_affection_profile,
+)
+
+HMAC_KEY = b"records-test-key-that-is-longer-than-32-bytes"
 
 
 class FakeSource:
@@ -239,3 +247,80 @@ def test_completed_dry_run_checkpoint_is_a_terminal_noop() -> None:
     assert source.scans == 0
     assert projector.validated == projector.projected == []
     assert statistics.saved == []
+
+
+def test_affection_profile_projection_hashes_private_identity_and_normalizes_scores() -> None:
+    source = {
+        "PK": "AFFECTION#REQUESTER#private-user",
+        "SK": "PROFILE",
+        "schema_version": 8,
+        "record_type": "affection_profile",
+        "requester_id": "private-user",
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [625, 55, 987],
+        "version": 3,
+        "updated_at": NOW.isoformat(),
+    }
+
+    projected = project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)
+
+    assert projected == {
+        "PK": "AFFECTION#PROFILE",
+        "SK": derive_requester_key(HMAC_KEY, "private-user"),
+        "schema_version": 1,
+        "record_type": "affection_profile",
+        "source_version": 3,
+        "display_name": "Requester",
+        "scores": {
+            "participant-a": 625,
+            "participant-b": 55,
+            "participant-c": 987,
+        },
+        "updated_at": NOW.isoformat(),
+    }
+    assert "private-user" not in repr(projected)
+    assert "private-name" not in repr(projected)
+
+
+def test_affection_projector_reloads_source_and_converges_statistics() -> None:
+    source_item = {
+        "PK": "AFFECTION#REQUESTER#private-user",
+        "SK": "PROFILE",
+        "schema_version": 8,
+        "record_type": "affection_profile",
+        "requester_id": "private-user",
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [500, 501, 502],
+        "version": 1,
+        "updated_at": NOW.isoformat(),
+    }
+
+    class Source:
+        def load_affection_profile(self, partition_key: str) -> dict[str, object]:
+            assert partition_key == source_item["PK"]
+            return cast(dict[str, object], source_item)
+
+    class Store:
+        def __init__(self) -> None:
+            self.item: object = None
+
+        def put_profile(self, item: object) -> bool:
+            self.item = item
+            return True
+
+    class Configuration:
+        def load(self) -> object:
+            return type("Config", (), {"identity_hmac_key": HMAC_KEY})()
+
+    store = Store()
+    service = AffectionProjectorService(
+        source=cast(Any, Source()),
+        statistics=cast(Any, store),
+        configuration=cast(Any, Configuration()),
+    )
+
+    assert service.project_partition(str(source_item["PK"])).created is True
+    assert isinstance(store.item, dict)
+    assert store.item["source_version"] == 1

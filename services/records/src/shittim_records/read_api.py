@@ -14,11 +14,14 @@ from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 
 from shittim_records.contracts import (
+    AffectionRankingEntry,
+    AffectionRankingsResponse,
     CostBreakdown,
     CostConversion,
     CostPeriod,
     CostsResponse,
     ImageAvatarRef,
+    ParticipantAffectionRanking,
     ParticipantSlot,
     PlaceholderAvatarRef,
     RankingEntry,
@@ -66,6 +69,12 @@ class ListQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class AffectionRankingQuery:
+    limit: int = 50
+    cursor: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ArchivePage:
     items: tuple[DynamoItem, ...]
     last_evaluated_key: DynamoItem | None
@@ -91,6 +100,17 @@ class RecordsReader(Protocol):
     def load_record(self, *, record_id: str) -> tuple[DynamoItem, ...]: ...
 
     def load_ranking_snapshots(self) -> tuple[DynamoItem, ...]: ...
+
+    def load_affection_ranking_pointer(self) -> DynamoItem | None: ...
+
+    def load_affection_ranking_generation(self, *, generation_id: str) -> DynamoItem | None: ...
+
+    def load_affection_ranking_pages(
+        self,
+        *,
+        generation_id: str,
+        page_indices: tuple[int, ...],
+    ) -> tuple[DynamoItem, ...]: ...
 
     def load_cost_ledger(
         self,
@@ -188,6 +208,85 @@ class CursorCodec:
             raise ReadFailure("CURSOR_INVALID", 400) from None
         return expected_index, key
 
+    def encode_affection(
+        self,
+        *,
+        generation_id: str,
+        offset: int,
+        limit: int,
+        now: datetime,
+        expires_at: int | None = None,
+    ) -> str:
+        if not _is_generation_id(generation_id) or offset < 0 or not 1 <= limit <= 50:
+            raise ReadFailure("CURSOR_INVALID", 400)
+        current_timestamp = int(_utc(now).timestamp())
+        effective_expiry = (
+            int((_utc(now) + CURSOR_TTL).timestamp()) if expires_at is None else expires_at
+        )
+        if (
+            isinstance(effective_expiry, bool)
+            or not isinstance(effective_expiry, int)
+            or effective_expiry <= current_timestamp
+        ):
+            raise ReadFailure("CURSOR_INVALID", 400)
+        payload = {
+            "version": 1,
+            "kind": "affection",
+            "generation": generation_id,
+            "offset": offset,
+            "limit": limit,
+            "expires_at": effective_expiry,
+        }
+        encoded = _base64url(_canonical(payload))
+        signature = _base64url(
+            hmac.new(
+                self._key,
+                f"records:affection-cursor:{encoded}".encode(),
+                hashlib.sha256,
+            ).digest()
+        )
+        return f"{encoded}.{signature}"
+
+    def decode_affection(
+        self,
+        *,
+        cursor: str,
+        limit: int,
+        now: datetime,
+    ) -> tuple[str, int, int]:
+        if not cursor or len(cursor) > 4096:
+            raise ReadFailure("CURSOR_INVALID", 400)
+        try:
+            encoded, signature = cursor.split(".", 1)
+            expected = _base64url(
+                hmac.new(
+                    self._key,
+                    f"records:affection-cursor:{encoded}".encode(),
+                    hashlib.sha256,
+                ).digest()
+            )
+            if not hmac.compare_digest(signature, expected):
+                raise ValueError
+            payload = json.loads(_decode_base64url(encoded))
+        except UnicodeDecodeError, ValueError, json.JSONDecodeError:
+            raise ReadFailure("CURSOR_INVALID", 400) from None
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"version", "kind", "generation", "offset", "limit", "expires_at"}
+            or payload["version"] != 1
+            or payload["kind"] != "affection"
+            or not _is_generation_id(payload["generation"])
+            or isinstance(payload["offset"], bool)
+            or not isinstance(payload["offset"], int)
+            or payload["offset"] < 0
+            or payload["limit"] != limit
+            or isinstance(payload["expires_at"], bool)
+            or not isinstance(payload["expires_at"], int)
+            or payload["expires_at"] <= int(_utc(now).timestamp())
+        ):
+            raise ReadFailure("CURSOR_INVALID", 400)
+        return payload["generation"], payload["offset"], payload["expires_at"]
+
 
 class RecordsReadService:
     """Map immutable Archive v1 items to the public Records API."""
@@ -247,10 +346,14 @@ class RecordsReadService:
             if not isinstance(sk, str) or sk in by_key:
                 raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
             by_key[sk] = item
+        meta = by_key.get("META")
+        archive_version = meta.get("schema_version") if isinstance(meta, dict) else None
+        if archive_version not in {1, 2}:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         expected = {
             "META",
             "DECISION",
-            "PROJECTION#V1",
+            f"PROJECTION#V{archive_version}",
             *(f"INITIAL#{slot}" for slot in PARTICIPANT_SLOTS),
             *(f"FINAL#{slot}" for slot in PARTICIPANT_SLOTS),
             *(f"VOTE#{slot}" for slot in PARTICIPANT_SLOTS),
@@ -270,7 +373,7 @@ class RecordsReadService:
         if stored_winner != decision_winner:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         payload: dict[str, Any] = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "recordId": _required_text(meta, "record_id"),
             "completedAt": _required_text(meta, "completed_at"),
             "question": _required_text(meta, "question"),
@@ -308,6 +411,7 @@ class RecordsReadService:
                 "actions": _required_text_list(by_key["DECISION"], "actions"),
                 "caveats": _required_text_list(by_key["DECISION"], "caveats"),
             },
+            "affection": self._affection(meta) if archive_version == 2 else None,
         }
         try:
             result = RecordDetailResponse.model_validate(payload)
@@ -316,6 +420,109 @@ class RecordsReadService:
         if result.record_id != record_id:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         return result
+
+    def get_affection_rankings(
+        self,
+        *,
+        query: AffectionRankingQuery,
+        now: datetime,
+    ) -> AffectionRankingsResponse:
+        query = validate_affection_ranking_query(query)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ReadFailure("REQUEST_INVALID", 400)
+        pointer: DynamoItem | None = None
+        cursor_expires_at: int | None = None
+        if query.cursor is None:
+            pointer = self._reader.load_affection_ranking_pointer()
+            if pointer is None:
+                raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+            generation_id = _validate_affection_pointer(pointer)
+            offset = 0
+        else:
+            generation_id, offset, cursor_expires_at = self._cursor_codec.decode_affection(
+                cursor=query.cursor,
+                limit=query.limit,
+                now=now,
+            )
+        raw_meta = self._reader.load_affection_ranking_generation(generation_id=generation_id)
+        if raw_meta is None:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        meta = _validate_affection_generation(raw_meta, generation_id=generation_id)
+        if pointer is not None:
+            _require_pointer_matches_generation(pointer, raw_meta)
+        if offset > meta.profile_count or (offset == meta.profile_count and offset != 0):
+            raise ReadFailure("CURSOR_INVALID", 400)
+        end = min(offset + query.limit, meta.profile_count)
+        page_indices = _page_indices(offset, end, page_size=meta.page_size)
+        if page_indices and page_indices[0] > 0:
+            # Read the preceding page as validation context. Without it, a cursor
+            # aligned to a page boundary could not verify the first global rank.
+            page_indices = (page_indices[0] - 1, *page_indices)
+        raw_pages = self._reader.load_affection_ranking_pages(
+            generation_id=generation_id,
+            page_indices=page_indices,
+        )
+        page_entries = _validate_affection_pages(
+            raw_pages,
+            generation=meta,
+            page_indices=page_indices,
+            offset=offset,
+            end=end,
+        )
+        requester_keys = tuple(
+            dict.fromkeys(
+                _required_text(entry, "requester_key")
+                for entries in page_entries.values()
+                for entry in entries
+            )
+        )
+        profiles = self._reader.load_profiles(requester_keys=requester_keys)
+        rankings: list[ParticipantAffectionRanking] = []
+        for slot, participant_name in meta.participants:
+            public_entries: list[AffectionRankingEntry] = []
+            for item in page_entries[slot]:
+                requester_key = _required_text(item, "requester_key")
+                profile = profiles.get(requester_key)
+                # Snapshot display names are the sort key. Session profiles may supply
+                # only the current avatar so pagination order and competition ranks stay stable.
+                display_name = _required_text(item, "display_name")
+                public_entries.append(
+                    AffectionRankingEntry(
+                        rank=cast(int, item["rank"]),
+                        display_name=display_name,
+                        avatar=self._avatar(
+                            asset_key=(profile.avatar_asset_key if profile is not None else None),
+                            alt=f"{display_name}のアバター",
+                            fallback_variant=_requester_variant(requester_key),
+                            prefix="requesters/",
+                        ),
+                        score=cast(int, item["score"]),
+                    )
+                )
+            rankings.append(
+                ParticipantAffectionRanking(
+                    participant=slot,
+                    display_name=participant_name,
+                    entries=tuple(public_entries),
+                )
+            )
+        next_cursor = None
+        if end < meta.profile_count:
+            next_cursor = self._cursor_codec.encode_affection(
+                generation_id=generation_id,
+                offset=end,
+                limit=query.limit,
+                now=now,
+                expires_at=cursor_expires_at,
+            )
+        return AffectionRankingsResponse(
+            schema_version=1,
+            generated_at=meta.generated_at,
+            default_score=500,
+            max_score=1000,
+            rankings=(rankings[0], rankings[1], rankings[2]),
+            next_cursor=next_cursor,
+        )
 
     def get_rankings(self, *, now: datetime) -> RankingsResponse:
         if now.tzinfo is None or now.utcoffset() is None:
@@ -506,6 +713,34 @@ class RecordsReadService:
         return tuple(result)
 
     @staticmethod
+    def _affection(meta: DynamoItem) -> dict[str, Any]:
+        raw = meta.get("affection")
+        if not isinstance(raw, dict) or set(raw) != {
+            "status",
+            "rubric_version",
+            "participants",
+        }:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        participants = raw.get("participants")
+        if not isinstance(participants, list):
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        return {
+            "status": raw.get("status"),
+            "rubricVersion": raw.get("rubric_version"),
+            "participants": tuple(
+                {
+                    "participant": item.get("participant"),
+                    "before": item.get("before"),
+                    "questionScore": item.get("question_score"),
+                    "appliedDelta": item.get("applied_delta"),
+                    "after": item.get("after"),
+                }
+                for item in participants
+                if isinstance(item, dict)
+            ),
+        }
+
+    @staticmethod
     def _result(meta: DynamoItem) -> dict[str, Any]:
         raw_counts = meta.get("vote_counts")
         if not isinstance(raw_counts, dict) or set(raw_counts) != set(PARTICIPANT_SLOTS):
@@ -562,6 +797,16 @@ def validate_list_query(query: ListQuery) -> ListQuery:
     )
 
 
+def validate_affection_ranking_query(
+    query: AffectionRankingQuery,
+) -> AffectionRankingQuery:
+    if isinstance(query.limit, bool) or not 1 <= query.limit <= 50:
+        raise ReadFailure("REQUEST_INVALID", 400)
+    if query.cursor is not None and (not query.cursor or len(query.cursor) > 4096):
+        raise ReadFailure("CURSOR_INVALID", 400)
+    return query
+
+
 def _required_text(item: DynamoItem, field: str) -> str:
     value = item.get(field)
     if not isinstance(value, str) or not value.strip():
@@ -599,6 +844,14 @@ def _is_record_id(value: str) -> bool:
     )
 
 
+def _is_generation_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def _validate_cursor_key(value: Any, *, index_name: str) -> DynamoItem:
     expected_fields = {"PK", "SK", f"{index_name}pk", f"{index_name}sk"}
     if index_name not in {"gsi1", "gsi2"} or not isinstance(value, dict):
@@ -613,7 +866,7 @@ def _validate_cursor_key(value: Any, *, index_name: str) -> DynamoItem:
 def _validate_meta_item(item: DynamoItem) -> None:
     record_id = item.get("record_id")
     if (
-        item.get("schema_version") != 1
+        item.get("schema_version") not in {1, 2}
         or item.get("record_type") != "archive_meta"
         or not isinstance(record_id, str)
         or not _is_record_id(record_id)
@@ -660,22 +913,298 @@ def _validate_list_projection(
 
 
 def _validate_archive_items(items: dict[str, DynamoItem], *, record_id: str) -> None:
+    meta_version = items["META"].get("schema_version")
+    if meta_version not in {1, 2}:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
     expected_types = {
         "META": "archive_meta",
         "DECISION": "final_decision",
-        "PROJECTION#V1": "projection_marker",
+        f"PROJECTION#V{meta_version}": "projection_marker",
         **{f"INITIAL#{slot}": "initial_opinion" for slot in PARTICIPANT_SLOTS},
         **{f"FINAL#{slot}": "final_proposal" for slot in PARTICIPANT_SLOTS},
         **{f"VOTE#{slot}": "vote" for slot in PARTICIPANT_SLOTS},
     }
     for sk, item in items.items():
         if (
-            item.get("schema_version") != 1
+            item.get("schema_version") != meta_version
             or item.get("record_id") != record_id
             or item.get("PK") != f"RECORD#{record_id}"
             or item.get("record_type") != expected_types[sk]
         ):
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+
+@dataclass(frozen=True, slots=True)
+class _AffectionGeneration:
+    generation_id: str
+    generated_at: datetime
+    profile_count: int
+    page_count: int
+    page_size: int
+    checksum: str
+    participants: tuple[tuple[ParticipantSlot, str], ...]
+
+
+def _validate_affection_pointer(item: DynamoItem) -> str:
+    expected = {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "generation_id",
+        "generated_at",
+        "profile_count",
+        "page_count",
+        "checksum",
+    }
+    generation_id = item.get("generation_id")
+    profile_count = item.get("profile_count")
+    page_count = item.get("page_count")
+    checksum = item.get("checksum")
+    if (
+        set(item) != expected
+        or item.get("PK") != "RANKING#AFFECTION"
+        or item.get("SK") != "CURRENT"
+        or item.get("schema_version") != 1
+        or item.get("record_type") != "affection_ranking_pointer"
+        or not _is_generation_id(generation_id)
+        or isinstance(profile_count, bool)
+        or not isinstance(profile_count, int)
+        or profile_count < 0
+        or isinstance(page_count, bool)
+        or not isinstance(page_count, int)
+        or page_count < 0
+        or not isinstance(checksum, str)
+        or len(checksum) != 64
+        or not all(character in "0123456789abcdef" for character in checksum)
+    ):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    _canonical_timestamp(item, field="generated_at")
+    return cast(str, generation_id)
+
+
+def _validate_affection_generation(
+    item: DynamoItem,
+    *,
+    generation_id: str,
+) -> _AffectionGeneration:
+    expected = {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "generation_id",
+        "generated_at",
+        "profile_count",
+        "page_count",
+        "page_size",
+        "checksum",
+        "participants",
+    }
+    profile_count = item.get("profile_count")
+    page_count = item.get("page_count")
+    page_size = item.get("page_size")
+    checksum = item.get("checksum")
+    raw_participants = item.get("participants")
+    if (
+        set(item) != expected
+        or item.get("PK") != f"RANKING#AFFECTION#GEN#{generation_id}"
+        or item.get("SK") != "META"
+        or item.get("schema_version") != 1
+        or item.get("record_type") != "affection_ranking_generation"
+        or item.get("generation_id") != generation_id
+        or isinstance(profile_count, bool)
+        or not isinstance(profile_count, int)
+        or profile_count < 0
+        or isinstance(page_count, bool)
+        or not isinstance(page_count, int)
+        or page_count < 0
+        or isinstance(page_size, bool)
+        or not isinstance(page_size, int)
+        or page_size != 50
+        or page_count != (profile_count + page_size - 1) // page_size
+        or not isinstance(checksum, str)
+        or len(checksum) != 64
+        or not all(character in "0123456789abcdef" for character in checksum)
+        or not isinstance(raw_participants, list)
+        or len(raw_participants) != 3
+    ):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    participants: list[tuple[ParticipantSlot, str]] = []
+    for expected_slot, raw in zip(PARTICIPANT_SLOTS, raw_participants, strict=True):
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != {"participant", "display_name"}
+            or raw.get("participant") != expected_slot
+        ):
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        participants.append((expected_slot, _required_text(raw, "display_name")))
+    return _AffectionGeneration(
+        generation_id=generation_id,
+        generated_at=_canonical_timestamp(item, field="generated_at"),
+        profile_count=profile_count,
+        page_count=page_count,
+        page_size=page_size,
+        checksum=checksum,
+        participants=tuple(participants),
+    )
+
+
+def _require_pointer_matches_generation(pointer: DynamoItem, generation: DynamoItem) -> None:
+    for field in (
+        "generation_id",
+        "generated_at",
+        "profile_count",
+        "page_count",
+        "checksum",
+    ):
+        if pointer.get(field) != generation.get(field):
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+
+
+def _page_indices(offset: int, end: int, *, page_size: int) -> tuple[int, ...]:
+    if end <= offset:
+        return ()
+    return tuple(range(offset // page_size, (end - 1) // page_size + 1))
+
+
+def _validate_affection_pages(
+    items: tuple[DynamoItem, ...],
+    *,
+    generation: _AffectionGeneration,
+    page_indices: tuple[int, ...],
+    offset: int,
+    end: int,
+) -> dict[ParticipantSlot, list[DynamoItem]]:
+    by_index: dict[int, DynamoItem] = {}
+    for item in items:
+        index = item.get("page_index")
+        if isinstance(index, bool) or not isinstance(index, int) or index in by_index:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        by_index[index] = item
+    if set(by_index) != set(page_indices):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    collected: dict[ParticipantSlot, list[DynamoItem]] = {slot: [] for slot in PARTICIPANT_SLOTS}
+    for page_index in page_indices:
+        item = by_index[page_index]
+        page_offset = page_index * generation.page_size
+        expected_count = min(
+            generation.page_size,
+            generation.profile_count - page_offset,
+        )
+        rankings = item.get("rankings")
+        if (
+            set(item)
+            != {
+                "PK",
+                "SK",
+                "schema_version",
+                "record_type",
+                "generation_id",
+                "page_index",
+                "offset",
+                "entry_count",
+                "rankings",
+            }
+            or item.get("PK") != f"RANKING#AFFECTION#GEN#{generation.generation_id}"
+            or item.get("SK") != f"PAGE#{page_index:06d}"
+            or item.get("schema_version") != 1
+            or item.get("record_type") != "affection_ranking_page"
+            or item.get("generation_id") != generation.generation_id
+            or item.get("offset") != page_offset
+            or item.get("entry_count") != expected_count
+            or not isinstance(rankings, list)
+            or len(rankings) != 3
+        ):
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        for slot, raw_ranking in zip(PARTICIPANT_SLOTS, rankings, strict=True):
+            if (
+                not isinstance(raw_ranking, dict)
+                or set(raw_ranking) != {"participant", "entries"}
+                or raw_ranking.get("participant") != slot
+                or not isinstance(raw_ranking.get("entries"), list)
+                or len(cast(list[object], raw_ranking["entries"])) != expected_count
+            ):
+                raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+            entries = cast(list[DynamoItem], raw_ranking["entries"])
+            _validate_affection_page_entries(entries, offset=page_offset)
+            if collected[slot]:
+                previous = collected[slot][-1]
+                current = entries[0]
+                previous_sort = (
+                    -cast(int, previous["score"]),
+                    _required_text(previous, "display_name"),
+                    _required_text(previous, "requester_key"),
+                )
+                current_sort = (
+                    -cast(int, current["score"]),
+                    _required_text(current, "display_name"),
+                    _required_text(current, "requester_key"),
+                )
+                expected_rank = (
+                    cast(int, previous["rank"])
+                    if previous["score"] == current["score"]
+                    else page_offset + 1
+                )
+                if previous_sort > current_sort or current["rank"] != expected_rank:
+                    raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+            collected[slot].extend(entries)
+    for entries in collected.values():
+        keys = tuple(_required_text(entry, "requester_key") for entry in entries)
+        if len(set(keys)) != len(keys):
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    if not page_indices:
+        return collected
+    base_offset = page_indices[0] * generation.page_size
+    start_index = offset - base_offset
+    stop_index = end - base_offset
+    return {slot: entries[start_index:stop_index] for slot, entries in collected.items()}
+
+
+def _validate_affection_page_entries(entries: list[DynamoItem], *, offset: int) -> None:
+    keys: list[str] = []
+    sortable: list[tuple[int, str, str]] = []
+    previous_score: int | None = None
+    previous_rank = 0
+    for local_index, entry in enumerate(entries):
+        if set(entry) != {"requester_key", "display_name", "score", "rank"}:
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        key = _required_text(entry, "requester_key")
+        display_name = _required_text(entry, "display_name")
+        score = entry.get("score")
+        rank = entry.get("rank")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, int)
+            or not 0 <= score <= 1000
+            or isinstance(rank, bool)
+            or not isinstance(rank, int)
+            or rank < 1
+            or rank > offset + local_index + 1
+        ):
+            raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        if local_index > 0:
+            expected_rank = previous_rank if score == previous_score else offset + local_index + 1
+            if rank != expected_rank:
+                raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+        keys.append(key)
+        sortable.append((-score, display_name, key))
+        previous_score = score
+        previous_rank = rank
+    if len(set(keys)) != len(keys) or sortable != sorted(sortable):
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+
+
+def _canonical_timestamp(item: DynamoItem, *, field: str) -> datetime:
+    try:
+        value = (
+            TypeAdapter(AwareDatetime).validate_python(_required_text(item, field)).astimezone(UTC)
+        )
+    except OverflowError, ValidationError:
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503) from None
+    if value.isoformat() != item[field]:
+        raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
+    return value
 
 
 def _validate_ranking_snapshot(item: DynamoItem, *, kind: Literal["wins", "requests"]) -> datetime:

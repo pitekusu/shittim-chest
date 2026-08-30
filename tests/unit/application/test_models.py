@@ -70,12 +70,19 @@ def test_panel_refresh_state_is_derived_from_durable_delivery_fields() -> None:
 
 def test_initial_generation_checkpoint_and_output_must_settle_together() -> None:
     source = snapshot()
-    collecting_state = source.state.transition_to(
-        DebatePhase.PREPARING_EVIDENCE,
-        at=NOW + timedelta(seconds=1),
-    ).transition_to(
-        DebatePhase.COLLECTING_INITIAL_OPINIONS,
-        at=NOW + timedelta(seconds=2),
+    collecting_state = (
+        source.state.transition_to(
+            DebatePhase.SCORING_AFFECTION,
+            at=NOW + timedelta(seconds=1),
+        )
+        .transition_to(
+            DebatePhase.PREPARING_EVIDENCE,
+            at=NOW + timedelta(seconds=1),
+        )
+        .transition_to(
+            DebatePhase.COLLECTING_INITIAL_OPINIONS,
+            at=NOW + timedelta(seconds=2),
+        )
     )
     lease = LeaseGrant(
         owner_id="worker",
@@ -115,6 +122,10 @@ def test_final_proposal_checkpoint_and_output_must_settle_together() -> None:
     source = snapshot()
     collecting_state = (
         source.state.transition_to(
+            DebatePhase.SCORING_AFFECTION,
+            at=NOW + timedelta(seconds=1),
+        )
+        .transition_to(
             DebatePhase.PREPARING_EVIDENCE,
             at=NOW + timedelta(seconds=1),
         )
@@ -164,6 +175,10 @@ def test_vote_checkpoint_and_output_must_settle_together() -> None:
     source = snapshot()
     selecting_state = (
         source.state.transition_to(
+            DebatePhase.SCORING_AFFECTION,
+            at=NOW + timedelta(seconds=1),
+        )
+        .transition_to(
             DebatePhase.PREPARING_EVIDENCE,
             at=NOW + timedelta(seconds=1),
         )

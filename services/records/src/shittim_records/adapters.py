@@ -117,6 +117,19 @@ class SourceDebateRepository:
         last_key = None if not raw_last_key else unmarshal_item(raw_last_key)
         return partition_keys, last_key
 
+    def load_affection_profile(self, partition_key: str) -> DynamoItem:
+        if not partition_key.startswith("AFFECTION#REQUESTER#"):
+            raise ValueError("source partition key is not an affection profile")
+        response = self._client.get_item(
+            TableName=self._table_name,
+            Key=marshal_item({"PK": partition_key, "SK": "PROFILE"}),
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        if raw is None:
+            raise ValueError("source affection profile does not exist")
+        return unmarshal_item(raw)
+
 
 class ArchiveRepository:
     """Write immutable projections using one bounded DynamoDB transaction."""
@@ -128,7 +141,7 @@ class ArchiveRepository:
     def put_projection(self, projection: ArchiveProjection) -> bool:
         marker_key = {
             "PK": f"RECORD#{projection.record_id}",
-            "SK": "PROJECTION#V1",
+            "SK": f"PROJECTION#V{projection.schema_version}",
         }
         marker = self._get(marker_key)
         if marker is not None:
@@ -175,6 +188,57 @@ class ArchiveRepository:
         if actual == expected_fingerprint:
             return False
         raise ProjectionConflict("existing projection fingerprint does not match source")
+
+
+class AffectionProjectionRepository:
+    """Converge one opaque affection profile without retaining its private source ID."""
+
+    def __init__(self, client: DynamoDBClient, table_name: str) -> None:
+        self._client = client
+        self._table_name = table_name
+
+    def put_profile(self, item: DynamoItem) -> bool:
+        version = item.get("source_version")
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise ValueError("affection projection version is invalid")
+        try:
+            self._client.put_item(
+                TableName=self._table_name,
+                Item=marshal_item(item),
+                ConditionExpression=(
+                    "attribute_not_exists(PK) OR attribute_not_exists(source_version) "
+                    "OR source_version < :version"
+                ),
+                ExpressionAttributeValues=marshal_item({":version": version}),
+            )
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+            existing = self._get({"PK": item["PK"], "SK": item["SK"]})
+            if existing is None:
+                raise
+            existing_version = existing.get("source_version")
+            if (
+                isinstance(existing_version, bool)
+                or not isinstance(existing_version, int)
+                or existing_version < version
+            ):
+                raise ProjectionConflict("affection projection version is inconsistent") from error
+            if existing_version == version and existing != item:
+                raise ProjectionConflict(
+                    "affection projection content conflicts at one version"
+                ) from error
+            return False
+        return True
+
+    def _get(self, key: Mapping[str, DynamoValue]) -> DynamoItem | None:
+        response = self._client.get_item(
+            TableName=self._table_name,
+            Key=marshal_item(key),
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        return None if raw is None else unmarshal_item(raw)
 
 
 class StatisticsRepository:

@@ -192,7 +192,11 @@ def test_oauth_claim_session_and_archive_pagination(
     assert len(reader.load_record(record_id=projection.record_id)) == 12
 
     ranking = RankingService(
-        source=DynamoRankingSource(dynamodb_client, archive_table),
+        source=DynamoRankingSource(
+            dynamodb_client,
+            archive_table,
+            statistics_table,
+        ),
         store=DynamoRankingSnapshotStore(dynamodb_client, statistics_table),
     ).refresh(now=NOW)
     assert ranking.archive_count == 1

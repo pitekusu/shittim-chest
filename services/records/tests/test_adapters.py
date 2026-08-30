@@ -6,7 +6,11 @@ from typing import Any, cast
 
 import pytest
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.adapters.dynamodb.serializer import serialize_snapshot
+from shittim_chest.adapters.dynamodb.serializer import (
+    CURRENT_SCHEMA_VERSION,
+    PREVIOUS_SCHEMA_VERSION,
+    serialize_snapshot,
+)
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.adapters import (
@@ -84,14 +88,16 @@ def test_source_repository_reads_all_pages_with_strong_consistency() -> None:
 
 def test_source_repository_accepts_previous_source_schema() -> None:
     source = completed_snapshot()
-    items = tuple({**item, "schema_version": 6} for item in serialize_snapshot(source))
+    items = tuple(
+        {**item, "schema_version": PREVIOUS_SCHEMA_VERSION} for item in serialize_snapshot(source)
+    )
     client = FakeSourceDynamoDb([{"Items": [marshal_item(item) for item in items]}])
 
     restored = SourceDebateRepository(cast(Any, client), "source").load_partition(
         str(items[0]["PK"])
     )
 
-    assert restored.state.schema_version == 7
+    assert restored.state.schema_version == CURRENT_SCHEMA_VERSION
     assert restored.final_decision == source.final_decision
 
 

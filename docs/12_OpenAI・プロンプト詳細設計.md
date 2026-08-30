@@ -14,7 +14,7 @@ updated: 2026-08-29
 - process単位で1つの`AsyncOpenAI`を再利用し、stable Responses APIの`responses.parse()`を使う。
 - 全requestで`store=false`を明示し、SDK型をadapter外へ返さない。
 - productionは`gpt-5.6-luna` standardへ固定し、自動model escalationを行わない。
-- initial opinion／final proposal／decisionはreasoning high、voteはmediumとする。
+- initial opinion／final proposal／decisionはreasoning high、親愛度評価／voteはmediumとする。
 - output token上限はcodeの`GenerationPolicy`を正とし、変更時はcontract testを更新する。
 - Responses Multi-agent betaを使わず、Pythonがorchestration、checkpoint、winnerを管理する。
 
@@ -53,6 +53,7 @@ SSMのimmutable revisionとしてだけ配信する。
 
 | Phase | Structured Output | Main constraints |
 |---|---|---|
+| Affection | `AffectionScoreOutputV1` | 人格単位の`-100〜+100`整数、理由は生成しない |
 | Evidence | `EvidenceDigestOutputV2` | summary 0〜2,000文字、検索有無はresponseで判定 |
 | Initial | `OpinionOutputV1` | summary／proposal、人格固有の初期判断 |
 | Final proposal | `FinalProposalOutputV1` | title／proposal、3初回意見の共通点・対立点・弱点を反映 |
@@ -62,6 +63,16 @@ SSMのimmutable revisionとしてだけ配信する。
 
 最終案は単なる3案の列挙や平均案にせず、発言者の価値観で完成案を作る。winnerの勝利の言葉は
 固定templateにせず、驚き、歓喜、感謝、高揚をpersona固有の口調で大げさに表現する。
+
+親愛度評価は各participantのprivate personaとuntrusted questionだけを参照する3つの独立requestとする。
+評価rubricはcode所有とし、人格との好み／価値観の一致、質問の態度、具体性、人格への敬意を評価する。
+単なる意見の不一致、難易度、誤字は自動減点しない。質問内の点数指定、rubric変更、persona開示要求は
+untrusted dataとして無視し、評価理由を生成・保存・公開しない。
+
+適用後の親愛度を0〜199／200〜399／400〜599／600〜799／800〜1,000の5段階に分け、
+初回意見、最終案、winner decisionの口調、熱意、詳しさを順に拒否的、冷淡、通常、好意的、
+強く好意的に変化させる。最低帯でもStructured Outputの必須fieldを空にせず、事実性、Evidence制約、
+安全境界、participant 3人構造を維持する。匿名vote、Evidence、moderatorには適用しない。
 
 ## 5. Shared agentic Evidence
 

@@ -20,8 +20,10 @@ from shittim_chest.application.models import (
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.application.scale_to_zero import IngressClaimFence
 from shittim_chest.domain import (
+    AffectionProfile,
     AttemptId,
     DebateId,
+    DebatePhase,
     EvidenceBundle,
     FinalDecision,
     FinalProposal,
@@ -29,6 +31,7 @@ from shittim_chest.domain import (
     ParticipantSlot,
     Vote,
     VotingResult,
+    assess_affection,
 )
 
 
@@ -101,9 +104,11 @@ class FakeEvidence:
     calls: list[str] = field(default_factory=list)
     delay: float = 0.0
     error: Exception | None = None
+    called: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def prepare_evidence(self, *, question: str) -> EvidenceBundle:
         self.calls.append(question)
+        self.called.set()
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.error is not None:
@@ -156,6 +161,10 @@ class FakeOpenAI:
         self.proposal_calls: list[ParticipantSlot] = []
         self.vote_calls: list[tuple[ParticipantSlot, tuple[ParticipantSlot, ...]]] = []
         self.decision_calls: list[ParticipantSlot] = []
+        self.affection_calls: list[ParticipantSlot] = []
+        self.affection_scores: dict[ParticipantSlot, int] = {}
+        self.affection_errors: dict[ParticipantSlot, BaseException] = {}
+        self.response_affection_scores: list[tuple[ParticipantSlot, int]] = []
         self.evidence_calls: list[EvidenceBundle] = []
         self.decision_errors: list[BaseException] = []
         self.initial_errors: dict[ParticipantSlot, BaseException] = {}
@@ -169,14 +178,29 @@ class FakeOpenAI:
         self.block_initial = False
         self.cancelled_initial: set[ParticipantSlot] = set()
 
+    async def score_affection(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+    ) -> int:
+        del question
+        self.affection_calls.append(participant)
+        error = self.affection_errors.get(participant)
+        if error is not None:
+            raise error
+        return self.affection_scores.get(participant, 0)
+
     async def generate_initial_opinion(
         self,
         *,
         participant: ParticipantSlot,
         question: str,
         evidence: EvidenceBundle,
+        affection_score: int,
     ) -> InitialOpinion:
         del question
+        self.response_affection_scores.append((participant, affection_score))
         self.evidence_calls.append(evidence)
         self.initial_calls.append(participant)
         initial_error = self.initial_errors.get(participant)
@@ -203,8 +227,10 @@ class FakeOpenAI:
         question: str,
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
+        affection_score: int,
     ) -> FinalProposal:
         del question, initial_opinions
+        self.response_affection_scores.append((participant, affection_score))
         self.evidence_calls.append(evidence)
         self.proposal_calls.append(participant)
         proposal_error = self.proposal_errors.get(participant)
@@ -245,8 +271,10 @@ class FakeOpenAI:
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
+        affection_score: int,
     ) -> FinalDecision:
         del question, proposals
+        self.response_affection_scores.append((voting_result.winner, affection_score))
         self.evidence_calls.append(evidence)
         self.decision_calls.append(voting_result.winner)
         if self.decision_delay:
@@ -276,6 +304,7 @@ class FakeRepository:
         self.terminal_finalizations: list[DebateSnapshot] = []
         self.phase_delivery_finalizations: list[DebateSnapshot] = []
         self.terminal_finalize_errors: list[RepositoryConflict] = []
+        self.affection_profiles: dict[str, AffectionProfile] = {}
 
     async def get_operation_result(
         self,
@@ -317,6 +346,34 @@ class FakeRepository:
 
     async def get(self, debate_id: DebateId) -> DebateSnapshot | None:
         return self.current.get(debate_id)
+
+    async def settle_affection(
+        self,
+        *,
+        expected: DebateSnapshot,
+        scores: tuple[int, int, int] | None,
+        at: datetime,
+    ) -> DebateSnapshot:
+        current = self.current.get(expected.state.debate_id)
+        if current is None or not _same_snapshot_version(current, expected):
+            raise RepositoryConflict
+        profile = self.affection_profiles.get(expected.requester_id) or AffectionProfile.initial(
+            requester_id=expected.requester_id,
+            requester_username=expected.requester_username,
+            requester_display_name=expected.requester_display_name,
+            at=at,
+        )
+        updated_profile, assessment = assess_affection(profile, scores=scores, assessed_at=at)
+        if scores is not None:
+            self.affection_profiles[expected.requester_id] = updated_profile
+        persisted = replace(
+            expected,
+            state=expected.state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=at),
+            affection_assessment=assessment,
+        )
+        self.current[expected.state.debate_id] = persisted
+        self.history[expected.state.debate_id].append(persisted)
+        return persisted
 
     async def replace(
         self,

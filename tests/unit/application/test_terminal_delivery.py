@@ -19,11 +19,15 @@ from shittim_chest.application import (
     prepare_terminal_outbox_operations,
 )
 from shittim_chest.domain import (
+    AFFECTION_RULES_VERSION,
+    AffectionAssessment,
+    AffectionAssessmentStatus,
     AttemptId,
     DebateId,
     DebatePhase,
     DebateState,
     FinalDecision,
+    ParticipantAffection,
     ParticipantSlot,
     RecoveryState,
     Vote,
@@ -54,6 +58,7 @@ def snapshot(
     error_code: str | None = None,
     thread_id: str | None = "103",
     terminal_delivery: TerminalDeliveryPlan | None = None,
+    affection_assessment: AffectionAssessment | None = None,
 ) -> DebateSnapshot:
     return DebateSnapshot(
         state=DebateState(
@@ -81,6 +86,7 @@ def snapshot(
         votes=(votes_for_winner(final_decision.winner) if final_decision is not None else ()),
         error_code=error_code,
         terminal_delivery=terminal_delivery,
+        affection_assessment=affection_assessment,
     )
 
 
@@ -137,6 +143,54 @@ def test_completed_delivery_contains_decision_actions_and_caveats_without_discla
     assert "- 薄力粉と卵を混ぜる" in decision_content
     assert "- 甘さは好みで調整する" in decision_content
     assert AI_DISCLAIMER not in decision_content
+
+
+def test_completed_delivery_reports_effective_affection_changes() -> None:
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=(
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_A, 590, 35, 35, 625),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_B, 98, -43, -43, 55),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_C, 987, 50, 13, 1000),
+        ),
+        assessed_at=NOW,
+    )
+    source = snapshot(final_decision=final_decision(), affection_assessment=assessment)
+
+    operations = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
+    )
+
+    assert "**親愛度の変化**" in operations[0].content
+    assert "- アロナ: 625点\uff08+35\uff09" in operations[0].content
+    assert "- プラナ: 55点\uff08-43\uff09" in operations[0].content
+    assert "- 安倍晋三: 1000点\uff08+13\uff09" in operations[0].content
+
+
+def test_completed_delivery_explains_unavailable_affection_without_zeroing_scores() -> None:
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.UNAVAILABLE,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=tuple(
+            ParticipantAffection(participant, 500, None, 0, 500) for participant in ParticipantSlot
+        ),
+        assessed_at=NOW,
+    )
+    source = snapshot(final_decision=final_decision(), affection_assessment=assessment)
+
+    operations = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
+    )
+
+    assert "質問の評価を完了できなかったため、親愛度は変更していません。" in (operations[0].content)
+    assert "500点" not in operations[0].content
 
 
 def test_completed_delivery_explains_a_tied_ballot_before_the_winner_speaks() -> None:
@@ -225,6 +279,39 @@ def test_failed_and_cancelled_delivery_have_concise_terminal_content() -> None:
     assert AI_DISCLAIMER not in cancelled_content
     assert all(operation.bot_slot is DiscordBotSlot.MODERATOR for operation in failed)
     assert all(operation.bot_slot is DiscordBotSlot.MODERATOR for operation in cancelled)
+
+
+def test_failed_and_cancelled_delivery_preserve_applied_affection_visibility() -> None:
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=(
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_A, 500, 35, 35, 535),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_B, 500, -43, -43, 457),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_C, 987, 50, 13, 1_000),
+        ),
+        assessed_at=NOW,
+    )
+
+    failed = prepare_terminal_outbox_operations(
+        snapshot=snapshot(affection_assessment=assessment),
+        target_phase=DebatePhase.FAILED,
+        error_code="OPENAI_TIMEOUT",
+        created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
+    )
+    cancelled = prepare_terminal_outbox_operations(
+        snapshot=snapshot(affection_assessment=assessment),
+        target_phase=DebatePhase.CANCELLED,
+        created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
+    )
+
+    for content in (failed[0].content, cancelled[0].content):
+        assert "**親愛度の変化**" in content
+        assert "アロナ: 535点\uff08+35\uff09" in content
+        assert "プラナ: 457点\uff08-43\uff09" in content
+        assert "安倍晋三: 1000点\uff08+13\uff09" in content
 
 
 @pytest.mark.parametrize(

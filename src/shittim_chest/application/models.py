@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum, unique
 
 from shittim_chest.domain import (
+    AffectionAssessment,
     AttemptId,
     DebateId,
     DebatePhase,
@@ -737,6 +738,7 @@ class DebateSnapshot:
     votes: tuple[Vote, ...] = ()
     final_decision: FinalDecision | None = None
     escalation_assessment: EscalationAssessment | None = None
+    affection_assessment: AffectionAssessment | None = None
     generation_checkpoints: tuple[GenerationCheckpoint, ...] = ()
     error_code: str | None = None
     terminal_delivery: TerminalDeliveryPlan | PhaseDeliveryPlan | None = None
@@ -824,6 +826,11 @@ class DebateSnapshot:
             raise ValueError("settled panel refresh cannot retain retry or claim state")
         if self.error_code is not None and not self.error_code.strip():
             raise ValueError("error code must be non-empty when present")
+        if self.affection_assessment is not None:
+            if self.state.phase in {DebatePhase.ACCEPTED, DebatePhase.SCORING_AFFECTION}:
+                raise ValueError("affection assessment requires the scoring phase to be settled")
+            if self.affection_assessment.assessed_at < self.created_at:
+                raise ValueError("affection assessment cannot precede the debate")
         checkpoint_keys = tuple(
             (checkpoint.phase, checkpoint.participant) for checkpoint in self.generation_checkpoints
         )

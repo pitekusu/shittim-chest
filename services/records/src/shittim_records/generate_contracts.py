@@ -271,6 +271,35 @@ def build_openapi() -> dict[str, Any]:
                     },
                 }
             },
+            "/api/v1/insights/affection-rankings": {
+                "get": {
+                    "operationId": "getAffectionRankings",
+                    "parameters": [
+                        _parameter(
+                            "limit",
+                            "query",
+                            {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 50,
+                                "default": 50,
+                            },
+                        ),
+                        _parameter(
+                            "cursor",
+                            "query",
+                            {"type": "string", "minLength": 1, "maxLength": 4096},
+                        ),
+                    ],
+                    "responses": {
+                        "200": _response(
+                            "AffectionRankingsResponse",
+                            "Requester affection rankings for all three participants",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
             "/api/v1/insights/costs": {
                 "get": {
                     "operationId": "getCosts",

@@ -7,7 +7,15 @@ from dataclasses import replace
 
 import pytest
 from shittim_chest.application import DebateSnapshot
-from shittim_chest.domain import DebatePhase, FinalDecision, ParticipantSlot
+from shittim_chest.domain import (
+    AFFECTION_RULES_VERSION,
+    AffectionAssessment,
+    AffectionAssessmentStatus,
+    DebatePhase,
+    FinalDecision,
+    ParticipantAffection,
+    ParticipantSlot,
+)
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import ProjectionRejected, project_completed_debate
@@ -90,6 +98,60 @@ def test_projection_is_deterministic_and_public_identity_is_hmac_derived() -> No
     )
     assert changed_requester.record_id == first.record_id
     assert changed_requester.source_fingerprint != first.source_fingerprint
+
+
+def test_affection_projection_uses_archive_v2_and_exposes_only_question_changes() -> None:
+    source = completed_snapshot()
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=(
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_A, 500, 35, 35, 535),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_B, 10, -43, -10, 0),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_C, 987, 50, 13, 1000),
+        ),
+        assessed_at=NOW,
+    )
+
+    projection = project_completed_debate(
+        replace(source, affection_assessment=assessment),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+
+    assert projection.schema_version == 2
+    assert {item["schema_version"] for item in projection.items} == {2}
+    assert any(item["SK"] == "PROJECTION#V2" for item in projection.items)
+    meta = next(item for item in projection.items if item["SK"] == "META")
+    assert meta["affection"] == {
+        "status": "applied",
+        "rubric_version": AFFECTION_RULES_VERSION,
+        "participants": [
+            {
+                "participant": "participant-a",
+                "before": 500,
+                "question_score": 35,
+                "applied_delta": 35,
+                "after": 535,
+            },
+            {
+                "participant": "participant-b",
+                "before": 10,
+                "question_score": -43,
+                "applied_delta": -10,
+                "after": 0,
+            },
+            {
+                "participant": "participant-c",
+                "before": 987,
+                "question_score": 50,
+                "applied_delta": 13,
+                "after": 1000,
+            },
+        ],
+    }
+    assert source.requester_id not in repr(projection.items)
 
 
 @pytest.mark.parametrize(

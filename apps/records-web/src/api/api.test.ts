@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { getAffectionRankings, mergeAffectionRankingPages } from "./affectionRankings";
 import { getCosts } from "./costs";
 import {
   applyAdminPrompts,
@@ -14,6 +15,7 @@ import { getRecord } from "./recordDetail";
 import { getRecords } from "./recordList";
 import { getRankings } from "./rankings";
 import { getSession } from "./session";
+import type { AffectionRankingsResponse } from "./types";
 
 const RECORD_ID = "r".repeat(43);
 
@@ -37,7 +39,7 @@ function recordDetail() {
     avatar: placeholder(displayName!, fallbackVariant as "cyan" | "pink" | "lavender"),
   }));
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     recordId: RECORD_ID,
     completedAt: "2026-08-15T06:00:00Z",
     question: "休日の過ごし方を決める",
@@ -74,6 +76,7 @@ function recordDetail() {
       actions: ["実行する"],
       caveats: ["注意する"],
     },
+    affection: null,
   };
 }
 
@@ -103,6 +106,44 @@ function rankingsResponse() {
     requests: [],
     generatedAt: "2026-08-22T00:00:00Z",
   };
+}
+
+function affectionRankingsResponse() {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-08-22T00:05:00Z",
+    defaultScore: 500,
+    maxScore: 1000,
+    rankings: [
+      { participant: "participant-a", displayName: "アロナ", entries: [] },
+      { participant: "participant-b", displayName: "プラナ", entries: [] },
+      { participant: "participant-c", displayName: "安倍晋三AI", entries: [] },
+    ],
+    nextCursor: null,
+  };
+}
+
+function affectionRankingsPage(
+  rank: number,
+  score: number,
+  nextCursor: string | null,
+): AffectionRankingsResponse {
+  const base = affectionRankingsResponse();
+  return {
+    ...base,
+    rankings: base.rankings.map((ranking) => ({
+      ...ranking,
+      entries: [
+        {
+          rank,
+          displayName: `依頼者${rank}`,
+          avatar: placeholder(`依頼者${rank}`, "cyan"),
+          score,
+        },
+      ],
+    })),
+    nextCursor,
+  } as AffectionRankingsResponse;
 }
 
 function costsResponse() {
@@ -259,6 +300,92 @@ describe("Records API endpoint validation", () => {
     );
 
     await expect(getRankings()).resolves.toEqual(rankingsResponse());
+  });
+
+  it("validates the separate all-requester affection rankings contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(affectionRankingsResponse()))),
+    );
+
+    await expect(getAffectionRankings()).resolves.toEqual(affectionRankingsResponse());
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/insights/affection-rankings?limit=50",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("encodes the opaque affection rankings cursor without changing the page limit", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(affectionRankingsResponse()))),
+    );
+
+    await getAffectionRankings("cursor+/=");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/insights/affection-rankings?limit=50&cursor=cursor%2B%2F%3D",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("merges validated affection pages in fixed participant and rank order", () => {
+    const merged = mergeAffectionRankingPages(
+      [affectionRankingsPage(1, 700, "next"), affectionRankingsPage(2, 600, null)],
+      [undefined, "next"],
+    );
+
+    expect(merged.nextCursor).toBeNull();
+    expect(merged.rankings.map((ranking) => ranking.participant)).toEqual([
+      "participant-a",
+      "participant-b",
+      "participant-c",
+    ]);
+    expect(merged.rankings.map((ranking) => ranking.entries.map((entry) => entry.rank))).toEqual([
+      [1, 2],
+      [1, 2],
+      [1, 2],
+    ]);
+  });
+
+  it("rejects duplicate pages, participant mismatches, and invalid cross-page ranks", () => {
+    const first = affectionRankingsPage(1, 700, "next");
+    const duplicate = { ...first, nextCursor: null };
+    const validSecond = affectionRankingsPage(2, 600, null);
+    const participantMismatch = {
+      ...validSecond,
+      rankings: [validSecond.rankings[1]!, validSecond.rankings[0]!, validSecond.rankings[2]!],
+    } as AffectionRankingsResponse;
+
+    expect(() => mergeAffectionRankingPages([first, duplicate], [undefined, "next"])).toThrow(
+      "サーバーから不正な応答を受信しました。",
+    );
+    expect(() =>
+      mergeAffectionRankingPages([first, participantMismatch], [undefined, "next"]),
+    ).toThrow("サーバーから不正な応答を受信しました。");
+    expect(() =>
+      mergeAffectionRankingPages([first, affectionRankingsPage(1, 600, null)], [undefined, "next"]),
+    ).toThrow("サーバーから不正な応答を受信しました。");
+  });
+
+  it("rejects private requester identifiers in affection rankings", async () => {
+    const rankings = affectionRankingsResponse();
+    rankings.rankings[0]!.entries.push({
+      rank: 1,
+      displayName: "依頼者",
+      avatar: placeholder("依頼者", "cyan"),
+      score: 500,
+      requesterKey: "must-not-pass",
+    } as never);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(rankings))),
+    );
+
+    await expect(getAffectionRankings()).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_API_RESPONSE",
+    });
   });
 
   it("validates costs with its route-private JPY schema", async () => {

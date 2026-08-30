@@ -16,6 +16,7 @@ class DebatePhase(StrEnum):
     """Persisted phases in the only valid forward order."""
 
     ACCEPTED = "accepted"
+    SCORING_AFFECTION = "scoring_affection"
     PREPARING_EVIDENCE = "preparing_evidence"
     COLLECTING_INITIAL_OPINIONS = "collecting_initial_opinions"
     DISCUSSING = "discussing"
@@ -43,6 +44,7 @@ class RecoveryState(StrEnum):
 
 NORMAL_PHASE_FLOW: Final[tuple[DebatePhase, ...]] = (
     DebatePhase.ACCEPTED,
+    DebatePhase.SCORING_AFFECTION,
     DebatePhase.PREPARING_EVIDENCE,
     DebatePhase.COLLECTING_INITIAL_OPINIONS,
     DebatePhase.DISCUSSING,
@@ -154,7 +156,7 @@ class DebateState:
     updated_at: datetime
     retry_of: AttemptId | None = None
     failed_from_phase: DebatePhase | None = None
-    schema_version: int = 7
+    schema_version: int = 8
 
     def __post_init__(self) -> None:
         _validate_utc_timestamp(self.updated_at)

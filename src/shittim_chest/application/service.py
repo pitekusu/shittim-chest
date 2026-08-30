@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from shittim_chest.application.discord import (
     DiscordBotSlot,
@@ -62,6 +62,7 @@ from shittim_chest.application.ports import (
 )
 from shittim_chest.application.scale_to_zero import IngressClaimFence, IngressKind
 from shittim_chest.domain import (
+    DEFAULT_AFFECTION_SCORE,
     PARTICIPANTS,
     AttemptId,
     DebateId,
@@ -718,7 +719,9 @@ class DebateApplication:
 
             phase = snapshot.state.phase
             if phase is DebatePhase.ACCEPTED:
-                await self._advance(snapshot, DebatePhase.PREPARING_EVIDENCE)
+                await self._advance(snapshot, DebatePhase.SCORING_AFFECTION)
+            elif phase is DebatePhase.SCORING_AFFECTION:
+                await self._score_affection(snapshot)
             elif phase is DebatePhase.PREPARING_EVIDENCE:
                 await self._prepare_evidence(snapshot)
             elif phase is DebatePhase.COLLECTING_INITIAL_OPINIONS:
@@ -733,6 +736,42 @@ class DebateApplication:
                 await self._generate_decision(snapshot)
             else:
                 raise InvalidApplicationOperation(f"unsupported active phase: {phase.value}")
+
+    async def _score_affection(self, snapshot: DebateSnapshot) -> None:
+        """Score all personas independently and apply only one complete score set."""
+
+        tasks = tuple(
+            asyncio.create_task(
+                self._within_phase(
+                    self._openai.score_affection(
+                        participant=participant,
+                        question=snapshot.question,
+                    )
+                ),
+                name=f"affection:{participant.value}",
+            )
+            for participant in PARTICIPANTS
+        )
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            raise
+        scores: tuple[int, int, int] | None
+        if any(isinstance(result, BaseException) for result in results):
+            scores = None
+        else:
+            scores = (
+                cast(int, results[0]),
+                cast(int, results[1]),
+                cast(int, results[2]),
+            )
+        await self._repository.settle_affection(
+            expected=snapshot,
+            scores=scores,
+            at=self._clock.now(),
+        )
 
     async def _prepare_evidence(self, snapshot: DebateSnapshot) -> None:
         evidence = snapshot.evidence
@@ -1291,6 +1330,7 @@ class DebateApplication:
                     evidence=evidence,
                     proposals=snapshot.final_proposals,
                     voting_result=voting_result,
+                    affection_score=_affection_score(snapshot, voting_result.winner),
                 )
             )
         except asyncio.CancelledError:
@@ -1437,6 +1477,7 @@ class DebateApplication:
                     participant=participant,
                     question=snapshot.question,
                     evidence=evidence,
+                    affection_score=_affection_score(snapshot, participant),
                 )
             )
         except GenerationProviderError as error:
@@ -1582,6 +1623,7 @@ class DebateApplication:
                     question=snapshot.question,
                     evidence=evidence,
                     initial_opinions=snapshot.initial_opinions,
+                    affection_score=_affection_score(snapshot, participant),
                 )
             )
         except GenerationProviderError as error:
@@ -1675,6 +1717,7 @@ class DebateApplication:
                         question=question,
                         evidence=evidence,
                         initial_opinions=initial_opinions,
+                        affection_score=DEFAULT_AFFECTION_SCORE,
                     ),
                     name=f"proposal:{participant.value}",
                 )
@@ -2021,9 +2064,7 @@ class DebateApplication:
             target_phase=target,
             created_at=staged_at,
             error_code=error_code,
-            participant_display_names=(
-                self._participant_display_names if target is DebatePhase.COMPLETED else None
-            ),
+            participant_display_names=self._participant_display_names,
         )
         delivery = PhaseDeliveryPlan(
             plan_id=operations[0].plan_id or f"terminal-{target.value}",
@@ -2515,3 +2556,12 @@ def _validate_participant_outputs(
         raise ValueError(f"{label} must contain exactly one item per participant")
     if {output.participant for output in outputs} != set(PARTICIPANTS):
         raise ValueError(f"{label} contain a duplicate or unknown participant")
+
+
+def _affection_score(snapshot: DebateSnapshot, participant: ParticipantSlot) -> int:
+    """Read a post-assessment score while preserving schema-v7 retry compatibility."""
+
+    assessment = snapshot.affection_assessment
+    if assessment is None:
+        return DEFAULT_AFFECTION_SCORE
+    return assessment.score_for(participant)

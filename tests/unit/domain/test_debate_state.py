@@ -28,6 +28,7 @@ STARTED_AT = datetime(2026, 7, 16, 0, 0, tzinfo=UTC)
 EXPECTED_NON_TERMINAL_PHASES = frozenset(
     {
         DebatePhase.ACCEPTED,
+        DebatePhase.SCORING_AFFECTION,
         DebatePhase.PREPARING_EVIDENCE,
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
         DebatePhase.DISCUSSING,
@@ -41,7 +42,8 @@ EXPECTED_TERMINAL_PHASES = frozenset(
 )
 EXPECTED_PHASE_TRANSITIONS = frozenset(
     {
-        (DebatePhase.ACCEPTED, DebatePhase.PREPARING_EVIDENCE),
+        (DebatePhase.ACCEPTED, DebatePhase.SCORING_AFFECTION),
+        (DebatePhase.SCORING_AFFECTION, DebatePhase.PREPARING_EVIDENCE),
         (DebatePhase.PREPARING_EVIDENCE, DebatePhase.COLLECTING_INITIAL_OPINIONS),
         (DebatePhase.COLLECTING_INITIAL_OPINIONS, DebatePhase.DISCUSSING),
         (DebatePhase.DISCUSSING, DebatePhase.COLLECTING_FINAL_PROPOSALS),
@@ -49,6 +51,7 @@ EXPECTED_PHASE_TRANSITIONS = frozenset(
         (DebatePhase.SELECTING_WINNER, DebatePhase.GENERATING_DECISION),
         (DebatePhase.GENERATING_DECISION, DebatePhase.COMPLETED),
         (DebatePhase.ACCEPTED, DebatePhase.CANCELLED),
+        (DebatePhase.SCORING_AFFECTION, DebatePhase.CANCELLED),
         (DebatePhase.PREPARING_EVIDENCE, DebatePhase.CANCELLED),
         (DebatePhase.COLLECTING_INITIAL_OPINIONS, DebatePhase.CANCELLED),
         (DebatePhase.DISCUSSING, DebatePhase.CANCELLED),
@@ -56,6 +59,7 @@ EXPECTED_PHASE_TRANSITIONS = frozenset(
         (DebatePhase.SELECTING_WINNER, DebatePhase.CANCELLED),
         (DebatePhase.GENERATING_DECISION, DebatePhase.CANCELLED),
         (DebatePhase.ACCEPTED, DebatePhase.FAILED),
+        (DebatePhase.SCORING_AFFECTION, DebatePhase.FAILED),
         (DebatePhase.PREPARING_EVIDENCE, DebatePhase.FAILED),
         (DebatePhase.COLLECTING_INITIAL_OPINIONS, DebatePhase.FAILED),
         (DebatePhase.DISCUSSING, DebatePhase.FAILED),
@@ -92,6 +96,7 @@ def make_state(
 def test_persisted_enum_values_are_explicit_and_stable() -> None:
     assert tuple(phase.value for phase in DebatePhase) == (
         "accepted",
+        "scoring_affection",
         "preparing_evidence",
         "collecting_initial_opinions",
         "discussing",
@@ -105,8 +110,8 @@ def test_persisted_enum_values_are_explicit_and_stable() -> None:
     assert tuple(state.value for state in RecoveryState) == ("none", "checkpointed")
 
 
-def test_phase_transition_matrix_contains_exactly_the_21_designed_edges() -> None:
-    assert len(EXPECTED_PHASE_TRANSITIONS) == 21
+def test_phase_transition_matrix_contains_exactly_the_24_designed_edges() -> None:
+    assert len(EXPECTED_PHASE_TRANSITIONS) == 24
     assert ALLOWED_PHASE_TRANSITIONS == EXPECTED_PHASE_TRANSITIONS
 
     for current in DebatePhase:
@@ -160,7 +165,7 @@ def test_phase_transition_is_blocked_while_checkpointed() -> None:
     state = make_state().checkpoint(at=STARTED_AT)
 
     with pytest.raises(InvalidRecoveryTransition) as raised:
-        state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=STARTED_AT)
+        state.transition_to(DebatePhase.SCORING_AFFECTION, at=STARTED_AT)
 
     assert raised.value.code == "invalid_recovery_transition"
     assert raised.value.operation == "phase_transition"
@@ -217,7 +222,7 @@ def test_timestamp_cannot_move_backwards_but_may_stay_equal() -> None:
             at=STARTED_AT - timedelta(microseconds=1),
         )
 
-    transitioned = state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=STARTED_AT)
+    transitioned = state.transition_to(DebatePhase.SCORING_AFFECTION, at=STARTED_AT)
     assert transitioned.updated_at == STARTED_AT
 
 

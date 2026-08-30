@@ -1,5 +1,16 @@
 """Domain types and invariants for The Shittim Chest."""
 
+from shittim_chest.domain.affection import (
+    AFFECTION_RULES_VERSION,
+    DEFAULT_AFFECTION_SCORE,
+    MAX_AFFECTION_SCORE,
+    MIN_AFFECTION_SCORE,
+    AffectionAssessment,
+    AffectionAssessmentStatus,
+    AffectionProfile,
+    ParticipantAffection,
+    assess_affection,
+)
 from shittim_chest.domain.debate_content import (
     PARTICIPANTS,
     STABLE_TIE_BREAK_ORDER,
@@ -33,9 +44,16 @@ from shittim_chest.domain.escalation import (
 from shittim_chest.domain.identifiers import AttemptId, DebateId
 
 __all__ = (
+    "AFFECTION_RULES_VERSION",
+    "DEFAULT_AFFECTION_SCORE",
     "ESCALATION_RULES_VERSION",
+    "MAX_AFFECTION_SCORE",
+    "MIN_AFFECTION_SCORE",
     "PARTICIPANTS",
     "STABLE_TIE_BREAK_ORDER",
+    "AffectionAssessment",
+    "AffectionAssessmentStatus",
+    "AffectionProfile",
     "AttemptId",
     "DebateId",
     "DebatePhase",
@@ -52,11 +70,13 @@ __all__ = (
     "InvalidRetryTransition",
     "InvalidStateTransition",
     "InvalidVote",
+    "ParticipantAffection",
     "ParticipantSlot",
     "RecoveryState",
     "SearchRequirement",
     "Vote",
     "VotingResult",
+    "assess_affection",
     "assess_escalation",
     "select_winner",
 )

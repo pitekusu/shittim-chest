@@ -96,6 +96,29 @@ def new_snapshot(*, offset: int = 0) -> DebateSnapshot:
     )
 
 
+async def settle_unavailable_affection(
+    repository: DynamoDbDebateRepository,
+    snapshot: DebateSnapshot,
+    *,
+    scoring_at: datetime,
+) -> DebateSnapshot:
+    scoring = await repository.replace(
+        expected=snapshot,
+        updated=replace(
+            snapshot,
+            state=snapshot.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=scoring_at,
+            ),
+        ),
+    )
+    return await repository.settle_affection(
+        expected=scoring,
+        scores=None,
+        at=scoring_at + timedelta(microseconds=1),
+    )
+
+
 async def claimed_ingress(
     *,
     repository: DynamoDbIngressRepository,
@@ -179,9 +202,7 @@ async def finalize_terminal_delivery(
         target_phase=target_phase,
         created_at=staged_at,
         error_code=error_code,
-        participant_display_names=(
-            DISPLAY_NAMES if target_phase is DebatePhase.COMPLETED else None
-        ),
+        participant_display_names=DISPLAY_NAMES,
     )
     plan = PhaseDeliveryPlan(
         plan_id=operations[0].plan_id or f"terminal-{target_phase.value}",
@@ -368,15 +389,10 @@ async def test_initial_opinion_delivery_stages_and_finalizes_without_releasing_t
             control_panel_message_id="103",
         ),
     )
-    preparing = await debates.replace(
-        expected=bound,
-        updated=replace(
-            bound,
-            state=bound.state.transition_to(
-                DebatePhase.PREPARING_EVIDENCE,
-                at=NOW + timedelta(seconds=1),
-            ),
-        ),
+    preparing = await settle_unavailable_affection(
+        debates,
+        bound,
+        scoring_at=NOW + timedelta(seconds=1),
     )
     collecting = await debates.replace(
         expected=preparing,
@@ -490,15 +506,10 @@ async def test_final_proposal_delivery_stages_and_finalizes_in_its_reserved_rang
             control_panel_message_id="303",
         ),
     )
-    preparing = await debates.replace(
-        expected=bound,
-        updated=replace(
-            bound,
-            state=bound.state.transition_to(
-                DebatePhase.PREPARING_EVIDENCE,
-                at=NOW + timedelta(seconds=21),
-            ),
-        ),
+    preparing = await settle_unavailable_affection(
+        debates,
+        bound,
+        scoring_at=NOW + timedelta(seconds=21),
     )
     collecting_initial = await debates.replace(
         expected=preparing,
@@ -630,15 +641,10 @@ async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
             control_panel_message_id="503",
         ),
     )
-    preparing = await debates.replace(
-        expected=bound,
-        updated=replace(
-            bound,
-            state=bound.state.transition_to(
-                DebatePhase.PREPARING_EVIDENCE,
-                at=NOW + timedelta(seconds=41),
-            ),
-        ),
+    preparing = await settle_unavailable_affection(
+        debates,
+        bound,
+        scoring_at=NOW + timedelta(seconds=41),
     )
     collecting_initial = await debates.replace(
         expected=preparing,
@@ -1700,7 +1706,7 @@ async def test_phase_write_cannot_restore_a_stale_panel_refresh_claim(
     stale_phase_write = replace(
         retry,
         state=retry.state.transition_to(
-            DebatePhase.PREPARING_EVIDENCE,
+            DebatePhase.SCORING_AFFECTION,
             at=NOW + timedelta(seconds=3),
         ),
     )
@@ -1720,7 +1726,7 @@ async def test_phase_write_cannot_restore_a_stale_panel_refresh_claim(
     stale_claimed_phase_write = replace(
         panel_claim,
         state=panel_claim.state.transition_to(
-            DebatePhase.PREPARING_EVIDENCE,
+            DebatePhase.SCORING_AFFECTION,
             at=NOW + timedelta(seconds=3),
         ),
     )
@@ -1740,12 +1746,12 @@ async def test_phase_write_cannot_restore_a_stale_panel_refresh_claim(
         updated=replace(
             completed,
             state=completed.state.transition_to(
-                DebatePhase.PREPARING_EVIDENCE,
+                DebatePhase.SCORING_AFFECTION,
                 at=NOW + timedelta(seconds=3),
             ),
         ),
     )
-    assert advanced.state.phase is DebatePhase.PREPARING_EVIDENCE
+    assert advanced.state.phase is DebatePhase.SCORING_AFFECTION
     assert advanced.panel_refresh_pending is False
 
 
@@ -2052,6 +2058,234 @@ async def test_daily_quota_condition_fails_closed(
 
 
 @pytest.mark.asyncio
+async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_profile_cas(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    first = await repository.create(
+        new_snapshot(),
+        operation_id="affection-first",
+        lease_owner="worker-1",
+    )
+    first = await repository.replace(
+        expected=first,
+        updated=replace(
+            first,
+            state=first.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(microseconds=1),
+            ),
+        ),
+    )
+
+    settled, replay = await asyncio.gather(
+        repository.settle_affection(
+            expected=first,
+            scores=(10, -20, 100),
+            at=NOW + timedelta(microseconds=2),
+        ),
+        repository.settle_affection(
+            expected=first,
+            scores=(10, -20, 100),
+            at=NOW + timedelta(microseconds=2),
+        ),
+    )
+
+    assert settled == replay
+    assert settled.state.phase is DebatePhase.PREPARING_EVIDENCE
+    assert settled.affection_assessment is not None
+    assert tuple(item.after for item in settled.affection_assessment.participants) == (
+        510,
+        480,
+        600,
+    )
+    profile_key = {
+        "PK": f"AFFECTION#REQUESTER#{settled.requester_id}",
+        "SK": "PROFILE",
+    }
+    raw_profile = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(profile_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert raw_profile["scores"] == [510, 480, 600]
+    assert raw_profile["version"] == 1
+
+    second = await repository.create(
+        new_snapshot(offset=10),
+        operation_id="affection-second",
+        lease_owner="worker-2",
+    )
+    second = await repository.replace(
+        expected=second,
+        updated=replace(
+            second,
+            state=second.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(seconds=11),
+            ),
+        ),
+    )
+    third = await repository.create(
+        new_snapshot(offset=20),
+        operation_id="affection-third",
+        lease_owner="worker-3",
+    )
+    third = await repository.replace(
+        expected=third,
+        updated=replace(
+            third,
+            state=third.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(seconds=21),
+            ),
+        ),
+    )
+    second, third = await asyncio.gather(
+        repository.settle_affection(
+            expected=second,
+            scores=(20, 20, -100),
+            at=NOW + timedelta(seconds=30),
+        ),
+        repository.settle_affection(
+            expected=third,
+            scores=(30, -10, 50),
+            at=NOW + timedelta(seconds=31),
+        ),
+    )
+    assert second.affection_assessment is not None
+    assert third.affection_assessment is not None
+    assert tuple(item.question_score for item in second.affection_assessment.participants) == (
+        20,
+        20,
+        -100,
+    )
+    assert tuple(item.question_score for item in third.affection_assessment.participants) == (
+        30,
+        -10,
+        50,
+    )
+    raw_profile = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(profile_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert raw_profile["scores"] == [560, 490, 550]
+    assert raw_profile["version"] == 3
+
+
+@pytest.mark.asyncio
+async def test_first_unavailable_affection_assessment_does_not_create_a_profile(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(new_snapshot(), requester_id="unavailable-only"),
+        operation_id="affection-unavailable-first",
+        lease_owner="worker-1",
+    )
+    scoring = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=accepted.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=accepted.created_at + timedelta(seconds=1),
+            ),
+        ),
+    )
+    settled = await repository.settle_affection(
+        expected=scoring,
+        scores=None,
+        at=accepted.created_at + timedelta(seconds=2),
+    )
+
+    assert settled.affection_assessment is not None
+    assert settled.affection_assessment.status.value == "unavailable"
+    profile_key = {
+        "PK": f"AFFECTION#REQUESTER#{settled.requester_id}",
+        "SK": "PROFILE",
+    }
+    assert "Item" not in dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(profile_key),
+        ConsistentRead=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unavailable_affection_assessment_does_not_rewrite_an_existing_profile(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    applied = await repository.create(
+        new_snapshot(),
+        operation_id="affection-profile-source",
+        lease_owner="worker-1",
+    )
+    applied = await repository.replace(
+        expected=applied,
+        updated=replace(
+            applied,
+            state=applied.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(microseconds=1),
+            ),
+        ),
+    )
+    applied = await repository.settle_affection(
+        expected=applied,
+        scores=(10, -20, 100),
+        at=NOW + timedelta(microseconds=2),
+    )
+    profile_key = {
+        "PK": f"AFFECTION#REQUESTER#{applied.requester_id}",
+        "SK": "PROFILE",
+    }
+    profile_before = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(profile_key),
+        ConsistentRead=True,
+    )["Item"]
+
+    snapshots: list[DebateSnapshot] = []
+    for index in range(2):
+        accepted = await repository.create(
+            new_snapshot(offset=(index + 1) * 10),
+            operation_id=f"affection-unavailable-existing-{index}",
+            lease_owner=f"worker-{index + 2}",
+        )
+        snapshots.append(
+            await settle_unavailable_affection(
+                repository,
+                accepted,
+                scoring_at=accepted.created_at + timedelta(seconds=1),
+            )
+        )
+    assert all(
+        snapshot.affection_assessment is not None
+        and snapshot.affection_assessment.status.value == "unavailable"
+        for snapshot in snapshots
+    )
+    profile_after = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(profile_key),
+        ConsistentRead=True,
+    )["Item"]
+    assert profile_after == profile_before
+    raw_profile = unmarshal_item(profile_after)
+    assert raw_profile["scores"] == [510, 480, 600]
+    assert raw_profile["version"] == 1
+
+
+@pytest.mark.asyncio
 async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,
@@ -2067,6 +2301,21 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
         ),
         operation_id="accept",
         lease_owner="worker-1",
+    )
+    accepted = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=accepted.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(microseconds=100),
+            ),
+        ),
+    )
+    accepted = await repository.settle_affection(
+        expected=accepted,
+        scores=(10, -20, 100),
+        at=NOW + timedelta(microseconds=101),
     )
     persisted_failed = await finalize_terminal_delivery(
         debates=repository,
@@ -2113,6 +2362,20 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
     assert persisted_retry.lease is not None
     assert persisted_retry.requester_username == accepted.requester_username
     assert persisted_retry.requester_display_name == accepted.requester_display_name
+    assert persisted_retry.affection_assessment == accepted.affection_assessment
+    profile_key = {
+        "PK": f"AFFECTION#REQUESTER#{accepted.requester_id}",
+        "SK": "PROFILE",
+    }
+    profile = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(profile_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert profile["scores"] == [510, 480, 600]
+    assert profile["version"] == 1
     assert await repository.get_operation_result("retry") == persisted_retry
     assert (
         await repository.create_retry(
@@ -2165,7 +2428,7 @@ async def test_recoverable_gsi_claim_and_lease_renewal_are_fenced(
     stale_update = replace(
         accepted,
         state=accepted.state.transition_to(
-            DebatePhase.PREPARING_EVIDENCE,
+            DebatePhase.SCORING_AFFECTION,
             at=NOW + timedelta(seconds=1),
         ),
     )
@@ -2183,7 +2446,7 @@ async def test_recoverable_gsi_claim_and_lease_renewal_are_fenced(
     advanced = replace(
         current,
         state=current.state.transition_to(
-            DebatePhase.PREPARING_EVIDENCE,
+            DebatePhase.SCORING_AFFECTION,
             at=NOW + timedelta(seconds=21),
         ),
     )

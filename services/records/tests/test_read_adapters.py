@@ -21,6 +21,7 @@ class FakeDynamo:
         self.queries: list[dict[str, Any]] = []
         self.batch_calls: list[dict[str, Any]] = []
         self.transact_get_calls: list[dict[str, Any]] = []
+        self.get_calls: list[dict[str, Any]] = []
 
     def query(self, **kwargs: Any) -> dict[str, Any]:
         self.queries.append(kwargs)
@@ -32,6 +33,10 @@ class FakeDynamo:
 
     def transact_get_items(self, **kwargs: Any) -> dict[str, Any]:
         self.transact_get_calls.append(kwargs)
+        return self.responses.pop(0)
+
+    def get_item(self, **kwargs: Any) -> dict[str, Any]:
+        self.get_calls.append(kwargs)
         return self.responses.pop(0)
 
 
@@ -91,6 +96,70 @@ def test_rankings_use_one_atomic_read_for_both_snapshots() -> None:
             ]
         }
     ]
+
+
+def test_affection_pointer_and_generation_are_strongly_consistent_reads() -> None:
+    generation_id = "a" * 32
+    pointer = marshal_item({"PK": "RANKING#AFFECTION", "SK": "CURRENT"})
+    generation = marshal_item({"PK": f"RANKING#AFFECTION#GEN#{generation_id}", "SK": "META"})
+    client = FakeDynamo([{"Item": pointer}, {"Item": generation}])
+    records = reader(client)
+
+    assert records.load_affection_ranking_pointer() == {
+        "PK": "RANKING#AFFECTION",
+        "SK": "CURRENT",
+    }
+    assert records.load_affection_ranking_generation(generation_id=generation_id) == {
+        "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+        "SK": "META",
+    }
+    assert all(call["ConsistentRead"] is True for call in client.get_calls)
+
+
+def test_affection_pages_retry_only_unprocessed_batch_keys() -> None:
+    generation_id = "a" * 32
+    page_zero = marshal_item(
+        {
+            "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+            "SK": "PAGE#000000",
+        }
+    )
+    page_one = marshal_item(
+        {
+            "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+            "SK": "PAGE#000001",
+        }
+    )
+    unprocessed = {
+        "statistics": {
+            "Keys": [
+                marshal_item(
+                    {
+                        "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+                        "SK": "PAGE#000001",
+                    }
+                )
+            ],
+            "ConsistentRead": True,
+        }
+    }
+    client = FakeDynamo(
+        [
+            {
+                "Responses": {"statistics": [page_zero]},
+                "UnprocessedKeys": unprocessed,
+            },
+            {"Responses": {"statistics": [page_one]}},
+        ]
+    )
+
+    result = reader(client).load_affection_ranking_pages(
+        generation_id=generation_id,
+        page_indices=(0, 1),
+    )
+
+    assert {item["SK"] for item in result} == {"PAGE#000000", "PAGE#000001"}
+    assert client.batch_calls[1]["RequestItems"] == unprocessed
 
 
 def test_cost_ledger_queries_cost_and_fx_partitions_strongly_consistently() -> None:
