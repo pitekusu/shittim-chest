@@ -67,9 +67,11 @@ exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正
 - vote 3件確定前に公開Outboxをstageしない。
 - winner結果、terminal Outbox、activity counterを矛盾なく確定する。
 - deployment lockがclosedならRuntime producer writeを条件式で拒否する。
-- v7 controlを移行したReleaseでcandidate Runtimeが有効にならなかった場合は、取得時snapshotとの
-  exact conditionを満たす11件とopen lockを1 transactionでv7へ戻す。candidateの適用状態が曖昧な
-  場合はrollbackもlock解放も行わず、fail closedのままoperator判断へ委ねる。
+- v7 controlを移行したReleaseでは、lock取得直後の11件をcanonical化したcontent-free SHA-256を
+  immutable acquire auditへ保存する。candidate Runtimeが有効にならなかった場合は、rollback直前の
+  11件がこの取得時fingerprintと一致し、各recordのexact conditionも満たす場合だけ、open lockとともに
+  1 transactionでv7へ戻す。不一致またはcandidateの適用状態が曖昧な場合はrollbackもlock解放も行わず、
+  fail closedのままoperator判断へ委ねる。
 - transaction cancellation reasonはrequest action順で分類し、本文をlogへ出さない。
 - prompt publish／rollbackはpending audit、idempotency、`CURRENT`をtransactionで整合させる。SSMの
   active pointer切替後にaudit完了が失敗した場合は、次回読込でmanifestとpointerを検証して回復する。

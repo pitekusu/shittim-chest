@@ -19,6 +19,7 @@ from shittim_chest.adapters.dynamodb.control_records import (
 from shittim_chest.adapters.dynamodb.deployment_guard import (
     DeploymentGuardUnavailable,
     DynamoDbDeploymentGuard,
+    _control_snapshot_hash,
 )
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
@@ -52,6 +53,7 @@ class FakeClient:
         self.raise_after_persist = False
         self.raise_before_persist = False
         self.audit_mutation: DynamoItem | None = None
+        self.snapshot_mutation: tuple[int, DynamoItem] | None = None
         self.exceptions = SimpleNamespace(
             TransactionCanceledException=TransactionCanceledException,
         )
@@ -71,6 +73,18 @@ class FakeClient:
                 if item.get("record_type") == "deployment_guard_audit":
                     item.update(self.audit_mutation or {})
                 self.persisted[(cast(str, item["PK"]), cast(str, item["SK"]))] = item
+        self.items = tuple(
+            self.persisted.get(
+                (cast(str, item["PK"]), cast(str, item["SK"])),
+                item,
+            )
+            for item in self.items
+        )
+        if self.snapshot_mutation is not None:
+            index, mutation = self.snapshot_mutation
+            changed = list(self.items)
+            changed[index] = {**changed[index], **mutation}
+            self.items = tuple(changed)
         if self.raise_after_persist:
             raise TransactionCanceledException
         return {}
@@ -211,6 +225,7 @@ def test_previous_schema_acquire_migrates_all_controls_and_locks_atomically() ->
     assert audit["control_schema_before"] == PREVIOUS_SCHEMA_VERSION
     assert audit["control_schema_after"] == CURRENT_SCHEMA_VERSION
     assert audit["control_schema_migrated"] is True
+    assert audit["control_snapshot_after_hash"] == _control_snapshot_hash(migrated)
 
 
 def test_previous_schema_acquire_cancellation_leaves_original_snapshot_untouched() -> None:
@@ -295,6 +310,24 @@ def test_previous_schema_acquire_replay_preserves_original_schema_evidence() -> 
 
     assert acquired.control_schema_before == PREVIOUS_SCHEMA_VERSION
     assert acquired.control_schema_after == CURRENT_SCHEMA_VERSION
+
+
+def test_acquire_replay_fails_closed_when_post_acquire_snapshot_changed() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    client.raise_after_persist = True
+    client.snapshot_mutation = (1, {"count": 1})
+
+    with pytest.raises(DeploymentGuardUnavailable, match="replay snapshot"):
+        _guard(client).acquire(
+            context=_context(),
+            guard_id=GUARD_ID,
+            acquired_at=NOW,
+            expires_at=NOW + timedelta(minutes=15),
+        )
+
+    assert client.items[-1]["lock_state"] == "locked"
+    assert client.items[1]["count"] == 1
+    assert len(client.transact_write_requests) == 1
 
 
 def test_acquire_replay_uses_stored_timestamps_for_same_idempotency_key() -> None:
@@ -455,6 +488,34 @@ def test_release_atomically_rolls_back_migrated_controls_when_runtime_is_not_act
     assert audit["control_schema_before"] == PREVIOUS_SCHEMA_VERSION
     assert audit["control_schema_after"] == PREVIOUS_SCHEMA_VERSION
     assert audit["control_schema_rolled_back"] is True
+
+
+def test_schema_rollback_fails_closed_when_acquired_snapshot_changed() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    guard = _guard(client)
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+    changed = list(client.items)
+    changed[1] = {**changed[1], "count": 1}
+    client.items = tuple(changed)
+
+    with pytest.raises(DeploymentGuardUnavailable, match="does not match acquisition"):
+        guard.release(
+            guard_id=GUARD_ID,
+            expected_fencing_token=acquired.lock.fencing_token,
+            actor="pitekusu",
+            released_at=NOW + timedelta(minutes=1),
+            rollback_control_schema=True,
+        )
+
+    assert len(client.transact_write_requests) == 1
+    assert client.items[-1]["lock_state"] == "locked"
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in client.items)
+    assert (f"CONTROL#DEPLOYMENT#AUDIT#{GUARD_ID}", "RELEASE") not in client.persisted
 
 
 def test_schema_rollback_release_replays_after_ambiguous_sdk_response() -> None:

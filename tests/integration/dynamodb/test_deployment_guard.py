@@ -253,6 +253,53 @@ def test_previous_controls_are_atomically_restored_when_runtime_candidate_is_not
         initializer.validate()
 
 
+def test_previous_control_rollback_rejects_changes_after_acquisition(
+    dynamodb_client: DynamoDBClient,
+    empty_dynamodb_table: str,
+) -> None:
+    _seed_previous_controls(dynamodb_client, empty_dynamodb_table)
+    guard = DynamoDbDeploymentGuard(
+        client=dynamodb_client,
+        table_name=empty_dynamodb_table,
+    )
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+    changed = {**_fixed_control_items(dynamodb_client, empty_dynamodb_table)[1], "count": 1}
+    dynamodb_client.put_item(
+        TableName=empty_dynamodb_table,
+        Item=marshal_item(changed),
+    )
+
+    with pytest.raises(DeploymentGuardUnavailable, match="does not match acquisition"):
+        guard.release(
+            guard_id=GUARD_ID,
+            expected_fencing_token=acquired.lock.fencing_token,
+            actor="pitekusu",
+            released_at=NOW + timedelta(minutes=1),
+            rollback_control_schema=True,
+        )
+
+    retained = _fixed_control_items(dynamodb_client, empty_dynamodb_table)
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in retained)
+    assert retained[1]["count"] == 1
+    assert retained[-1]["lock_state"] == "locked"
+    release_audit = dynamodb_client.get_item(
+        TableName=empty_dynamodb_table,
+        Key=marshal_item(
+            {
+                "PK": f"CONTROL#DEPLOYMENT#AUDIT#{GUARD_ID}",
+                "SK": "RELEASE",
+            }
+        ),
+        ConsistentRead=True,
+    )
+    assert "Item" not in release_audit
+
+
 @pytest.mark.asyncio
 async def test_lock_blocks_ingress_and_idle_stop_until_exact_idempotent_release(
     dynamodb_client: DynamoDBClient,
