@@ -174,6 +174,8 @@ function response(value: unknown, status = 200): Response {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -404,6 +406,37 @@ describe("Records API endpoint validation", () => {
     expect(rollbackHeaders.get("X-Idempotency-Key")).toBe("rollback-idempotency-key");
   });
 
+  it.each([429, 503])(
+    "retries a throttled Admin GET with status %i exactly once",
+    async (status) => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      const prompts = adminPromptsResponse();
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          response(
+            {
+              error: {
+                code: "PROMPT_CONFIGURATION_UNAVAILABLE",
+                message: "プロンプト設定を利用できません。",
+                requestId: "request-id",
+              },
+            },
+            status,
+          ),
+        )
+        .mockResolvedValueOnce(response(prompts));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const request = getAdminPrompts();
+      await vi.runAllTimersAsync();
+
+      await expect(request).resolves.toEqual(prompts);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("rejects private fields in a prompt response", async () => {
     vi.stubGlobal(
       "fetch",
@@ -452,5 +485,27 @@ describe("Records API endpoint validation", () => {
     const init = vi.mocked(fetch).mock.calls[0]?.[1];
     expect(init?.method).toBe("POST");
     expect(init?.body).toBeUndefined();
+  });
+
+  it("does not automatically retry an Admin write", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      response(
+        {
+          error: {
+            code: "ADMIN_STATUS_UNAVAILABLE",
+            message: "稼働状況を取得できません。",
+            requestId: "request-id",
+          },
+        },
+        503,
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(refreshAdminStatus("csrf-token", "idempotency-key")).rejects.toMatchObject({
+      status: 503,
+      code: "ADMIN_STATUS_UNAVAILABLE",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

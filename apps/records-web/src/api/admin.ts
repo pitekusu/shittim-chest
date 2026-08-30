@@ -3,7 +3,7 @@ import adminPromptsResponseValidator from "../generated/admin-prompts-response-v
 import adminRevisionResponseValidator from "../generated/admin-revision-response-validator.mjs";
 import adminRevisionsResponseValidator from "../generated/admin-revisions-response-validator.mjs";
 import adminStatusResponseValidator from "../generated/admin-status-response-validator.mjs";
-import { requestJson } from "./http";
+import { RecordsApiError, requestJson, type ResponseValidator } from "./http";
 import type {
   AdminApplyRequest,
   AdminApplyResponse,
@@ -34,6 +34,28 @@ function isAdminStatusResponse(value: unknown): value is AdminStatusResponse {
   return adminStatusResponseValidator(value);
 }
 
+const ADMIN_GET_RETRYABLE_STATUSES = new Set([429, 503]);
+const ADMIN_GET_RETRY_BASE_MS = 250;
+const ADMIN_GET_RETRY_JITTER_MS = 250;
+
+function waitForAdminGetRetry(): Promise<void> {
+  const delay =
+    ADMIN_GET_RETRY_BASE_MS + Math.floor(Math.random() * (ADMIN_GET_RETRY_JITTER_MS + 1));
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+async function requestAdminGet<T>(path: string, validate: ResponseValidator<T>): Promise<T> {
+  try {
+    return await requestJson(path, validate);
+  } catch (error) {
+    if (!(error instanceof RecordsApiError) || !ADMIN_GET_RETRYABLE_STATUSES.has(error.status)) {
+      throw error;
+    }
+  }
+  await waitForAdminGetRetry();
+  return requestJson(path, validate);
+}
+
 function mutationHeaders(csrfToken: string, idempotencyKey: string): HeadersInit {
   return {
     "Content-Type": "application/json",
@@ -43,7 +65,7 @@ function mutationHeaders(csrfToken: string, idempotencyKey: string): HeadersInit
 }
 
 export function getAdminPrompts(): Promise<AdminPromptsResponse> {
-  return requestJson("/api/v1/admin/prompts", isAdminPromptsResponse);
+  return requestAdminGet("/api/v1/admin/prompts", isAdminPromptsResponse);
 }
 
 export function applyAdminPrompts(
@@ -62,11 +84,11 @@ export function getAdminRevisions(cursor?: string): Promise<AdminRevisionsRespon
   const search = new URLSearchParams();
   if (cursor !== undefined) search.set("cursor", cursor);
   const query = search.size > 0 ? `?${search.toString()}` : "";
-  return requestJson(`/api/v1/admin/prompts/revisions${query}`, isAdminRevisionsResponse);
+  return requestAdminGet(`/api/v1/admin/prompts/revisions${query}`, isAdminRevisionsResponse);
 }
 
 export function getAdminRevision(revision: string): Promise<AdminRevisionResponse> {
-  return requestJson(
+  return requestAdminGet(
     `/api/v1/admin/prompts/revisions/${encodeURIComponent(revision)}`,
     isAdminRevisionResponse,
   );
@@ -85,7 +107,7 @@ export function rollbackAdminPrompts(
 }
 
 export function getAdminStatus(): Promise<AdminStatusResponse> {
-  return requestJson("/api/v1/admin/status", isAdminStatusResponse);
+  return requestAdminGet("/api/v1/admin/status", isAdminStatusResponse);
 }
 
 export function refreshAdminStatus(

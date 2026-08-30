@@ -430,6 +430,7 @@ describe("AdminPage", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent("AWSの状態を読み込んでいます");
     expect(screen.getByRole("status")).toHaveTextContent("16サービスを並列で確認しています");
+    expect(screen.getByRole("button", { name: "状態を更新" })).toBeDisabled();
     expect(container.querySelectorAll("ol li")).toHaveLength(4);
   });
 
@@ -496,7 +497,9 @@ describe("AdminPage", () => {
     );
 
     renderAdmin();
-    fireEvent.click(await screen.findByRole("button", { name: "状態を更新" }));
+    const refreshButton = await screen.findByRole("button", { name: "状態を更新" });
+    await waitFor(() => expect(refreshButton).toBeEnabled());
+    fireEvent.click(refreshButton);
 
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests[1]?.path).toBe("/api/v1/admin/status/refresh");
