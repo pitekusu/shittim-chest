@@ -18,7 +18,7 @@ OAUTH_COOKIE_NAME = "__Host-shittim-records-oauth"
 SESSION_COOKIE_NAME = "__Host-shittim-records-session"
 CSRF_COOKIE_NAME = "__Host-shittim-records-csrf"
 OAUTH_TTL = timedelta(minutes=10)
-SESSION_TTL = timedelta(hours=12)
+SESSION_TTL = timedelta(days=90)
 DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 HOSTNAME_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
