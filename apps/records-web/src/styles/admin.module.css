@@ -99,7 +99,7 @@
     color 150ms ease;
 }
 
-.serviceAnchorList a > span {
+.serviceAnchorMarker {
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
@@ -116,11 +116,57 @@
   box-shadow: inset 0 0 0 1px var(--records-line);
 }
 
-.serviceAnchorList a:hover > span,
-.serviceAnchorList a:focus-visible > span {
+.serviceAnchorList a:hover > .serviceAnchorMarker,
+.serviceAnchorList a:focus-visible > .serviceAnchorMarker {
   background: var(--records-cyan-100);
   box-shadow: 0 0 0 3px var(--records-line);
   transform: rotate(45deg) scale(1.22);
+}
+
+.serviceAnchorList a[data-state="warning"],
+.serviceAnchorList a[data-state="critical"] {
+  color: var(--records-ink-900);
+  font-weight: 800;
+}
+
+.serviceAnchorList a[data-state="warning"] {
+  background: var(--admin-severity-medium-soft);
+  box-shadow: inset 3px 0 0 var(--admin-severity-medium);
+}
+
+.serviceAnchorList a[data-state="critical"] {
+  background: var(--admin-severity-critical-soft);
+  box-shadow: inset 3px 0 0 var(--admin-severity-critical);
+}
+
+.serviceAnchorAlert {
+  display: inline-grid;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  background: var(--records-control-background);
+}
+
+.serviceAnchorAlert[data-state="warning"] {
+  color: var(--admin-severity-medium);
+}
+
+.serviceAnchorAlert[data-state="critical"] {
+  color: var(--admin-severity-critical);
+}
+
+.serviceAnchorAlert svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .adminContent {
@@ -1906,7 +1952,7 @@
 
 .promptHistoryList li {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(140px, 0.6fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 14px 16px;
@@ -1922,20 +1968,20 @@
   box-shadow: inset 4px 0 0 var(--records-cyan-ink);
 }
 
-.promptCurrentBadge {
-  display: inline-flex;
-  min-height: 34px;
-  align-items: center;
-  padding: 7px 12px;
-  border: 1px solid var(--records-cyan-500);
-  border-radius: 999px;
-  background: var(--records-cyan-100);
-  color: var(--records-ink-900) !important;
-  font-size: 0.72rem !important;
-  font-weight: 800;
+.promptHistoryList .promptHistoryCompactAction {
+  min-width: 88px;
+  min-height: 44px;
+  font-size: 0.76rem;
 }
 
-.promptHistoryList li > div:first-child {
+.promptHistoryList .promptCurrentBadge {
+  border-color: var(--records-cyan-500);
+  background: var(--records-cyan-100);
+  color: var(--records-ink-900) !important;
+  cursor: default;
+}
+
+.promptHistoryMetadata {
   display: grid;
   min-width: 0;
   gap: 4px;
@@ -1949,8 +1995,14 @@
 }
 
 .promptChecksum {
+  display: block;
+  margin-top: 2px;
   overflow-wrap: anywhere;
   font-family: ui-monospace, monospace;
+}
+
+.promptHistoryList .promptHistoryActions {
+  min-width: 226px;
 }
 
 .promptLoadMore {
@@ -2398,6 +2450,10 @@
 
   .promptHistoryActions {
     justify-content: flex-start;
+  }
+
+  .promptHistoryList .promptHistoryActions {
+    min-width: 0;
   }
 
   .statusLoadingStages li {

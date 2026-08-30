@@ -1884,6 +1884,9 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(nextTaskImage).toContainText(nextTaskReleaseTag);
   const nextTaskEcrLink = nextTaskImage.getByRole("link", { name: /ECR一覧で確認/ });
   await expect(nextTaskEcrLink).toHaveAttribute("href", "#admin-service-ecr");
+  const inspectorStatusLink = page.getByRole("link", { name: "Inspector（異常）" });
+  await expect(inspectorStatusLink).toHaveAttribute("data-state", "critical");
+  await expect(inspectorStatusLink.locator("svg")).toBeVisible();
   const nextTaskTagScroller = nextTaskImage.getByRole("region", {
     name: "次回起動時に使用するECRイメージタグ",
   });
@@ -2073,6 +2076,21 @@ test("prompt management supports safe editing, history, and responsive layout", 
   });
   await expect(activeRevision.getByText("使用中", { exact: true })).toBeVisible();
   await expect(activeRevision.getByRole("button")).toHaveCount(0);
+  const currentBadgeBox = await activeRevision.getByText("使用中", { exact: true }).boundingBox();
+  const restoreButtonBox = await previousRevision
+    .getByRole("button", { name: "復元" })
+    .boundingBox();
+  expect(currentBadgeBox).not.toBeNull();
+  expect(restoreButtonBox).not.toBeNull();
+  expect(currentBadgeBox!.width).toBeCloseTo(restoreButtonBox!.width, 0);
+  expect(currentBadgeBox!.height).toBeCloseTo(restoreButtonBox!.height, 0);
+  for (const row of [activeRevision, previousRevision]) {
+    const revisionBox = await row.locator("strong").boundingBox();
+    const checksumBox = await row.getByText(/checksum/u).boundingBox();
+    expect(revisionBox).not.toBeNull();
+    expect(checksumBox).not.toBeNull();
+    expect(checksumBox!.x).toBeCloseTo(revisionBox!.x, 0);
+  }
   await previousRevision.getByRole("button", { name: "変更点を見る" }).click();
   const revisionComparison = page.getByRole("region", { name: "revisionを比較" });
   await expect(revisionComparison).toBeVisible();
@@ -2080,14 +2098,23 @@ test("prompt management supports safe editing, history, and responsive layout", 
   await moderatorComparison.locator("summary").click();
   await expect(
     moderatorComparison.locator('tr[data-kind="removed"] code', {
-      hasText: adminPromptValues.moderator,
+      hasText: previousAdminPromptValues.moderator,
     }),
   ).toBeVisible();
   await expect(
     moderatorComparison.locator('tr[data-kind="added"] code', {
-      hasText: previousAdminPromptValues.moderator,
+      hasText: adminPromptValues.moderator,
     }),
   ).toBeVisible();
+  if (desktop) {
+    await expect(revisionComparison).toHaveScreenshot("admin-prompts-diff-dark.png", {
+      animations: "disabled",
+      // Element-clipped text has small rasterization differences between the
+      // pinned local and GitHub-hosted Chromium environments. The semantic
+      // direction and row contents are asserted immediately above.
+      maxDiffPixelRatio: 0.003,
+    });
+  }
   await page.getByRole("tab", { name: "システム" }).click();
   await page
     .getByLabel("システムプロンプト")

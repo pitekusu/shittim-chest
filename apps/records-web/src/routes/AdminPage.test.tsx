@@ -337,6 +337,10 @@ describe("AdminPage", () => {
     const alarmLink = screen.getByRole("link", { name: /DynamoDBのスロットリング/ });
     expect(alarmLink).toHaveAttribute("href", "#admin-service-dynamodb");
     expect(screen.getByRole("link", { name: "ECS" })).toHaveAttribute("href", "#admin-service-ecs");
+    const inspectorLink = screen.getByRole("link", { name: "Inspector（異常）" });
+    expect(inspectorLink).toHaveAttribute("data-state", "critical");
+    expect(inspectorLink.querySelector("svg")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "ECS" })).not.toHaveAttribute("data-state");
     expect(screen.getByText("タスク稼働")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "タスク定義" })).toBeVisible();
     expect(screen.getByText("Fargate On-Demand")).toBeVisible();

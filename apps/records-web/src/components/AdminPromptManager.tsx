@@ -210,26 +210,26 @@ function PromptLineDiff({ before, after }: { readonly before: string; readonly a
   return (
     <div className={adminStyles.promptUnifiedDiff}>
       <div className={adminStyles.promptDiffLegend} aria-hidden="true">
-        <span data-kind="removed">− 現在</span>
-        <span data-kind="added">＋ 選択revision</span>
+        <span data-kind="removed">− 選択revision</span>
+        <span data-kind="added">＋ 現在</span>
       </div>
       <div className={adminStyles.promptDiffRows}>
-        <table className={adminStyles.promptDiffTable} aria-label="現在と選択revisionの行差分">
+        <table className={adminStyles.promptDiffTable} aria-label="選択revisionから現在への行差分">
           <tbody>
             {entries.map((entry, index) => (
               <tr className={adminStyles.promptDiffLine} data-kind={entry.kind} key={index}>
                 <td
                   aria-label={
-                    entry.beforeLine === null ? "現在の行なし" : `現在 ${entry.beforeLine}行目`
+                    entry.beforeLine === null
+                      ? "選択revisionの行なし"
+                      : `選択revision ${entry.beforeLine}行目`
                   }
                 >
                   {entry.beforeLine ?? ""}
                 </td>
                 <td
                   aria-label={
-                    entry.afterLine === null
-                      ? "選択revisionの行なし"
-                      : `選択revision ${entry.afterLine}行目`
+                    entry.afterLine === null ? "現在の行なし" : `現在 ${entry.afterLine}行目`
                   }
                 >
                   {entry.afterLine ?? ""}
@@ -674,7 +674,7 @@ export default function AdminPromptManager({
               const isCurrent = item.revision === prompts.data?.activeRevision;
               return (
                 <li key={item.revision} data-current={isCurrent || undefined}>
-                  <div>
+                  <div className={adminStyles.promptHistoryMetadata}>
                     <strong className={adminStyles.promptRevision}>{item.revision}</strong>
                     <span>
                       {item.action === "rollback" ? "復元" : "更新"}・
@@ -683,13 +683,17 @@ export default function AdminPromptManager({
                     <small>
                       元revision: {item.sourceRevision ?? item.baseRevision ?? "既存設定"}
                     </small>
+                    <small className={adminStyles.promptChecksum}>
+                      checksum {item.checksum.slice(0, 12)}
+                    </small>
                   </div>
-                  <span className={adminStyles.promptChecksum}>
-                    checksum {item.checksum.slice(0, 12)}
-                  </span>
                   <div className={adminStyles.promptHistoryActions}>
                     {isCurrent ? (
-                      <span className={adminStyles.promptCurrentBadge}>使用中</span>
+                      <span
+                        className={`${commonStyles.secondaryButton} ${adminStyles.promptHistoryCompactAction} ${adminStyles.promptCurrentBadge}`}
+                      >
+                        使用中
+                      </span>
                     ) : (
                       <>
                         <button
@@ -701,7 +705,7 @@ export default function AdminPromptManager({
                         </button>
                         {canWrite && (
                           <button
-                            className={commonStyles.secondaryButton}
+                            className={`${commonStyles.secondaryButton} ${adminStyles.promptHistoryCompactAction}`}
                             type="button"
                             onClick={() => {
                               rollbackIdempotencyKeyRef.current = null;
@@ -785,8 +789,8 @@ export default function AdminPromptManager({
                     >
                       <summary>{PROMPT_PRESENTATION[key].label}</summary>
                       <PromptLineDiff
-                        before={prompts.data.prompts[key]}
-                        after={revision.data.prompts[key]}
+                        before={revision.data.prompts[key]}
+                        after={prompts.data.prompts[key]}
                       />
                     </details>
                   ))}

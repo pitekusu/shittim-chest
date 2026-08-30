@@ -209,6 +209,8 @@ describe("AdminPromptManager", () => {
     const moderatorDiff = within(moderatorSummary.closest("details")!);
     expect(moderatorDiff.getByText("moderator prompt", { selector: "code" })).toBeVisible();
     expect(moderatorDiff.getByText("previous moderator", { selector: "code" })).toBeVisible();
+    expect(moderatorDiff.getByText("− 選択revision")).toBeVisible();
+    expect(moderatorDiff.getByText("＋ 現在")).toBeVisible();
     expect(screen.queryByRole("button", { name: "このrevisionを復元" })).not.toBeInTheDocument();
     expect(
       requests.some(
@@ -288,12 +290,12 @@ describe("AdminPromptManager", () => {
     expect(moderatorDiff.getByText("previous moderator", { selector: "code" })).toBeVisible();
     expect(
       moderatorDiff
-        .getByText("moderator prompt", { selector: "code" })
+        .getByText("previous moderator", { selector: "code" })
         .closest('[data-kind="removed"]'),
     ).not.toBeNull();
     expect(
       moderatorDiff
-        .getByText("previous moderator", { selector: "code" })
+        .getByText("moderator prompt", { selector: "code" })
         .closest('[data-kind="added"]'),
     ).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "このrevisionを復元" }));
