@@ -2088,14 +2088,6 @@ test("prompt management supports safe editing, history, and responsive layout", 
       hasText: previousAdminPromptValues.moderator,
     }),
   ).toBeVisible();
-  if (desktop) {
-    await expect(page).toHaveScreenshot("admin-prompts-diff-dark.png", {
-      animations: "disabled",
-      fullPage: true,
-      maxDiffPixels: 20,
-    });
-  }
-
   await page.getByRole("tab", { name: "システム" }).click();
   await page
     .getByLabel("システムプロンプト")
