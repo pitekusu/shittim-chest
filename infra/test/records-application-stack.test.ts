@@ -435,7 +435,7 @@ describe("RecordsApplicationStack", () => {
     expect(configText).toContain("ssm:GetParameter");
     expect(configText).toContain("ssm:GetParameters");
     expect(configText).toContain("ssm:PutParameter");
-    expect(configText).not.toContain("ssm:DeleteParameter");
+    expect(configText).toContain("ssm:DeleteParameters");
     expect(configText).toContain("ADMIN#PROMPT");
     expect(configText).toContain("dynamodb:EnclosingOperation");
     expect(configText).toContain('"ssm:Overwrite":"false"');
@@ -458,6 +458,9 @@ describe("RecordsApplicationStack", () => {
     const promptPutStatements = configStatements.filter((statement) =>
       actionsOf(statement).includes("ssm:PutParameter"),
     );
+    const promptDeleteStatements = configStatements.filter((statement) =>
+      actionsOf(statement).includes("ssm:DeleteParameters"),
+    );
     expect(promptPutStatements).toHaveLength(3);
     expect(
       promptPutStatements.find(
@@ -467,6 +470,17 @@ describe("RecordsApplicationStack", () => {
           JSON.stringify(statement.Resource).includes("/runtime-prompts/active"),
       ),
     ).toBeDefined();
+    expect(promptDeleteStatements).toHaveLength(1);
+    expect(promptDeleteStatements[0]?.Effect).toBe("Allow");
+    expect(JSON.stringify(promptDeleteStatements[0]?.Resource)).toContain(
+      "/runtime-prompts/r??????????????????????????/*",
+    );
+    expect(JSON.stringify(promptDeleteStatements[0]?.Resource)).not.toContain(
+      "/runtime-prompts/active",
+    );
+    expect(
+      configStatements.some((statement) => actionsOf(statement).includes("ssm:DeleteParameter")),
+    ).toBe(false);
     expect(
       promptPutStatements.find(
         (statement) =>
@@ -551,6 +565,7 @@ describe("RecordsApplicationStack", () => {
     }
     expect(statusText).toContain("/records/admin/discord-user-id");
     expect(statusText).not.toContain("ssm:PutParameter");
+    expect(statusText).not.toContain("ssm:DeleteParameters");
     expect(statusText).not.toContain("dynamodb:PutItem");
     expect(statusText).not.toContain("dynamodb:UpdateItem");
     expect(statusText).not.toContain("dynamodb:DeleteItem");

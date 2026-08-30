@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { AdminPrompts, AdminStatusResponse } from "../api/types";
@@ -56,6 +56,15 @@ const REVISION_SUMMARY = {
   baseRevision: null,
   sourceRevision: null,
   checksum: "a".repeat(64),
+} as const;
+
+const CURRENT_REVISION_SUMMARY = {
+  revision: CURRENT_REVISION,
+  createdAt: "2026-08-29T03:00:00Z",
+  action: "publish",
+  baseRevision: PREVIOUS_REVISION,
+  sourceRevision: null,
+  checksum: "b".repeat(64),
 } as const;
 
 function renderManager(canWrite = true): void {
@@ -120,7 +129,11 @@ function installApi({
       if (path === "/api/v1/admin/status") return Promise.resolve(response(STATUS));
       if (path === "/api/v1/admin/prompts/revisions") {
         return Promise.resolve(
-          response({ schemaVersion: 1, items: [REVISION_SUMMARY], nextCursor: null }),
+          response({
+            schemaVersion: 1,
+            items: [CURRENT_REVISION_SUMMARY, REVISION_SUMMARY],
+            nextCursor: null,
+          }),
         );
       }
       if (path === `/api/v1/admin/prompts/revisions/${PREVIOUS_REVISION}`) {
@@ -185,12 +198,16 @@ describe("AdminPromptManager", () => {
     ).not.toBeInTheDocument();
     expect(await screen.findByText(PREVIOUS_REVISION)).toBeVisible();
     expect(screen.queryByRole("button", { name: "復元" })).not.toBeInTheDocument();
+    expect(screen.getByText("使用中")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "内容を見る" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "内容を見る" }));
+    fireEvent.click(screen.getByRole("button", { name: "変更点を見る" }));
 
-    await screen.findByText("previous moderator", { selector: "pre" });
-    fireEvent.click(screen.getByText("事前調査AI", { selector: "summary" }));
-    expect(screen.getByText("previous moderator", { selector: "pre" })).toBeVisible();
+    const moderatorSummary = await screen.findByText("事前調査AI", { selector: "summary" });
+    fireEvent.click(moderatorSummary);
+    const moderatorDiff = within(moderatorSummary.closest("details")!);
+    expect(moderatorDiff.getByText("moderator prompt", { selector: "code" })).toBeVisible();
+    expect(moderatorDiff.getByText("previous moderator", { selector: "code" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "このrevisionを復元" })).not.toBeInTheDocument();
     expect(
       requests.some(
@@ -256,10 +273,28 @@ describe("AdminPromptManager", () => {
     expect(requests.some(({ path }) => path.endsWith(`/revisions/${PREVIOUS_REVISION}`))).toBe(
       false,
     );
-    fireEvent.click(screen.getByRole("button", { name: "内容を見る" }));
-    await screen.findByText("previous moderator", { selector: "pre" });
-    fireEvent.click(screen.getByText("事前調査AI", { selector: "summary" }));
-    expect(screen.getByText("previous moderator", { selector: "pre" })).toBeVisible();
+    const activeRow = screen.getByText(CURRENT_REVISION, { selector: "strong" }).closest("li");
+    expect(activeRow).not.toBeNull();
+    expect(within(activeRow!).getByText("使用中")).toBeVisible();
+    expect(within(activeRow!).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "内容を見る" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "変更点を見る" }));
+    const moderatorSummary = await screen.findByText("事前調査AI", { selector: "summary" });
+    fireEvent.click(moderatorSummary);
+    const moderatorDiff = within(moderatorSummary.closest("details")!);
+    expect(moderatorDiff.getByText("moderator prompt", { selector: "code" })).toBeVisible();
+    expect(moderatorDiff.getByText("previous moderator", { selector: "code" })).toBeVisible();
+    expect(
+      moderatorDiff
+        .getByText("moderator prompt", { selector: "code" })
+        .closest('[data-kind="removed"]'),
+    ).not.toBeNull();
+    expect(
+      moderatorDiff
+        .getByText("previous moderator", { selector: "code" })
+        .closest('[data-kind="added"]'),
+    ).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "このrevisionを復元" }));
     fireEvent.click(screen.getByRole("button", { name: "新しい版として復元" }));
 

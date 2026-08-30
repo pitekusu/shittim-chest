@@ -630,6 +630,10 @@ export class RecordsApplicationStack extends Stack {
           conditions: { StringEquals: { "ssm:Overwrite": "false" } },
         }),
         new iam.PolicyStatement({
+          actions: ["ssm:DeleteParameters"],
+          resources: [runtimePromptRevisionArn],
+        }),
+        new iam.PolicyStatement({
           effect: iam.Effect.DENY,
           actions: ["ssm:PutParameter"],
           resources: [runtimePromptRevisionArn],
@@ -653,7 +657,7 @@ export class RecordsApplicationStack extends Stack {
       Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].map((partition) => [
           `AwsSolutions-IAM5[Resource::${partition}:ssm:${this.region}:${nagAccount}:parameter/shittim-chest/production/runtime-prompts/r??????????????????????????/*]`,
-          "Prompt revision access is confined to one fixed-length immutable revision subtree; IAM denies overwrite and service validation permits only the exact manifest and five prompt names.",
+          "Prompt revision access is confined to one fixed-length revision subtree; IAM denies overwrite, retention deletes only inactive revisions, and service validation permits only the exact manifest and five prompt names.",
         ]),
       ),
     );

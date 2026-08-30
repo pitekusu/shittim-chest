@@ -67,8 +67,9 @@ AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管�
 - Lambda roleはhandlerごとに分離し、table leading key、function、service、log groupを限定する。
 - Records Admin Config roleはSessionの`SESSION#*`読込、Statisticsの`ADMIN#PROMPT` transaction、
   exact legacy／管理者parameter読込、runtime prompt subtreeの条件付きPutに限定する。revision Putは
-  `ssm:Overwrite=false`だけを許し、overwriteと削除を明示的に拒否する。Admin StatusのAWS状態取得権限を
-  共有しない。
+  `ssm:Overwrite=false`だけを許し、overwriteを明示的に拒否する。保持期限を過ぎた非active revisionには
+  fixed-length revision subtreeだけの`ssm:DeleteParameters`を許し、`active` parameterは削除対象resourceへ
+  含めない。Admin StatusのAWS状態取得権限を共有しない。
 - `ecs:DescribeTaskDefinition`はresource-level permission非対応のため、Image Admission、Release Deploy、
   Records Admin Status Lambda roleで独立statementの`Resource: "*"`を用いる。Image Admissionと
   Release Deployはfamily、revision、container、digestをapplicationでexact validationする。Admin Status

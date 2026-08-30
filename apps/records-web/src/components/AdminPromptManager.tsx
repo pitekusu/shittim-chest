@@ -24,6 +24,7 @@ import {
   deriveAdminPromptApplicationState,
 } from "../lib/adminPromptState";
 import { formatCompletedDateTime } from "../lib/dateTime";
+import { lineDiff } from "../lib/lineDiff";
 import adminStyles from "../styles/admin.module.css";
 import commonStyles from "../styles/common.module.css";
 
@@ -197,6 +198,57 @@ function SystemConfirmation({
           onChange={(event) => onChange(event.target.value)}
         />
       </label>
+    </div>
+  );
+}
+
+function PromptLineDiff({ before, after }: { readonly before: string; readonly after: string }) {
+  const entries = lineDiff(before, after);
+  const changed = entries.some((entry) => entry.kind !== "context");
+  if (!changed) return <p className={adminStyles.promptDiffUnchanged}>現在の内容と同一です。</p>;
+
+  return (
+    <div className={adminStyles.promptUnifiedDiff}>
+      <div className={adminStyles.promptDiffLegend} aria-hidden="true">
+        <span data-kind="removed">− 現在</span>
+        <span data-kind="added">＋ 選択revision</span>
+      </div>
+      <div className={adminStyles.promptDiffRows}>
+        <table className={adminStyles.promptDiffTable} aria-label="現在と選択revisionの行差分">
+          <tbody>
+            {entries.map((entry, index) => (
+              <tr className={adminStyles.promptDiffLine} data-kind={entry.kind} key={index}>
+                <td
+                  aria-label={
+                    entry.beforeLine === null ? "現在の行なし" : `現在 ${entry.beforeLine}行目`
+                  }
+                >
+                  {entry.beforeLine ?? ""}
+                </td>
+                <td
+                  aria-label={
+                    entry.afterLine === null
+                      ? "選択revisionの行なし"
+                      : `選択revision ${entry.afterLine}行目`
+                  }
+                >
+                  {entry.afterLine ?? ""}
+                </td>
+                <td
+                  aria-label={
+                    entry.kind === "removed" ? "削除" : entry.kind === "added" ? "追加" : "変更なし"
+                  }
+                >
+                  {entry.kind === "removed" ? "−" : entry.kind === "added" ? "+" : " "}
+                </td>
+                <td>
+                  <code>{entry.text.length === 0 ? " " : entry.text}</code>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -616,51 +668,56 @@ export default function AdminPromptManager({
         )}
         {allRevisions.length > 0 && (
           <ul className={adminStyles.promptHistoryList}>
-            {allRevisions.map((item) => (
-              <li
-                key={item.revision}
-                data-current={item.revision === prompts.data?.activeRevision || undefined}
-              >
-                <div>
-                  <strong className={adminStyles.promptRevision}>{item.revision}</strong>
-                  <span>
-                    {item.action === "rollback" ? "復元" : "更新"}・
-                    {formatCompletedDateTime(item.createdAt)}
+            {allRevisions.map((item) => {
+              const isCurrent = item.revision === prompts.data?.activeRevision;
+              return (
+                <li key={item.revision} data-current={isCurrent || undefined}>
+                  <div>
+                    <strong className={adminStyles.promptRevision}>{item.revision}</strong>
+                    <span>
+                      {item.action === "rollback" ? "復元" : "更新"}・
+                      {formatCompletedDateTime(item.createdAt)}
+                    </span>
+                    <small>
+                      元revision: {item.sourceRevision ?? item.baseRevision ?? "既存設定"}
+                    </small>
+                  </div>
+                  <span className={adminStyles.promptChecksum}>
+                    checksum {item.checksum.slice(0, 12)}
                   </span>
-                  <small>
-                    元revision: {item.sourceRevision ?? item.baseRevision ?? "既存設定"}
-                  </small>
-                </div>
-                <span className={adminStyles.promptChecksum}>
-                  checksum {item.checksum.slice(0, 12)}
-                </span>
-                <div className={adminStyles.promptHistoryActions}>
-                  <button
-                    className={commonStyles.secondaryButton}
-                    type="button"
-                    onClick={() => setSelectedRevision(item.revision)}
-                  >
-                    内容を見る
-                  </button>
-                  {canWrite && (
-                    <button
-                      className={commonStyles.secondaryButton}
-                      type="button"
-                      disabled={item.revision === prompts.data?.activeRevision}
-                      onClick={() => {
-                        rollbackIdempotencyKeyRef.current = null;
-                        rollbackMutation.reset();
-                        setSelectedRevision(item.revision);
-                        setRollbackTarget(item.revision);
-                        setRollbackConfirmation("");
-                      }}
-                    >
-                      復元
-                    </button>
-                  )}
-                </div>
-              </li>
-            ))}
+                  <div className={adminStyles.promptHistoryActions}>
+                    {isCurrent ? (
+                      <span className={adminStyles.promptCurrentBadge}>使用中</span>
+                    ) : (
+                      <>
+                        <button
+                          className={commonStyles.secondaryButton}
+                          type="button"
+                          onClick={() => setSelectedRevision(item.revision)}
+                        >
+                          変更点を見る
+                        </button>
+                        {canWrite && (
+                          <button
+                            className={commonStyles.secondaryButton}
+                            type="button"
+                            onClick={() => {
+                              rollbackIdempotencyKeyRef.current = null;
+                              rollbackMutation.reset();
+                              setSelectedRevision(item.revision);
+                              setRollbackTarget(item.revision);
+                              setRollbackConfirmation("");
+                            }}
+                          >
+                            復元
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
         {revisions.hasNextPage && (
@@ -725,16 +782,10 @@ export default function AdminPromptManager({
                       }
                     >
                       <summary>{PROMPT_PRESENTATION[key].label}</summary>
-                      <div className={adminStyles.promptDiff}>
-                        <section>
-                          <h3>現在</h3>
-                          <pre>{prompts.data.prompts[key]}</pre>
-                        </section>
-                        <section>
-                          <h3>選択revision</h3>
-                          <pre>{revision.data.prompts[key]}</pre>
-                        </section>
-                      </div>
+                      <PromptLineDiff
+                        before={prompts.data.prompts[key]}
+                        after={revision.data.prompts[key]}
+                      />
                     </details>
                   ))}
                 </div>

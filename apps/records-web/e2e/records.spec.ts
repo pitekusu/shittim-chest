@@ -1821,7 +1821,9 @@ test("prompt management is read-only for a non-admin member", async ({ page }, t
   await expect(page.getByLabel("システムプロンプト")).not.toBeEditable();
   await expect(page.getByRole("button", { name: "変更を反映" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "復元" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "内容を見る" }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "内容を見る" })).toHaveCount(0);
+  await expect(page.getByText("使用中", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "変更点を見る" }).first()).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
@@ -2066,11 +2068,33 @@ test("prompt management supports safe editing, history, and responsive layout", 
   const previousRevision = page.locator("li", {
     has: page.locator("strong", { hasText: previousPromptRevision }),
   });
-  await previousRevision.getByRole("button", { name: "内容を見る" }).click();
+  const activeRevision = page.locator("li", {
+    has: page.locator("strong", { hasText: activePromptRevision }),
+  });
+  await expect(activeRevision.getByText("使用中", { exact: true })).toBeVisible();
+  await expect(activeRevision.getByRole("button")).toHaveCount(0);
+  await previousRevision.getByRole("button", { name: "変更点を見る" }).click();
   const revisionComparison = page.getByRole("region", { name: "revisionを比較" });
   await expect(revisionComparison).toBeVisible();
-  await revisionComparison.locator("details", { hasText: "事前調査AI" }).locator("summary").click();
-  await expect(page.getByText(previousAdminPromptValues.moderator, { exact: true })).toBeVisible();
+  const moderatorComparison = revisionComparison.locator("details", { hasText: "事前調査AI" });
+  await moderatorComparison.locator("summary").click();
+  await expect(
+    moderatorComparison.locator('tr[data-kind="removed"] code', {
+      hasText: adminPromptValues.moderator,
+    }),
+  ).toBeVisible();
+  await expect(
+    moderatorComparison.locator('tr[data-kind="added"] code', {
+      hasText: previousAdminPromptValues.moderator,
+    }),
+  ).toBeVisible();
+  if (desktop) {
+    await expect(page).toHaveScreenshot("admin-prompts-diff-dark.png", {
+      animations: "disabled",
+      fullPage: true,
+      maxDiffPixels: 20,
+    });
+  }
 
   await page.getByRole("tab", { name: "システム" }).click();
   await page
