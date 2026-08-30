@@ -221,6 +221,9 @@ def test_callback_claims_once_and_stores_only_hashed_session_values() -> None:
     assert raw_session not in repr(completed)
     assert raw_csrf not in repr(completed)
     assert completed.location == "https://records.example.invalid/insights"
+    assert stored.expires_at == int((NOW + timedelta(days=90, seconds=1)).timestamp())
+    assert "Max-Age=7776000" in completed.session_cookie
+    assert "Max-Age=7776000" in completed.csrf_cookie
     assert "HttpOnly" in completed.session_cookie
     assert "HttpOnly" not in completed.csrf_cookie
     with pytest.raises(AuthFailure) as caught:
