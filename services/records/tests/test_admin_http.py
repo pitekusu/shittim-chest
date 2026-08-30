@@ -80,8 +80,9 @@ def event(
 
 
 class Authorizer:
-    def __init__(self, failure: AdminFailure | None = None) -> None:
+    def __init__(self, failure: AdminFailure | None = None, *, is_admin: bool = True) -> None:
         self.failure = failure
+        self.is_admin = is_admin
         self.writes = 0
 
     def authenticate(self, *, raw_session: str | None, now: datetime) -> SessionRecord:
@@ -99,6 +100,14 @@ class Authorizer:
         )
 
     def authorize_write(self, **kwargs: Any) -> str:
+        if not self.is_admin:
+            raise AdminFailure("ADMIN_ACCESS_DENIED", 403)
+        return self._authorize_action(**kwargs)
+
+    def authorize_status_refresh(self, **kwargs: Any) -> str:
+        return self._authorize_action(**kwargs)
+
+    def _authorize_action(self, **kwargs: Any) -> str:
         assert kwargs["raw_csrf"] == "csrf-token"
         assert kwargs["csrf_header"] == "csrf-token"
         assert kwargs["origin"] == "https://records.example.invalid"
@@ -235,8 +244,12 @@ def test_config_routes_authorize_and_return_strict_json(
     "route",
     ("GET /api/v1/admin/status", "POST /api/v1/admin/status/refresh"),
 )
-def test_status_routes_authorize_and_return_sanitized_snapshot(route: str) -> None:
-    authorizer = Authorizer()
+@pytest.mark.parametrize("is_admin", (True, False))
+def test_status_routes_authorize_and_return_sanitized_snapshot(
+    route: str,
+    is_admin: bool,
+) -> None:
+    authorizer = Authorizer(is_admin=is_admin)
     controller = AdminStatusHttpController(
         authorizer=cast(Any, authorizer),
         status=cast(Any, StatusService()),
@@ -250,9 +263,6 @@ def test_status_routes_authorize_and_return_sanitized_snapshot(route: str) -> No
 
 
 @pytest.mark.parametrize(
-    "status,code", ((401, "AUTHENTICATION_REQUIRED"), (403, "ADMIN_ACCESS_DENIED"))
-)
-@pytest.mark.parametrize(
     "route",
     (
         "GET /api/v1/admin/prompts",
@@ -264,12 +274,8 @@ def test_status_routes_authorize_and_return_sanitized_snapshot(route: str) -> No
         "POST /api/v1/admin/status/refresh",
     ),
 )
-def test_every_admin_route_rejects_unauthorized_sessions(
-    route: str,
-    status: int,
-    code: str,
-) -> None:
-    authorizer = Authorizer(AdminFailure(code, status))
+def test_every_admin_route_rejects_anonymous_sessions(route: str) -> None:
+    authorizer = Authorizer(AdminFailure("AUTHENTICATION_REQUIRED", 401))
     if "status" in route:
         controller: Any = AdminStatusHttpController(
             authorizer=cast(Any, authorizer),
@@ -293,8 +299,58 @@ def test_every_admin_route_rejects_unauthorized_sessions(
         now=NOW,
     )
 
-    assert response["statusCode"] == status
-    assert json.loads(response["body"])["error"]["code"] == code
+    assert response["statusCode"] == 401
+    assert json.loads(response["body"])["error"]["code"] == "AUTHENTICATION_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    ("route", "path"),
+    (
+        ("GET /api/v1/admin/prompts", None),
+        ("GET /api/v1/admin/prompts/revisions", None),
+        (
+            "GET /api/v1/admin/prompts/revisions/{revision}",
+            {"revision": REVISION},
+        ),
+    ),
+)
+def test_authenticated_non_admin_can_read_prompt_configuration(
+    route: str,
+    path: dict[str, str] | None,
+) -> None:
+    controller = AdminConfigHttpController(
+        authorizer=cast(Any, Authorizer(is_admin=False)),
+        prompts=cast(Any, PromptService()),
+    )
+
+    response = controller.handle(event(route, path=path), now=NOW)
+
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+
+
+@pytest.mark.parametrize(
+    ("route", "body"),
+    (
+        ("POST /api/v1/admin/prompts/apply", APPLY_BODY),
+        ("POST /api/v1/admin/prompts/rollback", ROLLBACK_BODY),
+    ),
+)
+def test_authenticated_non_admin_cannot_change_prompts(
+    route: str,
+    body: dict[str, Any],
+) -> None:
+    controller = AdminConfigHttpController(
+        authorizer=cast(Any, Authorizer(is_admin=False)),
+        prompts=cast(Any, PromptService()),
+    )
+
+    response = controller.handle(event(route, body=body), now=NOW)
+
+    assert response["statusCode"] == 403
+    error = json.loads(response["body"])["error"]
+    assert error["code"] == "ADMIN_ACCESS_DENIED"
+    assert error["message"] == "この操作を実行する権限がありません。"
 
 
 def test_invalid_prompt_body_returns_content_free_error() -> None:

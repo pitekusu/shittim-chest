@@ -28,18 +28,18 @@ afterEach(() => {
 });
 
 describe("App shell", () => {
-  it("shows both SYSTEM ACCESS links and renders a branded denial without Admin API calls", async () => {
+  it("shows both SYSTEM ACCESS links and opens service status for a member", async () => {
     window.history.replaceState(null, "", "/admin");
     const requests = mockApi();
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "ACCESS DENIED" })).toBeVisible();
-    expect(screen.getByText("この画面を利用する権限がありません。")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "サービス状態確認" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "ACCESS DENIED" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "サービス状態確認" })).toHaveLength(2);
     expect(screen.getAllByRole("link", { name: "プロンプト管理" })).toHaveLength(2);
     expect(screen.getByText("SYSTEM ACCESS")).toBeVisible();
-    expect(requests).toEqual(["/api/v1/session?contract=admin-v1"]);
+    expect(requests).toEqual(["/api/v1/session?contract=admin-v1", "/api/v1/admin/status"]);
   });
 
   it("coordinates branded motion and heading focus across internal routes", async () => {

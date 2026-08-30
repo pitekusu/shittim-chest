@@ -205,7 +205,7 @@ class PromptAuditStore(Protocol):
 
 
 class AdminAuthorizer:
-    """Authenticate a Session then derive the exact administrator key for every request."""
+    """Authenticate members and require the exact administrator key for prompt writes."""
 
     def __init__(
         self,
@@ -228,15 +228,52 @@ class AdminAuthorizer:
         )
         if stored is None or stored.expires_at <= int(_utc(now).timestamp()):
             raise AdminFailure("AUTHENTICATION_REQUIRED", 401)
+        return stored
+
+    def authorize_status_refresh(
+        self,
+        *,
+        session: SessionRecord,
+        raw_csrf: str | None,
+        csrf_header: str | None,
+        origin: str | None,
+        idempotency_key: str | None,
+    ) -> str:
+        return self._authorize_action(
+            session=session,
+            raw_csrf=raw_csrf,
+            csrf_header=csrf_header,
+            origin=origin,
+            idempotency_key=idempotency_key,
+        )
+
+    def authorize_write(
+        self,
+        *,
+        session: SessionRecord,
+        raw_csrf: str | None,
+        csrf_header: str | None,
+        origin: str | None,
+        idempotency_key: str | None,
+    ) -> str:
+        self._require_admin(session)
+        return self._authorize_action(
+            session=session,
+            raw_csrf=raw_csrf,
+            csrf_header=csrf_header,
+            origin=origin,
+            idempotency_key=idempotency_key,
+        )
+
+    def _require_admin(self, session: SessionRecord) -> None:
         expected = derive_requester_key(
             self._configuration.identity_hmac_key,
             self._configuration.admin_discord_user_id,
         )
-        if not hmac.compare_digest(expected, stored.requester_key):
+        if not hmac.compare_digest(expected, session.requester_key):
             raise AdminFailure("ADMIN_ACCESS_DENIED", 403)
-        return stored
 
-    def authorize_write(
+    def _authorize_action(
         self,
         *,
         session: SessionRecord,

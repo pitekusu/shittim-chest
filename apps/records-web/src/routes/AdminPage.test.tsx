@@ -290,16 +290,16 @@ afterEach(() => {
 });
 
 describe("AdminPage", () => {
-  it("does not request Admin data for a non-admin member", () => {
-    const fetchMock = vi.fn<typeof fetch>();
+  it("loads service status for a non-admin member", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(response(statusResponse)));
     vi.stubGlobal("fetch", fetchMock);
 
     renderAdmin(false);
 
-    expect(screen.getByRole("heading", { name: "ACCESS DENIED" })).toBeVisible();
-    expect(screen.getByText("403")).toBeVisible();
-    expect(screen.getByRole("link", { name: "記録一覧へ戻る" })).toHaveAttribute("href", "/");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: "サービス状態確認" })).toBeVisible();
+    expect(await screen.findByText("Scale-to-Zeroで待機しています。")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "ACCESS DENIED" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/admin/status"]);
   });
 
   it("loads prompt management and its independent application-status snapshot", async () => {

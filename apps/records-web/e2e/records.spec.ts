@@ -1789,10 +1789,11 @@ test("SYSTEM ACCESS remains reachable in the six-column 320px mobile navigation"
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.setViewportSize({ width: 320, height: 720 });
+  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
   await mockAuthenticatedApi(page);
 
   await page.goto("/admin");
-  await expect(page.getByRole("heading", { name: "ACCESS DENIED" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "サービス状態確認" })).toBeVisible();
 
   const mobileNavigation = page.getByRole("navigation", {
     name: "モバイルナビゲーション",
@@ -1806,6 +1807,21 @@ test("SYSTEM ACCESS remains reachable in the six-column 320px mobile navigation"
     scrollWidth: document.documentElement.scrollWidth,
   }));
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("prompt management is read-only for a non-admin member", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await mockAuthenticatedApi(page);
+
+  await page.goto("/admin/prompts");
+
+  await expect(page.getByRole("heading", { name: "プロンプト参照" })).toBeVisible();
+  await expect(page.getByText(/閲覧専用です。/u)).toBeVisible();
+  await expect(page.getByLabel("システムプロンプト")).not.toBeEditable();
+  await expect(page.getByRole("button", { name: "変更を反映" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "復元" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "内容を見る" }).first()).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
@@ -2077,7 +2093,7 @@ for (const directRoute of [
   { path: "/", chunkName: "RecordsHome", heading: "議論の記録" },
   { path: `/records/${RECORD_ID}`, chunkName: "RecordDetail", heading: detail.question },
   { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
-  { path: "/admin", chunkName: "AdminPage", heading: "ACCESS DENIED" },
+  { path: "/admin", chunkName: "AdminPage", heading: "サービス状態確認" },
 ] as const) {
   test(`direct ${directRoute.path} navigation loads its route chunk`, async ({
     page,

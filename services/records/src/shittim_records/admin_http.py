@@ -1,4 +1,4 @@
-"""HTTP API v2 controllers for the authenticated Records ADMIN boundary."""
+"""HTTP API v2 controllers for authenticated status and prompt administration."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ MAX_ADMIN_BODY_BYTES = 64 * 1024
 
 
 class AdminConfigHttpController:
-    """Authorize every request before reading or changing private prompt configuration."""
+    """Allow authenticated reads while restricting prompt changes to the administrator."""
 
     def __init__(
         self,
@@ -143,7 +143,7 @@ class AdminConfigHttpController:
 
 
 class AdminStatusHttpController:
-    """Expose only sanitized read-only status snapshots."""
+    """Expose sanitized status snapshots to authenticated Records members."""
 
     def __init__(
         self,
@@ -168,7 +168,7 @@ class AdminStatusHttpController:
                 _reject_query(request)
                 if event.get("body") not in (None, ""):
                     raise AdminFailure("REQUEST_INVALID", 400)
-                self._authorizer.authorize_write(
+                self._authorizer.authorize_status_refresh(
                     session=session,
                     raw_csrf=request.cookies.get(CSRF_COOKIE_NAME),
                     csrf_header=request.headers.get("x-csrf-token"),

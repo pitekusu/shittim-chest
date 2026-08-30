@@ -58,6 +58,7 @@ const PROMPT_PRESENTATION: Readonly<
 };
 
 interface AdminPromptManagerProps {
+  readonly canWrite: boolean;
   readonly csrfToken: string;
 }
 
@@ -200,7 +201,10 @@ function SystemConfirmation({
   );
 }
 
-export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProps): JSX.Element {
+export default function AdminPromptManager({
+  canWrite,
+  csrfToken,
+}: AdminPromptManagerProps): JSX.Element {
   const queryClient = useQueryClient();
   const prompts = useQuery({ queryKey: ["admin", "prompts"], queryFn: getAdminPrompts });
   const status = useQuery({ queryKey: ["admin", "status"], queryFn: getAdminStatus });
@@ -337,6 +341,7 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
     drafts === null ? PROMPT_KEYS : PROMPT_KEYS.filter((key) => !promptIsValid(drafts[key]));
   const isLegacyRegistration = baseSnapshot?.mode === "legacy" && !dirty;
   const canApply =
+    canWrite &&
     baseSnapshot !== null &&
     drafts !== null &&
     invalidPrompts.length === 0 &&
@@ -358,6 +363,7 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
     normalizePrompt(prompts.data.prompts.system) !== normalizePrompt(revision.data.prompts.system),
   );
   const canRollback =
+    canWrite &&
     rollbackTarget !== null &&
     revision.data?.revision === rollbackTarget &&
     baseSnapshot?.activeRevision != null &&
@@ -407,7 +413,8 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
         </dl>
         {status.isError && (
           <p className={adminStyles.promptStatusNote}>
-            AWS状態を確認できないため、反映状態は「保存済み」として表示しています。編集は継続できます。
+            AWS状態を確認できないため、反映状態は「保存済み」として表示しています。
+            {canWrite ? "編集" : "閲覧"}は継続できます。
           </p>
         )}
       </section>
@@ -416,11 +423,16 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
         <header className={adminStyles.panelHeader}>
           <div>
             <p className={adminStyles.panelEyebrow} lang="en">
-              PROMPT EDITOR
+              {canWrite ? "PROMPT EDITOR" : "PROMPT VIEWER"}
             </p>
-            <h2 id="prompt-editor-title">プロンプト編集</h2>
+            <h2 id="prompt-editor-title">{canWrite ? "プロンプト編集" : "プロンプト参照"}</h2>
           </div>
         </header>
+        {!canWrite && (
+          <p className={adminStyles.promptStatusNote}>
+            閲覧専用です。プロンプトの反映とrevisionの復元は管理者だけが実行できます。
+          </p>
+        )}
         {prompts.isPending && (
           <PanelState
             busy
@@ -437,7 +449,7 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
         )}
         {!prompts.isPending && !prompts.isError && baseSnapshot !== null && drafts !== null && (
           <div className={adminStyles.promptEditorBody}>
-            {latestConflict !== null && (
+            {canWrite && latestConflict !== null && (
               <div className={adminStyles.promptConflict} role="alert">
                 <div>
                   <strong>別の画面で新しいrevisionが保存されました。</strong>
@@ -465,7 +477,11 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
                 </button>
               </div>
             )}
-            <div className={adminStyles.promptTabs} role="tablist" aria-label="編集するプロンプト">
+            <div
+              className={adminStyles.promptTabs}
+              role="tablist"
+              aria-label={canWrite ? "編集するプロンプト" : "参照するプロンプト"}
+            >
               {PROMPT_KEYS.map((key) => (
                 <button
                   aria-controls="admin-prompt-editor"
@@ -509,16 +525,18 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
               <p>{PROMPT_PRESENTATION[selectedPrompt].description}</p>
               <textarea
                 id={`admin-prompt-${selectedPrompt}`}
+                readOnly={!canWrite}
                 spellCheck={false}
                 value={drafts[selectedPrompt]}
                 onChange={(event) => {
+                  if (!canWrite) return;
                   applyIdempotencyKeyRef.current = null;
                   applyMutation.reset();
                   setSuccessMessage(null);
                   setDrafts({ ...drafts, [selectedPrompt]: event.target.value });
                 }}
               />
-              {systemChanged && (
+              {canWrite && systemChanged && (
                 <SystemConfirmation
                   before={baseSnapshot.prompts.system}
                   after={drafts.system}
@@ -527,26 +545,28 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
                   labelPrefix="変更用"
                 />
               )}
-              <div className={adminStyles.promptActions}>
-                <p aria-live="polite">
-                  {invalidPrompts.length > 0
-                    ? "空のプロンプト、または3,500 bytesを超える内容は保存できません。"
-                    : (successMessage ?? "未保存の変更はこのブラウザ内だけにあります。")}
-                </p>
-                <button
-                  className={commonStyles.primaryButton}
-                  type="button"
-                  disabled={!canApply}
-                  onClick={() => applyMutation.mutate()}
-                >
-                  {applyMutation.isPending
-                    ? "保存しています"
-                    : isLegacyRegistration
-                      ? "現在の設定を管理版として登録"
-                      : "変更を反映"}
-                </button>
-              </div>
-              {applyMutation.isError && (
+              {canWrite && (
+                <div className={adminStyles.promptActions}>
+                  <p aria-live="polite">
+                    {invalidPrompts.length > 0
+                      ? "空のプロンプト、または3,500 bytesを超える内容は保存できません。"
+                      : (successMessage ?? "未保存の変更はこのブラウザ内だけにあります。")}
+                  </p>
+                  <button
+                    className={commonStyles.primaryButton}
+                    type="button"
+                    disabled={!canApply}
+                    onClick={() => applyMutation.mutate()}
+                  >
+                    {applyMutation.isPending
+                      ? "保存しています"
+                      : isLegacyRegistration
+                        ? "現在の設定を管理版として登録"
+                        : "変更を反映"}
+                  </button>
+                </div>
+              )}
+              {canWrite && applyMutation.isError && (
                 <PanelState
                   title={
                     isRevisionConflict(applyMutation.error)
@@ -622,20 +642,22 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
                   >
                     内容を見る
                   </button>
-                  <button
-                    className={commonStyles.secondaryButton}
-                    type="button"
-                    disabled={item.revision === prompts.data?.activeRevision}
-                    onClick={() => {
-                      rollbackIdempotencyKeyRef.current = null;
-                      rollbackMutation.reset();
-                      setSelectedRevision(item.revision);
-                      setRollbackTarget(item.revision);
-                      setRollbackConfirmation("");
-                    }}
-                  >
-                    復元
-                  </button>
+                  {canWrite && (
+                    <button
+                      className={commonStyles.secondaryButton}
+                      type="button"
+                      disabled={item.revision === prompts.data?.activeRevision}
+                      onClick={() => {
+                        rollbackIdempotencyKeyRef.current = null;
+                        rollbackMutation.reset();
+                        setSelectedRevision(item.revision);
+                        setRollbackTarget(item.revision);
+                        setRollbackConfirmation("");
+                      }}
+                    >
+                      復元
+                    </button>
+                  )}
                 </div>
               </li>
             ))}
@@ -716,7 +738,7 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
                     </details>
                   ))}
                 </div>
-                {rollbackTarget === revision.data.revision && (
+                {canWrite && rollbackTarget === revision.data.revision && (
                   <div className={adminStyles.promptRollbackConfirmation}>
                     <h3>新しいrevisionとして復元します</h3>
                     <p>
@@ -772,19 +794,22 @@ export default function AdminPromptManager({ csrfToken }: AdminPromptManagerProp
                     )}
                   </div>
                 )}
-                {!selectedIsCurrent && rollbackTarget === null && !rollbackSameContent && (
-                  <button
-                    className={commonStyles.secondaryButton}
-                    type="button"
-                    onClick={() => {
-                      rollbackIdempotencyKeyRef.current = null;
-                      rollbackMutation.reset();
-                      setRollbackTarget(revision.data.revision);
-                    }}
-                  >
-                    このrevisionを復元
-                  </button>
-                )}
+                {canWrite &&
+                  !selectedIsCurrent &&
+                  rollbackTarget === null &&
+                  !rollbackSameContent && (
+                    <button
+                      className={commonStyles.secondaryButton}
+                      type="button"
+                      onClick={() => {
+                        rollbackIdempotencyKeyRef.current = null;
+                        rollbackMutation.reset();
+                        setRollbackTarget(revision.data.revision);
+                      }}
+                    >
+                      このrevisionを復元
+                    </button>
+                  )}
               </>
             )}
           </section>
