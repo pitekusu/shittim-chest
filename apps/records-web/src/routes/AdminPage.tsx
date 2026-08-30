@@ -1782,6 +1782,9 @@ function AwsStatusPanel({
 function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): React.JSX.Element {
   const status = useQuery({ queryKey: ["admin", "status"], queryFn: getAdminStatus });
   useAuthenticationRecovery(status.error);
+  const serviceStates = new Map(
+    status.data?.sections.map((section) => [section.service, section.state] as const) ?? [],
+  );
 
   return (
     <div className={adminStyles.adminPage} data-route-motion-ready="">
@@ -1805,12 +1808,38 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
             サービス
           </a>
           <div className={adminStyles.serviceAnchorList}>
-            {SERVICE_ORDER.map((service) => (
-              <a href={`#admin-service-${service}`} key={service}>
-                <span aria-hidden="true" />
-                {SERVICE_PRESENTATION[service].name}
-              </a>
-            ))}
+            {SERVICE_ORDER.map((service) => {
+              const state = serviceStates.get(service);
+              const attentionState = state === "warning" || state === "critical" ? state : null;
+              const serviceName = SERVICE_PRESENTATION[service].name;
+              return (
+                <a
+                  aria-label={
+                    attentionState === null
+                      ? undefined
+                      : `${serviceName}（${HEALTH_LABELS[attentionState]}）`
+                  }
+                  data-state={attentionState ?? undefined}
+                  href={`#admin-service-${service}`}
+                  key={service}
+                >
+                  <span className={adminStyles.serviceAnchorMarker} aria-hidden="true" />
+                  {serviceName}
+                  {attentionState !== null && (
+                    <span
+                      className={adminStyles.serviceAnchorAlert}
+                      data-state={attentionState}
+                      aria-hidden="true"
+                    >
+                      <svg viewBox="0 0 20 20" focusable="false">
+                        <path d="M10 2.5 18 17H2L10 2.5Z" />
+                        <path d="M10 7v4.5M10 14.5v.1" />
+                      </svg>
+                    </span>
+                  )}
+                </a>
+              );
+            })}
           </div>
         </nav>
         <div className={adminStyles.adminContent}>
