@@ -2109,7 +2109,10 @@ test("prompt management supports safe editing, history, and responsive layout", 
   if (desktop) {
     await expect(revisionComparison).toHaveScreenshot("admin-prompts-diff-dark.png", {
       animations: "disabled",
-      maxDiffPixels: 20,
+      // Element-clipped text has small rasterization differences between the
+      // pinned local and GitHub-hosted Chromium environments. The semantic
+      // direction and row contents are asserted immediately above.
+      maxDiffPixelRatio: 0.003,
     });
   }
   await page.getByRole("tab", { name: "システム" }).click();
