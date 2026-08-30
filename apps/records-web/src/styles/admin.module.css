@@ -1675,7 +1675,7 @@
   border: 1px solid var(--records-line);
   border-radius: 12px;
   background: var(--records-lavender-100);
-  color: var(--records-ink-600);
+  color: var(--records-ink-900);
   font-size: 0.75rem;
   line-height: 1.7;
 }
@@ -2067,78 +2067,6 @@
   color: var(--records-ink-600);
   font-size: 0.86rem;
   line-height: 1.8;
-}
-
-.accessDenied {
-  position: relative;
-  display: grid;
-  max-width: 760px;
-  min-height: 430px;
-  margin: min(8vh, 72px) auto;
-  padding: clamp(32px, 6vw, 70px);
-  overflow: hidden;
-  place-items: center;
-  border: 1px solid var(--records-panel-border);
-  border-radius: calc(var(--records-radius-card) + 8px);
-  background:
-    radial-gradient(circle at 82% 18%, var(--records-pink-100), transparent 28%),
-    var(--records-surface);
-  box-shadow: var(--records-shadow);
-  text-align: center;
-}
-
-.deniedMark {
-  position: relative;
-  display: grid;
-  width: 88px;
-  height: 88px;
-  place-items: center;
-  border: 1px solid var(--records-line-strong);
-  color: var(--records-cyan-ink);
-  transform: rotate(45deg);
-}
-
-.deniedMark::before {
-  width: 24px;
-  height: 24px;
-  border: 3px solid currentColor;
-  border-radius: 50% 50% 45% 45%;
-  content: "";
-}
-
-.deniedMark::after {
-  position: absolute;
-  width: 4px;
-  height: 25px;
-  border-radius: 999px;
-  background: currentColor;
-  content: "";
-}
-
-.accessDeniedCopy {
-  display: grid;
-  justify-items: center;
-}
-
-.accessDenied h1 {
-  margin: 5px 0 8px;
-  font-family: var(--records-font-display);
-  font-size: clamp(1.8rem, 5vw, 3.2rem);
-  font-weight: 400;
-  letter-spacing: 0.08em;
-}
-
-.accessDenied .deniedCode {
-  margin: 20px 0 0;
-  color: var(--records-cyan-ink);
-  font-family: var(--admin-font-numeric);
-  font-size: 0.7rem;
-  letter-spacing: 0.18em;
-}
-
-.accessDenied p {
-  margin: 0 0 24px;
-  color: var(--records-ink-600);
 }
 
 @media (max-width: 1180px) {

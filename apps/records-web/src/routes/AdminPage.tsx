@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 
 import { getAdminStatus, refreshAdminStatus } from "../api/admin";
 import { RecordsApiError } from "../api/http";
@@ -480,30 +479,6 @@ function SystemSignalIcon(): React.JSX.Element {
       <path d="M11 32h11l4-8 8 17 5-10h14" strokeWidth="2.2" strokeLinecap="round" />
       <path d="m50 12 2 4 4 2-4 2-2 4-2-4-4-2 4-2 2-4Z" fill="currentColor" stroke="none" />
     </svg>
-  );
-}
-
-function AdminAccessDenied(): React.JSX.Element {
-  return (
-    <section
-      className={`${adminStyles.accessDenied} ${routeStyles.routeMotionItem}`}
-      data-route-motion-ready=""
-      data-route-motion-terminal=""
-    >
-      <div className={adminStyles.accessDeniedCopy}>
-        <span className={adminStyles.deniedMark} aria-hidden="true" />
-        <p className={adminStyles.deniedCode} lang="en">
-          403
-        </p>
-        <h1 lang="en" tabIndex={-1}>
-          ACCESS DENIED
-        </h1>
-        <p className={commonStyles.japaneseText}>この画面を利用する権限がありません。</p>
-        <Link className={commonStyles.primaryButton} to="/">
-          記録一覧へ戻る
-        </Link>
-      </div>
-    </section>
   );
 }
 
@@ -1847,7 +1822,13 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
   );
 }
 
-function AuthorizedPromptPage({ csrfToken }: { readonly csrfToken: string }): React.JSX.Element {
+function AuthorizedPromptPage({
+  canWrite,
+  csrfToken,
+}: {
+  readonly canWrite: boolean;
+  readonly csrfToken: string;
+}): React.JSX.Element {
   return (
     <div className={adminStyles.adminPage} data-route-motion-ready="">
       <header className={`${commonStyles.pageHeader} ${routeStyles.routeMotionItem}`}>
@@ -1861,7 +1842,7 @@ function AuthorizedPromptPage({ csrfToken }: { readonly csrfToken: string }): Re
           プロンプト管理
         </h1>
       </header>
-      <AdminPromptManager csrfToken={csrfToken} />
+      <AdminPromptManager canWrite={canWrite} csrfToken={csrfToken} />
     </div>
   );
 }
@@ -1871,9 +1852,8 @@ export default function AdminPage({
   csrfToken,
   view = "status",
 }: AdminPageProps): React.JSX.Element {
-  if (!isAdmin) return <AdminAccessDenied />;
   return view === "prompts" ? (
-    <AuthorizedPromptPage csrfToken={csrfToken} />
+    <AuthorizedPromptPage canWrite={isAdmin} csrfToken={csrfToken} />
   ) : (
     <AuthorizedAdminPage csrfToken={csrfToken} />
   );

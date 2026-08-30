@@ -58,13 +58,13 @@ const REVISION_SUMMARY = {
   checksum: "a".repeat(64),
 } as const;
 
-function renderManager(): void {
+function renderManager(canWrite = true): void {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
-      <AdminPromptManager csrfToken="csrf-token" />
+      <AdminPromptManager canWrite={canWrite} csrfToken="csrf-token" />
     </QueryClientProvider>,
   );
 }
@@ -168,6 +168,38 @@ afterEach(() => {
 });
 
 describe("AdminPromptManager", () => {
+  it("lets a non-admin read current and historical prompts without write controls", async () => {
+    const requests = installApi();
+    renderManager(false);
+
+    expect(await screen.findByRole("heading", { name: "プロンプト参照" })).toBeVisible();
+    expect(
+      screen.getByText(
+        "閲覧専用です。プロンプトの反映とrevisionの復元は管理者だけが実行できます。",
+      ),
+    ).toBeVisible();
+    expect(await screen.findByLabelText("システムプロンプト")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: "変更を反映" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "現在の設定を管理版として登録" }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByText(PREVIOUS_REVISION)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "復元" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "内容を見る" }));
+
+    await screen.findByText("previous moderator", { selector: "pre" });
+    fireEvent.click(screen.getByText("事前調査AI", { selector: "summary" }));
+    expect(screen.getByText("previous moderator", { selector: "pre" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "このrevisionを復元" })).not.toBeInTheDocument();
+    expect(
+      requests.some(
+        ({ path }) =>
+          path === "/api/v1/admin/prompts/apply" || path === "/api/v1/admin/prompts/rollback",
+      ),
+    ).toBe(false);
+  });
+
   it("edits five keyboard tabs and requires exact confirmation for a normalized system change", async () => {
     const requests = installApi();
     renderManager();

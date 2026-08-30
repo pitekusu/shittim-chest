@@ -268,7 +268,7 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "REQUEST_INVALID": "リクエストが正しくありません。",
         "CURSOR_INVALID": "ページ情報が正しくありません。",
         "INSIGHTS_UNAVAILABLE": "集計を準備しています。",
-        "ADMIN_ACCESS_DENIED": "この画面を利用する権限がありません。",
+        "ADMIN_ACCESS_DENIED": "この操作を実行する権限がありません。",
         "ADMIN_STATUS_UNAVAILABLE": "稼働状況を取得できません。",
         "ADMIN_STATUS_INVALID": "稼働状況を確認できません。",
         "PROMPT_INVALID": "プロンプトの入力内容が正しくありません。",

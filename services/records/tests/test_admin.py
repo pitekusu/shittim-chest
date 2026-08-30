@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -207,7 +208,7 @@ def session(requester_key: str) -> SessionRecord:
     )
 
 
-def test_authorizer_accepts_only_exact_hmac_derived_discord_id() -> None:
+def test_authorizer_authenticates_members_and_restricts_prompt_writes() -> None:
     expected = derive_requester_key(IDENTITY_KEY, ADMIN_ID)
     store = SessionStore(session(expected))
     configuration = AdminSecurityConfiguration(
@@ -226,13 +227,40 @@ def test_authorizer_accepts_only_exact_hmac_derived_discord_id() -> None:
     assert authenticated.requester_key == expected
     assert store.received_hash == session_hash(SESSION_KEY, "session-token")
     assert ADMIN_ID not in repr(authorizer)
+    assert (
+        authorizer.authorize_write(
+            session=authenticated,
+            raw_csrf="csrf-token",
+            csrf_header="csrf-token",
+            origin="https://records.example.invalid",
+            idempotency_key="idempotency-key-1",
+        )
+        == hashlib.sha256(b"idempotency-key-1").hexdigest()
+    )
 
-    denied = AdminAuthorizer(
+    member = AdminAuthorizer(
         store=SessionStore(session(derive_requester_key(IDENTITY_KEY, "999999999" + "999999999"))),
         configuration=configuration,
     )
+    member_session = member.authenticate(raw_session="session-token", now=NOW)
+
+    refresh_key = member.authorize_status_refresh(
+        session=member_session,
+        raw_csrf="csrf-token",
+        csrf_header="csrf-token",
+        origin="https://records.example.invalid",
+        idempotency_key="idempotency-key-1",
+    )
+    assert refresh_key == hashlib.sha256(b"idempotency-key-1").hexdigest()
+
     with pytest.raises(AdminFailure) as caught:
-        denied.authenticate(raw_session="session-token", now=NOW)
+        member.authorize_write(
+            session=member_session,
+            raw_csrf="csrf-token",
+            csrf_header="csrf-token",
+            origin="https://records.example.invalid",
+            idempotency_key="idempotency-key-1",
+        )
     assert caught.value.code == "ADMIN_ACCESS_DENIED"
     assert caught.value.status == 403
 

@@ -206,6 +206,24 @@ export function mockApi(
       if (path.startsWith("/api/v1/insights/costs?")) {
         return Promise.resolve(response(costs));
       }
+      if (path === "/api/v1/admin/status") {
+        return Promise.resolve(
+          response({
+            schemaVersion: 1,
+            generatedAt: "2026-08-24T03:00:00Z",
+            expiresAt: "2026-08-24T03:01:00Z",
+            stale: false,
+            overall: {
+              state: "healthy",
+              criticalAlarms: 0,
+              warningAlarms: 0,
+              partial: false,
+              activeAlarms: [],
+            },
+            sections: [],
+          }),
+        );
+      }
       throw new Error(`Unexpected request: ${path}`);
     }),
   );
