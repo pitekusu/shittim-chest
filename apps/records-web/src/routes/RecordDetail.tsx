@@ -54,7 +54,11 @@ export default function RecordDetail(): React.JSX.Element {
   return <RecordDocument record={record.data} />;
 }
 
-function RecordDocument({ record }: { readonly record: RecordDetailResponse }): React.JSX.Element {
+export function RecordDocument({
+  record,
+}: {
+  readonly record: RecordDetailResponse;
+}): React.JSX.Element {
   const participant = (slot: ParticipantSlot) =>
     record.participants.find((item) => item.slot === slot)!;
   const count = (slot: ParticipantSlot) =>
@@ -119,9 +123,91 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }): 
           })}
         </div>
       </section>
+      {record.affection && (
+        <section
+          className={`${detailStyles.detailSection} ${detailStyles.affectionSection} ${routeStyles.routeMotionItem}`}
+          style={routeMotionDelay(80)}
+          aria-labelledby="affection-title"
+        >
+          <header className={detailStyles.affectionHeader}>
+            <div>
+              <p className={commonStyles.eyebrow} lang="en">
+                AFFECTION UPDATE
+              </p>
+              <h2 id="affection-title" className={JAPANESE_HEADING_CLASS}>
+                親愛度の変化
+              </h2>
+            </div>
+            <span className={detailStyles.affectionScale}>0 — 1000</span>
+          </header>
+          {record.affection.status === "unavailable" && (
+            <p className={`${detailStyles.affectionUnavailable} ${JAPANESE_PROSE_CLASS}`}>
+              質問の評価を完了できなかったため、親愛度は変更されませんでした。
+            </p>
+          )}
+          <div className={detailStyles.affectionGrid}>
+            {record.affection.participants.map((change) => {
+              const person = participant(change.participant);
+              const signedDelta =
+                change.appliedDelta > 0 ? `+${change.appliedDelta}` : String(change.appliedDelta);
+              const signedQuestionScore =
+                change.questionScore === null
+                  ? "未評価"
+                  : change.questionScore > 0
+                    ? `+${change.questionScore}`
+                    : String(change.questionScore);
+              return (
+                <article
+                  className={`${detailStyles.affectionCard} ${detailStyles[change.participant]}`}
+                  key={change.participant}
+                >
+                  <header>
+                    <Avatar avatar={person.avatar} />
+                    <div>
+                      <h3>{person.displayName}</h3>
+                      <span>
+                        質問評価 <strong>{signedQuestionScore}</strong>
+                      </span>
+                    </div>
+                  </header>
+                  <div className={detailStyles.affectionTransition}>
+                    <span>
+                      <small>変更前</small>
+                      <strong>{change.before}</strong>
+                    </span>
+                    <span
+                      className={
+                        change.appliedDelta > 0
+                          ? detailStyles.affectionPositive
+                          : change.appliedDelta < 0
+                            ? detailStyles.affectionNegative
+                            : detailStyles.affectionNeutral
+                      }
+                      aria-label={`実増減 ${signedDelta}点`}
+                    >
+                      {signedDelta}
+                    </span>
+                    <span>
+                      <small>変更後</small>
+                      <strong>{change.after}</strong>
+                    </span>
+                  </div>
+                  <meter
+                    aria-label={`${person.displayName}の親愛度 ${change.after}点（1000点満点）`}
+                    className={detailStyles.affectionMeter}
+                    min={0}
+                    max={1000}
+                    value={change.after}
+                  />
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
       <section
         className={`${detailStyles.detailSection} ${routeStyles.routeMotionItem}`}
-        style={routeMotionDelay(80)}
+        style={routeMotionDelay(record.affection ? 120 : 80)}
         aria-labelledby="votes-title"
       >
         <h2 id="votes-title" className={JAPANESE_HEADING_CLASS}>
@@ -150,7 +236,7 @@ function RecordDocument({ record }: { readonly record: RecordDetailResponse }): 
       <section
         className={`${detailStyles.detailSection} ${detailStyles.decisionSection} ${routeStyles.routeMotionItem}`}
         data-route-motion-terminal=""
-        style={routeMotionDelay(120)}
+        style={routeMotionDelay(record.affection ? 160 : 120)}
         aria-labelledby="decision-title"
       >
         <p className={commonStyles.eyebrow} lang="en">

@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
 import pytest
+from shittim_chest.domain import (
+    AFFECTION_RULES_VERSION,
+    AffectionAssessment,
+    AffectionAssessmentStatus,
+    ParticipantAffection,
+    ParticipantSlot,
+)
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import project_completed_debate
 from shittim_records.costs import CostCategory, StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
+    AffectionRankingQuery,
     ArchivePage,
     CursorCodec,
     ListQuery,
@@ -38,6 +47,11 @@ class FakeReader:
         self.page = ArchivePage(items=(self.meta,), last_evaluated_key=None, index_name="gsi1")
         self.list_calls: list[dict[str, Any]] = []
         self.ranking_items = ranking_items()
+        (
+            self.affection_pointer,
+            self.affection_generation,
+            self.affection_pages,
+        ) = affection_ranking_items()
         self.costs = tuple(
             StoredDailyCost(
                 cost_date=date(2026, 8, 14),
@@ -68,6 +82,25 @@ class FakeReader:
 
     def load_ranking_snapshots(self) -> tuple[dict[str, Any], ...]:
         return self.ranking_items
+
+    def load_affection_ranking_pointer(self) -> dict[str, Any] | None:
+        return self.affection_pointer
+
+    def load_affection_ranking_generation(self, *, generation_id: str) -> dict[str, Any] | None:
+        return (
+            self.affection_generation
+            if generation_id == self.affection_generation["generation_id"]
+            else None
+        )
+
+    def load_affection_ranking_pages(
+        self,
+        *,
+        generation_id: str,
+        page_indices: tuple[int, ...],
+    ) -> tuple[dict[str, Any], ...]:
+        assert generation_id == self.affection_generation["generation_id"]
+        return tuple(page for page in self.affection_pages if page["page_index"] in page_indices)
 
     def load_cost_ledger(
         self,
@@ -132,6 +165,102 @@ def ranking_items() -> tuple[dict[str, Any], ...]:
     )
 
 
+def affection_ranking_items(
+    *,
+    profile_count: int = 2,
+    generation_id: str = "a" * 32,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    tuple[dict[str, Any], ...],
+]:
+    generated_at = NOW.isoformat()
+    checksum = "b" * 64
+    if profile_count == 2:
+        entries = [
+            {
+                "requester_key": "requester-a",
+                "display_name": "Stored A",
+                "score": 700,
+                "rank": 1,
+            },
+            {
+                "requester_key": "requester-b",
+                "display_name": "Stored B",
+                "score": 500,
+                "rank": 2,
+            },
+        ]
+    else:
+        entries = [
+            {
+                "requester_key": f"requester-{index:03d}",
+                "display_name": f"Requester {index:03d}",
+                "score": 1000 - index,
+                "rank": index + 1,
+            }
+            for index in range(profile_count)
+        ]
+    page_count = (profile_count + 49) // 50
+    pages = tuple(
+        {
+            "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+            "SK": f"PAGE#{page_index:06d}",
+            "schema_version": 1,
+            "record_type": "affection_ranking_page",
+            "generation_id": generation_id,
+            "page_index": page_index,
+            "offset": page_index * 50,
+            "entry_count": len(entries[page_index * 50 : (page_index + 1) * 50]),
+            "rankings": [
+                {
+                    "participant": slot,
+                    "entries": [
+                        dict(entry) for entry in entries[page_index * 50 : (page_index + 1) * 50]
+                    ],
+                }
+                for slot in (
+                    "participant-a",
+                    "participant-b",
+                    "participant-c",
+                )
+            ],
+        }
+        for page_index in range(page_count)
+    )
+    return (
+        {
+            "PK": "RANKING#AFFECTION",
+            "SK": "CURRENT",
+            "schema_version": 1,
+            "record_type": "affection_ranking_pointer",
+            "generation_id": generation_id,
+            "generated_at": generated_at,
+            "profile_count": profile_count,
+            "page_count": page_count,
+            "checksum": checksum,
+        },
+        {
+            "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
+            "SK": "META",
+            "schema_version": 1,
+            "record_type": "affection_ranking_generation",
+            "generation_id": generation_id,
+            "generated_at": generated_at,
+            "profile_count": profile_count,
+            "page_count": page_count,
+            "page_size": 50,
+            "checksum": checksum,
+            "participants": [
+                {"participant": "participant-a", "display_name": "Arona"},
+                {"participant": "participant-b", "display_name": "Plana"},
+                {"participant": "participant-c", "display_name": "Participant C"},
+            ],
+        },
+        pages,
+    )
+
+
 def test_list_normalizes_preview_and_uses_profile_avatar() -> None:
     records, reader = service()
     reader.meta["question"] = "  one\n two\tthree  "
@@ -164,6 +293,208 @@ def test_rankings_use_atomic_snapshots_and_current_requester_profiles() -> None:
     ]
     assert all(entry.avatar.kind == "image" for entry in result.requests)
     assert "requesterKey" not in repr(payload)
+
+
+def test_affection_rankings_return_all_three_personas_without_internal_keys() -> None:
+    records, _reader = service()
+
+    result = records.get_affection_rankings(query=AffectionRankingQuery(), now=NOW)
+    payload = result.model_dump(by_alias=True, mode="json")
+
+    assert result.default_score == 500
+    assert result.max_score == 1000
+    assert [ranking.participant for ranking in result.rankings] == [
+        "participant-a",
+        "participant-b",
+        "participant-c",
+    ]
+    assert all(len(ranking.entries) == 2 for ranking in result.rankings)
+    assert result.rankings[0].entries[0].display_name == "Stored A"
+    assert result.rankings[0].entries[0].score == 700
+    assert result.next_cursor is None
+    assert "requesterKey" not in repr(payload)
+
+
+def test_affection_rankings_cursor_reads_every_profile_from_one_immutable_generation() -> None:
+    records, reader = service()
+    (
+        reader.affection_pointer,
+        reader.affection_generation,
+        reader.affection_pages,
+    ) = affection_ranking_items(profile_count=55)
+
+    first = records.get_affection_rankings(
+        query=AffectionRankingQuery(limit=50),
+        now=NOW,
+    )
+
+    assert all(len(ranking.entries) == 50 for ranking in first.rankings)
+    assert first.next_cursor is not None
+    reader.affection_pointer = {"corrupt": True}
+
+    second = records.get_affection_rankings(
+        query=AffectionRankingQuery(limit=50, cursor=first.next_cursor),
+        now=NOW,
+    )
+
+    assert all(len(ranking.entries) == 5 for ranking in second.rankings)
+    assert [ranking.entries[0].rank for ranking in second.rankings] == [51, 51, 51]
+    assert second.next_cursor is None
+    assert second.generated_at == first.generated_at
+
+
+def test_affection_cursor_chain_keeps_initial_expiry_after_late_next_page() -> None:
+    reader = FakeReader()
+    (
+        reader.affection_pointer,
+        reader.affection_generation,
+        reader.affection_pages,
+    ) = affection_ranking_items(profile_count=105)
+    codec = CursorCodec(SESSION_KEY)
+    records = RecordsReadService(reader=reader, cursor_codec=codec)
+
+    first = records.get_affection_rankings(
+        query=AffectionRankingQuery(limit=50),
+        now=NOW,
+    )
+    assert first.next_cursor is not None
+    _generation, _offset, initial_expiry = codec.decode_affection(
+        cursor=first.next_cursor,
+        limit=50,
+        now=NOW,
+    )
+    assert initial_expiry == int((NOW + timedelta(hours=1)).timestamp())
+    reader.affection_pointer = {"replaced": True}
+    late = NOW + timedelta(minutes=59)
+
+    second = records.get_affection_rankings(
+        query=AffectionRankingQuery(limit=50, cursor=first.next_cursor),
+        now=late,
+    )
+
+    assert second.next_cursor is not None
+    _generation, offset, inherited_expiry = codec.decode_affection(
+        cursor=second.next_cursor,
+        limit=50,
+        now=late,
+    )
+    assert offset == 100
+    assert inherited_expiry == initial_expiry
+
+
+def test_affection_rankings_cursor_is_bound_to_limit_and_signature() -> None:
+    records, reader = service()
+    (
+        reader.affection_pointer,
+        reader.affection_generation,
+        reader.affection_pages,
+    ) = affection_ranking_items(profile_count=55)
+    first = records.get_affection_rankings(
+        query=AffectionRankingQuery(limit=50),
+        now=NOW,
+    )
+    assert first.next_cursor is not None
+    replacement = "A" if first.next_cursor[-1] != "A" else "B"
+
+    with pytest.raises(ReadFailure) as wrong_limit:
+        records.get_affection_rankings(
+            query=AffectionRankingQuery(limit=49, cursor=first.next_cursor),
+            now=NOW,
+        )
+    with pytest.raises(ReadFailure) as tampered:
+        records.get_affection_rankings(
+            query=AffectionRankingQuery(
+                limit=50,
+                cursor=f"{first.next_cursor[:-1]}{replacement}",
+            ),
+            now=NOW,
+        )
+
+    assert wrong_limit.value.code == "CURSOR_INVALID"
+    assert wrong_limit.value.status == 400
+    assert tampered.value.code == "CURSOR_INVALID"
+    assert tampered.value.status == 400
+
+
+def test_affection_rankings_reject_corrupt_competition_rank_across_pages() -> None:
+    records, reader = service()
+    (
+        reader.affection_pointer,
+        reader.affection_generation,
+        reader.affection_pages,
+    ) = affection_ranking_items(profile_count=55)
+    for ranking in reader.affection_pages[1]["rankings"]:
+        ranking["entries"][0]["score"] = 951
+    first = records.get_affection_rankings(
+        query=AffectionRankingQuery(limit=49),
+        now=NOW,
+    )
+    assert first.next_cursor is not None
+
+    with pytest.raises(ReadFailure) as failure:
+        records.get_affection_rankings(
+            query=AffectionRankingQuery(limit=49, cursor=first.next_cursor),
+            now=NOW,
+        )
+
+    assert failure.value.code == "INSIGHTS_UNAVAILABLE"
+    assert failure.value.status == 503
+
+
+def test_affection_rankings_reject_corrupt_rank_at_an_aligned_page_boundary() -> None:
+    records, reader = service()
+    (
+        reader.affection_pointer,
+        reader.affection_generation,
+        reader.affection_pages,
+    ) = affection_ranking_items(profile_count=55)
+    first = records.get_affection_rankings(
+        query=AffectionRankingQuery(limit=50),
+        now=NOW,
+    )
+    assert first.next_cursor is not None
+    for ranking in reader.affection_pages[1]["rankings"]:
+        ranking["entries"][0]["rank"] = 1
+
+    with pytest.raises(ReadFailure) as failure:
+        records.get_affection_rankings(
+            query=AffectionRankingQuery(limit=50, cursor=first.next_cursor),
+            now=NOW,
+        )
+
+    assert failure.value.code == "INSIGHTS_UNAVAILABLE"
+    assert failure.value.status == 503
+
+
+def test_detail_maps_archive_v2_affection_and_historical_v1_remains_null() -> None:
+    records, reader = service()
+    historical = records.get_record(record_id=reader.record_id, now=NOW)
+    assert historical.schema_version == 2
+    assert historical.affection is None
+
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=(
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_A, 500, 25, 25, 525),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_B, 500, -10, -10, 490),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_C, 990, 50, 10, 1000),
+        ),
+        assessed_at=NOW,
+    )
+    projection = project_completed_debate(
+        replace(completed_snapshot(), affection_assessment=assessment),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    reader.record_id = projection.record_id
+    reader.items = projection.items
+
+    current = records.get_record(record_id=projection.record_id, now=NOW)
+
+    assert current.affection is not None
+    assert current.affection.participants[2].applied_delta == 10
 
 
 @pytest.mark.parametrize(

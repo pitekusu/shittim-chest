@@ -43,11 +43,17 @@ Guildとallowed channelを起動時／操作時に検証し、participantへcomm
 1. participant 3人の初回意見
 2. participant 3人の最終案
 3. 3票確定後の投票者名、投票先、理由
-4. moderatorの票数とwinner
+4. moderatorの票数、winner、3人の親愛度と実増減
 5. winnerの勝利の言葉、最終決定、実行案、注意点
 
 投票中はcandidateを匿名IDにし、3票確定前のvote Discord writeを0にする。最終結果のwinnerは
 保存済みPython resultと一致するparticipantだけが投稿する。
+
+親愛度は適用後の点数とclamp後の実増減を表示する。上限／下限で質問評価値と実増減が
+異なる場合も、Discordには実際に反映した値を示す。3人の評価を完了できなかった場合は、
+部分的な点数や0点を表示せず、全員の親愛度を変更しなかったことだけを表示する。
+評価確定後に討論が失敗または取消となった場合も、terminal通知へ同じ親愛度変化を付け、
+永続profileへ反映済みの変更を利用者から隠さない。評価前の失敗／取消には親愛度sectionを表示しない。
 
 ## 5. Ordered Outbox delivery
 

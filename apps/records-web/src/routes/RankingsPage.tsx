@@ -1,10 +1,23 @@
 import { useState } from "react";
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  type UseInfiniteQueryResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
+import { getAffectionRankings, mergeAffectionRankingPages } from "../api/affectionRankings";
 import { getCosts } from "../api/costs";
 import { RecordsApiError } from "../api/http";
 import { getRankings } from "../api/rankings";
-import type { CostPeriod, CostsResponse, RankingEntry } from "../api/types";
+import type {
+  AffectionRankingsResponse,
+  CostPeriod,
+  CostsResponse,
+  ParticipantAffectionRanking,
+  ParticipantSlot,
+  RankingEntry,
+} from "../api/types";
 import { Avatar } from "../components/Avatar";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import { formatCompletedDateTime } from "../lib/dateTime";
@@ -270,6 +283,174 @@ function RankingShareAvatar({
   );
 }
 
+const AFFECTION_VARIANTS: Readonly<Record<ParticipantSlot, string>> = {
+  "participant-a": rankingStyles.affectionCyan,
+  "participant-b": rankingStyles.affectionPink,
+  "participant-c": rankingStyles.affectionLavender,
+};
+
+function AffectionRankings({
+  query,
+}: {
+  readonly query: UseInfiniteQueryResult<AffectionRankingsResponse>;
+}) {
+  const initialError = query.data === undefined ? query.error : null;
+  const paginationError = query.data === undefined ? null : query.error;
+  const apiError = initialError instanceof RecordsApiError ? initialError : undefined;
+  const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
+  const retryPagination = () => {
+    if (query.isFetchNextPageError) {
+      void query.fetchNextPage();
+    } else {
+      void query.refetch();
+    }
+  };
+
+  return (
+    <section
+      className={`${rankingStyles.affectionPanel} ${routeStyles.routeMotionItem}`}
+      style={routeMotionDelay(120)}
+      aria-labelledby="affection-rankings-title"
+      aria-busy={query.isPending || query.isFetchingNextPage}
+    >
+      <header className={rankingStyles.affectionHeader}>
+        <div>
+          <p className={commonStyles.eyebrow} lang="en">
+            AFFECTION RANKINGS
+          </p>
+          <h2 id="affection-rankings-title" className={JAPANESE_HEADING_CLASS}>
+            親愛度ランキング
+          </h2>
+          <p className={`${JAPANESE_PROSE_CLASS} ${rankingStyles.rankingDescription}`}>
+            質問者ごとの現在の親愛度です。人格ごとに1000点満点で表示します。
+          </p>
+        </div>
+        {query.data && (
+          <p className={rankingStyles.affectionGeneratedAt}>
+            最終集計:{" "}
+            <time dateTime={query.data.generatedAt}>
+              {formatCompletedDateTime(query.data.generatedAt)}
+            </time>
+          </p>
+        )}
+      </header>
+      {query.isPending && (
+        <p className={rankingStyles.affectionStatus} aria-live="polite">
+          親愛度を読み込んでいます。
+        </p>
+      )}
+      {preparing && (
+        <output className={rankingStyles.affectionStatus}>
+          <strong>親愛度ランキングを準備しています</strong>
+          <span>最初の集計が終わるまで、しばらくお待ちください。</span>
+        </output>
+      )}
+      {initialError && !preparing && (
+        <div className={rankingStyles.affectionStatus} role="alert">
+          <strong>親愛度ランキングを読み込めませんでした</strong>
+          <span>{apiError?.message ?? "通信状態を確認してください。"}</span>
+          <button
+            className={commonStyles.secondaryButton}
+            type="button"
+            onClick={() => void query.refetch()}
+          >
+            もう一度試す
+          </button>
+        </div>
+      )}
+      {query.data && (
+        <>
+          <div className={rankingStyles.affectionRankingsGrid}>
+            {query.data.rankings.map((ranking) => (
+              <AffectionRankingCard
+                key={ranking.participant}
+                ranking={ranking}
+                maxScore={query.data.maxScore}
+              />
+            ))}
+          </div>
+          {(query.hasNextPage || paginationError) && (
+            <div
+              className={rankingStyles.affectionLoadMore}
+              aria-live="polite"
+              aria-busy={query.isFetchingNextPage}
+            >
+              {paginationError && (
+                <span role="alert">
+                  {paginationError instanceof RecordsApiError
+                    ? paginationError.message
+                    : "続きを読み込めませんでした。"}
+                </span>
+              )}
+              <button
+                className={commonStyles.secondaryButton}
+                type="button"
+                disabled={query.isFetchingNextPage}
+                aria-label="親愛度ランキングの続きを読み込む"
+                onClick={paginationError ? retryPagination : () => void query.fetchNextPage()}
+              >
+                {query.isFetchingNextPage
+                  ? "続きを読み込んでいます"
+                  : paginationError
+                    ? "続きをもう一度読み込む"
+                    : "続きを読み込む"}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function AffectionRankingCard({
+  ranking,
+  maxScore,
+}: {
+  readonly ranking: ParticipantAffectionRanking;
+  readonly maxScore: number;
+}) {
+  const titleId = `affection-${ranking.participant}-title`;
+  return (
+    <section
+      className={`${rankingStyles.affectionRankingCard} ${AFFECTION_VARIANTS[ranking.participant]}`}
+      aria-labelledby={titleId}
+    >
+      <header>
+        <span className={rankingStyles.affectionDiamond} aria-hidden="true" />
+        <div>
+          <span>親愛度</span>
+          <h3 id={titleId}>{ranking.displayName}</h3>
+        </div>
+      </header>
+      {ranking.entries.length === 0 ? (
+        <p className={rankingStyles.affectionEmpty}>まだ集計対象がありません。</p>
+      ) : (
+        <ol className={rankingStyles.affectionRankingList}>
+          {ranking.entries.map((entry, index) => (
+            <li key={`${entry.rank}-${entry.displayName}-${index}`} value={entry.rank}>
+              <span className={rankingStyles.affectionRank}>
+                <span aria-hidden="true">{entry.rank}</span>
+                <span className={commonStyles.visuallyHidden}>{entry.rank}位</span>
+              </span>
+              <Avatar avatar={entry.avatar} />
+              <span className={rankingStyles.affectionName}>{entry.displayName}</span>
+              <strong className={rankingStyles.affectionScore}>{entry.score}</strong>
+              <meter
+                aria-label={`${ranking.displayName}から${entry.displayName}への親愛度 ${entry.score}点（${maxScore}点満点）`}
+                className={rankingStyles.affectionRankingMeter}
+                min={0}
+                max={maxScore}
+                value={entry.score}
+              />
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 function CostDashboard({
   costs,
   period,
@@ -419,11 +600,19 @@ function formatCalendarDate(value: string): string {
 export default function RankingsPage() {
   const [period, setPeriod] = useState<CostPeriod>("week");
   const rankings = useQuery({ queryKey: ["rankings"], queryFn: getRankings });
+  const affectionRankings = useInfiniteQuery({
+    queryKey: ["affection-rankings"],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => getAffectionRankings(pageParam),
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    select: (data) => mergeAffectionRankingPages(data.pages, data.pageParams),
+  });
   const costs = useQuery({
     queryKey: ["costs", period],
     queryFn: () => getCosts(period),
   });
   useAuthenticationRecovery(rankings.error);
+  useAuthenticationRecovery(affectionRankings.error);
   useAuthenticationRecovery(costs.error);
 
   return (
@@ -469,6 +658,7 @@ export default function RankingsPage() {
           onRetry={() => void rankings.refetch()}
           motionDelay={100}
         />
+        <AffectionRankings query={affectionRankings} />
         <CostDashboard costs={costs} period={period} onPeriodChange={setPeriod} />
       </div>
     </>

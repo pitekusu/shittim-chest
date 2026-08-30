@@ -129,6 +129,26 @@ def stream_event() -> dict[str, object]:
     }
 
 
+def affection_stream_event() -> dict[str, object]:
+    return {
+        "Records": [
+            {
+                "eventID": "opaque-affection-event",
+                "eventName": "MODIFY",
+                "dynamodb": {
+                    "SequenceNumber": "opaque-affection-sequence",
+                    "NewImage": {
+                        "PK": {"S": "AFFECTION#REQUESTER#private"},
+                        "SK": {"S": "PROFILE"},
+                        "record_type": {"S": "affection_profile"},
+                        "schema_version": {"N": "8"},
+                    },
+                },
+            }
+        ]
+    }
+
+
 def test_projector_handler_returns_empty_partial_failure_list(monkeypatch: Any) -> None:
     service = FakeProjector()
     monkeypatch.setattr(lambda_handlers, "_PROJECTOR", cast(Any, service))
@@ -137,6 +157,27 @@ def test_projector_handler_returns_empty_partial_failure_list(monkeypatch: Any) 
 
     assert result == {"batchItemFailures": []}
     assert service.partitions == ["DEBATE#opaque"]
+
+
+def test_projector_handler_routes_affection_profile_without_logging_private_identity(
+    monkeypatch: Any,
+) -> None:
+    class FakeAffectionProjector:
+        def __init__(self) -> None:
+            self.partition_count = 0
+
+        def project_partition(self, partition_key: str) -> ProjectionResult:
+            assert partition_key.startswith("AFFECTION#REQUESTER#")
+            self.partition_count += 1
+            return ProjectionResult(created=True)
+
+    service = FakeAffectionProjector()
+    monkeypatch.setattr(lambda_handlers, "_AFFECTION_PROJECTOR", cast(Any, service))
+
+    result = lambda_handlers.projector_handler(affection_stream_event(), object())
+
+    assert result == {"batchItemFailures": []}
+    assert service.partition_count == 1
 
 
 def test_projector_handler_returns_only_failed_stream_sequence(monkeypatch: Any) -> None:

@@ -687,12 +687,20 @@ class CandidateOrderer(Protocol):
 class OpenAIService(Protocol):
     """Return validated domain models rather than SDK response objects."""
 
+    async def score_affection(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+    ) -> int: ...
+
     async def generate_initial_opinion(
         self,
         *,
         participant: ParticipantSlot,
         question: str,
         evidence: EvidenceBundle,
+        affection_score: int,
     ) -> InitialOpinion: ...
 
     async def generate_final_proposal(
@@ -702,6 +710,7 @@ class OpenAIService(Protocol):
         question: str,
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
+        affection_score: int,
     ) -> FinalProposal: ...
 
     async def cast_vote(
@@ -720,6 +729,7 @@ class OpenAIService(Protocol):
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
+        affection_score: int,
     ) -> FinalDecision: ...
 
 
@@ -743,6 +753,14 @@ class DebateRepository(Protocol):
     ) -> DebateSnapshot: ...
 
     async def get(self, debate_id: DebateId) -> DebateSnapshot | None: ...
+
+    async def settle_affection(
+        self,
+        *,
+        expected: DebateSnapshot,
+        scores: tuple[int, int, int] | None,
+        at: datetime,
+    ) -> DebateSnapshot: ...
 
     async def replace(
         self,

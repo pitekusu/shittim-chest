@@ -32,6 +32,7 @@ from shittim_records.contracts import (
     SessionUser,
 )
 from shittim_records.read_api import (
+    AffectionRankingQuery,
     ListQuery,
     ReadFailure,
     RecordsReadService,
@@ -208,6 +209,17 @@ class ReadHttpController:
                 if request.raw_query:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.get_rankings(now=now)
+            elif request.route_key == "GET /api/v1/insights/affection-rankings":
+                query = _query(request.raw_query)
+                if not set(query).issubset({"cursor", "limit"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.get_affection_rankings(
+                    query=AffectionRankingQuery(
+                        limit=_affection_limit(_optional_single(query, "limit")),
+                        cursor=_optional_single(query, "cursor"),
+                    ),
+                    now=now,
+                )
             elif request.route_key == "GET /api/v1/insights/costs":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"period"}):
@@ -325,6 +337,18 @@ def _optional_single(query: Mapping[str, list[str]], name: str) -> str | None:
 def _limit(value: str | None) -> int:
     if value is None:
         return 12
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise ReadFailure("REQUEST_INVALID", 400) from None
+    if str(parsed) != value or not 1 <= parsed <= 50:
+        raise ReadFailure("REQUEST_INVALID", 400)
+    return parsed
+
+
+def _affection_limit(value: str | None) -> int:
+    if value is None:
+        return 50
     try:
         parsed = int(value)
     except ValueError:

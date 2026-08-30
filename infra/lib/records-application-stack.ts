@@ -223,6 +223,7 @@ export class RecordsApplicationStack extends Stack {
       identityParameter,
       presentationParameter,
       allowScan: false,
+      allowAffectionProjection: true,
     });
     this.projectorFunction.addEventSource(
       new eventSources.DynamoEventSource(sourceTable, {
@@ -240,6 +241,14 @@ export class RecordsApplicationStack extends Stack {
               NewImage: {
                 record_type: { S: lambda.FilterRule.isEqual("debate_meta") },
                 current_phase: { S: lambda.FilterRule.isEqual("completed") },
+              },
+            },
+          }),
+          lambda.FilterCriteria.filter({
+            dynamodb: {
+              NewImage: {
+                record_type: { S: lambda.FilterRule.isEqual("affection_profile") },
+                schema_version: { N: lambda.FilterRule.isEqual("8") },
               },
             },
           }),
@@ -264,6 +273,7 @@ export class RecordsApplicationStack extends Stack {
       identityParameter,
       presentationParameter,
       allowScan: true,
+      allowAffectionProjection: false,
     });
 
     this.authFunction = this.httpFunctionWithRole({
@@ -336,12 +346,86 @@ export class RecordsApplicationStack extends Stack {
           resources: [`${archiveTable.tableArn}/index/gsi1`],
         }),
         new iam.PolicyStatement({
+          actions: ["dynamodb:Query"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": [
+                "AFFECTION#PROFILE",
+                "RANKING#AFFECTION#CATALOG",
+              ],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:BatchGetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["AFFECTION#PROFILE"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["RANKING#AFFECTION"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["RANKING#AFFECTION#GEN#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["RANKING#AFFECTION#CATALOG"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:BatchWriteItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["RANKING#AFFECTION#GEN#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
           actions: ["dynamodb:PutItem"],
           resources: [statisticsTable.tableArn],
           conditions: {
             StringEquals: {
               "dynamodb:EnclosingOperation": "TransactWriteItems",
             },
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": [
+                "AFFECTION#PROFILE",
+                "RANKING#WINS",
+                "RANKING#REQUESTS",
+                "RANKING#AFFECTION",
+                "RANKING#AFFECTION#CATALOG",
+                "AFFECTION#SEED",
+              ],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
           },
         }),
       ],
@@ -516,6 +600,28 @@ export class RecordsApplicationStack extends Stack {
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
           resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": [
+                "RANKING#WINS",
+                "RANKING#REQUESTS",
+                "RANKING#AFFECTION",
+                "COST#DAILY",
+                "FX#DAILY",
+              ],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:BatchGetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["RANKING#AFFECTION#GEN#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
         }),
         new iam.PolicyStatement({
           actions: ["dynamodb:Query"],
@@ -1158,6 +1264,11 @@ export class RecordsApplicationStack extends Stack {
       integration: readIntegration,
     });
     api.addRoutes({
+      path: "/api/v1/insights/affection-rankings",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: readIntegration,
+    });
+    api.addRoutes({
       path: "/api/v1/insights/costs",
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
@@ -1268,6 +1379,7 @@ export class RecordsApplicationStack extends Stack {
     readonly identityParameter: ssm.IStringParameter;
     readonly presentationParameter: ssm.IStringParameter;
     readonly allowScan: boolean;
+    readonly allowAffectionProjection: boolean;
   }): lambda.Function {
     const logGroup = new logs.LogGroup(this, `${options.id}Logs`, {
       logGroupName: `/aws/lambda/${options.functionName}`,
@@ -1285,6 +1397,32 @@ export class RecordsApplicationStack extends Stack {
         resources: [options.sourceTable.tableArn],
       }),
     );
+    if (options.allowAffectionProjection) {
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [options.sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["AFFECTION#REQUESTER#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+      );
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
+          resources: [options.statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["AFFECTION#PROFILE"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+      );
+    }
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ["dynamodb:GetItem"],

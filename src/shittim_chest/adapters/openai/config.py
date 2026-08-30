@@ -33,6 +33,10 @@ class OpenAIAdapterConfig:
         return self.policy.model
 
     @property
+    def affection(self) -> PhaseBudget:
+        return self.policy.affection
+
+    @property
     def initial_opinion(self) -> PhaseBudget:
         return self.policy.initial_opinion
 

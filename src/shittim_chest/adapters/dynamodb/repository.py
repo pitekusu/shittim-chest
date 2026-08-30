@@ -28,15 +28,18 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
+    PREVIOUS_SCHEMA_VERSION,
     DynamoItem,
     DynamoValue,
     PersistenceFormatError,
+    deserialize_affection_profile,
     deserialize_ingress_operation_result,
     deserialize_ingress_request,
     deserialize_outbox,
     deserialize_panel_operation,
     deserialize_snapshot,
     ingress_request_sort_key_from_identity,
+    serialize_affection_profile,
     serialize_outbox,
     serialize_panel_operation,
     serialize_snapshot,
@@ -85,7 +88,13 @@ from shittim_chest.application.scale_to_zero import (
     IngressRequest,
     IngressStatus,
 )
-from shittim_chest.domain import AttemptId, DebateId, DebatePhase
+from shittim_chest.domain import (
+    AffectionProfile,
+    AttemptId,
+    DebateId,
+    DebatePhase,
+    assess_affection,
+)
 
 LEASE_SECONDS = 60
 INGRESS_PREPARE_LEASE_MIN_SECONDS = 50
@@ -172,6 +181,15 @@ class DynamoDbDebateRepository:
 
     async def get(self, debate_id: DebateId) -> DebateSnapshot | None:
         return await asyncio.to_thread(self._load_snapshot, debate_id, None)
+
+    async def settle_affection(
+        self,
+        *,
+        expected: DebateSnapshot,
+        scores: tuple[int, int, int] | None,
+        at: datetime,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(self._settle_affection, expected, scores, at)
 
     async def replace(
         self,
@@ -468,6 +486,11 @@ class DynamoDbDebateRepository:
         _require_same_attempt(expected, updated)
         if expected.terminal_delivery is not None or updated.terminal_delivery is not None:
             raise RepositoryConflict("terminal delivery requires its dedicated repository path")
+        if expected.affection_assessment != updated.affection_assessment or (
+            expected.state.phase is DebatePhase.SCORING_AFFECTION
+            and updated.state.phase is DebatePhase.PREPARING_EVIDENCE
+        ):
+            raise RepositoryConflict("affection settlement requires its dedicated repository path")
         direct_unbound_cancel = _is_direct_unbound_cancellation(
             expected,
             updated,
@@ -543,6 +566,121 @@ class DynamoDbDebateRepository:
             self._require_current_ingress_claim(ingress_claim, operation_id=operation_id)
             raise
         return persisted
+
+    def _settle_affection(
+        self,
+        expected: DebateSnapshot,
+        scores: tuple[int, int, int] | None,
+        at: datetime,
+    ) -> DebateSnapshot:
+        """Atomically settle one score set, profile CAS, and the next debate phase."""
+
+        _require_utc(at)
+        if expected.state.phase is not DebatePhase.SCORING_AFFECTION:
+            raise RepositoryConflict("affection settlement requires the scoring phase")
+        if expected.affection_assessment is not None:
+            raise RepositoryConflict("affection assessment is already durable")
+        current = expected
+        for _retry in range(5):
+            if current.state.attempt_id != expected.state.attempt_id:
+                raise RepositoryConflict("affection settlement changed attempt")
+            if current.affection_assessment is not None:
+                return current
+            if current.state.phase is not DebatePhase.SCORING_AFFECTION:
+                raise RepositoryConflict("affection settlement phase changed")
+            lease = current.lease
+            if lease is None:
+                raise RepositoryConflict("affection settlement requires a fenced lease")
+
+            profile_key = {
+                "PK": f"AFFECTION#REQUESTER#{current.requester_id}",
+                "SK": "PROFILE",
+            }
+            raw_profile = self._get_item(profile_key)
+            profile = (
+                AffectionProfile.initial(
+                    requester_id=current.requester_id,
+                    requester_username=current.requester_username,
+                    requester_display_name=current.requester_display_name,
+                    at=at,
+                )
+                if raw_profile is None
+                else deserialize_affection_profile(raw_profile)
+            )
+            if profile.requester_id != current.requester_id:
+                raise RepositoryConflict("affection profile requester changed")
+            updated_profile, assessment = assess_affection(profile, scores=scores, assessed_at=at)
+            if scores is not None:
+                updated_profile = replace(
+                    updated_profile,
+                    requester_username=current.requester_username,
+                    requester_display_name=current.requester_display_name,
+                )
+            if updated_profile.updated_at < profile.updated_at:
+                updated_profile = replace(updated_profile, updated_at=profile.updated_at)
+            persisted = replace(
+                current,
+                state=current.state.transition_to(DebatePhase.PREPARING_EVIDENCE, at=at),
+                affection_assessment=assessment,
+            )
+            old_items = _items_by_key(serialize_snapshot(current))
+            new_items = _items_by_key(serialize_snapshot(persisted))
+            attempt_key = _attempt_key(current.state.debate_id, current.state.attempt_id)
+            attempt_tuple = (_text(attempt_key, "PK"), _text(attempt_key, "SK"))
+            attempt_item = new_items.pop(attempt_tuple)
+            actions: list[TransactWriteItemTypeDef] = [
+                self._update_expected_attempt(
+                    previous=old_items[attempt_tuple],
+                    updated=attempt_item,
+                    expected=current,
+                    write_at=at,
+                )
+            ]
+            for key, item in new_items.items():
+                if old_items.get(key) != item:
+                    actions.append(
+                        self._put_new(item)
+                        if item.get("record_type") == "affection_assessment"
+                        else self._put(item)
+                    )
+            if scores is not None:
+                actions.append(
+                    self._put_new(serialize_affection_profile(updated_profile))
+                    if raw_profile is None
+                    else self._put_affection_profile(
+                        updated_profile,
+                        expected_version=profile.version,
+                    )
+                )
+            else:
+                actions.append(
+                    self._check_affection_profile(
+                        profile,
+                        exists=raw_profile is not None,
+                    )
+                )
+            try:
+                self._transact(
+                    actions,
+                    token=_client_token(
+                        f"{self._table_name}:affection:{current.state.debate_id}:"
+                        f"{current.state.attempt_id}:{profile.version}:{at.isoformat()}"
+                    ),
+                )
+                return persisted
+            except RepositoryConflict:
+                refreshed = self._load_snapshot(current.state.debate_id, None)
+                if refreshed is None:
+                    raise RepositoryConflict("affection debate disappeared") from None
+                if refreshed.affection_assessment is not None:
+                    return refreshed
+                if (
+                    refreshed.state.attempt_id != current.state.attempt_id
+                    or refreshed.state.phase is not DebatePhase.SCORING_AFFECTION
+                ):
+                    raise RepositoryConflict("affection debate changed concurrently") from None
+                current = refreshed
+        raise RepositoryConflict("affection profile CAS retries exhausted")
 
     def _stage_terminal_delivery(
         self,
@@ -1254,6 +1392,11 @@ class DynamoDbDebateRepository:
             debate_item = items.pop((_text(debate_key, "PK"), _text(debate_key, "SK")))
             attempt_key = _attempt_key(persisted.state.debate_id, persisted.state.attempt_id)
             attempt_item = items.pop((_text(attempt_key, "PK"), _text(attempt_key, "SK")))
+            items = {
+                key: item
+                for key, item in items.items()
+                if item.get("record_type") != "affection_assessment"
+            }
             operation = _panel_operation(
                 persisted,
                 operation_id=operation_id,
@@ -2742,6 +2885,74 @@ class DynamoDbDebateRepository:
         return cast(
             TransactWriteItemTypeDef,
             {"Put": {"TableName": self._table_name, "Item": marshal_item(item)}},
+        )
+
+    def _put_affection_profile(
+        self,
+        profile: AffectionProfile,
+        *,
+        expected_version: int,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(serialize_affection_profile(profile)),
+                    "ConditionExpression": (
+                        "record_type=:type AND schema_version IN (:previous_schema,:schema) "
+                        "AND version=:version AND requester_id=:requester"
+                    ),
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":type": "affection_profile",
+                            ":previous_schema": PREVIOUS_SCHEMA_VERSION,
+                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":version": expected_version,
+                            ":requester": profile.requester_id,
+                        }
+                    ),
+                }
+            },
+        )
+
+    def _check_affection_profile(
+        self,
+        profile: AffectionProfile,
+        *,
+        exists: bool,
+    ) -> TransactWriteItemTypeDef:
+        condition: dict[str, object] = {
+            "TableName": self._table_name,
+            "Key": marshal_item(
+                {
+                    "PK": f"AFFECTION#REQUESTER#{profile.requester_id}",
+                    "SK": "PROFILE",
+                }
+            ),
+            "ConditionExpression": "attribute_not_exists(PK)",
+        }
+        if exists:
+            condition.update(
+                {
+                    "ConditionExpression": (
+                        "record_type=:type AND schema_version IN (:previous_schema,:schema) "
+                        "AND version=:version AND requester_id=:requester"
+                    ),
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":type": "affection_profile",
+                            ":previous_schema": PREVIOUS_SCHEMA_VERSION,
+                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":version": profile.version,
+                            ":requester": profile.requester_id,
+                        }
+                    ),
+                }
+            )
+        return cast(
+            TransactWriteItemTypeDef,
+            {"ConditionCheck": condition},
         )
 
     def _put_phase_plan(

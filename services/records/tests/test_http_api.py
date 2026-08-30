@@ -21,9 +21,12 @@ from shittim_records.auth import (
     session_hash as hash_session,
 )
 from shittim_records.contracts import (
+    AffectionRankingEntry,
+    AffectionRankingsResponse,
     CostBreakdown,
     CostConversion,
     CostsResponse,
+    ParticipantAffectionRanking,
     PlaceholderAvatarRef,
     RankingEntry,
     RankingsResponse,
@@ -128,6 +131,39 @@ class FakeRecords:
             ),
             requests=(),
             generated_at=NOW,
+        )
+
+    def get_affection_rankings(self, **_kwargs: Any) -> AffectionRankingsResponse:
+        rankings = tuple(
+            ParticipantAffectionRanking(
+                participant=cast(Any, slot),
+                display_name=name,
+                entries=(
+                    AffectionRankingEntry(
+                        rank=1,
+                        display_name="Requester",
+                        avatar=PlaceholderAvatarRef(
+                            kind="placeholder",
+                            alt="Requester avatar",
+                            fallback_variant="cyan",
+                        ),
+                        score=500,
+                    ),
+                ),
+            )
+            for slot, name in (
+                ("participant-a", "Arona"),
+                ("participant-b", "Plana"),
+                ("participant-c", "Participant C"),
+            )
+        )
+        return AffectionRankingsResponse(
+            schema_version=1,
+            generated_at=NOW,
+            default_score=500,
+            max_score=1000,
+            rankings=cast(Any, rankings),
+            next_cursor=None,
         )
 
     def get_costs(self, **kwargs: Any) -> CostsResponse:
@@ -400,6 +436,36 @@ def test_rankings_route_requires_authentication_and_rejects_query_parameters() -
         "count": 3,
     }
     assert invalid["statusCode"] == 400
+
+
+def test_affection_rankings_route_is_authenticated_no_store_and_has_no_internal_key() -> None:
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, FakeRecords()),
+    )
+    route = "GET /api/v1/insights/affection-rankings"
+    cookies = [f"{SESSION_COOKIE_NAME}=session-token"]
+
+    unauthorized = controller.handle(event(route), now=NOW)
+    successful = controller.handle(event(route, cookies=cookies), now=NOW)
+    limited = controller.handle(event(route, query="limit=1", cookies=cookies), now=NOW)
+    unknown = controller.handle(event(route, query="internal=true", cookies=cookies), now=NOW)
+    duplicate = controller.handle(
+        event(route, query="limit=1&limit=2", cookies=cookies),
+        now=NOW,
+    )
+
+    assert unauthorized["statusCode"] == 401
+    assert successful["statusCode"] == 200
+    assert successful["headers"]["Cache-Control"] == "private, no-store"
+    payload = json.loads(successful["body"])
+    assert payload["defaultScore"] == 500
+    assert len(payload["rankings"]) == 3
+    assert "requesterKey" not in successful["body"]
+    assert limited["statusCode"] == 200
+    assert unknown["statusCode"] == 400
+    assert duplicate["statusCode"] == 400
 
 
 def test_costs_route_defaults_to_week_and_rejects_unknown_or_duplicate_period() -> None:

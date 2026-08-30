@@ -15,7 +15,7 @@ const participant = (slot: "participant-a" | "participant-b" | "participant-c", 
 });
 
 const record: RecordDetailResponse = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   recordId: "r".repeat(43),
   completedAt: "2026-08-15T06:00:00Z",
   question: "question",
@@ -59,6 +59,7 @@ const record: RecordDetailResponse = {
     actions: ["action"],
     caveats: ["caveat"],
   },
+  affection: null,
 };
 
 afterEach(() => {

@@ -47,7 +47,8 @@ const participants = [
 }));
 
 const detail = {
-  schemaVersion: 1,
+  schemaVersion: 2,
+  affection: null,
   recordId: RECORD_ID,
   completedAt: "2026-08-15T06:00:00Z",
   question: "休日に家で過ごすなら、映画を見るかゲームをするか。それぞれの価値観から話し合う",
@@ -118,6 +119,32 @@ const rankings = {
     { rank: 3, displayName: "先生", avatar: placeholder("先生", "lavender"), count: 8 },
   ],
   generatedAt: "2026-08-22T00:00:00Z",
+};
+
+const affectionRankings = {
+  schemaVersion: 1,
+  generatedAt: "2026-08-22T00:05:00Z",
+  defaultScore: 500,
+  maxScore: 1000,
+  rankings: participants.map((participant, participantIndex) => ({
+    participant: participant.slot,
+    displayName: participant.displayName,
+    entries: [
+      {
+        rank: 1,
+        displayName: "パワー系ウナギ",
+        avatar: placeholder("パワー系ウナギ", "cyan"),
+        score: [625, 755, 987][participantIndex],
+      },
+      {
+        rank: 2,
+        displayName: "先生",
+        avatar: placeholder("先生", "lavender"),
+        score: [500, 500, 480][participantIndex],
+      },
+    ],
+  })),
+  nextCursor: "affection-next",
 };
 
 const costs = {
@@ -622,6 +649,9 @@ async function mockAuthenticatedApi(
     return route.fulfill({ json: recordDetail });
   });
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
+  await page.route("**/api/v1/insights/affection-rankings?*", (route) =>
+    route.fulfill({ json: affectionRankings }),
+  );
   await page.route("**/api/v1/insights/costs?*", (route) => {
     const period = new URL(route.request().url()).searchParams.get("period") ?? "week";
     return route.fulfill({ json: { ...costs, period } });
@@ -1252,6 +1282,18 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   ).toContainText("32回");
   await expect(requests.getByRole("meter")).toHaveCount(3);
   await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
+  const affection = page.getByRole("region", { name: "親愛度ランキング" });
+  await expect(affection.getByRole("heading", { name: "アロナ" })).toBeVisible();
+  await expect(affection.getByRole("heading", { name: "プラナ" })).toBeVisible();
+  await expect(affection.getByRole("heading", { name: "安倍晋三AI" })).toBeVisible();
+  await expect(
+    affection.getByRole("meter", {
+      name: "安倍晋三AIからパワー系ウナギへの親愛度 987点（1000点満点）",
+    }),
+  ).toHaveAttribute("value", "987");
+  await expect(
+    affection.getByRole("button", { name: "親愛度ランキングの続きを読み込む" }),
+  ).toBeVisible();
   const costDashboard = page.getByRole("region", { name: "概算費用" });
   await expect(costDashboard).toContainText("¥124");
   await expect(costDashboard).toContainText("Fargate");
@@ -1277,6 +1319,55 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
     fullPage: true,
     maxDiffPixels: 20,
   });
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await expect(affection.getByRole("heading", { name: "親愛度ランキング" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  for (const participantName of ["アロナ", "プラナ", "安倍晋三AI"]) {
+    const cardBox = await affection.getByRole("region", { name: participantName }).boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(cardBox!.x).toBeGreaterThanOrEqual(0);
+    expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(320);
+  }
+});
+
+test("loads the next affection ranking page from the keyboard", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/insights/affection-rankings?*", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    if (cursor === null) return route.fulfill({ json: affectionRankings });
+    return route.fulfill({
+      json: {
+        ...affectionRankings,
+        rankings: affectionRankings.rankings.map((ranking) => ({
+          ...ranking,
+          entries: [
+            {
+              rank: 3,
+              displayName: "追加の質問者",
+              avatar: placeholder("追加の質問者", "lavender"),
+              score: 400,
+            },
+          ],
+        })),
+        nextCursor: null,
+      },
+    });
+  });
+
+  await page.goto("/insights");
+  const affection = page.getByRole("region", { name: "親愛度ランキング" });
+  const loadMore = affection.getByRole("button", {
+    name: "親愛度ランキングの続きを読み込む",
+  });
+  await expect(loadMore).toBeVisible();
+  await loadMore.focus();
+  await page.keyboard.press("Enter");
+
+  await expect(affection.getByText("追加の質問者", { exact: true })).toHaveCount(3);
+  await expect(affection.getByRole("listitem")).toHaveCount(9);
+  await expect(loadMore).toHaveCount(0);
 });
 
 test("English login product name keeps the approved two-line break at narrow widths", async ({

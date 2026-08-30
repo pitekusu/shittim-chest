@@ -41,15 +41,21 @@ terminal stateからphaseを戻さない。recovery checkpointはphaseと別fiel
 Serviceは次を順番に実行する。
 
 1. fenced leaseを取得しsnapshotを読む。
-2. 共通Evidenceを準備または再利用する。
-3. participant単位のgeneration checkpointをclaimし、3件を並列生成する。
-4. 全output保存後にphase delivery planとOutboxを原子的にstageする。
-5. 必須Outboxがすべて`SENT`になった場合だけ次phaseへ進む。
-6. voteをPythonで集計しwinnerを固定する。
-7. result／winner decisionの必須delivery後に`completed`へ確定する。
+2. 3人の質問評価を並列実行し、全件成功時だけprofile、討論評価、
+   `preparing_evidence`遷移を同一transactionで確定する。
+3. 共通Evidenceを準備または再利用する。
+4. participant単位のgeneration checkpointをclaimし、3件を並列生成する。
+5. 全output保存後にphase delivery planとOutboxを原子的にstageする。
+6. 必須Outboxがすべて`SENT`になった場合だけ次phaseへ進む。
+7. voteをPythonで集計しwinnerを固定する。
+8. result／winner decisionの必須delivery後に`completed`へ確定する。
 
 Generationはlogical outputごとに最大2 SDK callを許す。結果保存のCASに勝った1件だけを正とし、
 再生成結果で上書きしない。
+
+親愛度評価は討論ごと1回で、CAS競合時はproviderを再呼び出しせず、同じ評価値を
+最新profileの0〜1,000範囲へclampして再適用する。討論評価が既にあるretryでは再評価や
+二重加算を行わない。評価後の討論失敗／取消でもprofileの変更を戻さない。
 
 ## 4. Concurrency and cancellation
 

@@ -78,7 +78,7 @@ def test_ingress_request_round_trip_has_fifo_and_independent_schema_keys() -> No
 
 def test_ingress_request_previous_shared_schema_is_upconverted() -> None:
     source = request()
-    previous = {**serialize_ingress_request(source), "schema_version": 6}
+    previous = {**serialize_ingress_request(source), "schema_version": 7}
 
     assert deserialize_ingress_request(previous) == source
 

@@ -1083,6 +1083,303 @@
         "title": "AdminStatusSection",
         "type": "object"
       },
+      "AffectionParticipantView": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "maximum": 1000,
+            "minimum": 0,
+            "title": "After",
+            "type": "integer"
+          },
+          "appliedDelta": {
+            "maximum": 100,
+            "minimum": -100,
+            "title": "Applieddelta",
+            "type": "integer"
+          },
+          "before": {
+            "maximum": 1000,
+            "minimum": 0,
+            "title": "Before",
+            "type": "integer"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "questionScore": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": -100,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Questionscore"
+          }
+        },
+        "required": [
+          "participant",
+          "before",
+          "questionScore",
+          "appliedDelta",
+          "after"
+        ],
+        "title": "AffectionParticipantView",
+        "type": "object"
+      },
+      "AffectionRankingEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "avatar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageAvatarRef"
+              },
+              {
+                "$ref": "#/components/schemas/PlaceholderAvatarRef"
+              }
+            ],
+            "title": "Avatar"
+          },
+          "displayName": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Displayname",
+            "type": "string"
+          },
+          "rank": {
+            "minimum": 1,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "maximum": 1000,
+            "minimum": 0,
+            "title": "Score",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rank",
+          "displayName",
+          "avatar",
+          "score"
+        ],
+        "title": "AffectionRankingEntry",
+        "type": "object"
+      },
+      "AffectionRankingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "defaultScore": {
+            "const": 500,
+            "title": "Defaultscore",
+            "type": "integer"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "title": "Generatedat",
+            "type": "string"
+          },
+          "maxScore": {
+            "const": 1000,
+            "title": "Maxscore",
+            "type": "integer"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          },
+          "rankings": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-a"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-b"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-c"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/ParticipantAffectionRanking"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantAffectionRanking"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantAffectionRanking"
+              }
+            ],
+            "title": "Rankings",
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "generatedAt",
+          "defaultScore",
+          "maxScore",
+          "rankings",
+          "nextCursor"
+        ],
+        "title": "AffectionRankingsResponse",
+        "type": "object"
+      },
+      "AffectionView": {
+        "additionalProperties": false,
+        "properties": {
+          "participants": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-a"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-b"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-c"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/AffectionParticipantView"
+              },
+              {
+                "$ref": "#/components/schemas/AffectionParticipantView"
+              },
+              {
+                "$ref": "#/components/schemas/AffectionParticipantView"
+              }
+            ],
+            "title": "Participants",
+            "type": "array"
+          },
+          "rubricVersion": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Rubricversion",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "applied",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "rubricVersion",
+          "participants"
+        ],
+        "title": "AffectionView",
+        "type": "object"
+      },
       "AnonymousSession": {
         "additionalProperties": false,
         "properties": {
@@ -1526,6 +1823,40 @@
         "title": "InitialOpinionView",
         "type": "object"
       },
+      "ParticipantAffectionRanking": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Displayname",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AffectionRankingEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "participant",
+          "displayName",
+          "entries"
+        ],
+        "title": "ParticipantAffectionRanking",
+        "type": "object"
+      },
       "ParticipantSummary": {
         "additionalProperties": false,
         "properties": {
@@ -1681,6 +2012,16 @@
       "RecordDetailResponse": {
         "additionalProperties": false,
         "properties": {
+          "affection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AffectionView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "completedAt": {
             "format": "date-time",
             "title": "Completedat",
@@ -1899,7 +2240,7 @@
             "$ref": "#/components/schemas/RecordResultSummary"
           },
           "schemaVersion": {
-            "const": 1,
+            "const": 2,
             "title": "Schemaversion",
             "type": "integer"
           },
@@ -1979,7 +2320,8 @@
           "finalProposals",
           "votes",
           "result",
-          "finalDecision"
+          "finalDecision",
+          "affection"
         ],
         "title": "RecordDetailResponse",
         "type": "object"
@@ -3203,6 +3545,116 @@
           }
         },
         "security": []
+      }
+    },
+    "/api/v1/insights/affection-rankings": {
+      "get": {
+        "operationId": "getAffectionRankings",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AffectionRankingsResponse"
+                }
+              }
+            },
+            "description": "Requester affection rankings for all three participants"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
       }
     },
     "/api/v1/insights/costs": {

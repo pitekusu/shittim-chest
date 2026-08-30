@@ -19,17 +19,17 @@ updated: 2026-08-29
 
 ## 2. Schema version
 
-current shared schemaは**v7**、読み込み可能なprevious schemaは**v6**である。readerは構造を
-検証後にv6をv7へmemory上でup-convertする。v5以前、future version、unknown field／enumは
+current shared schemaは**v8**、読み込み可能なprevious schemaは**v7**である。readerは構造を
+検証後にv7をv8へmemory上でup-convertする。v6以前、future version、unknown field／enumは
 fail closedとする。record固有schemaは次のとおりである。
 
 | Record | Current contract |
 |---|---|
-| Debate／Attempt／Output／Vote | shared schema v7 |
+| Debate／Attempt／Output／Vote／Affection | shared schema v8 |
 | Runtime control | manifest schema v2 |
 | Outbox | record schema v2、v1 history read互換 |
 | Status publication | record schema v3 |
-| Generation checkpoint／Phase delivery | v7 record family |
+| Generation checkpoint／Phase delivery | v8 record family |
 
 旧migrationの作業履歴はGit historyを正とし、本書へ累積しない。
 
@@ -47,6 +47,8 @@ fail closedとする。record固有schemaは次のとおりである。
 | Status publication | channel Statusのdesired／observed state |
 | Deployment guard／lock | Release前提、owner、TTL、stack fence |
 | `ADMIN#PROMPT` | current revision、content-free revision audit、hashed idempotency state |
+| `AFFECTION#REQUESTER#<private ID> / PROFILE` | 質問者ごと3人の0〜1,000点とCAS version |
+| `DEBATE#<Debate ID> / AFFECTION` | 討論ごとの評価状態、変更前、質問評価、実増減、変更後 |
 
 exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正とする。
 
@@ -62,6 +64,9 @@ exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正
 - transaction cancellation reasonはrequest action順で分類し、本文をlogへ出さない。
 - prompt publish／rollbackはpending audit、idempotency、`CURRENT`をtransactionで整合させる。SSMの
   active pointer切替後にaudit完了が失敗した場合は、次回読込でmanifestとpointerを検証して回復する。
+- 親愛度は3人のprofile更新、討論評価、`scoring_affection`から次phaseへの遷移を同一transactionで
+  反映する。評価は3件すべてが成功した場合だけ全員へ適用し、同じ討論の再試行では二重加算しない。
+  profile CAS競合は同じ評価値で再計算し、OpenAIを再実行しない。
 
 ## 5. Lease and fencing
 

@@ -18,7 +18,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     assert first == expected_documents()
     assert set(first) == {"openapi.json", "records-api.schema.json", "records-invariants.ts"}
     json_schema = json.loads(first["records-api.schema.json"])
-    assert len(json_schema["oneOf"]) == 11
+    assert len(json_schema["oneOf"]) == 12
     assert "#/components/schemas/" not in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/ImageAvatarRef"' in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/PlaceholderAvatarRef"' in first["records-api.schema.json"].decode()
@@ -74,6 +74,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "/api/v1/records",
         "/api/v1/records/{recordId}",
         "/api/v1/insights/rankings",
+        "/api/v1/insights/affection-rankings",
         "/api/v1/insights/costs",
         "/api/v1/admin/prompts",
         "/api/v1/admin/prompts/apply",
@@ -176,4 +177,14 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
             "enum": ["today", "week", "month", "all"],
             "default": "week",
         },
+    }
+    affection_parameters = openapi["paths"]["/api/v1/insights/affection-rankings"]["get"][
+        "parameters"
+    ]
+    assert [parameter["name"] for parameter in affection_parameters] == ["limit", "cursor"]
+    assert affection_parameters[0]["schema"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 50,
     }

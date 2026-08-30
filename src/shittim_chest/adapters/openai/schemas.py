@@ -25,6 +25,12 @@ class OpinionOutputV1(StrictOutput):
     proposal: str = Field(min_length=1, max_length=1_600)
 
 
+class AffectionScoreOutputV1(StrictOutput):
+    """One code-bounded question score with no persisted rationale."""
+
+    score: int = Field(ge=-100, le=100)
+
+
 class FinalProposalOutputV1(StrictOutput):
     """Final proposal fields persisted by the current domain schema."""
 

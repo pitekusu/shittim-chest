@@ -4,7 +4,12 @@ import type { ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { vi } from "vite-plus/test";
 
-import type { AvatarRef, SessionResponse } from "../api/types";
+import type {
+  AvatarRef,
+  ParticipantSlot,
+  RecordDetailResponse,
+  SessionResponse,
+} from "../api/types";
 
 export const RECORD_ID = "r".repeat(43);
 
@@ -20,18 +25,18 @@ export function placeholder(
   };
 }
 
-export function recordDetail() {
-  const participants = [
+export function recordDetail(): RecordDetailResponse {
+  const participants: RecordDetailResponse["participants"] = [
     ["participant-a", "アロナ", "cyan"],
     ["participant-b", "プラナ", "pink"],
     ["participant-c", "安倍晋三AI", "lavender"],
   ].map(([slot, displayName, fallbackVariant]) => ({
-    slot,
+    slot: slot as ParticipantSlot,
     displayName,
     avatar: placeholder(displayName!, fallbackVariant as AvatarRef["fallbackVariant"]),
   }));
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     recordId: RECORD_ID,
     completedAt: "2026-08-15T06:00:00Z",
     question: "休日の過ごし方を決める",
@@ -68,6 +73,7 @@ export function recordDetail() {
       actions: ["実行する"],
       caveats: ["注意する"],
     },
+    affection: null,
   };
 }
 
@@ -137,6 +143,51 @@ export function rankingsResponse() {
   };
 }
 
+export function affectionRankingsResponse() {
+  const requesters = [
+    {
+      rank: 1,
+      displayName: "パワー系ウナギ",
+      avatar: placeholder("パワー系ウナギ", "cyan"),
+      score: 987,
+    },
+    {
+      rank: 2,
+      displayName: "先生",
+      avatar: placeholder("先生", "pink"),
+      score: 625,
+    },
+  ];
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-08-22T00:05:00Z",
+    defaultScore: 500,
+    maxScore: 1000,
+    rankings: [
+      { participant: "participant-a", displayName: "アロナ", entries: requesters },
+      {
+        participant: "participant-b",
+        displayName: "プラナ",
+        entries: requesters.map((entry, index) => ({
+          ...entry,
+          rank: index + 1,
+          score: index === 0 ? 755 : 500,
+        })),
+      },
+      {
+        participant: "participant-c",
+        displayName: "安倍晋三AI",
+        entries: requesters.map((entry, index) => ({
+          ...entry,
+          rank: index + 1,
+          score: index === 0 ? 1000 : 480,
+        })),
+      },
+    ],
+    nextCursor: null,
+  };
+}
+
 export function costsResponse(period: "today" | "week" | "month" | "all" = "week") {
   return {
     schemaVersion: 1,
@@ -202,6 +253,9 @@ export function mockApi(
       }
       if (path === "/api/v1/insights/rankings") {
         return Promise.resolve(response(rankings));
+      }
+      if (path.startsWith("/api/v1/insights/affection-rankings?")) {
+        return Promise.resolve(response(affectionRankingsResponse()));
       }
       if (path.startsWith("/api/v1/insights/costs?")) {
         return Promise.resolve(response(costs));

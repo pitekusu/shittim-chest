@@ -273,8 +273,52 @@ class FinalDecisionView(PublicModel):
     caveats: tuple[NonEmptyText, ...]
 
 
+class AffectionParticipantView(PublicModel):
+    participant: ParticipantSlot
+    before: Annotated[int, Field(ge=0, le=1000)]
+    question_score: Annotated[int, Field(ge=-100, le=100)] | None
+    applied_delta: Annotated[int, Field(ge=-100, le=100)]
+    after: Annotated[int, Field(ge=0, le=1000)]
+
+    @model_validator(mode="after")
+    def require_consistent_change(self) -> AffectionParticipantView:
+        if self.after - self.before != self.applied_delta:
+            raise ValueError("applied_delta must match before and after")
+        if self.question_score is None and self.applied_delta != 0:
+            raise ValueError("an unavailable score cannot change affection")
+        return self
+
+
+AffectionParticipantCollection = Annotated[
+    tuple[AffectionParticipantView, AffectionParticipantView, AffectionParticipantView],
+    Field(json_schema_extra=_complete_slot_json_schema("participant")),
+]
+
+
+class AffectionView(PublicModel):
+    status: Literal["applied", "unavailable"]
+    rubric_version: NonEmptyText
+    participants: AffectionParticipantCollection
+
+    @model_validator(mode="after")
+    def require_complete_participants(self) -> AffectionView:
+        _require_complete_slots(
+            tuple(item.participant for item in self.participants),
+            "participants",
+        )
+        if self.status == "applied" and any(
+            item.question_score is None for item in self.participants
+        ):
+            raise ValueError("applied affection requires all question scores")
+        if self.status == "unavailable" and any(
+            item.question_score is not None for item in self.participants
+        ):
+            raise ValueError("unavailable affection cannot expose partial scores")
+        return self
+
+
 class RecordDetailResponse(PublicModel):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     record_id: RecordId
     completed_at: AwareDatetime
     question: NonEmptyText
@@ -285,6 +329,7 @@ class RecordDetailResponse(PublicModel):
     votes: VoteCollection
     result: RecordResultSummary
     final_decision: FinalDecisionView
+    affection: AffectionView | None
 
     @model_validator(mode="after")
     def require_consistent_participants_and_winner(self) -> RecordDetailResponse:
@@ -349,6 +394,46 @@ class RankingsResponse(PublicModel):
     wins: tuple[RankingEntry, ...]
     requests: tuple[RankingEntry, ...]
     generated_at: AwareDatetime
+
+
+class AffectionRankingEntry(PublicModel):
+    rank: Annotated[int, Field(ge=1)]
+    display_name: NonEmptyText
+    avatar: AvatarRef
+    score: Annotated[int, Field(ge=0, le=1000)]
+
+
+class ParticipantAffectionRanking(PublicModel):
+    participant: ParticipantSlot
+    display_name: NonEmptyText
+    entries: tuple[AffectionRankingEntry, ...]
+
+
+AffectionRankingCollection = Annotated[
+    tuple[
+        ParticipantAffectionRanking,
+        ParticipantAffectionRanking,
+        ParticipantAffectionRanking,
+    ],
+    Field(json_schema_extra=_complete_slot_json_schema("participant")),
+]
+
+
+class AffectionRankingsResponse(PublicModel):
+    schema_version: Literal[1]
+    generated_at: AwareDatetime
+    default_score: Literal[500]
+    max_score: Literal[1000]
+    rankings: AffectionRankingCollection
+    next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None
+
+    @model_validator(mode="after")
+    def require_complete_rankings(self) -> AffectionRankingsResponse:
+        _require_complete_slots(
+            tuple(item.participant for item in self.rankings),
+            "rankings",
+        )
+        return self
 
 
 CanonicalJpyAmount = Annotated[str, Field(pattern=r"^[0-9]+\.[0-9]{6}$")]
@@ -597,6 +682,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordListResponse,
     RecordDetailResponse,
     RankingsResponse,
+    AffectionRankingsResponse,
     CostsResponse,
     SessionResponse,
     AdminPromptsResponse,

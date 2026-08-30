@@ -692,6 +692,7 @@ describe("RuntimeStack", () => {
       [
         "NormalTaskRole",
         [
+          "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
           "CONTROL#INGRESS",
@@ -737,6 +738,7 @@ describe("RuntimeStack", () => {
       [
         "NormalTaskRole",
         [
+          "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
           "CONTROL#INGRESS",
@@ -779,6 +781,7 @@ describe("RuntimeStack", () => {
         "NormalTaskRole",
         [
           "CONTROL#DEPLOYMENT",
+          "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
           "CONTROL#INGRESS",

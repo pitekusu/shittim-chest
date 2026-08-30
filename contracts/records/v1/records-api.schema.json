@@ -1082,6 +1082,303 @@
       "title": "AdminStatusSection",
       "type": "object"
     },
+    "AffectionParticipantView": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "After",
+          "type": "integer"
+        },
+        "appliedDelta": {
+          "maximum": 100,
+          "minimum": -100,
+          "title": "Applieddelta",
+          "type": "integer"
+        },
+        "before": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Before",
+          "type": "integer"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "questionScore": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": -100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Questionscore"
+        }
+      },
+      "required": [
+        "participant",
+        "before",
+        "questionScore",
+        "appliedDelta",
+        "after"
+      ],
+      "title": "AffectionParticipantView",
+      "type": "object"
+    },
+    "AffectionRankingEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
+        },
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        },
+        "rank": {
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rank",
+        "displayName",
+        "avatar",
+        "score"
+      ],
+      "title": "AffectionRankingEntry",
+      "type": "object"
+    },
+    "AffectionRankingsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "defaultScore": {
+          "const": 500,
+          "title": "Defaultscore",
+          "type": "integer"
+        },
+        "generatedAt": {
+          "format": "date-time",
+          "title": "Generatedat",
+          "type": "string"
+        },
+        "maxScore": {
+          "const": 1000,
+          "title": "Maxscore",
+          "type": "integer"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        },
+        "rankings": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/ParticipantAffectionRanking"
+            },
+            {
+              "$ref": "#/$defs/ParticipantAffectionRanking"
+            },
+            {
+              "$ref": "#/$defs/ParticipantAffectionRanking"
+            }
+          ],
+          "title": "Rankings",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "generatedAt",
+        "defaultScore",
+        "maxScore",
+        "rankings",
+        "nextCursor"
+      ],
+      "title": "AffectionRankingsResponse",
+      "type": "object"
+    },
+    "AffectionView": {
+      "additionalProperties": false,
+      "properties": {
+        "participants": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/AffectionParticipantView"
+            },
+            {
+              "$ref": "#/$defs/AffectionParticipantView"
+            },
+            {
+              "$ref": "#/$defs/AffectionParticipantView"
+            }
+          ],
+          "title": "Participants",
+          "type": "array"
+        },
+        "rubricVersion": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Rubricversion",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "applied",
+            "unavailable"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "rubricVersion",
+        "participants"
+      ],
+      "title": "AffectionView",
+      "type": "object"
+    },
     "AnonymousSession": {
       "additionalProperties": false,
       "properties": {
@@ -1525,6 +1822,40 @@
       "title": "InitialOpinionView",
       "type": "object"
     },
+    "ParticipantAffectionRanking": {
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/AffectionRankingEntry"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "participant",
+        "displayName",
+        "entries"
+      ],
+      "title": "ParticipantAffectionRanking",
+      "type": "object"
+    },
     "ParticipantSummary": {
       "additionalProperties": false,
       "properties": {
@@ -1680,6 +2011,16 @@
     "RecordDetailResponse": {
       "additionalProperties": false,
       "properties": {
+        "affection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AffectionView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "completedAt": {
           "format": "date-time",
           "title": "Completedat",
@@ -1898,7 +2239,7 @@
           "$ref": "#/$defs/RecordResultSummary"
         },
         "schemaVersion": {
-          "const": 1,
+          "const": 2,
           "title": "Schemaversion",
           "type": "integer"
         },
@@ -1978,7 +2319,8 @@
         "finalProposals",
         "votes",
         "result",
-        "finalDecision"
+        "finalDecision",
+        "affection"
       ],
       "title": "RecordDetailResponse",
       "type": "object"
@@ -2425,6 +2767,9 @@
     },
     {
       "$ref": "#/$defs/RankingsResponse"
+    },
+    {
+      "$ref": "#/$defs/AffectionRankingsResponse"
     },
     {
       "$ref": "#/$defs/CostsResponse"

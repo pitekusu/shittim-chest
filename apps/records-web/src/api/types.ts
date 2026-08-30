@@ -66,6 +66,42 @@ export interface RankingsResponse {
   readonly generatedAt: string;
 }
 
+export interface AffectionRankingEntry {
+  readonly rank: number;
+  readonly displayName: string;
+  readonly avatar: AvatarRef;
+  readonly score: number;
+}
+
+export interface ParticipantAffectionRanking {
+  readonly participant: ParticipantSlot;
+  readonly displayName: string;
+  readonly entries: readonly AffectionRankingEntry[];
+}
+
+export interface AffectionRankingsResponse {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly defaultScore: 500;
+  readonly maxScore: 1000;
+  readonly rankings: readonly ParticipantAffectionRanking[];
+  readonly nextCursor: string | null;
+}
+
+export interface ParticipantAffectionChange {
+  readonly participant: ParticipantSlot;
+  readonly before: number;
+  readonly questionScore: number | null;
+  readonly appliedDelta: number;
+  readonly after: number;
+}
+
+export interface DebateAffection {
+  readonly status: "applied" | "unavailable";
+  readonly rubricVersion: string;
+  readonly participants: readonly ParticipantAffectionChange[];
+}
+
 export type CostPeriod = "today" | "week" | "month" | "all";
 
 export interface CostsResponse {
@@ -93,7 +129,7 @@ export interface CostsResponse {
 }
 
 export interface RecordDetailResponse {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly recordId: string;
   readonly completedAt: string;
   readonly question: string;
@@ -122,6 +158,7 @@ export interface RecordDetailResponse {
     readonly actions: readonly string[];
     readonly caveats: readonly string[];
   };
+  readonly affection: DebateAffection | null;
 }
 
 export type SessionResponse =

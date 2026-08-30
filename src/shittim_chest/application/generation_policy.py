@@ -44,6 +44,7 @@ class GenerationPolicy:
     policy_id: GenerationPolicyId
     model: str
     reasoning_mode: ReasoningMode
+    affection: PhaseBudget
     initial_opinion: PhaseBudget
     final_proposal: PhaseBudget
     vote: PhaseBudget
@@ -63,6 +64,7 @@ def _policy(
         policy_id=policy_id,
         model=model,
         reasoning_mode=reasoning_mode,
+        affection=PhaseBudget(ReasoningEffort.MEDIUM, 512),
         initial_opinion=PhaseBudget(ReasoningEffort.HIGH, 2_400),
         final_proposal=PhaseBudget(ReasoningEffort.HIGH, 4_000),
         vote=PhaseBudget(ReasoningEffort.MEDIUM, 800),

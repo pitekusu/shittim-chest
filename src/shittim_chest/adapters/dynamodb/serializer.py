@@ -47,6 +47,9 @@ from shittim_chest.application.scale_to_zero import (
 )
 from shittim_chest.domain import (
     PARTICIPANTS,
+    AffectionAssessment,
+    AffectionAssessmentStatus,
+    AffectionProfile,
     AttemptId,
     DebateId,
     DebatePhase,
@@ -58,6 +61,7 @@ from shittim_chest.domain import (
     FinalDecision,
     FinalProposal,
     InitialOpinion,
+    ParticipantAffection,
     ParticipantSlot,
     RecoveryState,
     SearchRequirement,
@@ -68,8 +72,8 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 7
-PREVIOUS_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 8
+PREVIOUS_SCHEMA_VERSION = 7
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
@@ -98,9 +102,8 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
-        # v6 predates staged terminal delivery. Missing optional delivery
-        # fields remain absent; deployment validation rejects unsafe legacy
-        # activity before the scale-to-zero control records are initialized.
+        # v7 predates requester affection. Missing optional assessment fields
+        # remain absent and are interpreted as the neutral compatibility value.
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -285,6 +288,14 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         attempt_meta["gsi2sk"] = f"{_timestamp(snapshot.state.updated_at)}#{debate_id}#{attempt_id}"
 
     items = [debate_meta, attempt_meta]
+    if snapshot.affection_assessment is not None:
+        items.append(
+            _serialize_affection_assessment(
+                debate_id=debate_id,
+                created_at=snapshot.created_at,
+                value=snapshot.affection_assessment,
+            )
+        )
     if isinstance(terminal_delivery, PhaseDeliveryPlan):
         items.append(_serialize_phase_delivery_plan(common, attempt_id, terminal_delivery))
     if snapshot.evidence is not None:
@@ -444,6 +455,10 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             executed_policy_id=_optional_text(escalation_item, "executed_policy_id"),
             execution_count=_integer(escalation_item, "execution_count"),
         )
+    affection_item = _optional_one(items, "affection_assessment")
+    affection_assessment = (
+        None if affection_item is None else _deserialize_affection_assessment(affection_item)
+    )
     generation_checkpoints = _deserialize_generation_checkpoints(attempt_meta)
 
     terminal_fields = frozenset(
@@ -602,6 +617,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         votes=votes,
         final_decision=decision,
         escalation_assessment=escalation_assessment,
+        affection_assessment=affection_assessment,
         generation_checkpoints=generation_checkpoints,
         error_code=_optional_text(attempt_meta, "error_code"),
         terminal_delivery=terminal_delivery,
@@ -1716,6 +1732,111 @@ def _serialize_escalation(
     }
     _put_optional(item, "executed_policy_id", value.executed_policy_id)
     return item
+
+
+def _serialize_affection_assessment(
+    *,
+    debate_id: str,
+    created_at: datetime,
+    value: AffectionAssessment,
+) -> DynamoItem:
+    return {
+        "PK": f"DEBATE#{debate_id}",
+        "SK": "AFFECTION",
+        "record_type": "affection_assessment",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "debate_id": debate_id,
+        "created_at": _timestamp(created_at),
+        "updated_at": _timestamp(value.assessed_at),
+        "status": value.status.value,
+        "rules_version": value.rules_version,
+        "assessed_at": _timestamp(value.assessed_at),
+        "participants": [
+            {
+                "participant": item.participant.value,
+                "before": item.before,
+                "question_score": item.question_score,
+                "applied_delta": item.applied_delta,
+                "after": item.after,
+            }
+            for item in value.participants
+        ],
+    }
+
+
+def _deserialize_affection_assessment(item: DynamoItem) -> AffectionAssessment:
+    raw_participants = item.get("participants")
+    if not isinstance(raw_participants, list):
+        raise PersistenceFormatError("affection participants must be a list")
+    participants: list[ParticipantAffection] = []
+    for raw in raw_participants:
+        if not isinstance(raw, dict):
+            raise PersistenceFormatError("affection participant must be a map")
+        question_score = raw.get("question_score")
+        if question_score is not None and (
+            isinstance(question_score, bool) or not isinstance(question_score, int)
+        ):
+            raise PersistenceFormatError("affection question score must be an integer or null")
+        participants.append(
+            ParticipantAffection(
+                participant=ParticipantSlot(_text(raw, "participant")),
+                before=_integer(raw, "before"),
+                question_score=question_score,
+                applied_delta=_integer(raw, "applied_delta"),
+                after=_integer(raw, "after"),
+            )
+        )
+    return AffectionAssessment(
+        status=AffectionAssessmentStatus(_text(item, "status")),
+        rules_version=_text(item, "rules_version"),
+        participants=tuple(participants),
+        assessed_at=_datetime(item, "assessed_at"),
+    )
+
+
+def serialize_affection_profile(profile: AffectionProfile) -> DynamoItem:
+    """Serialize one private requester profile for a source-table transaction."""
+
+    return _validated_item(
+        {
+            "PK": f"AFFECTION#REQUESTER#{profile.requester_id}",
+            "SK": "PROFILE",
+            "record_type": "affection_profile",
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "requester_id": profile.requester_id,
+            "requester_username": profile.requester_username,
+            "requester_display_name": profile.requester_display_name,
+            "scores": list(profile.scores),
+            "version": profile.version,
+            "updated_at": _timestamp(profile.updated_at),
+        }
+    )
+
+
+def deserialize_affection_profile(raw_item: Mapping[str, DynamoValue]) -> AffectionProfile:
+    """Validate one requester profile read through the source-table boundary."""
+
+    item = migrate_item(raw_item)
+    if _text(item, "record_type") != "affection_profile" or _text(item, "SK") != "PROFILE":
+        raise PersistenceFormatError("affection profile identity is invalid")
+    raw_scores = item.get("scores")
+    if (
+        not isinstance(raw_scores, list)
+        or len(raw_scores) != len(PARTICIPANTS)
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in raw_scores)
+    ):
+        raise PersistenceFormatError("affection profile scores are invalid")
+    profile = AffectionProfile(
+        requester_id=_text(item, "requester_id"),
+        requester_username=_text(item, "requester_username"),
+        requester_display_name=_text(item, "requester_display_name"),
+        scores=cast(tuple[int, int, int], tuple(raw_scores)),
+        version=_integer(item, "version"),
+        updated_at=_datetime(item, "updated_at"),
+    )
+    if _text(item, "PK") != f"AFFECTION#REQUESTER#{profile.requester_id}":
+        raise PersistenceFormatError("affection profile partition does not match requester")
+    return profile
 
 
 def _deserialize_evidence(item: DynamoItem) -> EvidenceItem:
