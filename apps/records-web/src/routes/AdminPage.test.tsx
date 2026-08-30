@@ -164,6 +164,13 @@ const statusResponse: AdminStatusResponse = {
         ]),
         { name: "debate_stream_enabled", value: true },
         { name: "debate_stream_view_type", value: "NEW_IMAGE" },
+        { name: "affection_ranking_ready", value: true },
+        { name: "affection_ranking_fresh", value: true },
+        { name: "affection_profile_count", value: 7 },
+        { name: "affection_page_count", value: 1 },
+        { name: "affection_ranking_generated_at", value: "2026-08-24T02:55:00Z" },
+        { name: "affection_seed_complete", value: true },
+        { name: "affection_seed_archive_count", value: 12 },
       ],
     },
     {
@@ -400,11 +407,25 @@ describe("AdminPage", () => {
     expect(screen.getByRole("columnheader", { name: "自動反映" })).toBeVisible();
     const lambdaTable = screen.getByRole("region", { name: "Lambda関数状態" });
     expect(within(lambdaTable).getByRole("rowheader", { name: "Runtime調整" })).toBeVisible();
+    expect(within(lambdaTable).getByRole("rowheader", { name: "記録・親愛度投影" })).toBeVisible();
+    expect(
+      within(lambdaTable).getByRole("rowheader", { name: "ランキング・親愛度集計" }),
+    ).toBeVisible();
     expect(within(lambdaTable).getByRole("rowheader", { name: "プロンプト管理API" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "討論Runtime" })).toBeVisible();
     expect(screen.getByText("Discord連携")).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "実績使用率" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "OpenAI Costs" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Affection" })).not.toBeInTheDocument();
+    const affectionData = screen.getByRole("region", { name: "親愛度データ" });
+    expect(within(affectionData).getByText("プロフィール").parentElement).toHaveTextContent("7 人");
+    expect(within(affectionData).getByText("最終ランキング集計").parentElement).toHaveTextContent(
+      "2026年8月24日 11:55",
+    );
+    const eventTable = screen.getByRole("region", { name: "定期実行とイベント配信" });
+    expect(
+      within(eventTable).getByRole("rowheader", { name: "ランキング・親愛度集計" }),
+    ).toBeVisible();
     expect(screen.getByText("署名時から12か月間有効")).toBeVisible();
     expect(container.querySelector("#admin-service-sns")?.nextElementSibling).toBe(
       container.querySelector("#admin-service-signer"),
@@ -436,6 +457,34 @@ describe("AdminPage", () => {
     expect(screen.getByRole("status")).toHaveTextContent("16サービスを並列で確認しています");
     expect(screen.getByRole("button", { name: "状態を更新" })).toBeDisabled();
     expect(container.querySelectorAll("ol li")).toHaveLength(4);
+  });
+
+  it("highlights DynamoDB when the affection ranking checkpoint is stale", async () => {
+    const warningResponse: AdminStatusResponse = {
+      ...statusResponse,
+      sections: statusResponse.sections.map((section) =>
+        section.service === "dynamodb"
+          ? {
+              ...section,
+              state: "warning",
+              summary: "親愛度データの初期化またはランキング更新を確認してください。",
+              metrics: section.metrics.map((metric) =>
+                metric.name === "affection_ranking_fresh" ? { ...metric, value: false } : metric,
+              ),
+            }
+          : section,
+      ),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(warningResponse))),
+    );
+
+    renderAdmin();
+
+    const link = await screen.findByRole("link", { name: "DynamoDB（注意）" });
+    expect(link).toHaveAttribute("data-state", "warning");
+    expect(link).toHaveAttribute("href", "#admin-service-dynamodb");
   });
 
   it("shows the canonical Inspector total without masking unavailable details", async () => {

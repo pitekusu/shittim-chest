@@ -47,6 +47,8 @@ _TABLE_LABELS = ("debate", "archive", "statistics", "session")
 _BUCKET_LABELS = ("web", "media", "release")
 _MAX_PAGINATOR_PAGES = 20
 _STATUS_COLLECTION_TIMEOUT_SECONDS = 20.0
+_AFFECTION_RANKING_FRESHNESS = timedelta(minutes=35)
+_AFFECTION_RANKING_PAGE_SIZE = 50
 _PRODUCTION_ALARM_PREFIX = "shittim-chest-production-"
 _PROJECTOR_DLQ_RETENTION_SECONDS = 14 * 24 * 60 * 60
 _GLOBAL_STACK_LABELS = frozenset({"records_edge", "cost_governance"})
@@ -1064,7 +1066,7 @@ class AwsAdminStatusSource:
 
     def _dynamodb_section(self, now: datetime) -> AdminStatusSection:
         metrics: list[AdminStatusMetric] = []
-        warning = False
+        table_warning = False
         throttles = self._dynamodb_throttles(now)
         throttles_unknown = any(value is None for value in throttles.values())
         throttled = any(value is not None and value > 0 for value in throttles.values())
@@ -1085,14 +1087,18 @@ class AwsAdminStatusSource:
             )
             protected = table.get("DeletionProtectionEnabled") is True
             ttl_status = ttl.get("TimeToLiveStatus")
-            warning = warning or status != "ACTIVE" or pitr != "ENABLED" or not protected
+            table_warning = (
+                table_warning or status != "ACTIVE" or pitr != "ENABLED" or not protected
+            )
             if label == "session":
-                warning = warning or ttl_status != "ENABLED"
+                table_warning = table_warning or ttl_status != "ENABLED"
             stream = table.get("StreamSpecification", {})
             stream_enabled = stream.get("StreamEnabled") is True
             stream_view_type = stream.get("StreamViewType") if stream_enabled else None
             if label == "debate":
-                warning = warning or not stream_enabled or stream_view_type != "NEW_IMAGE"
+                table_warning = (
+                    table_warning or not stream_enabled or stream_view_type != "NEW_IMAGE"
+                )
             metrics.extend(
                 (
                     _metric(f"{label}_status", status or "unknown"),
@@ -1111,6 +1117,10 @@ class AwsAdminStatusSource:
                         _metric("debate_stream_view_type", stream_view_type),
                     )
                 )
+        affection_metrics, affection_state = self._affection_dynamodb_metrics(now)
+        metrics.extend(affection_metrics)
+        affection_warning = affection_state == "warning"
+        warning = table_warning or affection_warning
         return AdminStatusSection(
             service="dynamodb",
             state="unknown"
@@ -1122,6 +1132,12 @@ class AwsAdminStatusSource:
             if throttles_unknown
             else "直近1時間にDynamoDB throttleを検出しました。"
             if throttled
+            else "Table状態、保護設定、または親愛度データを確認してください。"
+            if table_warning and affection_warning
+            else "Table状態または保護設定を確認してください。"
+            if table_warning
+            else "親愛度データの初期化またはランキング更新を確認してください。"
+            if affection_warning
             else "Table状態と保護設定を確認しました。",
             metrics=tuple(metrics),
         )
@@ -1576,9 +1592,9 @@ class AwsAdminStatusSource:
         return AdminStatusSection(
             service="sqs",
             state=state,
-            summary="DLQのメッセージまたは保護設定を確認してください。"
+            summary="記録・親愛度投影DLQのメッセージまたは保護設定を確認してください。"
             if state == "warning"
-            else "DLQは空で保護設定も正常です。",
+            else "記録・親愛度投影DLQは空で保護設定も正常です。",
             metrics=(
                 _metric("visible_messages", visible),
                 _metric("inflight_messages", inflight),
@@ -1794,6 +1810,61 @@ class AwsAdminStatusSource:
             ),
             metrics=tuple(metrics),
         )
+
+    def _affection_dynamodb_metrics(
+        self, now: datetime
+    ) -> tuple[tuple[AdminStatusMetric, ...], AdminHealthState]:
+        pointer = self._statistics_item(pk="RANKING#AFFECTION", sk="CURRENT")
+        seed = self._statistics_item(pk="AFFECTION#SEED", sk="CURRENT")
+        if pointer is None or seed is None:
+            return (
+                (
+                    _metric("affection_ranking_ready", pointer is not None),
+                    _metric("affection_ranking_fresh", None),
+                    _metric("affection_profile_count", None),
+                    _metric("affection_page_count", None),
+                    _metric("affection_ranking_generated_at", None),
+                    _metric("affection_seed_complete", None),
+                    _metric("affection_seed_archive_count", None),
+                ),
+                "warning",
+            )
+
+        pointer_generated_at, profile_count, page_count = _affection_pointer(pointer)
+        seed_generated_at, seed_archive_count, seed_profile_count, seed_complete = _affection_seed(
+            seed
+        )
+        if (
+            pointer_generated_at != seed_generated_at
+            or profile_count != seed_profile_count
+            or page_count
+            != (profile_count + _AFFECTION_RANKING_PAGE_SIZE - 1) // _AFFECTION_RANKING_PAGE_SIZE
+        ):
+            raise ValueError("affection ranking metadata is inconsistent")
+        future = pointer_generated_at > now + timedelta(minutes=5)
+        fresh = not future and now - pointer_generated_at <= _AFFECTION_RANKING_FRESHNESS
+        state: AdminHealthState = "healthy" if fresh and seed_complete else "warning"
+        return (
+            (
+                _metric("affection_ranking_ready", True),
+                _metric("affection_ranking_fresh", fresh),
+                _metric("affection_profile_count", profile_count),
+                _metric("affection_page_count", page_count),
+                _metric("affection_ranking_generated_at", _timestamp(pointer_generated_at)),
+                _metric("affection_seed_complete", seed_complete),
+                _metric("affection_seed_archive_count", seed_archive_count),
+            ),
+            state,
+        )
+
+    def _statistics_item(self, *, pk: str, sk: str) -> Mapping[str, object] | None:
+        response = self._dynamodb.get_item(
+            TableName=self._config.tables["statistics"],
+            Key=marshal_item({"PK": pk, "SK": sk}),
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        return None if raw is None else unmarshal_item(raw)
 
     def _cloudformation_section(self) -> AdminStatusSection:
         metrics: list[AdminStatusMetric] = []
@@ -2754,6 +2825,72 @@ def _iso_timestamp(value: object) -> datetime | None:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("stored timestamp is invalid")
     return parsed.astimezone(UTC)
+
+
+def _affection_pointer(item: Mapping[str, object]) -> tuple[datetime, int, int]:
+    expected = {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "generation_id",
+        "generated_at",
+        "profile_count",
+        "page_count",
+        "checksum",
+    }
+    generation_id = item.get("generation_id")
+    checksum = item.get("checksum")
+    profile_count = _optional_nonnegative_integer(item.get("profile_count"))
+    page_count = _optional_nonnegative_integer(item.get("page_count"))
+    generated_at = _iso_timestamp(item.get("generated_at"))
+    if (
+        set(item) != expected
+        or item.get("PK") != "RANKING#AFFECTION"
+        or item.get("SK") != "CURRENT"
+        or item.get("schema_version") != 1
+        or item.get("record_type") != "affection_ranking_pointer"
+        or not isinstance(generation_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", generation_id) is None
+        or not isinstance(checksum, str)
+        or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+        or not checksum.startswith(generation_id)
+        or profile_count is None
+        or page_count is None
+        or generated_at is None
+    ):
+        raise ValueError("affection ranking pointer is invalid")
+    return generated_at, profile_count, page_count
+
+
+def _affection_seed(item: Mapping[str, object]) -> tuple[datetime, int, int, bool]:
+    expected = {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "generated_at",
+        "archive_count",
+        "profile_count",
+        "complete",
+    }
+    archive_count = _optional_nonnegative_integer(item.get("archive_count"))
+    profile_count = _optional_nonnegative_integer(item.get("profile_count"))
+    complete = item.get("complete")
+    generated_at = _iso_timestamp(item.get("generated_at"))
+    if (
+        set(item) != expected
+        or item.get("PK") != "AFFECTION#SEED"
+        or item.get("SK") != "CURRENT"
+        or item.get("schema_version") != 1
+        or item.get("record_type") != "affection_seed_checkpoint"
+        or archive_count is None
+        or profile_count is None
+        or not isinstance(complete, bool)
+        or generated_at is None
+    ):
+        raise ValueError("affection seed checkpoint is invalid")
+    return generated_at, archive_count, profile_count, complete
 
 
 def _first_nonnegative_integer(item: Mapping[str, object], *names: str) -> int | None:

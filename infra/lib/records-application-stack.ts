@@ -1074,7 +1074,11 @@ export class RecordsApplicationStack extends Stack {
           resources: [statisticsTable.tableArn],
           conditions: {
             "ForAllValues:StringEquals": {
-              "dynamodb:LeadingKeys": ["COLLECTOR#COST"],
+              "dynamodb:LeadingKeys": [
+                "AFFECTION#SEED",
+                "COLLECTOR#COST",
+                "RANKING#AFFECTION",
+              ],
             },
             Null: {
               "dynamodb:LeadingKeys": "false",

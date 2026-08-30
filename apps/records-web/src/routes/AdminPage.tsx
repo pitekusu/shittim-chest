@@ -28,7 +28,7 @@ const SERVICE_PRESENTATION: Readonly<
   dynamodb: { name: "DynamoDB", purpose: "データストア" },
   lambda: { name: "Lambda", purpose: "サーバーレス処理" },
   cloudfront: { name: "CloudFront", purpose: "Web配信" },
-  sqs: { name: "SQS", purpose: "失敗イベント保管" },
+  sqs: { name: "SQS", purpose: "記録・親愛度投影DLQ" },
   apigateway: { name: "API Gateway", purpose: "API入口" },
   eventbridge: { name: "EventBridge", purpose: "定期・イベント配信" },
   cloudformation: { name: "CloudFormation", purpose: "Stack管理" },
@@ -145,11 +145,11 @@ const LAMBDA_RESOURCES = [
   { key: "discord_status", label: "Discord状態通知" },
   { key: "image_admission", label: "イメージ審査" },
   { key: "runtime_reconciler", label: "Runtime調整" },
-  { key: "records_projector", label: "記録投影" },
+  { key: "records_projector", label: "記録・親愛度投影" },
   { key: "records_backfill", label: "過去記録取込" },
   { key: "records_auth", label: "認証API" },
   { key: "records_read", label: "閲覧API" },
-  { key: "records_ranking", label: "ランキング集計" },
+  { key: "records_ranking", label: "ランキング・親愛度集計" },
   { key: "records_cost", label: "費用集計" },
   { key: "records_inspector_translation", label: "脆弱性概要翻訳" },
   { key: "records_admin_status", label: "管理状態API" },
@@ -169,7 +169,7 @@ const API_RESOURCES = [
 
 const EVENT_RESOURCES = [
   { key: "runtime", label: "Runtime調整", hasDeliveryMetrics: false },
-  { key: "ranking", label: "ランキング集計", hasDeliveryMetrics: true },
+  { key: "ranking", label: "ランキング・親愛度集計", hasDeliveryMetrics: true },
   { key: "aws_fx", label: "AWS・為替集計", hasDeliveryMetrics: true },
   { key: "openai", label: "OpenAI集計", hasDeliveryMetrics: true },
   { key: "inspector_translation", label: "脆弱性概要翻訳", hasDeliveryMetrics: true },
@@ -1201,6 +1201,10 @@ function DynamoDbMetrics({
   readonly translationMetrics: readonly AdminStatusMetric[];
 }): React.JSX.Element {
   const metrics = metricLookup([...source, ...translationMetrics]);
+  const rankingReadyValue = metrics.get("affection_ranking_ready")?.value;
+  const rankingFreshValue = metrics.get("affection_ranking_fresh")?.value;
+  const seedCompleteValue = metrics.get("affection_seed_complete")?.value;
+  const profileCount = metrics.get("affection_profile_count")?.value;
   return (
     <>
       {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus. */}
@@ -1255,6 +1259,71 @@ function DynamoDbMetrics({
             <span className={adminStyles.metricMarker} aria-hidden="true" />
             <dt>最終翻訳日時</dt>
             <dd>{metricValue(metrics, "translation_last_translated_at")}</dd>
+          </div>
+        </dl>
+      </section>
+      <section
+        className={adminStyles.translationCacheStatus}
+        aria-labelledby="affection-data-status-title"
+      >
+        <h4 id="affection-data-status-title">親愛度データ</h4>
+        <dl className={`${adminStyles.readinessGrid} ${adminStyles.affectionReadiness}`}>
+          <div data-ready={rankingReadyValue === true || undefined}>
+            <dt>ランキング公開</dt>
+            <dd>
+              <strong>
+                {rankingReadyValue === true
+                  ? "公開中"
+                  : rankingReadyValue === false
+                    ? "未準備"
+                    : "未取得"}
+              </strong>
+            </dd>
+          </div>
+          <div data-ready={rankingFreshValue === true || undefined}>
+            <dt>集計鮮度</dt>
+            <dd>
+              <strong>
+                {rankingFreshValue === true
+                  ? "最新"
+                  : rankingFreshValue === false
+                    ? "要確認"
+                    : "未取得"}
+              </strong>
+            </dd>
+          </div>
+          <div data-ready={typeof profileCount === "number" || undefined}>
+            <dt>プロフィール</dt>
+            <dd>
+              <strong>{metricValue(metrics, "affection_profile_count")}</strong>
+              {typeof profileCount === "number" && <span> 人</span>}
+            </dd>
+          </div>
+          <div data-ready={seedCompleteValue === true || undefined}>
+            <dt>既存議論の初期化</dt>
+            <dd>
+              <strong>
+                {seedCompleteValue === true
+                  ? "完了"
+                  : seedCompleteValue === false
+                    ? "未完了"
+                    : "未取得"}
+              </strong>
+            </dd>
+          </div>
+        </dl>
+        <dl className={adminStyles.inlineFacts}>
+          <div>
+            <dt>最終ランキング集計</dt>
+            <dd>{metricValue(metrics, "affection_ranking_generated_at")}</dd>
+          </div>
+          <div>
+            <dt>ランキングページ</dt>
+            <dd>{metricValue(metrics, "affection_page_count")}</dd>
+          </div>
+          <div>
+            <dt>初期化対象の議論</dt>
+            <dd>{metricValue(metrics, "affection_seed_archive_count")}</dd>
           </div>
         </dl>
       </section>
