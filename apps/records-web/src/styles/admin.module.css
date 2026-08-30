@@ -1429,6 +1429,14 @@
   font-weight: 700;
 }
 
+.affectionReadiness > div[data-ready="true"] strong {
+  color: var(--records-cyan-ink);
+}
+
+.affectionReadiness > div:not([data-ready="true"]) strong {
+  color: var(--admin-severity-medium);
+}
+
 .panelState {
   display: grid;
   min-height: 150px;

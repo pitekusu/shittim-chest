@@ -717,7 +717,13 @@ describe("RecordsApplicationStack", () => {
         JSON.stringify(statement.Condition).includes("COLLECTOR#COST"),
     );
     expect(statusCollectorRead?.Condition).toEqual({
-      "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["COLLECTOR#COST"] },
+      "ForAllValues:StringEquals": {
+        "dynamodb:LeadingKeys": [
+          "AFFECTION#SEED",
+          "COLLECTOR#COST",
+          "RANKING#AFFECTION",
+        ],
+      },
       Null: { "dynamodb:LeadingKeys": "false" },
     });
     const statusTranslationRead = statusStatements.find(

@@ -364,6 +364,13 @@ const adminStatus = {
         ]),
         { name: "debate_stream_enabled", value: true },
         { name: "debate_stream_view_type", value: "NEW_IMAGE" },
+        { name: "affection_ranking_ready", value: true },
+        { name: "affection_ranking_fresh", value: true },
+        { name: "affection_profile_count", value: 7 },
+        { name: "affection_page_count", value: 1 },
+        { name: "affection_ranking_generated_at", value: "2026-08-27T00:45:00Z" },
+        { name: "affection_seed_complete", value: true },
+        { name: "affection_seed_archive_count", value: 12 },
       ],
     },
     {
@@ -397,7 +404,7 @@ const adminStatus = {
     {
       service: "sqs",
       state: "healthy",
-      summary: "DLQは空で保護設定も正常です。",
+      summary: "記録・親愛度投影DLQは空で保護設定も正常です。",
       metrics: [
         { name: "visible_messages", value: 0 },
         { name: "inflight_messages", value: 0 },
@@ -2030,6 +2037,13 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(page.getByRole("region", { name: "Lambda関数状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "API Gateway状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "定期実行とイベント配信" })).toBeVisible();
+  await expect(page.locator("#admin-service-affection")).toHaveCount(0);
+  const dynamodbCard = page.locator("#admin-service-dynamodb");
+  await expect(dynamodbCard.getByRole("region", { name: "親愛度データ" })).toBeVisible();
+  await expect(dynamodbCard).toContainText("プロフィール7 人");
+  await expect(page.getByRole("rowheader", { name: "記録・親愛度投影" })).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: "ランキング・親愛度集計" })).toHaveCount(2);
+  await expect(page.getByText("記録・親愛度投影DLQ", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "CloudFormation Stack状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "予算状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "外部集計状態" })).toBeVisible();
@@ -2114,6 +2128,7 @@ test("service status page contains wide status tables on mobile", async ({ page 
   await expect(page.getByRole("region", { name: "タグ付きECRイメージ" })).toBeVisible();
   await expect(page.getByText("CVE-2026-12345", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "親愛度データ" })).toBeVisible();
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,

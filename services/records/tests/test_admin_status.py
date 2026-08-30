@@ -216,6 +216,35 @@ class CloudWatch:
         }
 
 
+class HealthyAffectionCheckpoints:
+    def get_item(self, *, Key: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        key = status_adapters.unmarshal_item(Key)
+        generated_at = NOW - timedelta(minutes=10)
+        item = (
+            {
+                **key,
+                "schema_version": 1,
+                "record_type": "affection_ranking_pointer",
+                "generation_id": "a" * 32,
+                "generated_at": generated_at.isoformat(),
+                "profile_count": 7,
+                "page_count": 1,
+                "checksum": "a" * 64,
+            }
+            if key["PK"] == "RANKING#AFFECTION"
+            else {
+                **key,
+                "schema_version": 1,
+                "record_type": "affection_seed_checkpoint",
+                "generated_at": generated_at.isoformat(),
+                "archive_count": 12,
+                "profile_count": 7,
+                "complete": True,
+            }
+        )
+        return {"Item": status_adapters.marshal_item(item)}
+
+
 class Paginator:
     def __init__(self, pages: list[dict[str, Any]]) -> None:
         self.pages = pages
@@ -578,7 +607,7 @@ def test_ecs_marks_failed_rollout_without_exposing_provider_reason() -> None:
 
 
 def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
-    class Dynamo:
+    class Dynamo(HealthyAffectionCheckpoints):
         def describe_table(self, *, TableName: str) -> dict[str, Any]:
             table: dict[str, Any] = {
                 "TableStatus": "ACTIVE",
@@ -608,6 +637,10 @@ def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
     assert section.state == "warning"
     assert values["debate_stream_enabled"] is True
     assert values["debate_stream_view_type"] == "NEW_IMAGE"
+    assert values["affection_ranking_ready"] is True
+    assert values["affection_ranking_fresh"] is True
+    assert values["affection_profile_count"] == 7
+    assert values["affection_seed_complete"] is True
     for label in ("debate", "archive", "statistics", "session"):
         assert values[f"{label}_read_throttles"] == 1
         assert values[f"{label}_write_throttles"] == 1
@@ -649,7 +682,7 @@ def test_dynamodb_requires_new_image_stream_view(
     stream_view_type: str,
     expected_state: str,
 ) -> None:
-    class Dynamo:
+    class Dynamo(HealthyAffectionCheckpoints):
         def describe_table(self, *, TableName: str) -> dict[str, Any]:
             stream = (
                 {"StreamEnabled": True, "StreamViewType": stream_view_type}
@@ -691,7 +724,7 @@ def test_dynamodb_requires_new_image_stream_view(
 
 
 def test_dynamodb_requires_session_ttl_to_be_enabled() -> None:
-    class Dynamo:
+    class Dynamo(HealthyAffectionCheckpoints):
         def describe_table(self, *, TableName: str) -> dict[str, Any]:
             stream = (
                 {"StreamEnabled": True, "StreamViewType": "NEW_IMAGE"}
@@ -1687,6 +1720,7 @@ def test_sqs_includes_oldest_age_without_reading_messages_or_returning_queue_nam
     section = source(sqs=sqs, cloudwatch=cloudwatch)._sqs_section(NOW)
 
     assert section.state == "warning"
+    assert "記録・親愛度投影DLQ" in section.summary
     assert metrics(section)["oldest_message_age_seconds"] == "42.000"
     assert sqs.calls[0]["AttributeNames"] and "ReceiveMessage" not in repr(sqs.calls)
     assert "projector-dlq" not in section.model_dump_json()
@@ -2127,6 +2161,144 @@ def test_external_reports_checkpoint_freshness_without_keys_or_cursors() -> None
     serialized = section.model_dump_json()
     assert "COLLECTOR#COST" not in serialized
     assert "next_date" not in serialized
+
+
+def test_dynamodb_affection_metrics_report_checkpoint_without_private_keys() -> None:
+    generated_at = NOW - timedelta(minutes=10)
+
+    class Dynamo:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def get_item(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            key = status_adapters.unmarshal_item(kwargs["Key"])
+            if key["PK"] == "RANKING#AFFECTION":
+                item = {
+                    **key,
+                    "schema_version": 1,
+                    "record_type": "affection_ranking_pointer",
+                    "generation_id": "a" * 32,
+                    "generated_at": generated_at.isoformat(),
+                    "profile_count": 7,
+                    "page_count": 1,
+                    "checksum": "a" * 64,
+                }
+            else:
+                item = {
+                    **key,
+                    "schema_version": 1,
+                    "record_type": "affection_seed_checkpoint",
+                    "generated_at": generated_at.isoformat(),
+                    "archive_count": 12,
+                    "profile_count": 7,
+                    "complete": True,
+                }
+            return {"Item": status_adapters.marshal_item(item)}
+
+    dynamodb = Dynamo()
+    status_metrics, state = source(dynamodb=dynamodb)._affection_dynamodb_metrics(NOW)
+    values = {metric.name: metric.value for metric in status_metrics}
+
+    assert state == "healthy"
+    assert values == {
+        "affection_ranking_ready": True,
+        "affection_ranking_fresh": True,
+        "affection_profile_count": 7,
+        "affection_page_count": 1,
+        "affection_ranking_generated_at": generated_at.isoformat(),
+        "affection_seed_complete": True,
+        "affection_seed_archive_count": 12,
+    }
+    assert all(call["ConsistentRead"] is True for call in dynamodb.calls)
+    serialized = repr(status_metrics)
+    assert "RANKING#AFFECTION" not in serialized
+    assert "AFFECTION#SEED" not in serialized
+    assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in serialized
+
+
+def test_dynamodb_affection_metrics_warn_when_checkpoint_is_missing() -> None:
+    class Dynamo:
+        def get_item(self, **_kwargs: Any) -> dict[str, Any]:
+            return {}
+
+    status_metrics, state = source(dynamodb=Dynamo())._affection_dynamodb_metrics(NOW)
+    values = {metric.name: metric.value for metric in status_metrics}
+
+    assert state == "warning"
+    assert values["affection_ranking_ready"] is False
+    assert values["affection_ranking_fresh"] is None
+    assert values["affection_seed_complete"] is None
+
+
+def test_dynamodb_affection_metrics_warn_when_ranking_checkpoint_is_stale() -> None:
+    generated_at = NOW - timedelta(minutes=36)
+
+    class Dynamo:
+        def get_item(self, *, Key: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            key = status_adapters.unmarshal_item(Key)
+            item = (
+                {
+                    **key,
+                    "schema_version": 1,
+                    "record_type": "affection_ranking_pointer",
+                    "generation_id": "b" * 32,
+                    "generated_at": generated_at.isoformat(),
+                    "profile_count": 1,
+                    "page_count": 1,
+                    "checksum": "b" * 64,
+                }
+                if key["PK"] == "RANKING#AFFECTION"
+                else {
+                    **key,
+                    "schema_version": 1,
+                    "record_type": "affection_seed_checkpoint",
+                    "generated_at": generated_at.isoformat(),
+                    "archive_count": 1,
+                    "profile_count": 1,
+                    "complete": True,
+                }
+            )
+            return {"Item": status_adapters.marshal_item(item)}
+
+    status_metrics, state = source(dynamodb=Dynamo())._affection_dynamodb_metrics(NOW)
+
+    assert state == "warning"
+    assert {metric.name: metric.value for metric in status_metrics}[
+        "affection_ranking_fresh"
+    ] is False
+
+
+def test_dynamodb_affection_metrics_reject_inconsistent_atomic_checkpoints() -> None:
+    class Dynamo:
+        def get_item(self, *, Key: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+            key = status_adapters.unmarshal_item(Key)
+            item = (
+                {
+                    **key,
+                    "schema_version": 1,
+                    "record_type": "affection_ranking_pointer",
+                    "generation_id": "c" * 32,
+                    "generated_at": NOW.isoformat(),
+                    "profile_count": 1,
+                    "page_count": 1,
+                    "checksum": "c" * 64,
+                }
+                if key["PK"] == "RANKING#AFFECTION"
+                else {
+                    **key,
+                    "schema_version": 1,
+                    "record_type": "affection_seed_checkpoint",
+                    "generated_at": NOW.isoformat(),
+                    "archive_count": 1,
+                    "profile_count": 2,
+                    "complete": True,
+                }
+            )
+            return {"Item": status_adapters.marshal_item(item)}
+
+    with pytest.raises(ValueError, match="inconsistent"):
+        source(dynamodb=Dynamo())._affection_dynamodb_metrics(NOW)
 
 
 def test_status_service_reuses_warm_cache_for_sixty_seconds() -> None:
