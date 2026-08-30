@@ -1922,6 +1922,19 @@
   box-shadow: inset 4px 0 0 var(--records-cyan-ink);
 }
 
+.promptCurrentBadge {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid var(--records-cyan-500);
+  border-radius: 999px;
+  background: var(--records-cyan-100);
+  color: var(--records-ink-900) !important;
+  font-size: 0.72rem !important;
+  font-weight: 800;
+}
+
 .promptHistoryList li > div:first-child {
   display: grid;
   min-width: 0;
@@ -1991,6 +2004,124 @@
 
 .promptRevisionCompare .promptDiff {
   margin-top: 12px;
+}
+
+.promptUnifiedDiff {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.promptDiffLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.promptDiffLegend span {
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.promptDiffLegend span[data-kind="removed"] {
+  background: var(--records-pink-100);
+  color: var(--records-pink-ink);
+}
+
+.promptDiffLegend span[data-kind="added"] {
+  background: var(--records-cyan-100);
+  color: var(--records-cyan-ink);
+}
+
+.promptDiffRows {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--records-line);
+  border-radius: 10px;
+  background: var(--records-control-background);
+}
+
+.promptDiffTable {
+  width: 100%;
+  min-width: 440px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font:
+    0.7rem/1.6 ui-monospace,
+    monospace;
+}
+
+.promptDiffLine {
+  border-top: 1px solid var(--records-line);
+}
+
+.promptDiffLine:first-child {
+  border-top: 0;
+}
+
+.promptDiffLine td {
+  padding: 4px 7px;
+  border-right: 1px solid var(--records-line);
+  color: var(--records-ink-600);
+  text-align: right;
+  user-select: none;
+}
+
+.promptDiffLine td:nth-child(1),
+.promptDiffLine td:nth-child(2) {
+  width: 42px;
+}
+
+.promptDiffLine td:nth-child(3) {
+  width: 28px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.promptDiffLine td:last-child {
+  border-right: 0;
+  text-align: left;
+  user-select: text;
+}
+
+.promptDiffLine code {
+  display: block;
+  min-width: 0;
+  padding: 4px 9px;
+  color: var(--records-ink-900);
+  font: inherit;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.promptDiffLine[data-kind="removed"] {
+  background: var(--records-pink-100);
+}
+
+.promptDiffLine[data-kind="removed"] td:nth-child(3),
+.promptDiffLine[data-kind="removed"] code {
+  color: var(--records-pink-ink);
+}
+
+.promptDiffLine[data-kind="added"] {
+  background: var(--records-cyan-100);
+}
+
+.promptDiffLine[data-kind="added"] td:nth-child(3),
+.promptDiffLine[data-kind="added"] code {
+  color: var(--records-cyan-ink);
+}
+
+.promptDiffUnchanged {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--records-line);
+  border-radius: 10px;
+  background: var(--records-control-background);
+  color: var(--records-ink-600);
+  font-size: 0.72rem;
 }
 
 .promptRollbackConfirmation {

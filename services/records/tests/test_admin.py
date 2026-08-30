@@ -86,6 +86,11 @@ class RevisionStore:
             raise AdminFailure("PROMPT_REVISION_CONFLICT", 409)
         self.active = revision
 
+    def delete_revision(self, revision: str) -> None:
+        if revision == self.active:
+            raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+        self.revisions.pop(revision, None)
+
 
 class Legacy:
     def __init__(self, prompts: PromptValues) -> None:
@@ -193,8 +198,21 @@ class Audit:
         return self.summaries.get(revision)
 
     def list_summaries(self, *, limit: int, cursor: str | None) -> PromptHistoryPage:
-        del limit, cursor
-        return PromptHistoryPage(items=tuple(self.summaries.values()), next_cursor=None)
+        ordered = sorted(self.summaries.values(), key=lambda item: item.revision, reverse=True)
+        start = 0
+        if cursor is not None:
+            try:
+                start = next(
+                    index + 1 for index, summary in enumerate(ordered) if summary.revision == cursor
+                )
+            except StopIteration:
+                raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503) from None
+        items = tuple(ordered[start : start + limit])
+        next_cursor = items[-1].revision if start + len(items) < len(ordered) else None
+        return PromptHistoryPage(items=items, next_cursor=next_cursor)
+
+    def delete_summary(self, revision: str) -> None:
+        self.summaries.pop(revision, None)
 
 
 def session(requester_key: str) -> SessionRecord:
@@ -711,6 +729,204 @@ def test_rollback_copies_a_tracked_revision_into_a_new_immutable_revision(
     assert restored.source_revision == REVISION
     assert revisions.revisions[REVISION_THREE].prompts == legacy
     assert revisions.revisions[REVISION_THREE].manifest.base_revision == REVISION_TWO
+
+
+def test_revision_retention_keeps_active_and_four_previous_generations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = tuple(f"r01k3gqp6g0000000000000000{index}" for index in range(6))
+    generated_iter = iter(generated)
+    monkeypatch.setattr(admin_module, "new_revision_id", lambda _now: next(generated_iter))
+    revisions = RevisionStore()
+    audit = Audit()
+    initial = prompt_values(system="value-0")
+    service = AdminPromptService(revisions=revisions, legacy=Legacy(initial), audit=audit)
+
+    base: str | None = None
+    for index in range(6):
+        result = service.apply(
+            base_revision=base,
+            prompts=prompt_values(system=f"value-{index}").as_mapping(),
+            system_confirmation=None if index == 0 else SYSTEM_PROMPT_CONFIRMATION,
+            idempotency_hash=f"{index}" * 64,
+            now=NOW + timedelta(seconds=index),
+        )
+        base = result.revision
+
+    assert revisions.active == generated[-1]
+    assert set(revisions.revisions) == set(generated[1:])
+    assert set(audit.summaries) == set(generated[1:])
+    assert generated[0] not in revisions.revisions
+    assert generated[0] not in audit.summaries
+
+
+def test_retention_uses_latest_active_revision_when_it_changes_during_summary_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = tuple(f"r01k3gqp6g0000000000000000{index}" for index in range(6))
+    generated_iter = iter(generated[:5])
+    monkeypatch.setattr(admin_module, "new_revision_id", lambda _now: next(generated_iter))
+    revisions = RevisionStore()
+    audit = Audit()
+    service = AdminPromptService(
+        revisions=revisions,
+        legacy=Legacy(prompt_values(system="value-0")),
+        audit=audit,
+    )
+
+    base: str | None = None
+    for index in range(5):
+        base = service.apply(
+            base_revision=base,
+            prompts=prompt_values(system=f"value-{index}").as_mapping(),
+            system_confirmation=None if index == 0 else SYSTEM_PROMPT_CONFIRMATION,
+            idempotency_hash=f"{index}" * 64,
+            now=NOW + timedelta(seconds=index),
+        ).revision
+    assert base == generated[4]
+
+    concurrent_values = prompt_values(system="value-5")
+    concurrent_revision = PromptRevision(
+        manifest=admin_module.PromptManifest(
+            revision=generated[5],
+            created_at=NOW + timedelta(seconds=5),
+            action="publish",
+            base_revision=base,
+            checksums=concurrent_values.checksums(),
+        ),
+        prompts=concurrent_values,
+    )
+    concurrent_summary = PromptRevisionSummary(
+        revision=generated[5],
+        created_at=NOW + timedelta(seconds=5),
+        action="publish",
+        base_revision=base,
+        source_revision=None,
+        checksum=aggregate_checksum(concurrent_values.checksums()),
+    )
+    original_list_summaries = audit.list_summaries
+    switched = False
+
+    def list_summaries(*, limit: int, cursor: str | None) -> PromptHistoryPage:
+        nonlocal switched
+        if not switched:
+            switched = True
+            revisions.revisions[generated[5]] = concurrent_revision
+            revisions.active = generated[5]
+            audit.summaries[generated[5]] = concurrent_summary
+            audit.active_revision = generated[5]
+        return original_list_summaries(limit=limit, cursor=cursor)
+
+    monkeypatch.setattr(audit, "list_summaries", list_summaries)
+
+    current = service.get_current()
+
+    assert current.revision == concurrent_revision
+    assert set(revisions.revisions) == set(generated)
+    assert set(audit.summaries) == set(generated)
+
+    service.get_current()
+
+    assert set(revisions.revisions) == set(generated[1:])
+    assert set(audit.summaries) == set(generated[1:])
+
+
+def test_retention_follows_the_active_chain_instead_of_revision_sort_order() -> None:
+    revisions = RevisionStore()
+    audit = Audit()
+    value = prompt_values()
+    active = PromptRevision(
+        manifest=admin_module.PromptManifest(
+            revision=REVISION,
+            created_at=NOW,
+            action="publish",
+            base_revision=None,
+            checksums=value.checksums(),
+        ),
+        prompts=value,
+    )
+    revisions.revisions[REVISION] = active
+    revisions.active = REVISION
+    audit.summaries[REVISION_TWO] = PromptRevisionSummary(
+        revision=REVISION_TWO,
+        created_at=NOW + timedelta(seconds=1),
+        action="publish",
+        base_revision=REVISION,
+        source_revision=None,
+        checksum="f" * 64,
+    )
+    audit.summaries[REVISION] = PromptRevisionSummary(
+        revision=REVISION,
+        created_at=NOW,
+        action="publish",
+        base_revision=None,
+        source_revision=None,
+        checksum=aggregate_checksum(value.checksums()),
+    )
+    service = AdminPromptService(revisions=revisions, legacy=Legacy(value), audit=audit)
+
+    current = service.get_current()
+
+    assert current.revision == active
+    assert revisions.active == REVISION
+    assert REVISION in revisions.revisions
+    assert REVISION in audit.summaries
+    assert REVISION_TWO not in audit.summaries
+
+
+def test_retention_retries_after_revision_body_cleanup_precedes_summary_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailOnceAudit(Audit):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_delete = True
+
+        def delete_summary(self, revision: str) -> None:
+            if self.fail_next_delete:
+                self.fail_next_delete = False
+                raise AdminFailure("PROMPT_CONFIGURATION_UNAVAILABLE", 503)
+            super().delete_summary(revision)
+
+    generated = tuple(f"r01k3gqp6g0000000000000000{index}" for index in range(6))
+    generated_iter = iter(generated)
+    monkeypatch.setattr(admin_module, "new_revision_id", lambda _now: next(generated_iter))
+    revisions = RevisionStore()
+    audit = FailOnceAudit()
+    service = AdminPromptService(
+        revisions=revisions,
+        legacy=Legacy(prompt_values(system="value-0")),
+        audit=audit,
+    )
+
+    base: str | None = None
+    for index in range(5):
+        base = service.apply(
+            base_revision=base,
+            prompts=prompt_values(system=f"value-{index}").as_mapping(),
+            system_confirmation=None if index == 0 else SYSTEM_PROMPT_CONFIRMATION,
+            idempotency_hash=f"{index}" * 64,
+            now=NOW + timedelta(seconds=index),
+        ).revision
+
+    with pytest.raises(AdminFailure) as caught:
+        service.apply(
+            base_revision=base,
+            prompts=prompt_values(system="value-5").as_mapping(),
+            system_confirmation=SYSTEM_PROMPT_CONFIRMATION,
+            idempotency_hash="5" * 64,
+            now=NOW + timedelta(seconds=5),
+        )
+
+    assert caught.value.code == "PROMPT_CONFIGURATION_UNAVAILABLE"
+    assert revisions.active == generated[-1]
+    assert generated[0] not in revisions.revisions
+    assert generated[0] in audit.summaries
+
+    service.get_current()
+
+    assert generated[0] not in audit.summaries
+    assert set(revisions.revisions) == set(generated[1:])
 
 
 def test_same_base_revision_cannot_hold_two_pending_updates() -> None:

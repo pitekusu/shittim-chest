@@ -33,6 +33,7 @@ PromptKey = Literal[
 PromptAction = Literal["publish", "rollback"]
 SYSTEM_PROMPT_CONFIRMATION = "APPLY SYSTEM PROMPT"
 MAX_PROMPT_BYTES = 3_500
+MAX_PROMPT_REVISIONS = 5
 REVISION_PATTERN = re.compile(r"^r[0-9a-hjkmnp-tv-z]{26}$")
 IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9._~-]{16,128}$")
 _CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"
@@ -164,6 +165,8 @@ class PromptRevisionStore(Protocol):
 
     def activate(self, *, revision: str, expected_base_revision: str | None) -> None: ...
 
+    def delete_revision(self, revision: str) -> None: ...
+
 
 class LegacyPromptSource(Protocol):
     def load(self) -> PromptValues: ...
@@ -202,6 +205,8 @@ class PromptAuditStore(Protocol):
     def get_summary(self, revision: str) -> PromptRevisionSummary | None: ...
 
     def list_summaries(self, *, limit: int, cursor: str | None) -> PromptHistoryPage: ...
+
+    def delete_summary(self, revision: str) -> None: ...
 
 
 class AdminAuthorizer:
@@ -313,7 +318,7 @@ class AdminPromptService:
         active = None if current.revision is None else current.revision.manifest.revision
         pending = self._audit.get_pending_operation_any()
         if pending is None:
-            return current
+            return self._enforce_retention(current)
         if pending.revision == active:
             if current.revision is None:
                 raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
@@ -321,14 +326,14 @@ class AdminPromptService:
                 operation=pending,
                 summary=_summary_from_operation(pending, current.revision.manifest),
             )
-            return current
+            return self._enforce_retention(current)
         if pending.base_revision != active:
             raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
         try:
             revision = self._revisions.load_revision(pending.revision)
         except PromptRevisionIncomplete:
             self._audit.abort_operation(operation=pending)
-            return current
+            return self._enforce_retention(current)
         self._revisions.activate(
             revision=pending.revision,
             expected_base_revision=pending.base_revision,
@@ -337,7 +342,9 @@ class AdminPromptService:
             operation=pending,
             summary=_summary_from_operation(pending, revision.manifest),
         )
-        return PromptCurrent(mode="managed", revision=revision, prompts=revision.prompts)
+        return self._enforce_retention(
+            PromptCurrent(mode="managed", revision=revision, prompts=revision.prompts)
+        )
 
     def apply(
         self,
@@ -370,6 +377,7 @@ class AdminPromptService:
     ) -> PromptRevisionSummary:
         _validate_revision(base_revision)
         _validate_revision(source_revision)
+        self.get_current()
         source_summary = self._audit.get_summary(source_revision)
         if source_summary is None:
             raise AdminFailure("PROMPT_REVISION_NOT_FOUND", 404)
@@ -387,6 +395,7 @@ class AdminPromptService:
 
     def get_revision(self, revision: str) -> tuple[PromptRevisionSummary, PromptRevision]:
         _validate_revision(revision)
+        self.get_current()
         summary = self._audit.get_summary(revision)
         if summary is None:
             raise AdminFailure("PROMPT_REVISION_NOT_FOUND", 404)
@@ -399,6 +408,7 @@ class AdminPromptService:
             raise AdminFailure("REQUEST_INVALID", 400)
         if cursor is not None:
             _validate_revision(cursor)
+        self.get_current()
         return self._audit.list_summaries(limit=limit, cursor=cursor)
 
     def _save(
@@ -467,7 +477,7 @@ class AdminPromptService:
         if operation.complete:
             existing = self._audit.get_summary(operation.revision)
             if existing is None:
-                raise AdminFailure("PROMPT_CONFIGURATION_UNAVAILABLE", 503)
+                raise AdminFailure("PROMPT_REVISION_NOT_FOUND", 404)
             return existing
         manifest = PromptManifest(
             revision=operation.revision,
@@ -484,7 +494,58 @@ class AdminPromptService:
         )
         summary = _summary_from_operation(operation, manifest)
         self._audit.complete_operation(operation=operation, summary=summary)
+        self._enforce_retention(
+            PromptCurrent(mode="managed", revision=revision, prompts=revision.prompts)
+        )
         return summary
+
+    def _enforce_retention(self, current: PromptCurrent) -> PromptCurrent:
+        if current.revision is None:
+            return current
+        active = current.revision.manifest.revision
+        summaries: list[PromptRevisionSummary] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            page = self._audit.list_summaries(limit=50, cursor=cursor)
+            summaries.extend(page.items)
+            if page.next_cursor is None:
+                break
+            if page.next_cursor in seen_cursors:
+                raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+            seen_cursors.add(page.next_cursor)
+            cursor = page.next_cursor
+        latest_active = self._revisions.load_active_revision_id()
+        if latest_active != active:
+            if latest_active is None:
+                raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+            latest_revision = self._load_revision_for_read(latest_active)
+            return PromptCurrent(
+                mode="managed",
+                revision=latest_revision,
+                prompts=latest_revision.prompts,
+            )
+        by_revision = {summary.revision: summary for summary in summaries}
+        if len(by_revision) != len(summaries) or active not in by_revision:
+            raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+        retained: set[str] = set()
+        candidate: str | None = active
+        while candidate is not None and len(retained) < MAX_PROMPT_REVISIONS:
+            if candidate in retained:
+                raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+            summary = by_revision.get(candidate)
+            if summary is None:
+                raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+            retained.add(candidate)
+            candidate = summary.base_revision
+        for obsolete in summaries:
+            if obsolete.revision in retained:
+                continue
+            if obsolete.revision == active:
+                raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+            self._revisions.delete_revision(obsolete.revision)
+            self._audit.delete_summary(obsolete.revision)
+        return current
 
     def _load_current_without_recovery(self) -> PromptCurrent:
         active = self._revisions.load_active_revision_id()

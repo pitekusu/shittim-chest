@@ -88,6 +88,17 @@ class FakeSsm:
         self.puts.append(kwargs)
         return {"Version": 1}
 
+    def delete_parameters(self, **kwargs: Any) -> dict[str, Any]:
+        deleted: list[str] = []
+        missing: list[str] = []
+        for name in kwargs["Names"]:
+            if name in self.values:
+                self.values.pop(name)
+                deleted.append(name)
+            else:
+                missing.append(name)
+        return {"DeletedParameters": deleted, "InvalidParameters": missing}
+
 
 class FakeDynamo:
     def __init__(self) -> None:
@@ -166,6 +177,49 @@ def test_active_pointer_retry_is_idempotent_after_pointer_write() -> None:
     assert active_puts[0]["Overwrite"] is False
     assert active_puts[0]["Tier"] == "Standard"
     assert store.load_revision(REVISION) == revision
+
+
+def test_inactive_revision_delete_is_idempotent_and_active_revision_is_protected() -> None:
+    client = FakeSsm()
+    store = SsmPromptRevisionStore(cast(Any, client), ROOT)
+    revision = _revision()
+    store.create_revision(revision)
+    client.values[f"{ROOT}/active"] = "r01k3gqp6g00000000000000001"
+
+    store.delete_revision(REVISION)
+    store.delete_revision(REVISION)
+
+    assert not any(name.startswith(f"{ROOT}/{REVISION}/") for name in client.values)
+    client.values.update(
+        {
+            f"{ROOT}/{REVISION}/{name}": "retained"
+            for name in (
+                "system",
+                "moderator",
+                "participant-a",
+                "participant-b",
+                "participant-c",
+                "manifest",
+            )
+        }
+    )
+    client.values[f"{ROOT}/active"] = REVISION
+
+    with pytest.raises(AdminFailure) as caught:
+        store.delete_revision(REVISION)
+
+    assert caught.value.code == "PROMPT_CONFIGURATION_INVALID"
+    assert all(
+        f"{ROOT}/{REVISION}/{name}" in client.values
+        for name in (
+            "system",
+            "moderator",
+            "participant-a",
+            "participant-b",
+            "participant-c",
+            "manifest",
+        )
+    )
 
 
 def test_missing_inactive_revision_is_distinguished_for_safe_recovery() -> None:
@@ -412,6 +466,26 @@ def test_completion_clears_all_pending_request_bindings_atomically() -> None:
     )
     assert "pending_request_hash = :request_hash" in current["ConditionExpression"]
     assert "pending_idempotency_hash = :idempotency_hash" in current["ConditionExpression"]
+
+
+def test_delete_summary_uses_the_scoped_transaction_boundary() -> None:
+    client = FakeDynamo()
+    store = DynamoPromptAuditStore(cast(Any, client), "statistics")
+
+    store.delete_summary(REVISION)
+
+    assert client.transactions == [
+        {
+            "TransactItems": [
+                {
+                    "Delete": {
+                        "TableName": "statistics",
+                        "Key": marshal_item({"PK": "ADMIN#PROMPT", "SK": f"REVISION#{REVISION}"}),
+                    }
+                }
+            ]
+        }
+    ]
 
 
 def test_abort_operation_releases_legacy_lock_and_idempotency_record_atomically() -> None:

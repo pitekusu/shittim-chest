@@ -246,6 +246,21 @@ class SsmPromptRevisionStore:
                 raise AdminFailure("PROMPT_REVISION_CONFLICT", 409) from None
             raise AdminFailure("PROMPT_CONFIGURATION_UNAVAILABLE", 503) from None
 
+    def delete_revision(self, revision: str) -> None:
+        if REVISION_PATTERN.fullmatch(revision) is None:
+            raise AdminFailure("PROMPT_REVISION_INVALID", 400)
+        if self.load_active_revision_id() == revision:
+            raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+        names = set(self._revision_names(revision).values())
+        try:
+            response = self._client.delete_parameters(Names=sorted(names))
+        except ClientError:
+            raise AdminFailure("PROMPT_CONFIGURATION_UNAVAILABLE", 503) from None
+        deleted = set(response.get("DeletedParameters", []))
+        missing = set(response.get("InvalidParameters", []))
+        if deleted & missing or deleted | missing != names:
+            raise AdminFailure("PROMPT_CONFIGURATION_UNAVAILABLE", 503)
+
     def _revision_names(self, revision: str) -> dict[str, str]:
         base = f"{self._root}/{revision}"
         return {key: f"{base}/{key}" for key in (*PROMPT_KEYS, "manifest")}
@@ -650,6 +665,23 @@ class DynamoPromptAuditStore:
                 raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
             next_cursor = sk.removeprefix("REVISION#")
         return PromptHistoryPage(items=items, next_cursor=next_cursor)
+
+    def delete_summary(self, revision: str) -> None:
+        if REVISION_PATTERN.fullmatch(revision) is None:
+            raise AdminFailure("PROMPT_REVISION_INVALID", 400)
+        try:
+            self._client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Delete": {
+                            "TableName": self._table_name,
+                            "Key": marshal_item(self._summary_key(revision)),
+                        }
+                    }
+                ]
+            )
+        except ClientError:
+            raise AdminFailure("PROMPT_CONFIGURATION_UNAVAILABLE", 503) from None
 
     @classmethod
     def _operation_key(cls, idempotency_hash: str) -> dict[str, str]:
