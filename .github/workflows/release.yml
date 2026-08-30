@@ -1418,7 +1418,7 @@ jobs:
             task_definition=$(jq --raw-output '.services[0].taskDefinition' <<< "${service}")
             deployed_image=$(aws ecs describe-task-definition \
               --task-definition "${task_definition}" \
-              --query 'taskDefinition.containerDefinitions[?name==`application`].image | [0]' \
+              --query "taskDefinition.containerDefinitions[?name=='application'].image | [0]" \
               --output text)
             expected_image=$(jq --raw-output .images.normal.reference \
               "${RUNNER_TEMP}/release/release-manifest.json")
