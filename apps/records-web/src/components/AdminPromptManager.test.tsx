@@ -67,7 +67,7 @@ const CURRENT_REVISION_SUMMARY = {
   checksum: "b".repeat(64),
 } as const;
 
-function renderManager(canWrite = true): void {
+function renderManager(canWrite = true): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -76,6 +76,7 @@ function renderManager(canWrite = true): void {
       <AdminPromptManager canWrite={canWrite} csrfToken="csrf-token" />
     </QueryClientProvider>,
   );
+  return client;
 }
 
 function requestPath(input: RequestInfo | URL): string {
@@ -267,7 +268,7 @@ describe("AdminPromptManager", () => {
 
   it("loads revision bodies only after selection and rolls back by creating a new revision", async () => {
     const requests = installApi();
-    renderManager();
+    const client = renderManager();
 
     await screen.findByText(PREVIOUS_REVISION);
     expect(requests.some(({ path }) => path.endsWith(`/revisions/${PREVIOUS_REVISION}`))).toBe(
@@ -308,6 +309,9 @@ describe("AdminPromptManager", () => {
       sourceRevision: PREVIOUS_REVISION,
       systemConfirmation: null,
     });
+    expect(await screen.findByText(/を復元版として保存しました/)).toBeVisible();
+    expect(screen.queryByRole("region", { name: "revisionを比較" })).not.toBeInTheDocument();
+    expect(client.getQueryData(["admin", "prompt-revision", PREVIOUS_REVISION])).toBeUndefined();
   });
 
   it("preserves a local draft on 409 and rebases only after explicit confirmation", async () => {

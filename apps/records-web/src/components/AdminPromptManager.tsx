@@ -304,6 +304,11 @@ export default function AdminPromptManager({
   }
 
   async function loadSavedRevision(message: string): Promise<void> {
+    setSelectedRevision(null);
+    setRollbackTarget(null);
+    setRollbackConfirmation("");
+    rollbackIdempotencyKeyRef.current = null;
+    queryClient.removeQueries({ queryKey: ["admin", "prompt-revision"] });
     const latest = await prompts.refetch();
     if (latest.data !== undefined) {
       setBaseSnapshot(latest.data);
@@ -369,9 +374,6 @@ export default function AdminPromptManager({
       );
     },
     onSuccess: async (response) => {
-      rollbackIdempotencyKeyRef.current = null;
-      setRollbackTarget(null);
-      setRollbackConfirmation("");
       await loadSavedRevision(`revision ${response.revision} を復元版として保存しました。`);
     },
     onError: async (error) => {

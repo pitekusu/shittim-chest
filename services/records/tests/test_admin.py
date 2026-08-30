@@ -760,6 +760,77 @@ def test_revision_retention_keeps_active_and_four_previous_generations(
     assert generated[0] not in audit.summaries
 
 
+def test_retention_uses_latest_active_revision_when_it_changes_during_summary_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated = tuple(f"r01k3gqp6g0000000000000000{index}" for index in range(6))
+    generated_iter = iter(generated[:5])
+    monkeypatch.setattr(admin_module, "new_revision_id", lambda _now: next(generated_iter))
+    revisions = RevisionStore()
+    audit = Audit()
+    service = AdminPromptService(
+        revisions=revisions,
+        legacy=Legacy(prompt_values(system="value-0")),
+        audit=audit,
+    )
+
+    base: str | None = None
+    for index in range(5):
+        base = service.apply(
+            base_revision=base,
+            prompts=prompt_values(system=f"value-{index}").as_mapping(),
+            system_confirmation=None if index == 0 else SYSTEM_PROMPT_CONFIRMATION,
+            idempotency_hash=f"{index}" * 64,
+            now=NOW + timedelta(seconds=index),
+        ).revision
+    assert base == generated[4]
+
+    concurrent_values = prompt_values(system="value-5")
+    concurrent_revision = PromptRevision(
+        manifest=admin_module.PromptManifest(
+            revision=generated[5],
+            created_at=NOW + timedelta(seconds=5),
+            action="publish",
+            base_revision=base,
+            checksums=concurrent_values.checksums(),
+        ),
+        prompts=concurrent_values,
+    )
+    concurrent_summary = PromptRevisionSummary(
+        revision=generated[5],
+        created_at=NOW + timedelta(seconds=5),
+        action="publish",
+        base_revision=base,
+        source_revision=None,
+        checksum=aggregate_checksum(concurrent_values.checksums()),
+    )
+    original_list_summaries = audit.list_summaries
+    switched = False
+
+    def list_summaries(*, limit: int, cursor: str | None) -> PromptHistoryPage:
+        nonlocal switched
+        if not switched:
+            switched = True
+            revisions.revisions[generated[5]] = concurrent_revision
+            revisions.active = generated[5]
+            audit.summaries[generated[5]] = concurrent_summary
+            audit.active_revision = generated[5]
+        return original_list_summaries(limit=limit, cursor=cursor)
+
+    monkeypatch.setattr(audit, "list_summaries", list_summaries)
+
+    current = service.get_current()
+
+    assert current.revision == concurrent_revision
+    assert set(revisions.revisions) == set(generated)
+    assert set(audit.summaries) == set(generated)
+
+    service.get_current()
+
+    assert set(revisions.revisions) == set(generated[1:])
+    assert set(audit.summaries) == set(generated[1:])
+
+
 def test_retention_follows_the_active_chain_instead_of_revision_sort_order() -> None:
     revisions = RevisionStore()
     audit = Audit()

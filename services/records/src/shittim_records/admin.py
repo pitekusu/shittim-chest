@@ -515,6 +515,16 @@ class AdminPromptService:
                 raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
             seen_cursors.add(page.next_cursor)
             cursor = page.next_cursor
+        latest_active = self._revisions.load_active_revision_id()
+        if latest_active != active:
+            if latest_active is None:
+                raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
+            latest_revision = self._load_revision_for_read(latest_active)
+            return PromptCurrent(
+                mode="managed",
+                revision=latest_revision,
+                prompts=latest_revision.prompts,
+            )
         by_revision = {summary.revision: summary for summary in summaries}
         if len(by_revision) != len(summaries) or active not in by_revision:
             raise AdminFailure("PROMPT_CONFIGURATION_INVALID", 503)
