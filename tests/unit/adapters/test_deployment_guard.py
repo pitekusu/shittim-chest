@@ -11,12 +11,21 @@ from mypy_boto3_dynamodb.client import DynamoDBClient
 from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.adapters.dynamodb.control_records import CONTROL_RECORD_MANIFEST
+from shittim_chest.adapters.dynamodb.control_records import (
+    CONTROL_RECORD_MANIFEST,
+    CONTROL_RECORD_MANIFEST_HASH,
+    CONTROL_RECORD_PREVIOUS_MANIFEST_HASH,
+)
 from shittim_chest.adapters.dynamodb.deployment_guard import (
     DeploymentGuardUnavailable,
     DynamoDbDeploymentGuard,
+    _control_snapshot_hash,
 )
-from shittim_chest.adapters.dynamodb.serializer import DynamoItem
+from shittim_chest.adapters.dynamodb.serializer import (
+    CURRENT_SCHEMA_VERSION,
+    PREVIOUS_SCHEMA_VERSION,
+    DynamoItem,
+)
 from shittim_chest.application.deployment_guard import (
     BreakGlassReason,
     DeploymentGuardCode,
@@ -42,7 +51,9 @@ class FakeClient:
         self.get_requests: list[dict[str, object]] = []
         self.persisted: dict[tuple[str, str], DynamoItem] = {}
         self.raise_after_persist = False
+        self.raise_before_persist = False
         self.audit_mutation: DynamoItem | None = None
+        self.snapshot_mutation: tuple[int, DynamoItem] | None = None
         self.exceptions = SimpleNamespace(
             TransactionCanceledException=TransactionCanceledException,
         )
@@ -53,6 +64,8 @@ class FakeClient:
 
     def transact_write_items(self, **kwargs: object) -> dict[str, object]:
         self.transact_write_requests.append(kwargs)
+        if self.raise_before_persist:
+            raise TransactionCanceledException
         for action in cast(list[dict[str, Any]], kwargs["TransactItems"]):
             put = action.get("Put")
             if put is not None:
@@ -60,6 +73,18 @@ class FakeClient:
                 if item.get("record_type") == "deployment_guard_audit":
                     item.update(self.audit_mutation or {})
                 self.persisted[(cast(str, item["PK"]), cast(str, item["SK"]))] = item
+        self.items = tuple(
+            self.persisted.get(
+                (cast(str, item["PK"]), cast(str, item["SK"])),
+                item,
+            )
+            for item in self.items
+        )
+        if self.snapshot_mutation is not None:
+            index, mutation = self.snapshot_mutation
+            changed = list(self.items)
+            changed[index] = {**changed[index], **mutation}
+            self.items = tuple(changed)
         if self.raise_after_persist:
             raise TransactionCanceledException
         return {}
@@ -71,11 +96,26 @@ class FakeClient:
         return {} if item is None else {"Item": marshal_item(item)}
 
 
-def _items() -> tuple[DynamoItem, ...]:
-    return (
+def _items(*, schema_version: int = CURRENT_SCHEMA_VERSION) -> tuple[DynamoItem, ...]:
+    items = [
         *(spec.install_item for spec in CONTROL_RECORD_MANIFEST.activity_records),
         CONTROL_RECORD_MANIFEST.initial_runtime_item,
         CONTROL_RECORD_MANIFEST.initial_deployment_lock_item,
+    ]
+    for item in items:
+        item["schema_version"] = schema_version
+    if schema_version == PREVIOUS_SCHEMA_VERSION:
+        items[0]["manifest_hash"] = CONTROL_RECORD_PREVIOUS_MANIFEST_HASH
+    return tuple(items)
+
+
+def _persisted_snapshot(client: FakeClient) -> tuple[DynamoItem, ...]:
+    return tuple(
+        client.persisted.get(
+            (cast(str, item["PK"]), cast(str, item["SK"])),
+            item,
+        )
+        for item in client.items
     )
 
 
@@ -143,6 +183,8 @@ def test_acquire_has_one_lock_action_exact_snapshot_checks_and_append_only_audit
 
     assert acquired.lock.state is DeploymentLockState.LOCKED
     assert acquired.lock.fencing_token == 1
+    assert acquired.control_schema_before == CURRENT_SCHEMA_VERSION
+    assert acquired.control_schema_after == CURRENT_SCHEMA_VERSION
     request = client.transact_write_requests[0]
     actions = cast(list[dict[str, Any]], request["TransactItems"])
     assert len(actions) == 12
@@ -156,6 +198,59 @@ def test_acquire_has_one_lock_action_exact_snapshot_checks_and_append_only_audit
         touched_keys.append((cast(str, key["PK"]), cast(str, key["SK"])))
     assert touched_keys.count(("CONTROL#DEPLOYMENT", "LOCK")) == 1
     assert any(key[0].startswith("CONTROL#DEPLOYMENT#AUDIT#") for key in touched_keys)
+    assert sum("ConditionCheck" in action for action in actions) == 10
+    assert sum("Put" in action for action in actions) == 2
+
+
+def test_previous_schema_acquire_migrates_all_controls_and_locks_atomically() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+
+    acquired = _guard(client).acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+
+    assert acquired.control_schema_before == PREVIOUS_SCHEMA_VERSION
+    assert acquired.control_schema_after == CURRENT_SCHEMA_VERSION
+    actions = cast(list[dict[str, Any]], client.transact_write_requests[0]["TransactItems"])
+    assert len(actions) == 12
+    assert all("Put" in action for action in actions)
+    migrated = _persisted_snapshot(client)
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in migrated)
+    assert migrated[0]["manifest_hash"] == CONTROL_RECORD_MANIFEST_HASH
+    assert migrated[-1]["lock_state"] == "locked"
+    audit = acquired.audit_item
+    assert audit["control_schema_before"] == PREVIOUS_SCHEMA_VERSION
+    assert audit["control_schema_after"] == CURRENT_SCHEMA_VERSION
+    assert audit["control_schema_migrated"] is True
+    assert audit["control_snapshot_after_hash"] == _control_snapshot_hash(migrated)
+
+
+def test_previous_schema_acquire_cancellation_leaves_original_snapshot_untouched() -> None:
+    original = _items(schema_version=PREVIOUS_SCHEMA_VERSION)
+    client = FakeClient(original)
+    client.raise_before_persist = True
+
+    with pytest.raises(DeploymentGuardUnavailable, match="deployment"):
+        _guard(client).acquire(
+            context=_context(),
+            guard_id=GUARD_ID,
+            acquired_at=NOW,
+            expires_at=NOW + timedelta(minutes=15),
+        )
+
+    assert client.persisted == {}
+    assert client.items == original
+
+
+def test_guard_rejects_mixed_control_schema_snapshot() -> None:
+    items = list(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    items[1] = _items()[1]
+
+    with pytest.raises(DeploymentGuardUnavailable, match="snapshot"):
+        _guard(FakeClient(tuple(items))).guard(context=_context(), evaluated_at=NOW)
 
 
 def test_break_glass_acquire_persists_complete_immutable_context_and_prestate() -> None:
@@ -200,6 +295,39 @@ def test_acquire_recognizes_same_guard_after_ambiguous_sdk_response() -> None:
     assert acquired.lock.guard_id == GUARD_ID
     assert acquired.lock.owner == "pitekusu"
     assert acquired.assessment.code is DeploymentGuardCode.SAFE
+
+
+def test_previous_schema_acquire_replay_preserves_original_schema_evidence() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    client.raise_after_persist = True
+
+    acquired = _guard(client).acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+
+    assert acquired.control_schema_before == PREVIOUS_SCHEMA_VERSION
+    assert acquired.control_schema_after == CURRENT_SCHEMA_VERSION
+
+
+def test_acquire_replay_fails_closed_when_post_acquire_snapshot_changed() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    client.raise_after_persist = True
+    client.snapshot_mutation = (1, {"count": 1})
+
+    with pytest.raises(DeploymentGuardUnavailable, match="replay snapshot"):
+        _guard(client).acquire(
+            context=_context(),
+            guard_id=GUARD_ID,
+            acquired_at=NOW,
+            expires_at=NOW + timedelta(minutes=15),
+        )
+
+    assert client.items[-1]["lock_state"] == "locked"
+    assert client.items[1]["count"] == 1
+    assert len(client.transact_write_requests) == 1
 
 
 def test_acquire_replay_uses_stored_timestamps_for_same_idempotency_key() -> None:
@@ -301,6 +429,124 @@ def test_release_recognizes_response_loss_and_a_separate_later_replay() -> None:
     assert released["fencing_token"] == acquired.lock.fencing_token
     audit = client.persisted[(f"CONTROL#DEPLOYMENT#AUDIT#{GUARD_ID}", "RELEASE")]
     assert audit["released_at"] == "2026-07-28T08:31:00.000000Z"
+
+
+def test_release_keeps_migrated_controls_after_candidate_runtime_is_active() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    guard = _guard(client)
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+
+    guard.release(
+        guard_id=GUARD_ID,
+        expected_fencing_token=acquired.lock.fencing_token,
+        actor="pitekusu",
+        released_at=NOW + timedelta(minutes=1),
+    )
+
+    controls = _persisted_snapshot(client)
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in controls)
+    assert controls[0]["manifest_hash"] == CONTROL_RECORD_MANIFEST_HASH
+    assert controls[-1]["lock_state"] == "open"
+    audit = client.persisted[(f"CONTROL#DEPLOYMENT#AUDIT#{GUARD_ID}", "RELEASE")]
+    assert audit["control_schema_before"] == PREVIOUS_SCHEMA_VERSION
+    assert audit["control_schema_after"] == CURRENT_SCHEMA_VERSION
+    assert audit["control_schema_rolled_back"] is False
+
+
+def test_release_atomically_rolls_back_migrated_controls_when_runtime_is_not_active() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    guard = _guard(client)
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+    client.items = _persisted_snapshot(client)
+
+    guard.release(
+        guard_id=GUARD_ID,
+        expected_fencing_token=acquired.lock.fencing_token,
+        actor="pitekusu",
+        released_at=NOW + timedelta(minutes=1),
+        rollback_control_schema=True,
+    )
+
+    actions = cast(list[dict[str, Any]], client.transact_write_requests[-1]["TransactItems"])
+    assert len(actions) == 12
+    assert all("Put" in action for action in actions)
+    controls = _persisted_snapshot(client)
+    assert all(item["schema_version"] == PREVIOUS_SCHEMA_VERSION for item in controls)
+    assert controls[0]["manifest_hash"] == CONTROL_RECORD_PREVIOUS_MANIFEST_HASH
+    assert controls[-1]["lock_state"] == "open"
+    audit = client.persisted[(f"CONTROL#DEPLOYMENT#AUDIT#{GUARD_ID}", "RELEASE")]
+    assert audit["control_schema_before"] == PREVIOUS_SCHEMA_VERSION
+    assert audit["control_schema_after"] == PREVIOUS_SCHEMA_VERSION
+    assert audit["control_schema_rolled_back"] is True
+
+
+def test_schema_rollback_fails_closed_when_acquired_snapshot_changed() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    guard = _guard(client)
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+    changed = list(client.items)
+    changed[1] = {**changed[1], "count": 1}
+    client.items = tuple(changed)
+
+    with pytest.raises(DeploymentGuardUnavailable, match="does not match acquisition"):
+        guard.release(
+            guard_id=GUARD_ID,
+            expected_fencing_token=acquired.lock.fencing_token,
+            actor="pitekusu",
+            released_at=NOW + timedelta(minutes=1),
+            rollback_control_schema=True,
+        )
+
+    assert len(client.transact_write_requests) == 1
+    assert client.items[-1]["lock_state"] == "locked"
+    assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in client.items)
+    assert (f"CONTROL#DEPLOYMENT#AUDIT#{GUARD_ID}", "RELEASE") not in client.persisted
+
+
+def test_schema_rollback_release_replays_after_ambiguous_sdk_response() -> None:
+    client = FakeClient(_items(schema_version=PREVIOUS_SCHEMA_VERSION))
+    guard = _guard(client)
+    acquired = guard.acquire(
+        context=_context(),
+        guard_id=GUARD_ID,
+        acquired_at=NOW,
+        expires_at=NOW + timedelta(minutes=15),
+    )
+    client.items = _persisted_snapshot(client)
+    client.raise_after_persist = True
+
+    guard.release(
+        guard_id=GUARD_ID,
+        expected_fencing_token=acquired.lock.fencing_token,
+        actor="pitekusu",
+        released_at=NOW + timedelta(minutes=1),
+        rollback_control_schema=True,
+    )
+    client.raise_after_persist = False
+    guard.release(
+        guard_id=GUARD_ID,
+        expected_fencing_token=acquired.lock.fencing_token,
+        actor="pitekusu",
+        released_at=NOW + timedelta(minutes=2),
+        rollback_control_schema=True,
+    )
+
+    assert len(client.transact_write_requests) == 2
 
 
 @pytest.mark.parametrize(

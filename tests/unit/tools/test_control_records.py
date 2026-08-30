@@ -13,6 +13,10 @@ from shittim_chest.adapters.dynamodb.deployment_guard import (
     DeploymentGuardUnavailable,
     DeploymentLockAcquisition,
 )
+from shittim_chest.adapters.dynamodb.serializer import (
+    CURRENT_SCHEMA_VERSION,
+    PREVIOUS_SCHEMA_VERSION,
+)
 from shittim_chest.application.deployment_guard import (
     DeploymentGuardAssessment,
     DeploymentGuardCode,
@@ -135,6 +139,48 @@ def test_initialize_requires_exact_write_acknowledgement(
     assert result == 2
 
 
+def test_release_cli_forwards_explicit_control_schema_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, object] = {}
+
+    class RecordingGuard:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def release(self, **kwargs: object) -> None:
+            received.update(kwargs)
+
+    monkeypatch.setattr(
+        control_records,
+        "create_control_records_dynamodb_client",
+        lambda **_: object(),
+    )
+    monkeypatch.setattr(control_records, "DynamoDbDeploymentGuard", RecordingGuard)
+
+    result = control_records.main(
+        (
+            "release",
+            "--table-name",
+            "table",
+            "--region",
+            "ap-northeast-1",
+            "--guard-id",
+            GUARD_ID,
+            "--fencing-token",
+            "1",
+            "--actor",
+            "pitekusu",
+            "--rollback-control-schema",
+            "--acknowledge-write",
+            control_records.RELEASE_ACKNOWLEDGEMENT,
+        )
+    )
+
+    assert result == 0
+    assert received["rollback_control_schema"] is True
+
+
 def test_acquire_cli_replay_uses_stored_times_across_separate_invocations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -193,6 +239,8 @@ def test_acquire_cli_replay_uses_stored_times_across_separate_invocations(
                         assessment=assessment,
                         lock=lock,
                         audit_item={},
+                        control_schema_before=CURRENT_SCHEMA_VERSION,
+                        control_schema_after=CURRENT_SCHEMA_VERSION,
                     )
                 )
             return stored[0]
@@ -248,3 +296,130 @@ def test_audit_output_refuses_existing_symlink(tmp_path: Path) -> None:
         control_records._write_audit(link, {"allowed": False})
 
     assert target.read_text(encoding="utf-8") == "safe"
+
+
+@pytest.mark.parametrize(
+    (
+        "before",
+        "after",
+        "migrated",
+        "stack_status",
+        "candidate_active",
+        "expected_result",
+        "expected_rollback",
+    ),
+    [
+        (
+            CURRENT_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "false",
+            "not-checked",
+            "false",
+            0,
+            False,
+        ),
+        (
+            PREVIOUS_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "true",
+            "UPDATE_COMPLETE",
+            "true",
+            0,
+            False,
+        ),
+        (
+            PREVIOUS_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "true",
+            "UPDATE_COMPLETE",
+            "false",
+            0,
+            True,
+        ),
+        (
+            PREVIOUS_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "true",
+            "UPDATE_ROLLBACK_COMPLETE",
+            "false",
+            0,
+            True,
+        ),
+        (
+            PREVIOUS_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "true",
+            "UPDATE_IN_PROGRESS",
+            "false",
+            3,
+            False,
+        ),
+        (
+            PREVIOUS_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "true",
+            "UPDATE_ROLLBACK_COMPLETE",
+            "true",
+            3,
+            False,
+        ),
+        (
+            PREVIOUS_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "false",
+            "not-checked",
+            "false",
+            3,
+            False,
+        ),
+        (
+            CURRENT_SCHEMA_VERSION,
+            CURRENT_SCHEMA_VERSION,
+            "true",
+            "UPDATE_COMPLETE",
+            "true",
+            3,
+            False,
+        ),
+    ],
+)
+def test_release_decision_is_fail_closed_and_content_free(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    before: int,
+    after: int,
+    migrated: str,
+    stack_status: str,
+    candidate_active: str,
+    expected_result: int,
+    expected_rollback: bool,
+) -> None:
+    output = tmp_path / "release-decision.json"
+
+    result = control_records.main(
+        (
+            "release-decision",
+            "--control-schema-before",
+            str(before),
+            "--control-schema-after",
+            str(after),
+            "--control-schema-migrated",
+            migrated,
+            "--runtime-stack-status",
+            stack_status,
+            "--runtime-candidate-active",
+            candidate_active,
+            "--audit-output",
+            str(output),
+        )
+    )
+
+    assert result == expected_result
+    assert output.stat().st_mode & 0o777 == 0o600
+    audit = json.loads(output.read_text(encoding="utf-8"))
+    assert audit["release_decision_safe"] is (expected_result == 0)
+    assert audit["rollback_requested"] is expected_rollback
+    assert audit["lock_released"] is False
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["ok"] is (expected_result == 0)
+    assert printed["rollback_control_schema"] is expected_rollback

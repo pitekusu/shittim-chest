@@ -93,6 +93,7 @@ class ControlRecordInitializationStatus(StrEnum):
 
     INITIALIZED = "initialized"
     ALREADY_INITIALIZED = "already_initialized"
+    UPGRADE_REQUIRED = "upgrade_required"
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,22 +240,28 @@ def _initial_deployment_lock_item() -> DynamoItem:
     return serialize_deployment_lock(DeploymentLock.open(at=_INITIAL_RUNTIME_AT))
 
 
-def _manifest_payload() -> dict[str, object]:
+def _with_schema_version(item: DynamoItem, schema_version: int) -> DynamoItem:
+    versioned = dict(item)
+    versioned["schema_version"] = schema_version
+    return versioned
+
+
+def _manifest_payload(*, schema_version: int = CURRENT_SCHEMA_VERSION) -> dict[str, object]:
     # The marker's hash field is intentionally absent from this canonical
     # payload; otherwise the digest would be self-referential.
     return {
         "manifest_version": CONTROL_RECORD_MANIFEST_VERSION,
         "records": [
-            *(spec.base_item() for spec in _ACTIVITY_SPECS),
-            _initial_runtime_item(),
-            _initial_deployment_lock_item(),
+            *(_with_schema_version(spec.base_item(), schema_version) for spec in _ACTIVITY_SPECS),
+            _with_schema_version(_initial_runtime_item(), schema_version),
+            _with_schema_version(_initial_deployment_lock_item(), schema_version),
         ],
     }
 
 
-def _manifest_hash() -> str:
+def _manifest_hash(*, schema_version: int = CURRENT_SCHEMA_VERSION) -> str:
     encoded = json.dumps(
-        _manifest_payload(),
+        _manifest_payload(schema_version=schema_version),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -263,6 +270,7 @@ def _manifest_hash() -> str:
 
 
 CONTROL_RECORD_MANIFEST_HASH = _manifest_hash()
+CONTROL_RECORD_PREVIOUS_MANIFEST_HASH = _manifest_hash(schema_version=PREVIOUS_SCHEMA_VERSION)
 CONTROL_RECORD_MANIFEST = ControlRecordManifest(
     version=CONTROL_RECORD_MANIFEST_VERSION,
     manifest_hash=CONTROL_RECORD_MANIFEST_HASH,
@@ -321,6 +329,22 @@ class DynamoDbControlRecordInitializer:
         except BotoCoreError, ClientError, PersistenceFormatError, ValueError:
             raise ControlRecordInitializationError("control record validation failed") from None
 
+    def validate_compatible(self) -> ControlRecordInitializationResult:
+        """Validate one uniform current or immediately previous installed manifest."""
+
+        try:
+            schema_version = self._validate_compatible_complete(self._read_snapshot())
+            status = (
+                ControlRecordInitializationStatus.ALREADY_INITIALIZED
+                if schema_version == CURRENT_SCHEMA_VERSION
+                else ControlRecordInitializationStatus.UPGRADE_REQUIRED
+            )
+            return self._result(status)
+        except ControlRecordInitializationError:
+            raise
+        except BotoCoreError, ClientError, PersistenceFormatError, ValueError:
+            raise ControlRecordInitializationError("control record validation failed") from None
+
     def _result(
         self,
         status: ControlRecordInitializationStatus,
@@ -358,33 +382,49 @@ class DynamoDbControlRecordInitializer:
         )
 
     def _validate_complete(self, snapshot: tuple[DynamoItem | None, ...]) -> None:
+        if self._validate_compatible_complete(snapshot) != CURRENT_SCHEMA_VERSION:
+            raise ControlRecordInitializationError("control record schema upgrade is required")
+
+    def _validate_compatible_complete(
+        self,
+        snapshot: tuple[DynamoItem | None, ...],
+    ) -> int:
         if len(snapshot) != 11:
             raise ControlRecordInitializationError("control record snapshot has an invalid shape")
+        schema_versions: set[int] = set()
         for spec, item in zip(_ACTIVITY_SPECS, snapshot[:9], strict=True):
             if item is None:
                 raise ControlRecordInitializationError("installed control record is missing")
+            schema_versions.add(_schema_version(item))
             _validate_activity_item(
                 spec,
                 item,
                 require_idle=False,
-                allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
+                allowed_schema_versions=frozenset(
+                    {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+                ),
             )
         state_item = snapshot[9]
         if state_item is None:
             raise ControlRecordInitializationError("installed runtime state is missing")
+        schema_versions.add(_schema_version(state_item))
         _validate_runtime_item(
             state_item,
             require_stopped=False,
-            allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
+            allowed_schema_versions=frozenset({PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}),
         )
         lock_item = snapshot[10]
         if lock_item is None:
             raise ControlRecordInitializationError("installed deployment lock is missing")
+        schema_versions.add(_schema_version(lock_item))
         _validate_deployment_lock_item(
             lock_item,
             require_open=False,
-            allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
+            allowed_schema_versions=frozenset({PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}),
         )
+        if len(schema_versions) != 1:
+            raise ControlRecordInitializationError("control record schema versions are mixed")
+        return schema_versions.pop()
 
     def _validate_first_install_snapshot(
         self,
@@ -564,9 +604,13 @@ def _validate_activity_item(
     require_idle: bool,
     allowed_schema_versions: frozenset[int],
 ) -> None:
-    if _schema_version(item) not in allowed_schema_versions:
+    schema_version = _schema_version(item)
+    if schema_version not in allowed_schema_versions:
         raise ControlRecordInitializationError("control record schema is unsupported")
     expected = spec.install_item
+    if spec.marker and schema_version == PREVIOUS_SCHEMA_VERSION:
+        expected = _with_schema_version(expected, PREVIOUS_SCHEMA_VERSION)
+        expected["manifest_hash"] = CONTROL_RECORD_PREVIOUS_MANIFEST_HASH
     if not set(item) <= spec.allowed_fields:
         raise ControlRecordInitializationError("control record has unknown attributes")
     for field, value in expected.items():
@@ -678,7 +722,30 @@ def _migrate_fixed_record(
     )
     migrated = dict(item)
     migrated["schema_version"] = CURRENT_SCHEMA_VERSION
+    if spec.marker:
+        migrated["manifest_hash"] = CONTROL_RECORD_MANIFEST_HASH
     return migrated
+
+
+def _convert_fixed_record_schema(
+    spec: ControlRecordSpec | _RuntimeStateSpec | _DeploymentLockSpec,
+    item: DynamoItem,
+    *,
+    schema_version: int,
+) -> DynamoItem:
+    """Convert only the shared schema and marker digest after typed validation."""
+
+    if schema_version not in {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}:
+        raise ValueError("control record target schema is unsupported")
+    converted = dict(item)
+    converted["schema_version"] = schema_version
+    if isinstance(spec, ControlRecordSpec) and spec.marker:
+        converted["manifest_hash"] = (
+            CONTROL_RECORD_MANIFEST_HASH
+            if schema_version == CURRENT_SCHEMA_VERSION
+            else CONTROL_RECORD_PREVIOUS_MANIFEST_HASH
+        )
+    return converted
 
 
 def _put_missing(table_name: str, item: DynamoItem) -> TransactWriteItemTypeDef:
@@ -1686,6 +1753,7 @@ __all__ = (
     "CONTROL_RECORD_MANIFEST",
     "CONTROL_RECORD_MANIFEST_HASH",
     "CONTROL_RECORD_MANIFEST_VERSION",
+    "CONTROL_RECORD_PREVIOUS_MANIFEST_HASH",
     "ControlRecordInitializationError",
     "ControlRecordInitializationResult",
     "ControlRecordInitializationStatus",

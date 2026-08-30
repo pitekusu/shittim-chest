@@ -1111,7 +1111,7 @@ jobs:
               "${RUNNER_TEMP}/cdk-asset-head.json")" = "${expected_checksum}"
           done < <(jq --compact-output '.files[]' \
             "${RUNNER_TEMP}/release/cdk-assets.json")
-          uv run --frozen python -m tools.control_records validate \
+          uv run --frozen python -m tools.control_records validate-compatible \
             --table-name "${TABLE_NAME}" \
             --region "${AWS_REGION}" >/dev/null
           uv run --frozen python -m tools.control_records guard \
@@ -1283,10 +1283,19 @@ jobs:
             --audit-output "${RUNNER_TEMP}/release/deploy-lock-audit.json"
           fencing_token=$(jq --raw-output .lock_fencing_token \
             "${RUNNER_TEMP}/release/deploy-lock-audit.json")
+          control_schema_before=$(jq --raw-output .control_schema_before \
+            "${RUNNER_TEMP}/release/deploy-lock-audit.json")
+          control_schema_after=$(jq --raw-output .control_schema_after \
+            "${RUNNER_TEMP}/release/deploy-lock-audit.json")
+          control_schema_migrated=$(jq --raw-output .control_schema_migrated \
+            "${RUNNER_TEMP}/release/deploy-lock-audit.json")
           {
             echo "acquired=true"
             echo "guard_id=${guard_id}"
             echo "fencing_token=${fencing_token}"
+            echo "control_schema_before=${control_schema_before}"
+            echo "control_schema_after=${control_schema_after}"
+            echo "control_schema_migrated=${control_schema_migrated}"
           } >> "${GITHUB_OUTPUT}"
       - name: Execute only the attested change sets
         env:
@@ -1386,15 +1395,71 @@ jobs:
         env:
           FENCING_TOKEN: ${{ steps.acquire.outputs.fencing_token }}
           GUARD_ID: ${{ steps.acquire.outputs.guard_id }}
+          CONTROL_SCHEMA_BEFORE: ${{ steps.acquire.outputs.control_schema_before }}
+          CONTROL_SCHEMA_AFTER: ${{ steps.acquire.outputs.control_schema_after }}
+          CONTROL_SCHEMA_MIGRATED: ${{ steps.acquire.outputs.control_schema_migrated }}
           TABLE_NAME: ${{ vars.DYNAMODB_TABLE_NAME }}
         run: |
+          rollback=false
+          runtime_candidate_active=false
+          runtime_stack_status=not-checked
+          release_args=()
+          if [ "${CONTROL_SCHEMA_MIGRATED}" = true ]; then
+            runtime_stack_status=$(aws cloudformation describe-stacks \
+              --region "${AWS_REGION}" \
+              --stack-name ShittimChest-Prod-Runtime \
+              --query 'Stacks[0].StackStatus' --output text)
+            service=$(aws ecs describe-services \
+              --cluster shittim-chest-production \
+              --services shittim-chest-production --output json)
+            jq --exit-status \
+              '(.failures == []) and (.services | length == 1)' \
+              <<< "${service}" >/dev/null
+            task_definition=$(jq --raw-output '.services[0].taskDefinition' <<< "${service}")
+            deployed_image=$(aws ecs describe-task-definition \
+              --task-definition "${task_definition}" \
+              --query "taskDefinition.containerDefinitions[?name=='application'].image | [0]" \
+              --output text)
+            expected_image=$(jq --raw-output .images.normal.reference \
+              "${RUNNER_TEMP}/release/release-manifest.json")
+            if [ "${deployed_image}" = "${expected_image}" ]; then
+              runtime_candidate_active=true
+            fi
+          elif [ "${CONTROL_SCHEMA_MIGRATED}" != false ]; then
+            echo "Control schema migration evidence is invalid" >&2
+            exit 1
+          fi
+          if ! uv run --frozen python -m tools.control_records release-decision \
+            --control-schema-before "${CONTROL_SCHEMA_BEFORE}" \
+            --control-schema-after "${CONTROL_SCHEMA_AFTER}" \
+            --control-schema-migrated "${CONTROL_SCHEMA_MIGRATED}" \
+            --runtime-stack-status "${runtime_stack_status}" \
+            --runtime-candidate-active "${runtime_candidate_active}" \
+            --audit-output "${RUNNER_TEMP}/release/control-schema-release.json"
+          then
+            echo "Runtime deployment state is ambiguous; retaining the deployment fence" >&2
+            exit 1
+          fi
+          rollback=$(jq --raw-output .rollback_requested \
+            "${RUNNER_TEMP}/release/control-schema-release.json")
+          if [ "${rollback}" = true ]; then
+            release_args+=(--rollback-control-schema)
+          elif [ "${rollback}" != false ]; then
+            exit 1
+          fi
           uv run --frozen python -m tools.control_records release \
             --table-name "${TABLE_NAME}" \
             --region "${AWS_REGION}" \
             --guard-id "${GUARD_ID}" \
             --fencing-token "${FENCING_TOKEN}" \
             --actor "${GITHUB_TRIGGERING_ACTOR}" \
+            "${release_args[@]}" \
             --acknowledge-write release-deployment-lock
+          jq '.lock_released = true' \
+            "${RUNNER_TEMP}/release/control-schema-release.json" \
+            > "${RUNNER_TEMP}/release/control-schema-release.next.json"
+          mv "${RUNNER_TEMP}/release/control-schema-release.next.json" \
+            "${RUNNER_TEMP}/release/control-schema-release.json"
       - name: Retain deployment lock evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1403,6 +1468,7 @@ jobs:
           path: |
             ${{ runner.temp }}/release/deploy-preflight-audit.json
             ${{ runner.temp }}/release/deploy-lock-audit.json
+            ${{ runner.temp }}/release/control-schema-release.json
             ${{ runner.temp }}/release/deployment-failure-events.json
           if-no-files-found: warn
           retention-days: 90

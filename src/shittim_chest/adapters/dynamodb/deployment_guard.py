@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,8 +27,10 @@ from shittim_chest.adapters.dynamodb.control_records import (
     ControlRecordInitializationError,
     ControlRecordSpec,
     _condition_exact,
+    _convert_fixed_record_schema,
     _DeploymentLockSpec,
     _exact_condition,
+    _put_migrated,
     _RuntimeStateSpec,
     _validate_activity_item,
     _validate_deployment_lock_item,
@@ -41,6 +44,7 @@ from shittim_chest.adapters.dynamodb.repository import (
 )
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
+    PREVIOUS_SCHEMA_VERSION,
     DynamoItem,
     PersistenceFormatError,
     deserialize_deployment_lock,
@@ -49,12 +53,14 @@ from shittim_chest.adapters.dynamodb.serializer import (
 )
 from shittim_chest.application.deployment_guard import (
     DEPLOYMENT_GUARD_AUDIT_SCHEMA_VERSION,
+    BreakGlassReason,
     DeploymentGuardAssessment,
     DeploymentGuardCode,
     DeploymentGuardContext,
     DeploymentGuardSnapshot,
     DeploymentLock,
     DeploymentLockState,
+    DeploymentMode,
     assess_deployment,
     validate_deployment_actor,
     validate_deployment_guard_id,
@@ -89,6 +95,8 @@ class DeploymentLockAcquisition:
     assessment: DeploymentGuardAssessment
     lock: DeploymentLock
     audit_item: DynamoItem
+    control_schema_before: int
+    control_schema_after: int
 
 
 class DynamoDbDeploymentGuard:
@@ -171,13 +179,16 @@ class DynamoDbDeploymentGuard:
                 mode=context.mode,
                 reason=context.reason,
             )
+            post_acquire_items = _post_acquire_items(validated=validated, locked=locked)
             audit = _acquire_audit_item(
                 assessment=assessment,
                 lock=locked,
+                control_schema_before=validated.schema_version,
+                control_snapshot_after_hash=_control_snapshot_hash(post_acquire_items),
             )
             actions = self._acquire_actions(
                 validated=validated,
-                locked=locked,
+                post_acquire_items=post_acquire_items,
                 audit=audit,
             )
             try:
@@ -198,7 +209,13 @@ class DynamoDbDeploymentGuard:
                 if replay is not None:
                     return replay
                 raise DeploymentGuardUnavailable("deployment lock acquisition failed") from None
-            return DeploymentLockAcquisition(assessment=assessment, lock=locked, audit_item=audit)
+            return DeploymentLockAcquisition(
+                assessment=assessment,
+                lock=locked,
+                audit_item=audit,
+                control_schema_before=validated.schema_version,
+                control_schema_after=CURRENT_SCHEMA_VERSION,
+            )
         except DeploymentGuardRejected, DeploymentGuardUnavailable:
             raise
         except (
@@ -217,6 +234,7 @@ class DynamoDbDeploymentGuard:
         expected_fencing_token: int,
         actor: str,
         released_at: datetime,
+        rollback_control_schema: bool = False,
     ) -> None:
         """Release only the exact owned fence; an immutable audit makes retries safe."""
 
@@ -230,9 +248,13 @@ class DynamoDbDeploymentGuard:
                 guard_id=guard_id,
                 expected_fencing_token=expected_fencing_token,
                 actor=actor,
+                rollback_control_schema=rollback_control_schema,
             ):
                 return
-            current = self._read_lock()
+            validated = self._read_snapshot(at=released_at) if rollback_control_schema else None
+            current = (
+                validated.snapshot.deployment_lock if validated is not None else self._read_lock()
+            )
             if current.state is DeploymentLockState.OPEN:
                 raise DeploymentGuardUnavailable("deployment lock release did not match")
             if (
@@ -241,6 +263,38 @@ class DynamoDbDeploymentGuard:
                 or current.fencing_token != expected_fencing_token
             ):
                 raise DeploymentGuardUnavailable("deployment lock release did not match")
+            acquire_audit = self._get_audit(guard_id=guard_id, action="ACQUIRE")
+            acquire_context = (
+                None if acquire_audit is None else _acquire_audit_context(acquire_audit)
+            )
+            if (
+                acquire_audit is None
+                or acquire_context is None
+                or acquire_context.actor != actor
+                or not _acquire_audit_matches(
+                    acquire_audit,
+                    context=acquire_context,
+                    lock=current,
+                )
+            ):
+                raise DeploymentGuardUnavailable("deployment lock acquisition audit is invalid")
+            control_schema_before = _integer(acquire_audit, "control_schema_before")
+            control_schema_rolled_back = (
+                rollback_control_schema and control_schema_before == PREVIOUS_SCHEMA_VERSION
+            )
+            if control_schema_rolled_back and (
+                validated is None
+                or not hmac.compare_digest(
+                    _control_snapshot_hash(validated.items),
+                    _sha256_digest(acquire_audit, "control_snapshot_after_hash"),
+                )
+            ):
+                raise DeploymentGuardUnavailable(
+                    "deployment rollback snapshot does not match acquisition"
+                )
+            control_schema_after = (
+                PREVIOUS_SCHEMA_VERSION if control_schema_rolled_back else CURRENT_SCHEMA_VERSION
+            )
             opened = DeploymentLock(
                 state=DeploymentLockState.OPEN,
                 fencing_token=current.fencing_token,
@@ -252,23 +306,16 @@ class DynamoDbDeploymentGuard:
                 actor=actor,
                 fencing_token=expected_fencing_token,
                 released_at=released_at,
+                control_schema_before=control_schema_before,
+                control_schema_after=control_schema_after,
+                control_schema_rolled_back=control_schema_rolled_back,
             )
-            actions = [
-                cast(
-                    TransactWriteItemTypeDef,
-                    {
-                        "Put": {
-                            "TableName": self._table_name,
-                            "Item": marshal_item(serialize_deployment_lock(opened)),
-                            **_exact_condition(
-                                serialize_deployment_lock(current),
-                                allowed_fields=_DeploymentLockSpec().allowed_fields,
-                            ),
-                        }
-                    },
-                ),
-                _put_immutable(self._table_name, audit),
-            ]
+            actions = self._release_actions(
+                current=current,
+                opened=opened,
+                audit=audit,
+                validated=validated if control_schema_rolled_back else None,
+            )
             try:
                 self._client.transact_write_items(
                     TransactItems=actions,
@@ -284,6 +331,7 @@ class DynamoDbDeploymentGuard:
                     guard_id=guard_id,
                     expected_fencing_token=expected_fencing_token,
                     actor=actor,
+                    rollback_control_schema=rollback_control_schema,
                 ):
                     return
                 raise DeploymentGuardUnavailable("deployment lock release failed") from None
@@ -291,6 +339,70 @@ class DynamoDbDeploymentGuard:
             raise
         except BotoCoreError, ClientError, PersistenceFormatError, ValueError:
             raise DeploymentGuardUnavailable("deployment lock release failed") from None
+
+    def _release_actions(
+        self,
+        *,
+        current: DeploymentLock,
+        opened: DeploymentLock,
+        audit: DynamoItem,
+        validated: _ValidatedSnapshot | None,
+    ) -> list[TransactWriteItemTypeDef]:
+        if validated is None:
+            return [
+                cast(
+                    TransactWriteItemTypeDef,
+                    {
+                        "Put": {
+                            "TableName": self._table_name,
+                            "Item": marshal_item(serialize_deployment_lock(opened)),
+                            **_exact_condition(
+                                serialize_deployment_lock(current),
+                                allowed_fields=_DeploymentLockSpec().allowed_fields,
+                            ),
+                        }
+                    },
+                ),
+                _put_immutable(self._table_name, audit),
+            ]
+        if validated.schema_version != CURRENT_SCHEMA_VERSION:
+            raise DeploymentGuardUnavailable("deployment rollback snapshot is not current")
+        specs: tuple[ControlRecordSpec | _RuntimeStateSpec | _DeploymentLockSpec, ...] = (
+            *CONTROL_RECORD_MANIFEST.activity_records,
+            _RuntimeStateSpec(),
+            _DeploymentLockSpec(),
+        )
+        targets = [
+            _convert_fixed_record_schema(
+                spec,
+                item,
+                schema_version=PREVIOUS_SCHEMA_VERSION,
+            )
+            for spec, item in zip(specs[:-1], validated.items[:-1], strict=True)
+        ]
+        targets.append(
+            _convert_fixed_record_schema(
+                specs[-1],
+                serialize_deployment_lock(opened),
+                schema_version=PREVIOUS_SCHEMA_VERSION,
+            )
+        )
+        actions = [
+            _put_migrated(
+                self._table_name,
+                previous=previous,
+                current=target,
+                allowed_fields=spec.allowed_fields,
+            )
+            for spec, previous, target in zip(
+                specs,
+                validated.items,
+                targets,
+                strict=True,
+            )
+        ]
+        actions.append(_put_immutable(self._table_name, audit))
+        return actions
 
     def _read_snapshot(self, *, at: datetime) -> _ValidatedSnapshot:
         specs: tuple[ControlRecordSpec | _RuntimeStateSpec | _DeploymentLockSpec, ...] = (
@@ -324,28 +436,38 @@ class DynamoDbDeploymentGuard:
         if any(item is None for item in items):
             raise DeploymentGuardUnavailable("deployment snapshot is incomplete")
         complete = cast(tuple[DynamoItem, ...], items)
+        schema_versions: set[int] = set()
         for spec, item in zip(CONTROL_RECORD_MANIFEST.activity_records, complete[:9], strict=True):
+            schema_versions.add(_control_schema_version(item))
             _validate_activity_item(
                 spec,
                 item,
                 require_idle=False,
-                allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
+                allowed_schema_versions=frozenset(
+                    {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+                ),
             )
+        schema_versions.add(_control_schema_version(complete[9]))
         runtime_item = _validate_runtime_item(
             complete[9],
             require_stopped=False,
-            allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
+            allowed_schema_versions=frozenset({PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}),
         )
+        schema_versions.add(_control_schema_version(complete[10]))
         lock_item = _validate_deployment_lock_item(
             complete[10],
             require_open=False,
-            allowed_schema_versions=frozenset({CURRENT_SCHEMA_VERSION}),
+            allowed_schema_versions=frozenset({PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}),
         )
+        if len(schema_versions) != 1:
+            raise DeploymentGuardUnavailable("deployment snapshot schema versions are mixed")
+        schema_version = schema_versions.pop()
         runtime = deserialize_runtime_state(runtime_item)
         lock = deserialize_deployment_lock(lock_item)
         activity = _runtime_activity(complete[1:9], at=at)
         return _ValidatedSnapshot(
             items=complete,
+            schema_version=schema_version,
             snapshot=DeploymentGuardSnapshot(
                 runtime=runtime,
                 activity=activity,
@@ -368,21 +490,37 @@ class DynamoDbDeploymentGuard:
         self,
         *,
         validated: _ValidatedSnapshot,
-        locked: DeploymentLock,
+        post_acquire_items: tuple[DynamoItem, ...],
         audit: DynamoItem,
     ) -> list[TransactWriteItemTypeDef]:
         specs: tuple[ControlRecordSpec | _RuntimeStateSpec, ...] = (
             *CONTROL_RECORD_MANIFEST.activity_records,
             _RuntimeStateSpec(),
         )
-        actions = [
-            _condition_exact(
-                self._table_name,
-                item,
-                allowed_fields=spec.allowed_fields,
-            )
-            for spec, item in zip(specs, validated.items[:10], strict=True)
-        ]
+        if validated.schema_version == PREVIOUS_SCHEMA_VERSION:
+            actions = [
+                _put_migrated(
+                    self._table_name,
+                    previous=previous,
+                    current=current,
+                    allowed_fields=spec.allowed_fields,
+                )
+                for spec, previous, current in zip(
+                    specs,
+                    validated.items[:10],
+                    post_acquire_items[:10],
+                    strict=True,
+                )
+            ]
+        else:
+            actions = [
+                _condition_exact(
+                    self._table_name,
+                    item,
+                    allowed_fields=spec.allowed_fields,
+                )
+                for spec, item in zip(specs, validated.items[:10], strict=True)
+            ]
         previous_lock = validated.items[10]
         actions.append(
             cast(
@@ -390,7 +528,7 @@ class DynamoDbDeploymentGuard:
                 {
                     "Put": {
                         "TableName": self._table_name,
-                        "Item": marshal_item(serialize_deployment_lock(locked)),
+                        "Item": marshal_item(post_acquire_items[10]),
                         **_exact_condition(
                             previous_lock,
                             allowed_fields=_DeploymentLockSpec().allowed_fields,
@@ -422,6 +560,15 @@ class DynamoDbDeploymentGuard:
         audit = self._get_audit(guard_id=guard_id, action="ACQUIRE")
         if audit is None or not _acquire_audit_matches(audit, context=context, lock=lock):
             return None
+        validated = self._read_snapshot(at=lock.acquired_at or lock.updated_at)
+        if validated.snapshot.deployment_lock != lock or not hmac.compare_digest(
+            _control_snapshot_hash(validated.items),
+            _sha256_digest(audit, "control_snapshot_after_hash"),
+        ):
+            raise DeploymentGuardUnavailable(
+                "deployment lock acquisition replay snapshot is invalid"
+            )
+        control_schema_before = _integer(audit, "control_schema_before")
         assessment = DeploymentGuardAssessment(
             allowed=True,
             code=(
@@ -437,7 +584,13 @@ class DynamoDbDeploymentGuard:
             deployment_lock_state=DeploymentLockState.OPEN,
             deployment_lock_fencing_token=lock.fencing_token - 1,
         )
-        return DeploymentLockAcquisition(assessment=assessment, lock=lock, audit_item=audit)
+        return DeploymentLockAcquisition(
+            assessment=assessment,
+            lock=lock,
+            audit_item=audit,
+            control_schema_before=control_schema_before,
+            control_schema_after=CURRENT_SCHEMA_VERSION,
+        )
 
     def _release_audit_exists(
         self,
@@ -445,6 +598,7 @@ class DynamoDbDeploymentGuard:
         guard_id: str,
         expected_fencing_token: int,
         actor: str,
+        rollback_control_schema: bool,
     ) -> bool:
         audit = self._get_audit(guard_id=guard_id, action="RELEASE")
         return audit is not None and _release_audit_matches(
@@ -452,6 +606,7 @@ class DynamoDbDeploymentGuard:
             guard_id=guard_id,
             actor=actor,
             fencing_token=expected_fencing_token,
+            rollback_control_schema=rollback_control_schema,
         )
 
     def _get_audit(self, *, guard_id: str, action: str) -> DynamoItem | None:
@@ -467,7 +622,42 @@ class DynamoDbDeploymentGuard:
 @dataclass(frozen=True, slots=True)
 class _ValidatedSnapshot:
     items: tuple[DynamoItem, ...]
+    schema_version: int
     snapshot: DeploymentGuardSnapshot
+
+
+def _post_acquire_items(
+    *,
+    validated: _ValidatedSnapshot,
+    locked: DeploymentLock,
+) -> tuple[DynamoItem, ...]:
+    specs: tuple[ControlRecordSpec | _RuntimeStateSpec, ...] = (
+        *CONTROL_RECORD_MANIFEST.activity_records,
+        _RuntimeStateSpec(),
+    )
+    controls = tuple(
+        _convert_fixed_record_schema(
+            spec,
+            item,
+            schema_version=CURRENT_SCHEMA_VERSION,
+        )
+        if validated.schema_version == PREVIOUS_SCHEMA_VERSION
+        else dict(item)
+        for spec, item in zip(specs, validated.items[:10], strict=True)
+    )
+    return (*controls, serialize_deployment_lock(locked))
+
+
+def _control_snapshot_hash(items: tuple[DynamoItem, ...]) -> str:
+    if len(items) != _SNAPSHOT_RECORD_COUNT:
+        raise ValueError("deployment control snapshot is incomplete")
+    canonical = json.dumps(
+        items,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _runtime_activity(items: tuple[DynamoItem, ...], *, at: datetime) -> RuntimeActivity:
@@ -514,10 +704,23 @@ def _bounded_counter(item: DynamoItem, field: str, limit: int) -> int:
     return value
 
 
+def _control_schema_version(item: DynamoItem) -> int:
+    value = item.get("schema_version")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value not in {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+    ):
+        raise ValueError("deployment control schema version is unsupported")
+    return value
+
+
 def _acquire_audit_item(
     *,
     assessment: DeploymentGuardAssessment,
     lock: DeploymentLock,
+    control_schema_before: int,
+    control_snapshot_after_hash: str,
 ) -> DynamoItem:
     item: DynamoItem = {
         **_audit_key(guard_id=lock.guard_id or "", action="ACQUIRE"),
@@ -537,6 +740,10 @@ def _acquire_audit_item(
         "runtime_version": assessment.runtime_version,
         "activity_clear": assessment.activity_clear,
         "lock_fencing_token": lock.fencing_token,
+        "control_schema_before": control_schema_before,
+        "control_schema_after": CURRENT_SCHEMA_VERSION,
+        "control_schema_migrated": control_schema_before != CURRENT_SCHEMA_VERSION,
+        "control_snapshot_after_hash": control_snapshot_after_hash,
         "evaluated_at": _timestamp(assessment.evaluated_at),
         "lock_expires_at": _timestamp(lock.expires_at or assessment.evaluated_at),
     }
@@ -551,6 +758,9 @@ def _release_audit_item(
     actor: str,
     fencing_token: int,
     released_at: datetime,
+    control_schema_before: int,
+    control_schema_after: int,
+    control_schema_rolled_back: bool,
 ) -> DynamoItem:
     return {
         **_audit_key(guard_id=guard_id, action="RELEASE"),
@@ -561,6 +771,9 @@ def _release_audit_item(
         "guard_id": guard_id,
         "actor": actor,
         "lock_fencing_token": fencing_token,
+        "control_schema_before": control_schema_before,
+        "control_schema_after": control_schema_after,
+        "control_schema_rolled_back": control_schema_rolled_back,
         "released_at": _timestamp(released_at),
     }
 
@@ -571,6 +784,7 @@ def _release_audit_matches(
     guard_id: str,
     actor: str,
     fencing_token: int,
+    rollback_control_schema: bool,
 ) -> bool:
     """Validate an immutable release receipt without binding it to retry time."""
 
@@ -584,6 +798,9 @@ def _release_audit_matches(
         "guard_id",
         "actor",
         "lock_fencing_token",
+        "control_schema_before",
+        "control_schema_after",
+        "control_schema_rolled_back",
         "released_at",
     }
     if set(audit) != allowed_fields:
@@ -601,15 +818,23 @@ def _release_audit_matches(
         schema_version = _integer(audit, "schema_version")
         record_schema_version = _integer(audit, "record_schema_version")
         stored_fencing_token = _integer(audit, "lock_fencing_token")
+        control_schema_before = _integer(audit, "control_schema_before")
+        control_schema_after = _integer(audit, "control_schema_after")
+        control_schema_rolled_back = _boolean(audit, "control_schema_rolled_back")
         released_at = _text(audit, "released_at")
         parsed_released_at = _parse_timestamp(released_at)
     except ValueError:
         return False
+    expected_rollback = rollback_control_schema and control_schema_before == PREVIOUS_SCHEMA_VERSION
+    expected_after = PREVIOUS_SCHEMA_VERSION if expected_rollback else CURRENT_SCHEMA_VERSION
     return (
         schema_version == CURRENT_SCHEMA_VERSION
         and record_schema_version == DEPLOYMENT_GUARD_AUDIT_SCHEMA_VERSION
         and stored_fencing_token == fencing_token
         and stored_fencing_token > 0
+        and control_schema_before in {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+        and control_schema_after == expected_after
+        and control_schema_rolled_back is expected_rollback
         and _timestamp(parsed_released_at) == released_at
     )
 
@@ -628,6 +853,21 @@ def _put_immutable(table_name: str, item: DynamoItem) -> TransactWriteItemTypeDe
                 "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
             }
         },
+    )
+
+
+def _acquire_audit_context(audit: DynamoItem) -> DeploymentGuardContext:
+    mode = DeploymentMode(_text(audit, "deployment_mode"))
+    raw_reason = audit.get("break_glass_reason")
+    if raw_reason is not None and (not isinstance(raw_reason, str) or not raw_reason):
+        raise ValueError("deployment audit reason is malformed")
+    return DeploymentGuardContext(
+        commit_sha=_text(audit, "commit_sha"),
+        actor=_text(audit, "actor"),
+        run_id=_text(audit, "run_id"),
+        environment=_text(audit, "environment"),
+        mode=mode,
+        reason=BreakGlassReason(raw_reason) if raw_reason is not None else None,
     )
 
 
@@ -656,6 +896,10 @@ def _acquire_audit_matches(
         "runtime_version",
         "activity_clear",
         "lock_fencing_token",
+        "control_schema_before",
+        "control_schema_after",
+        "control_schema_migrated",
+        "control_snapshot_after_hash",
         "evaluated_at",
         "lock_expires_at",
     }
@@ -676,6 +920,7 @@ def _acquire_audit_matches(
         "environment": context.environment,
         "deployment_mode": context.mode.value,
         "lock_fencing_token": lock.fencing_token,
+        "control_schema_after": CURRENT_SCHEMA_VERSION,
         "evaluated_at": _timestamp(lock.acquired_at or lock.updated_at),
         "lock_expires_at": _timestamp(lock.expires_at or lock.updated_at),
     }
@@ -688,12 +933,23 @@ def _acquire_audit_matches(
         status = _runtime_status(audit)
         generation = _integer(audit, "runtime_generation")
         version = _integer(audit, "runtime_version")
+        control_schema_before = _integer(audit, "control_schema_before")
+        control_schema_after = _integer(audit, "control_schema_after")
+        control_schema_migrated = _boolean(audit, "control_schema_migrated")
+        _sha256_digest(audit, "control_snapshot_after_hash")
         activity_clear = _boolean(audit, "activity_clear")
         _parse_timestamp(_text(audit, "evaluated_at"))
         _parse_timestamp(_text(audit, "lock_expires_at"))
     except ValueError:
         return False
-    if generation < 0 or version < 0 or status.value != audit["runtime_status"]:
+    if (
+        generation < 0
+        or version < 0
+        or status.value != audit["runtime_status"]
+        or control_schema_before not in {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+        or control_schema_after != CURRENT_SCHEMA_VERSION
+        or control_schema_migrated != (control_schema_before != CURRENT_SCHEMA_VERSION)
+    ):
         return False
     expected_code = (
         DeploymentGuardCode.BREAK_GLASS_OVERRIDE
@@ -733,6 +989,13 @@ def _text(item: DynamoItem, field: str) -> str:
     value = item.get(field)
     if not isinstance(value, str) or not value:
         raise ValueError("deployment audit text is malformed")
+    return value
+
+
+def _sha256_digest(item: DynamoItem, field: str) -> str:
+    value = _text(item, field)
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("deployment audit digest is malformed")
     return value
 
 
