@@ -87,14 +87,37 @@ describe("RankingsPage", () => {
     expect(within(costs).getByText(/Route 53は含みません/)).toBeVisible();
     expect(within(costs).getByRole("radio", { name: "直近7日" })).toBeChecked();
     const affection = screen.getByRole("region", { name: "親愛度ランキング" });
+    expect(within(affection).getByText("AFFECTION", { exact: true })).toBeVisible();
+    expect(
+      within(affection).queryByText("AFFECTION RANKINGS", { exact: true }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(affection).queryByText(
+        "質問者ごとの現在の親愛度です。人格ごとに1000点満点で表示します。",
+        { exact: true },
+      ),
+    ).not.toBeInTheDocument();
+    expect(within(affection).queryByText("親愛度", { exact: true })).not.toBeInTheDocument();
     expect(within(affection).getByRole("heading", { name: "アロナ" })).toBeVisible();
     expect(within(affection).getByRole("heading", { name: "プラナ" })).toBeVisible();
     expect(within(affection).getByRole("heading", { name: "安倍晋三AI" })).toBeVisible();
-    expect(
-      within(affection).getByRole("meter", {
-        name: "安倍晋三AIからパワー系ウナギへの親愛度 1000点（1000点満点）",
-      }),
-    ).toHaveAttribute("value", "1000");
+    for (const participantName of ["アロナ", "プラナ", "安倍晋三AI"]) {
+      expect(
+        within(affection).getByRole("img", { name: `${participantName}のアイコン` }),
+      ).toBeVisible();
+    }
+    const fullHearts = within(affection).getByRole("status", {
+      name: "安倍晋三AIからパワー系ウナギへの親愛度 1000点（1000点満点、ハート10個中10個）",
+    });
+    expect(fullHearts.querySelectorAll('svg[data-filled="true"]')).toHaveLength(10);
+    const fiveHearts = within(affection).getByRole("status", {
+      name: "プラナから先生への親愛度 500点（1000点満点、ハート10個中5個）",
+    });
+    expect(fiveHearts.querySelectorAll('svg[data-filled="true"]')).toHaveLength(5);
+    const fourHearts = within(affection).getByRole("status", {
+      name: "安倍晋三AIから先生への親愛度 480点（1000点満点、ハート10個中4個）",
+    });
+    expect(fourHearts.querySelectorAll('svg[data-filled="true"]')).toHaveLength(4);
   });
 
   it("fetches costs independently when the Japanese period changes", async () => {

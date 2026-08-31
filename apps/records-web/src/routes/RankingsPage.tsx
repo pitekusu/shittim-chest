@@ -12,6 +12,7 @@ import { RecordsApiError } from "../api/http";
 import { getRankings } from "../api/rankings";
 import type {
   AffectionRankingsResponse,
+  AvatarRef,
   CostPeriod,
   CostsResponse,
   ParticipantAffectionRanking,
@@ -288,6 +289,27 @@ const AFFECTION_VARIANTS: Readonly<Record<ParticipantSlot, string>> = {
   "participant-b": rankingStyles.affectionPink,
   "participant-c": rankingStyles.affectionLavender,
 };
+const AFFECTION_PERSONA_AVATARS: Readonly<Record<ParticipantSlot, AvatarRef>> = {
+  "participant-a": {
+    kind: "image",
+    url: new URL("../../scripts/og-image-assets/participant-a.webp", import.meta.url).href,
+    alt: "アロナのアイコン",
+    fallbackVariant: "cyan",
+  },
+  "participant-b": {
+    kind: "image",
+    url: new URL("../../scripts/og-image-assets/participant-b.webp", import.meta.url).href,
+    alt: "プラナのアイコン",
+    fallbackVariant: "pink",
+  },
+  "participant-c": {
+    kind: "image",
+    url: new URL("../../scripts/og-image-assets/participant-c.webp", import.meta.url).href,
+    alt: "安倍晋三AIのアイコン",
+    fallbackVariant: "lavender",
+  },
+};
+const AFFECTION_HEART_COUNT = 10;
 
 function AffectionRankings({
   query,
@@ -316,14 +338,11 @@ function AffectionRankings({
       <header className={rankingStyles.affectionHeader}>
         <div>
           <p className={commonStyles.eyebrow} lang="en">
-            AFFECTION RANKINGS
+            AFFECTION
           </p>
           <h2 id="affection-rankings-title" className={JAPANESE_HEADING_CLASS}>
             親愛度ランキング
           </h2>
-          <p className={`${JAPANESE_PROSE_CLASS} ${rankingStyles.rankingDescription}`}>
-            質問者ごとの現在の親愛度です。人格ごとに1000点満点で表示します。
-          </p>
         </div>
         {query.data && (
           <p className={rankingStyles.affectionGeneratedAt}>
@@ -417,11 +436,8 @@ function AffectionRankingCard({
       aria-labelledby={titleId}
     >
       <header>
-        <span className={rankingStyles.affectionDiamond} aria-hidden="true" />
-        <div>
-          <span>親愛度</span>
-          <h3 id={titleId}>{ranking.displayName}</h3>
-        </div>
+        <Avatar avatar={AFFECTION_PERSONA_AVATARS[ranking.participant]} />
+        <h3 id={titleId}>{ranking.displayName}</h3>
       </header>
       {ranking.entries.length === 0 ? (
         <p className={rankingStyles.affectionEmpty}>まだ集計対象がありません。</p>
@@ -436,18 +452,60 @@ function AffectionRankingCard({
               <Avatar avatar={entry.avatar} />
               <span className={rankingStyles.affectionName}>{entry.displayName}</span>
               <strong className={rankingStyles.affectionScore}>{entry.score}</strong>
-              <meter
-                aria-label={`${ranking.displayName}から${entry.displayName}への親愛度 ${entry.score}点（${maxScore}点満点）`}
-                className={rankingStyles.affectionRankingMeter}
-                min={0}
-                max={maxScore}
-                value={entry.score}
+              <AffectionHearts
+                participantName={ranking.displayName}
+                requesterName={entry.displayName}
+                score={entry.score}
+                maxScore={maxScore}
               />
             </li>
           ))}
         </ol>
       )}
     </section>
+  );
+}
+
+function AffectionHearts({
+  participantName,
+  requesterName,
+  score,
+  maxScore,
+}: {
+  readonly participantName: string;
+  readonly requesterName: string;
+  readonly score: number;
+  readonly maxScore: number;
+}) {
+  const filledHearts =
+    maxScore <= 0
+      ? 0
+      : Math.min(
+          AFFECTION_HEART_COUNT,
+          Math.max(0, Math.floor((score * AFFECTION_HEART_COUNT) / maxScore)),
+        );
+  return (
+    <output
+      className={rankingStyles.affectionHearts}
+      aria-label={`${participantName}から${requesterName}への親愛度 ${score}点（${maxScore}点満点、ハート${AFFECTION_HEART_COUNT}個中${filledHearts}個）`}
+    >
+      {Array.from({ length: AFFECTION_HEART_COUNT }, (_, index) => {
+        const filled = index < filledHearts;
+        return (
+          <svg
+            key={index}
+            className={`${rankingStyles.affectionHeart} ${
+              filled ? rankingStyles.affectionHeartFilled : ""
+            }`}
+            data-filled={filled}
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M12 21 4.13 13.56A5.18 5.18 0 0 1 11.45 6.23L12 6.8l.55-.57a5.18 5.18 0 0 1 7.32 7.33Z" />
+          </svg>
+        );
+      })}
+    </output>
   );
 }
 
