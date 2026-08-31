@@ -26,6 +26,7 @@ from shittim_chest.application import (
     DebateSnapshot,
     DeliveryAbandonReason,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     GenerationCheckpoint,
     IngressClaimFence,
     IngressKind,
@@ -191,6 +192,7 @@ async def finalize_terminal_delivery(
     ingress_claim: IngressClaimFence | None = None,
     persisted_bot_slot_override: DiscordBotSlot | None = None,
     previous_terminal_shape: bool = False,
+    previous_completed_without_affection: bool = False,
     legacy_terminal_plan: bool = False,
     dynamodb_client: DynamoDBClient | None = None,
     dynamodb_table: str | None = None,
@@ -231,7 +233,64 @@ async def finalize_terminal_delivery(
         operation_id=operation_id,
         ingress_claim=ingress_claim,
     )
-    if previous_terminal_shape:
+    if previous_completed_without_affection:
+        if (
+            target_phase is not DebatePhase.COMPLETED
+            or dynamodb_client is None
+            or dynamodb_table is None
+        ):
+            raise AssertionError("previous completed shape requires a DynamoDB table")
+        previous_operations = tuple(
+            operation
+            for operation in operations
+            if operation.operation_id != "terminal-completed-affection-0000"
+        )
+        if len(previous_operations) != len(operations) - 1:
+            raise AssertionError("current completed shape must contain one affection post")
+        previous_plan = replace(
+            plan,
+            operation_ids=tuple(operation.operation_id for operation in previous_operations),
+            content_hashes=tuple(operation.content_hash for operation in previous_operations),
+            delivery_sequences=tuple(
+                operation.delivery_sequence
+                for operation in previous_operations
+                if operation.delivery_sequence is not None
+            ),
+        )
+        affection_operation = operations[-1]
+        dynamodb_client.delete_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(
+                {
+                    "PK": f"DEBATE#{persisted.state.debate_id}",
+                    "SK": (
+                        f"ATTEMPT#{persisted.state.attempt_id}#OUTBOX#"
+                        f"{affection_operation.operation_id}"
+                    ),
+                }
+            ),
+        )
+        persisted = replace(persisted, terminal_delivery=previous_plan)
+        for item in serialize_snapshot(persisted):
+            dynamodb_client.put_item(
+                TableName=dynamodb_table,
+                Item=marshal_item(item),
+            )
+        await asyncio.to_thread(
+            outbox._transact,
+            [
+                outbox_activity_action(
+                    table_name=dynamodb_table,
+                    pending_delta=-1,
+                    claimed_delta=0,
+                    at=staged_at,
+                )
+            ],
+            f"previous-completed-shape-{persisted.state.attempt_id}",
+        )
+        operations = previous_operations
+        plan = previous_plan
+    elif previous_terminal_shape:
         if persisted_bot_slot_override is None or dynamodb_client is None or dynamodb_table is None:
             raise AssertionError("previous terminal shape requires a persisted owner and table")
         previous_operations = tuple(
@@ -366,6 +425,79 @@ async def finalize_terminal_delivery(
         terminal_delivery=persisted_plan.complete(at=terminal_at),
     )
     return await debates.finalize_terminal(expected=persisted, updated=terminal)
+
+
+@pytest.mark.asyncio
+async def test_completed_terminal_finalize_accepts_plan_without_separate_affection_post(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await debates.create(
+        replace(new_snapshot(), channel_id="100"),
+        operation_id="pre-affection-post-plan",
+        lease_owner="worker-1",
+    )
+    scoring = await debates.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=accepted.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(microseconds=1),
+            ),
+        ),
+    )
+    assessed = await debates.settle_affection(
+        expected=scoring,
+        scores=(10, -20, 100),
+        at=NOW + timedelta(microseconds=2),
+    )
+    bound = await debates.replace(
+        expected=assessed,
+        updated=replace(
+            assessed,
+            state=replace(
+                assessed.state,
+                phase=DebatePhase.GENERATING_DECISION,
+                updated_at=NOW + timedelta(milliseconds=500),
+            ),
+            starter_message_id="101",
+            thread_id="102",
+            control_panel_message_id="103",
+            final_decision=FinalDecision(
+                winner=ParticipantSlot.PARTICIPANT_A,
+                decision="fixture decision",
+                actions=("fixture action",),
+                caveats=("fixture caveat",),
+            ),
+            votes=votes_for_winner(ParticipantSlot.PARTICIPANT_A),
+        ),
+    )
+
+    completed = await finalize_terminal_delivery(
+        debates=debates,
+        outbox=outbox,
+        expected=bound,
+        target_phase=DebatePhase.COMPLETED,
+        staged_at=NOW + timedelta(seconds=1),
+        terminal_at=NOW + timedelta(seconds=2),
+        previous_completed_without_affection=True,
+        dynamodb_client=dynamodb_client,
+        dynamodb_table=dynamodb_table,
+    )
+
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert completed.affection_assessment == assessed.affection_assessment
+    assert (
+        await outbox.get(
+            debate_id=completed.state.debate_id,
+            attempt_id=completed.state.attempt_id,
+            operation_id="terminal-completed-affection-0000",
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -2295,6 +2427,7 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
     accepted = await repository.create(
         replace(
             new_snapshot(),
+            channel_id="500",
             starter_message_id="501",
             thread_id="502",
             control_panel_message_id="503",
@@ -2326,6 +2459,16 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
         terminal_at=NOW + timedelta(seconds=1),
         error_code="test_failure",
     )
+    affection_post = await outbox.get(
+        debate_id=persisted_failed.state.debate_id,
+        attempt_id=persisted_failed.state.attempt_id,
+        operation_id="terminal-failed-affection-0000",
+    )
+    assert affection_post is not None
+    assert affection_post.status is OutboxStatus.SENT
+    assert affection_post.record_schema_version == 3
+    assert affection_post.delivery_target is DiscordDeliveryTarget.CHANNEL
+    assert affection_post.channel_id == "500"
     failed_panel_claim = await repository.claim_panel_refresh(
         debate_id=persisted_failed.state.debate_id,
         attempt_id=persisted_failed.state.attempt_id,

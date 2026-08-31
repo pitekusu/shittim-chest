@@ -46,8 +46,11 @@ from shittim_chest.adapters.dynamodb.serializer import (
 )
 from shittim_chest.adapters.dynamodb.transaction_errors import classified_transaction_conflict
 from shittim_chest.application.discord import (
+    CANCELLED_AFFECTION_DELIVERY_SEQUENCE,
     CANCELLED_DELIVERY_SEQUENCE_START,
+    COMPLETED_AFFECTION_DELIVERY_SEQUENCE,
     COMPLETED_DELIVERY_SEQUENCE_START,
+    FAILED_AFFECTION_DELIVERY_SEQUENCE,
     FAILED_DELIVERY_SEQUENCE_START,
     FINAL_PROPOSAL_DELIVERY_SEQUENCE_START,
     INITIAL_OPINION_DELIVERY_SEQUENCE_START,
@@ -60,6 +63,7 @@ from shittim_chest.application.discord import (
     MAX_VOTE_CHUNKS,
     VOTE_DELIVERY_SEQUENCE_START,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     OutboxOperation,
     OutboxStatus,
     PanelOperation,
@@ -1187,7 +1191,7 @@ class DynamoDbDebateRepository:
                 for operation_id in delivery.operation_ids
             )
         ):
-            identities = tuple(
+            identities_with_targets = tuple(
                 _completed_terminal_operation_identity(
                     expected,
                     operation_id=operation.operation_id,
@@ -1201,30 +1205,84 @@ class DynamoDbDebateRepository:
             )
             if any(
                 operation.bot_slot is not bot_slot or operation.chunk_sequence != chunk_sequence
-                for operation, (bot_slot, chunk_sequence) in zip(
+                for operation, (bot_slot, chunk_sequence, _) in zip(
                     persisted_operations,
-                    identities,
+                    identities_with_targets,
                     strict=True,
                 )
             ):
                 raise RepositoryConflict("completed delivery outbox has an invalid Bot owner")
             result_sequences = tuple(
                 chunk_sequence
-                for bot_slot, chunk_sequence in identities
-                if bot_slot is DiscordBotSlot.MODERATOR
+                for bot_slot, chunk_sequence, affection_result in identities_with_targets
+                if bot_slot is DiscordBotSlot.MODERATOR and not affection_result
             )
             decision_sequences = tuple(
                 chunk_sequence
-                for bot_slot, chunk_sequence in identities
+                for bot_slot, chunk_sequence, _ in identities_with_targets
                 if bot_slot is not DiscordBotSlot.MODERATOR
+            )
+            affection_sequences = tuple(
+                chunk_sequence
+                for _, chunk_sequence, affection_result in identities_with_targets
+                if affection_result
+            )
+            affection_operation_planned = (
+                "terminal-completed-affection-0000" in delivery.operation_ids
             )
             if (
                 result_sequences != (0,)
                 or not decision_sequences
                 or decision_sequences != tuple(range(len(decision_sequences)))
+                or affection_sequences != ((0,) if affection_operation_planned else ())
+                or (affection_operation_planned and expected.affection_assessment is None)
             ):
                 raise RepositoryConflict("completed delivery outbox sequence is invalid")
-            return identities
+            return tuple(
+                (bot_slot, chunk_sequence)
+                for bot_slot, chunk_sequence, _ in identities_with_targets
+            )
+
+        if (
+            isinstance(delivery, PhaseDeliveryPlan)
+            and delivery.target_phase in {DebatePhase.FAILED, DebatePhase.CANCELLED}
+            and any(
+                operation.delivery_target is DiscordDeliveryTarget.CHANNEL
+                for operation in persisted_operations
+            )
+        ):
+            notice_operations = tuple(
+                operation
+                for operation in persisted_operations
+                if operation.delivery_target is DiscordDeliveryTarget.THREAD
+            )
+            affection_operations = tuple(
+                operation
+                for operation in persisted_operations
+                if operation.delivery_target is DiscordDeliveryTarget.CHANNEL
+            )
+            expected_notice_ids = tuple(
+                f"terminal-{delivery.target_phase.value}-{sequence:04d}"
+                for sequence in range(len(notice_operations))
+            )
+            affection_operation_id = f"terminal-{delivery.target_phase.value}-affection-0000"
+            if (
+                tuple(operation.operation_id for operation in notice_operations)
+                != expected_notice_ids
+                or tuple(operation.chunk_sequence for operation in notice_operations)
+                != tuple(range(len(notice_operations)))
+                or len(affection_operations) != 1
+                or affection_operations[0].operation_id != affection_operation_id
+                or affection_operations[0].chunk_sequence != 0
+                or any(
+                    operation.bot_slot is not DiscordBotSlot.MODERATOR
+                    for operation in persisted_operations
+                )
+            ):
+                raise RepositoryConflict("terminal affection outbox identity is invalid")
+            return tuple(
+                (operation.bot_slot, operation.chunk_sequence) for operation in persisted_operations
+            )
 
         expected_operation_ids = tuple(
             f"terminal-{delivery.target_phase.value}-{sequence:04d}"
@@ -3589,11 +3647,6 @@ def _require_terminal_stage(
     )
     if not operations or len(operations) > operation_limit:
         raise RepositoryConflict("delivery operation count is outside its bounds")
-    if (
-        plan.target_phase in {DebatePhase.FAILED, DebatePhase.CANCELLED}
-        and len(operations) > MAX_TERMINAL_NOTICE_CHUNKS
-    ):
-        raise RepositoryConflict("terminal notice exceeds its reserved sequence range")
     operation_ids = tuple(operation.operation_id for operation in operations)
     content_hashes = tuple(operation.content_hash for operation in operations)
     if operation_ids != plan.operation_ids or content_hashes != plan.content_hashes:
@@ -3607,7 +3660,10 @@ def _require_terminal_stage(
     }
     completed_result_chunk_sequences: list[int] = []
     completed_decision_chunk_sequences: list[int] = []
+    affection_result_chunk_sequences: list[int] = []
+    terminal_notice_chunk_sequences: list[int] = []
     for sequence, operation in enumerate(operations):
+        affection_result = False
         if participant_phase_delivery:
             if operation.delivery_sequence is None:
                 raise RepositoryConflict("participant phase delivery sequence is missing")
@@ -3624,14 +3680,20 @@ def _require_terminal_stage(
         elif plan.target_phase is DebatePhase.COMPLETED:
             if operation.delivery_sequence is None or not isinstance(plan, PhaseDeliveryPlan):
                 raise RepositoryConflict("completed delivery requires its durable sequence")
-            expected_bot_slot, expected_chunk_sequence = _completed_terminal_operation_identity(
+            (
+                expected_bot_slot,
+                expected_chunk_sequence,
+                affection_result,
+            ) = _completed_terminal_operation_identity(
                 staged,
                 operation_id=operation.operation_id,
                 delivery_sequence=operation.delivery_sequence,
             )
             expected_phase = plan.target_phase
             expected_delivery_sequence = operation.delivery_sequence
-            if expected_bot_slot is DiscordBotSlot.MODERATOR:
+            if affection_result:
+                affection_result_chunk_sequences.append(expected_chunk_sequence)
+            elif expected_bot_slot is DiscordBotSlot.MODERATOR:
                 completed_result_chunk_sequences.append(expected_chunk_sequence)
             else:
                 completed_decision_chunk_sequences.append(expected_chunk_sequence)
@@ -3643,25 +3705,45 @@ def _require_terminal_stage(
             }.get(plan.target_phase)
             if delivery_sequence_start is None:
                 raise RepositoryConflict("terminal delivery target has no sequence range")
-            expected_bot_slot = _terminal_delivery_bot_slot(
-                staged,
-                target_phase=plan.target_phase,
-            )
-            expected_chunk_sequence = sequence
             expected_phase = plan.target_phase
-            expected_delivery_sequence = delivery_sequence_start + sequence
+            affection_operation_id = f"terminal-{plan.target_phase.value}-affection-0000"
+            if operation.operation_id == affection_operation_id:
+                affection_result = True
+                expected_bot_slot = DiscordBotSlot.MODERATOR
+                expected_chunk_sequence = 0
+                expected_delivery_sequence = {
+                    DebatePhase.FAILED: FAILED_AFFECTION_DELIVERY_SEQUENCE,
+                    DebatePhase.CANCELLED: CANCELLED_AFFECTION_DELIVERY_SEQUENCE,
+                }[plan.target_phase]
+                affection_result_chunk_sequences.append(expected_chunk_sequence)
+            else:
+                expected_bot_slot = _terminal_delivery_bot_slot(
+                    staged,
+                    target_phase=plan.target_phase,
+                )
+                expected_chunk_sequence = sequence
+                expected_delivery_sequence = delivery_sequence_start + sequence
+                terminal_notice_chunk_sequences.append(expected_chunk_sequence)
+        expected_target = (
+            DiscordDeliveryTarget.CHANNEL if affection_result else DiscordDeliveryTarget.THREAD
+        )
+        expected_record_schema_version = 3 if affection_result else 2
+        expected_channel_id = expected.channel_id if affection_result else None
         if (
             operation.debate_id != expected.state.debate_id
             or operation.attempt_id != expected.state.attempt_id
             or operation.bot_slot is not expected_bot_slot
             or operation.thread_id != expected.thread_id
+            or operation.delivery_target is not expected_target
+            or operation.channel_id != expected_channel_id
             or (
                 not participant_phase_delivery
                 and plan.target_phase is not DebatePhase.COMPLETED
+                and not affection_result
                 and operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
             )
             or operation.chunk_sequence != expected_chunk_sequence
-            or operation.record_schema_version != 2
+            or operation.record_schema_version != expected_record_schema_version
             or operation.phase is not expected_phase
             or not isinstance(plan, PhaseDeliveryPlan)
             or operation.plan_id != plan.plan_id
@@ -3696,6 +3778,22 @@ def _require_terminal_stage(
         != list(range(len(completed_decision_chunk_sequences)))
     ):
         raise RepositoryConflict("completed delivery requires one result and bounded winner output")
+    terminal_affection_delivery = plan.target_phase in {
+        DebatePhase.COMPLETED,
+        DebatePhase.FAILED,
+        DebatePhase.CANCELLED,
+    }
+    expected_affection_chunks = (
+        [0] if terminal_affection_delivery and staged.affection_assessment is not None else []
+    )
+    if affection_result_chunk_sequences != expected_affection_chunks:
+        raise RepositoryConflict("terminal affection delivery does not match its assessment")
+    if plan.target_phase in {DebatePhase.FAILED, DebatePhase.CANCELLED} and (
+        not terminal_notice_chunk_sequences
+        or len(terminal_notice_chunk_sequences) > MAX_TERMINAL_NOTICE_CHUNKS
+        or terminal_notice_chunk_sequences != list(range(len(terminal_notice_chunk_sequences)))
+    ):
+        raise RepositoryConflict("terminal notice exceeds its reserved sequence range")
     if isinstance(plan, PhaseDeliveryPlan) and plan.delivery_sequences != tuple(
         expected_delivery_sequences
     ):
@@ -3834,8 +3932,8 @@ def _completed_terminal_operation_identity(
     *,
     operation_id: str,
     delivery_sequence: int,
-) -> tuple[DiscordBotSlot, int]:
-    """Validate the moderator result followed by the winner's decision."""
+) -> tuple[DiscordBotSlot, int, bool]:
+    """Validate the thread result, winner decision, and parent-channel affection post."""
 
     winner_bot_slot = _terminal_delivery_bot_slot(
         snapshot,
@@ -3846,7 +3944,7 @@ def _completed_terminal_operation_identity(
     if operation_id == "terminal-completed-result-0000":
         if delivery_sequence != result_start:
             raise RepositoryConflict("completed result delivery sequence is invalid")
-        return DiscordBotSlot.MODERATOR, 0
+        return DiscordBotSlot.MODERATOR, 0, False
     if operation_id.startswith("terminal-completed-decision-"):
         sequence_text = operation_id.removeprefix("terminal-completed-decision-")
         if len(sequence_text) != 4 or not sequence_text.isascii() or not sequence_text.isdigit():
@@ -3857,7 +3955,11 @@ def _completed_terminal_operation_identity(
             or delivery_sequence != decision_start + chunk_sequence
         ):
             raise RepositoryConflict("completed decision delivery sequence is invalid")
-        return winner_bot_slot, chunk_sequence
+        return winner_bot_slot, chunk_sequence, False
+    if operation_id == "terminal-completed-affection-0000":
+        if delivery_sequence != COMPLETED_AFFECTION_DELIVERY_SEQUENCE:
+            raise RepositoryConflict("completed affection delivery sequence is invalid")
+        return DiscordBotSlot.MODERATOR, 0, True
     raise RepositoryConflict("completed terminal operation identity is invalid")
 
 
@@ -3919,6 +4021,7 @@ def _sent_outbox_check(
         delivery = expected.terminal_delivery
         if not isinstance(delivery, PhaseDeliveryPlan) or delivery.plan_id != plan_id:
             raise RepositoryConflict("outbox completion plan is not current")
+        affection_delivery = operation_id == f"terminal-{delivery_phase.value}-affection-0000"
         condition += (
             " AND record_schema_version=:record_schema AND plan_id=:plan "
             "AND phase=:delivery_phase AND delivery_sequence=:delivery_sequence "
@@ -3926,7 +4029,7 @@ def _sent_outbox_check(
         )
         values.update(
             {
-                ":record_schema": 2,
+                ":record_schema": 3 if affection_delivery else 2,
                 ":plan": plan_id,
                 ":delivery_phase": delivery_phase.value,
                 ":delivery_sequence": delivery_sequence,
@@ -3934,6 +4037,14 @@ def _sent_outbox_check(
                 ":staged_at": _timestamp(delivery.staged_at),
             }
         )
+        if affection_delivery:
+            condition += " AND delivery_target=:delivery_target AND channel_id=:channel"
+            values.update(
+                {
+                    ":delivery_target": DiscordDeliveryTarget.CHANNEL.value,
+                    ":channel": expected.channel_id,
+                }
+            )
     return cast(
         TransactWriteItemTypeDef,
         {

@@ -27,9 +27,12 @@ DISCORD_MESSAGE_LIMIT = 2_000
 DISCORD_CUSTOM_ID_LIMIT = 100
 DISCORD_NONCE_LIMIT = 25
 OUTBOX_CLAIM_SECONDS = 60
-MAX_TERMINAL_OUTBOX_CHUNKS = 20
+MAX_TERMINAL_OUTBOX_CHUNKS = 21
 MAX_COMPLETED_RESULT_CHUNKS = 1
-MAX_COMPLETED_DECISION_CHUNKS = MAX_TERMINAL_OUTBOX_CHUNKS - MAX_COMPLETED_RESULT_CHUNKS
+MAX_AFFECTION_RESULT_CHUNKS = 1
+MAX_COMPLETED_DECISION_CHUNKS = (
+    MAX_TERMINAL_OUTBOX_CHUNKS - MAX_COMPLETED_RESULT_CHUNKS - MAX_AFFECTION_RESULT_CHUNKS
+)
 MAX_INITIAL_OPINION_CHUNKS = 8
 MAX_FINAL_PROPOSAL_CHUNKS = 8
 MAX_VOTE_CHUNKS = 8
@@ -41,6 +44,13 @@ COMPLETED_DELIVERY_SEQUENCE_START = 300
 FAILED_DELIVERY_SEQUENCE_START = 900
 CANCELLED_DELIVERY_SEQUENCE_START = 910
 MAX_TERMINAL_NOTICE_CHUNKS = 10
+COMPLETED_AFFECTION_DELIVERY_SEQUENCE = (
+    COMPLETED_DELIVERY_SEQUENCE_START + MAX_COMPLETED_RESULT_CHUNKS + MAX_COMPLETED_DECISION_CHUNKS
+)
+FAILED_AFFECTION_DELIVERY_SEQUENCE = FAILED_DELIVERY_SEQUENCE_START + MAX_TERMINAL_NOTICE_CHUNKS
+CANCELLED_AFFECTION_DELIVERY_SEQUENCE = (
+    CANCELLED_DELIVERY_SEQUENCE_START + MAX_TERMINAL_NOTICE_CHUNKS
+)
 _MODEL_DISPLAY_LINE_LIMIT = 1_800
 
 _NONCE_PATTERN = re.compile(r"[A-Za-z0-9_-]{22}\Z")
@@ -158,6 +168,14 @@ class OutboxStatus(StrEnum):
     ABANDONED = "abandoned"
 
 
+@unique
+class DiscordDeliveryTarget(StrEnum):
+    """Allowlisted Discord destination type for a persisted operation."""
+
+    THREAD = "thread"
+    CHANNEL = "channel"
+
+
 @dataclass(frozen=True, slots=True)
 class OutboxOperation:
     """One content-addressed Discord delivery operation."""
@@ -186,6 +204,8 @@ class OutboxOperation:
     deadline_at: datetime | None = None
     abandoned_at: datetime | None = None
     abandon_reason: DeliveryAbandonReason | None = None
+    delivery_target: DiscordDeliveryTarget = DiscordDeliveryTarget.THREAD
+    channel_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.operation_id, label="operation ID")
@@ -213,16 +233,16 @@ class OutboxOperation:
             or self.delivery_attempt < 0
         ):
             raise ValueError("delivery attempt must be a non-negative integer")
-        if self.record_schema_version not in {1, 2}:
+        if self.record_schema_version not in {1, 2, 3}:
             raise ValueError("unsupported outbox record schema")
-        if self.record_schema_version == 2:
+        if self.record_schema_version in {2, 3}:
             if (
                 self.phase is None
                 or self.plan_id is None
                 or self.delivery_sequence is None
                 or self.deadline_at is None
             ):
-                raise ValueError("outbox v2 requires phase, plan, sequence, and deadline")
+                raise ValueError("versioned outbox requires phase, plan, sequence, and deadline")
             _require_text(self.plan_id, label="delivery plan ID")
             if (
                 isinstance(self.delivery_sequence, bool)
@@ -231,7 +251,7 @@ class OutboxOperation:
             ):
                 raise ValueError("delivery sequence must be a non-negative integer")
             if self.delivery_attempt > MAX_OUTBOX_DELIVERY_ATTEMPTS:
-                raise ValueError("outbox v2 delivery attempt exceeds its bound")
+                raise ValueError("versioned outbox delivery attempt exceeds its bound")
             _require_utc(self.deadline_at, label="outbox deadline")
             if self.deadline_at != self.created_at + timedelta(minutes=15):
                 raise ValueError("outbox deadline must be exactly 15 minutes after creation")
@@ -240,6 +260,20 @@ class OutboxOperation:
             for value in (self.phase, self.plan_id, self.delivery_sequence, self.deadline_at)
         ):
             raise ValueError("outbox v1 cannot contain v2 delivery fields")
+        if self.record_schema_version < 3:
+            if (
+                self.delivery_target is not DiscordDeliveryTarget.THREAD
+                or self.channel_id is not None
+            ):
+                raise ValueError("legacy outbox records must target their bound thread")
+        elif self.delivery_target is not DiscordDeliveryTarget.CHANNEL:
+            raise ValueError("outbox v3 is reserved for parent-channel delivery")
+        else:
+            if self.channel_id is None:
+                raise ValueError("channel delivery requires a channel ID")
+            _require_snowflake(self.channel_id, label="channel ID")
+            if self.channel_id == self.thread_id:
+                raise ValueError("channel delivery must target outside the debate thread")
         _require_utc(self.created_at, label="outbox creation timestamp")
         for label, timestamp in (
             ("claim expiry", self.claim_expires_at),
@@ -287,8 +321,8 @@ class OutboxOperation:
             ):
                 raise ValueError("sent operation cannot retain delivery or abandonment state")
         elif self.status is OutboxStatus.ABANDONED:
-            if self.record_schema_version != 2:
-                raise ValueError("only outbox v2 may be abandoned")
+            if self.record_schema_version not in {2, 3}:
+                raise ValueError("only a versioned outbox may be abandoned")
             if self.abandoned_at is None or self.abandon_reason is None:
                 raise ValueError("abandoned operation requires a timestamp and reason")
             if self.abandoned_at < self.created_at:
@@ -304,6 +338,16 @@ class OutboxOperation:
                 )
             ):
                 raise ValueError("abandoned operation cannot retain delivery state")
+
+    @property
+    def delivery_target_id(self) -> str:
+        """Return the exact Discord destination without weakening its durable fence."""
+
+        if self.delivery_target is DiscordDeliveryTarget.CHANNEL:
+            if self.channel_id is None:  # pragma: no cover - constructor validates this
+                raise AssertionError("channel delivery lost its channel ID")
+            return self.channel_id
+        return self.thread_id
 
 
 @unique
@@ -475,6 +519,8 @@ def prepare_outbox_operations(
     phase: DebatePhase | None = None,
     plan_id: str | None = None,
     delivery_sequence_start: int | None = None,
+    delivery_target: DiscordDeliveryTarget = DiscordDeliveryTarget.THREAD,
+    channel_id: str | None = None,
 ) -> tuple[OutboxOperation, ...]:
     """Build deterministic, content-addressed prepared operations for one logical post."""
 
@@ -504,6 +550,8 @@ def prepare_outbox_operations(
             deadline_at=(
                 None if record_schema_version == 1 else created_at + timedelta(minutes=15)
             ),
+            delivery_target=delivery_target,
+            channel_id=channel_id,
         )
         for sequence, chunk in enumerate(chunks)
     )
@@ -525,22 +573,6 @@ def prepare_terminal_outbox_operations(
     if snapshot.thread_id is None:
         raise ValueError("terminal delivery requires a bound Discord thread")
     content = _terminal_content(snapshot, target_phase=target_phase, error_code=error_code)
-    if target_phase is not DebatePhase.COMPLETED and snapshot.affection_assessment is not None:
-        if participant_display_names is None:
-            raise ValueError("settled affection delivery requires participant display names")
-        display_names = dict(participant_display_names)
-        if set(display_names) != set(PARTICIPANTS):
-            raise ValueError(
-                "settled affection delivery requires each participant display name exactly once"
-            )
-        affection_sections = _affection_result_sections(
-            snapshot,
-            participant_display_names={
-                participant: sanitize_discord_model_text(display_names[participant])
-                for participant in PARTICIPANTS
-            },
-        )
-        content = "\n".join((content, "", *affection_sections))
     chunks = split_discord_message(content)
     if target_phase is DebatePhase.COMPLETED:
         decision = snapshot.final_decision
@@ -612,7 +644,15 @@ def prepare_terminal_outbox_operations(
                 COMPLETED_DELIVERY_SEQUENCE_START + MAX_COMPLETED_RESULT_CHUNKS
             ),
         )
-        return (*result_operations, *decision_operations)
+        affection_operations = _prepare_affection_result_operations(
+            snapshot,
+            participant_display_names=display_names,
+            target_phase=target_phase,
+            plan_id=plan_id,
+            created_at=created_at,
+            delivery_sequence=COMPLETED_AFFECTION_DELIVERY_SEQUENCE,
+        )
+        return (*result_operations, *decision_operations, *affection_operations)
     if len(chunks) > MAX_TERMINAL_OUTBOX_CHUNKS:
         raise ValueError("terminal delivery exceeds the bounded chunk count")
     if (
@@ -639,7 +679,7 @@ def prepare_terminal_outbox_operations(
         )
         for sequence in range(len(chunks))
     )
-    return prepare_outbox_operations(
+    notice_operations = prepare_outbox_operations(
         operation_prefix=operation_prefix,
         debate_id=snapshot.state.debate_id,
         attempt_id=snapshot.state.attempt_id,
@@ -653,6 +693,28 @@ def prepare_terminal_outbox_operations(
         plan_id=plan_id,
         delivery_sequence_start=delivery_sequence_start,
     )
+    if snapshot.affection_assessment is None:
+        return notice_operations
+    if participant_display_names is None:
+        raise ValueError("settled affection delivery requires participant display names")
+    display_names = dict(participant_display_names)
+    if set(display_names) != set(PARTICIPANTS):
+        raise ValueError(
+            "settled affection delivery requires each participant display name exactly once"
+        )
+    affection_sequence = {
+        DebatePhase.FAILED: FAILED_AFFECTION_DELIVERY_SEQUENCE,
+        DebatePhase.CANCELLED: CANCELLED_AFFECTION_DELIVERY_SEQUENCE,
+    }[target_phase]
+    affection_operations = _prepare_affection_result_operations(
+        snapshot,
+        participant_display_names=display_names,
+        target_phase=target_phase,
+        plan_id=plan_id,
+        created_at=created_at,
+        delivery_sequence=affection_sequence,
+    )
+    return (*notice_operations, *affection_operations)
 
 
 def prepare_initial_opinion_outbox_operations(
@@ -929,33 +991,98 @@ def _completed_result_content(
     ]
     if len(leaders) > 1:
         sections.append("同票のため、規定の評価基準で勝者を決定しました。")
-    sections.extend(_affection_result_sections(snapshot, participant_display_names=display_names))
     return "\n".join(sections)
 
 
-def _affection_result_sections(
+def _prepare_affection_result_operations(
     snapshot: DebateSnapshot,
     *,
     participant_display_names: Mapping[ParticipantSlot, str],
-) -> tuple[str, ...]:
-    """Render the durable effective change without exposing scoring rationale."""
+    target_phase: DebatePhase,
+    plan_id: str,
+    created_at: datetime,
+    delivery_sequence: int,
+) -> tuple[OutboxOperation, ...]:
+    """Build one moderator-owned parent-channel result from durable assessment data."""
 
     assessment = snapshot.affection_assessment
     if assessment is None:
         return ()
-    if assessment.status is AffectionAssessmentStatus.UNAVAILABLE:
-        return (
-            "**親愛度の変化**",
-            "質問の評価を完了できなかったため、親愛度は変更していません。",
-        )
-    return (
-        "**親愛度の変化**",
-        *(
-            f"- {participant_display_names[item.participant]}: "
-            f"{item.after}点\uff08{item.applied_delta:+d}\uff09"
-            for item in assessment.participants
-        ),
+    content = _affection_result_content(
+        snapshot,
+        participant_display_names=participant_display_names,
     )
+    chunks = split_discord_message(content)
+    if len(chunks) != MAX_AFFECTION_RESULT_CHUNKS:
+        raise ValueError("affection result must fit in one Discord message")
+    if snapshot.thread_id is None:  # pragma: no cover - terminal constructor validates this
+        raise ValueError("affection result requires a bound Discord thread")
+    return prepare_outbox_operations(
+        operation_prefix=f"terminal-{target_phase.value}-affection",
+        debate_id=snapshot.state.debate_id,
+        attempt_id=snapshot.state.attempt_id,
+        bot_slot=DiscordBotSlot.MODERATOR,
+        thread_id=snapshot.thread_id,
+        content=content,
+        nonce_sources=(
+            _derived_uuid7(
+                snapshot.state.attempt_id,
+                phase=target_phase,
+                bot_slot=DiscordBotSlot.MODERATOR,
+                sequence=delivery_sequence,
+            ),
+        ),
+        created_at=created_at,
+        record_schema_version=3,
+        phase=target_phase,
+        plan_id=plan_id,
+        delivery_sequence_start=delivery_sequence,
+        delivery_target=DiscordDeliveryTarget.CHANNEL,
+        channel_id=snapshot.channel_id,
+    )
+
+
+def _affection_result_content(
+    snapshot: DebateSnapshot,
+    *,
+    participant_display_names: Mapping[ParticipantSlot, str],
+) -> str:
+    """Render one graphical, rationale-free affection result for the parent channel."""
+
+    assessment = snapshot.affection_assessment
+    if assessment is None:  # pragma: no cover - operation constructor validates this
+        raise ValueError("affection result requires a settled assessment")
+    requester = sanitize_discord_model_text(snapshot.requester_display_name)
+    sections = [f"## 💗 {requester}の親愛度結果"]
+    if assessment.status is AffectionAssessmentStatus.UNAVAILABLE:
+        sections.extend(
+            (
+                "> ⚠️ 質問の評価を完了できなかったため、",
+                "> 親愛度は変更していません。",
+            )
+        )
+        return "\n".join(sections)
+
+    participant_icons = {
+        ParticipantSlot.PARTICIPANT_A: "🩵",
+        ParticipantSlot.PARTICIPANT_B: "💙",
+        ParticipantSlot.PARTICIPANT_C: "💜",
+    }
+    delta_icons = {-1: "📉", 0: "⚪", 1: "📈"}
+    for item in assessment.participants:
+        display_name = sanitize_discord_model_text(participant_display_names[item.participant])
+        filled_count = item.after // 100
+        heart_bar = "💗" * filled_count + "🤍" * (10 - filled_count)
+        delta_direction = (item.applied_delta > 0) - (item.applied_delta < 0)
+        sections.extend(
+            (
+                f"### {participant_icons[item.participant]} {display_name}",
+                f"> {heart_bar}",
+                f"> **{item.after}点** / 1000　"
+                f"{delta_icons[delta_direction]} **{item.applied_delta:+d}**",
+            )
+        )
+    return "\n".join(sections)
 
 
 def _derived_uuid7(

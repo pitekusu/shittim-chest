@@ -163,9 +163,9 @@ class DynamoDbOutboxRepository:
         _require_same_attempt(expected, operation)
         if operation.status is not OutboxStatus.PREPARED or operation.delivery_attempt != 0:
             raise RepositoryConflict("new outbox operation must be prepared and unattempted")
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             raise RepositoryConflict(
-                "outbox v2 must be staged atomically with its phase delivery plan"
+                "versioned outbox must be staged atomically with its phase delivery plan"
             )
         existing = self._get(operation.debate_id, operation.attempt_id, operation.operation_id)
         if existing is not None:
@@ -231,7 +231,7 @@ class DynamoDbOutboxRepository:
             raise RepositoryConflict("outbox operation does not exist")
         if operation.status in {OutboxStatus.SENT, OutboxStatus.ABANDONED}:
             return None
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             if operation.delivery_attempt >= MAX_OUTBOX_DELIVERY_ATTEMPTS:
                 return None
             if operation.deadline_at is None or operation.deadline_at <= at:
@@ -281,17 +281,17 @@ class DynamoDbOutboxRepository:
             raw_values[":expected_retry"] = _timestamp(operation.next_retry_at)
             retry_condition = "next_retry_at=:expected_retry AND next_retry_at <= :at"
         identity_condition = "content_hash=:content_hash AND created_at=:created"
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             if (
                 operation.plan_id is None
                 or operation.phase is None
                 or operation.delivery_sequence is None
                 or operation.deadline_at is None
             ):
-                raise RepositoryConflict("outbox v2 identity is incomplete")
+                raise RepositoryConflict("versioned outbox identity is incomplete")
             raw_values.update(
                 {
-                    ":record_schema": 2,
+                    ":record_schema": operation.record_schema_version,
                     ":plan": operation.plan_id,
                     ":phase": operation.phase.value,
                     ":delivery_sequence": operation.delivery_sequence,
@@ -303,6 +303,18 @@ class DynamoDbOutboxRepository:
                 "AND phase=:phase AND delivery_sequence=:delivery_sequence "
                 "AND deadline_at=:deadline"
             )
+            if operation.record_schema_version == 3:
+                if operation.channel_id is None:
+                    raise RepositoryConflict("parent-channel outbox identity is incomplete")
+                raw_values.update(
+                    {
+                        ":delivery_target": operation.delivery_target.value,
+                        ":channel": operation.channel_id,
+                    }
+                )
+                identity_condition += (
+                    " AND delivery_target=:delivery_target AND channel_id=:channel"
+                )
         update = cast(
             TransactWriteItemTypeDef,
             {
@@ -331,7 +343,7 @@ class DynamoDbOutboxRepository:
             self._current_attempt_check(expected),
             self._lease_check(expected, at, operation=operation),
         ]
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             actions.append(
                 self._phase_plan_check(
                     expected,
@@ -353,7 +365,7 @@ class DynamoDbOutboxRepository:
             RepositoryTransactionAction.ATTEMPT_CAS,
             RepositoryTransactionAction.LEASE_FENCE,
         ]
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             action_kinds.append(RepositoryTransactionAction.PHASE_DELIVERY_PLAN)
         action_kinds.append(RepositoryTransactionAction.OUTBOX_OPERATION)
         if not reclaim:
@@ -423,7 +435,7 @@ class DynamoDbOutboxRepository:
             RepositoryTransactionAction.ATTEMPT_CAS,
             RepositoryTransactionAction.LEASE_FENCE,
         ]
-        if observed.record_schema_version == 2:
+        if observed.record_schema_version in {2, 3}:
             actions.append(
                 self._phase_plan_check(
                     expected,
@@ -478,7 +490,7 @@ class DynamoDbOutboxRepository:
             return current
         if current != observed:
             raise RepositoryConflict("outbox claim changed before reconciliation")
-        if observed.record_schema_version != 2 or observed.delivery_attempt < 1:
+        if observed.record_schema_version not in {2, 3} or observed.delivery_attempt < 1:
             raise RepositoryConflict("outbox operation has no delivery to reconcile")
         if observed.status is OutboxStatus.CLAIMED:
             if observed.claim_expires_at is None or observed.claim_expires_at >= at:
@@ -602,7 +614,7 @@ class DynamoDbOutboxRepository:
             RepositoryTransactionAction.ATTEMPT_CAS,
             RepositoryTransactionAction.LEASE_FENCE,
         ]
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             actions.append(
                 self._phase_plan_check(
                     expected,
@@ -654,7 +666,7 @@ class DynamoDbOutboxRepository:
         operation: OutboxOperation,
     ) -> bool:
         operations = self._query_attempt_outbox(operation.debate_id, operation.attempt_id)
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             plan = self._expected_phase_plan(expected, operation)
             by_operation_id = {candidate.operation_id: candidate for candidate in operations}
             if len(by_operation_id) != len(operations):
@@ -669,7 +681,7 @@ class DynamoDbOutboxRepository:
             ):
                 candidate = by_operation_id[operation_id]
                 if (
-                    candidate.record_schema_version != 2
+                    candidate.record_schema_version not in {2, 3}
                     or candidate.plan_id != plan.plan_id
                     or candidate.phase is not plan.target_phase
                     or candidate.content_hash != content_hash
@@ -844,7 +856,7 @@ class DynamoDbOutboxRepository:
             "AND fencing_token=:token AND lease_expiry >= :at"
         )
         names: dict[str, str] = {}
-        if operation.record_schema_version == 2:
+        if operation.record_schema_version in {2, 3}:
             plan = self._expected_phase_plan(expected, operation)
             values.update(
                 {
@@ -973,12 +985,12 @@ class DynamoDbOutboxRepository:
         plan = expected.terminal_delivery
         if (
             not isinstance(plan, PhaseDeliveryPlan)
-            or operation.record_schema_version != 2
+            or operation.record_schema_version not in {2, 3}
             or operation.plan_id != plan.plan_id
             or operation.phase is not plan.target_phase
             or operation.operation_id not in plan.operation_ids
         ):
-            raise RepositoryConflict("outbox v2 is not bound to the current phase plan")
+            raise RepositoryConflict("versioned outbox is not bound to the current phase plan")
         index = plan.operation_ids.index(operation.operation_id)
         if (
             operation.content_hash != plan.content_hashes[index]
@@ -986,7 +998,7 @@ class DynamoDbOutboxRepository:
             or operation.deadline_at != plan.deadline_at
             or operation.created_at != plan.staged_at
         ):
-            raise RepositoryConflict("outbox v2 identity conflicts with its phase plan")
+            raise RepositoryConflict("versioned outbox identity conflicts with its phase plan")
         return plan
 
     def _outbox_activity_action(
@@ -1151,7 +1163,7 @@ def _operation_identity_condition(
             or operation.delivery_sequence is None
             or operation.deadline_at is None
         ):
-            raise RepositoryConflict("outbox v2 identity is incomplete")
+            raise RepositoryConflict("versioned outbox identity is incomplete")
         values.update(
             {
                 ":phase": operation.phase.value,
@@ -1164,6 +1176,16 @@ def _operation_identity_condition(
             "AND record_schema_version=:record_schema AND phase=:phase AND plan_id=:plan "
             "AND delivery_sequence=:delivery_sequence AND deadline_at=:deadline "
         )
+        if operation.record_schema_version == 3:
+            if operation.channel_id is None:
+                raise RepositoryConflict("parent-channel outbox identity is incomplete")
+            values.update(
+                {
+                    ":delivery_target": operation.delivery_target.value,
+                    ":channel": operation.channel_id,
+                }
+            )
+            condition += "AND delivery_target=:delivery_target AND channel_id=:channel "
     return condition, values
 
 
@@ -1230,6 +1252,8 @@ def _same_outbox_identity(first: OutboxOperation, second: OutboxOperation) -> bo
         and first.attempt_id == second.attempt_id
         and first.bot_slot is second.bot_slot
         and first.thread_id == second.thread_id
+        and first.delivery_target is second.delivery_target
+        and first.channel_id == second.channel_id
         and first.content == second.content
         and first.content_hash == second.content_hash
         and first.nonce == second.nonce

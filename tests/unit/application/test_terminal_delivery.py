@@ -12,6 +12,7 @@ import pytest
 from shittim_chest.application import (
     DebateSnapshot,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     OutboxOperation,
     OutboxStatus,
     TerminalDeliveryPlan,
@@ -165,10 +166,61 @@ def test_completed_delivery_reports_effective_affection_changes() -> None:
         participant_display_names=DISPLAY_NAMES,
     )
 
-    assert "**親愛度の変化**" in operations[0].content
-    assert "- アロナ: 625点\uff08+35\uff09" in operations[0].content
-    assert "- プラナ: 55点\uff08-43\uff09" in operations[0].content
-    assert "- 安倍晋三: 1000点\uff08+13\uff09" in operations[0].content
+    affection = operations[-1]
+    assert "親愛度" not in operations[0].content
+    assert affection.operation_id == "terminal-completed-affection-0000"
+    assert affection.bot_slot is DiscordBotSlot.MODERATOR
+    assert affection.thread_id == "103"
+    assert affection.channel_id == "102"
+    assert affection.delivery_target is DiscordDeliveryTarget.CHANNEL
+    assert affection.delivery_target_id == "102"
+    assert affection.record_schema_version == 3
+    assert affection.delivery_sequence == 320
+    assert "## 💗 ぬしの親愛度結果" in affection.content
+    assert "### 🩵 アロナ" in affection.content
+    assert "💗💗💗💗💗💗🤍🤍🤍🤍" in affection.content
+    assert "**625点** / 1000　📈 **+35**" in affection.content
+    assert "### 💙 プラナ" in affection.content
+    assert "🤍🤍🤍🤍🤍🤍🤍🤍🤍🤍" in affection.content
+    assert "**55点** / 1000　📉 **-43**" in affection.content
+    assert "### 💜 安倍晋三" in affection.content
+    assert "💗💗💗💗💗💗💗💗💗💗" in affection.content
+    assert "**1000点** / 1000　📈 **+13**" in affection.content
+
+
+def test_affection_channel_post_matches_the_requester_facing_result_contract() -> None:
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=(
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_A, 500, 32, 32, 532),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_B, 500, -12, -12, 488),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_C, 500, -20, -20, 480),
+        ),
+        assessed_at=NOW,
+    )
+    source = replace(
+        snapshot(final_decision=final_decision(), affection_assessment=assessment),
+        requester_display_name="パワー系ウナギ",
+    )
+
+    affection = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW,
+        participant_display_names={
+            **DISPLAY_NAMES,
+            ParticipantSlot.PARTICIPANT_C: "安倍晋三AI",
+        },
+    )[-1]
+
+    assert affection.content.startswith("## 💗 パワー系ウナギの親愛度結果")
+    assert "### 🩵 アロナ" in affection.content
+    assert "**532点** / 1000　📈 **+32**" in affection.content
+    assert "### 💙 プラナ" in affection.content
+    assert "**488点** / 1000　📉 **-12**" in affection.content
+    assert "### 💜 安倍晋三AI" in affection.content
+    assert "**480点** / 1000　📉 **-20**" in affection.content
 
 
 def test_completed_delivery_explains_unavailable_affection_without_zeroing_scores() -> None:
@@ -189,8 +241,12 @@ def test_completed_delivery_explains_unavailable_affection_without_zeroing_score
         participant_display_names=DISPLAY_NAMES,
     )
 
-    assert "質問の評価を完了できなかったため、親愛度は変更していません。" in (operations[0].content)
-    assert "500点" not in operations[0].content
+    affection = operations[-1]
+    assert "親愛度" not in operations[0].content
+    assert "質問の評価を完了できなかったため、" in affection.content
+    assert "親愛度は変更していません。" in affection.content
+    assert "500点" not in affection.content
+    assert affection.delivery_target is DiscordDeliveryTarget.CHANNEL
 
 
 def test_completed_delivery_explains_a_tied_ballot_before_the_winner_speaks() -> None:
@@ -307,11 +363,16 @@ def test_failed_and_cancelled_delivery_preserve_applied_affection_visibility() -
         participant_display_names=DISPLAY_NAMES,
     )
 
-    for content in (failed[0].content, cancelled[0].content):
-        assert "**親愛度の変化**" in content
-        assert "アロナ: 535点\uff08+35\uff09" in content
-        assert "プラナ: 457点\uff08-43\uff09" in content
-        assert "安倍晋三: 1000点\uff08+13\uff09" in content
+    for operations, expected_sequence in ((failed, 910), (cancelled, 920)):
+        assert "親愛度" not in operations[0].content
+        affection = operations[-1]
+        assert affection.delivery_sequence == expected_sequence
+        assert affection.delivery_target is DiscordDeliveryTarget.CHANNEL
+        assert affection.channel_id == "102"
+        assert "### 🩵 アロナ" in affection.content
+        assert "**535点** / 1000　📈 **+35**" in affection.content
+        assert "**457点** / 1000　📉 **-43**" in affection.content
+        assert "**1000点** / 1000　📈 **+13**" in affection.content
 
 
 @pytest.mark.parametrize(

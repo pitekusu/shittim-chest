@@ -18,6 +18,7 @@ from shittim_chest.application import (
     DebateApplication,
     DebateNotFound,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     GenerationProviderError,
     IngressClaimFence,
     IngressKind,
@@ -172,7 +173,7 @@ def request(*, requester_id: str = "requester") -> AcceptDebateRequest:
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         operation_id="accept-operation",
     )
 
@@ -511,10 +512,15 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     assert completed_operations
     assert completed_operations[0].bot_slot is DiscordBotSlot.MODERATOR
     assert all(
-        operation.bot_slot is DiscordBotSlot.PARTICIPANT_B for operation in completed_operations[1:]
+        operation.bot_slot is DiscordBotSlot.PARTICIPANT_B
+        for operation in completed_operations[1:-1]
     )
+    affection_operation = completed_operations[-1]
+    assert affection_operation.bot_slot is DiscordBotSlot.MODERATOR
+    assert affection_operation.delivery_target is DiscordDeliveryTarget.CHANNEL
+    assert affection_operation.channel_id == "100"
     assert "persona victory message" in "\n".join(
-        operation.content for operation in completed_operations[1:]
+        operation.content for operation in completed_operations[1:-1]
     )
     assert MetricEvent.COMPLETED in {event for event, _ in metrics.events}
     assert [item.state.phase for item in repository.history[accepted.debate_id]] == [
@@ -882,7 +888,7 @@ async def test_final_proposal_recovery_uses_one_successor_call_per_participant(
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         created_at=accepted_at,
         attempt_created_at=accepted_at,
         starter_message_id="101",
@@ -1106,7 +1112,7 @@ async def test_vote_recovery_uses_one_successor_call_per_participant(
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         created_at=accepted_at,
         attempt_created_at=accepted_at,
         starter_message_id="101",
@@ -1223,7 +1229,7 @@ async def test_vote_generation_exhaustion_stops_before_a_third_logical_call(
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         created_at=accepted_at,
         attempt_created_at=accepted_at,
         starter_message_id="101",
@@ -1289,7 +1295,7 @@ async def test_complete_legacy_ballot_is_delivered_without_regeneration(
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         created_at=accepted_at,
         attempt_created_at=accepted_at,
         starter_message_id="101",
@@ -1424,7 +1430,7 @@ async def test_initial_opinion_generation_recovery_uses_one_successor_call_per_p
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         created_at=accepted_at,
         attempt_created_at=accepted_at,
         starter_message_id="101",
@@ -1501,7 +1507,7 @@ async def test_initial_opinion_generation_stops_before_a_third_logical_call(
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         created_at=accepted_at,
         attempt_created_at=accepted_at,
         starter_message_id="101",
@@ -1738,7 +1744,7 @@ def test_accept_request_preserves_unicode_names_without_normalization() -> None:
         requester_username=" Pitekusu\u3000",
         requester_display_name=" ぬし ",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         operation_id="operation",
     )
     assert request.requester_username == " Pitekusu\u3000"
@@ -3003,7 +3009,7 @@ async def test_recovery_reuses_every_completed_phase_artifact(
         requester_username="pitekusu",
         requester_display_name="ぬし",
         guild_id="guild",
-        channel_id="channel",
+        channel_id="100",
         created_at=state.updated_at,
         attempt_created_at=state.updated_at,
         starter_message_id="101",

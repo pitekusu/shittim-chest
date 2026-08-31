@@ -25,6 +25,7 @@ from shittim_chest.application.discord import (
     DISCORD_BOT_SLOTS,
     OUTBOX_CLAIM_SECONDS,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     OutboxOperation,
     OutboxStatus,
     content_sha256,
@@ -122,18 +123,18 @@ class DiscordPyPublisher:
         try:
             async with asyncio.timeout(delivery_timeout):
                 client = self._ready_client(claimed.bot_slot)
-                thread = await self._resolve_thread(client, expected, claimed)
-                if thread.locked:
+                target = await self._resolve_target(client, expected, claimed)
+                if isinstance(target, discord.Thread) and target.locked:
                     raise DiscordThreadLocked
 
                 if claimed.delivery_attempt > 1:
-                    reconciled = await self._find_existing(client, thread, claimed)
+                    reconciled = await self._find_existing(client, target, claimed)
                     if reconciled is not None:
                         message_id = reconciled.id
                     else:
-                        message_id = await self._send(client, thread, claimed)
+                        message_id = await self._send(client, target, claimed)
                 else:
-                    message_id = await self._send(client, thread, claimed)
+                    message_id = await self._send(client, target, claimed)
             return await self._complete(expected, claimed, message_id)
         except asyncio.CancelledError:
             raise
@@ -186,8 +187,8 @@ class DiscordPyPublisher:
         try:
             async with asyncio.timeout(self._delivery_timeout_seconds):
                 client = self._ready_client(operation.bot_slot)
-                thread = await self._resolve_thread(client, expected, operation)
-                existing = await self._find_existing(client, thread, operation)
+                target = await self._resolve_target(client, expected, operation)
+                existing = await self._find_existing(client, target, operation)
             if existing is None:
                 return None
             return await self._outbox.mark_reconciled_sent(
@@ -217,16 +218,26 @@ class DiscordPyPublisher:
             raise DiscordIdentityUnavailable
         return client
 
-    async def _resolve_thread(
+    async def _resolve_target(
         self,
         client: discord.Client,
         expected: DebateSnapshot,
         operation: OutboxOperation,
-    ) -> discord.Thread:
-        channel = client.get_channel(int(operation.thread_id))
+    ) -> discord.Thread | discord.TextChannel:
+        if operation.thread_id != expected.thread_id:
+            raise DiscordThreadUnavailable
+        if (
+            operation.delivery_target is DiscordDeliveryTarget.CHANNEL
+            and operation.channel_id != expected.channel_id
+        ):
+            raise DiscordThreadUnavailable
+        channel = client.get_channel(int(operation.delivery_target_id))
         if channel is None:
-            channel = await client.fetch_channel(int(operation.thread_id))
-        if not isinstance(channel, discord.Thread):
+            channel = await client.fetch_channel(int(operation.delivery_target_id))
+        if operation.delivery_target is DiscordDeliveryTarget.THREAD:
+            if not isinstance(channel, discord.Thread):
+                raise DiscordThreadUnavailable
+        elif not isinstance(channel, discord.TextChannel):
             raise DiscordThreadUnavailable
         if str(channel.guild.id) != expected.guild_id:
             raise DiscordThreadUnavailable
@@ -235,7 +246,7 @@ class DiscordPyPublisher:
     async def _find_existing(
         self,
         client: discord.Client,
-        thread: discord.Thread,
+        target: discord.Thread | discord.TextChannel,
         operation: OutboxOperation,
     ) -> discord.Message | None:
         user = client.user
@@ -243,7 +254,7 @@ class DiscordPyPublisher:
             raise DiscordIdentityUnavailable
         matched: discord.Message | None = None
         inspected = 0
-        async for message in thread.history(
+        async for message in target.history(
             limit=self._history_limit,
             after=operation.created_at,
             oldest_first=True,
@@ -272,7 +283,7 @@ class DiscordPyPublisher:
         if user is None:
             raise DiscordIdentityUnavailable
         if (
-            str(message.channel.id) != operation.thread_id
+            str(message.channel.id) != operation.delivery_target_id
             or message.author.id != user.id
             or str(message.nonce) != operation.nonce
             or message.content != operation.content
@@ -283,10 +294,10 @@ class DiscordPyPublisher:
     async def _send(
         self,
         client: discord.Client,
-        thread: discord.Thread,
+        target: discord.Thread | discord.TextChannel,
         operation: OutboxOperation,
     ) -> int:
-        message = await thread.send(
+        message = await target.send(
             operation.content,
             nonce=operation.nonce,
             allowed_mentions=discord.AllowedMentions.none(),

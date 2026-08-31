@@ -722,7 +722,7 @@ def test_outbox_rejects_persisted_hash_schema_deadline_and_result_conflicts() ->
     with pytest.raises(ValueError, match="must match the UTF-8"):
         replace(legacy, content_hash="a" * 64)
     with pytest.raises(ValueError, match="unsupported outbox"):
-        replace(legacy, record_schema_version=3)
+        replace(legacy, record_schema_version=4)
     with pytest.raises(ValueError, match="delivery sequence"):
         replace(v2, delivery_sequence=True)
     with pytest.raises(ValueError, match="exactly 15 minutes"):
@@ -736,7 +736,7 @@ def test_outbox_rejects_persisted_hash_schema_deadline_and_result_conflicts() ->
             message_id=MESSAGE_ID,
             sent_at=NOW + timedelta(seconds=1),
         )
-    with pytest.raises(ValueError, match="only outbox v2"):
+    with pytest.raises(ValueError, match="only a versioned outbox"):
         replace(
             legacy,
             status=OutboxStatus.ABANDONED,
