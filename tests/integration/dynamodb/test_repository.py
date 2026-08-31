@@ -26,6 +26,7 @@ from shittim_chest.application import (
     DebateSnapshot,
     DeliveryAbandonReason,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     GenerationCheckpoint,
     IngressClaimFence,
     IngressKind,
@@ -2295,6 +2296,7 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
     accepted = await repository.create(
         replace(
             new_snapshot(),
+            channel_id="500",
             starter_message_id="501",
             thread_id="502",
             control_panel_message_id="503",
@@ -2326,6 +2328,16 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
         terminal_at=NOW + timedelta(seconds=1),
         error_code="test_failure",
     )
+    affection_post = await outbox.get(
+        debate_id=persisted_failed.state.debate_id,
+        attempt_id=persisted_failed.state.attempt_id,
+        operation_id="terminal-failed-affection-0000",
+    )
+    assert affection_post is not None
+    assert affection_post.status is OutboxStatus.SENT
+    assert affection_post.record_schema_version == 3
+    assert affection_post.delivery_target is DiscordDeliveryTarget.CHANNEL
+    assert affection_post.channel_id == "500"
     failed_panel_claim = await repository.claim_panel_refresh(
         debate_id=persisted_failed.state.debate_id,
         attempt_id=persisted_failed.state.attempt_id,

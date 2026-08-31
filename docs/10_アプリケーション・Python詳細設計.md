@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-14
+updated: 2026-08-31
 ---
 
 # アプリケーション・Python詳細設計
@@ -48,14 +48,16 @@ Serviceは次を順番に実行する。
 5. 全output保存後にphase delivery planとOutboxを原子的にstageする。
 6. 必須Outboxがすべて`SENT`になった場合だけ次phaseへ進む。
 7. voteをPythonで集計しwinnerを固定する。
-8. result／winner decisionの必須delivery後に`completed`へ確定する。
+8. result／winner decisionのthread deliveryと、元channelへの親愛度独立deliveryを同一planにstageし、
+   必須operationがすべて`SENT`になった後に`completed`へ確定する。
 
 Generationはlogical outputごとに最大2 SDK callを許す。結果保存のCASに勝った1件だけを正とし、
 再生成結果で上書きしない。
 
 親愛度評価は討論ごと1回で、CAS競合時はproviderを再呼び出しせず、同じ評価値を
 最新profileの0〜1,000範囲へclampして再適用する。討論評価が既にあるretryでは再評価や
-二重加算を行わない。評価後の討論失敗／取消でもprofileの変更を戻さない。
+二重加算を行わない。評価後の討論失敗／取消でもprofileの変更を戻さず、
+元channelへの独立deliveryをterminal planに含める。
 
 ## 4. Concurrency and cancellation
 

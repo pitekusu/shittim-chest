@@ -31,6 +31,7 @@ from shittim_chest.application import (
     OUTBOX_CLAIM_SECONDS,
     DebateSnapshot,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     LeaseGrant,
     OutboxOperation,
     OutboxRecoveryAbandoned,
@@ -281,6 +282,17 @@ def prepared_v2(
     )
 
 
+def prepared_channel_v3(expected: DebateSnapshot) -> OutboxOperation:
+    return replace(
+        prepared_v2(expected),
+        operation_id="terminal-completed-affection-0000",
+        record_schema_version=3,
+        delivery_sequence=320,
+        delivery_target=DiscordDeliveryTarget.CHANNEL,
+        channel_id=CHANNEL_ID,
+    )
+
+
 def message(
     operation: OutboxOperation,
     *,
@@ -292,7 +304,7 @@ def message(
         discord.Message,
         SimpleNamespace(
             id=message_id,
-            channel=SimpleNamespace(id=int(operation.thread_id)),
+            channel=SimpleNamespace(id=int(operation.delivery_target_id)),
             author=SimpleNamespace(id=user_id),
             nonce=operation.nonce,
             content=operation.content if content is None else content,
@@ -336,6 +348,41 @@ def clients_and_thread(
         client_mock.fetch_channel = AsyncMock(return_value=thread)
         clients[slot] = cast(discord.Client, client_mock)
     return clients, thread, send_mock
+
+
+def clients_and_channel(
+    operation: OutboxOperation,
+) -> tuple[Mapping[DiscordBotSlot, discord.Client], discord.TextChannel, AsyncMock]:
+    channel_mock = MagicMock(spec=discord.TextChannel)
+    channel_mock.guild = SimpleNamespace(id=int(GUILD_ID))
+
+    async def history(
+        *,
+        limit: int,
+        after: datetime,
+        oldest_first: bool,
+    ) -> AsyncIterator[discord.Message]:
+        assert limit == 500
+        assert after == operation.created_at
+        assert oldest_first
+        if False:  # pragma: no cover - retain an async iterator without messages
+            yield message(operation)
+
+    channel_mock.history.side_effect = history
+    send_mock = AsyncMock(return_value=message(operation))
+    channel_mock.send = send_mock
+    channel = cast(discord.TextChannel, channel_mock)
+
+    clients: dict[DiscordBotSlot, discord.Client] = {}
+    for index, slot in enumerate(DISCORD_BOT_SLOTS):
+        client_mock = MagicMock(spec=discord.Client)
+        client_mock.user = SimpleNamespace(id=201 + index)
+        cast(Any, client_mock).http = SimpleNamespace(max_ratelimit_timeout=300.0)
+        client_mock.is_ready.return_value = True
+        client_mock.get_channel.return_value = channel if slot is operation.bot_slot else None
+        client_mock.fetch_channel = AsyncMock(return_value=channel)
+        clients[slot] = cast(discord.Client, client_mock)
+    return clients, channel, send_mock
 
 
 def publisher(
@@ -433,6 +480,56 @@ async def test_publisher_claims_sends_with_safe_mentions_and_completes() -> None
     assert kwargs["nonce"] == operation.nonce
     assert kwargs["allowed_mentions"].to_dict() == {"parse": []}
     assert kwargs["suppress_embeds"] is True
+
+
+@pytest.mark.asyncio
+async def test_publisher_sends_v3_affection_result_to_the_bound_parent_channel() -> None:
+    expected = snapshot()
+    operation = prepared_channel_v3(expected)
+    repository = FakeOutboxRepository(operation)
+    clients, _, send_mock = clients_and_channel(operation)
+    subject = DiscordPyPublisher(
+        clients=clients,
+        outbox=repository,
+        clock=FakeClock(),
+        claim_owner=CLAIM_OWNER,
+    )
+
+    sent = await subject.publish_persisted(
+        expected=expected,
+        operation_id=operation.operation_id,
+    )
+
+    assert sent is not None
+    assert sent.status is OutboxStatus.SENT
+    send_mock.assert_awaited_once()
+    await_args = send_mock.await_args
+    assert await_args is not None
+    kwargs = await_args.kwargs
+    assert kwargs["allowed_mentions"].to_dict() == {"parse": []}
+    assert kwargs["suppress_embeds"] is True
+
+
+@pytest.mark.asyncio
+async def test_publisher_rejects_a_parent_channel_outside_the_attempt_fence() -> None:
+    expected = snapshot()
+    operation = prepared_channel_v3(expected)
+    repository = FakeOutboxRepository(operation)
+    clients, _, send_mock = clients_and_channel(operation)
+    subject = DiscordPyPublisher(
+        clients=clients,
+        outbox=repository,
+        clock=FakeClock(),
+        claim_owner=CLAIM_OWNER,
+    )
+
+    with pytest.raises(DiscordThreadUnavailable):
+        await subject.publish_persisted(
+            expected=replace(expected, channel_id="999"),
+            operation_id=operation.operation_id,
+        )
+
+    send_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

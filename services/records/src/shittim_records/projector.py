@@ -132,7 +132,8 @@ def project_affection_profile(
         updated_at = TypeAdapter(AwareDatetime).validate_python(updated_at_text).astimezone(UTC)
     except OverflowError, ValidationError:
         raise ValueError("source affection timestamp is invalid") from None
-    if updated_at.isoformat() != updated_at_text:
+    source_timestamp = updated_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    if source_timestamp != updated_at_text:
         raise ValueError("source affection timestamp is not canonical UTC")
     requester_key = derive_requester_key(identity_hmac_key, requester_id)
     return cast(
@@ -145,7 +146,7 @@ def project_affection_profile(
             "source_version": version,
             "display_name": display_name,
             "scores": clean_scores,
-            "updated_at": updated_at_text,
+            "updated_at": updated_at.isoformat(),
         },
     )
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from shittim_chest.adapters.dynamodb.serializer import serialize_affection_profile
+from shittim_chest.domain import AffectionProfile
 from tests.factories import NOW
 
 from shittim_records.adapters import BackfillCheckpoint
@@ -250,20 +252,20 @@ def test_completed_dry_run_checkpoint_is_a_terminal_noop() -> None:
 
 
 def test_affection_profile_projection_hashes_private_identity_and_normalizes_scores() -> None:
-    source = {
-        "PK": "AFFECTION#REQUESTER#private-user",
-        "SK": "PROFILE",
-        "schema_version": 8,
-        "record_type": "affection_profile",
-        "requester_id": "private-user",
-        "requester_username": "private-name",
-        "requester_display_name": "Requester",
-        "scores": [625, 55, 987],
-        "version": 3,
-        "updated_at": NOW.isoformat(),
-    }
+    source = serialize_affection_profile(
+        AffectionProfile(
+            requester_id="private-user",
+            requester_username="private-name",
+            requester_display_name="Requester",
+            scores=(625, 55, 987),
+            version=3,
+            updated_at=NOW,
+        )
+    )
 
-    projected = project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)
+    assert source["updated_at"] == NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+    projected = project_affection_profile(source, identity_hmac_key=HMAC_KEY)
 
     assert projected == {
         "PK": "AFFECTION#PROFILE",
@@ -284,18 +286,16 @@ def test_affection_profile_projection_hashes_private_identity_and_normalizes_sco
 
 
 def test_affection_projector_reloads_source_and_converges_statistics() -> None:
-    source_item = {
-        "PK": "AFFECTION#REQUESTER#private-user",
-        "SK": "PROFILE",
-        "schema_version": 8,
-        "record_type": "affection_profile",
-        "requester_id": "private-user",
-        "requester_username": "private-name",
-        "requester_display_name": "Requester",
-        "scores": [500, 501, 502],
-        "version": 1,
-        "updated_at": NOW.isoformat(),
-    }
+    source_item = serialize_affection_profile(
+        AffectionProfile(
+            requester_id="private-user",
+            requester_username="private-name",
+            requester_display_name="Requester",
+            scores=(500, 501, 502),
+            version=1,
+            updated_at=NOW,
+        )
+    )
 
     class Source:
         def load_affection_profile(self, partition_key: str) -> dict[str, object]:

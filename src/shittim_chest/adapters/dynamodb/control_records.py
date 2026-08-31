@@ -895,6 +895,8 @@ _LEGACY_SCAN_FIELDS = (
     "operation_id",
     "bot_slot",
     "thread_id",
+    "delivery_target",
+    "channel_id",
     "content_hash",
     "nonce",
     "chunk_sequence",

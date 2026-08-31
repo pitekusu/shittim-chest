@@ -16,6 +16,7 @@ from shittim_chest.application.deployment_guard import (
 )
 from shittim_chest.application.discord import (
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     OutboxOperation,
     OutboxStatus,
     PanelOperation,
@@ -842,15 +843,22 @@ def serialize_outbox(operation: OutboxOperation) -> DynamoItem:
     _put_optional(item, "next_retry_at", _optional_timestamp(operation.next_retry_at))
     _put_optional(item, "message_id", operation.message_id)
     _put_optional(item, "sent_at", _optional_timestamp(operation.sent_at))
-    if operation.record_schema_version == 2:
+    if operation.record_schema_version in {2, 3}:
         if operation.phase is None or operation.delivery_sequence is None:
-            raise PersistenceFormatError("outbox v2 fields disappeared during serialization")
+            raise PersistenceFormatError("versioned outbox fields disappeared during serialization")
         item.update(
             {
                 "phase": operation.phase.value,
                 "plan_id": operation.plan_id,
                 "delivery_sequence": operation.delivery_sequence,
                 "deadline_at": _optional_timestamp(operation.deadline_at),
+            }
+        )
+    if operation.record_schema_version == 3:
+        item.update(
+            {
+                "delivery_target": operation.delivery_target.value,
+                "channel_id": operation.channel_id,
             }
         )
     _put_optional(item, "abandoned_at", _optional_timestamp(operation.abandoned_at))
@@ -904,6 +912,11 @@ _OUTBOX_V2_OPTIONAL_FIELDS = _OUTBOX_DELIVERY_OPTIONAL_FIELDS | {
     "abandoned_at",
     "abandon_reason",
 }
+_OUTBOX_V3_REQUIRED_FIELDS = _OUTBOX_V2_REQUIRED_FIELDS | {
+    "delivery_target",
+    "channel_id",
+}
+_OUTBOX_V3_OPTIONAL_FIELDS = _OUTBOX_V2_OPTIONAL_FIELDS
 
 
 def deserialize_outbox(raw_item: Mapping[str, DynamoValue]) -> OutboxOperation:
@@ -915,14 +928,18 @@ def deserialize_outbox(raw_item: Mapping[str, DynamoValue]) -> OutboxOperation:
     record_schema_version = (
         1 if "record_schema_version" not in item else _integer(item, "record_schema_version")
     )
-    if record_schema_version not in {1, 2}:
+    if record_schema_version not in {1, 2, 3}:
         raise PersistenceFormatError("invalid outbox operation")
-    required_fields = (
-        _OUTBOX_V2_REQUIRED_FIELDS if record_schema_version == 2 else _OUTBOX_V1_REQUIRED_FIELDS
-    )
-    optional_fields = (
-        _OUTBOX_V2_OPTIONAL_FIELDS if record_schema_version == 2 else _OUTBOX_V1_OPTIONAL_FIELDS
-    )
+    required_fields = {
+        1: _OUTBOX_V1_REQUIRED_FIELDS,
+        2: _OUTBOX_V2_REQUIRED_FIELDS,
+        3: _OUTBOX_V3_REQUIRED_FIELDS,
+    }[record_schema_version]
+    optional_fields = {
+        1: _OUTBOX_V1_OPTIONAL_FIELDS,
+        2: _OUTBOX_V2_OPTIONAL_FIELDS,
+        3: _OUTBOX_V3_OPTIONAL_FIELDS,
+    }[record_schema_version]
     fields = frozenset(item)
     if required_fields - fields or fields - required_fields - optional_fields:
         raise PersistenceFormatError("invalid outbox operation fields")
@@ -954,18 +971,26 @@ def deserialize_outbox(raw_item: Mapping[str, DynamoValue]) -> OutboxOperation:
             message_id=_optional_text(item, "message_id"),
             sent_at=_optional_datetime(item, "sent_at"),
             record_schema_version=record_schema_version,
-            phase=(DebatePhase(_text(item, "phase")) if record_schema_version == 2 else None),
-            plan_id=(_text(item, "plan_id") if record_schema_version == 2 else None),
+            phase=(DebatePhase(_text(item, "phase")) if record_schema_version in {2, 3} else None),
+            plan_id=(_text(item, "plan_id") if record_schema_version in {2, 3} else None),
             delivery_sequence=(
-                _integer(item, "delivery_sequence") if record_schema_version == 2 else None
+                _integer(item, "delivery_sequence") if record_schema_version in {2, 3} else None
             ),
-            deadline_at=(_datetime(item, "deadline_at") if record_schema_version == 2 else None),
+            deadline_at=(
+                _datetime(item, "deadline_at") if record_schema_version in {2, 3} else None
+            ),
             abandoned_at=_optional_datetime(item, "abandoned_at"),
             abandon_reason=(
                 None
                 if "abandon_reason" not in item
                 else DeliveryAbandonReason(_text(item, "abandon_reason"))
             ),
+            delivery_target=(
+                DiscordDeliveryTarget(_text(item, "delivery_target"))
+                if record_schema_version == 3
+                else DiscordDeliveryTarget.THREAD
+            ),
+            channel_id=(_text(item, "channel_id") if record_schema_version == 3 else None),
         )
     except (TypeError, ValueError) as error:
         raise PersistenceFormatError("invalid outbox operation") from error

@@ -31,6 +31,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
 from shittim_chest.application import (
     DebateSnapshot,
     DiscordBotSlot,
+    DiscordDeliveryTarget,
     GenerationCheckpoint,
     LeaseGrant,
     PanelRefreshState,
@@ -669,13 +670,30 @@ def test_outbox_validation_rejects_inconsistent_records() -> None:
     with pytest.raises(PersistenceFormatError, match="key conflicts"):
         deserialize_outbox({**item, "PK": "DEBATE#substituted"})
     with pytest.raises(PersistenceFormatError, match="invalid outbox"):
-        deserialize_outbox({**item, "record_schema_version": 3})
+        deserialize_outbox({**item, "record_schema_version": 4})
     with pytest.raises(PersistenceFormatError, match="fields"):
         deserialize_outbox(
             {key: value for key, value in item.items() if key != "record_schema_version"}
         )
     with pytest.raises(PersistenceFormatError, match="fields"):
         deserialize_outbox({**item, "future_field": "unknown"})
+
+    parent_channel = replace(
+        versioned,
+        record_schema_version=3,
+        delivery_target=DiscordDeliveryTarget.CHANNEL,
+        channel_id="103",
+    )
+    parent_channel_item = serialize_outbox(parent_channel)
+    assert parent_channel_item["delivery_target"] == "channel"
+    assert parent_channel_item["channel_id"] == "103"
+    assert deserialize_outbox(parent_channel_item) == parent_channel
+    with pytest.raises(PersistenceFormatError, match="fields"):
+        deserialize_outbox(
+            {key: value for key, value in parent_channel_item.items() if key != "channel_id"}
+        )
+    with pytest.raises(ValueError, match="outside the debate thread"):
+        replace(parent_channel, channel_id=parent_channel.thread_id)
 
     legacy_item = serialize_outbox(valid)
     legacy_item.pop("record_schema_version")
