@@ -106,18 +106,48 @@ describe("RankingsPage", () => {
         within(affection).getByRole("img", { name: `${participantName}のアイコン` }),
       ).toBeVisible();
     }
-    const fullHearts = within(affection).getByRole("status", {
+    const fullHearts = within(affection).getByRole("figure", {
       name: "安倍晋三AIからパワー系ウナギへの親愛度 1000点（1000点満点、ハート10個中10個）",
     });
     expect(fullHearts.querySelectorAll('svg[data-filled="true"]')).toHaveLength(10);
-    const fiveHearts = within(affection).getByRole("status", {
+    const fiveHearts = within(affection).getByRole("figure", {
       name: "プラナから先生への親愛度 500点（1000点満点、ハート10個中5個）",
     });
     expect(fiveHearts.querySelectorAll('svg[data-filled="true"]')).toHaveLength(5);
-    const fourHearts = within(affection).getByRole("status", {
+    const fourHearts = within(affection).getByRole("figure", {
       name: "安倍晋三AIから先生への親愛度 480点（1000点満点、ハート10個中4個）",
     });
     expect(fourHearts.querySelectorAll('svg[data-filled="true"]')).toHaveLength(4);
+  });
+
+  it("uses the current persona name for its icon without making hearts live regions", async () => {
+    const renamedAffection = affectionRankingsResponse();
+    renamedAffection.rankings[0].displayName = "アロナ改";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const path = requestPath(input);
+        return Promise.resolve(
+          response(
+            path.startsWith("/api/v1/insights/affection-rankings?")
+              ? renamedAffection
+              : insightResponse(path),
+          ),
+        );
+      }),
+    );
+
+    renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
+
+    const affection = await screen.findByRole("region", { name: "親愛度ランキング" });
+    expect(await within(affection).findByRole("heading", { name: "アロナ改" })).toBeVisible();
+    expect(await within(affection).findByRole("img", { name: "アロナ改のアイコン" })).toBeVisible();
+    expect(
+      within(affection).queryByRole("img", { name: "アロナのアイコン" }),
+    ).not.toBeInTheDocument();
+    const heartsLabel = "アロナ改からパワー系ウナギへの親愛度 987点（1000点満点、ハート10個中9個）";
+    expect(within(affection).getByRole("figure", { name: heartsLabel })).toBeVisible();
+    expect(within(affection).queryByRole("status", { name: heartsLabel })).not.toBeInTheDocument();
   });
 
   it("fetches costs independently when the Japanese period changes", async () => {

@@ -289,23 +289,20 @@ const AFFECTION_VARIANTS: Readonly<Record<ParticipantSlot, string>> = {
   "participant-b": rankingStyles.affectionPink,
   "participant-c": rankingStyles.affectionLavender,
 };
-const AFFECTION_PERSONA_AVATARS: Readonly<Record<ParticipantSlot, AvatarRef>> = {
+const AFFECTION_PERSONA_AVATARS: Readonly<Record<ParticipantSlot, Omit<AvatarRef, "alt">>> = {
   "participant-a": {
     kind: "image",
     url: new URL("../../scripts/og-image-assets/participant-a.webp", import.meta.url).href,
-    alt: "アロナのアイコン",
     fallbackVariant: "cyan",
   },
   "participant-b": {
     kind: "image",
     url: new URL("../../scripts/og-image-assets/participant-b.webp", import.meta.url).href,
-    alt: "プラナのアイコン",
     fallbackVariant: "pink",
   },
   "participant-c": {
     kind: "image",
     url: new URL("../../scripts/og-image-assets/participant-c.webp", import.meta.url).href,
-    alt: "安倍晋三AIのアイコン",
     fallbackVariant: "lavender",
   },
 };
@@ -436,7 +433,12 @@ function AffectionRankingCard({
       aria-labelledby={titleId}
     >
       <header>
-        <Avatar avatar={AFFECTION_PERSONA_AVATARS[ranking.participant]} />
+        <Avatar
+          avatar={{
+            ...AFFECTION_PERSONA_AVATARS[ranking.participant],
+            alt: `${ranking.displayName}のアイコン`,
+          }}
+        />
         <h3 id={titleId}>{ranking.displayName}</h3>
       </header>
       {ranking.entries.length === 0 ? (
@@ -485,7 +487,7 @@ function AffectionHearts({
           Math.max(0, Math.floor((score * AFFECTION_HEART_COUNT) / maxScore)),
         );
   return (
-    <output
+    <figure
       className={rankingStyles.affectionHearts}
       aria-label={`${participantName}から${requesterName}への親愛度 ${score}点（${maxScore}点満点、ハート${AFFECTION_HEART_COUNT}個中${filledHearts}個）`}
     >
@@ -505,7 +507,7 @@ function AffectionHearts({
           </svg>
         );
       })}
-    </output>
+    </figure>
   );
 }
 

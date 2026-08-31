@@ -649,6 +649,7 @@
   display: grid;
   width: min(100%, 150px);
   min-width: 0;
+  margin: 0;
   grid-column: 3 / -1;
   grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: 3px;

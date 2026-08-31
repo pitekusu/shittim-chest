@@ -1306,15 +1306,15 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
       affection.getByRole("img", { name: `${participantName}のアイコン` }),
     ).toBeVisible();
   }
-  const nineHearts = affection.getByRole("status", {
+  const nineHearts = affection.getByRole("figure", {
     name: "安倍晋三AIからパワー系ウナギへの親愛度 987点（1000点満点、ハート10個中9個）",
   });
   await expect(nineHearts.locator('svg[data-filled="true"]')).toHaveCount(9);
-  const fiveHearts = affection.getByRole("status", {
+  const fiveHearts = affection.getByRole("figure", {
     name: "プラナから先生への親愛度 500点（1000点満点、ハート10個中5個）",
   });
   await expect(fiveHearts.locator('svg[data-filled="true"]')).toHaveCount(5);
-  const fourHearts = affection.getByRole("status", {
+  const fourHearts = affection.getByRole("figure", {
     name: "安倍晋三AIから先生への親愛度 480点（1000点満点、ハート10個中4個）",
   });
   await expect(fourHearts.locator('svg[data-filled="true"]')).toHaveCount(4);
