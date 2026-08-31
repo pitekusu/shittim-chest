@@ -591,21 +591,8 @@
 }
 
 .affectionRankingCard h3 {
-  margin: 1px 0 0;
-  font-size: 1rem;
-}
-
-.affectionRankingCard header span:not(.affectionDiamond) {
-  color: var(--records-ink-600);
-  font-size: 0.66rem;
-}
-
-.affectionDiamond {
-  width: 13px;
-  height: 13px;
-  border: 2px solid var(--affection-end);
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--affection-start) 12%, transparent);
-  transform: rotate(45deg);
+  margin: 0;
+  font-size: 1.04rem;
 }
 
 .affectionRankingList {
@@ -620,7 +607,7 @@
   display: grid;
   min-width: 0;
   grid-template-columns: 30px 36px minmax(0, 1fr) auto;
-  grid-template-rows: auto 7px;
+  grid-template-rows: auto auto;
   align-items: center;
   gap: 8px;
   padding: 8px 9px 9px;
@@ -658,35 +645,35 @@
   font-variant-numeric: tabular-nums;
 }
 
-.affectionRankingMeter {
-  display: block;
-  overflow: hidden;
-  width: 100%;
-  height: 7px;
+.affectionHearts {
+  display: grid;
+  width: min(100%, 150px);
+  min-width: 0;
+  margin: 0;
   grid-column: 3 / -1;
-  appearance: none;
-  border: 1px solid var(--records-panel-border-soft);
-  border-radius: 999px;
-  background: var(--records-meter-track);
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 3px;
 }
 
-.affectionRankingMeter::-webkit-meter-bar {
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
+.affectionHeart {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  fill: color-mix(in srgb, var(--affection-start) 5%, transparent);
+  filter: drop-shadow(0 0 3px transparent);
+  stroke: color-mix(in srgb, var(--affection-end) 50%, var(--records-ink-600));
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  transition:
+    fill 180ms ease,
+    filter 180ms ease,
+    stroke 180ms ease;
 }
 
-.affectionRankingMeter::-webkit-meter-optimum-value,
-.affectionRankingMeter::-moz-meter-bar {
-  border: 0;
-  border-radius: inherit;
-  background:
-    repeating-linear-gradient(
-      90deg,
-      transparent 0 calc(20% - 1px),
-      var(--records-meter-divider) calc(20% - 1px) 20%
-    ),
-    linear-gradient(90deg, var(--affection-start), var(--affection-end));
+.affectionHeartFilled {
+  fill: var(--affection-end);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--affection-start) 40%, transparent));
+  stroke: var(--affection-start);
 }
 
 .affectionEmpty {
@@ -1108,7 +1095,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .costPeriod span,
-  .costStackPart {
+  .costStackPart,
+  .affectionHeart {
     transition: none;
   }
 }

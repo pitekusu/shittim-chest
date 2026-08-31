@@ -1290,14 +1290,34 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   await expect(requests.getByRole("meter")).toHaveCount(3);
   await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
   const affection = page.getByRole("region", { name: "親愛度ランキング" });
+  await expect(affection.getByText("AFFECTION", { exact: true })).toBeVisible();
+  await expect(affection.getByText("AFFECTION RANKINGS", { exact: true })).toHaveCount(0);
+  await expect(
+    affection.getByText("質問者ごとの現在の親愛度です。人格ごとに1000点満点で表示します。", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect(affection.getByText("親愛度", { exact: true })).toHaveCount(0);
   await expect(affection.getByRole("heading", { name: "アロナ" })).toBeVisible();
   await expect(affection.getByRole("heading", { name: "プラナ" })).toBeVisible();
   await expect(affection.getByRole("heading", { name: "安倍晋三AI" })).toBeVisible();
-  await expect(
-    affection.getByRole("meter", {
-      name: "安倍晋三AIからパワー系ウナギへの親愛度 987点（1000点満点）",
-    }),
-  ).toHaveAttribute("value", "987");
+  for (const participantName of ["アロナ", "プラナ", "安倍晋三AI"]) {
+    await expect(
+      affection.getByRole("img", { name: `${participantName}のアイコン` }),
+    ).toBeVisible();
+  }
+  const nineHearts = affection.getByRole("figure", {
+    name: "安倍晋三AIからパワー系ウナギへの親愛度 987点（1000点満点、ハート10個中9個）",
+  });
+  await expect(nineHearts.locator('svg[data-filled="true"]')).toHaveCount(9);
+  const fiveHearts = affection.getByRole("figure", {
+    name: "プラナから先生への親愛度 500点（1000点満点、ハート10個中5個）",
+  });
+  await expect(fiveHearts.locator('svg[data-filled="true"]')).toHaveCount(5);
+  const fourHearts = affection.getByRole("figure", {
+    name: "安倍晋三AIから先生への親愛度 480点（1000点満点、ハート10個中4個）",
+  });
+  await expect(fourHearts.locator('svg[data-filled="true"]')).toHaveCount(4);
   await expect(
     affection.getByRole("button", { name: "親愛度ランキングの続きを読み込む" }),
   ).toBeVisible();
