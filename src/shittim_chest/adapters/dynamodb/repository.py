@@ -1227,12 +1227,15 @@ class DynamoDbDebateRepository:
                 for _, chunk_sequence, affection_result in identities_with_targets
                 if affection_result
             )
+            affection_operation_planned = (
+                "terminal-completed-affection-0000" in delivery.operation_ids
+            )
             if (
                 result_sequences != (0,)
                 or not decision_sequences
                 or decision_sequences != tuple(range(len(decision_sequences)))
-                or affection_sequences
-                != ((0,) if expected.affection_assessment is not None else ())
+                or affection_sequences != ((0,) if affection_operation_planned else ())
+                or (affection_operation_planned and expected.affection_assessment is None)
             ):
                 raise RepositoryConflict("completed delivery outbox sequence is invalid")
             return tuple(
