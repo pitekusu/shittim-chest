@@ -52,7 +52,10 @@ const detail = {
   recordId: RECORD_ID,
   completedAt: "2026-08-15T06:00:00Z",
   question: "休日に家で過ごすなら、映画を見るかゲームをするか。それぞれの価値観から話し合う",
-  requester: { displayName: "パワー系ウナギ", avatar: placeholder("依頼者", "cyan") },
+  requester: {
+    displayName: "パワー系ウナギ",
+    avatar: placeholder("パワー系ウナギ", "cyan"),
+  },
   participants,
   initialOpinions: participants.map(({ slot }, index) => ({
     participant: slot,
@@ -93,6 +96,37 @@ const detail = {
       "今夜は二時間以内の映画を一本観て、見終わった後に印象に残った場面や感想をゆっくり話し合います。",
     actions: ["好みの飲み物を用意する", "全員が楽しめる二時間以内の映画を選ぶ"],
     caveats: ["翌日の予定に疲れを残さない時間までに終える"],
+  },
+};
+
+const detailWithAffection = {
+  ...detail,
+  affection: {
+    status: "applied",
+    rubricVersion: "affection-rubric-v1",
+    participants: [
+      {
+        participant: "participant-a",
+        before: 532,
+        questionScore: 30,
+        appliedDelta: 30,
+        after: 562,
+      },
+      {
+        participant: "participant-b",
+        before: 488,
+        questionScore: 30,
+        appliedDelta: 30,
+        after: 518,
+      },
+      {
+        participant: "participant-c",
+        before: 480,
+        questionScore: 15,
+        appliedDelta: 15,
+        after: 495,
+      },
+    ],
   },
 };
 
@@ -602,7 +636,7 @@ const PRODUCTION_CSP = [
 
 async function mockAuthenticatedApi(
   page: Page,
-  recordDetail = detail,
+  recordDetail: typeof detail | typeof detailWithAffection = detail,
   recordDelayMs = 0,
   isAdmin = false,
 ): Promise<void> {
@@ -838,6 +872,39 @@ test("authenticated member can browse the completed archive", async ({ page }) =
     maxDiffPixels: 30,
   });
 
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test("record detail identifies the requester and uses affection hearts", async ({ page }) => {
+  await mockAuthenticatedApi(page, detailWithAffection);
+  await page.goto(`/records/${RECORD_ID}`);
+
+  const affection = page.getByRole("region", { name: "親愛度の変化" });
+  await expect(affection).toBeVisible();
+  await expect(affection.getByText("質問者", { exact: true })).toBeVisible();
+  await expect(affection.getByText("パワー系ウナギ", { exact: true })).toBeVisible();
+  await expect(affection.getByText("パワー系ウナギのアバター", { exact: true })).toBeVisible();
+  await expect(affection.getByText("0 — 1000", { exact: true })).toHaveCount(0);
+  await expect(affection.getByRole("meter")).toHaveCount(0);
+
+  const aronaHearts = affection.getByRole("figure", {
+    name: "アロナからパワー系ウナギへの親愛度 562点（1000点満点、ハート10個中5個）",
+  });
+  const plannaHearts = affection.getByRole("figure", {
+    name: "プラナからパワー系ウナギへの親愛度 518点（1000点満点、ハート10個中5個）",
+  });
+  const abeHearts = affection.getByRole("figure", {
+    name: "安倍晋三AIからパワー系ウナギへの親愛度 495点（1000点満点、ハート10個中4個）",
+  });
+  await expect(aronaHearts.locator('[data-filled="true"]')).toHaveCount(5);
+  await expect(plannaHearts.locator('[data-filled="true"]')).toHaveCount(5);
+  await expect(abeHearts.locator('[data-filled="true"]')).toHaveCount(4);
+
+  await expect(affection).toHaveScreenshot("records-detail-affection.png", {
+    animations: "disabled",
+    maxDiffPixels: 30,
+  });
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });

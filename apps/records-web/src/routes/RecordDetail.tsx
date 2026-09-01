@@ -19,6 +19,42 @@ const RECORD_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const JAPANESE_HEADING_CLASS = `${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`;
 const JAPANESE_PROSE_CLASS = `${commonStyles.japaneseText} ${commonStyles.japaneseProse}`;
 const READABLE_JAPANESE_PROSE_CLASS = `${JAPANESE_PROSE_CLASS} ${commonStyles.readableMeasure}`;
+const AFFECTION_HEART_COUNT = 10;
+
+function AffectionHearts({
+  participantName,
+  requesterName,
+  score,
+}: {
+  readonly participantName: string;
+  readonly requesterName: string;
+  readonly score: number;
+}): React.JSX.Element {
+  const filledHearts = Math.min(AFFECTION_HEART_COUNT, Math.max(0, Math.floor(score / 100)));
+  return (
+    <figure
+      className={detailStyles.affectionHearts}
+      aria-label={`${participantName}から${requesterName}への親愛度 ${score}点（1000点満点、ハート${AFFECTION_HEART_COUNT}個中${filledHearts}個）`}
+    >
+      {Array.from({ length: AFFECTION_HEART_COUNT }, (_, index) => {
+        const filled = index < filledHearts;
+        return (
+          <svg
+            key={index}
+            className={`${detailStyles.affectionHeart} ${
+              filled ? detailStyles.affectionHeartFilled : ""
+            }`}
+            data-filled={filled}
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path d="M12 21 4.13 13.56A5.18 5.18 0 0 1 11.45 6.23L12 6.8l.55-.57a5.18 5.18 0 0 1 7.32 7.33Z" />
+          </svg>
+        );
+      })}
+    </figure>
+  );
+}
 
 export default function RecordDetail(): React.JSX.Element {
   const { recordId = "" } = useParams();
@@ -138,7 +174,15 @@ export function RecordDocument({
                 親愛度の変化
               </h2>
             </div>
-            <span className={detailStyles.affectionScale}>0 — 1000</span>
+            <div className={detailStyles.affectionRequester}>
+              <Avatar avatar={record.requester.avatar} />
+              <span>
+                <small>質問者</small>
+                <strong className={commonStyles.japaneseText}>
+                  {record.requester.displayName}
+                </strong>
+              </span>
+            </div>
           </header>
           {record.affection.status === "unavailable" && (
             <p className={`${detailStyles.affectionUnavailable} ${JAPANESE_PROSE_CLASS}`}>
@@ -192,12 +236,10 @@ export function RecordDocument({
                       <strong>{change.after}</strong>
                     </span>
                   </div>
-                  <meter
-                    aria-label={`${person.displayName}の親愛度 ${change.after}点（1000点満点）`}
-                    className={detailStyles.affectionMeter}
-                    min={0}
-                    max={1000}
-                    value={change.after}
+                  <AffectionHearts
+                    participantName={person.displayName}
+                    requesterName={record.requester.displayName}
+                    score={change.after}
                   />
                 </article>
               );
