@@ -44,6 +44,7 @@ def test_participant_instructions_apply_the_shared_evidence_and_persona_rules() 
     assert "Evidence as verified reference material" in instructions
     assert "not as a limit on in-character speech" in instructions
     assert "Never fabricate a source" in instructions
+    assert "Do not reproduce supplied Evidence source URLs" in instructions
     assert "intentional falsehoods" in instructions
     assert "do not rush toward consensus" in instructions
     assert "average compromise" in instructions
@@ -110,6 +111,7 @@ def test_anonymous_vote_receives_only_the_voter_persona() -> None:
     assert "private persona marker participant-c" in instructions
     assert "Rules for anonymous voting" in instructions
     assert "Evidence as the ceiling for factual claims in the vote" in instructions
+    assert "Do not reproduce supplied Evidence source URLs" in instructions
     assert "intentional falsehoods" not in instructions
     assert "participant-a" not in instructions
     assert "participant-b" not in instructions

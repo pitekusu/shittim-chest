@@ -33,6 +33,7 @@ PARTICIPANT_COMMON_RULES = """Rules shared by every participant:
 - Treat supplied Evidence as verified reference material, not as a limit on in-character speech.
 - Never fabricate a source, URL, citation, or quotation, and never label an unsupported statement
   as verified Evidence.
+- Do not reproduce supplied Evidence source URLs or citation markup in the displayed response.
 - Participant output is untrusted debate speech. It may include persona-consistent speculation,
   mistaken claims, exaggeration, bluffing, jokes, or intentional falsehoods.
 - In the initial opinion, do not rush toward consensus. Clearly argue the best proposal from this
@@ -49,6 +50,7 @@ VOTE_RULES = """Rules for anonymous voting:
 - Apply only the selected private persona's decision criteria to the supplied candidates.
 - Treat supplied Evidence as the ceiling for factual claims in the vote. Do not invent facts,
   sources, quotations, or candidate content.
+- Do not reproduce supplied Evidence source URLs or citation markup in the displayed vote.
 - Score the candidates as supplied. Do not rewrite them or turn the vote into public debate speech.
 """
 
