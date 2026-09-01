@@ -32,12 +32,19 @@ from shittim_chest.application.discord import (
 )
 from shittim_chest.application.errors import OutboxRecoveryAbandoned
 from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason
-from shittim_chest.application.ports import Clock, DiscordOutboxRepository
+from shittim_chest.application.ports import (
+    Clock,
+    DiscordOutboxRepository,
+    RepositoryTransactionConflict,
+    RepositoryUnavailable,
+)
 
 DEFAULT_HISTORY_LIMIT = 500
 DEFAULT_RETRY_DELAY_SECONDS = 30.0
 DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 300.0
 DEFAULT_DELIVERY_TIMEOUT_SECONDS = 45.0
+DEFAULT_COMPLETION_RETRIES = 3
+DEFAULT_COMPLETION_RETRY_SECONDS = 0.1
 
 
 class DiscordPyPublisher:
@@ -53,6 +60,8 @@ class DiscordPyPublisher:
         history_limit: int = DEFAULT_HISTORY_LIMIT,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         delivery_timeout_seconds: float = DEFAULT_DELIVERY_TIMEOUT_SECONDS,
+        completion_retries: int = DEFAULT_COMPLETION_RETRIES,
+        completion_retry_seconds: float = DEFAULT_COMPLETION_RETRY_SECONDS,
     ) -> None:
         if set(clients) != set(DISCORD_BOT_SLOTS):
             raise ValueError("publisher requires exactly one client for each Discord Bot slot")
@@ -73,6 +82,14 @@ class DiscordPyPublisher:
             raise ValueError("retry delay must be positive")
         if not 0 < delivery_timeout_seconds < OUTBOX_CLAIM_SECONDS:
             raise ValueError("delivery timeout must be positive and shorter than the outbox claim")
+        if (
+            isinstance(completion_retries, bool)
+            or not isinstance(completion_retries, int)
+            or not 1 <= completion_retries <= 10
+        ):
+            raise ValueError("completion retries must be an integer between 1 and 10")
+        if completion_retry_seconds < 0:
+            raise ValueError("completion retry delay must not be negative")
         self._clients = dict(clients)
         self._outbox = outbox
         self._clock = clock
@@ -80,6 +97,8 @@ class DiscordPyPublisher:
         self._history_limit = history_limit
         self._retry_delay_seconds = retry_delay_seconds
         self._delivery_timeout_seconds = delivery_timeout_seconds
+        self._completion_retries = completion_retries
+        self._completion_retry_seconds = completion_retry_seconds
 
     async def publish_persisted(
         self,
@@ -312,12 +331,23 @@ class DiscordPyPublisher:
         operation: OutboxOperation,
         message_id: int,
     ) -> OutboxOperation:
-        return await self._outbox.mark_sent(
-            expected=expected,
-            operation=operation,
-            message_id=str(message_id),
-            at=self._clock.now(),
-        )
+        completion_at = self._clock.now()
+        for retry in range(self._completion_retries + 1):
+            try:
+                return await self._outbox.mark_sent(
+                    expected=expected,
+                    operation=operation,
+                    message_id=str(message_id),
+                    at=completion_at,
+                )
+            except RepositoryTransactionConflict as error:
+                if not error.retryable or retry >= self._completion_retries:
+                    raise
+            except RepositoryUnavailable:
+                if retry >= self._completion_retries:
+                    raise
+            await asyncio.sleep(self._completion_retry_seconds * (2**retry))
+        raise AssertionError("bounded outbox completion retries did not terminate")
 
     async def _reschedule(
         self,

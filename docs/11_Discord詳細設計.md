@@ -66,6 +66,9 @@ Guildとallowed channelを起動時／操作時に検証し、participantへcomm
 - 22文字base64url nonceを同じidentityから導出する。
 - global delivery sequenceの小さい未完了operationだけをclaimし、1件ずつPOSTする。
 - Discord clientの`max_ratelimit_timeout`は300秒。429はSDKの`Retry-After`処理後に分類する。
+- Discord POST成功後の`SENT`確定がDynamoDBの一時競合または一時利用不能になった場合は、取得済みの
+  message IDと同じ確定時刻を保持し、0.1／0.2／0.4秒の最大3回だけ確定transactionを再試行する。
+  この再試行ではDiscord POSTを行わない。
 - timeout後はhistoryをnonce、author、channel、contentで照合し、完全一致なら`SENT`にする。
 - content mismatch、unknown message、permission failureは成功扱いしない。
 - 最大3 delivery attemptまたはdeadline後は残件を`ABANDONED`へ収束し、attemptをFAILEDにする。

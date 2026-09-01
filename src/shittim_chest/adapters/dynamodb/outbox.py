@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_dynamodb.type_defs import (
@@ -42,6 +44,7 @@ from shittim_chest.application.ports import (
     RepositoryTransactionAction,
     RepositoryTransactionConflict,
     RepositoryTransactionStage,
+    RepositoryUnavailable,
 )
 from shittim_chest.application.scale_to_zero import OutboxActivity
 from shittim_chest.domain import AttemptId, DebateId
@@ -102,13 +105,18 @@ class DynamoDbOutboxRepository:
         message_id: str,
         at: datetime,
     ) -> OutboxOperation:
-        return await asyncio.to_thread(
-            self._mark_sent,
-            expected,
-            operation,
-            message_id,
-            at,
-        )
+        try:
+            return await asyncio.to_thread(
+                self._mark_sent,
+                expected,
+                operation,
+                message_id,
+                at,
+            )
+        except RepositoryConflict:
+            raise
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
 
     async def reschedule(
         self,
