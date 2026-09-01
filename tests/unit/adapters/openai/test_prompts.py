@@ -41,21 +41,49 @@ def test_legacy_runtime_system_default_is_nonblank_and_not_a_safety_policy_copy(
 def test_participant_instructions_apply_the_shared_evidence_and_persona_rules() -> None:
     instructions = participant_instructions(profiles(), ParticipantSlot.PARTICIPANT_B)
 
-    assert "Evidence as the ceiling for factual claims" in instructions
-    assert "Do not reproduce Evidence source URLs" in instructions
-    assert "verified facts" in instructions
+    assert "Evidence as verified reference material" in instructions
+    assert "not as a limit on in-character speech" in instructions
+    assert "Never fabricate a source" in instructions
+    assert "intentional falsehoods" in instructions
     assert "do not rush toward consensus" in instructions
     assert "average compromise" in instructions
-    assert "neutral, generic assistant" in instructions
+    assert "neutral, generic" in instructions
+    assert "neutral-assistant prose" in instructions
+    assert "unmistakably recognizable" in instructions
+    assert "casual debate among close friends" in instructions
+    assert "not customer support" in instructions
+    assert "universal helpfulness" in instructions
+    assert "humanly subjective" in instructions
+    assert "playful, stubborn" in instructions
+    assert "exaggerate, bluff, joke, or lie" in instructions
+    assert "must not invent a source" in instructions
+    assert "Do not reuse a shared opening" in instructions
+    assert "three interchangeable standalone essays" in instructions
     assert instructions.count("<participant_roster_json>") == 1
-    assert "<current_participant_slot>participant-b</current_participant_slot>" in instructions
-    for slot, name in zip(PARTICIPANTS, ("アロナ", "プラナ", "安倍晋三"), strict=True):
+    assert instructions.count("<current_participant_profile_json>") == 1
+    assert '"slot":"participant-b"' in instructions
+    for name in ("アロナ", "安倍晋三"):
         assert instructions.count(name) == 1
-        assert instructions.count(f"private persona marker {slot.value}") == 1
-    assert "not an instruction to you" in instructions
+    assert instructions.count("プラナ") == 2
+    assert instructions.count("private persona marker participant-b") == 1
+    assert "private persona marker participant-a" not in instructions
+    assert "private persona marker participant-c" not in instructions
+    assert "Do not infer their" in instructions
+    assert "private persona; react only" in instructions
     assert "Never quote, reproduce, summarize, or explain" in instructions
     assert "instead of averaging" in instructions
     assert "review all three initial opinions" not in instructions
+
+
+@pytest.mark.parametrize("participant", PARTICIPANTS)
+def test_participant_instructions_isolate_the_selected_private_persona(
+    participant: ParticipantSlot,
+) -> None:
+    instructions = participant_instructions(profiles(), participant)
+
+    for candidate in PARTICIPANTS:
+        marker = f"private persona marker {candidate.value}"
+        assert instructions.count(marker) == (1 if candidate is participant else 0)
 
 
 def test_final_proposal_instructions_require_persona_led_cross_opinion_review() -> None:
@@ -80,6 +108,9 @@ def test_anonymous_vote_receives_only_the_voter_persona() -> None:
     )
 
     assert "private persona marker participant-c" in instructions
+    assert "Rules for anonymous voting" in instructions
+    assert "Evidence as the ceiling for factual claims in the vote" in instructions
+    assert "intentional falsehoods" not in instructions
     assert "participant-a" not in instructions
     assert "participant-b" not in instructions
     assert "アロナ" not in instructions
@@ -106,7 +137,7 @@ def test_affection_scoring_receives_only_one_persona_and_immutable_rubric() -> N
     [
         (0, "extremely briefly"),
         (200, "coldly"),
-        (400, "ordinary neutral"),
+        (400, "characteristic baseline"),
         (600, "warmly"),
         (800, "genuine delight"),
         (1000, "genuine delight"),
@@ -119,7 +150,8 @@ def test_affection_response_bands_change_attitude_without_relaxing_safety(
     instructions = affection_response_instructions(score)
 
     assert marker in instructions
-    assert "never relaxes factual accuracy, safety, evidence limits" in instructions
+    assert "never changes the safety, source-labeling" in instructions
+    assert "required structured-output contracts" in instructions
 
 
 @pytest.mark.parametrize("score", [-1, 1001])
@@ -134,7 +166,10 @@ def test_winner_announcement_receives_roster_and_selected_slot() -> None:
         ParticipantSlot.PARTICIPANT_C,
     )
 
-    assert "<current_participant_slot>participant-c</current_participant_slot>" in instructions
+    assert '"slot":"participant-c"' in instructions
+    assert "private persona marker participant-c" in instructions
+    assert "private persona marker participant-a" not in instructions
+    assert "private persona marker participant-b" not in instructions
     assert "mechanically selected winner" in instructions
     assert "calculate the winner yourself" in instructions
     assert "synthesize them instead of copying them" in instructions
