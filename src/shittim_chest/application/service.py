@@ -82,6 +82,8 @@ _T = TypeVar("_T")
 
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRIES = 3
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRY_SECONDS = 1.0
+DEFAULT_SESSION_TIMEOUT_SECONDS = 420.0
+DEFAULT_PHASE_TIMEOUT_SECONDS = 120.0
 _LOGGER = logging.getLogger("shittim_chest")
 
 
@@ -132,8 +134,8 @@ class DebateApplication:
         outbox_recovery: DiscordOutboxDrainer,
         participant_display_names: Mapping[ParticipantSlot, str],
         lease_owner: str,
-        session_timeout_seconds: float = 300.0,
-        phase_timeout_seconds: float = 60.0,
+        session_timeout_seconds: float = DEFAULT_SESSION_TIMEOUT_SECONDS,
+        phase_timeout_seconds: float = DEFAULT_PHASE_TIMEOUT_SECONDS,
         lease_renewal_seconds: float = 20.0,
         terminal_delivery_conflict_retries: int = DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRIES,
         terminal_delivery_conflict_retry_seconds: float = (

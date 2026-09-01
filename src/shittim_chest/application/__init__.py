@@ -115,7 +115,11 @@ from shittim_chest.application.scale_to_zero import (
     StatusPublicationWork,
     status_publication_nonce,
 )
-from shittim_chest.application.service import DebateApplication
+from shittim_chest.application.service import (
+    DEFAULT_PHASE_TIMEOUT_SECONDS,
+    DEFAULT_SESSION_TIMEOUT_SECONDS,
+    DebateApplication,
+)
 from shittim_chest.application.status_publication import (
     DiscordStatusGateway,
     DiscordStatusMessage,
@@ -133,6 +137,8 @@ from shittim_chest.application.status_publication import (
 )
 
 __all__ = (
+    "DEFAULT_PHASE_TIMEOUT_SECONDS",
+    "DEFAULT_SESSION_TIMEOUT_SECONDS",
     "DISCORD_BOT_SLOTS",
     "GUILD_PUBLIC_THREAD",
     "GUILD_TEXT_CHANNEL",

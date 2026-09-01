@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-31
+updated: 2026-09-01
 ---
 
 # アプリケーション・Python詳細設計
@@ -64,6 +64,8 @@ Generationはlogical outputごとに最大2 SDK callを許す。結果保存のC
 - process内のasync taskはownerを明確にし、cancel後に必ずawaitする。
 - participant 3件の生成はTaskGroup相当のstructured concurrencyで並列化する。
 - OpenAI共有limiterは最大6 request。vote公開とDiscord Outboxは永続順序で直列化する。
+- 親愛度評価を含む1討論sessionは420秒、SDK retryを含む各logical generation phaseは120秒を上限とする。
+  OpenAI transportの1試行60秒とは分離し、親愛度評価後のEvidence、3段階生成、winner decisionに余裕を残す。
 - `CancelledError`を通常errorへ変換せず再送出する。
 - Stopは新しいwork claimを閉じ、active attemptをcheckpointし、Discord clientとSDK clientを
   bounded timeoutでcloseする。

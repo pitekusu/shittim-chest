@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-29
+updated: 2026-09-01
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -16,6 +16,8 @@ updated: 2026-08-29
 - productionは`gpt-5.6-luna` standardへ固定し、自動model escalationを行わない。
 - initial opinion／final proposal／decisionはreasoning high、親愛度評価／voteはmediumとする。
 - output token上限はcodeの`GenerationPolicy`を正とし、変更時はcontract testを更新する。
+- 通常討論はOpenAI transportの1試行を60秒、SDK retryを含むlogical generation phaseを120秒、
+  親愛度評価からwinner decisionまでのsession全体を420秒でboundedにする。
 - Responses Multi-agent betaを使わず、Pythonがorchestration、checkpoint、winnerを管理する。
 
 ## 2. Trust hierarchy
