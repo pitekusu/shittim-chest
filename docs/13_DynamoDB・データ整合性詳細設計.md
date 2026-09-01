@@ -92,6 +92,11 @@ Outbox v2は`PENDING / CLAIMED / SENT / ABANDONED`を持つ。同attempt内で�
 `delivery_sequence`がすべてterminalになるまで次をclaimできない。claim timeout後は再取得可能だが、
 Discord history reconciliationで既送信を検出する。
 
+Discordが受理したmessage IDの`SENT`確定は、同じmessage ID、claim、確定時刻から同一の
+idempotency tokenを導出する。完全な`TransactionConflict`またはSDK呼出結果不明だけを短時間で
+bounded retryし、条件不一致やidentity conflictは再試行しない。DynamoDB SDK例外はadapter境界で
+`RepositoryUnavailable`へ変換し、provider messageをapplication／logへ漏らさない。
+
 nonretryable error、最大3 delivery attempt、stageから15分のdeadlineで新claimを止め、残件を
 `ABANDONED`へ収束する。必須displayのabandonはattemptをFAILEDにし、欠落したままCOMPLETEDへ
 進めない。

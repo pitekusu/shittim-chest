@@ -40,7 +40,14 @@ from shittim_chest.application import (
     nonce_from_uuid7,
 )
 from shittim_chest.application.models import DeliveryAbandonReason
-from shittim_chest.application.ports import RepositoryConflict
+from shittim_chest.application.ports import (
+    RepositoryCancellationCode,
+    RepositoryConflict,
+    RepositoryTransactionAction,
+    RepositoryTransactionConflict,
+    RepositoryTransactionStage,
+    RepositoryUnavailable,
+)
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
 
 NOW = datetime(2026, 7, 17, 10, 0, tzinfo=UTC)
@@ -72,7 +79,10 @@ class FakeResponse:
 class FakeOutboxRepository:
     operation: OutboxOperation | None
     fail_mark_once: bool = False
+    mark_failures: list[Exception] = field(default_factory=list)
     claims: int = 0
+    mark_attempts: int = 0
+    mark_times: list[datetime] = field(default_factory=list)
     marks: list[str] = field(default_factory=list)
     retry_delays: list[timedelta] = field(default_factory=list)
 
@@ -147,9 +157,13 @@ class FakeOutboxRepository:
         at: datetime,
     ) -> OutboxOperation:
         del expected
+        self.mark_attempts += 1
+        self.mark_times.append(at)
         if self.fail_mark_once:
             self.fail_mark_once = False
             raise RepositoryConflict("injected completion failure")
+        if self.mark_failures:
+            raise self.mark_failures.pop(0)
         if self.operation != operation:
             raise RepositoryConflict("claim generation mismatch")
         self.marks.append(message_id)
@@ -392,6 +406,7 @@ def publisher(
     history_messages: tuple[discord.Message, ...] = (),
     clock: FakeClock | None = None,
     delivery_timeout_seconds: float = 45.0,
+    completion_retry_seconds: float = 0.0,
 ) -> tuple[DiscordPyPublisher, discord.Thread, AsyncMock, FakeClock]:
     clients, thread, send_mock = clients_and_thread(
         operation,
@@ -405,6 +420,7 @@ def publisher(
             clock=test_clock,
             claim_owner=CLAIM_OWNER,
             delivery_timeout_seconds=delivery_timeout_seconds,
+            completion_retry_seconds=completion_retry_seconds,
         ),
         thread,
         send_mock,
@@ -456,6 +472,41 @@ def test_publisher_rejects_a_delivery_timeout_that_can_outlive_the_claim() -> No
             clock=FakeClock(),
             claim_owner=CLAIM_OWNER,
             delivery_timeout_seconds=OUTBOX_CLAIM_SECONDS,
+        )
+
+
+@pytest.mark.parametrize("completion_retries", [True, 0, 11])
+def test_publisher_rejects_invalid_completion_retry_counts(
+    completion_retries: int,
+) -> None:
+    expected = snapshot()
+    operation = prepared(expected)
+    repository = FakeOutboxRepository(operation)
+    clients, _, _ = clients_and_thread(operation)
+
+    with pytest.raises(ValueError, match="completion retries"):
+        DiscordPyPublisher(
+            clients=clients,
+            outbox=repository,
+            clock=FakeClock(),
+            claim_owner=CLAIM_OWNER,
+            completion_retries=completion_retries,
+        )
+
+
+def test_publisher_rejects_a_negative_completion_retry_delay() -> None:
+    expected = snapshot()
+    operation = prepared(expected)
+    repository = FakeOutboxRepository(operation)
+    clients, _, _ = clients_and_thread(operation)
+
+    with pytest.raises(ValueError, match="completion retry delay"):
+        DiscordPyPublisher(
+            clients=clients,
+            outbox=repository,
+            clock=FakeClock(),
+            claim_owner=CLAIM_OWNER,
+            completion_retry_seconds=-0.1,
         )
 
 
@@ -723,6 +774,67 @@ async def test_send_success_then_completion_failure_recovers_from_history() -> N
     assert sent is not None
     assert sent.message_id == str(created_message.id)
     assert sent.delivery_attempt == 2
+    assert send_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "completion_failure",
+    [
+        RepositoryTransactionConflict(
+            stage=RepositoryTransactionStage.OUTBOX_MARK_SENT,
+            failures=(
+                (
+                    RepositoryTransactionAction.LEASE_FENCE,
+                    RepositoryCancellationCode.TRANSACTION_CONFLICT,
+                ),
+            ),
+            reasons_complete=True,
+        ),
+        RepositoryUnavailable(),
+    ],
+)
+async def test_send_success_retries_only_completion_without_another_discord_post(
+    completion_failure: Exception,
+) -> None:
+    expected = snapshot()
+    operation = prepared(expected)
+    repository = FakeOutboxRepository(operation, mark_failures=[completion_failure])
+    subject, _, send_mock, _ = publisher(operation, repository)
+
+    sent = await subject.publish_persisted(
+        expected=expected,
+        operation_id=operation.operation_id,
+    )
+
+    assert sent is not None
+    assert sent.status is OutboxStatus.SENT
+    assert sent.message_id == str(MESSAGE_ID)
+    assert repository.mark_attempts == 2
+    assert repository.mark_times == [repository.mark_times[0]] * 2
+    assert repository.marks == [str(MESSAGE_ID)]
+    assert send_mock.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_send_success_bounds_completion_retries_without_another_discord_post() -> None:
+    expected = snapshot()
+    operation = prepared(expected)
+    repository = FakeOutboxRepository(
+        operation,
+        mark_failures=[RepositoryUnavailable() for _ in range(4)],
+    )
+    subject, _, send_mock, _ = publisher(operation, repository)
+
+    with pytest.raises(RepositoryUnavailable):
+        await subject.publish_persisted(
+            expected=expected,
+            operation_id=operation.operation_id,
+        )
+
+    assert repository.mark_attempts == 4
+    assert repository.mark_times == [repository.mark_times[0]] * 4
+    assert repository.marks == []
     assert send_mock.await_count == 1
 
 
