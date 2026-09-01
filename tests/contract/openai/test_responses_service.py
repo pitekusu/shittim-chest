@@ -286,10 +286,15 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     for request_index in (0, 1, 3):
         instructions = server.requests[request_index]["instructions"]
         assert instructions.count("<participant_roster_json>") == 1
-        assert "<current_participant_slot>participant-a</current_participant_slot>" in instructions
+        assert instructions.count("<current_participant_profile_json>") == 1
+        assert '"slot":"participant-a"' in instructions
         for slot in PARTICIPANTS:
-            assert instructions.count(f"Display {slot.value}") == 1
-            assert instructions.count(f"persona for {slot.value}") == 1
+            assert instructions.count(f"Display {slot.value}") == (
+                2 if slot is ParticipantSlot.PARTICIPANT_A else 1
+            )
+            assert instructions.count(f"persona for {slot.value}") == (
+                1 if slot is ParticipantSlot.PARTICIPANT_A else 0
+            )
     vote_instructions = server.requests[2]["instructions"]
     assert "<participant_roster_json>" not in vote_instructions
     assert "persona for participant-a" in vote_instructions
