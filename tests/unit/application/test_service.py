@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from dataclasses import replace
@@ -11,6 +12,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from shittim_chest.application import (
+    DEFAULT_PHASE_TIMEOUT_SECONDS,
+    DEFAULT_SESSION_TIMEOUT_SECONDS,
     AcceptDebateRequest,
     AcceptedDebate,
     BindDiscordContextCommand,
@@ -107,8 +110,8 @@ def make_application(
         FakeCandidateOrderer,
     ],
     *,
-    session_timeout: float = 300.0,
-    phase_timeout: float = 60.0,
+    session_timeout: float = DEFAULT_SESSION_TIMEOUT_SECONDS,
+    phase_timeout: float = DEFAULT_PHASE_TIMEOUT_SECONDS,
     lease_renewal: float = 20.0,
     outbox_recovery: FakeOutboxRecovery | None = None,
     participant_display_names: dict[ParticipantSlot, str] | None = None,
@@ -140,6 +143,21 @@ def make_application(
         phase_timeout_seconds=phase_timeout,
         lease_renewal_seconds=lease_renewal,
         terminal_delivery_conflict_retry_seconds=terminal_delivery_conflict_retry_seconds,
+    )
+
+
+def test_default_timeout_budgets_include_affection_scoring_headroom() -> None:
+    signature = inspect.signature(DebateApplication)
+
+    assert (
+        signature.parameters["phase_timeout_seconds"].default
+        == DEFAULT_PHASE_TIMEOUT_SECONDS
+        == 120.0
+    )
+    assert (
+        signature.parameters["session_timeout_seconds"].default
+        == DEFAULT_SESSION_TIMEOUT_SECONDS
+        == 420.0
     )
 
 
