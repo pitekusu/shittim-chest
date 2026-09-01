@@ -1,4 +1,4 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { RECORD_ID, mockApi, recordDetail, renderRoute } from "../test/recordsTestUtils";
@@ -67,13 +67,23 @@ describe("RecordDetail", () => {
 
     renderRoute(<RecordDocument record={detail} />);
 
-    expect(screen.getByRole("heading", { name: "親愛度の変化" })).toBeVisible();
-    expect(screen.getByLabelText("実増減 +35点")).toBeVisible();
-    expect(screen.getByLabelText("実増減 -43点")).toBeVisible();
-    expect(screen.getByLabelText("実増減 +13点")).toBeVisible();
-    expect(
-      screen.getByRole("meter", { name: "安倍晋三AIの親愛度 1000点（1000点満点）" }),
-    ).toHaveAttribute("value", "1000");
+    const section = screen.getByRole("region", { name: "親愛度の変化" });
+    expect(within(section).getByText("質問者")).toBeVisible();
+    expect(within(section).getByText("依頼者")).toBeVisible();
+    expect(within(section).getByText("依頼者のアバター")).toBeVisible();
+    expect(within(section).queryByText("0 — 1000")).not.toBeInTheDocument();
+    expect(within(section).getByLabelText("実増減 +35点")).toBeVisible();
+    expect(within(section).getByLabelText("実増減 -43点")).toBeVisible();
+    expect(within(section).getByLabelText("実増減 +13点")).toBeVisible();
+    expect(within(section).queryAllByRole("meter")).toHaveLength(0);
+    const sixHearts = within(section).getByRole("figure", {
+      name: "アロナから依頼者への親愛度 625点（1000点満点、ハート10個中6個）",
+    });
+    const tenHearts = within(section).getByRole("figure", {
+      name: "安倍晋三AIから依頼者への親愛度 1000点（1000点満点、ハート10個中10個）",
+    });
+    expect(sixHearts.querySelectorAll('[data-filled="true"]')).toHaveLength(6);
+    expect(tenHearts.querySelectorAll('[data-filled="true"]')).toHaveLength(10);
   });
 
   it("explains that affection stayed unchanged when evaluation was unavailable", () => {
