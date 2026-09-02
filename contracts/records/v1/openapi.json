@@ -1162,6 +1162,12 @@
             "title": "Rank",
             "type": "integer"
           },
+          "resetCount": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Resetcount",
+            "type": "integer"
+          },
           "score": {
             "maximum": 1000,
             "minimum": 0,

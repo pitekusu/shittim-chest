@@ -204,6 +204,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
     repository = DynamoDbDebateRepository(
         client=dynamodb_client,
         table_name=config.table_name,
+        identity_hmac_key=config.require_identity_hmac_key(),
     )
     runtime_state_repository = DynamoDbRuntimeStateRepository(
         client=dynamodb_client,
@@ -361,11 +362,26 @@ async def run_from_environment(environ: Mapping[str, str] | None = None) -> None
     """Validate injected environment values before creating any external SDK client."""
 
     config = load_bootstrap_config(os.environ if environ is None else environ)
+    config = await _resolve_identity_hmac_key(config)
     config = await _resolve_runtime_prompt_revision(config)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     _LOGGER.setLevel(getattr(logging, config.log_level))
     runtime = build_production_runtime(config)
     await runtime.run()
+
+
+async def _resolve_identity_hmac_key(config: BootstrapConfig) -> BootstrapConfig:
+    """Load the shared identity HMAC key once before constructing repositories."""
+
+    client = create_startup_ssm_client(region_name=config.aws_region)
+    reader = SsmParameterReader(client=client)
+    try:
+        values = await reader.get_parameters((config.identity_hmac_parameter_name,))
+        return config.with_identity_hmac_key(values[config.identity_hmac_parameter_name])
+    except KeyError, ParameterReadUnavailable, StartupConfigurationError:
+        raise StartupConfigurationError from None
+    finally:
+        client.close()
 
 
 async def _resolve_runtime_prompt_revision(config: BootstrapConfig) -> BootstrapConfig:

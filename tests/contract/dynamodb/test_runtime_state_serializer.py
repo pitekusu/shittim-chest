@@ -14,6 +14,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_runtime_state,
     serialize_runtime_wake_result,
 )
+from shittim_chest.adapters.dynamodb.serializer import PREVIOUS_SCHEMA_VERSION
 from shittim_chest.application import (
     RuntimeState,
     RuntimeStatus,
@@ -59,7 +60,10 @@ def test_runtime_state_round_trip_uses_canonical_singleton_key() -> None:
 
 def test_runtime_state_previous_shared_schema_is_upconverted() -> None:
     source = ready_state()
-    previous = {**serialize_runtime_state(source), "schema_version": 7}
+    previous = {
+        **serialize_runtime_state(source),
+        "schema_version": PREVIOUS_SCHEMA_VERSION,
+    }
 
     assert deserialize_runtime_state(previous) == source
 

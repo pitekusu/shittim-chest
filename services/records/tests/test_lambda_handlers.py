@@ -180,6 +180,72 @@ def test_projector_handler_routes_affection_profile_without_logging_private_iden
     assert service.partition_count == 1
 
 
+def test_projector_handler_routes_v9_opaque_affection_profile(monkeypatch: Any) -> None:
+    class FakeAffectionProjector:
+        def project_partition(self, partition_key: str) -> ProjectionResult:
+            assert partition_key == f"AFFECTION#REQUESTER#{'a' * 43}"
+            return ProjectionResult(created=True)
+
+    event = cast(dict[str, Any], affection_stream_event())
+    image = event["Records"][0]["dynamodb"]["NewImage"]
+    image["PK"] = {"S": f"AFFECTION#REQUESTER#{'a' * 43}"}
+    image["schema_version"] = {"N": "9"}
+    monkeypatch.setattr(
+        lambda_handlers,
+        "_AFFECTION_PROJECTOR",
+        cast(Any, FakeAffectionProjector()),
+    )
+
+    assert lambda_handlers.projector_handler(event, object()) == {"batchItemFailures": []}
+
+
+def test_projector_handler_skips_late_legacy_affection_delete(monkeypatch: Any) -> None:
+    event = cast(dict[str, Any], affection_stream_event())
+    record = event["Records"][0]
+    record["eventName"] = "REMOVE"
+    image = record["dynamodb"].pop("NewImage")
+    record["dynamodb"]["Keys"] = {
+        "PK": {"S": "AFFECTION#REQUESTER#" + "123456789" + "012345678"},
+        "SK": image["SK"],
+    }
+    monkeypatch.setattr(lambda_handlers, "_AFFECTION_PROJECTOR", None)
+
+    assert lambda_handlers.projector_handler(event, object()) == {"batchItemFailures": []}
+
+
+def test_projector_handler_does_not_skip_unknown_or_debate_delete() -> None:
+    event = cast(dict[str, Any], affection_stream_event())
+    record = event["Records"][0]
+    record["eventName"] = "REMOVE"
+    record["dynamodb"].pop("NewImage")
+    record["dynamodb"]["Keys"] = {
+        "PK": {"S": "DEBATE#opaque"},
+        "SK": {"S": "META"},
+    }
+
+    result = lambda_handlers.projector_handler(event, object())
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "opaque-affection-sequence"}]}
+
+
+@pytest.mark.parametrize("suffix", ("a" * 43, "not-a-discord-snowflake", "1234"))
+def test_projector_handler_does_not_skip_current_or_malformed_profile_delete(
+    suffix: str,
+) -> None:
+    event = cast(dict[str, Any], affection_stream_event())
+    record = event["Records"][0]
+    record["eventName"] = "REMOVE"
+    record["dynamodb"].pop("NewImage")
+    record["dynamodb"]["Keys"] = {
+        "PK": {"S": f"AFFECTION#REQUESTER#{suffix}"},
+        "SK": {"S": "PROFILE"},
+    }
+
+    result = lambda_handlers.projector_handler(event, object())
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "opaque-affection-sequence"}]}
+
+
 def test_projector_handler_returns_only_failed_stream_sequence(monkeypatch: Any) -> None:
     service = FakeProjector(fail=True)
     monkeypatch.setattr(lambda_handlers, "_PROJECTOR", cast(Any, service))

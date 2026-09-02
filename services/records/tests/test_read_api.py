@@ -183,6 +183,7 @@ def affection_ranking_items(
                 "display_name": "Stored A",
                 "score": 700,
                 "rank": 1,
+                "reset_count": 2,
             },
             {
                 "requester_key": "requester-b",
@@ -311,6 +312,8 @@ def test_affection_rankings_return_all_three_personas_without_internal_keys() ->
     assert all(len(ranking.entries) == 2 for ranking in result.rankings)
     assert result.rankings[0].entries[0].display_name == "Stored A"
     assert result.rankings[0].entries[0].score == 700
+    assert result.rankings[0].entries[0].reset_count == 2
+    assert result.rankings[0].entries[1].reset_count == 0
     assert result.next_cursor is None
     assert "requesterKey" not in repr(payload)
 

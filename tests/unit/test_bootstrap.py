@@ -18,7 +18,11 @@ from shittim_chest.bootstrap import (
     RuntimeClientCloseTimeout,
     build_production_runtime,
 )
-from shittim_chest.config import StartupConfigurationError, load_bootstrap_config
+from shittim_chest.config import (
+    IDENTITY_HMAC_PARAMETER_NAME,
+    StartupConfigurationError,
+    load_bootstrap_config,
+)
 from shittim_chest.runtime.lifecycle import DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
 
 PROMPT_REVISION = "r" + "0" * 26
@@ -33,7 +37,7 @@ async def test_production_composition_builds_and_closes_without_external_request
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "local-placeholder")
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     monkeypatch.setattr(bootstrap, "ecs_task_instance_id", lambda: "runtime-owner")
-    config = load_bootstrap_config(_environment())
+    config = load_bootstrap_config(_environment()).with_identity_hmac_key("i" * 32)
 
     runtime = build_production_runtime(config)
 
@@ -81,6 +85,11 @@ async def test_run_from_environment_keeps_third_party_root_logging_at_warning(
     monkeypatch.setattr(logging, "basicConfig", _configure_logging)
     monkeypatch.setattr(bootstrap, "_LOGGER", _ApplicationLogger())
     monkeypatch.setattr(bootstrap, "build_production_runtime", _build)
+
+    async def _resolve_identity(config: object) -> object:
+        return cast(Any, config).with_identity_hmac_key("i" * 32)
+
+    monkeypatch.setattr(bootstrap, "_resolve_identity_hmac_key", _resolve_identity)
 
     await bootstrap.run_from_environment(environment)
 
@@ -295,6 +304,44 @@ class _PromptSsmClient:
 
 
 @pytest.mark.asyncio
+async def test_identity_hmac_key_is_loaded_once_and_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_marker = "identity-hmac-private-marker-that-is-long-enough"
+    client = _PromptSsmClient(
+        None,
+        {IDENTITY_HMAC_PARAMETER_NAME: private_marker},
+    )
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
+
+    resolved = await bootstrap._resolve_identity_hmac_key(load_bootstrap_config(_environment()))
+
+    assert resolved.require_identity_hmac_key() == private_marker.encode()
+    assert private_marker not in repr(resolved)
+    assert client.get_parameters_calls == 1
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_identity_hmac_key_failure_is_content_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_marker = "private-invalid-value"
+    client = _PromptSsmClient(
+        None,
+        {IDENTITY_HMAC_PARAMETER_NAME: private_marker},
+    )
+    monkeypatch.setattr(bootstrap, "create_startup_ssm_client", lambda **_kwargs: client)
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        await bootstrap._resolve_identity_hmac_key(load_bootstrap_config(_environment()))
+
+    assert str(captured.value) == "startup_configuration_invalid"
+    assert private_marker not in repr(captured.value)
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_runtime_prompt_environment_absence_skips_ssm_and_uses_legacy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -438,6 +485,7 @@ def _environment() -> dict[str, str]:
         "AWS_REGION": "ap-northeast-1",
         "SHITTIM_DYNAMODB_TABLE": "local-table",
         "SHITTIM_STATUS_PUBLISHER_FUNCTION": "shittim-status-publisher",
+        "IDENTITY_HMAC_PARAMETER_NAME": IDENTITY_HMAC_PARAMETER_NAME,
         "OPENAI_API_KEY": "openai-key-placeholder",
         "DISCORD_TOKEN_MODERATOR": "token-moderator-placeholder",
         "DISCORD_TOKEN_PARTICIPANT_A": "token-a-placeholder",

@@ -156,6 +156,7 @@ def affection_snapshot(*, profile_count: int = 51) -> RankingSnapshot:
                     display_name=f"Requester {index:03d}",
                     score=1000 - index,
                     rank=index + 1,
+                    reset_count=index % 3,
                 )
                 for index in range(profile_count)
             ),
@@ -195,6 +196,7 @@ def test_store_writes_immutable_pages_before_switching_active_pointer() -> None:
     second_page = cast(list[dict[str, Any]], written[3]["rankings"])
     assert all(len(ranking["entries"]) == 50 for ranking in first_page)
     assert all(len(ranking["entries"]) == 1 for ranking in second_page)
+    assert first_page[0]["entries"][1]["reset_count"] == 1
 
     assert len(client.transactions) == 1
     switched = [

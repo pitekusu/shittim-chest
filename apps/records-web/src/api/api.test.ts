@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import affectionRankingsResponseValidator from "../generated/affection-rankings-response-validator.mjs";
 import { getAffectionRankings, mergeAffectionRankingPages } from "./affectionRankings";
 import { getCosts } from "./costs";
 import {
@@ -139,12 +140,27 @@ function affectionRankingsPage(
           displayName: `依頼者${rank}`,
           avatar: placeholder(`依頼者${rank}`, "cyan"),
           score,
+          resetCount: rank,
         },
       ],
     })),
     nextCursor,
   } as AffectionRankingsResponse;
 }
+
+it("accepts affection ranking entries with or without optional resetCount", () => {
+  const withResetCount = affectionRankingsPage(1, 600, null);
+  const withoutResetCount = {
+    ...withResetCount,
+    rankings: withResetCount.rankings.map((ranking) => ({
+      ...ranking,
+      entries: ranking.entries.map(({ resetCount: _resetCount, ...entry }) => entry),
+    })),
+  };
+
+  expect(affectionRankingsResponseValidator(withResetCount)).toBe(true);
+  expect(affectionRankingsResponseValidator(withoutResetCount)).toBe(true);
+});
 
 function costsResponse() {
   return {

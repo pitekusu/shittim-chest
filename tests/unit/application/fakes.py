@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -358,12 +360,22 @@ class FakeRepository:
         if current is None or not _same_snapshot_version(current, expected):
             raise RepositoryConflict
         profile = self.affection_profiles.get(expected.requester_id) or AffectionProfile.initial(
-            requester_id=expected.requester_id,
+            requester_key=base64.urlsafe_b64encode(
+                hashlib.sha256(expected.requester_id.encode()).digest()
+            )
+            .decode()
+            .rstrip("="),
             requester_username=expected.requester_username,
             requester_display_name=expected.requester_display_name,
             at=at,
         )
-        updated_profile, assessment = assess_affection(profile, scores=scores, assessed_at=at)
+        updated_profile, assessment = assess_affection(
+            profile,
+            scores=scores,
+            assessed_at=at,
+            debate_id=expected.state.debate_id,
+            operation_seed=str(expected.state.attempt_id),
+        )
         if scores is not None:
             self.affection_profiles[expected.requester_id] = updated_profile
         persisted = replace(

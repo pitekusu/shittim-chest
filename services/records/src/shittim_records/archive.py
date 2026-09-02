@@ -21,9 +21,16 @@ from shittim_chest.adapters.dynamodb.serializer import (
     DynamoValue,
 )
 from shittim_chest.application import DebateSnapshot
-from shittim_chest.domain import PARTICIPANTS, DebatePhase, ParticipantSlot, select_winner
+from shittim_chest.domain import (
+    PARTICIPANTS,
+    DebateId,
+    DebatePhase,
+    ParticipantSlot,
+    select_winner,
+)
 
 ARCHIVE_SCHEMA_VERSION = 2
+ARCHIVE_V1_SOURCE_SCHEMA_VERSION = 7
 
 
 class ProjectionRejected(ValueError):
@@ -77,6 +84,7 @@ def project_completed_debate(
     identity_hmac_key: bytes,
     presentation: RecordsPresentationConfig,
     projected_at: datetime,
+    source_schema_version: int | None = None,
 ) -> ArchiveProjection:
     """Validate and project one completed aggregate without external I/O."""
 
@@ -86,8 +94,11 @@ def project_completed_debate(
         raise ProjectionRejected("projection timestamp must be timezone-aware")
     projected_at = projected_at.astimezone(UTC)
 
-    if snapshot.state.schema_version != SOURCE_SCHEMA_VERSION:
-        raise ProjectionRejected("source aggregate schema is not current")
+    if snapshot.state.schema_version not in {PREVIOUS_SCHEMA_VERSION, SOURCE_SCHEMA_VERSION}:
+        raise ProjectionRejected("source aggregate schema is not compatible")
+    persisted_schema_version = source_schema_version or snapshot.state.schema_version
+    if persisted_schema_version not in {PREVIOUS_SCHEMA_VERSION, SOURCE_SCHEMA_VERSION}:
+        raise ProjectionRejected("persisted source aggregate schema is not compatible")
     if snapshot.state.phase is not DebatePhase.COMPLETED:
         raise ProjectionRejected("only completed debates may be projected")
     if not snapshot.terminal_delivery_complete:
@@ -115,7 +126,7 @@ def project_completed_debate(
 
     debate_id = str(snapshot.state.debate_id)
     attempt_id = str(snapshot.state.attempt_id)
-    record_id = _opaque_key(identity_hmac_key, f"record:{debate_id}")
+    record_id = derive_record_key(identity_hmac_key, debate_id)
     requester_key = derive_requester_key(identity_hmac_key, snapshot.requester_id)
     completed_at = snapshot.state.updated_at.astimezone(UTC).isoformat()
     projected_at_text = projected_at.isoformat()
@@ -125,10 +136,10 @@ def project_completed_debate(
     archive_schema_version = (
         ARCHIVE_SCHEMA_VERSION if snapshot.affection_assessment is not None else 1
     )
-    source_schema_version = (
-        SOURCE_SCHEMA_VERSION
+    canonical_source_schema_version = (
+        persisted_schema_version
         if archive_schema_version == ARCHIVE_SCHEMA_VERSION
-        else PREVIOUS_SCHEMA_VERSION
+        else ARCHIVE_V1_SOURCE_SCHEMA_VERSION
     )
 
     participant_snapshot: dict[str, DynamoValue] = {
@@ -176,7 +187,7 @@ def project_completed_debate(
             ),
         }
     canonical_source = {
-        "source_schema_version": source_schema_version,
+        "source_schema_version": canonical_source_schema_version,
         "debate_id": debate_id,
         "attempt_id": attempt_id,
         "completed_at": completed_at,
@@ -302,7 +313,7 @@ def project_completed_debate(
         **common,
         "SK": f"PROJECTION#V{archive_schema_version}",
         "record_type": "projection_marker",
-        "source_schema_version": source_schema_version,
+        "source_schema_version": canonical_source_schema_version,
         "source_fingerprint": fingerprint,
         "presentation_version": presentation.presentation_version,
         "projected_at": projected_at_text,
@@ -329,6 +340,20 @@ def derive_requester_key(key: bytes, requester_id: str) -> str:
     if len(key) < 32 or not requester_id:
         raise ValueError("requester key input is invalid")
     return _opaque_key(key, f"requester:{requester_id}")
+
+
+def derive_record_key(key: bytes, debate_id: str) -> str:
+    """Derive the public Records identity for one private source debate ID."""
+
+    if len(key) < 32 or not debate_id:
+        raise ValueError("record key input is invalid")
+    try:
+        canonical_debate_id = str(DebateId.parse(debate_id))
+    except ValueError:
+        raise ValueError("record key debate ID is invalid") from None
+    if canonical_debate_id != debate_id:
+        raise ValueError("record key debate ID is not canonical")
+    return _opaque_key(key, f"record:{debate_id}")
 
 
 def _canonical_json(value: object) -> bytes:

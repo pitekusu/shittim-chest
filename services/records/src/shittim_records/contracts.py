@@ -401,6 +401,7 @@ class AffectionRankingEntry(PublicModel):
     display_name: NonEmptyText
     avatar: AvatarRef
     score: Annotated[int, Field(ge=0, le=1000)]
+    reset_count: Annotated[int, Field(ge=0)] = 0
 
 
 class ParticipantAffectionRanking(PublicModel):

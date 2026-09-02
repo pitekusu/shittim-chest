@@ -156,7 +156,7 @@ class DebateState:
     updated_at: datetime
     retry_of: AttemptId | None = None
     failed_from_phase: DebatePhase | None = None
-    schema_version: int = 8
+    schema_version: int = 9
 
     def __post_init__(self) -> None:
         _validate_utc_timestamp(self.updated_at)

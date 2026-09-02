@@ -7,6 +7,7 @@ import pytest
 
 from shittim_chest.application import DiscordBotSlot
 from shittim_chest.config import (
+    IDENTITY_HMAC_PARAMETER_NAME,
     RUNTIME_PROMPT_NAMES,
     RUNTIME_PROMPTS_ACTIVE_PARAMETER,
     StartupConfigurationError,
@@ -27,6 +28,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.table_name == "shittim-chest-production"
     assert config.status_publisher_function == "shittim-status-publisher"
     assert config.config_version == "v0001"
+    assert config.identity_hmac_parameter_name == IDENTITY_HMAC_PARAMETER_NAME
     assert config.runtime.guild_id == "101"
     assert config.runtime.allowed_channel_ids == frozenset({"201", "202"})
     assert config.runtime.farewell_channel_id == "201"
@@ -43,6 +45,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert "openai-key-placeholder" not in rendered
     assert "token-moderator-placeholder" not in rendered
     assert "Generic private prompt" not in rendered
+    assert config.identity_hmac_key is None
 
 
 @pytest.mark.parametrize(
@@ -56,6 +59,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
         {"OPENAI_API_KEY": ""},
         {"DISCORD_TOKEN_PARTICIPANT_C": "token-moderator-placeholder"},
         {"SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH": "not-a-hash"},
+        {"IDENTITY_HMAC_PARAMETER_NAME": "invalid-parameter"},
     ),
 )
 def test_load_bootstrap_config_fails_closed_for_invalid_process_inputs(
@@ -89,6 +93,20 @@ def test_load_bootstrap_config_redacts_invalid_private_values() -> None:
 
     assert private_marker not in str(captured.value)
     assert private_marker not in repr(captured.value)
+
+
+def test_identity_hmac_key_is_validated_and_redacted() -> None:
+    private_marker = "identity-hmac-private-marker-that-is-long-enough"
+    config = load_bootstrap_config(_valid_environment()).with_identity_hmac_key(private_marker)
+
+    assert config.require_identity_hmac_key() == private_marker.encode()
+    assert private_marker not in repr(config)
+
+    with pytest.raises(StartupConfigurationError):
+        config.with_identity_hmac_key("too-short")
+
+    with pytest.raises(StartupConfigurationError):
+        load_bootstrap_config(_valid_environment()).require_identity_hmac_key()
 
 
 def test_load_bootstrap_config_rejects_renderer_incompatible_display_name() -> None:
@@ -262,6 +280,7 @@ def _valid_environment() -> dict[str, str]:
         "SHITTIM_DYNAMODB_TABLE": "shittim-chest-production",
         "SHITTIM_STATUS_PUBLISHER_FUNCTION": "shittim-status-publisher",
         "SHITTIM_LOG_LEVEL": "INFO",
+        "IDENTITY_HMAC_PARAMETER_NAME": IDENTITY_HMAC_PARAMETER_NAME,
         "OPENAI_API_KEY": "openai-key-placeholder",
         "DISCORD_TOKEN_MODERATOR": "token-moderator-placeholder",
         "DISCORD_TOKEN_PARTICIPANT_A": "token-participant-a-placeholder",

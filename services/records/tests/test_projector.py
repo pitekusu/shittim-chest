@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from shittim_chest.adapters.dynamodb.serializer import serialize_affection_profile
-from shittim_chest.domain import AffectionProfile
+import pytest
+from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from tests.factories import NOW
 
 from shittim_records.adapters import BackfillCheckpoint
@@ -18,6 +18,28 @@ from shittim_records.projector import (
 )
 
 HMAC_KEY = b"records-test-key-that-is-longer-than-32-bytes"
+
+
+def legacy_affection_profile(
+    *,
+    scores: tuple[int, int, int] = (625, 55, 987),
+    version: int = 3,
+) -> DynamoItem:
+    return cast(
+        DynamoItem,
+        {
+            "PK": "AFFECTION#REQUESTER#private-user",
+            "SK": "PROFILE",
+            "record_type": "affection_profile",
+            "schema_version": 8,
+            "requester_id": "private-user",
+            "requester_username": "private-name",
+            "requester_display_name": "Requester",
+            "scores": list(scores),
+            "version": version,
+            "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        },
+    )
 
 
 class FakeSource:
@@ -252,16 +274,7 @@ def test_completed_dry_run_checkpoint_is_a_terminal_noop() -> None:
 
 
 def test_affection_profile_projection_hashes_private_identity_and_normalizes_scores() -> None:
-    source = serialize_affection_profile(
-        AffectionProfile(
-            requester_id="private-user",
-            requester_username="private-name",
-            requester_display_name="Requester",
-            scores=(625, 55, 987),
-            version=3,
-            updated_at=NOW,
-        )
-    )
+    source = legacy_affection_profile()
 
     assert source["updated_at"] == NOW.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
@@ -270,7 +283,7 @@ def test_affection_profile_projection_hashes_private_identity_and_normalizes_sco
     assert projected == {
         "PK": "AFFECTION#PROFILE",
         "SK": derive_requester_key(HMAC_KEY, "private-user"),
-        "schema_version": 1,
+        "schema_version": 2,
         "record_type": "affection_profile",
         "source_version": 3,
         "display_name": "Requester",
@@ -280,27 +293,20 @@ def test_affection_profile_projection_hashes_private_identity_and_normalizes_sco
             "participant-c": 987,
         },
         "updated_at": NOW.isoformat(),
+        "reset_count": 0,
+        "memorial_cycle": 1,
     }
     assert "private-user" not in repr(projected)
     assert "private-name" not in repr(projected)
 
 
 def test_affection_projector_reloads_source_and_converges_statistics() -> None:
-    source_item = serialize_affection_profile(
-        AffectionProfile(
-            requester_id="private-user",
-            requester_username="private-name",
-            requester_display_name="Requester",
-            scores=(500, 501, 502),
-            version=1,
-            updated_at=NOW,
-        )
-    )
+    source_item = legacy_affection_profile(scores=(500, 501, 502), version=1)
 
     class Source:
-        def load_affection_profile(self, partition_key: str) -> dict[str, object]:
+        def find_affection_profile(self, partition_key: str) -> DynamoItem:
             assert partition_key == source_item["PK"]
-            return cast(dict[str, object], source_item)
+            return source_item
 
     class Store:
         def __init__(self) -> None:
@@ -324,3 +330,229 @@ def test_affection_projector_reloads_source_and_converges_statistics() -> None:
     assert service.project_partition(str(source_item["PK"])).created is True
     assert isinstance(store.item, dict)
     assert store.item["source_version"] == 1
+
+
+def test_affection_projector_recovers_late_v8_event_from_migrated_v9_profile() -> None:
+    requester_id = "123456789" + "012345678"
+    requester_key = derive_requester_key(HMAC_KEY, requester_id)
+    legacy_pk = f"AFFECTION#REQUESTER#{requester_id}"
+    current_pk = f"AFFECTION#REQUESTER#{requester_key}"
+    current = {
+        "PK": current_pk,
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": 9,
+        "requester_key": requester_key,
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [500, 501, 502],
+        "version": 2,
+        "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "reset_count": 0,
+        "memorial_cycle": 1,
+    }
+
+    class Source:
+        def find_affection_profile(self, partition_key: str) -> DynamoItem | None:
+            return cast(DynamoItem, current) if partition_key == current_pk else None
+
+    class Store:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def put_profile(self, _item: object) -> bool:
+            self.calls += 1
+            return self.calls == 1
+
+    class Configuration:
+        def load(self) -> object:
+            return type("Config", (), {"identity_hmac_key": HMAC_KEY})()
+
+    service = AffectionProjectorService(
+        source=cast(Any, Source()),
+        statistics=cast(Any, Store()),
+        configuration=cast(Any, Configuration()),
+    )
+
+    assert service.project_partition(legacy_pk).created is True
+    assert service.project_partition(legacy_pk).created is False
+
+
+@pytest.mark.parametrize(
+    "partition_key",
+    (
+        "AFFECTION#REQUESTER#" + "123456789" + "012345678",
+        f"AFFECTION#REQUESTER#{'a' * 43}",
+        "AFFECTION#REQUESTER#not-a-snowflake",
+    ),
+)
+def test_affection_projector_rejects_missing_unrecoverable_profile(
+    partition_key: str,
+) -> None:
+    class Source:
+        def find_affection_profile(self, _partition_key: str) -> None:
+            return None
+
+    class Configuration:
+        def load(self) -> object:
+            return type("Config", (), {"identity_hmac_key": HMAC_KEY})()
+
+    service = AffectionProjectorService(
+        source=cast(Any, Source()),
+        statistics=cast(Any, object()),
+        configuration=cast(Any, Configuration()),
+    )
+
+    with pytest.raises(ValueError, match="profile does not exist") as error:
+        service.project_partition(partition_key)
+    assert partition_key not in str(error.value)
+
+
+def test_v9_affection_profile_uses_opaque_identity_and_projects_memorial_metadata() -> None:
+    requester_key = "a" * 43
+    source = {
+        "PK": f"AFFECTION#REQUESTER#{requester_key}",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": 9,
+        "requester_key": requester_key,
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [1000, 600, 500],
+        "version": 4,
+        "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "reset_count": 2,
+        "memorial_cycle": 3,
+        "unlocked_participant": "participant-a",
+        "unlocked_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "unlock_debate_id": "019d2c1f-0000-7000-8000-a00000000021",
+        "unlock_display_name": "Requester at unlock",
+        "unlock_retroactive": False,
+    }
+
+    projected = project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)
+
+    assert projected["SK"] == requester_key
+    assert projected["reset_count"] == 2
+    assert projected["memorial_cycle"] == 3
+    assert projected["unlocked_participant"] == "participant-a"
+    assert projected["unlock_memorial_cycle"] == 3
+    assert projected["unlock_display_name"] == "Requester at unlock"
+    assert projected["unlock_retroactive"] is False
+    assert len(cast(str, projected["unlock_record_id"])) == 43
+    assert "019d2c1f-0000-7000-8000-a00000000021" not in repr(projected)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("requester_key", "é" * 43),
+        ("unlock_debate_id", "00000000-0000-4000-8000-000000000000"),
+    ),
+)
+def test_v9_affection_profile_rejects_non_ascii_key_or_non_uuidv7_unlock(
+    field: str, value: str
+) -> None:
+    requester_key = "a" * 43
+    source = {
+        "PK": f"AFFECTION#REQUESTER#{requester_key}",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": 9,
+        "requester_key": requester_key,
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [1000, 600, 500],
+        "version": 4,
+        "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "reset_count": 2,
+        "memorial_cycle": 3,
+        "unlocked_participant": "participant-a",
+        "unlocked_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "unlock_debate_id": "019d2c1f-0000-7000-8000-a00000000021",
+        "unlock_display_name": "Requester at unlock",
+        "unlock_retroactive": True,
+    }
+    source[field] = value
+    if field == "requester_key":
+        source["PK"] = f"AFFECTION#REQUESTER#{value}"
+
+    with pytest.raises(ValueError, match=r"identity|record key"):
+        project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)
+
+
+@pytest.mark.parametrize("retroactive", (None, "false"))
+def test_v9_affection_profile_rejects_missing_or_non_boolean_unlock_provenance(
+    retroactive: object,
+) -> None:
+    requester_key = "a" * 43
+    source = {
+        "PK": f"AFFECTION#REQUESTER#{requester_key}",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": 9,
+        "requester_key": requester_key,
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [1000, 600, 500],
+        "version": 4,
+        "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "reset_count": 2,
+        "memorial_cycle": 3,
+        "unlocked_participant": "participant-a",
+        "unlocked_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "unlock_debate_id": "019d2c1f-0000-7000-8000-a00000000021",
+        "unlock_display_name": "Requester at unlock",
+        "unlock_retroactive": retroactive,
+    }
+    if retroactive is None:
+        del source["unlock_retroactive"]
+
+    with pytest.raises(ValueError, match=r"fields|incomplete|invalid"):
+        project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)
+
+
+def test_v9_affection_profile_rejects_raw_identity_or_partial_unlock() -> None:
+    requester_key = "a" * 43
+    source = {
+        "PK": f"AFFECTION#REQUESTER#{requester_key}",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": 9,
+        "requester_key": requester_key,
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [500, 500, 500],
+        "version": 1,
+        "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "reset_count": 0,
+        "memorial_cycle": 1,
+    }
+    source["requester_id"] = "private-user"
+    with pytest.raises(ValueError, match="fields"):
+        project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)
+    del source["requester_id"]
+    source["unlocked_participant"] = "participant-a"
+    with pytest.raises(ValueError, match=r"fields|incomplete"):
+        project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)
+
+
+def test_v9_affection_profile_rejects_inconsistent_reset_cycle() -> None:
+    requester_key = "a" * 43
+    source = {
+        "PK": f"AFFECTION#REQUESTER#{requester_key}",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": 9,
+        "requester_key": requester_key,
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": [500, 500, 500],
+        "version": 2,
+        "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "reset_count": 1,
+        "memorial_cycle": 1,
+    }
+
+    with pytest.raises(ValueError, match="identity"):
+        project_affection_profile(cast(Any, source), identity_hmac_key=HMAC_KEY)

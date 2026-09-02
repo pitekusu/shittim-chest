@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-29
+updated: 2026-09-02
 ---
 
 # AWS・CDK詳細設計
@@ -63,6 +63,9 @@ AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管�
 ## 5. IAM boundaries
 
 - task roleはDynamoDBの必要partitionとStatus Publisher invokeだけを許可する。
+- Runtimeがsource親愛度profileをopaque key化するため、task roleは既存Records identity HMAC parameterの
+  exact ARNに対する`ssm:GetParameters`だけを持つ。container環境変数へはparameter名だけを渡し、
+  CloudFormation dynamic referenceやsecret値を置かない。
 - execution roleはnormal image pull、exact SSM secret injection、log writeだけを許可する。
 - Lambda roleはhandlerごとに分離し、table leading key、function、service、log groupを限定する。
 - Records Admin Config roleはSessionの`SESSION#*`読込、Statisticsの`ADMIN#PROMPT` transaction、

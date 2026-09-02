@@ -5,6 +5,7 @@ from shittim_chest.config.ingress import (
     load_ingress_bootstrap_settings,
 )
 from shittim_chest.config.models import (
+    IDENTITY_HMAC_PARAMETER_NAME,
     RUNTIME_PROMPT_NAMES,
     RUNTIME_PROMPTS_ACTIVE_PARAMETER,
     BootstrapConfig,
@@ -22,6 +23,7 @@ from shittim_chest.config.runtime_reconciler import (
 )
 
 __all__ = (
+    "IDENTITY_HMAC_PARAMETER_NAME",
     "RUNTIME_PROMPTS_ACTIVE_PARAMETER",
     "RUNTIME_PROMPT_NAMES",
     "BootstrapConfig",

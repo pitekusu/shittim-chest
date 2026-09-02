@@ -21,6 +21,7 @@ from shittim_chest.adapters.dynamodb.outbox import (
 from shittim_chest.adapters.dynamodb.repository import (
     DynamoDbDebateRepository,
     _abandon_outbox_action,
+    derive_affection_requester_key,
 )
 from shittim_chest.adapters.dynamodb.repository import (
     _require_transaction_size as require_repository_transaction_size,
@@ -39,6 +40,14 @@ from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
 
 NOW = datetime(2026, 7, 17, 3, 0, tzinfo=UTC)
+
+
+def test_affection_and_records_derive_the_same_opaque_requester_key() -> None:
+    identity_key = b"i" * 32
+
+    assert derive_affection_requester_key(identity_key, "private-requester") == (
+        "xDtrTAPtslo-r6StMr0FS6GliBLskiI-CbXUlFIlbfI"
+    )
 
 
 def client() -> DynamoDBClient:
@@ -168,7 +177,11 @@ def test_transaction_preflight_enforces_the_dynamodb_action_limit(
 @pytest.mark.asyncio
 async def test_transaction_cancellation_maps_to_repository_conflict() -> None:
     sdk = client()
-    repository = DynamoDbDebateRepository(client=sdk, table_name="test-table")
+    repository = DynamoDbDebateRepository(
+        client=sdk,
+        table_name="test-table",
+        identity_hmac_key=b"i" * 32,
+    )
     with Stubber(sdk) as stubber:
         stubber.add_client_error(
             "transact_write_items",

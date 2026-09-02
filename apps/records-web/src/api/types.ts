@@ -71,6 +71,7 @@ export interface AffectionRankingEntry {
   readonly displayName: string;
   readonly avatar: AvatarRef;
   readonly score: number;
+  readonly resetCount?: number;
 }
 
 export interface ParticipantAffectionRanking {

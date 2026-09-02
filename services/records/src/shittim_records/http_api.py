@@ -230,7 +230,10 @@ class ReadHttpController:
                 )
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
-            return json_response(200, result.model_dump(by_alias=True, mode="json"))
+            payload = result.model_dump(by_alias=True, mode="json")
+            if request.route_key == "GET /api/v1/insights/affection-rankings":
+                _omit_zero_reset_counts(payload)
+            return json_response(200, payload)
         except AuthFailure as error:
             status = 400 if error.code == "oauth_request_invalid" else 503
             code = "REQUEST_INVALID" if status == 400 else "RECORDS_UNAVAILABLE"
@@ -380,6 +383,23 @@ def _cost_period(value: str | None) -> Any:
     if value not in {"today", "week", "month", "all"}:
         raise ReadFailure("REQUEST_INVALID", 400)
     return value
+
+
+def _omit_zero_reset_counts(payload: dict[str, Any]) -> None:
+    """Keep the PR1 wire response compatible with cached pre-reset validators."""
+
+    rankings = payload.get("rankings")
+    if not isinstance(rankings, list):
+        return
+    for ranking in rankings:
+        if not isinstance(ranking, dict):
+            continue
+        entries = ranking.get("entries")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("resetCount") == 0:
+                entry.pop("resetCount")
 
 
 def _cookies(values: list[str]) -> dict[str, str]:

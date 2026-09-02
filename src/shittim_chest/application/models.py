@@ -831,6 +831,14 @@ class DebateSnapshot:
                 raise ValueError("affection assessment requires the scoring phase to be settled")
             if self.affection_assessment.assessed_at < self.created_at:
                 raise ValueError("affection assessment cannot precede the debate")
+            memorial_unlock = self.affection_assessment.memorial_unlock
+            if memorial_unlock is not None:
+                if memorial_unlock.debate_id != self.state.debate_id:
+                    raise ValueError("affection memorial unlock must belong to the snapshot debate")
+                if memorial_unlock.requester_display_name != self.requester_display_name:
+                    raise ValueError(
+                        "affection memorial unlock display name must match the snapshot requester"
+                    )
         checkpoint_keys = tuple(
             (checkpoint.phase, checkpoint.participant) for checkpoint in self.generation_checkpoints
         )
