@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
 
 import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
+from mypy_boto3_dynamodb.type_defs import TransactWriteItemTypeDef
 
 from shittim_chest.adapters.dynamodb import (
-    DynamoDbDebateRepository,
+    DynamoDbDebateRepository as _DynamoDbDebateRepository,
+)
+from shittim_chest.adapters.dynamodb import (
     DynamoDbIngressRepository,
     DynamoDbOutboxRepository,
     OutboxOperation,
@@ -21,7 +25,13 @@ from shittim_chest.adapters.dynamodb import (
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
-from shittim_chest.adapters.dynamodb.serializer import serialize_outbox, serialize_snapshot
+from shittim_chest.adapters.dynamodb.repository import derive_affection_requester_key
+from shittim_chest.adapters.dynamodb.serializer import (
+    PREVIOUS_SCHEMA_VERSION,
+    DynamoItem,
+    serialize_outbox,
+    serialize_snapshot,
+)
 from shittim_chest.application import (
     DebateSnapshot,
     DeliveryAbandonReason,
@@ -50,6 +60,7 @@ from shittim_chest.application.ports import (
     RepositoryQuotaExceeded,
     RepositoryTransactionAction,
     RepositoryTransactionConflict,
+    RepositoryTransactionStage,
 )
 from shittim_chest.domain import (
     AttemptId,
@@ -64,11 +75,54 @@ from shittim_chest.domain import (
 )
 
 NOW = datetime(2026, 7, 17, 2, 0, tzinfo=UTC)
+IDENTITY_HMAC_KEY = b"i" * 32
 DISPLAY_NAMES = {
     ParticipantSlot.PARTICIPANT_A: "Generic A",
     ParticipantSlot.PARTICIPANT_B: "Generic B",
     ParticipantSlot.PARTICIPANT_C: "Generic C",
 }
+
+
+class DynamoDbDebateRepository(_DynamoDbDebateRepository):
+    """Bind the non-secret test identity key for integration coverage."""
+
+    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+        super().__init__(
+            client=client,
+            table_name=table_name,
+            identity_hmac_key=IDENTITY_HMAC_KEY,
+        )
+        self._legacy_profile_to_insert: DynamoItem | None = None
+
+    def insert_legacy_profile_before_next_transaction(self, item: DynamoItem) -> None:
+        self._legacy_profile_to_insert = item
+
+    def _transact(
+        self,
+        actions: Iterable[TransactWriteItemTypeDef],
+        *,
+        token: str,
+        cancellation_stage: RepositoryTransactionStage | None = None,
+        cancellation_action_kinds: tuple[RepositoryTransactionAction, ...] = (),
+    ) -> None:
+        legacy_item = self._legacy_profile_to_insert
+        if legacy_item is not None:
+            self._legacy_profile_to_insert = None
+            self._client.put_item(
+                TableName=self._table_name,
+                Item=marshal_item(legacy_item),
+            )
+        super()._transact(
+            actions,
+            token=token,
+            cancellation_stage=cancellation_stage,
+            cancellation_action_kinds=cancellation_action_kinds,
+        )
+
+
+def affection_profile_partition(requester_id: str) -> str:
+    requester_key = derive_affection_requester_key(IDENTITY_HMAC_KEY, requester_id)
+    return f"AFFECTION#REQUESTER#{requester_key}"
 
 
 def votes_for_winner(winner: ParticipantSlot) -> tuple[Vote, ...]:
@@ -2233,7 +2287,7 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
         600,
     )
     profile_key = {
-        "PK": f"AFFECTION#REQUESTER#{settled.requester_id}",
+        "PK": affection_profile_partition(settled.requester_id),
         "SK": "PROFILE",
     }
     raw_profile = unmarshal_item(
@@ -2341,12 +2395,207 @@ async def test_first_unavailable_affection_assessment_does_not_create_a_profile(
     assert settled.affection_assessment is not None
     assert settled.affection_assessment.status.value == "unavailable"
     profile_key = {
-        "PK": f"AFFECTION#REQUESTER#{settled.requester_id}",
+        "PK": affection_profile_partition(settled.requester_id),
         "SK": "PROFILE",
     }
     assert "Item" not in dynamodb_client.get_item(
         TableName=dynamodb_table,
         Key=marshal_item(profile_key),
+        ConsistentRead=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_affection_atomically_migrates_the_v8_raw_profile(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    requester_id = "legacy-private-requester"
+    legacy_key = {"PK": f"AFFECTION#REQUESTER#{requester_id}", "SK": "PROFILE"}
+    legacy_item: DynamoItem = {
+        **legacy_key,
+        "record_type": "affection_profile",
+        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "requester_id": requester_id,
+        "requester_username": "legacy",
+        "requester_display_name": "Legacy",
+        "scores": [1000, 990, 500],
+        "version": 4,
+        "updated_at": NOW.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+    }
+    dynamodb_client.put_item(TableName=dynamodb_table, Item=marshal_item(legacy_item))
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(
+            new_snapshot(),
+            requester_id=requester_id,
+            requester_username="current",
+            requester_display_name="Current",
+        ),
+        operation_id="affection-v8-migration",
+        lease_owner="worker-1",
+    )
+    scoring = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=accepted.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(microseconds=1),
+            ),
+        ),
+    )
+
+    settled = await repository.settle_affection(
+        expected=scoring,
+        scores=(-100, 10, 0),
+        at=NOW + timedelta(microseconds=2),
+    )
+
+    assert "Item" not in dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(legacy_key),
+        ConsistentRead=True,
+    )
+    new_key = {
+        "PK": affection_profile_partition(requester_id),
+        "SK": "PROFILE",
+    }
+    migrated = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(new_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert migrated["scores"] == [900, 1000, 500]
+    assert migrated["requester_key"] == derive_affection_requester_key(
+        IDENTITY_HMAC_KEY,
+        requester_id,
+    )
+    assert "requester_id" not in migrated
+    assert migrated["reset_count"] == 0
+    assert migrated["memorial_cycle"] == 1
+    assert migrated["unlocked_participant"] == ParticipantSlot.PARTICIPANT_A.value
+    assert migrated["unlock_debate_id"] == str(settled.state.debate_id)
+    assert migrated["unlock_display_name"] == "Current"
+    assert migrated["unlock_retroactive"] is True
+    assert settled.affection_assessment is not None
+    assert settled.affection_assessment.memorial_unlock is not None
+    assert settled.affection_assessment.memorial_unlock.retroactive is True
+
+
+@pytest.mark.asyncio
+async def test_new_affection_profile_retries_when_a_v8_profile_appears_after_the_read(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    requester_id = "legacy-race-requester"
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(new_snapshot(), requester_id=requester_id),
+        operation_id="affection-v8-race",
+        lease_owner="worker-1",
+    )
+    scoring = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=accepted.state.transition_to(
+                DebatePhase.SCORING_AFFECTION,
+                at=NOW + timedelta(microseconds=1),
+            ),
+        ),
+    )
+    legacy_key = {"PK": f"AFFECTION#REQUESTER#{requester_id}", "SK": "PROFILE"}
+    legacy_item: DynamoItem = {
+        **legacy_key,
+        "record_type": "affection_profile",
+        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "requester_id": requester_id,
+        "requester_username": "legacy",
+        "requester_display_name": "Legacy",
+        "scores": [600, 400, 500],
+        "version": 7,
+        "updated_at": NOW.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+    }
+    repository.insert_legacy_profile_before_next_transaction(legacy_item)
+
+    settled = await repository.settle_affection(
+        expected=scoring,
+        scores=(10, -20, 30),
+        at=NOW + timedelta(microseconds=2),
+    )
+
+    assert settled.affection_assessment is not None
+    assert tuple(item.after for item in settled.affection_assessment.participants) == (
+        610,
+        380,
+        530,
+    )
+    assert "Item" not in dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(legacy_key),
+        ConsistentRead=True,
+    )
+    migrated = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=dynamodb_table,
+            Key=marshal_item(
+                {
+                    "PK": affection_profile_partition(requester_id),
+                    "SK": "PROFILE",
+                }
+            ),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert migrated["scores"] == [610, 380, 530]
+    assert migrated["version"] == 8
+    assert "requester_id" not in migrated
+
+
+@pytest.mark.asyncio
+async def test_unavailable_affection_does_not_migrate_the_v8_raw_profile(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    requester_id = "legacy-unavailable-requester"
+    legacy_key = {"PK": f"AFFECTION#REQUESTER#{requester_id}", "SK": "PROFILE"}
+    legacy_item: DynamoItem = {
+        **legacy_key,
+        "record_type": "affection_profile",
+        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "requester_id": requester_id,
+        "requester_username": "legacy",
+        "requester_display_name": "Legacy",
+        "scores": [500, 500, 500],
+        "version": 2,
+        "updated_at": NOW.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+    }
+    dynamodb_client.put_item(TableName=dynamodb_table, Item=marshal_item(legacy_item))
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(new_snapshot(), requester_id=requester_id),
+        operation_id="affection-v8-unavailable",
+        lease_owner="worker-1",
+    )
+
+    await settle_unavailable_affection(
+        repository,
+        accepted,
+        scoring_at=NOW + timedelta(microseconds=1),
+    )
+
+    retained = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item(legacy_key),
+        ConsistentRead=True,
+    )["Item"]
+    assert unmarshal_item(retained) == legacy_item
+    assert "Item" not in dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": affection_profile_partition(requester_id), "SK": "PROFILE"}),
         ConsistentRead=True,
     )
 
@@ -2378,7 +2627,7 @@ async def test_unavailable_affection_assessment_does_not_rewrite_an_existing_pro
         at=NOW + timedelta(microseconds=2),
     )
     profile_key = {
-        "PK": f"AFFECTION#REQUESTER#{applied.requester_id}",
+        "PK": affection_profile_partition(applied.requester_id),
         "SK": "PROFILE",
     }
     profile_before = dynamodb_client.get_item(
@@ -2507,7 +2756,7 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
     assert persisted_retry.requester_display_name == accepted.requester_display_name
     assert persisted_retry.affection_assessment == accepted.affection_assessment
     profile_key = {
-        "PK": f"AFFECTION#REQUESTER#{accepted.requester_id}",
+        "PK": affection_profile_partition(accepted.requester_id),
         "SK": "PROFILE",
     }
     profile = unmarshal_item(

@@ -24,6 +24,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_snapshot,
 )
 from shittim_chest.adapters.dynamodb.serializer import (
+    PREVIOUS_SCHEMA_VERSION,
     DynamoItem,
     deserialize_affection_profile,
     serialize_affection_profile,
@@ -60,13 +61,14 @@ from shittim_chest.domain import (
 )
 
 NOW = datetime(2026, 7, 17, 1, 2, 3, tzinfo=UTC)
+REQUESTER_KEY = "B" * 43
 
 
 def _as_previous_schema(item: DynamoItem) -> DynamoItem:
-    """Build a v7 item from a current snapshot item for migration tests."""
+    """Build a previous-version item from a current snapshot item for migration tests."""
 
     migrated: DynamoItem = {key: value for key, value in item.items()}
-    migrated["schema_version"] = 7
+    migrated["schema_version"] = PREVIOUS_SCHEMA_VERSION
     return migrated
 
 
@@ -272,7 +274,7 @@ def test_terminal_delivery_round_trip_and_partial_fields_fail_closed() -> None:
     assert restored.terminal_delivery_complete
 
 
-def test_generation_checkpoint_collection_is_strict_and_v7_absence_is_compatible() -> None:
+def test_generation_checkpoint_collection_is_strict_and_previous_absence_is_compatible() -> None:
     source = snapshot()
     checkpoints = (
         GenerationCheckpoint.planned(
@@ -463,7 +465,7 @@ def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> Non
 def test_affection_assessment_and_private_profile_round_trip_without_reason_text() -> None:
     source = snapshot()
     profile = AffectionProfile.initial(
-        requester_id=source.requester_id,
+        requester_key=REQUESTER_KEY,
         requester_username=source.requester_username,
         requester_display_name=source.requester_display_name,
         at=NOW,
@@ -483,9 +485,134 @@ def test_affection_assessment_and_private_profile_round_trip_without_reason_text
     assert deserialize_snapshot(items).affection_assessment == assessment
 
     profile_item = serialize_affection_profile(updated_profile)
-    assert profile_item["PK"] == f"AFFECTION#REQUESTER#{source.requester_id}"
+    assert profile_item["PK"] == f"AFFECTION#REQUESTER#{REQUESTER_KEY}"
+    assert profile_item["requester_key"] == REQUESTER_KEY
+    assert "requester_id" not in profile_item
     assert profile_item["scores"] == [535, 457, 600]
     assert deserialize_affection_profile(profile_item) == updated_profile
+
+
+def test_v8_affection_profile_requires_an_opaque_key_and_defaults_memorial_state() -> None:
+    legacy: DynamoItem = {
+        "PK": "AFFECTION#REQUESTER#private-requester",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "requester_id": "private-requester",
+        "requester_username": "requester",
+        "requester_display_name": "Requester",
+        "scores": [625, 55, 987],
+        "version": 4,
+        "updated_at": NOW.isoformat(),
+    }
+
+    with pytest.raises(PersistenceFormatError, match="opaque requester key"):
+        deserialize_affection_profile(legacy)
+    restored = deserialize_affection_profile(legacy, requester_key=REQUESTER_KEY)
+    assert restored.requester_key == REQUESTER_KEY
+    assert restored.reset_count == 0
+    assert restored.memorial_cycle == 1
+    assert restored.memorial_unlock is None
+
+
+def test_memorial_retroactive_provenance_round_trips_and_is_required() -> None:
+    source = snapshot()
+    profile = AffectionProfile(
+        requester_key=REQUESTER_KEY,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        scores=(1000, 500, 500),
+        version=4,
+        updated_at=NOW,
+    )
+    updated, assessment = assess_affection(
+        profile,
+        scores=(-10, 0, 0),
+        assessed_at=NOW + timedelta(seconds=1),
+        debate_id=source.state.debate_id,
+        operation_seed="legacy",
+        allow_existing_max_unlock=True,
+    )
+    assessment_item = next(
+        item
+        for item in serialize_snapshot(replace(source, affection_assessment=assessment))
+        if item["record_type"] == "affection_assessment"
+    )
+    raw_unlock = assessment_item["memorial_unlock"]
+    assert isinstance(raw_unlock, dict)
+    assert raw_unlock["retroactive"] is True
+    assert (
+        deserialize_snapshot(
+            serialize_snapshot(replace(source, affection_assessment=assessment))
+        ).affection_assessment
+        == assessment
+    )
+
+    profile_item = serialize_affection_profile(updated)
+    assert profile_item["unlock_retroactive"] is True
+    assert deserialize_affection_profile(profile_item) == updated
+    with pytest.raises(PersistenceFormatError, match="partial memorial unlock"):
+        deserialize_affection_profile(
+            {key: value for key, value in profile_item.items() if key != "unlock_retroactive"}
+        )
+
+    malformed_unlock = dict(raw_unlock)
+    malformed_unlock.pop("retroactive")
+    malformed_assessment = {
+        **assessment_item,
+        "memorial_unlock": malformed_unlock,
+    }
+    other_items = tuple(
+        item
+        for item in serialize_snapshot(replace(source, affection_assessment=assessment))
+        if item["record_type"] != "affection_assessment"
+    )
+    with pytest.raises(PersistenceFormatError, match="invalid memorial unlock"):
+        deserialize_snapshot((*other_items, malformed_assessment))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("debate_id", str(DebateId.new()), "snapshot debate"),
+        ("requester_display_name", "別の表示名", "snapshot requester"),
+    ),
+)
+def test_snapshot_rejects_memorial_unlock_from_another_aggregate_identity(
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    source = snapshot()
+    profile = AffectionProfile(
+        requester_key=REQUESTER_KEY,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        scores=(999, 500, 500),
+        version=1,
+        updated_at=NOW,
+    )
+    _, assessment = assess_affection(
+        profile,
+        scores=(1, 0, 0),
+        assessed_at=NOW + timedelta(seconds=7),
+        debate_id=source.state.debate_id,
+        operation_seed="serializer-integrity",
+    )
+    items = serialize_snapshot(replace(source, affection_assessment=assessment))
+    affection_item = next(item for item in items if item["record_type"] == "affection_assessment")
+    unlock = affection_item["memorial_unlock"]
+    assert isinstance(unlock, dict)
+    malformed_unlock = {**unlock, field: value}
+    malformed = tuple(
+        {**item, "memorial_unlock": malformed_unlock}
+        if item["record_type"] == "affection_assessment"
+        else item
+        for item in items
+    )
+
+    with pytest.raises(ValueError, match=message):
+        deserialize_snapshot(malformed)
 
 
 def test_current_debate_meta_requires_requester_name_snapshots() -> None:
@@ -587,7 +714,7 @@ def test_outbox_and_panel_records_have_stable_keys_and_versions() -> None:
     with pytest.raises(PersistenceFormatError, match="not a panel"):
         deserialize_panel_operation(outbox_item)
 
-    previous_outbox = {**outbox_item, "schema_version": 7}
+    previous_outbox = {**outbox_item, "schema_version": PREVIOUS_SCHEMA_VERSION}
     assert previous_outbox["bot_slot"] == DiscordBotSlot.MODERATOR.value
     assert deserialize_outbox(previous_outbox) == outbox
     with pytest.raises(PersistenceFormatError, match="unsupported schema"):

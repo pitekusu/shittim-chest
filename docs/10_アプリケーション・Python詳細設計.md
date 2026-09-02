@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-01
+updated: 2026-09-02
 ---
 
 # アプリケーション・Python詳細設計
@@ -59,6 +59,13 @@ Generationはlogical outputごとに最大2 SDK callを許す。結果保存のC
 二重加算を行わない。評価後の討論失敗／取消でもprofileの変更を戻さず、
 元channelへの独立deliveryをterminal planに含める。
 
+各cycleで未解放のprofileが初めて1,000点へ到達した場合は、変更前score、clamp前の質問評価の順で
+候補を絞り、同点はAttempt由来のrandom seedで1人を選ぶ。選出結果、到達時刻、Debate ID、当時の
+質問者表示名、cycleをprofileと討論評価へ同じtransactionで保存するため、CAS retryでも選出は変わらない。
+v8からopaque v9へ移行する成功評価だけは、移行前から1,000点の人格も候補へ含める。通常のv9評価では
+今回`before < 1000`から`after = 1000`になった人格だけを新規到達として扱う。
+評価不能時は旧profileのopaque key移行も解放判定も行わない。
+
 ## 4. Concurrency and cancellation
 
 - process内のasync taskはownerを明確にし、cancel後に必ずawaitする。
@@ -90,6 +97,9 @@ ECSのcontainer healthはprocess内のreadinessとheartbeatを読む。healthche
 - PersonaConfig schema v1を1 slotずつ4設定揃え、participant display nameの重複を拒否する。
 - persona promptは非空、最大3,500 UTF-8 bytesで、repr／validation errorへ本文を出さない。
 - secretは専用SSM pathからexact `GetParameters`で取得し、path走査をしない。
+- RuntimeはRecordsと共通のidentity HMAC SecureStringを起動時にexact `GetParameters`で1回だけ読み、
+  key長を検証してからrepositoryへ渡す。環境変数、repr、errorにはparameter名だけを保持し、値の欠落、
+  取得失敗、短い値はclient構築前にcontent-free errorでfail closedとする。
 
 ## 7. Errors and telemetry
 

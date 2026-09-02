@@ -62,6 +62,7 @@ from shittim_chest.domain import (
     FinalDecision,
     FinalProposal,
     InitialOpinion,
+    MemorialUnlock,
     ParticipantAffection,
     ParticipantSlot,
     RecoveryState,
@@ -73,8 +74,8 @@ type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 8
-PREVIOUS_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 9
+PREVIOUS_SCHEMA_VERSION = 8
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
@@ -103,8 +104,8 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
     if version == PREVIOUS_SCHEMA_VERSION:
-        # v7 predates requester affection. Missing optional assessment fields
-        # remain absent and are interpreted as the neutral compatibility value.
+        # v8 predates memorial unlock metadata and opaque source-profile keys.
+        # Missing optional assessment fields retain their compatibility meaning.
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
         version = CURRENT_SCHEMA_VERSION
     if version != CURRENT_SCHEMA_VERSION:
@@ -1765,7 +1766,7 @@ def _serialize_affection_assessment(
     created_at: datetime,
     value: AffectionAssessment,
 ) -> DynamoItem:
-    return {
+    item: DynamoItem = {
         "PK": f"DEBATE#{debate_id}",
         "SK": "AFFECTION",
         "record_type": "affection_assessment",
@@ -1787,6 +1788,9 @@ def _serialize_affection_assessment(
             for item in value.participants
         ],
     }
+    if value.memorial_unlock is not None:
+        item["memorial_unlock"] = _serialize_memorial_unlock(value.memorial_unlock)
+    return item
 
 
 def _deserialize_affection_assessment(item: DynamoItem) -> AffectionAssessment:
@@ -1816,31 +1820,48 @@ def _deserialize_affection_assessment(item: DynamoItem) -> AffectionAssessment:
         rules_version=_text(item, "rules_version"),
         participants=tuple(participants),
         assessed_at=_datetime(item, "assessed_at"),
+        memorial_unlock=_deserialize_memorial_unlock(item.get("memorial_unlock")),
     )
 
 
 def serialize_affection_profile(profile: AffectionProfile) -> DynamoItem:
     """Serialize one private requester profile for a source-table transaction."""
 
-    return _validated_item(
-        {
-            "PK": f"AFFECTION#REQUESTER#{profile.requester_id}",
-            "SK": "PROFILE",
-            "record_type": "affection_profile",
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "requester_id": profile.requester_id,
-            "requester_username": profile.requester_username,
-            "requester_display_name": profile.requester_display_name,
-            "scores": list(profile.scores),
-            "version": profile.version,
-            "updated_at": _timestamp(profile.updated_at),
-        }
-    )
+    item: DynamoItem = {
+        "PK": f"AFFECTION#REQUESTER#{profile.requester_key}",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "requester_key": profile.requester_key,
+        "requester_username": profile.requester_username,
+        "requester_display_name": profile.requester_display_name,
+        "scores": list(profile.scores),
+        "version": profile.version,
+        "updated_at": _timestamp(profile.updated_at),
+        "reset_count": profile.reset_count,
+        "memorial_cycle": profile.memorial_cycle,
+    }
+    if profile.memorial_unlock is not None:
+        item.update(
+            {
+                "unlocked_participant": profile.memorial_unlock.participant.value,
+                "unlocked_at": _timestamp(profile.memorial_unlock.unlocked_at),
+                "unlock_debate_id": str(profile.memorial_unlock.debate_id),
+                "unlock_display_name": profile.memorial_unlock.requester_display_name,
+                "unlock_retroactive": profile.memorial_unlock.retroactive,
+            }
+        )
+    return _validated_item(item)
 
 
-def deserialize_affection_profile(raw_item: Mapping[str, DynamoValue]) -> AffectionProfile:
+def deserialize_affection_profile(
+    raw_item: Mapping[str, DynamoValue],
+    *,
+    requester_key: str | None = None,
+) -> AffectionProfile:
     """Validate one requester profile read through the source-table boundary."""
 
+    source_version = _integer(raw_item, "schema_version")
     item = migrate_item(raw_item)
     if _text(item, "record_type") != "affection_profile" or _text(item, "SK") != "PROFILE":
         raise PersistenceFormatError("affection profile identity is invalid")
@@ -1851,17 +1872,101 @@ def deserialize_affection_profile(raw_item: Mapping[str, DynamoValue]) -> Affect
         or any(isinstance(value, bool) or not isinstance(value, int) for value in raw_scores)
     ):
         raise PersistenceFormatError("affection profile scores are invalid")
+    if source_version == PREVIOUS_SCHEMA_VERSION:
+        if requester_key is None:
+            raise PersistenceFormatError(
+                "legacy affection profile requires an opaque requester key"
+            )
+        legacy_requester_id = _text(item, "requester_id")
+        if _text(item, "PK") != f"AFFECTION#REQUESTER#{legacy_requester_id}":
+            raise PersistenceFormatError("legacy affection profile partition is invalid")
+        profile_requester_key = requester_key
+        reset_count = 0
+        memorial_cycle = 1
+        memorial_unlock = None
+    else:
+        if "requester_id" in item:
+            raise PersistenceFormatError("current affection profile contains a raw requester ID")
+        profile_requester_key = _text(item, "requester_key")
+        if requester_key is not None and requester_key != profile_requester_key:
+            raise PersistenceFormatError("affection profile requester key changed")
+        reset_count = _integer(item, "reset_count")
+        memorial_cycle = _integer(item, "memorial_cycle")
+        memorial_unlock = _deserialize_profile_memorial_unlock(item, memorial_cycle)
     profile = AffectionProfile(
-        requester_id=_text(item, "requester_id"),
+        requester_key=profile_requester_key,
         requester_username=_text(item, "requester_username"),
         requester_display_name=_text(item, "requester_display_name"),
         scores=cast(tuple[int, int, int], tuple(raw_scores)),
         version=_integer(item, "version"),
         updated_at=_datetime(item, "updated_at"),
+        reset_count=reset_count,
+        memorial_cycle=memorial_cycle,
+        memorial_unlock=memorial_unlock,
     )
-    if _text(item, "PK") != f"AFFECTION#REQUESTER#{profile.requester_id}":
+    if source_version == CURRENT_SCHEMA_VERSION and _text(item, "PK") != (
+        f"AFFECTION#REQUESTER#{profile.requester_key}"
+    ):
         raise PersistenceFormatError("affection profile partition does not match requester")
     return profile
+
+
+def _serialize_memorial_unlock(value: MemorialUnlock) -> DynamoItem:
+    return {
+        "participant": value.participant.value,
+        "unlocked_at": _timestamp(value.unlocked_at),
+        "debate_id": str(value.debate_id),
+        "requester_display_name": value.requester_display_name,
+        "memorial_cycle": value.memorial_cycle,
+        "retroactive": value.retroactive,
+    }
+
+
+def _deserialize_memorial_unlock(value: DynamoValue | None) -> MemorialUnlock | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise PersistenceFormatError("memorial unlock must be a map")
+    try:
+        return MemorialUnlock(
+            participant=ParticipantSlot(_text(value, "participant")),
+            unlocked_at=_datetime(value, "unlocked_at"),
+            debate_id=DebateId.parse(_text(value, "debate_id")),
+            requester_display_name=_text(value, "requester_display_name"),
+            memorial_cycle=_integer(value, "memorial_cycle"),
+            retroactive=_boolean(value, "retroactive"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid memorial unlock") from error
+
+
+def _deserialize_profile_memorial_unlock(
+    item: DynamoItem,
+    memorial_cycle: int,
+) -> MemorialUnlock | None:
+    fields = {
+        "unlocked_participant",
+        "unlocked_at",
+        "unlock_debate_id",
+        "unlock_display_name",
+        "unlock_retroactive",
+    }
+    present = fields.intersection(item)
+    if not present:
+        return None
+    if present != fields:
+        raise PersistenceFormatError("partial memorial unlock metadata is not allowed")
+    try:
+        return MemorialUnlock(
+            participant=ParticipantSlot(_text(item, "unlocked_participant")),
+            unlocked_at=_datetime(item, "unlocked_at"),
+            debate_id=DebateId.parse(_text(item, "unlock_debate_id")),
+            requester_display_name=_text(item, "unlock_display_name"),
+            memorial_cycle=memorial_cycle,
+            retroactive=_boolean(item, "unlock_retroactive"),
+        )
+    except ValueError as error:
+        raise PersistenceFormatError("invalid memorial unlock metadata") from error
 
 
 def _deserialize_evidence(item: DynamoItem) -> EvidenceItem:

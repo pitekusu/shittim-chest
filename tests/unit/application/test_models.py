@@ -19,6 +19,7 @@ from shittim_chest.application import (
     PhaseDeliveryStatus,
 )
 from shittim_chest.domain import (
+    AffectionProfile,
     AttemptId,
     DebateId,
     DebatePhase,
@@ -27,6 +28,7 @@ from shittim_chest.domain import (
     InitialOpinion,
     ParticipantSlot,
     Vote,
+    assess_affection,
 )
 
 NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
@@ -47,6 +49,58 @@ def snapshot() -> DebateSnapshot:
         thread_id="thread",
         control_panel_message_id="panel",
     )
+
+
+def snapshot_with_memorial_unlock() -> DebateSnapshot:
+    source = snapshot()
+    settled_state = source.state.transition_to(
+        DebatePhase.SCORING_AFFECTION,
+        at=NOW + timedelta(seconds=1),
+    ).transition_to(
+        DebatePhase.PREPARING_EVIDENCE,
+        at=NOW + timedelta(seconds=2),
+    )
+    profile = AffectionProfile(
+        requester_key="B" * 43,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        scores=(999, 500, 500),
+        version=1,
+        updated_at=NOW,
+    )
+    _, assessment = assess_affection(
+        profile,
+        scores=(1, 0, 0),
+        assessed_at=NOW + timedelta(seconds=2),
+        debate_id=source.state.debate_id,
+        operation_seed="snapshot-integrity",
+    )
+    return replace(source, state=settled_state, affection_assessment=assessment)
+
+
+def test_memorial_unlock_must_match_snapshot_debate_and_display_identity() -> None:
+    source = snapshot_with_memorial_unlock()
+    assessment = source.affection_assessment
+    assert assessment is not None
+    unlock = assessment.memorial_unlock
+    assert unlock is not None
+
+    with pytest.raises(ValueError, match="snapshot debate"):
+        replace(
+            source,
+            affection_assessment=replace(
+                assessment,
+                memorial_unlock=replace(unlock, debate_id=DebateId.new()),
+            ),
+        )
+    with pytest.raises(ValueError, match="snapshot requester"):
+        replace(
+            source,
+            affection_assessment=replace(
+                assessment,
+                memorial_unlock=replace(unlock, requester_display_name="別の表示名"),
+            ),
+        )
 
 
 def test_panel_refresh_state_is_derived_from_durable_delivery_fields() -> None:

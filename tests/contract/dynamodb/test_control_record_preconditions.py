@@ -50,7 +50,11 @@ def _update(action: object) -> dict[str, Any]:
 def test_counter_increments_require_preexisting_exact_control_records() -> None:
     sdk = _client()
     ingress = DynamoDbIngressRepository(client=sdk, table_name=TABLE_NAME)
-    debates = DynamoDbDebateRepository(client=sdk, table_name=TABLE_NAME)
+    debates = DynamoDbDebateRepository(
+        client=sdk,
+        table_name=TABLE_NAME,
+        identity_hmac_key=b"i" * 32,
+    )
     actions = (
         ingress._increment_counter_action(NOW),
         ingress._increment_status_counter_action(NOW),
@@ -75,7 +79,11 @@ def test_counter_increments_require_preexisting_exact_control_records() -> None:
 def test_counter_reads_reject_missing_control_records() -> None:
     sdk = _client()
     ingress = DynamoDbIngressRepository(client=sdk, table_name=TABLE_NAME)
-    debates = DynamoDbDebateRepository(client=sdk, table_name=TABLE_NAME)
+    debates = DynamoDbDebateRepository(
+        client=sdk,
+        table_name=TABLE_NAME,
+        identity_hmac_key=b"i" * 32,
+    )
     outbox = DynamoDbOutboxRepository(client=sdk, table_name=TABLE_NAME)
     keys = (
         {"PK": "CONTROL#INGRESS", "SK": "COUNTER"},
@@ -155,7 +163,11 @@ def test_outbox_token_mismatch_preserves_the_safe_operation_stage() -> None:
 
 def test_slot_acquisition_rejects_a_missing_deployment_owned_slot() -> None:
     sdk = _client()
-    repository = DynamoDbDebateRepository(client=sdk, table_name=TABLE_NAME)
+    repository = DynamoDbDebateRepository(
+        client=sdk,
+        table_name=TABLE_NAME,
+        identity_hmac_key=b"i" * 32,
+    )
 
     with Stubber(sdk) as stubber:
         stubber.add_response(
@@ -175,7 +187,11 @@ def test_slot_acquisition_rejects_a_missing_deployment_owned_slot() -> None:
 
 def test_slot_acquisition_preserves_schema_and_fencing_in_the_transaction() -> None:
     sdk = _client()
-    repository = DynamoDbDebateRepository(client=sdk, table_name=TABLE_NAME)
+    repository = DynamoDbDebateRepository(
+        client=sdk,
+        table_name=TABLE_NAME,
+        identity_hmac_key=b"i" * 32,
+    )
 
     with Stubber(sdk) as stubber:
         for slot in range(GLOBAL_LEASE_SLOTS):

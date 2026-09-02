@@ -87,7 +87,7 @@ class DynamoRankingSource:
                 {
                     "PK": "AFFECTION#PROFILE",
                     "SK": seed.requester_key,
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "record_type": "affection_profile",
                     "source_version": 0,
                     "display_name": seed.display_name,
@@ -97,6 +97,8 @@ class DynamoRankingSource:
                         "participant-c": 500,
                     },
                     "updated_at": updated_at.isoformat(),
+                    "reset_count": 0,
+                    "memorial_cycle": 1,
                 },
             )
             for seed in seeds
@@ -407,6 +409,7 @@ def _affection_generation_items(
                         "display_name": entry.display_name,
                         "score": entry.score,
                         "rank": entry.rank,
+                        "reset_count": entry.reset_count,
                     }
                     for entry in ranking.entries
                 ],
@@ -465,6 +468,7 @@ def _affection_generation_items(
                             "display_name": entry.display_name,
                             "score": entry.score,
                             "rank": entry.rank,
+                            "reset_count": entry.reset_count,
                         }
                         for entry in ranking.entries[start:stop]
                     ],

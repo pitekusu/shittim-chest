@@ -462,6 +462,11 @@ def test_affection_rankings_route_is_authenticated_no_store_and_has_no_internal_
     payload = json.loads(successful["body"])
     assert payload["defaultScore"] == 500
     assert len(payload["rankings"]) == 3
+    assert all(
+        set(entry) == {"rank", "displayName", "avatar", "score"}
+        for ranking in payload["rankings"]
+        for entry in ranking["entries"]
+    )
     assert "requesterKey" not in successful["body"]
     assert limited["statusCode"] == 200
     assert unknown["statusCode"] == 400

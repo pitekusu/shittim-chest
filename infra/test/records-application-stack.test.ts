@@ -765,7 +765,11 @@ describe("RecordsApplicationStack", () => {
           },
           {
             Pattern:
-              '{"dynamodb":{"NewImage":{"record_type":{"S":["affection_profile"]},"schema_version":{"N":["8"]}}}}',
+              '{"eventName":["INSERT","MODIFY"],"dynamodb":{"NewImage":{"record_type":{"S":["affection_profile"]},"schema_version":{"N":["8","9"]}}}}',
+          },
+          {
+            Pattern:
+              '{"eventName":["REMOVE"],"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"AFFECTION#REQUESTER#"}]},"SK":{"S":["PROFILE"]}}}}',
           },
         ],
       },

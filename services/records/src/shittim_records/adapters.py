@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import (
+    CURRENT_SCHEMA_VERSION,
+    PREVIOUS_SCHEMA_VERSION,
     DynamoItem,
     DynamoValue,
     deserialize_snapshot,
@@ -48,6 +50,14 @@ class ProjectionConfiguration:
 
 
 @dataclass(frozen=True, slots=True)
+class LoadedSourceDebate:
+    """One validated snapshot plus its persisted, pre-migration schema version."""
+
+    snapshot: DebateSnapshot
+    schema_version: int
+
+
+@dataclass(frozen=True, slots=True)
 class BackfillCheckpoint:
     """One validated resumable cursor, including its terminal state."""
 
@@ -67,6 +77,9 @@ class SourceDebateRepository:
         self._table_name = table_name
 
     def load_partition(self, partition_key: str) -> DebateSnapshot:
+        return self.load_partition_for_projection(partition_key).snapshot
+
+    def load_partition_for_projection(self, partition_key: str) -> LoadedSourceDebate:
         if not partition_key.startswith("DEBATE#"):
             raise ValueError("source partition key is not a debate partition")
         items: list[DynamoItem] = []
@@ -87,7 +100,39 @@ class SourceDebateRepository:
                 break
         if not items:
             raise ValueError("source debate partition does not exist")
-        return deserialize_snapshot(items)
+        if any(
+            isinstance(item.get("schema_version"), bool)
+            or not isinstance(item.get("schema_version"), int)
+            or item.get("schema_version") not in {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+            for item in items
+        ):
+            raise ValueError("source debate partition schema is inconsistent")
+        debate_metas = [
+            item
+            for item in items
+            if item.get("SK") == "META" and item.get("record_type") == "debate_meta"
+        ]
+        if len(debate_metas) != 1 or debate_metas[0].get("current_phase") != "completed":
+            raise ValueError("source completed debate metadata is invalid")
+        debate_meta = debate_metas[0]
+        attempt_id = debate_meta.get("current_attempt_id")
+        if not isinstance(attempt_id, str) or not attempt_id:
+            raise ValueError("source completed debate metadata is invalid")
+        attempt_metas = [
+            item
+            for item in items
+            if item.get("SK") == f"ATTEMPT#{attempt_id}#META"
+            and item.get("record_type") == "attempt_meta"
+        ]
+        if len(attempt_metas) != 1 or attempt_metas[0].get("phase") != "completed":
+            raise ValueError("source completed attempt metadata is invalid")
+        persisted_schema = debate_meta.get("schema_version")
+        if attempt_metas[0].get("schema_version") != persisted_schema:
+            raise ValueError("source completion metadata schema is inconsistent")
+        return LoadedSourceDebate(
+            snapshot=deserialize_snapshot(items),
+            schema_version=cast(int, persisted_schema),
+        )
 
     def scan_completed_meta(
         self,
@@ -118,6 +163,14 @@ class SourceDebateRepository:
         return partition_keys, last_key
 
     def load_affection_profile(self, partition_key: str) -> DynamoItem:
+        profile = self.find_affection_profile(partition_key)
+        if profile is None:
+            raise ValueError("source affection profile does not exist")
+        return profile
+
+    def find_affection_profile(self, partition_key: str) -> DynamoItem | None:
+        """Strongly read one profile without conflating absence with invalid input."""
+
         if not partition_key.startswith("AFFECTION#REQUESTER#"):
             raise ValueError("source partition key is not an affection profile")
         response = self._client.get_item(
@@ -126,9 +179,7 @@ class SourceDebateRepository:
             ConsistentRead=True,
         )
         raw = response.get("Item")
-        if raw is None:
-            raise ValueError("source affection profile does not exist")
-        return unmarshal_item(raw)
+        return None if raw is None else unmarshal_item(raw)
 
 
 class ArchiveRepository:
@@ -199,17 +250,41 @@ class AffectionProjectionRepository:
 
     def put_profile(self, item: DynamoItem) -> bool:
         version = item.get("source_version")
+        updated_at = item.get("updated_at")
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise ValueError("affection projection version is invalid")
+        if not isinstance(updated_at, str) or not updated_at:
+            raise ValueError("affection projection timestamp is invalid")
+        condition = (
+            "attribute_not_exists(PK) OR attribute_not_exists(source_version) "
+            "OR source_version = :seed_version "
+            "OR (source_version < :version AND updated_at <= :updated_at)"
+        )
+        condition_values: DynamoItem = {
+            ":seed_version": 0,
+            ":version": version,
+            ":updated_at": updated_at,
+        }
+        if _is_defaults_only_profile_upgrade(item):
+            condition += (
+                " OR (source_version = :version AND schema_version = :legacy_schema "
+                "AND record_type = :record_type AND display_name = :display_name "
+                "AND scores = :scores AND updated_at = :updated_at)"
+            )
+            condition_values.update(
+                {
+                    ":legacy_schema": 1,
+                    ":record_type": "affection_profile",
+                    ":display_name": item["display_name"],
+                    ":scores": item["scores"],
+                }
+            )
         try:
             self._client.put_item(
                 TableName=self._table_name,
                 Item=marshal_item(item),
-                ConditionExpression=(
-                    "attribute_not_exists(PK) OR attribute_not_exists(source_version) "
-                    "OR source_version < :version"
-                ),
-                ExpressionAttributeValues=marshal_item({":version": version}),
+                ConditionExpression=condition,
+                ExpressionAttributeValues=marshal_item(condition_values),
             )
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
@@ -218,17 +293,25 @@ class AffectionProjectionRepository:
             if existing is None:
                 raise
             existing_version = existing.get("source_version")
+            existing_updated_at = existing.get("updated_at")
             if (
                 isinstance(existing_version, bool)
                 or not isinstance(existing_version, int)
-                or existing_version < version
+                or not isinstance(existing_updated_at, str)
+                or not existing_updated_at
             ):
                 raise ProjectionConflict("affection projection version is inconsistent") from error
-            if existing_version == version and existing != item:
+            if existing == item:
+                return False
+            if existing_version == version:
                 raise ProjectionConflict(
                     "affection projection content conflicts at one version"
                 ) from error
-            return False
+            if existing_version > version and existing_updated_at >= updated_at:
+                return False
+            raise ProjectionConflict(
+                "affection projection version and timestamp ordering conflict"
+            ) from error
         return True
 
     def _get(self, key: Mapping[str, DynamoValue]) -> DynamoItem | None:
@@ -239,6 +322,25 @@ class AffectionProjectionRepository:
         )
         raw = response.get("Item")
         return None if raw is None else unmarshal_item(raw)
+
+
+def _is_defaults_only_profile_upgrade(item: DynamoItem) -> bool:
+    return (
+        item.get("schema_version") == 2
+        and item.get("record_type") == "affection_profile"
+        and item.get("reset_count") == 0
+        and item.get("memorial_cycle") == 1
+        and not {
+            "unlocked_participant",
+            "unlocked_at",
+            "unlock_record_id",
+            "unlock_display_name",
+            "unlock_memorial_cycle",
+            "unlock_retroactive",
+        }.intersection(item)
+        and isinstance(item.get("display_name"), str)
+        and isinstance(item.get("scores"), dict)
+    )
 
 
 class StatisticsRepository:

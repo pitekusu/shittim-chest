@@ -26,6 +26,8 @@ PRODUCTION_ENVIRONMENT = "production"
 DEFAULT_AWS_REGION = "ap-northeast-1"
 
 _RUNTIME_CONFIG_ENV = "SHITTIM_RUNTIME_CONFIG_JSON"
+IDENTITY_HMAC_PARAMETER_NAME = "/shittim-chest/production/records/identity-hmac-key"
+_IDENTITY_HMAC_PARAMETER_ENV = "IDENTITY_HMAC_PARAMETER_NAME"
 RUNTIME_PROMPTS_ACTIVE_PARAMETER = "/shittim-chest/production/runtime-prompts/active"
 _RUNTIME_PROMPTS_ACTIVE_ENV = "SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER"
 RUNTIME_PROMPT_NAMES = (
@@ -168,11 +170,28 @@ class BootstrapConfig:
     personas: Mapping[DiscordBotSlot, PersonaConfig] = field(repr=False)
     discord_tokens: Mapping[DiscordBotSlot, str] = field(repr=False)
     openai_api_key: str = field(repr=False)
+    identity_hmac_parameter_name: str = IDENTITY_HMAC_PARAMETER_NAME
+    identity_hmac_key: bytes | None = field(default=None, repr=False)
     previous_command_schema_hash: str | None = None
     runtime_prompts_active_parameter: str | None = None
     runtime_prompt_revision: str | None = None
     system_prompt: str | None = field(default=None, repr=False)
     moderator_prompt: str | None = field(default=None, repr=False)
+
+    def with_identity_hmac_key(self, raw_value: str) -> BootstrapConfig:
+        """Attach the decrypted Records identity key without retaining plaintext text."""
+
+        key = raw_value.encode()
+        if len(key) < 32:
+            raise StartupConfigurationError
+        return replace(self, identity_hmac_key=key)
+
+    def require_identity_hmac_key(self) -> bytes:
+        """Return the startup-resolved identity key or fail closed."""
+
+        if self.identity_hmac_key is None:
+            raise StartupConfigurationError
+        return self.identity_hmac_key
 
     def participant_prompts(self) -> Mapping[ParticipantSlot, str]:
         """Map private participant slots to their validated prompt text."""
@@ -296,6 +315,9 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             and runtime_prompts_active_parameter != RUNTIME_PROMPTS_ACTIVE_PARAMETER
         ):
             raise ValueError("invalid runtime prompts active parameter")
+        identity_hmac_parameter_name = _required(environ, _IDENTITY_HMAC_PARAMETER_ENV)
+        if identity_hmac_parameter_name != IDENTITY_HMAC_PARAMETER_NAME:
+            raise ValueError("invalid identity HMAC parameter")
 
         return BootstrapConfig(
             environment=environment,
@@ -308,6 +330,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             personas=MappingProxyType(personas),
             discord_tokens=MappingProxyType(tokens),
             openai_api_key=_required(environ, "OPENAI_API_KEY"),
+            identity_hmac_parameter_name=identity_hmac_parameter_name,
             previous_command_schema_hash=previous_hash,
             runtime_prompts_active_parameter=runtime_prompts_active_parameter,
         )

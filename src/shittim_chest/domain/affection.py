@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
+from re import fullmatch
 from typing import Final
 
 from shittim_chest.domain.debate_content import PARTICIPANTS, ParticipantSlot
+from shittim_chest.domain.identifiers import DebateId
 
 AFFECTION_RULES_VERSION: Final = "affection-rubric-v1"
 DEFAULT_AFFECTION_SCORE: Final = 500
@@ -15,6 +18,7 @@ MIN_AFFECTION_SCORE: Final = 0
 MAX_AFFECTION_SCORE: Final = 1_000
 MIN_QUESTION_SCORE: Final = -100
 MAX_QUESTION_SCORE: Final = 100
+OPAQUE_REQUESTER_KEY_PATTERN: Final = r"[A-Za-z0-9_-]{43}"
 
 
 @unique
@@ -53,6 +57,27 @@ class ParticipantAffection:
 
 
 @dataclass(frozen=True, slots=True)
+class MemorialUnlock:
+    """The participant selected when one affection cycle first reaches its maximum."""
+
+    participant: ParticipantSlot
+    unlocked_at: datetime
+    debate_id: DebateId
+    requester_display_name: str
+    memorial_cycle: int
+    retroactive: bool = False
+
+    def __post_init__(self) -> None:
+        _require_utc(self.unlocked_at, label="memorial unlock timestamp")
+        if not self.requester_display_name.strip():
+            raise ValueError("memorial unlock display name must not be empty")
+        if isinstance(self.memorial_cycle, bool) or self.memorial_cycle < 1:
+            raise ValueError("memorial cycle must be positive")
+        if not isinstance(self.retroactive, bool):
+            raise ValueError("memorial retroactive provenance must be boolean")
+
+
+@dataclass(frozen=True, slots=True)
 class AffectionAssessment:
     """Durable all-or-none result of scoring one debate question."""
 
@@ -60,14 +85,12 @@ class AffectionAssessment:
     rules_version: str
     participants: tuple[ParticipantAffection, ...]
     assessed_at: datetime
+    memorial_unlock: MemorialUnlock | None = None
 
     def __post_init__(self) -> None:
         if not self.rules_version.strip():
             raise ValueError("affection rules version must not be empty")
-        if self.assessed_at.tzinfo is None or self.assessed_at.utcoffset() is None:
-            raise ValueError("affection assessment timestamp must be timezone-aware")
-        if self.assessed_at.utcoffset() != timedelta(0):
-            raise ValueError("affection assessment timestamp must be UTC")
+        _require_utc(self.assessed_at, label="affection assessment timestamp")
         if tuple(item.participant for item in self.participants) != PARTICIPANTS:
             raise ValueError("affection assessment must contain the three fixed participants")
         if self.status is AffectionAssessmentStatus.APPLIED:
@@ -78,6 +101,21 @@ class AffectionAssessment:
             for item in self.participants
         ):
             raise ValueError("unavailable affection assessment must not change scores")
+        if self.memorial_unlock is not None:
+            if self.status is not AffectionAssessmentStatus.APPLIED:
+                raise ValueError("only an applied affection assessment may unlock a memorial")
+            selected = next(
+                item
+                for item in self.participants
+                if item.participant is self.memorial_unlock.participant
+            )
+            if self.memorial_unlock.retroactive:
+                if selected.before != MAX_AFFECTION_SCORE:
+                    raise ValueError("retroactive memorial participant must already be maximum")
+            elif selected.before >= MAX_AFFECTION_SCORE or selected.after != MAX_AFFECTION_SCORE:
+                raise ValueError("memorial participant must newly reach maximum affection")
+            if self.memorial_unlock.unlocked_at != self.assessed_at:
+                raise ValueError("memorial unlock must share the assessment timestamp")
 
     def score_for(self, participant: ParticipantSlot) -> int:
         """Return the post-assessment score for one participant."""
@@ -89,16 +127,19 @@ class AffectionAssessment:
 class AffectionProfile:
     """Current scores for one private requester identity."""
 
-    requester_id: str
+    requester_key: str
     requester_username: str
     requester_display_name: str
     scores: tuple[int, int, int]
     version: int
     updated_at: datetime
+    reset_count: int = 0
+    memorial_cycle: int = 1
+    memorial_unlock: MemorialUnlock | None = None
 
     def __post_init__(self) -> None:
-        if not self.requester_id.strip():
-            raise ValueError("affection requester ID must not be empty")
+        if fullmatch(OPAQUE_REQUESTER_KEY_PATTERN, self.requester_key) is None:
+            raise ValueError("affection requester key must be an opaque HMAC identity")
         if not self.requester_username.strip() or not self.requester_display_name.strip():
             raise ValueError("affection requester display identity must not be empty")
         if len(self.scores) != len(PARTICIPANTS) or any(
@@ -108,16 +149,24 @@ class AffectionProfile:
             raise ValueError("affection profile must contain three scores between 0 and 1000")
         if isinstance(self.version, bool) or self.version < 0:
             raise ValueError("affection profile version must be non-negative")
-        if self.updated_at.tzinfo is None or self.updated_at.utcoffset() is None:
-            raise ValueError("affection profile timestamp must be timezone-aware")
-        if self.updated_at.utcoffset() != timedelta(0):
-            raise ValueError("affection profile timestamp must be UTC")
+        _require_utc(self.updated_at, label="affection profile timestamp")
+        if isinstance(self.reset_count, bool) or self.reset_count < 0:
+            raise ValueError("affection reset count must be non-negative")
+        if isinstance(self.memorial_cycle, bool) or self.memorial_cycle < 1:
+            raise ValueError("affection memorial cycle must be positive")
+        if self.memorial_cycle != self.reset_count + 1:
+            raise ValueError("affection memorial cycle must follow the reset count")
+        if (
+            self.memorial_unlock is not None
+            and self.memorial_unlock.memorial_cycle != self.memorial_cycle
+        ):
+            raise ValueError("memorial unlock must belong to the current cycle")
 
     @classmethod
     def initial(
         cls,
         *,
-        requester_id: str,
+        requester_key: str,
         requester_username: str,
         requester_display_name: str,
         at: datetime,
@@ -125,7 +174,7 @@ class AffectionProfile:
         """Create the implicit 500-point profile used before the first assessment."""
 
         return cls(
-            requester_id=requester_id,
+            requester_key=requester_key,
             requester_username=requester_username,
             requester_display_name=requester_display_name,
             scores=(
@@ -146,6 +195,9 @@ def assess_affection(
     *,
     scores: tuple[int, int, int] | None,
     assessed_at: datetime,
+    debate_id: DebateId | None = None,
+    operation_seed: str | None = None,
+    allow_existing_max_unlock: bool = False,
 ) -> tuple[AffectionProfile, AffectionAssessment]:
     """Apply one complete score set, or persist an all-or-none unavailable result."""
 
@@ -182,17 +234,67 @@ def assess_affection(
                 after=after,
             )
         )
+    memorial_unlock = profile.memorial_unlock
+    new_candidates = tuple(
+        item
+        for item in entries
+        if (item.before < MAX_AFFECTION_SCORE and item.after == MAX_AFFECTION_SCORE)
+        or (allow_existing_max_unlock and item.before == MAX_AFFECTION_SCORE)
+    )
+    assessment_unlock: MemorialUnlock | None = None
+    if memorial_unlock is None and new_candidates:
+        if debate_id is None or operation_seed is None or not operation_seed.strip():
+            raise ValueError("memorial unlock requires a debate ID and operation seed")
+        selected = _select_memorial_candidate(new_candidates, operation_seed=operation_seed)
+        assessment_unlock = MemorialUnlock(
+            participant=selected.participant,
+            unlocked_at=assessed_at,
+            debate_id=debate_id,
+            requester_display_name=profile.requester_display_name,
+            memorial_cycle=profile.memorial_cycle,
+            retroactive=selected.before == MAX_AFFECTION_SCORE,
+        )
+        memorial_unlock = assessment_unlock
     updated = AffectionProfile(
-        requester_id=profile.requester_id,
+        requester_key=profile.requester_key,
         requester_username=profile.requester_username,
         requester_display_name=profile.requester_display_name,
         scores=(updated_scores[0], updated_scores[1], updated_scores[2]),
         version=profile.version + 1,
         updated_at=assessed_at,
+        reset_count=profile.reset_count,
+        memorial_cycle=profile.memorial_cycle,
+        memorial_unlock=memorial_unlock,
     )
     return updated, AffectionAssessment(
         status=AffectionAssessmentStatus.APPLIED,
         rules_version=AFFECTION_RULES_VERSION,
         participants=tuple(entries),
         assessed_at=assessed_at,
+        memorial_unlock=assessment_unlock,
     )
+
+
+def _select_memorial_candidate(
+    candidates: tuple[ParticipantAffection, ...],
+    *,
+    operation_seed: str,
+) -> ParticipantAffection:
+    highest_before = max(item.before for item in candidates)
+    finalists = tuple(item for item in candidates if item.before == highest_before)
+    highest_question_score = max(
+        item.question_score for item in finalists if item.question_score is not None
+    )
+    finalists = tuple(item for item in finalists if item.question_score == highest_question_score)
+    if len(finalists) == 1:
+        return finalists[0]
+    stable_identity = ",".join(item.participant.value for item in finalists)
+    digest = hashlib.sha256(f"{operation_seed}:{stable_identity}".encode()).digest()
+    return finalists[int.from_bytes(digest, "big") % len(finalists)]
+
+
+def _require_utc(value: datetime, *, label: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{label} must be timezone-aware")
+    if value.utcoffset() != timedelta(0):
+        raise ValueError(f"{label} must be UTC")

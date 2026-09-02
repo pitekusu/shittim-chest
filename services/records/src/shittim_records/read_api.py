@@ -497,6 +497,7 @@ class RecordsReadService:
                             prefix="requesters/",
                         ),
                         score=cast(int, item["score"]),
+                        reset_count=cast(int, item.get("reset_count", 0)),
                     )
                 )
             rankings.append(
@@ -1167,12 +1168,16 @@ def _validate_affection_page_entries(entries: list[DynamoItem], *, offset: int) 
     previous_score: int | None = None
     previous_rank = 0
     for local_index, entry in enumerate(entries):
-        if set(entry) != {"requester_key", "display_name", "score", "rank"}:
+        if set(entry) not in (
+            {"requester_key", "display_name", "score", "rank"},
+            {"requester_key", "display_name", "score", "rank", "reset_count"},
+        ):
             raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
         key = _required_text(entry, "requester_key")
         display_name = _required_text(entry, "display_name")
         score = entry.get("score")
         rank = entry.get("rank")
+        reset_count = entry.get("reset_count", 0)
         if (
             isinstance(score, bool)
             or not isinstance(score, int)
@@ -1181,6 +1186,9 @@ def _validate_affection_page_entries(entries: list[DynamoItem], *, offset: int) 
             or not isinstance(rank, int)
             or rank < 1
             or rank > offset + local_index + 1
+            or isinstance(reset_count, bool)
+            or not isinstance(reset_count, int)
+            or reset_count < 0
         ):
             raise ReadFailure("INSIGHTS_UNAVAILABLE", 503)
         if local_index > 0:

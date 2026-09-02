@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_ssm.client import SSMClient
 
-from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION
 from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
 
 from shittim_records.adapters import (
@@ -71,7 +70,13 @@ from shittim_records.inspector_translations import (
     InspectorTranslationService,
     InspectorTranslationUnavailable,
 )
-from shittim_records.projector import AffectionProjectorService, BackfillService, ProjectorService
+from shittim_records.projector import (
+    LEGACY_AFFECTION_SCHEMA_VERSION,
+    OPAQUE_AFFECTION_SCHEMA_VERSION,
+    AffectionProjectorService,
+    BackfillService,
+    ProjectorService,
+)
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
@@ -110,6 +115,9 @@ def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, o
         sequence_number = _stream_sequence_number(record)
         try:
             target, partition_key = _projection_target(record)
+            if target == "skip":
+                skipped += 1
+                continue
             if target == "debate":
                 result = _projector_service().project_partition(
                     partition_key, now=datetime.now(UTC)
@@ -616,6 +624,10 @@ def _projection_target(record: Mapping[str, Any]) -> tuple[str, str]:
     dynamodb = record.get("dynamodb")
     if not isinstance(dynamodb, Mapping):
         raise ValueError("stream record has no DynamoDB payload")
+    if record.get("eventName") == "REMOVE":
+        if _is_legacy_affection_profile_key(dynamodb.get("Keys")):
+            return "skip", ""
+        raise ValueError("stream remove record is not an obsolete affection profile")
     image = dynamodb.get("NewImage")
     if not isinstance(image, Mapping):
         raise ValueError("stream record has no new image")
@@ -630,7 +642,11 @@ def _projection_target(record: Mapping[str, Any]) -> tuple[str, str]:
     pk = image.get("PK")
     if (
         not isinstance(current_schema, Mapping)
-        or current_schema.get("N") != str(CURRENT_SCHEMA_VERSION)
+        or current_schema.get("N")
+        not in {
+            str(LEGACY_AFFECTION_SCHEMA_VERSION),
+            str(OPAQUE_AFFECTION_SCHEMA_VERSION),
+        }
         or not isinstance(sk, Mapping)
         or sk.get("S") != "PROFILE"
         or not isinstance(pk, Mapping)
@@ -639,6 +655,29 @@ def _projection_target(record: Mapping[str, Any]) -> tuple[str, str]:
     ):
         raise ValueError("stream affection profile identity is invalid")
     return "affection", pk["S"]
+
+
+def _is_legacy_affection_profile_key(keys: object) -> bool:
+    if not isinstance(keys, Mapping):
+        return False
+    pk = keys.get("PK")
+    sk = keys.get("SK")
+    if (
+        not isinstance(pk, Mapping)
+        or not isinstance(pk.get("S"), str)
+        or not isinstance(sk, Mapping)
+        or sk.get("S") != "PROFILE"
+    ):
+        return False
+    prefix = "AFFECTION#REQUESTER#"
+    partition_key = pk["S"]
+    requester_id = partition_key.removeprefix(prefix)
+    return (
+        partition_key.startswith(prefix)
+        and 17 <= len(requester_id) <= 20
+        and requester_id.isascii()
+        and requester_id.isdigit()
+    )
 
 
 def _required_text(record: Mapping[str, Any], field: str) -> str:

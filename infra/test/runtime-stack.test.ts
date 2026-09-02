@@ -555,6 +555,11 @@ describe("RuntimeStack", () => {
       Name: "SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER",
       Value: "/shittim-chest/production/runtime-prompts/active",
     });
+    expect(environment).toContainEqual({
+      Name: "IDENTITY_HMAC_PARAMETER_NAME",
+      Value: "/shittim-chest/production/records/identity-hmac-key",
+    });
+    expect(JSON.stringify(environment)).not.toContain("{{resolve:ssm-secure:");
   });
 
   test("keeps production task permissions bounded without interactive access", () => {
@@ -584,6 +589,17 @@ describe("RuntimeStack", () => {
     expect(JSON.stringify(normal)).toContain(
       "/shittim-chest/production/runtime-prompts/*",
     );
+    const identityHmacStatements = normal?.Properties.PolicyDocument.Statement.filter(
+      (statement: { Action?: string | string[]; Resource?: unknown }) =>
+        [statement.Action].flat().includes("ssm:GetParameters") &&
+        JSON.stringify(statement.Resource).includes("records/identity-hmac-key"),
+    );
+    expect(identityHmacStatements).toHaveLength(1);
+    expect(identityHmacStatements?.[0]).toMatchObject({
+      Action: "ssm:GetParameters",
+      Effect: "Allow",
+    });
+    expect(JSON.stringify(identityHmacStatements?.[0].Resource)).not.toContain("*");
     expect(JSON.stringify(normal)).not.toContain("ssm:GetParametersByPath");
     expect(JSON.stringify(normal)).not.toContain("ssm:DescribeParameters");
     expect(JSON.stringify(normal)).not.toContain("ssmmessages:");

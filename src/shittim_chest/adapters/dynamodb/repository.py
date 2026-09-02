@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -112,6 +114,7 @@ GLOBAL_LEASE_SLOTS = 3
 MAX_TRANSACTION_BYTES = 4 * 1024 * 1024
 RECOVERABLE_INDEX = "gsi2"
 _JST = ZoneInfo("Asia/Tokyo")
+MIN_IDENTITY_HMAC_KEY_BYTES = 32
 
 
 def create_dynamodb_client(
@@ -134,6 +137,19 @@ def create_dynamodb_client(
     )
 
 
+def derive_affection_requester_key(identity_hmac_key: bytes, requester_id: str) -> str:
+    """Derive the same opaque requester identity used by Records projection and OAuth."""
+
+    if len(identity_hmac_key) < MIN_IDENTITY_HMAC_KEY_BYTES or not requester_id:
+        raise ValueError("requester key input is invalid")
+    digest = hmac.new(
+        identity_hmac_key,
+        f"requester:{requester_id}".encode(),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
 @dataclass(frozen=True, slots=True)
 class _SlotCandidate:
     grant: LeaseGrant
@@ -143,13 +159,22 @@ class _SlotCandidate:
 class DynamoDbDebateRepository:
     """Store debate aggregates with durable idempotency and fenced leases."""
 
-    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+    def __init__(
+        self,
+        *,
+        client: DynamoDBClient,
+        table_name: str,
+        identity_hmac_key: bytes,
+    ) -> None:
         if not table_name.strip():
             raise ValueError("table name must not be empty")
+        if len(identity_hmac_key) < MIN_IDENTITY_HMAC_KEY_BYTES:
+            raise ValueError("identity HMAC key must contain at least 32 bytes")
         from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 
         self._client = client
         self._table_name = table_name
+        self._identity_hmac_key = bytes(identity_hmac_key)
         self._ingress_terminal_projection = DynamoDbIngressRepository(
             client=client,
             table_name=table_name,
@@ -596,30 +621,51 @@ class DynamoDbDebateRepository:
             if lease is None:
                 raise RepositoryConflict("affection settlement requires a fenced lease")
 
-            profile_key = {
-                "PK": f"AFFECTION#REQUESTER#{current.requester_id}",
+            requester_key = derive_affection_requester_key(
+                self._identity_hmac_key,
+                current.requester_id,
+            )
+            profile_key: DynamoItem = {
+                "PK": f"AFFECTION#REQUESTER#{requester_key}",
                 "SK": "PROFILE",
             }
             raw_profile = self._get_item(profile_key)
+            legacy_profile_key: DynamoItem = {
+                "PK": f"AFFECTION#REQUESTER#{current.requester_id}",
+                "SK": "PROFILE",
+            }
+            legacy_profile = None
+            if raw_profile is None:
+                legacy_profile = self._get_item(legacy_profile_key)
             profile = (
                 AffectionProfile.initial(
-                    requester_id=current.requester_id,
+                    requester_key=requester_key,
                     requester_username=current.requester_username,
                     requester_display_name=current.requester_display_name,
                     at=at,
                 )
-                if raw_profile is None
-                else deserialize_affection_profile(raw_profile)
+                if raw_profile is None and legacy_profile is None
+                else deserialize_affection_profile(
+                    raw_profile if raw_profile is not None else cast(DynamoItem, legacy_profile),
+                    requester_key=requester_key,
+                )
             )
-            if profile.requester_id != current.requester_id:
+            if profile.requester_key != requester_key:
                 raise RepositoryConflict("affection profile requester changed")
-            updated_profile, assessment = assess_affection(profile, scores=scores, assessed_at=at)
             if scores is not None:
-                updated_profile = replace(
-                    updated_profile,
+                profile = replace(
+                    profile,
                     requester_username=current.requester_username,
                     requester_display_name=current.requester_display_name,
                 )
+            updated_profile, assessment = assess_affection(
+                profile,
+                scores=scores,
+                assessed_at=at,
+                debate_id=current.state.debate_id,
+                operation_seed=str(current.state.attempt_id),
+                allow_existing_max_unlock=legacy_profile is not None,
+            )
             if updated_profile.updated_at < profile.updated_at:
                 updated_profile = replace(updated_profile, updated_at=profile.updated_at)
             persisted = replace(
@@ -648,19 +694,55 @@ class DynamoDbDebateRepository:
                         else self._put(item)
                     )
             if scores is not None:
-                actions.append(
-                    self._put_new(serialize_affection_profile(updated_profile))
-                    if raw_profile is None
-                    else self._put_affection_profile(
-                        updated_profile,
-                        expected_version=profile.version,
+                if raw_profile is None and legacy_profile is None:
+                    actions.extend(
+                        (
+                            self._put_new(serialize_affection_profile(updated_profile)),
+                            self._check_missing_affection_profile(legacy_profile_key),
+                        )
+                    )
+                elif legacy_profile is not None:
+                    actions.extend(
+                        (
+                            self._put_new(serialize_affection_profile(updated_profile)),
+                            self._delete_legacy_affection_profile(
+                                profile,
+                                requester_id=current.requester_id,
+                            ),
+                        )
+                    )
+                else:
+                    actions.extend(
+                        (
+                            self._put_affection_profile(
+                                updated_profile,
+                                expected_version=profile.version,
+                            ),
+                            self._check_missing_affection_profile(legacy_profile_key),
+                        )
+                    )
+            elif raw_profile is not None:
+                actions.extend(
+                    (
+                        self._check_affection_profile(profile),
+                        self._check_missing_affection_profile(legacy_profile_key),
+                    )
+                )
+            elif legacy_profile is not None:
+                actions.extend(
+                    (
+                        self._check_legacy_affection_profile(
+                            profile,
+                            requester_id=current.requester_id,
+                        ),
+                        self._check_missing_affection_profile(profile_key),
                     )
                 )
             else:
-                actions.append(
-                    self._check_affection_profile(
-                        profile,
-                        exists=raw_profile is not None,
+                actions.extend(
+                    (
+                        self._check_missing_affection_profile(profile_key),
+                        self._check_missing_affection_profile(legacy_profile_key),
                     )
                 )
             try:
@@ -2958,16 +3040,15 @@ class DynamoDbDebateRepository:
                     "TableName": self._table_name,
                     "Item": marshal_item(serialize_affection_profile(profile)),
                     "ConditionExpression": (
-                        "record_type=:type AND schema_version IN (:previous_schema,:schema) "
-                        "AND version=:version AND requester_id=:requester"
+                        "record_type=:type AND schema_version=:schema "
+                        "AND version=:version AND requester_key=:requester"
                     ),
                     "ExpressionAttributeValues": marshal_item(
                         {
                             ":type": "affection_profile",
-                            ":previous_schema": PREVIOUS_SCHEMA_VERSION,
                             ":schema": CURRENT_SCHEMA_VERSION,
                             ":version": expected_version,
-                            ":requester": profile.requester_id,
+                            ":requester": profile.requester_key,
                         }
                     ),
                 }
@@ -2977,40 +3058,113 @@ class DynamoDbDebateRepository:
     def _check_affection_profile(
         self,
         profile: AffectionProfile,
-        *,
-        exists: bool,
     ) -> TransactWriteItemTypeDef:
-        condition: dict[str, object] = {
-            "TableName": self._table_name,
-            "Key": marshal_item(
-                {
-                    "PK": f"AFFECTION#REQUESTER#{profile.requester_id}",
-                    "SK": "PROFILE",
-                }
-            ),
-            "ConditionExpression": "attribute_not_exists(PK)",
-        }
-        if exists:
-            condition.update(
-                {
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(
+                        {
+                            "PK": f"AFFECTION#REQUESTER#{profile.requester_key}",
+                            "SK": "PROFILE",
+                        }
+                    ),
                     "ConditionExpression": (
-                        "record_type=:type AND schema_version IN (:previous_schema,:schema) "
+                        "record_type=:type AND schema_version=:schema "
+                        "AND version=:version AND requester_key=:requester"
+                    ),
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":type": "affection_profile",
+                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":version": profile.version,
+                            ":requester": profile.requester_key,
+                        }
+                    ),
+                }
+            },
+        )
+
+    def _check_legacy_affection_profile(
+        self,
+        profile: AffectionProfile,
+        *,
+        requester_id: str,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(
+                        {
+                            "PK": f"AFFECTION#REQUESTER#{requester_id}",
+                            "SK": "PROFILE",
+                        }
+                    ),
+                    "ConditionExpression": (
+                        "record_type=:type AND schema_version=:schema "
                         "AND version=:version AND requester_id=:requester"
                     ),
                     "ExpressionAttributeValues": marshal_item(
                         {
                             ":type": "affection_profile",
-                            ":previous_schema": PREVIOUS_SCHEMA_VERSION,
-                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":schema": PREVIOUS_SCHEMA_VERSION,
                             ":version": profile.version,
-                            ":requester": profile.requester_id,
+                            ":requester": requester_id,
                         }
                     ),
                 }
-            )
+            },
+        )
+
+    def _delete_legacy_affection_profile(
+        self,
+        profile: AffectionProfile,
+        *,
+        requester_id: str,
+    ) -> TransactWriteItemTypeDef:
         return cast(
             TransactWriteItemTypeDef,
-            {"ConditionCheck": condition},
+            {
+                "Delete": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(
+                        {
+                            "PK": f"AFFECTION#REQUESTER#{requester_id}",
+                            "SK": "PROFILE",
+                        }
+                    ),
+                    "ConditionExpression": (
+                        "record_type=:type AND schema_version=:schema "
+                        "AND version=:version AND requester_id=:requester"
+                    ),
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":type": "affection_profile",
+                            ":schema": PREVIOUS_SCHEMA_VERSION,
+                            ":version": profile.version,
+                            ":requester": requester_id,
+                        }
+                    ),
+                }
+            },
+        )
+
+    def _check_missing_affection_profile(
+        self,
+        key: DynamoItem,
+    ) -> TransactWriteItemTypeDef:
+        return cast(
+            TransactWriteItemTypeDef,
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(key),
+                    "ConditionExpression": "attribute_not_exists(PK)",
+                }
+            },
         )
 
     def _put_phase_plan(

@@ -47,6 +47,45 @@ def test_affection_rankings_require_nullable_next_cursor_property() -> None:
         AffectionRankingsResponse.model_validate(payload)
 
 
+def test_affection_ranking_reset_count_is_public_and_defaults_for_old_pages() -> None:
+    payload: dict[str, object] = {
+        "schemaVersion": 1,
+        "generatedAt": datetime(2026, 8, 30, tzinfo=UTC),
+        "defaultScore": 500,
+        "maxScore": 1000,
+        "rankings": tuple(
+            {
+                "participant": slot,
+                "displayName": name,
+                "entries": (
+                    {
+                        "rank": 1,
+                        "displayName": "Requester",
+                        "avatar": {
+                            "kind": "placeholder",
+                            "alt": "Requester avatar",
+                            "fallbackVariant": "cyan",
+                        },
+                        "score": 1000,
+                        **({"resetCount": 2} if slot == "participant-a" else {}),
+                    },
+                ),
+            }
+            for slot, name in (
+                ("participant-a", "アロナ"),
+                ("participant-b", "プラナ"),
+                ("participant-c", "安倍晋三AI"),
+            )
+        ),
+        "nextCursor": None,
+    }
+
+    result = AffectionRankingsResponse.model_validate(payload)
+
+    assert result.rankings[0].entries[0].reset_count == 2
+    assert result.rankings[1].entries[0].reset_count == 0
+
+
 def _record_detail_payload() -> dict[str, object]:
     participants = tuple(
         {

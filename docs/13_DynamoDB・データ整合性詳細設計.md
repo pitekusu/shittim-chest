@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-30
+updated: 2026-09-02
 ---
 
 # DynamoDB・データ整合性詳細設計
@@ -19,23 +19,23 @@ updated: 2026-08-30
 
 ## 2. Schema version
 
-current shared schemaは**v8**、読み込み可能なprevious schemaは**v7**である。readerは構造を
-検証後にv7をv8へmemory上でup-convertする。v6以前、future version、unknown field／enumは
+current shared schemaは**v9**、読み込み可能なprevious schemaは**v8**である。readerは構造を
+検証後にv8をv9へmemory上でup-convertする。v7以前、future version、unknown field／enumは
 fail closedとする。record固有schemaは次のとおりである。
 
 固定Runtime control 11件はRelease境界でも全件が同じshared schemaであることを要求する。
-current v8またはprevious v7の完全なmanifestだけをread-only preflightで受理し、混在、欠落、
-marker hash不一致はfail closedとする。v7からのReleaseでは、10件のcontrol更新、v8のclosed
-deployment lock、immutable acquire auditを1 transactionで書き、v7/openまたはv8/closed以外の
+current v9またはprevious v8の完全なmanifestだけをread-only preflightで受理し、混在、欠落、
+marker hash不一致はfail closedとする。v8からのReleaseでは、10件のcontrol更新、v9のclosed
+deployment lock、immutable acquire auditを1 transactionで書き、v8/openまたはv9/closed以外の
 途中状態を公開しない。
 
 | Record | Current contract |
 |---|---|
-| Debate／Attempt／Output／Vote／Affection | shared schema v8 |
+| Debate／Attempt／Output／Vote／Affection | shared schema v9 |
 | Runtime control | manifest schema v2 |
 | Outbox | record schema v2、v1 history read互換 |
 | Status publication | record schema v3 |
-| Generation checkpoint／Phase delivery | v8 record family |
+| Generation checkpoint／Phase delivery | v9 record family |
 
 旧migrationの作業履歴はGit historyを正とし、本書へ累積しない。
 
@@ -53,8 +53,8 @@ deployment lock、immutable acquire auditを1 transactionで書き、v7/openま�
 | Status publication | channel Statusのdesired／observed state |
 | Deployment guard／lock | Release前提、owner、TTL、stack fence |
 | `ADMIN#PROMPT` | current revision、content-free revision audit、hashed idempotency state |
-| `AFFECTION#REQUESTER#<private ID> / PROFILE` | 質問者ごと3人の0〜1,000点とCAS version |
-| `DEBATE#<Debate ID> / AFFECTION` | 討論ごとの評価状態、変更前、質問評価、実増減、変更後 |
+| `AFFECTION#REQUESTER#<opaque requester key> / PROFILE` | 3人の0〜1,000点、CAS version、reset回数、cycle、解放状態 |
+| `DEBATE#<Debate ID> / AFFECTION` | 評価状態、変更前、質問評価、実増減、変更後、今回のメモリアル解放 |
 
 exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正とする。
 
@@ -78,6 +78,13 @@ exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正
 - 親愛度は3人のprofile更新、討論評価、`scoring_affection`から次phaseへの遷移を同一transactionで
   反映する。評価は3件すべてが成功した場合だけ全員へ適用し、同じ討論の再試行では二重加算しない。
   profile CAS競合は同じ評価値で再計算し、OpenAIを再実行しない。
+- v8のraw-ID profileは本人の次回成功評価時だけopaque keyのv9 profileへPutし、旧profileを同一transactionで
+  Deleteする。その成功評価では移行前から1,000点の人格も解放候補へ含める。評価不能時は旧rowを
+  read／condition-checkするだけで移行しない。新規v9 profileへraw IDを保存しない。
+- 未解放cycleで1人以上が新たに1,000点へ達した場合、またはv8移行時に既存1,000点がある場合は、
+  選出した1人の解放metadataをprofileと討論評価へ
+  同じtransactionで保存する。通常到達かv8遡及解放かをcontent-freeなbooleanで保持し、通常v9の
+  到達条件を緩めない。既に解放済みのcycleでは後続到達を無視する。
 
 ## 5. Lease and fencing
 

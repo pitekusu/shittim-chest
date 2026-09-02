@@ -8,6 +8,7 @@ from shittim_chest.domain.affection import (
     AffectionAssessment,
     AffectionAssessmentStatus,
     AffectionProfile,
+    MemorialUnlock,
     ParticipantAffection,
     assess_affection,
 )
@@ -70,6 +71,7 @@ __all__ = (
     "InvalidRetryTransition",
     "InvalidStateTransition",
     "InvalidVote",
+    "MemorialUnlock",
     "ParticipantAffection",
     "ParticipantSlot",
     "RecoveryState",

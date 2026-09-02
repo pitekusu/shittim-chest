@@ -34,6 +34,8 @@ const LAMBDA_BUNDLE_CODE_SHA256_PATTERN = "^[A-Za-z0-9+/]{43}=$";
 const PARAMETER_ROOT = "/shittim-chest/production";
 const DISCORD_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/public-key`;
 const MODERATOR_TOKEN_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/token`;
+const RECORDS_IDENTITY_HMAC_PARAMETER =
+  `${PARAMETER_ROOT}/records/identity-hmac-key`;
 const RUNTIME_PROMPTS_ROOT = `${PARAMETER_ROOT}/runtime-prompts`;
 const RUNTIME_PROMPTS_ACTIVE_PARAMETER = `${RUNTIME_PROMPTS_ROOT}/active`;
 const RUNTIME_CLUSTER_NAME = "shittim-chest-production";
@@ -255,6 +257,12 @@ export class RuntimeStack extends Stack {
       }),
     );
     this.grantRuntimePromptRead(normalTaskRole);
+    normalTaskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameters"],
+        resources: [this.parameterArn(RECORDS_IDENTITY_HMAC_PARAMETER)],
+      }),
+    );
 
     const parameters = this.runtimeParameters(configVersion.valueAsString);
     const logging = ecs.LogDrivers.awsLogs({
@@ -1065,6 +1073,7 @@ export class RuntimeStack extends Stack {
       containerName: options.containerName,
       environment: {
         AWS_REGION: "ap-northeast-1",
+        IDENTITY_HMAC_PARAMETER_NAME: RECORDS_IDENTITY_HMAC_PARAMETER,
         SHITTIM_DYNAMODB_TABLE: "shittim-chest-production",
         SHITTIM_ENVIRONMENT: "production",
         SHITTIM_LOG_LEVEL: "INFO",

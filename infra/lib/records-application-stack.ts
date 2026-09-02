@@ -245,10 +245,22 @@ export class RecordsApplicationStack extends Stack {
             },
           }),
           lambda.FilterCriteria.filter({
+            eventName: lambda.FilterRule.or("INSERT", "MODIFY"),
             dynamodb: {
               NewImage: {
                 record_type: { S: lambda.FilterRule.isEqual("affection_profile") },
-                schema_version: { N: lambda.FilterRule.isEqual("8") },
+                schema_version: { N: lambda.FilterRule.or("8", "9") },
+              },
+            },
+          }),
+          lambda.FilterCriteria.filter({
+            eventName: lambda.FilterRule.isEqual("REMOVE"),
+            dynamodb: {
+              Keys: {
+                PK: {
+                  S: lambda.FilterRule.beginsWith("AFFECTION#REQUESTER#"),
+                },
+                SK: { S: lambda.FilterRule.isEqual("PROFILE") },
               },
             },
           }),

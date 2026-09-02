@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
@@ -45,6 +45,7 @@ class AffectionRankingEntry:
     display_name: str
     score: int
     rank: int
+    reset_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +224,7 @@ class _AffectionProfileRow:
     requester_key: str
     display_name: str
     scores: dict[ParticipantSlot, int]
+    reset_count: int
 
 
 def _build_affection_rankings(
@@ -266,6 +268,7 @@ def _build_affection_rankings(
                         display_name=profile.display_name,
                         score=profile.scores[slot],
                         rank=rank,
+                        reset_count=profile.reset_count,
                     )
                     for profile, rank in zip(ordered, ranks, strict=True)
                 ),
@@ -275,7 +278,7 @@ def _build_affection_rankings(
 
 
 def _parse_affection_profile(item: DynamoItem) -> _AffectionProfileRow:
-    expected = {
+    legacy_fields = {
         "PK",
         "SK",
         "schema_version",
@@ -285,23 +288,50 @@ def _parse_affection_profile(item: DynamoItem) -> _AffectionProfileRow:
         "scores",
         "updated_at",
     }
+    current_fields = {
+        *legacy_fields,
+        "reset_count",
+        "memorial_cycle",
+    }
+    unlock_fields = {
+        "unlocked_participant",
+        "unlocked_at",
+        "unlock_record_id",
+        "unlock_display_name",
+        "unlock_memorial_cycle",
+        "unlock_retroactive",
+    }
     key = item.get("SK")
+    schema_version = item.get("schema_version")
     source_version = item.get("source_version")
     scores = item.get("scores")
+    reset_count = item.get("reset_count", 0)
+    memorial_cycle = item.get("memorial_cycle", 1)
+    expected_fields = legacy_fields if schema_version == 1 else current_fields
+    if schema_version == 2 and "unlocked_participant" in item:
+        expected_fields = {*current_fields, *unlock_fields}
     if (
-        set(item) != expected
+        set(item) != expected_fields
         or item.get("PK") != "AFFECTION#PROFILE"
-        or item.get("schema_version") != 1
+        or schema_version not in {1, 2}
         or item.get("record_type") != "affection_profile"
-        or not isinstance(key, str)
-        or not key
+        or not _is_opaque_key(key)
         or isinstance(source_version, bool)
         or not isinstance(source_version, int)
         or source_version < 0
+        or isinstance(reset_count, bool)
+        or not isinstance(reset_count, int)
+        or reset_count < 0
+        or isinstance(memorial_cycle, bool)
+        or not isinstance(memorial_cycle, int)
+        or memorial_cycle < 1
+        or memorial_cycle != reset_count + 1
         or not isinstance(scores, dict)
         or set(scores) != set(PARTICIPANT_SLOTS)
     ):
         raise RankingDataInvalid("affection profile is invalid")
+    if schema_version == 2 and unlock_fields.intersection(item):
+        _validate_memorial_unlock(item, memorial_cycle=memorial_cycle)
     parsed_scores: dict[ParticipantSlot, int] = {}
     for slot in PARTICIPANT_SLOTS:
         value = scores[slot]
@@ -316,9 +346,41 @@ def _parse_affection_profile(item: DynamoItem) -> _AffectionProfileRow:
     if updated_at.isoformat() != updated_text:
         raise RankingDataInvalid("affection profile timestamp is not canonical UTC")
     return _AffectionProfileRow(
-        requester_key=key,
+        requester_key=cast(str, key),
         display_name=_required_text(item, "display_name"),
         scores=parsed_scores,
+        reset_count=reset_count,
+    )
+
+
+def _validate_memorial_unlock(item: DynamoItem, *, memorial_cycle: int) -> None:
+    participant = item.get("unlocked_participant")
+    record_id = item.get("unlock_record_id")
+    unlock_cycle = item.get("unlock_memorial_cycle")
+    retroactive = item.get("unlock_retroactive")
+    if (
+        participant not in PARTICIPANT_SLOTS
+        or not _is_opaque_key(record_id)
+        or unlock_cycle != memorial_cycle
+        or not isinstance(retroactive, bool)
+    ):
+        raise RankingDataInvalid("affection memorial unlock is invalid")
+    _required_text(item, "unlock_display_name")
+    unlocked_text = _required_text(item, "unlocked_at")
+    try:
+        unlocked_at = TypeAdapter(AwareDatetime).validate_python(unlocked_text).astimezone(UTC)
+    except OverflowError, ValidationError:
+        raise RankingDataInvalid("affection memorial unlock timestamp is invalid") from None
+    if unlocked_at.isoformat() != unlocked_text:
+        raise RankingDataInvalid("affection memorial unlock timestamp is not canonical UTC")
+
+
+def _is_opaque_key(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 43
+        and value.isascii()
+        and all(character.isalnum() or character in "_-" for character in value)
     )
 
 
