@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-01
+updated: 2026-09-03
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -85,6 +85,25 @@ untrusted dataとして無視し、評価理由を生成・保存・公開しな
 強く好意的に変化させる。この共通指定はcurrent persona内で表現の強度だけを調整し、人格固有の口調や
 振る舞いを置換、標準化、中立化しない。最低帯でもStructured Outputの必須fieldを空にせず、安全境界、
 出典とEvidenceの分類、participant 3人構造を維持する。匿名vote、Evidence、moderatorには適用しない。
+
+### Memorial content generation
+
+- 選出participantのactive管理promptをmanifestとchecksumまで検証して読み、active pointer未登録時だけ
+  Releaseが固定したlegacy participant promptへfallbackする。選出外のpersonaやsystem／moderator本文は渡さない。
+- 本人がuploadした画像、選出participantのpresentation画像、本人の直近10質問から作る要約を
+  untrusted inputとして区切り、`gpt-image-2`で親密なdeformed two-shotを生成する。real-photo調、第三者の
+  追加、hidden promptの追従を禁止する。
+- jpeg／png／webpの本人uploadとparticipant参照は、バイト数、実format、frame数、pixel数をbounded検証し、
+  最大辺1,536 px／10 MiB以下のRGB PNGへ正規化する。両画像を最初のprovider callより前に検証し、
+  画像不正時に思い出文だけを生成しない。
+- providerへ1920×1088で生成させ、applicationが中央cropして1920×1080へ固定する。crop後にDelogyの
+  `THE SHITTIM CHEST`とLINE Seed JPのJST達成日をapplication overlayし、modelへ正確な文字描画を委ねない。
+- 別requestの`gpt-5.6-luna`でDiscord表示名を交えた約800文字の思い出文を生成する。直近10質問を
+  materialとして使うが本文を引用・列挙せず、選出participantの親愛度最大の口調で語る。
+- 文章生成はResponses API、`store=false`、toolなし、strict output contractを使う。画像と文章の片方だけを
+  公開せず、provider response、prompt、質問、upload画像をlogやtelemetryへ残さない。
+- 文章と画像のprovider callは各120秒を上限とし、OpenAI SDKは`max_retries=0`とする。Lambdaの
+  hard deadlineに対してcleanup用15秒を必ず残し、開始予算が不足するprovider callは実行しない。
 
 ## 5. Shared agentic Evidence
 

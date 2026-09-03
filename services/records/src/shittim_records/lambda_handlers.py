@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import boto3
@@ -70,6 +70,21 @@ from shittim_records.inspector_translations import (
     InspectorTranslationService,
     InspectorTranslationUnavailable,
 )
+from shittim_records.memorial import (
+    MemorialAuthorizer,
+    MemorialGenerationService,
+    MemorialService,
+)
+from shittim_records.memorial_adapters import (
+    DynamoMemorialRepository,
+    DynamoRecentQuestionSource,
+    MemorialConfigurationRepository,
+    MemorialSecurityConfigurationRepository,
+    OpenAIMemorialContentGenerator,
+    S3MemorialAssetStore,
+    SqsMemorialJobQueue,
+)
+from shittim_records.memorial_http import MemorialHttpController
 from shittim_records.projector import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
     OPAQUE_AFFECTION_SCHEMA_VERSION,
@@ -80,7 +95,11 @@ from shittim_records.projector import (
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
-from shittim_records.read_api import CursorCodec, RecordsReadService
+from shittim_records.read_api import (
+    PARTICIPANT_AVATAR_ASSET_KEYS,
+    CursorCodec,
+    RecordsReadService,
+)
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
@@ -96,6 +115,8 @@ _AUTH_CONTROLLER: AuthHttpController | None = None
 _READ_CONTROLLER: ReadHttpController | None = None
 _ADMIN_CONFIG_CONTROLLER: AdminConfigHttpController | None = None
 _ADMIN_STATUS_CONTROLLER: AdminStatusHttpController | None = None
+_MEMORIAL_API_CONTROLLER: MemorialHttpController | None = None
+_MEMORIAL_WORKER: MemorialGenerationService | None = None
 
 SDK_CONFIG = Config(
     retries={"total_max_attempts": 2, "mode": "standard"},
@@ -281,6 +302,78 @@ def admin_status_handler(event: Mapping[str, Any], _context: object) -> dict[str
             log_event="records_admin_status_request_failed",
             error=error,
         )
+
+
+def memorial_api_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
+    """Handle owner-bound Memorial Lobby operations without logging private content."""
+
+    try:
+        return _memorial_api_controller().handle(event, now=datetime.now(UTC))
+    except Exception as error:
+        return _content_free_http_failure(
+            event,
+            code="MEMORIAL_UNAVAILABLE",
+            log_event="records_memorial_api_request_failed",
+            error=error,
+        )
+
+
+def memorial_worker_handler(
+    event: Mapping[str, Any],
+    context: object,
+) -> dict[str, list[dict[str, str]]]:
+    """Process Memorial SQS jobs with partial failures and content-free telemetry."""
+
+    records = event.get("Records", [])
+    if not isinstance(records, list):
+        raise ValueError("Memorial SQS event records are invalid")
+    failures: list[dict[str, str]] = []
+    processed = 0
+    skipped = 0
+    for raw_record in records:
+        message_id = _memorial_message_id(raw_record)
+        try:
+            requester_key, cycle, receive_count = _memorial_job(raw_record)
+            started_at = datetime.now(UTC)
+            result = _memorial_worker_service().process(
+                requester_key=requester_key,
+                cycle=cycle,
+                receive_count=receive_count,
+                now=started_at,
+                deadline=_lambda_deadline(context, now=started_at),
+            )
+            if result is None:
+                skipped += 1
+            else:
+                processed += 1
+        except Exception as error:
+            failures.append({"itemIdentifier": message_id})
+            _log(
+                event="records_memorial_generation_failed",
+                error_type=type(error).__name__,
+            )
+    _log(
+        event="records_memorial_generation_completed",
+        records=len(records),
+        processed=processed,
+        skipped=skipped,
+        failed=len(failures),
+    )
+    return {"batchItemFailures": failures}
+
+
+def _lambda_deadline(context: object, *, now: datetime) -> datetime:
+    remaining_time = getattr(context, "get_remaining_time_in_millis", None)
+    if not callable(remaining_time):
+        raise ValueError("Lambda remaining time is unavailable")
+    remaining_milliseconds = remaining_time()
+    if (
+        isinstance(remaining_milliseconds, bool)
+        or not isinstance(remaining_milliseconds, int)
+        or remaining_milliseconds <= 0
+    ):
+        raise ValueError("Lambda remaining time is invalid")
+    return now + timedelta(milliseconds=remaining_milliseconds)
 
 
 def _projector_service() -> ProjectorService:
@@ -498,6 +591,7 @@ def _admin_status_controller() -> AdminStatusHttpController:
                 "web": _environment("WEB_BUCKET_NAME"),
                 "media": _environment("MEDIA_BUCKET_NAME"),
                 "release": _environment("RELEASE_BUNDLE_BUCKET_NAME"),
+                "memorial_upload": _environment("MEMORIAL_UPLOAD_BUCKET_NAME"),
             },
             tables={
                 "debate": _environment("SOURCE_TABLE_NAME"),
@@ -508,6 +602,8 @@ def _admin_status_controller() -> AdminStatusHttpController:
             functions=ADMIN_STATUS_FUNCTION_NAMES,
             records_public_hostname=_environment("RECORDS_PUBLIC_HOSTNAME"),
             projector_dlq_url=_environment("PROJECTOR_DLQ_URL"),
+            memorial_generation_queue_url=_environment("MEMORIAL_GENERATION_QUEUE_URL"),
+            memorial_generation_dlq_url=_environment("MEMORIAL_GENERATION_DLQ_URL"),
             stacks=ADMIN_STATUS_STACK_NAMES,
             static_parameters=ADMIN_STATUS_PARAMETER_NAMES,
             runtime_scheduler_name=_environment("RUNTIME_SCHEDULER_NAME"),
@@ -567,6 +663,82 @@ def _admin_status_controller() -> AdminStatusHttpController:
     return _ADMIN_STATUS_CONTROLLER
 
 
+def _memorial_api_controller() -> MemorialHttpController:
+    global _MEMORIAL_API_CONTROLLER
+    if _MEMORIAL_API_CONTROLLER is None:
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        ssm = boto3.client("ssm", config=SDK_CONFIG)
+        assets = S3MemorialAssetStore(
+            _regional_s3_client(),
+            upload_bucket_name=_environment("MEMORIAL_UPLOAD_BUCKET_NAME"),
+            media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
+            participant_asset_keys=PARTICIPANT_AVATAR_ASSET_KEYS,
+        )
+        _MEMORIAL_API_CONTROLLER = MemorialHttpController(
+            authorizer=MemorialAuthorizer(
+                store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
+                configuration=MemorialSecurityConfigurationRepository(
+                    ssm,
+                    session_key_parameter_name=_environment("SESSION_KEY_PARAMETER_NAME"),
+                    oauth_parameter_name=_environment("OAUTH_CONFIG_PARAMETER_NAME"),
+                ).load(),
+            ),
+            memorial=MemorialService(
+                repository=DynamoMemorialRepository(
+                    dynamodb,
+                    source_table_name=_environment("SOURCE_TABLE_NAME"),
+                    statistics_table_name=_environment("STATISTICS_TABLE_NAME"),
+                ),
+                assets=assets,
+                queue=SqsMemorialJobQueue(
+                    boto3.client("sqs", config=SDK_CONFIG),
+                    _environment("MEMORIAL_GENERATION_QUEUE_URL"),
+                ),
+            ),
+        )
+    return _MEMORIAL_API_CONTROLLER
+
+
+def _memorial_worker_service() -> MemorialGenerationService:
+    global _MEMORIAL_WORKER
+    if _MEMORIAL_WORKER is None:
+        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+        ssm = boto3.client("ssm", config=SDK_CONFIG)
+        assets = S3MemorialAssetStore(
+            _regional_s3_client(),
+            upload_bucket_name=_environment("MEMORIAL_UPLOAD_BUCKET_NAME"),
+            media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
+            participant_asset_keys=PARTICIPANT_AVATAR_ASSET_KEYS,
+        )
+        configuration = MemorialConfigurationRepository(
+            ssm,
+            api_key_parameter_name=_environment("MEMORIAL_OPENAI_API_KEY_PARAMETER_NAME"),
+            runtime_prompt_parameter_root=_environment("RUNTIME_PROMPTS_PARAMETER_ROOT"),
+            legacy_persona_parameter_names={
+                "participant-a": _environment("LEGACY_PERSONA_PARTICIPANT_A_PARAMETER_NAME"),
+                "participant-b": _environment("LEGACY_PERSONA_PARTICIPANT_B_PARAMETER_NAME"),
+                "participant-c": _environment("LEGACY_PERSONA_PARTICIPANT_C_PARAMETER_NAME"),
+            },
+        )
+        _MEMORIAL_WORKER = MemorialGenerationService(
+            repository=DynamoMemorialRepository(
+                dynamodb,
+                source_table_name=None,
+                statistics_table_name=_environment("STATISTICS_TABLE_NAME"),
+            ),
+            assets=assets,
+            questions=DynamoRecentQuestionSource(
+                dynamodb,
+                _environment("ARCHIVE_TABLE_NAME"),
+            ),
+            generator=OpenAIMemorialContentGenerator(
+                configuration,
+                participant_references=assets,
+            ),
+        )
+    return _MEMORIAL_WORKER
+
+
 def _admin_security_configuration(ssm: Any) -> Any:
     return AdminSecurityConfigurationRepository(
         ssm,
@@ -575,6 +747,47 @@ def _admin_security_configuration(ssm: Any) -> Any:
         oauth_parameter_name=_environment("OAUTH_CONFIG_PARAMETER_NAME"),
         admin_user_id_parameter_name=_environment("ADMIN_DISCORD_USER_ID_PARAMETER_NAME"),
     ).load()
+
+
+def _memorial_message_id(record: object) -> str:
+    if not isinstance(record, Mapping):
+        raise ValueError("Memorial SQS record is invalid")
+    value = record.get("messageId")
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise ValueError("Memorial SQS message identifier is invalid")
+    return value
+
+
+def _memorial_job(record: object) -> tuple[str, int, int]:
+    if not isinstance(record, Mapping):
+        raise ValueError("Memorial SQS record is invalid")
+    body = record.get("body")
+    attributes = record.get("attributes")
+    if not isinstance(body, str) or len(body.encode()) > 512:
+        raise ValueError("Memorial SQS job body is invalid")
+    if not isinstance(attributes, Mapping):
+        raise ValueError("Memorial SQS job attributes are invalid")
+    try:
+        payload = json.loads(body)
+    except TypeError, ValueError, json.JSONDecodeError:
+        raise ValueError("Memorial SQS job body is invalid") from None
+    if not isinstance(payload, Mapping) or set(payload) != {"requesterKey", "cycle"}:
+        raise ValueError("Memorial SQS job body is invalid")
+    requester_key = payload.get("requesterKey")
+    cycle = payload.get("cycle")
+    receive_count = attributes.get("ApproximateReceiveCount")
+    if (
+        not isinstance(requester_key, str)
+        or isinstance(cycle, bool)
+        or not isinstance(cycle, int)
+        or not 1 <= cycle <= 1_000_000_000
+        or not isinstance(receive_count, str)
+        or not receive_count.isdecimal()
+        or str(int(receive_count)) != receive_count
+        or not 1 <= int(receive_count) <= 1_000
+    ):
+        raise ValueError("Memorial SQS job body is invalid")
+    return requester_key, cycle, int(receive_count)
 
 
 def _build_projector(

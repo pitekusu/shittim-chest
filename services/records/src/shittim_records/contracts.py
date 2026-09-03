@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    RootModel,
+    model_validator,
+)
 
 RECORDS_API_SCHEMA_VERSION = 1
 
@@ -14,6 +22,8 @@ CostStatus = Literal["partial", "final", "unavailable"]
 CostPeriod = Literal["today", "week", "month", "all"]
 AdminPromptAction = Literal["publish", "rollback"]
 AdminHealthState = Literal["healthy", "warning", "critical", "unknown"]
+MemorialStateName = Literal["locked", "unlocked", "queued", "generating", "ready", "failed"]
+MemorialUploadContentType = Literal["image/jpeg", "image/png", "image/webp"]
 AdminServiceName = Literal[
     "ecs",
     "ecr",
@@ -437,6 +447,148 @@ class AffectionRankingsResponse(PublicModel):
         return self
 
 
+MemorialSha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+MemorialCycle = Annotated[int, Field(ge=1, le=1_000_000_000)]
+
+
+def _require_exact_schema_version(value: object) -> object:
+    if type(value) is not int or value != 1:
+        raise ValueError("schemaVersion must be the integer 1")
+    return value
+
+
+MemorialSchemaVersion = Annotated[Literal[1], BeforeValidator(_require_exact_schema_version)]
+
+
+class MemorialMemorySummary(PublicModel):
+    cycle: MemorialCycle
+    participant: ParticipantSlot
+    unlocked_at: AwareDatetime
+    generated_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def require_generation_after_unlock(self) -> MemorialMemorySummary:
+        if self.generated_at < self.unlocked_at:
+            raise ValueError("memorial generation cannot precede its unlock")
+        return self
+
+
+class MemorialStateResponse(PublicModel):
+    schema_version: Literal[1]
+    state: MemorialStateName
+    cycle: MemorialCycle
+    reset_count: Annotated[int, Field(ge=0, le=999_999_999)]
+    unlocked_participant: ParticipantSlot | None
+    unlocked_at: AwareDatetime | None
+    upload_ready: bool
+    latest_ready_cycle: MemorialCycle | None
+    memories: tuple[MemorialMemorySummary, ...]
+
+    @model_validator(mode="after")
+    def require_consistent_state(self) -> MemorialStateResponse:
+        if self.cycle != self.reset_count + 1:
+            raise ValueError("memorial cycle must follow the reset count")
+        has_unlock = self.unlocked_participant is not None and self.unlocked_at is not None
+        if (self.unlocked_participant is None) != (self.unlocked_at is None):
+            raise ValueError("memorial unlock metadata must be complete")
+        if self.state == "locked" and has_unlock:
+            raise ValueError("a locked memorial cannot contain unlock metadata")
+        if self.state != "locked" and not has_unlock:
+            raise ValueError("an unlocked memorial requires unlock metadata")
+        if self.upload_ready and self.state != "unlocked":
+            raise ValueError("only an unlocked memorial can accept its reserved upload")
+        if self.latest_ready_cycle is not None and self.latest_ready_cycle > self.cycle:
+            raise ValueError("latest ready cycle cannot be in the future")
+        if self.state == "ready" and self.latest_ready_cycle != self.cycle:
+            raise ValueError("a ready memorial must expose its current cycle")
+        cycles = tuple(memory.cycle for memory in self.memories)
+        if cycles != tuple(sorted(set(cycles))) or any(cycle > self.cycle for cycle in cycles):
+            raise ValueError("memories must contain unique ascending cycles")
+        expected_latest = cycles[-1] if cycles else None
+        if self.latest_ready_cycle != expected_latest:
+            raise ValueError("latest ready cycle must match memories")
+        if self.state == "ready":
+            current = self.memories[-1]
+            if (
+                current.participant != self.unlocked_participant
+                or current.unlocked_at != self.unlocked_at
+            ):
+                raise ValueError("ready memorial summary must match its unlock")
+        return self
+
+
+class MemorialUploadRequest(PublicModel):
+    schema_version: MemorialSchemaVersion
+    expected_cycle: MemorialCycle
+    content_type: MemorialUploadContentType
+    size_bytes: Annotated[int, Field(ge=1, le=10 * 1024 * 1024)]
+    sha256: MemorialSha256
+
+
+class MemorialUploadFields(PublicModel):
+    key: Annotated[str, Field(min_length=1, max_length=1024, pattern=r"^[^\x00-\x1f\x7f]+$")]
+    content_type: MemorialUploadContentType = Field(alias="Content-Type")
+    checksum_sha256: Annotated[
+        str,
+        Field(pattern=r"^[A-Za-z0-9+/]{43}=$"),
+    ] = Field(alias="x-amz-checksum-sha256")
+    algorithm: Literal["AWS4-HMAC-SHA256"] = Field(alias="x-amz-algorithm")
+    credential: Annotated[str, Field(min_length=1, max_length=1024)] = Field(
+        alias="x-amz-credential"
+    )
+    signing_date: Annotated[str, Field(pattern=r"^[0-9]{8}T[0-9]{6}Z$")] = Field(alias="x-amz-date")
+    security_token: Annotated[str, Field(min_length=1, max_length=4096)] | None = Field(
+        default=None,
+        alias="x-amz-security-token",
+    )
+    policy: Annotated[str, Field(min_length=1, max_length=16384, pattern=r"^[A-Za-z0-9+/]+=*$")]
+    signature: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] = Field(alias="x-amz-signature")
+
+
+class MemorialUploadResponse(PublicModel):
+    schema_version: Literal[1]
+    cycle: MemorialCycle
+    method: Literal["POST"]
+    upload_url: Annotated[str, Field(min_length=1, max_length=4096, pattern=r"^https://")]
+    expires_at: AwareDatetime
+    fields: MemorialUploadFields
+
+
+class MemorialGenerateRequest(PublicModel):
+    schema_version: MemorialSchemaVersion
+    expected_cycle: MemorialCycle
+    confirmation: Literal["GENERATE MEMORIAL"]
+
+
+class MemorialResetRequest(PublicModel):
+    schema_version: MemorialSchemaVersion
+    expected_cycle: MemorialCycle
+    confirmation: Literal["RESET AFFECTION"]
+
+
+class MemorialImage(PublicModel):
+    url: Annotated[str, Field(min_length=1, max_length=4096, pattern=r"^https://")]
+    width: Literal[1920]
+    height: Literal[1080]
+    alt: NonEmptyText
+
+
+class MemorialMemoryResponse(PublicModel):
+    schema_version: Literal[1]
+    cycle: MemorialCycle
+    participant: ParticipantSlot
+    unlocked_at: AwareDatetime
+    generated_at: AwareDatetime
+    image: MemorialImage
+    narrative: Annotated[str, Field(min_length=1, max_length=2000, pattern=r"\S")]
+
+    @model_validator(mode="after")
+    def require_generation_after_unlock(self) -> MemorialMemoryResponse:
+        if self.generated_at < self.unlocked_at:
+            raise ValueError("memorial generation cannot precede its unlock")
+        return self
+
+
 CanonicalJpyAmount = Annotated[str, Field(pattern=r"^[0-9]+\.[0-9]{6}$")]
 
 
@@ -685,6 +837,9 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RankingsResponse,
     AffectionRankingsResponse,
     CostsResponse,
+    MemorialStateResponse,
+    MemorialUploadResponse,
+    MemorialMemoryResponse,
     SessionResponse,
     AdminPromptsResponse,
     AdminPromptApplyResponse,
@@ -695,6 +850,9 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
 )
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (
+    MemorialUploadRequest,
+    MemorialGenerateRequest,
+    MemorialResetRequest,
     AdminPromptApplyRequest,
     AdminPromptRollbackRequest,
 )

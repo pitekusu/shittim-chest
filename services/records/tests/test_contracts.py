@@ -13,6 +13,12 @@ from shittim_records.contracts import (
     AvatarRef,
     CostsResponse,
     ErrorResponse,
+    MemorialGenerateRequest,
+    MemorialMemoryResponse,
+    MemorialResetRequest,
+    MemorialStateResponse,
+    MemorialUploadRequest,
+    MemorialUploadResponse,
     NonEmptyText,
     RankingsResponse,
     RecordDetailResponse,
@@ -568,3 +574,133 @@ def test_final_decision_rejects_whitespace_only_victory_message() -> None:
 
     with pytest.raises(ValidationError):
         RecordDetailResponse.model_validate(payload)
+
+
+def test_memorial_state_enumerates_content_free_memory_summaries() -> None:
+    payload = {
+        "schemaVersion": 1,
+        "state": "locked",
+        "cycle": 3,
+        "resetCount": 2,
+        "unlockedParticipant": None,
+        "unlockedAt": None,
+        "uploadReady": False,
+        "latestReadyCycle": 2,
+        "memories": (
+            {
+                "cycle": 1,
+                "participant": "participant-a",
+                "unlockedAt": "2026-08-30T01:00:00Z",
+                "generatedAt": "2026-08-30T01:10:00Z",
+            },
+            {
+                "cycle": 2,
+                "participant": "participant-c",
+                "unlockedAt": "2026-08-31T01:00:00Z",
+                "generatedAt": "2026-08-31T01:10:00Z",
+            },
+        ),
+    }
+
+    response = MemorialStateResponse.model_validate(payload)
+
+    assert [item.cycle for item in response.memories] == [1, 2]
+    serialized = response.model_dump_json(by_alias=True)
+    for private_name in ("requesterKey", "ownerKey", "imageAssetKey", "narrative"):
+        assert private_name not in serialized
+    with pytest.raises(ValidationError, match="unique ascending"):
+        MemorialStateResponse.model_validate(
+            {**payload, "memories": tuple(reversed(cast(tuple[object, ...], payload["memories"])))}
+        )
+    with pytest.raises(ValidationError, match="must match memories"):
+        MemorialStateResponse.model_validate({**payload, "latestReadyCycle": 1})
+
+
+def test_memorial_upload_contract_is_strict_and_bounded() -> None:
+    request = {
+        "schemaVersion": 1,
+        "expectedCycle": 1,
+        "contentType": "image/webp",
+        "sizeBytes": 10 * 1024 * 1024,
+        "sha256": "a" * 64,
+    }
+
+    assert MemorialUploadRequest.model_validate(request).size_bytes == 10 * 1024 * 1024
+    for invalid in (
+        {**request, "schemaVersion": True},
+        {**request, "schemaVersion": 1.0},
+        {**request, "expectedCycle": 0},
+        {**request, "sizeBytes": 10 * 1024 * 1024 + 1},
+        {**request, "contentType": "image/gif"},
+        {**request, "sha256": "A" * 64},
+        {**request, "requesterKey": "private"},
+    ):
+        with pytest.raises(ValidationError):
+            MemorialUploadRequest.model_validate(invalid)
+
+
+def test_memorial_presigned_post_contract_allows_only_fixed_s3_fields() -> None:
+    payload = {
+        "schemaVersion": 1,
+        "cycle": 1,
+        "method": "POST",
+        "uploadUrl": "https://upload.example.invalid/",
+        "expiresAt": "2026-09-03T01:05:00Z",
+        "fields": {
+            "key": "opaque/upload",
+            "Content-Type": "image/png",
+            "x-amz-checksum-sha256": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+            "x-amz-algorithm": "AWS4-HMAC-SHA256",
+            "x-amz-credential": "credential/scope",
+            "x-amz-date": "20260903T010000Z",
+            "policy": "cG9saWN5",
+            "x-amz-signature": "b" * 64,
+        },
+    }
+
+    assert MemorialUploadResponse.model_validate(payload).method == "POST"
+    with pytest.raises(ValidationError):
+        MemorialUploadResponse.model_validate(
+            {
+                **payload,
+                "fields": {**payload["fields"], "privateOwner": "forbidden"},
+            }
+        )
+    with pytest.raises(ValidationError):
+        MemorialUploadResponse.model_validate({**payload, "method": "PUT"})
+
+
+def test_memorial_confirmation_and_memory_contracts_are_content_free() -> None:
+    assert (
+        MemorialGenerateRequest.model_validate(
+            {"schemaVersion": 1, "expectedCycle": 1, "confirmation": "GENERATE MEMORIAL"}
+        ).confirmation
+        == "GENERATE MEMORIAL"
+    )
+    assert (
+        MemorialResetRequest.model_validate(
+            {"schemaVersion": 1, "expectedCycle": 1, "confirmation": "RESET AFFECTION"}
+        ).confirmation
+        == "RESET AFFECTION"
+    )
+    with pytest.raises(ValidationError):
+        MemorialGenerateRequest.model_validate(
+            {"schemaVersion": 1, "expectedCycle": 1, "confirmation": "generate memorial"}
+        )
+    memory = {
+        "schemaVersion": 1,
+        "cycle": 1,
+        "participant": "participant-b",
+        "unlockedAt": "2026-09-03T01:00:00Z",
+        "generatedAt": "2026-09-03T01:10:00Z",
+        "image": {
+            "url": "https://media.example.invalid/memory.png",
+            "width": 1920,
+            "height": 1080,
+            "alt": "メモリアルロビー",
+        },
+        "narrative": "大切な思い出です。",
+    }
+    assert MemorialMemoryResponse.model_validate(memory).cycle == 1
+    with pytest.raises(ValidationError):
+        MemorialMemoryResponse.model_validate({**memory, "requesterKey": "private"})

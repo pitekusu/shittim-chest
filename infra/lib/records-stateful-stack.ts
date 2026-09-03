@@ -15,7 +15,10 @@ export class RecordsStatefulStack extends Stack {
   public readonly statisticsTable: dynamodb.Table;
   public readonly sessionTable: dynamodb.Table;
   public readonly mediaBucket: s3.Bucket;
+  public readonly memorialUploadBucket: s3.Bucket;
   public readonly projectorDlq: sqs.Queue;
+  public readonly memorialGenerationDlq: sqs.Queue;
+  public readonly memorialGenerationQueue: sqs.Queue;
 
   public constructor(scope: Construct, id: string, props: StackProps) {
     super(scope, id, props);
@@ -75,6 +78,31 @@ export class RecordsStatefulStack extends Stack {
       serverAccessLogsPrefix: "media/",
       versioned: true,
     });
+    this.memorialUploadBucket = new s3.Bucket(this, "MemorialUploadBucket", {
+      bucketName: `shittim-chest-production-records-memorial-upload-${this.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      lifecycleRules: [
+        {
+          id: "ExpireMemorialUploads",
+          abortIncompleteMultipartUploadAfter: Duration.days(1),
+          expiration: Duration.days(1),
+        },
+      ],
+      cors: [
+        {
+          allowedHeaders: ["content-type"],
+          allowedMethods: [s3.HttpMethods.POST],
+          allowedOrigins: ["https://shittim.pitekusu.dev"],
+          maxAge: 300,
+        },
+      ],
+      removalPolicy: RemovalPolicy.RETAIN,
+      serverAccessLogsBucket: accessLogs,
+      serverAccessLogsPrefix: "memorial-upload/",
+      versioned: false,
+    });
 
     this.projectorDlq = new sqs.Queue(this, "ProjectorDlq", {
       queueName: "shittim-chest-production-records-projector-dlq",
@@ -82,10 +110,34 @@ export class RecordsStatefulStack extends Stack {
       enforceSSL: true,
       retentionPeriod: Duration.days(14),
     });
+    this.memorialGenerationDlq = new sqs.Queue(this, "MemorialGenerationDlq", {
+      queueName: "shittim-chest-production-records-memorial-generation-dlq",
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(14),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    this.memorialGenerationQueue = new sqs.Queue(this, "MemorialGenerationQueue", {
+      queueName: "shittim-chest-production-records-memorial-generation",
+      deadLetterQueue: {
+        maxReceiveCount: 3,
+        queue: this.memorialGenerationDlq,
+      },
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(1),
+      visibilityTimeout: Duration.minutes(30),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
     Validations.of(this.projectorDlq).acknowledge({
       id: "AwsSolutions-SQS3",
       reason:
         "This queue is the terminal failure destination for the bounded DynamoDB Streams retry policy.",
+    });
+    Validations.of(this.memorialGenerationDlq).acknowledge({
+      id: "AwsSolutions-SQS3",
+      reason:
+        "This queue is the terminal failure destination for the bounded memorial generation retry policy.",
     });
     Validations.of(accessLogs).acknowledge({
       id: "AwsSolutions-S1",

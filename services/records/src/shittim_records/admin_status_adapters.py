@@ -44,13 +44,16 @@ from shittim_records.inspector_translations import (
 )
 
 _TABLE_LABELS = ("debate", "archive", "statistics", "session")
-_BUCKET_LABELS = ("web", "media", "release")
+_BUCKET_LABELS = ("web", "media", "release", "memorial_upload")
 _MAX_PAGINATOR_PAGES = 20
 _STATUS_COLLECTION_TIMEOUT_SECONDS = 20.0
 _AFFECTION_RANKING_FRESHNESS = timedelta(minutes=35)
 _AFFECTION_RANKING_PAGE_SIZE = 50
 _PRODUCTION_ALARM_PREFIX = "shittim-chest-production-"
 _PROJECTOR_DLQ_RETENTION_SECONDS = 14 * 24 * 60 * 60
+_MEMORIAL_QUEUE_RETENTION_SECONDS = 24 * 60 * 60
+_MEMORIAL_DLQ_RETENTION_SECONDS = 14 * 24 * 60 * 60
+_MEMORIAL_QUEUE_STALE_SECONDS = 15 * 60
 _GLOBAL_STACK_LABELS = frozenset({"records_edge", "cost_governance"})
 ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
     {
@@ -64,6 +67,8 @@ ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
         "records_ranking": "shittim-chest-production-records-ranking",
         "records_cost": "shittim-chest-production-records-cost",
         "records_inspector_translation": ("shittim-chest-production-records-inspector-translation"),
+        "records_memorial_api": "shittim-chest-production-records-memorial-api",
+        "records_memorial_worker": "shittim-chest-production-records-memorial-worker",
         "records_read": "shittim-chest-production-records-read",
         "records_admin_config": "shittim-chest-production-records-admin-config",
         "records_admin_status": "shittim-chest-production-records-admin-status",
@@ -99,6 +104,9 @@ ADMIN_STATUS_PARAMETER_NAMES: Mapping[str, str] = MappingProxyType(
         "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
         "records_openai_inspector_translation_key": (
             "/shittim-chest/production/records/openai/inspector-translation-api-key"
+        ),
+        "records_openai_memorial_key": (
+            "/shittim-chest/production/records/openai/memorial-api-key"
         ),
         "records_admin_user_id": ("/shittim-chest/production/records/admin/discord-user-id"),
     }
@@ -172,6 +180,8 @@ class AwsAdminStatusConfiguration:
     functions: Mapping[str, str]
     records_public_hostname: str
     projector_dlq_url: str
+    memorial_generation_queue_url: str
+    memorial_generation_dlq_url: str
     stacks: Mapping[str, str]
     static_parameters: Mapping[str, str]
     runtime_scheduler_name: str
@@ -211,6 +221,8 @@ class AwsAdminStatusConfiguration:
             self.runtime_stack_name,
             self.records_public_hostname,
             self.projector_dlq_url,
+            self.memorial_generation_queue_url,
+            self.memorial_generation_dlq_url,
             self.runtime_scheduler_name,
             self.sns_topic_arn,
             self.signing_profile_name,
@@ -1049,7 +1061,14 @@ class AwsAdminStatusSource:
                 )
             )
             encrypted = bool(encryption)
-            warning = warning or versioning != "Enabled" or not encrypted or not public_blocked
+            versioning_expected = label != "memorial_upload"
+            versioning_enabled = versioning == "Enabled"
+            warning = (
+                warning
+                or versioning_enabled != versioning_expected
+                or not encrypted
+                or not public_blocked
+            )
             metrics.extend(
                 (
                     _metric(f"{label}_versioning", versioning or "Disabled"),
@@ -1057,6 +1076,27 @@ class AwsAdminStatusSource:
                     _metric(f"{label}_public_access_blocked", public_blocked),
                 )
             )
+            if label == "memorial_upload":
+                lifecycle = self._s3.get_bucket_lifecycle_configuration(Bucket=name)
+                rules = lifecycle.get("Rules", [])
+                expiration_days = 0
+                abort_days = 0
+                for rule in rules if isinstance(rules, list) else []:
+                    if not isinstance(rule, Mapping) or rule.get("Status") != "Enabled":
+                        continue
+                    expiration = rule.get("Expiration")
+                    abort = rule.get("AbortIncompleteMultipartUpload")
+                    if isinstance(expiration, Mapping):
+                        expiration_days = _decimal_integer(expiration.get("Days"))
+                    if isinstance(abort, Mapping):
+                        abort_days = _decimal_integer(abort.get("DaysAfterInitiation"))
+                warning = warning or expiration_days != 1 or abort_days != 1
+                metrics.extend(
+                    (
+                        _metric("memorial_upload_expiration_days", expiration_days),
+                        _metric("memorial_upload_abort_days", abort_days),
+                    )
+                )
         return AdminStatusSection(
             service="s3",
             state="warning" if warning else "healthy",
@@ -1549,8 +1589,73 @@ class AwsAdminStatusSource:
         return metrics, provider_complete and len(seen_ids) == len(identifiers)
 
     def _sqs_section(self, now: datetime) -> AdminStatusSection:
+        projector = self._queue_status(self._config.projector_dlq_url, now=now)
+        memorial = self._queue_status(self._config.memorial_generation_queue_url, now=now)
+        memorial_dlq = self._queue_status(
+            self._config.memorial_generation_dlq_url,
+            now=now,
+        )
+        projector_warning = (
+            projector[0] > 0
+            or projector[1] > 0
+            or projector[2] > 0
+            or not projector[3]
+            or projector[4] != _PROJECTOR_DLQ_RETENTION_SECONDS
+        )
+        memorial_oldest = float(memorial[5]) if memorial[5] is not None else 0.0
+        memorial_warning = (
+            memorial_oldest > _MEMORIAL_QUEUE_STALE_SECONDS
+            or not memorial[3]
+            or memorial[4] != _MEMORIAL_QUEUE_RETENTION_SECONDS
+        )
+        memorial_dlq_warning = (
+            memorial_dlq[0] > 0
+            or memorial_dlq[1] > 0
+            or memorial_dlq[2] > 0
+            or not memorial_dlq[3]
+            or memorial_dlq[4] != _MEMORIAL_DLQ_RETENTION_SECONDS
+        )
+        state: AdminHealthState = (
+            "warning"
+            if projector_warning or memorial_warning or memorial_dlq_warning
+            else "healthy"
+        )
+        return AdminStatusSection(
+            service="sqs",
+            state=state,
+            summary="非同期処理の滞留、DLQ、または保護設定を確認してください。"
+            if state == "warning"
+            else "投影DLQとメモリアル生成キューの状態は正常です。",
+            metrics=(
+                _metric("visible_messages", projector[0]),
+                _metric("inflight_messages", projector[1]),
+                _metric("delayed_messages", projector[2]),
+                _metric("oldest_message_age_seconds", projector[5]),
+                _metric("encrypted", projector[3]),
+                _metric("retention_seconds", projector[4]),
+                _metric("memorial_queued_messages", memorial[0]),
+                _metric("memorial_inflight_messages", memorial[1]),
+                _metric("memorial_delayed_messages", memorial[2]),
+                _metric("memorial_oldest_message_age_seconds", memorial[5]),
+                _metric("memorial_encrypted", memorial[3]),
+                _metric("memorial_retention_seconds", memorial[4]),
+                _metric("memorial_dlq_visible_messages", memorial_dlq[0]),
+                _metric("memorial_dlq_inflight_messages", memorial_dlq[1]),
+                _metric("memorial_dlq_delayed_messages", memorial_dlq[2]),
+                _metric("memorial_dlq_oldest_message_age_seconds", memorial_dlq[5]),
+                _metric("memorial_dlq_encrypted", memorial_dlq[3]),
+                _metric("memorial_dlq_retention_seconds", memorial_dlq[4]),
+            ),
+        )
+
+    def _queue_status(
+        self,
+        queue_url: str,
+        *,
+        now: datetime,
+    ) -> tuple[int, int, int, bool, int, str | None]:
         response = self._sqs.get_queue_attributes(
-            QueueUrl=self._config.projector_dlq_url,
+            QueueUrl=queue_url,
             AttributeNames=[
                 "ApproximateNumberOfMessages",
                 "ApproximateNumberOfMessagesNotVisible",
@@ -1568,45 +1673,14 @@ class AwsAdminStatusSource:
             attributes.get("SqsManagedSseEnabled") == "true"
         )
         retention_seconds = _decimal_integer(attributes.get("MessageRetentionPeriod"))
-        state: AdminHealthState = (
-            "warning"
-            if visible
-            or inflight
-            or delayed
-            or not encrypted
-            or retention_seconds != _PROJECTOR_DLQ_RETENTION_SECONDS
-            else "healthy"
-        )
         oldest_age = self._latest_metric(
             namespace="AWS/SQS",
             metric_name="ApproximateAgeOfOldestMessage",
-            dimensions=[
-                {
-                    "Name": "QueueName",
-                    "Value": _queue_name(self._config.projector_dlq_url),
-                }
-            ],
+            dimensions=[{"Name": "QueueName", "Value": _queue_name(queue_url)}],
             now=now,
             stat="Maximum",
         )
-        return AdminStatusSection(
-            service="sqs",
-            state=state,
-            summary="記録・親愛度投影DLQのメッセージまたは保護設定を確認してください。"
-            if state == "warning"
-            else "記録・親愛度投影DLQは空で保護設定も正常です。",
-            metrics=(
-                _metric("visible_messages", visible),
-                _metric("inflight_messages", inflight),
-                _metric("delayed_messages", delayed),
-                _metric("oldest_message_age_seconds", oldest_age),
-                _metric("encrypted", encrypted),
-                _metric(
-                    "retention_seconds",
-                    retention_seconds,
-                ),
-            ),
-        )
+        return visible, inflight, delayed, encrypted, retention_seconds, oldest_age
 
     def _apigateway_section(self, now: datetime) -> AdminStatusSection:
         api_definitions = (
@@ -2065,6 +2139,7 @@ class AwsAdminStatusSource:
                 "records_session_key",
                 "records_admin_user_id",
                 "records_openai_inspector_translation_key",
+                "records_openai_memorial_key",
             },
             "cost": {"records_openai_admin_key", "records_openai_project_id"},
         }
@@ -2763,9 +2838,19 @@ def _coverage_image_digest(
 
 
 def _decimal_integer(value: object) -> int:
-    if not isinstance(value, str) or not value.isdecimal():
+    if isinstance(value, bool):
         raise ValueError("provider decimal count is invalid")
-    return int(value)
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError("provider decimal count is invalid")
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value < 0 or value != value.to_integral_value():
+            raise ValueError("provider decimal count is invalid")
+        return int(value)
+    if isinstance(value, str) and value.isdecimal():
+        return int(value)
+    raise ValueError("provider decimal count is invalid")
 
 
 def _decimal_amount(value: object) -> Decimal:

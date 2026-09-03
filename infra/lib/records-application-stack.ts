@@ -33,6 +33,8 @@ const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
 const COST_FUNCTION_NAME = "shittim-chest-production-records-cost";
 const INSPECTOR_TRANSLATION_FUNCTION_NAME =
   "shittim-chest-production-records-inspector-translation";
+const MEMORIAL_API_FUNCTION_NAME = "shittim-chest-production-records-memorial-api";
+const MEMORIAL_WORKER_FUNCTION_NAME = "shittim-chest-production-records-memorial-worker";
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 
@@ -44,6 +46,8 @@ export class RecordsApplicationStack extends Stack {
   public readonly authFunction: lambda.Function;
   public readonly costFunction: lambda.Function;
   public readonly inspectorTranslationFunction: lambda.Function;
+  public readonly memorialApiFunction: lambda.Function;
+  public readonly memorialWorkerFunction: lambda.Function;
   public readonly rankingFunction: lambda.Function;
   public readonly readFunction: lambda.Function;
 
@@ -120,6 +124,11 @@ export class RecordsApplicationStack extends Stack {
       "MediaBucket",
       `shittim-chest-production-records-media-${this.account}`,
     );
+    const memorialUploadBucket = s3.Bucket.fromBucketName(
+      this,
+      "MemorialUploadBucket",
+      `shittim-chest-production-records-memorial-upload-${this.account}`,
+    );
     const repositoryArn = this.formatArn({
       service: "ecr",
       resource: "repository",
@@ -131,6 +140,22 @@ export class RecordsApplicationStack extends Stack {
       this.formatArn({
         service: "sqs",
         resource: "shittim-chest-production-records-projector-dlq",
+      }),
+    );
+    const memorialGenerationDlq = sqs.Queue.fromQueueArn(
+      this,
+      "MemorialGenerationDlq",
+      this.formatArn({
+        service: "sqs",
+        resource: "shittim-chest-production-records-memorial-generation-dlq",
+      }),
+    );
+    const memorialGenerationQueue = sqs.Queue.fromQueueArn(
+      this,
+      "MemorialGenerationQueue",
+      this.formatArn({
+        service: "sqs",
+        resource: "shittim-chest-production-records-memorial-generation",
       }),
     );
     const bundleBucket = s3.Bucket.fromBucketName(
@@ -202,6 +227,13 @@ export class RecordsApplicationStack extends Stack {
             "/shittim-chest/production/records/openai/inspector-translation-api-key",
         },
       );
+    const memorialApiKeyParameter = ssm.StringParameter.fromSecureStringParameterAttributes(
+      this,
+      "MemorialApiKeyParameter",
+      {
+        parameterName: "/shittim-chest/production/records/openai/memorial-api-key",
+      },
+    );
     const adminDiscordIdParameter = ssm.StringParameter.fromSecureStringParameterAttributes(
       this,
       "AdminDiscordIdParameter",
@@ -780,6 +812,237 @@ export class RecordsApplicationStack extends Stack {
       ),
     );
 
+    this.memorialApiFunction = this.httpFunctionWithRole({
+      id: "MemorialApiFunction",
+      functionName: MEMORIAL_API_FUNCTION_NAME,
+      handler: "shittim_records.lambda_handlers.memorial_api_handler",
+      code,
+      timeout: Duration.seconds(15),
+      reservedConcurrentExecutions: 2,
+      environment: {
+        SESSION_TABLE_NAME: sessionTable.tableName,
+        SOURCE_TABLE_NAME: sourceTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        MEMORIAL_UPLOAD_BUCKET_NAME: memorialUploadBucket.bucketName,
+        MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+        MEMORIAL_GENERATION_QUEUE_URL: memorialGenerationQueue.queueUrl,
+        OAUTH_CONFIG_PARAMETER_NAME: oauthConfigParameter.parameterName,
+        SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["SESSION#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["AFFECTION#REQUESTER#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:ConditionCheckItem", "dynamodb:UpdateItem"],
+          resources: [sourceTable.tableArn],
+          conditions: {
+            StringEquals: {
+              "dynamodb:EnclosingOperation": "TransactWriteItems",
+            },
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["AFFECTION#REQUESTER#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:Query"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["MEMORIAL#REQUESTER#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: [
+            "dynamodb:ConditionCheckItem",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem",
+          ],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            StringEquals: {
+              "dynamodb:EnclosingOperation": "TransactWriteItems",
+            },
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["MEMORIAL#REQUESTER#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:DeleteObject", "s3:GetObject", "s3:PutObject"],
+          resources: [`${memorialUploadBucket.bucketArn}/*`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"],
+          resources: [memorialUploadBucket.bucketArn],
+          conditions: {
+            StringLike: { "s3:prefix": ["uploads/*"] },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject"],
+          resources: [`${mediaBucket.bucketArn}/memorials/*`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"],
+          resources: [mediaBucket.bucketArn],
+          conditions: {
+            StringLike: { "s3:prefix": ["memorials/*"] },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["sqs:SendMessage"],
+          resources: [memorialGenerationQueue.queueArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"],
+          resources: [oauthConfigParameter.parameterArn, sessionKeyParameter.parameterArn],
+        }),
+      ],
+    });
+    this.memorialApiFunction.role!.node.addMetadata(
+      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+      Object.fromEntries(
+        ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
+          [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
+              `shittim-chest-production-records-memorial-upload-${nagAccount}/*]`,
+            "The owner-only memorial API can address only opaque, server-generated object keys in the dedicated ephemeral upload bucket.",
+          ],
+          [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
+              `shittim-chest-production-records-media-${nagAccount}/memorials/*]`,
+            "The owner-only memorial API reads generated assets only from the private memorial prefix to create short-lived signed responses.",
+          ],
+        ]),
+      ),
+    );
+
+    this.memorialWorkerFunction = this.httpFunctionWithRole({
+      id: "MemorialWorkerFunction",
+      functionName: MEMORIAL_WORKER_FUNCTION_NAME,
+      handler: "shittim_records.lambda_handlers.memorial_worker_handler",
+      code,
+      timeout: Duration.minutes(5),
+      reservedConcurrentExecutions: 1,
+      memorySize: 1024,
+      environment: {
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        MEMORIAL_UPLOAD_BUCKET_NAME: memorialUploadBucket.bucketName,
+        MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+        MEMORIAL_OPENAI_API_KEY_PARAMETER_NAME: memorialApiKeyParameter.parameterName,
+        RUNTIME_PROMPTS_PARAMETER_ROOT: "/shittim-chest/production/runtime-prompts",
+        RUNTIME_PROMPTS_ACTIVE_PARAMETER_NAME:
+          "/shittim-chest/production/runtime-prompts/active",
+        LEGACY_PERSONA_PARTICIPANT_A_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-a`,
+        LEGACY_PERSONA_PARTICIPANT_B_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-b`,
+        LEGACY_PERSONA_PARTICIPANT_C_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-c`,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["MEMORIAL#REQUESTER#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"],
+          resources: [`${archiveTable.tableArn}/index/gsi3`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject", "s3:DeleteObject"],
+          resources: [`${memorialUploadBucket.bucketArn}/*`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject"],
+          resources: [`${mediaBucket.bucketArn}/participants/*`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject", "s3:PutObject"],
+          resources: [`${mediaBucket.bucketArn}/memorials/*`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"],
+          resources: [mediaBucket.bucketArn],
+          conditions: {
+            StringLike: { "s3:prefix": ["memorials/*"] },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter", "ssm:GetParameters"],
+          resources: [
+            memorialApiKeyParameter.parameterArn,
+            runtimePromptActiveArn,
+            runtimePromptRevisionArn,
+            ...["participant-a", "participant-b", "participant-c"].map((participant) =>
+              this.formatArn({
+                service: "ssm",
+                resource: "parameter",
+                resourceName: `shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/${participant}`,
+              }),
+            ),
+          ],
+        }),
+      ],
+    });
+    this.memorialWorkerFunction.addEventSource(
+      new eventSources.SqsEventSource(memorialGenerationQueue, {
+        batchSize: 1,
+        reportBatchItemFailures: true,
+      }),
+    );
+    this.memorialWorkerFunction.role!.node.addMetadata(
+      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+      Object.fromEntries(
+        ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
+          [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
+              `shittim-chest-production-records-memorial-upload-${nagAccount}/*]`,
+            "The worker can read and permanently delete only opaque keys from the dedicated ephemeral upload bucket.",
+          ],
+          [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
+              `shittim-chest-production-records-media-${nagAccount}/participants/*]`,
+            "The worker reads only the three current participant presentation assets.",
+          ],
+          [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
+              `shittim-chest-production-records-media-${nagAccount}/memorials/*]`,
+            "The worker writes generated memorial assets only below the private memorial prefix.",
+          ],
+          [
+            `AwsSolutions-IAM5[Resource::${partition}:ssm:${this.region}:${nagAccount}:parameter/shittim-chest/production/runtime-prompts/r??????????????????????????/*]`,
+            "The active pointer selects one immutable runtime prompt revision and the worker validates and reads only the selected participant prompt.",
+          ],
+        ]),
+      ),
+    );
+
     const webBucketArn = this.formatArn({
       service: "s3",
       region: "",
@@ -833,11 +1096,17 @@ export class RecordsApplicationStack extends Stack {
       records_ranking: RANKING_FUNCTION_NAME,
       records_cost: COST_FUNCTION_NAME,
       records_inspector_translation: INSPECTOR_TRANSLATION_FUNCTION_NAME,
+      records_memorial_api: MEMORIAL_API_FUNCTION_NAME,
+      records_memorial_worker: MEMORIAL_WORKER_FUNCTION_NAME,
       records_read: READ_FUNCTION_NAME,
       records_admin_config: ADMIN_CONFIG_FUNCTION_NAME,
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
-    const statusFunctionArns = Object.values(statusFunctionNames).map((functionName) =>
+    const memorialStatusFunctionNames = [
+      MEMORIAL_API_FUNCTION_NAME,
+      MEMORIAL_WORKER_FUNCTION_NAME,
+    ] as const;
+    const memorialStatusFunctionArns = memorialStatusFunctionNames.map((functionName) =>
       this.formatArn({
         service: "lambda",
         resource: "function",
@@ -845,6 +1114,21 @@ export class RecordsApplicationStack extends Stack {
         arnFormat: ArnFormat.COLON_RESOURCE_NAME,
       }),
     );
+    const statusFunctionArns = Object.values(statusFunctionNames)
+      .filter(
+        (functionName) =>
+          !memorialStatusFunctionNames.some(
+            (memorialFunctionName) => memorialFunctionName === functionName,
+          ),
+      )
+      .map((functionName) =>
+        this.formatArn({
+          service: "lambda",
+          resource: "function",
+          resourceName: functionName,
+          arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+        }),
+      );
     const ecsServiceArn = this.formatArn({
       service: "ecs",
       resource: "service",
@@ -869,10 +1153,13 @@ export class RecordsApplicationStack extends Stack {
         OAUTH_CONFIG_PARAMETER_NAME: oauthConfigParameter.parameterName,
         SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+        MEMORIAL_UPLOAD_BUCKET_NAME: memorialUploadBucket.bucketName,
         WEB_BUCKET_NAME: `shittim-chest-production-records-web-${this.account}`,
         RELEASE_BUNDLE_BUCKET_NAME: bundleBucket.bucketName,
         RECORDS_PUBLIC_HOSTNAME: recordsPublicHostname.valueAsString,
         PROJECTOR_DLQ_URL: projectorDlq.queueUrl,
+        MEMORIAL_GENERATION_QUEUE_URL: memorialGenerationQueue.queueUrl,
+        MEMORIAL_GENERATION_DLQ_URL: memorialGenerationDlq.queueUrl,
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
         ECS_CONTAINER_NAME: "application",
@@ -968,8 +1255,14 @@ export class RecordsApplicationStack extends Stack {
             "s3:GetEncryptionConfiguration",
             "s3:GetBucketPublicAccessBlock",
             "s3:GetBucketVersioning",
+            "s3:GetLifecycleConfiguration",
           ],
-          resources: [mediaBucket.bucketArn, webBucketArn, bundleBucket.bucketArn],
+          resources: [
+            mediaBucket.bucketArn,
+            memorialUploadBucket.bucketArn,
+            webBucketArn,
+            bundleBucket.bucketArn,
+          ],
         }),
         new iam.PolicyStatement({
           actions: [
@@ -1081,24 +1374,30 @@ export class RecordsApplicationStack extends Stack {
             }),
           ],
         }),
-        new iam.PolicyStatement({
-          actions: ["dynamodb:GetItem"],
-          resources: [statisticsTable.tableArn],
-          conditions: {
-            "ForAllValues:StringEquals": {
-              "dynamodb:LeadingKeys": [
-                "AFFECTION#SEED",
-                "COLLECTOR#COST",
-                "RANKING#AFFECTION",
-              ],
-            },
-            Null: {
-              "dynamodb:LeadingKeys": "false",
-            },
-          },
-        }),
       ],
     });
+    this.adminStatusFunction.role!.attachInlinePolicy(
+      new iam.Policy(this, "AdminStatusStatisticsReadPolicy", {
+        statements: [
+          new iam.PolicyStatement({
+            actions: ["dynamodb:GetItem"],
+            resources: [statisticsTable.tableArn],
+            conditions: {
+              "ForAllValues:StringEquals": {
+                "dynamodb:LeadingKeys": [
+                  "AFFECTION#SEED",
+                  "COLLECTOR#COST",
+                  "RANKING#AFFECTION",
+                ],
+              },
+              Null: {
+                "dynamodb:LeadingKeys": "false",
+              },
+            },
+          }),
+        ],
+      }),
+    );
     this.adminStatusFunction.role!.attachInlinePolicy(
       new iam.Policy(this, "AdminStatusInspectorTranslationReadPolicy", {
         statements: [
@@ -1134,6 +1433,23 @@ export class RecordsApplicationStack extends Stack {
                 arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
               }),
             ],
+          }),
+        ],
+      }),
+    );
+    this.adminStatusFunction.role!.attachInlinePolicy(
+      new iam.Policy(this, "AdminStatusMemorialReadPolicy", {
+        statements: [
+          new iam.PolicyStatement({
+            actions: [
+              "lambda:GetFunctionConcurrency",
+              "lambda:GetFunctionConfiguration",
+            ],
+            resources: memorialStatusFunctionArns,
+          }),
+          new iam.PolicyStatement({
+            actions: ["sqs:GetQueueAttributes"],
+            resources: [memorialGenerationQueue.queueArn, memorialGenerationDlq.queueArn],
           }),
         ],
       }),
@@ -1194,6 +1510,10 @@ export class RecordsApplicationStack extends Stack {
       lambda: this.adminStatusFunction,
       codeSha256: bundleCodeSha256.valueAsString,
     });
+    const memorialApiVersion = new lambda.Version(this, "MemorialApiVersion", {
+      lambda: this.memorialApiFunction,
+      codeSha256: bundleCodeSha256.valueAsString,
+    });
     const authAlias = new lambda.Alias(this, "AuthLiveAlias", {
       aliasName: "live",
       version: authVersion,
@@ -1209,6 +1529,10 @@ export class RecordsApplicationStack extends Stack {
     const adminStatusAlias = new lambda.Alias(this, "AdminStatusLiveAlias", {
       aliasName: "live",
       version: adminStatusVersion,
+    });
+    const memorialApiAlias = new lambda.Alias(this, "MemorialApiLiveAlias", {
+      aliasName: "live",
+      version: memorialApiVersion,
     });
 
     const accessLogs = new logs.LogGroup(this, "RecordsApiAccessLogs", {
@@ -1250,6 +1574,11 @@ export class RecordsApplicationStack extends Stack {
     const adminStatusIntegration = new integrations.HttpLambdaIntegration(
       "AdminStatusIntegration",
       adminStatusAlias,
+      { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+    );
+    const memorialApiIntegration = new integrations.HttpLambdaIntegration(
+      "MemorialApiIntegration",
+      memorialApiAlias,
       { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
     );
     for (const path of [
@@ -1320,6 +1649,31 @@ export class RecordsApplicationStack extends Stack {
       methods: [apigatewayv2.HttpMethod.POST],
       integration: adminStatusIntegration,
     });
+    api.addRoutes({
+      path: "/api/v1/memorial",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: memorialApiIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/memorial/upload",
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: memorialApiIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/memorial/generate",
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: memorialApiIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/memorial/memories/{cycle}",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: memorialApiIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/memorial/reset",
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: memorialApiIntegration,
+    });
     const stage = api.addStage("DefaultStage", {
       stageName: "$default",
       autoDeploy: true,
@@ -1350,6 +1704,7 @@ export class RecordsApplicationStack extends Stack {
     readonly code: lambda.Code;
     readonly timeout: Duration;
     readonly reservedConcurrentExecutions: number;
+    readonly memorySize?: number;
     readonly environment: Readonly<Record<string, string>>;
     readonly policyStatements: readonly iam.PolicyStatement[];
   }): lambda.Function {
@@ -1372,7 +1727,7 @@ export class RecordsApplicationStack extends Stack {
       runtime: lambda.Runtime.PYTHON_3_14,
       handler: options.handler,
       code: options.code,
-      memorySize: 512,
+      memorySize: options.memorySize ?? 512,
       timeout: options.timeout,
       reservedConcurrentExecutions: options.reservedConcurrentExecutions,
       role,

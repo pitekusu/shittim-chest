@@ -117,7 +117,9 @@ jobs:
           mkdir -p "${stage}" "${wheels}"
           uv export --project services/records --frozen --no-dev --no-emit-local \
             --no-annotate --output-file "${RUNNER_TEMP}/records-runtime.txt"
-          uv pip install --require-hashes --target "${stage}" \
+          uv pip install --require-hashes --only-binary=:all: \
+            --python-version "${PYTHON_VERSION}" \
+            --python-platform aarch64-manylinux_2_28 --target "${stage}" \
             --requirements "${RUNNER_TEMP}/records-runtime.txt"
           uv build --wheel --out-dir "${wheels}"
           uv build --project services/records --wheel --out-dir "${wheels}"
@@ -125,7 +127,11 @@ jobs:
           uv export --project services/records --frozen --no-dev \
             --format cyclonedx1.5 --output-file "${RUNNER_TEMP}/records-sbom.cdx.json"
           uv run --frozen python tools/build_records_bundle.py \
-            --source "${stage}" --output "${RUNNER_TEMP}/records-lambda.zip"
+            --source "${stage}" --output "${RUNNER_TEMP}/records-lambda.zip" \
+            --asset "apps/records-web/src/assets/fonts/Delogy-Regular.ttf=shittim_records/assets/Delogy-Regular.ttf" \
+            --asset "apps/records-web/src/assets/fonts/LINESeedJP-ExtraBold.woff2=shittim_records/assets/LINESeedJP-ExtraBold.woff2" \
+            --asset "apps/records-web/THIRD_PARTY_NOTICES.md=shittim_records/assets/THIRD_PARTY_NOTICES.md" \
+            --asset "apps/records-web/third_party/line-seed/OFL.txt=shittim_records/assets/LINESeedJP-OFL.txt"
           bundle_hash=$(sha256sum "${RUNNER_TEMP}/records-lambda.zip" | cut -d' ' -f1)
           bundle_code_sha256=$(openssl dgst -sha256 -binary \
             "${RUNNER_TEMP}/records-lambda.zip" | base64 -w0)
@@ -203,6 +209,7 @@ jobs:
           OAUTH_CONFIG_PARAMETER_NAME: /shittim-chest/production/records/discord/oauth/v0001
           OPENAI_ADMIN_KEY_PARAMETER_NAME: /shittim-chest/production/records/openai/admin-key
           OPENAI_INSPECTOR_TRANSLATION_KEY_PARAMETER_NAME: /shittim-chest/production/records/openai/inspector-translation-api-key
+          OPENAI_MEMORIAL_KEY_PARAMETER_NAME: /shittim-chest/production/records/openai/memorial-api-key
           OPENAI_PROJECT_ID_PARAMETER_NAME: /shittim-chest/production/records/openai/project-id
           PRESENTATION_PARAMETER_NAME: /shittim-chest/production/records/presentation/v0001
           SESSION_KEY_PARAMETER_NAME: /shittim-chest/production/records/session-key
@@ -220,6 +227,7 @@ jobs:
             "${SESSION_KEY_PARAMETER_NAME}" \
             "${OPENAI_ADMIN_KEY_PARAMETER_NAME}" \
             "${OPENAI_INSPECTOR_TRANSLATION_KEY_PARAMETER_NAME}" \
+            "${OPENAI_MEMORIAL_KEY_PARAMETER_NAME}" \
             "${OPENAI_PROJECT_ID_PARAMETER_NAME}"
           do
             metadata=$(aws ssm describe-parameters \
@@ -809,6 +817,16 @@ jobs:
             "${RUNNER_TEMP}/records-admin-prompts.json" >/dev/null
           grep --ignore-case --quiet '^cache-control: private, no-store' \
             "${RUNNER_TEMP}/records-admin-prompts.headers"
+          memorial_status=$(curl --silent --show-error \
+            --dump-header "${RUNNER_TEMP}/records-memorial.headers" \
+            --output "${RUNNER_TEMP}/records-memorial.json" \
+            --write-out '%{http_code}' \
+            "${endpoint}/api/v1/memorial")
+          test "${memorial_status}" = 401
+          jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
+            "${RUNNER_TEMP}/records-memorial.json" >/dev/null
+          grep --ignore-case --quiet '^cache-control: private, no-store' \
+            "${RUNNER_TEMP}/records-memorial.headers"
       - name: Restore the previous Records entry point after a post-publish failure
         if: failure()
         continue-on-error: true

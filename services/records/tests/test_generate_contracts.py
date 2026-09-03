@@ -18,7 +18,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     assert first == expected_documents()
     assert set(first) == {"openapi.json", "records-api.schema.json", "records-invariants.ts"}
     json_schema = json.loads(first["records-api.schema.json"])
-    assert len(json_schema["oneOf"]) == 12
+    assert len(json_schema["oneOf"]) == 15
     assert "#/components/schemas/" not in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/ImageAvatarRef"' in first["records-api.schema.json"].decode()
     assert '"$ref": "#/$defs/PlaceholderAvatarRef"' in first["records-api.schema.json"].decode()
@@ -76,6 +76,11 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "/api/v1/insights/rankings",
         "/api/v1/insights/affection-rankings",
         "/api/v1/insights/costs",
+        "/api/v1/memorial",
+        "/api/v1/memorial/upload",
+        "/api/v1/memorial/generate",
+        "/api/v1/memorial/memories/{cycle}",
+        "/api/v1/memorial/reset",
         "/api/v1/admin/prompts",
         "/api/v1/admin/prompts/apply",
         "/api/v1/admin/prompts/revisions",
@@ -188,3 +193,53 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         "maximum": 50,
         "default": 50,
     }
+    for route, request_schema in (
+        ("/api/v1/memorial/upload", "MemorialUploadRequest"),
+        ("/api/v1/memorial/generate", "MemorialGenerateRequest"),
+        ("/api/v1/memorial/reset", "MemorialResetRequest"),
+    ):
+        operation = openapi["paths"][route]["post"]
+        assert [parameter["name"] for parameter in operation["parameters"]] == [
+            "Origin",
+            "X-CSRF-Token",
+            "X-Idempotency-Key",
+        ]
+        assert operation["requestBody"]["content"]["application/json"]["schema"] == {
+            "$ref": f"#/components/schemas/{request_schema}"
+        }
+    assert "202" in openapi["paths"]["/api/v1/memorial/generate"]["post"]["responses"]
+    for request_schema in (
+        "MemorialUploadRequest",
+        "MemorialGenerateRequest",
+        "MemorialResetRequest",
+    ):
+        schema = json_schema["$defs"][request_schema]
+        assert "expectedCycle" in schema["required"]
+        assert schema["properties"]["schemaVersion"] == {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer",
+        }
+    cycle_parameter = openapi["paths"]["/api/v1/memorial/memories/{cycle}"]["get"]["parameters"][0]
+    assert cycle_parameter == {
+        "name": "cycle",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "integer", "minimum": 1, "maximum": 1_000_000_000},
+    }
+    upload_response = json_schema["$defs"]["MemorialUploadResponse"]
+    assert upload_response["properties"]["method"]["const"] == "POST"
+    upload_fields = json_schema["$defs"]["MemorialUploadFields"]
+    assert upload_fields["additionalProperties"] is False
+    assert set(upload_fields["required"]) == {
+        "key",
+        "Content-Type",
+        "x-amz-checksum-sha256",
+        "x-amz-algorithm",
+        "x-amz-credential",
+        "x-amz-date",
+        "policy",
+        "x-amz-signature",
+    }
+    for private_name in ("requesterKey", "ownerKey", "discordUserId"):
+        assert private_name not in first["openapi.json"].decode()

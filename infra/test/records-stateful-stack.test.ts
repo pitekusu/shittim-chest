@@ -97,6 +97,122 @@ describe("RecordsStatefulStack", () => {
     });
   });
 
+  test("retains a private, short-lived memorial upload bucket", () => {
+    const { template } = synthesize();
+
+    template.hasResource("AWS::S3::Bucket", {
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+      Properties: {
+        BucketEncryption: {
+          ServerSideEncryptionConfiguration: [
+            {
+              ServerSideEncryptionByDefault: {
+                SSEAlgorithm: "AES256",
+              },
+            },
+          ],
+        },
+        BucketName: "shittim-chest-production-records-memorial-upload-000000000000",
+        CorsConfiguration: {
+          CorsRules: [
+            {
+              AllowedHeaders: ["content-type"],
+              AllowedMethods: ["POST"],
+              AllowedOrigins: ["https://shittim.pitekusu.dev"],
+              MaxAge: 300,
+            },
+          ],
+        },
+        LifecycleConfiguration: {
+          Rules: [
+            {
+              AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 },
+              ExpirationInDays: 1,
+              Id: "ExpireMemorialUploads",
+              Status: "Enabled",
+            },
+          ],
+        },
+        LoggingConfiguration: {
+          DestinationBucketName: { Ref: Match.stringLikeRegexp("^MediaAccessLogs") },
+          LogFilePrefix: "memorial-upload/",
+        },
+        PublicAccessBlockConfiguration: {
+          BlockPublicAcls: true,
+          BlockPublicPolicy: true,
+          IgnorePublicAcls: true,
+          RestrictPublicBuckets: true,
+        },
+        VersioningConfiguration: Match.absent(),
+      },
+    });
+    template.hasResourceProperties("AWS::S3::BucketPolicy", {
+      Bucket: { Ref: Match.stringLikeRegexp("^MemorialUploadBucket") },
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: "s3:*",
+            Condition: { Bool: { "aws:SecureTransport": "false" } },
+            Effect: "Deny",
+          }),
+        ]),
+      },
+    });
+  });
+
+  test("retains a bounded memorial generation queue and dead-letter queue", () => {
+    const { template } = synthesize();
+
+    template.hasResource("AWS::SQS::Queue", {
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+      Properties: {
+        MessageRetentionPeriod: 1209600,
+        QueueName: "shittim-chest-production-records-memorial-generation-dlq",
+        SqsManagedSseEnabled: true,
+      },
+    });
+    template.hasResource("AWS::SQS::Queue", {
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+      Properties: {
+        MessageRetentionPeriod: 86400,
+        QueueName: "shittim-chest-production-records-memorial-generation",
+        RedrivePolicy: {
+          deadLetterTargetArn: {
+            "Fn::GetAtt": [
+              Match.stringLikeRegexp("^MemorialGenerationDlq"),
+              "Arn",
+            ],
+          },
+          maxReceiveCount: 3,
+        },
+        SqsManagedSseEnabled: true,
+        VisibilityTimeout: 1800,
+      },
+    });
+    for (const queueLogicalId of [
+      "MemorialGenerationDlq",
+      "MemorialGenerationQueue",
+    ]) {
+      template.hasResourceProperties("AWS::SQS::QueuePolicy", {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: "sqs:*",
+              Condition: { Bool: { "aws:SecureTransport": "false" } },
+              Effect: "Deny",
+              Resource: {
+                "Fn::GetAtt": [Match.stringLikeRegexp(`^${queueLogicalId}`), "Arn"],
+              },
+            }),
+          ]),
+        },
+      });
+    }
+  });
+
   test("has no unacknowledged AWS Solutions findings", () => {
     const { checks, stack } = synthesize();
 

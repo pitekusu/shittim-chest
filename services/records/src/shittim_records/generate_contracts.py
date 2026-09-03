@@ -120,6 +120,18 @@ def _admin_write_headers() -> list[dict[str, Any]]:
     ]
 
 
+def _memorial_write_headers() -> list[dict[str, Any]]:
+    return [
+        _parameter(
+            "Origin",
+            "header",
+            {"type": "string", "format": "uri", "pattern": r"^https://"},
+            required=True,
+        ),
+        *_admin_write_headers(),
+    ]
+
+
 def build_openapi() -> dict[str, Any]:
     error_responses = {
         code: _response("ErrorResponse", description)
@@ -316,6 +328,80 @@ def build_openapi() -> dict[str, Any]:
                     ],
                     "responses": {
                         "200": _response("CostsResponse", "Estimated Records costs in JPY"),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/memorial": {
+                "get": {
+                    "operationId": "getMemorial",
+                    "responses": {
+                        "200": _response(
+                            "MemorialStateResponse",
+                            "Current owner's Memorial Lobby state",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/memorial/upload": {
+                "post": {
+                    "operationId": "prepareMemorialUpload",
+                    "parameters": _memorial_write_headers(),
+                    "requestBody": _request_body("MemorialUploadRequest"),
+                    "responses": {
+                        "200": _response(
+                            "MemorialUploadResponse",
+                            "One owner-bound presigned image upload",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/memorial/generate": {
+                "post": {
+                    "operationId": "generateMemorial",
+                    "parameters": _memorial_write_headers(),
+                    "requestBody": _request_body("MemorialGenerateRequest"),
+                    "responses": {
+                        "202": _response(
+                            "MemorialStateResponse",
+                            "Memorial generation queued",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/memorial/memories/{cycle}": {
+                "get": {
+                    "operationId": "getMemorialMemory",
+                    "parameters": [
+                        _parameter(
+                            "cycle",
+                            "path",
+                            {"type": "integer", "minimum": 1, "maximum": 1_000_000_000},
+                            required=True,
+                        )
+                    ],
+                    "responses": {
+                        "200": _response(
+                            "MemorialMemoryResponse",
+                            "One generated Memorial Lobby memory owned by the session",
+                        ),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/memorial/reset": {
+                "post": {
+                    "operationId": "resetMemorial",
+                    "parameters": _memorial_write_headers(),
+                    "requestBody": _request_body("MemorialResetRequest"),
+                    "responses": {
+                        "200": _response(
+                            "MemorialStateResponse",
+                            "Affection reset and next Memorial cycle started",
+                        ),
                         **error_responses,
                     },
                 }

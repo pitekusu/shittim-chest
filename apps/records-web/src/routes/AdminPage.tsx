@@ -28,7 +28,7 @@ const SERVICE_PRESENTATION: Readonly<
   dynamodb: { name: "DynamoDB", purpose: "データストア" },
   lambda: { name: "Lambda", purpose: "サーバーレス処理" },
   cloudfront: { name: "CloudFront", purpose: "Web配信" },
-  sqs: { name: "SQS", purpose: "記録・親愛度投影DLQ" },
+  sqs: { name: "SQS", purpose: "非同期処理・失敗イベント" },
   apigateway: { name: "API Gateway", purpose: "API入口" },
   eventbridge: { name: "EventBridge", purpose: "定期・イベント配信" },
   cloudformation: { name: "CloudFormation", purpose: "Stack管理" },
@@ -112,12 +112,24 @@ const SIMPLE_METRICS: Readonly<
     { name: "hour_5xx_rate", label: "5xx率" },
   ],
   sqs: [
-    { name: "visible_messages", label: "未処理メッセージ" },
-    { name: "inflight_messages", label: "処理中メッセージ" },
-    { name: "delayed_messages", label: "遅延メッセージ" },
-    { name: "oldest_message_age_seconds", label: "最古メッセージ" },
-    { name: "encrypted", label: "暗号化" },
-    { name: "retention_seconds", label: "保存期間" },
+    { name: "visible_messages", label: "投影DLQ・未処理" },
+    { name: "inflight_messages", label: "投影DLQ・処理中" },
+    { name: "delayed_messages", label: "投影DLQ・遅延" },
+    { name: "oldest_message_age_seconds", label: "投影DLQ・最古" },
+    { name: "encrypted", label: "投影DLQ・暗号化" },
+    { name: "retention_seconds", label: "投影DLQ・保存期間" },
+    { name: "memorial_queued_messages", label: "メモリアル生成待ち" },
+    { name: "memorial_inflight_messages", label: "メモリアル生成中" },
+    { name: "memorial_delayed_messages", label: "メモリアル遅延" },
+    { name: "memorial_oldest_message_age_seconds", label: "メモリアル最古" },
+    { name: "memorial_encrypted", label: "メモリアル暗号化" },
+    { name: "memorial_retention_seconds", label: "メモリアル保存期間" },
+    { name: "memorial_dlq_visible_messages", label: "生成DLQ・未処理" },
+    { name: "memorial_dlq_inflight_messages", label: "生成DLQ・処理中" },
+    { name: "memorial_dlq_delayed_messages", label: "生成DLQ・遅延" },
+    { name: "memorial_dlq_oldest_message_age_seconds", label: "生成DLQ・最古" },
+    { name: "memorial_dlq_encrypted", label: "生成DLQ・暗号化" },
+    { name: "memorial_dlq_retention_seconds", label: "生成DLQ・保存期間" },
   ],
   sns: [
     { name: "confirmed_subscriptions", label: "確認済み購読" },
@@ -131,6 +143,7 @@ const S3_RESOURCES = [
   { key: "web", label: "Webサイト" },
   { key: "media", label: "画像" },
   { key: "release", label: "リリース成果物" },
+  { key: "memorial_upload", label: "メモリアル原本" },
 ] as const;
 
 const DYNAMODB_RESOURCES = [
@@ -152,6 +165,8 @@ const LAMBDA_RESOURCES = [
   { key: "records_ranking", label: "ランキング・親愛度集計" },
   { key: "records_cost", label: "費用集計" },
   { key: "records_inspector_translation", label: "脆弱性概要翻訳" },
+  { key: "records_memorial_api", label: "メモリアルロビーAPI" },
+  { key: "records_memorial_worker", label: "メモリアル生成" },
   { key: "records_admin_status", label: "管理状態API" },
   { key: "records_admin_config", label: "プロンプト管理API" },
 ] as const;
@@ -237,7 +252,9 @@ function formatMetricValue(name: string, value: AdminStatusMetric["value"]): str
     if (name.endsWith("_percent")) return `${value.toLocaleString("ja-JP")}%`;
     if (name === "task_definition_revision") return `rev. ${value.toLocaleString("ja-JP")}`;
     if (name.endsWith("_seconds")) {
-      if (name === "retention_seconds" && value % 86400 === 0) return `${value / 86400}日`;
+      if (name.endsWith("retention_seconds") && value % 86400 === 0) {
+        return `${value / 86400}日`;
+      }
       return `${value}秒`;
     }
     return value.toLocaleString("ja-JP");
@@ -248,7 +265,9 @@ function formatMetricValue(name: string, value: AdminStatusMetric["value"]): str
   }
   if (name.endsWith("_seconds") && /^\d+(?:\.\d+)?$/.test(value)) {
     const seconds = Number(value);
-    if (name === "retention_seconds" && seconds % 86400 === 0) return `${seconds / 86400}日`;
+    if (name.endsWith("retention_seconds") && seconds % 86400 === 0) {
+      return `${seconds / 86400}日`;
+    }
     return `${seconds.toLocaleString("ja-JP")}秒`;
   }
   if (name.endsWith("_percent") && /^\d+(?:\.\d+)?$/.test(value)) return `${value}%`;
@@ -324,6 +343,11 @@ function metricLookup(
 function metricValue(metrics: ReadonlyMap<string, AdminStatusMetric>, name: string): string {
   const metric = metrics.get(name);
   return formatMetricValue(name, metric?.value ?? null);
+}
+
+function metricDays(metrics: ReadonlyMap<string, AdminStatusMetric>, name: string): string {
+  const value = metrics.get(name)?.value;
+  return typeof value === "number" ? `${value.toLocaleString("ja-JP")}日` : "未取得";
 }
 
 function ServiceIcon({ service }: { readonly service: AdminService }): React.JSX.Element {
@@ -1176,6 +1200,7 @@ function S3Metrics({
             <th scope="col">バージョン管理</th>
             <th scope="col">暗号化</th>
             <th scope="col">公開アクセス遮断</th>
+            <th scope="col">原本自動削除</th>
           </tr>
         </thead>
         <tbody>
@@ -1185,6 +1210,11 @@ function S3Metrics({
               <td>{metricValue(metrics, `${resource.key}_versioning`)}</td>
               <td>{metricValue(metrics, `${resource.key}_encrypted`)}</td>
               <td>{metricValue(metrics, `${resource.key}_public_access_blocked`)}</td>
+              <td>
+                {resource.key === "memorial_upload"
+                  ? metricDays(metrics, "memorial_upload_expiration_days")
+                  : "対象外"}
+              </td>
             </tr>
           ))}
         </tbody>

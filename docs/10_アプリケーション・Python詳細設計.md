@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 # アプリケーション・Python詳細設計
@@ -65,6 +65,32 @@ Generationはlogical outputごとに最大2 SDK callを許す。結果保存のC
 v8からopaque v9へ移行する成功評価だけは、移行前から1,000点の人格も候補へ含める。通常のv9評価では
 今回`before < 1000`から`after = 1000`になった人格だけを新規到達として扱う。
 評価不能時は旧profileのopaque key移行も解放判定も行わない。
+
+### Memorial backend
+
+Recordsのowner-only APIはSessionから導出したopaque requester keyだけをrepositoryへ渡し、別の質問者を
+request bodyやpathから指定させない。upload予約、生成queue投入、cycle別履歴参照、resetは安定した
+content-free errorへ変換し、POSTはOrigin、CSRF、idempotencyと必須の`expectedCycle`を検証する。
+upload／generate／resetは現在cycleが`expectedCycle`と一致する場合だけ状態を変更し、遅延した
+requestが次cycleを操作することを409でfenceする。
+
+生成workerは1件のSQS messageから`requester key + cycle`だけを受け、Statistics checkpointを
+`queued → generating → ready|failed`へ条件付き更新する。APIがcheckpoint更新後のqueue送信前に停止しても、
+`queued`の同一jobは新しいidempotency keyでもSQSへ安全に再送できる。retryは同じcheckpointと
+result asset keyを再利用し、既に`ready`のcycleを再生成しない。Archive GSI3から本人の直近10質問だけを読み、選出participantの
+active runtime promptを完全検証して読み込む。active pointerがない場合だけReleaseが固定したlegacy
+participant promptを使い、欠落・checksum不一致・不正revisionでは生成を開始しない。
+worker claimはgeneration attemptをcheckpoint内でCAS incrementし、paid generationは3回を上限とする。Standard SQSの
+`ApproximateReceiveCount`は参考情報に留め、再送や重複で変わる物理receive回数を終端判定の正本にしない。
+
+workerは文章と最終画像を個別にcheckpointし、両方が永続化された後にだけ`ready`を確定する。
+logical attempt 3回の後は新しいpaid provider callを開始しない。検証済み最終画像のobjectまたはcheckpointと
+文章が残る場合だけ同じcycle／asset keyからcompletion-onlyで再開する。最終画像がない文章だけの成果は
+terminal化時に破棄し、reset可能な`failed`へ収束させる。部分成果は`ready`までAPIへ公開しない。成功時または
+再試行不能なterminal失敗時にupload原本を削除し、一時障害ではSQS retryへ委ねる。provider callは各120秒、
+OpenAI SDKの自動retryは0回とし、Lambda hard deadlineからcleanup用15秒を差し引いた残時間が不足する場合は
+paid callの前にqueueへ戻す。resetはAPIだけがsource v9 profileと
+当該cycle checkpointを1 transactionで更新し、3スコアを500、reset回数とcycleを各+1へ進める。
 
 ## 4. Concurrency and cancellation
 

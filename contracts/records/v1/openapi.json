@@ -1829,6 +1829,462 @@
         "title": "InitialOpinionView",
         "type": "object"
       },
+      "MemorialGenerateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "GENERATE MEMORIAL",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "expectedCycle": {
+            "maximum": 1000000000,
+            "minimum": 1,
+            "title": "Expectedcycle",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "expectedCycle",
+          "confirmation"
+        ],
+        "title": "MemorialGenerateRequest",
+        "type": "object"
+      },
+      "MemorialImage": {
+        "additionalProperties": false,
+        "properties": {
+          "alt": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Alt",
+            "type": "string"
+          },
+          "height": {
+            "const": 1080,
+            "title": "Height",
+            "type": "integer"
+          },
+          "url": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^https://",
+            "title": "Url",
+            "type": "string"
+          },
+          "width": {
+            "const": 1920,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "url",
+          "width",
+          "height",
+          "alt"
+        ],
+        "title": "MemorialImage",
+        "type": "object"
+      },
+      "MemorialMemoryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cycle": {
+            "maximum": 1000000000,
+            "minimum": 1,
+            "title": "Cycle",
+            "type": "integer"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "title": "Generatedat",
+            "type": "string"
+          },
+          "image": {
+            "$ref": "#/components/schemas/MemorialImage"
+          },
+          "narrative": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Narrative",
+            "type": "string"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "unlockedAt": {
+            "format": "date-time",
+            "title": "Unlockedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "cycle",
+          "participant",
+          "unlockedAt",
+          "generatedAt",
+          "image",
+          "narrative"
+        ],
+        "title": "MemorialMemoryResponse",
+        "type": "object"
+      },
+      "MemorialMemorySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "cycle": {
+            "maximum": 1000000000,
+            "minimum": 1,
+            "title": "Cycle",
+            "type": "integer"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "title": "Generatedat",
+            "type": "string"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "unlockedAt": {
+            "format": "date-time",
+            "title": "Unlockedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cycle",
+          "participant",
+          "unlockedAt",
+          "generatedAt"
+        ],
+        "title": "MemorialMemorySummary",
+        "type": "object"
+      },
+      "MemorialResetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "RESET AFFECTION",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "expectedCycle": {
+            "maximum": 1000000000,
+            "minimum": 1,
+            "title": "Expectedcycle",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "expectedCycle",
+          "confirmation"
+        ],
+        "title": "MemorialResetRequest",
+        "type": "object"
+      },
+      "MemorialStateResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cycle": {
+            "maximum": 1000000000,
+            "minimum": 1,
+            "title": "Cycle",
+            "type": "integer"
+          },
+          "latestReadyCycle": {
+            "anyOf": [
+              {
+                "maximum": 1000000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latestreadycycle"
+          },
+          "memories": {
+            "items": {
+              "$ref": "#/components/schemas/MemorialMemorySummary"
+            },
+            "title": "Memories",
+            "type": "array"
+          },
+          "resetCount": {
+            "maximum": 999999999,
+            "minimum": 0,
+            "title": "Resetcount",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "locked",
+              "unlocked",
+              "queued",
+              "generating",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "unlockedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unlockedat"
+          },
+          "unlockedParticipant": {
+            "anyOf": [
+              {
+                "enum": [
+                  "participant-a",
+                  "participant-b",
+                  "participant-c"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unlockedparticipant"
+          },
+          "uploadReady": {
+            "title": "Uploadready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "state",
+          "cycle",
+          "resetCount",
+          "unlockedParticipant",
+          "unlockedAt",
+          "uploadReady",
+          "latestReadyCycle",
+          "memories"
+        ],
+        "title": "MemorialStateResponse",
+        "type": "object"
+      },
+      "MemorialUploadFields": {
+        "additionalProperties": false,
+        "properties": {
+          "Content-Type": {
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ],
+            "title": "Content-Type",
+            "type": "string"
+          },
+          "key": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Key",
+            "type": "string"
+          },
+          "policy": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9+/]+=*$",
+            "title": "Policy",
+            "type": "string"
+          },
+          "x-amz-algorithm": {
+            "const": "AWS4-HMAC-SHA256",
+            "title": "X-Amz-Algorithm",
+            "type": "string"
+          },
+          "x-amz-checksum-sha256": {
+            "pattern": "^[A-Za-z0-9+/]{43}=$",
+            "title": "X-Amz-Checksum-Sha256",
+            "type": "string"
+          },
+          "x-amz-credential": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "X-Amz-Credential",
+            "type": "string"
+          },
+          "x-amz-date": {
+            "pattern": "^[0-9]{8}T[0-9]{6}Z$",
+            "title": "X-Amz-Date",
+            "type": "string"
+          },
+          "x-amz-security-token": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "X-Amz-Security-Token"
+          },
+          "x-amz-signature": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "X-Amz-Signature",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "Content-Type",
+          "x-amz-checksum-sha256",
+          "x-amz-algorithm",
+          "x-amz-credential",
+          "x-amz-date",
+          "policy",
+          "x-amz-signature"
+        ],
+        "title": "MemorialUploadFields",
+        "type": "object"
+      },
+      "MemorialUploadRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "contentType": {
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ],
+            "title": "Contenttype",
+            "type": "string"
+          },
+          "expectedCycle": {
+            "maximum": 1000000000,
+            "minimum": 1,
+            "title": "Expectedcycle",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "sizeBytes": {
+            "maximum": 10485760,
+            "minimum": 1,
+            "title": "Sizebytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "expectedCycle",
+          "contentType",
+          "sizeBytes",
+          "sha256"
+        ],
+        "title": "MemorialUploadRequest",
+        "type": "object"
+      },
+      "MemorialUploadResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cycle": {
+            "maximum": 1000000000,
+            "minimum": 1,
+            "title": "Cycle",
+            "type": "integer"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/MemorialUploadFields"
+          },
+          "method": {
+            "const": "POST",
+            "title": "Method",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "uploadUrl": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^https://",
+            "title": "Uploadurl",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "cycle",
+          "method",
+          "uploadUrl",
+          "expiresAt",
+          "fields"
+        ],
+        "title": "MemorialUploadResponse",
+        "type": "object"
+      },
       "ParticipantAffectionRanking": {
         "additionalProperties": false,
         "properties": {
@@ -3871,6 +4327,573 @@
         "responses": {
           "204": {
             "description": "Session removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/memorial": {
+      "get": {
+        "operationId": "getMemorial",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorialStateResponse"
+                }
+              }
+            },
+            "description": "Current owner's Memorial Lobby state"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/memorial/generate": {
+      "post": {
+        "operationId": "generateMemorial",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "pattern": "^https://",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._~-]{16,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorialGenerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorialStateResponse"
+                }
+              }
+            },
+            "description": "Memorial generation queued"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/memorial/memories/{cycle}": {
+      "get": {
+        "operationId": "getMemorialMemory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cycle",
+            "required": true,
+            "schema": {
+              "maximum": 1000000000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorialMemoryResponse"
+                }
+              }
+            },
+            "description": "One generated Memorial Lobby memory owned by the session"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/memorial/reset": {
+      "post": {
+        "operationId": "resetMemorial",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "pattern": "^https://",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._~-]{16,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorialResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorialStateResponse"
+                }
+              }
+            },
+            "description": "Affection reset and next Memorial cycle started"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/memorial/upload": {
+      "post": {
+        "operationId": "prepareMemorialUpload",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "format": "uri",
+              "pattern": "^https://",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._~-]{16,128}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorialUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemorialUploadResponse"
+                }
+              }
+            },
+            "description": "One owner-bound presigned image upload"
           },
           "400": {
             "content": {

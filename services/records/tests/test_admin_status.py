@@ -79,6 +79,8 @@ def test_static_admin_status_inventory_is_complete_and_immutable() -> None:
         "records_ranking": "shittim-chest-production-records-ranking",
         "records_cost": "shittim-chest-production-records-cost",
         "records_inspector_translation": ("shittim-chest-production-records-inspector-translation"),
+        "records_memorial_api": "shittim-chest-production-records-memorial-api",
+        "records_memorial_worker": "shittim-chest-production-records-memorial-worker",
         "records_read": "shittim-chest-production-records-read",
         "records_admin_config": "shittim-chest-production-records-admin-config",
         "records_admin_status": "shittim-chest-production-records-admin-status",
@@ -111,6 +113,9 @@ def test_static_admin_status_inventory_is_complete_and_immutable() -> None:
         "records_openai_inspector_translation_key": (
             "/shittim-chest/production/records/openai/inspector-translation-api-key"
         ),
+        "records_openai_memorial_key": (
+            "/shittim-chest/production/records/openai/memorial-api-key"
+        ),
         "records_admin_user_id": ("/shittim-chest/production/records/admin/discord-user-id"),
     }
     assert dict(ADMIN_STATUS_BUDGET_NAMES) == {
@@ -140,6 +145,7 @@ def configuration() -> AwsAdminStatusConfiguration:
             "web": "private-web-bucket",
             "media": "private-media-bucket",
             "release": "private-release-bucket",
+            "memorial_upload": "private-memorial-upload-bucket",
         },
         tables={
             "debate": "private-debate-table",
@@ -151,6 +157,12 @@ def configuration() -> AwsAdminStatusConfiguration:
         records_public_hostname="records.example.com",
         projector_dlq_url=(
             f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/projector-dlq"
+        ),
+        memorial_generation_queue_url=(
+            f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/memorial-generation"
+        ),
+        memorial_generation_dlq_url=(
+            f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/memorial-generation-dlq"
         ),
         stacks={
             "stateful": "ShittimChest-Prod-Stateful",
@@ -179,6 +191,9 @@ def configuration() -> AwsAdminStatusConfiguration:
             "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
             "records_openai_inspector_translation_key": (
                 "/shittim-chest/production/records/openai/inspector-translation-api-key"
+            ),
+            "records_openai_memorial_key": (
+                "/shittim-chest/production/records/openai/memorial-api-key"
             ),
             "records_admin_user_id": "/shittim-chest/production/records/admin/discord-user-id",
         },
@@ -1340,6 +1355,52 @@ def test_inspector_rejects_details_that_exceed_severity_aggregates(severity: str
         )._inspector_section()
 
 
+def test_s3_accepts_non_versioned_one_day_memorial_upload_lifecycle() -> None:
+    class S3:
+        def __init__(self, *, expiration_days: int = 1) -> None:
+            self.expiration_days = expiration_days
+
+        def get_bucket_versioning(self, *, Bucket: str) -> dict[str, Any]:
+            return {} if Bucket == "private-memorial-upload-bucket" else {"Status": "Enabled"}
+
+        def get_bucket_encryption(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "ServerSideEncryptionConfiguration": {
+                    "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
+                }
+            }
+
+        def get_public_access_block(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "PublicAccessBlockConfiguration": {
+                    "BlockPublicAcls": True,
+                    "IgnorePublicAcls": True,
+                    "BlockPublicPolicy": True,
+                    "RestrictPublicBuckets": True,
+                }
+            }
+
+        def get_bucket_lifecycle_configuration(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "Rules": [
+                    {
+                        "Status": "Enabled",
+                        "Expiration": {"Days": self.expiration_days},
+                        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
+                    }
+                ]
+            }
+
+    healthy = source(s3=S3())._s3_section()
+    warning = source(s3=S3(expiration_days=2))._s3_section()
+
+    assert healthy.state == "healthy"
+    assert metrics(healthy)["memorial_upload_versioning"] == "Disabled"
+    assert metrics(healthy)["memorial_upload_expiration_days"] == 1
+    assert metrics(healthy)["memorial_upload_abort_days"] == 1
+    assert warning.state == "warning"
+
+
 @pytest.mark.parametrize("failure", ("partial", "missing"))
 def test_lambda_section_is_unknown_for_incomplete_provider_metrics(failure: str) -> None:
     class Lambda:
@@ -1720,7 +1781,7 @@ def test_sqs_includes_oldest_age_without_reading_messages_or_returning_queue_nam
     section = source(sqs=sqs, cloudwatch=cloudwatch)._sqs_section(NOW)
 
     assert section.state == "warning"
-    assert "記録・親愛度投影DLQ" in section.summary
+    assert "非同期処理" in section.summary
     assert metrics(section)["oldest_message_age_seconds"] == "42.000"
     assert sqs.calls[0]["AttributeNames"] and "ReceiveMessage" not in repr(sqs.calls)
     assert "projector-dlq" not in section.model_dump_json()
@@ -1752,6 +1813,42 @@ def test_sqs_state_includes_encryption_and_retention(
     section = source(sqs=Sqs())._sqs_section(NOW)
 
     assert section.state == "warning"
+
+
+def test_sqs_memorial_inflight_is_healthy_but_dlq_or_stale_work_warns() -> None:
+    class Sqs:
+        def __init__(self, *, dlq_visible: int = 0) -> None:
+            self.dlq_visible = dlq_visible
+
+        def get_queue_attributes(self, *, QueueUrl: str, **_kwargs: Any) -> dict[str, Any]:
+            is_memorial = QueueUrl.endswith("/memorial-generation")
+            is_memorial_dlq = QueueUrl.endswith("/memorial-generation-dlq")
+            return {
+                "Attributes": {
+                    "ApproximateNumberOfMessages": str(self.dlq_visible if is_memorial_dlq else 0),
+                    "ApproximateNumberOfMessagesNotVisible": "1" if is_memorial else "0",
+                    "ApproximateNumberOfMessagesDelayed": "0",
+                    "SqsManagedSseEnabled": "true",
+                    "MessageRetentionPeriod": "86400" if is_memorial else "1209600",
+                }
+            }
+
+    class FreshCloudWatch(CloudWatch):
+        def get_metric_statistics(self, **kwargs: Any) -> dict[str, Any]:
+            self.statistics_calls.append(kwargs)
+            return {"Datapoints": [{"Timestamp": NOW, "Maximum": 30.0}]}
+
+    healthy = source(sqs=Sqs(), cloudwatch=FreshCloudWatch())._sqs_section(NOW)
+    warning = source(
+        sqs=Sqs(dlq_visible=1),
+        cloudwatch=FreshCloudWatch(),
+    )._sqs_section(NOW)
+
+    assert healthy.state == "healthy"
+    assert metrics(healthy)["memorial_inflight_messages"] == 1
+    assert metrics(healthy)["memorial_dlq_visible_messages"] == 0
+    assert warning.state == "warning"
+    assert metrics(warning)["memorial_dlq_visible_messages"] == 1
 
 
 def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
@@ -2053,7 +2150,7 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
     assert section.state == "healthy"
     assert values["discord_ready"] == 5
     assert values["runtime_ready"] == 6
-    assert values["records_ready"] == 7
+    assert values["records_ready"] == 8
     assert values["cost_ready"] == 2
     assert values["runtime_prompt_pointer_present"] is False
     assert ssm.paginator.calls == [

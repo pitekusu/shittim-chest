@@ -82,3 +82,43 @@ def test_bundle_rejects_cross_distribution_uv_cache_record(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="unexpected uv cache path"):
         build_bundle(source, tmp_path / "bundle.zip")
+
+
+def test_bundle_adds_deterministic_runtime_assets(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "handler.py").write_text("VALUE = 1\n", encoding="utf-8")
+    font = tmp_path / "display.ttf"
+    font.write_bytes(b"font-bytes")
+    output = tmp_path / "bundle.zip"
+
+    build_bundle(
+        source,
+        output,
+        assets={"shittim_records/assets/display.ttf": font},
+    )
+
+    with zipfile.ZipFile(output) as archive:
+        assert archive.namelist() == [
+            "handler.py",
+            "shittim_records/assets/display.ttf",
+        ]
+        assert archive.read("shittim_records/assets/display.ttf") == b"font-bytes"
+
+
+@pytest.mark.parametrize(
+    "destination",
+    ("/absolute.ttf", "../outside.ttf", "handler.py"),
+)
+def test_bundle_rejects_unsafe_or_duplicate_asset_destination(
+    tmp_path: Path,
+    destination: str,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "handler.py").write_text("VALUE = 1\n", encoding="utf-8")
+    font = tmp_path / "display.ttf"
+    font.write_bytes(b"font-bytes")
+
+    with pytest.raises(ValueError):
+        build_bundle(source, tmp_path / "bundle.zip", assets={destination: font})

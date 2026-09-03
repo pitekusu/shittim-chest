@@ -469,6 +469,29 @@ def test_records_release_requires_a_path_only_attestation_signer(tmp_path: Path)
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "--only-binary=:all:",
+        '--python-version "${PYTHON_VERSION}"',
+        "--python-platform aarch64-manylinux_2_28",
+    ],
+)
+def test_records_release_builds_native_dependencies_for_arm64_lambda(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "REMOVED", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_binds_attestation_to_main_source_ref(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RECORDS_RELEASE_WORKFLOW

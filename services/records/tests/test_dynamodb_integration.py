@@ -14,6 +14,7 @@ import boto3
 import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION, DynamoItem
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.adapters import ArchiveRepository
@@ -29,6 +30,8 @@ from shittim_records.inspector_translations import (
     InspectorJapaneseSummary,
     inspector_description,
 )
+from shittim_records.memorial import MemorialFailure
+from shittim_records.memorial_adapters import DynamoMemorialRepository
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
@@ -111,6 +114,28 @@ def table_names(dynamodb_client: DynamoDBClient) -> Iterator[tuple[str, str, str
         dynamodb_client.delete_table(TableName=session_table)
         dynamodb_client.delete_table(TableName=archive_table)
         dynamodb_client.delete_table(TableName=statistics_table)
+
+
+@pytest.fixture
+def memorial_source_table(dynamodb_client: DynamoDBClient) -> Iterator[str]:
+    table_name = f"records-memorial-source-{uuid.uuid4().hex}"
+    dynamodb_client.create_table(
+        TableName=table_name,
+        AttributeDefinitions=[
+            {"AttributeName": "PK", "AttributeType": "S"},
+            {"AttributeName": "SK", "AttributeType": "S"},
+        ],
+        KeySchema=[
+            {"AttributeName": "PK", "KeyType": "HASH"},
+            {"AttributeName": "SK", "KeyType": "RANGE"},
+        ],
+        BillingMode="PAY_PER_REQUEST",
+    )
+    dynamodb_client.get_waiter("table_exists").wait(TableName=table_name)
+    try:
+        yield table_name
+    finally:
+        dynamodb_client.delete_table(TableName=table_name)
 
 
 def test_oauth_claim_session_and_archive_pagination(
@@ -349,6 +374,244 @@ def test_admin_prompt_audit_transactions_recovery_and_pagination(
     assert tuple(item.revision for item in second_page.items) == tuple(reversed(revisions[:2]))
     if second_page.next_cursor is not None:
         assert store.list_summaries(limit=2, cursor=second_page.next_cursor).items == ()
+
+
+def test_memorial_transactions_queue_idempotency_and_atomic_reset(
+    dynamodb_client: DynamoDBClient,
+    table_names: tuple[str, str, str],
+    memorial_source_table: str,
+) -> None:
+    statistics_table = table_names[2]
+    requester_key = "r" * 43
+    profile_key = {
+        "PK": f"AFFECTION#REQUESTER#{requester_key}",
+        "SK": "PROFILE",
+    }
+    unlocked_at = datetime(2026, 9, 3, 1, 2, 3, tzinfo=UTC)
+    source_profile: DynamoItem = {
+        **profile_key,
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_type": "affection_profile",
+        "requester_key": requester_key,
+        "requester_username": "owner",
+        "requester_display_name": "質問者",
+        "scores": [1000, 830, 410],
+        "version": 7,
+        "updated_at": unlocked_at.isoformat(),
+        "reset_count": 0,
+        "memorial_cycle": 1,
+        "unlocked_participant": "participant-a",
+        "unlocked_at": unlocked_at.isoformat(),
+        "unlock_debate_id": "d" * 43,
+        "unlock_display_name": "質問者",
+        "unlock_retroactive": False,
+    }
+    dynamodb_client.put_item(
+        TableName=memorial_source_table,
+        Item=marshal_item(source_profile),
+    )
+    repository = DynamoMemorialRepository(
+        dynamodb_client,
+        source_table_name=memorial_source_table,
+        statistics_table_name=statistics_table,
+    )
+    upload_hash = "1" * 64
+    queue_hash = "2" * 64
+    reset_hash = "3" * 64
+
+    reservation = repository.reserve_upload(
+        requester_key=requester_key,
+        expected_cycle=1,
+        content_type="image/png",
+        size_bytes=1024,
+        sha256="4" * 64,
+        idempotency_hash=upload_hash,
+        now=unlocked_at,
+    )
+    assert (
+        repository.reserve_upload(
+            requester_key=requester_key,
+            expected_cycle=1,
+            content_type="image/png",
+            size_bytes=1024,
+            sha256="4" * 64,
+            idempotency_hash=upload_hash,
+            now=unlocked_at,
+        )
+        == reservation
+    )
+    checkpoint_key = {
+        "PK": f"MEMORIAL#REQUESTER#{requester_key}",
+        "SK": "CYCLE#00000001",
+    }
+    checkpoint = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=statistics_table,
+            Key=marshal_item(checkpoint_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert checkpoint["state"] == "unlocked"
+    assert checkpoint["upload_asset_key"] == reservation.asset_key
+    assert checkpoint["upload_idempotency_hash"] == upload_hash
+    assert unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=memorial_source_table,
+            Key=marshal_item(profile_key),
+            ConsistentRead=True,
+        )["Item"]
+    )["scores"] == [1000, 830, 410]
+
+    queued = repository.queue_generation(
+        requester_key=requester_key,
+        expected_cycle=1,
+        idempotency_hash=queue_hash,
+        now=unlocked_at + timedelta(minutes=1),
+    )
+    assert queued.state == "queued"
+    checkpoint = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=statistics_table,
+            Key=marshal_item(checkpoint_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    result_asset_key = checkpoint["result_asset_key"]
+    assert checkpoint["queue_idempotency_hash"] == queue_hash
+    assert str(result_asset_key).startswith("memorials/")
+
+    replayed = repository.queue_generation(
+        requester_key=requester_key,
+        expected_cycle=1,
+        idempotency_hash=queue_hash,
+        now=unlocked_at + timedelta(minutes=1),
+    )
+    assert replayed.state == "queued"
+    assert (
+        unmarshal_item(
+            dynamodb_client.get_item(
+                TableName=statistics_table,
+                Key=marshal_item(checkpoint_key),
+                ConsistentRead=True,
+            )["Item"]
+        )["result_asset_key"]
+        == result_asset_key
+    )
+    duplicate = repository.queue_generation(
+        requester_key=requester_key,
+        expected_cycle=1,
+        idempotency_hash="5" * 64,
+        now=unlocked_at + timedelta(minutes=1),
+    )
+    assert duplicate.state == "queued"
+    duplicate_checkpoint = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=statistics_table,
+            Key=marshal_item(checkpoint_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert duplicate_checkpoint["queue_idempotency_hash"] == queue_hash
+    assert duplicate_checkpoint["result_asset_key"] == result_asset_key
+
+    with pytest.raises(MemorialFailure) as active_generation:
+        repository.reset_affection(
+            requester_key=requester_key,
+            expected_cycle=1,
+            reset_score=500,
+            idempotency_hash=reset_hash,
+            now=unlocked_at + timedelta(minutes=2),
+        )
+    assert active_generation.value.code == "MEMORIAL_RESET_NOT_ALLOWED"
+    unchanged_profile = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=memorial_source_table,
+            Key=marshal_item(profile_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert unchanged_profile["scores"] == [1000, 830, 410]
+    assert unchanged_profile["memorial_cycle"] == 1
+    assert (
+        dynamodb_client.get_item(
+            TableName=statistics_table,
+            Key=marshal_item(
+                {
+                    "PK": checkpoint_key["PK"],
+                    "SK": "RESET#00000001",
+                }
+            ),
+            ConsistentRead=True,
+        ).get("Item")
+        is None
+    )
+
+    job = repository.claim_generation(
+        requester_key=requester_key,
+        cycle=1,
+        now=unlocked_at + timedelta(minutes=2),
+    )
+    assert job is not None
+    assert job.generation_attempt == 1
+    repository.fail_generation(
+        job=job,
+        failed_at=unlocked_at + timedelta(minutes=3),
+        preserve_derived=False,
+    )
+    reset = repository.reset_affection(
+        requester_key=requester_key,
+        expected_cycle=1,
+        reset_score=500,
+        idempotency_hash=reset_hash,
+        now=unlocked_at + timedelta(minutes=4),
+    )
+    assert reset.state == "locked"
+    assert reset.cycle == 2
+    assert reset.reset_count == 1
+    updated_profile = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=memorial_source_table,
+            Key=marshal_item(profile_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert updated_profile["scores"] == [500, 500, 500]
+    assert updated_profile["reset_count"] == 1
+    assert updated_profile["memorial_cycle"] == 2
+    assert updated_profile["version"] == 8
+    assert not {
+        "unlocked_participant",
+        "unlocked_at",
+        "unlock_debate_id",
+        "unlock_display_name",
+        "unlock_retroactive",
+    }.intersection(updated_profile)
+    reset_receipt = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=statistics_table,
+            Key=marshal_item(
+                {
+                    "PK": checkpoint_key["PK"],
+                    "SK": "RESET#00000001",
+                }
+            ),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert reset_receipt["record_type"] == "memorial_reset"
+    assert reset_receipt["reset_to_cycle"] == 2
+    assert reset_receipt["idempotency_hash"] == reset_hash
+
+    replayed_reset = repository.reset_affection(
+        requester_key=requester_key,
+        expected_cycle=1,
+        reset_score=500,
+        idempotency_hash=reset_hash,
+        now=unlocked_at + timedelta(minutes=5),
+    )
+    assert replayed_reset.state == "locked"
+    assert replayed_reset.cycle == 2
+    assert replayed_reset.reset_count == 1
 
 
 class _NoopS3:
