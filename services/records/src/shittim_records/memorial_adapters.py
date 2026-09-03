@@ -86,6 +86,7 @@ _DATE_FONT_PATH = _ASSET_ROOT / "LINESeedJP-ExtraBold.woff2"
 Image.MAX_IMAGE_PIXELS = MAX_SOURCE_IMAGE_PIXELS
 
 _REQUESTER_KEY = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+_GENERATION_CLAIM_TOKEN = re.compile(r"[A-Za-z0-9_-]{22}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _UPLOAD_ASSET_KEY = re.compile(r"uploads/[A-Za-z0-9_-]{43}\.bin\Z")
 _MEMORY_ASSET_KEY = re.compile(r"memorials/[A-Za-z0-9_-]{43}\.png\Z")
@@ -973,6 +974,7 @@ class DynamoMemorialRepository:
         job = self._job(checkpoint)
         previous_attempt = job.generation_attempt
         generation_attempt = previous_attempt + 1
+        generation_claim_token = secrets.token_urlsafe(16)
         condition = "#state = :queued"
         values: DynamoItem = {
             ":generating": "generating",
@@ -982,6 +984,7 @@ class DynamoMemorialRepository:
             ":requester": requester_key,
             ":cycle": cycle,
             ":generation_attempt": generation_attempt,
+            ":generation_claim_token": generation_claim_token,
         }
         if old_lease is not None:
             condition = "#state = :generating AND generation_lease_expires_at = :old_lease"
@@ -998,7 +1001,8 @@ class DynamoMemorialRepository:
                 UpdateExpression=(
                     "SET #state = :generating, generation_started_at = :now, "
                     "generation_lease_expires_at = :lease, updated_at = :now, "
-                    "generation_attempt = :generation_attempt"
+                    "generation_attempt = :generation_attempt, "
+                    "generation_claim_token = :generation_claim_token"
                 ),
                 ConditionExpression=(
                     f"{condition} AND requester_key = :requester AND #cycle = :cycle"
@@ -1010,7 +1014,11 @@ class DynamoMemorialRepository:
             if _is_conditional(error):
                 return None
             raise MemorialFailure("MEMORIAL_UNAVAILABLE", 503) from error
-        return replace(job, generation_attempt=generation_attempt)
+        return replace(
+            job,
+            generation_attempt=generation_attempt,
+            generation_claim_token=generation_claim_token,
+        )
 
     def complete_generation(
         self,
@@ -1021,6 +1029,7 @@ class DynamoMemorialRepository:
         generated_at = _utc(generated_at)
         if job.narrative is None or job.image_asset_key is None:
             raise MemorialFailure("MEMORIAL_CHECKPOINT_INVALID", 503)
+        claim_token = _generation_claim_token(job)
         memory = MemorialMemory(
             cycle=job.cycle,
             participant=job.participant,
@@ -1040,7 +1049,8 @@ class DynamoMemorialRepository:
                     "#state = :generating AND requester_key = :requester AND #cycle = :cycle "
                     "AND unlocked_participant = :participant AND unlocked_at = :unlocked_at "
                     "AND image_asset_key = :image_asset_key AND narrative = :narrative "
-                    "AND generation_attempt = :generation_attempt"
+                    "AND generation_attempt = :generation_attempt "
+                    "AND generation_claim_token = :generation_claim_token"
                 ),
                 ExpressionAttributeNames={"#cycle": "cycle", "#state": "state"},
                 ExpressionAttributeValues=marshal_item(
@@ -1055,14 +1065,19 @@ class DynamoMemorialRepository:
                         ":participant": job.participant,
                         ":unlocked_at": _timestamp(job.unlocked_at),
                         ":generation_attempt": job.generation_attempt,
+                        ":generation_claim_token": claim_token,
                     }
                 ),
             )
         except ClientError as error:
             if not _is_conditional(error):
                 raise MemorialFailure("MEMORIAL_UNAVAILABLE", 503) from error
-            existing = self.get_memory(requester_key=job.requester_key, cycle=job.cycle)
-            if existing == memory:
+            checkpoint = self._load_checkpoint(job.requester_key, job.cycle)
+            if (
+                checkpoint is not None
+                and checkpoint.get("generation_claim_token") == claim_token
+                and self.get_memory(requester_key=job.requester_key, cycle=job.cycle) == memory
+            ):
                 return memory
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409) from error
         return memory
@@ -1076,6 +1091,7 @@ class DynamoMemorialRepository:
     ) -> MemorialGenerationJob:
         now = _utc(now)
         normalized = _normalize_narrative(narrative)
+        claim_token = _generation_claim_token(job)
         try:
             self._client.update_item(
                 TableName=self._statistics_table,
@@ -1086,7 +1102,8 @@ class DynamoMemorialRepository:
                     "AND #cycle = :cycle AND unlocked_participant = :participant "
                     "AND unlocked_at = :unlocked_at AND attribute_not_exists(narrative) "
                     "AND attribute_not_exists(image_asset_key) "
-                    "AND generation_attempt = :generation_attempt"
+                    "AND generation_attempt = :generation_attempt "
+                    "AND generation_claim_token = :generation_claim_token"
                 ),
                 ExpressionAttributeNames={"#cycle": "cycle", "#state": "state"},
                 ExpressionAttributeValues=marshal_item(
@@ -1099,6 +1116,7 @@ class DynamoMemorialRepository:
                         ":participant": job.participant,
                         ":unlocked_at": _timestamp(job.unlocked_at),
                         ":generation_attempt": job.generation_attempt,
+                        ":generation_claim_token": claim_token,
                     }
                 ),
             )
@@ -1106,7 +1124,11 @@ class DynamoMemorialRepository:
             if not _is_conditional(error):
                 raise MemorialFailure("MEMORIAL_UNAVAILABLE", 503) from error
             existing = self._load_checkpoint(job.requester_key, job.cycle)
-            if existing is not None and existing.get("narrative") == normalized:
+            if (
+                existing is not None
+                and existing.get("narrative") == normalized
+                and existing.get("generation_claim_token") == claim_token
+            ):
                 return self._job(existing)
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409) from error
         return MemorialGenerationJob(
@@ -1118,6 +1140,7 @@ class DynamoMemorialRepository:
             upload_asset_key=job.upload_asset_key,
             result_asset_key=job.result_asset_key,
             generation_attempt=job.generation_attempt,
+            generation_claim_token=claim_token,
             narrative=normalized,
         )
 
@@ -1135,6 +1158,7 @@ class DynamoMemorialRepository:
             or not _valid_memory_asset_key(image_asset_key)
         ):
             raise MemorialFailure("MEMORIAL_CHECKPOINT_INVALID", 503)
+        claim_token = _generation_claim_token(job)
         try:
             self._client.update_item(
                 TableName=self._statistics_table,
@@ -1145,7 +1169,8 @@ class DynamoMemorialRepository:
                     "AND #cycle = :cycle AND unlocked_participant = :participant "
                     "AND unlocked_at = :unlocked_at AND narrative = :narrative "
                     "AND attribute_not_exists(image_asset_key) "
-                    "AND generation_attempt = :generation_attempt"
+                    "AND generation_attempt = :generation_attempt "
+                    "AND generation_claim_token = :generation_claim_token"
                 ),
                 ExpressionAttributeNames={"#cycle": "cycle", "#state": "state"},
                 ExpressionAttributeValues=marshal_item(
@@ -1159,6 +1184,7 @@ class DynamoMemorialRepository:
                         ":unlocked_at": _timestamp(job.unlocked_at),
                         ":narrative": job.narrative,
                         ":generation_attempt": job.generation_attempt,
+                        ":generation_claim_token": claim_token,
                     }
                 ),
             )
@@ -1166,7 +1192,11 @@ class DynamoMemorialRepository:
             if not _is_conditional(error):
                 raise MemorialFailure("MEMORIAL_UNAVAILABLE", 503) from error
             existing = self._load_checkpoint(job.requester_key, job.cycle)
-            if existing is not None and existing.get("image_asset_key") == image_asset_key:
+            if (
+                existing is not None
+                and existing.get("image_asset_key") == image_asset_key
+                and existing.get("generation_claim_token") == claim_token
+            ):
                 return self._job(existing)
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409) from error
         return MemorialGenerationJob(
@@ -1178,6 +1208,7 @@ class DynamoMemorialRepository:
             upload_asset_key=job.upload_asset_key,
             result_asset_key=job.result_asset_key,
             generation_attempt=job.generation_attempt,
+            generation_claim_token=claim_token,
             narrative=job.narrative,
             image_asset_key=image_asset_key,
         )
@@ -1187,46 +1218,76 @@ class DynamoMemorialRepository:
         *,
         job: MemorialGenerationJob,
         released_at: datetime,
+        refund_attempt: bool = False,
     ) -> None:
         released_at = _utc(released_at)
+        claim_token = _generation_claim_token(job)
+        released_attempt = job.generation_attempt - int(refund_attempt)
+        if released_attempt < 0:
+            raise MemorialFailure("MEMORIAL_JOB_INVALID", 503)
         checkpoint = self._load_checkpoint(job.requester_key, job.cycle)
         if checkpoint is None:
             raise MemorialFailure("MEMORIAL_STATE_INVALID", 503)
         state = self._checkpoint_state(checkpoint)
         if state == "queued":
-            return
+            if (
+                checkpoint.get("generation_claim_token") == claim_token
+                and _integer(
+                    checkpoint.get("generation_attempt", 0),
+                    "generation attempt",
+                    minimum=0,
+                )
+                == released_attempt
+            ):
+                return
+            raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409)
         if state != "generating":
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409)
+        update_fields = (
+            "SET #state = :queued, generation_released_at = :released, updated_at = :released"
+        )
+        values: DynamoItem = {
+            ":queued": "queued",
+            ":generating": "generating",
+            ":released": _timestamp(released_at),
+            ":requester": job.requester_key,
+            ":cycle": job.cycle,
+            ":generation_attempt": job.generation_attempt,
+            ":generation_claim_token": claim_token,
+        }
+        if refund_attempt:
+            update_fields += ", generation_attempt = :released_attempt"
+            values[":released_attempt"] = released_attempt
         try:
             self._client.update_item(
                 TableName=self._statistics_table,
                 Key=marshal_item(self._checkpoint_key(job.requester_key, job.cycle)),
                 UpdateExpression=(
-                    "SET #state = :queued, generation_released_at = :released, "
-                    "updated_at = :released REMOVE generation_started_at, "
-                    "generation_lease_expires_at"
+                    f"{update_fields} REMOVE generation_started_at, generation_lease_expires_at"
                 ),
                 ConditionExpression=(
                     "#state = :generating AND requester_key = :requester AND #cycle = :cycle "
-                    "AND generation_attempt = :generation_attempt"
+                    "AND generation_attempt = :generation_attempt "
+                    "AND generation_claim_token = :generation_claim_token"
                 ),
                 ExpressionAttributeNames={"#cycle": "cycle", "#state": "state"},
-                ExpressionAttributeValues=marshal_item(
-                    {
-                        ":queued": "queued",
-                        ":generating": "generating",
-                        ":released": _timestamp(released_at),
-                        ":requester": job.requester_key,
-                        ":cycle": job.cycle,
-                        ":generation_attempt": job.generation_attempt,
-                    }
-                ),
+                ExpressionAttributeValues=marshal_item(values),
             )
         except ClientError as error:
             if not _is_conditional(error):
                 raise MemorialFailure("MEMORIAL_UNAVAILABLE", 503) from error
             raced = self._load_checkpoint(job.requester_key, job.cycle)
-            if raced is not None and self._checkpoint_state(raced) == "queued":
+            if (
+                raced is not None
+                and self._checkpoint_state(raced) == "queued"
+                and raced.get("generation_claim_token") == claim_token
+                and _integer(
+                    raced.get("generation_attempt", 0),
+                    "generation attempt",
+                    minimum=0,
+                )
+                == released_attempt
+            ):
                 return
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409) from error
 
@@ -1238,6 +1299,7 @@ class DynamoMemorialRepository:
         preserve_derived: bool,
     ) -> None:
         failed_at = _utc(failed_at)
+        claim_token = _generation_claim_token(job)
         if preserve_derived and job.narrative is None:
             raise MemorialFailure("MEMORIAL_CHECKPOINT_INVALID", 503)
         checkpoint = self._load_checkpoint(job.requester_key, job.cycle)
@@ -1245,7 +1307,9 @@ class DynamoMemorialRepository:
             raise MemorialFailure("MEMORIAL_STATE_INVALID", 503)
         state = self._checkpoint_state(checkpoint)
         if state in {"failed", "ready"}:
-            return
+            if checkpoint.get("generation_claim_token") == claim_token:
+                return
+            raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409)
         if state != "generating":
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409)
         try:
@@ -1258,7 +1322,8 @@ class DynamoMemorialRepository:
                 ),
                 ConditionExpression=(
                     "#state = :generating AND requester_key = :requester AND #cycle = :cycle "
-                    "AND generation_attempt = :generation_attempt"
+                    "AND generation_attempt = :generation_attempt "
+                    "AND generation_claim_token = :generation_claim_token"
                 ),
                 ExpressionAttributeNames={"#cycle": "cycle", "#state": "state"},
                 ExpressionAttributeValues=marshal_item(
@@ -1269,6 +1334,7 @@ class DynamoMemorialRepository:
                         ":requester": job.requester_key,
                         ":cycle": job.cycle,
                         ":generation_attempt": job.generation_attempt,
+                        ":generation_claim_token": claim_token,
                     }
                 ),
             )
@@ -1276,7 +1342,11 @@ class DynamoMemorialRepository:
             if not _is_conditional(error):
                 raise MemorialFailure("MEMORIAL_UNAVAILABLE", 503) from error
             raced = self._load_checkpoint(job.requester_key, job.cycle)
-            if raced is not None and self._checkpoint_state(raced) in {"failed", "ready"}:
+            if (
+                raced is not None
+                and self._checkpoint_state(raced) in {"failed", "ready"}
+                and raced.get("generation_claim_token") == claim_token
+            ):
                 return
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409) from error
 
@@ -1571,6 +1641,11 @@ class DynamoMemorialRepository:
                     item.get("generation_attempt", 0),
                     "generation attempt",
                     minimum=0,
+                ),
+                generation_claim_token=(
+                    None
+                    if item.get("generation_claim_token") is None
+                    else _generation_claim_token_value(item.get("generation_claim_token"))
                 ),
                 narrative=narrative,
                 image_asset_key=image_asset_key,
@@ -2411,6 +2486,20 @@ def _text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip() or "\x00" in value:
         raise ValueError(f"Memorial {label} is invalid")
     return value
+
+
+def _generation_claim_token_value(value: object) -> str:
+    token = _text(value, "generation claim token")
+    if _GENERATION_CLAIM_TOKEN.fullmatch(token) is None:
+        raise ValueError("Memorial generation claim token is invalid")
+    return token
+
+
+def _generation_claim_token(job: MemorialGenerationJob) -> str:
+    try:
+        return _generation_claim_token_value(job.generation_claim_token)
+    except ValueError as error:
+        raise MemorialFailure("MEMORIAL_JOB_INVALID", 503) from error
 
 
 def _integer(value: object, label: str, *, minimum: int) -> int:

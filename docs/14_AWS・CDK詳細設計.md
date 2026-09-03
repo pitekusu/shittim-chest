@@ -39,7 +39,10 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
   RETAINとする。production originからのpresigned POSTだけをCORSで許可し、原本と未完了multipart uploadは
   1日で期限切れにする。access logは既存Media access-log bucketの専用prefixへ送る。
 - Memorial generation queueはSQS managed encryption、TLS必須、retention 1日、visibility timeout 30分、
-  batch 1とする。最大3 receive後は14日retentionの専用DLQへ移し、Projector DLQと混在させない。
+  batch 1とする。最大4 receive後は14日retentionの専用DLQへ移し、Projector DLQと混在させない。
+  永続checkpointのpaid logical attempt上限は3のままとし、物理receive回数でpaid可否を決めない。通常の3回に加えた
+  物理配送余地により、`generation_attempt=3`のclaimがhard timeout／OOM／runtime crashとなった場合も、次の配送が
+  stale leaseをattempt 4として回収し、completion-onlyまたはproviderを呼ばないterminal化へ収束できるようにする。
 
 ## 3. Runtime network and compute
 

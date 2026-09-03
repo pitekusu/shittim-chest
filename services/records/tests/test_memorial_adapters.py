@@ -106,6 +106,7 @@ def _checkpoint(
     }
     if state == "generating":
         item["generation_lease_expires_at"] = (NOW + timedelta(minutes=5)).isoformat()
+        item["generation_claim_token"] = "c" * 22
     if narrative is not None:
         item["narrative"] = narrative
     if image_asset_key is not None:
@@ -149,6 +150,23 @@ class DynamoRecorder:
     def update_item(self, **kwargs: Any) -> dict[str, Any]:
         self.updates.append(kwargs)
         return {}
+
+
+class ConditionalUpdateDynamoRecorder(DynamoRecorder):
+    def update_item(self, **kwargs: Any) -> dict[str, Any]:
+        self.updates.append(kwargs)
+        raise ClientError(
+            cast(
+                Any,
+                {
+                    "Error": {
+                        "Code": "ConditionalCheckFailedException",
+                        "Message": "private detail",
+                    }
+                },
+            ),
+            "UpdateItem",
+        )
 
 
 def _repository(client: DynamoRecorder, *, with_source: bool = True) -> DynamoMemorialRepository:
@@ -358,6 +376,114 @@ def test_claim_and_generation_checkpoints_use_only_statistics_table() -> None:
     claim_values = unmarshal_item(client.updates[0]["ExpressionAttributeValues"])
     assert claim_values[":generation_attempt"] == 1
     assert "generation_attempt = :previous_attempt" in client.updates[0]["ConditionExpression"]
+    claim_token = cast(str, claim_values[":generation_claim_token"])
+    assert len(claim_token) == 22
+    for update in client.updates[1:]:
+        values = unmarshal_item(update["ExpressionAttributeValues"])
+        assert "generation_claim_token = :generation_claim_token" in update["ConditionExpression"]
+        assert values[":generation_claim_token"] == claim_token
+
+
+def test_expired_third_attempt_lease_can_be_claimed_for_recovery() -> None:
+    generating = _checkpoint(state="generating", generation_attempt=3)
+    generating["generation_lease_expires_at"] = (NOW - timedelta(seconds=1)).isoformat()
+    client = DynamoRecorder(checkpoint=generating)
+
+    job = _repository(client, with_source=False).claim_generation(
+        requester_key=REQUESTER_KEY,
+        cycle=1,
+        now=NOW,
+    )
+
+    assert job is not None and job.generation_attempt == 4
+    update = client.updates[0]
+    values = unmarshal_item(update["ExpressionAttributeValues"])
+    assert values[":previous_attempt"] == 3
+    assert values[":generation_attempt"] == 4
+    assert values[":old_lease"] == generating["generation_lease_expires_at"]
+    assert len(cast(str, values[":generation_claim_token"])) == 22
+
+
+def test_deadline_release_atomically_refunds_claimed_attempt() -> None:
+    generating = _checkpoint(state="generating", generation_attempt=3)
+    client = DynamoRecorder(checkpoint=generating)
+    repository = _repository(client, with_source=False)
+    job = repository._job(generating)
+
+    repository.release_generation_to_queue(
+        job=job,
+        released_at=NOW,
+        refund_attempt=True,
+    )
+
+    update = client.updates[0]
+    values = unmarshal_item(update["ExpressionAttributeValues"])
+    assert "generation_attempt = :released_attempt" in update["UpdateExpression"]
+    assert values[":generation_attempt"] == 3
+    assert values[":released_attempt"] == 2
+    assert values[":generation_claim_token"] == generating["generation_claim_token"]
+    assert "generation_claim_token = :generation_claim_token" in update["ConditionExpression"]
+
+
+def test_replayed_deadline_release_does_not_refund_the_attempt_twice() -> None:
+    queued = _checkpoint(state="queued", generation_attempt=2)
+    queued["generation_claim_token"] = "c" * 22
+    client = DynamoRecorder(checkpoint=queued)
+    repository = _repository(client, with_source=False)
+    claimed = _checkpoint(state="generating", generation_attempt=3)
+
+    repository.release_generation_to_queue(
+        job=repository._job(claimed),
+        released_at=NOW,
+        refund_attempt=True,
+    )
+
+    assert client.updates == []
+
+
+def test_stale_claim_token_cannot_replay_another_claims_release() -> None:
+    queued = _checkpoint(state="queued", generation_attempt=2)
+    queued["generation_claim_token"] = "n" * 22
+    client = DynamoRecorder(checkpoint=queued)
+    repository = _repository(client, with_source=False)
+    claimed = _checkpoint(state="generating", generation_attempt=3)
+
+    with pytest.raises(MemorialFailure) as failure:
+        repository.release_generation_to_queue(
+            job=repository._job(claimed),
+            released_at=NOW,
+            refund_attempt=True,
+        )
+
+    assert failure.value.code == "MEMORIAL_STATE_CONFLICT"
+    assert client.updates == []
+
+
+def test_stale_claim_token_cannot_adopt_another_claims_terminal_state() -> None:
+    ready = _checkpoint(
+        state="ready",
+        narrative=NARRATIVE,
+        image_asset_key=RESULT_KEY,
+        generation_attempt=3,
+    )
+    ready["generation_claim_token"] = "n" * 22
+    client = ConditionalUpdateDynamoRecorder(checkpoint=ready)
+    repository = _repository(client, with_source=False)
+    stale = _checkpoint(
+        state="generating",
+        narrative=NARRATIVE,
+        image_asset_key=RESULT_KEY,
+        generation_attempt=3,
+    )
+    job = repository._job(stale)
+
+    with pytest.raises(MemorialFailure) as completion_failure:
+        repository.complete_generation(job=job, generated_at=NOW + timedelta(minutes=2))
+    with pytest.raises(MemorialFailure) as failure_replay:
+        repository.fail_generation(job=job, failed_at=NOW, preserve_derived=True)
+
+    assert completion_failure.value.code == "MEMORIAL_STATE_CONFLICT"
+    assert failure_replay.value.code == "MEMORIAL_STATE_CONFLICT"
 
 
 @pytest.mark.parametrize(
@@ -386,6 +512,7 @@ def test_terminal_failure_clears_only_unrecoverable_partial_output(
     assert ("REMOVE narrative, image_asset_key" in update["UpdateExpression"]) is expects_remove
     values = unmarshal_item(update["ExpressionAttributeValues"])
     assert values[":generation_attempt"] == 3
+    assert values[":generation_claim_token"] == checkpoint["generation_claim_token"]
 
 
 def test_reset_transaction_fences_generation_and_atomically_resets_profile(

@@ -120,7 +120,7 @@ export class RecordsStatefulStack extends Stack {
     this.memorialGenerationQueue = new sqs.Queue(this, "MemorialGenerationQueue", {
       queueName: "shittim-chest-production-records-memorial-generation",
       deadLetterQueue: {
-        maxReceiveCount: 3,
+        maxReceiveCount: 4,
         queue: this.memorialGenerationDlq,
       },
       encryption: sqs.QueueEncryption.SQS_MANAGED,

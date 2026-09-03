@@ -186,7 +186,7 @@ describe("RecordsStatefulStack", () => {
               "Arn",
             ],
           },
-          maxReceiveCount: 3,
+          maxReceiveCount: 4,
         },
         SqsManagedSseEnabled: true,
         VisibilityTimeout: 1800,

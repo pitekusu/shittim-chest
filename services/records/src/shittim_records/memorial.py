@@ -30,6 +30,7 @@ MEMORIAL_NARRATIVE_START_BUDGET = MEMORIAL_PROVIDER_CALL_BUDGET * 2 + MEMORIAL_C
 MEMORIAL_IMAGE_START_BUDGET = MEMORIAL_PROVIDER_CALL_BUDGET + MEMORIAL_CLEANUP_MARGIN
 
 _OPAQUE_REQUESTER_KEY = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_GENERATION_CLAIM_TOKEN = re.compile(r"^[A-Za-z0-9_-]{22}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IDEMPOTENCY = re.compile(r"^[A-Za-z0-9._~-]{16,128}$")
 _POST_REQUIRED_FIELDS = frozenset(
@@ -230,6 +231,7 @@ class MemorialGenerationJob:
     upload_asset_key: str = field(repr=False)
     result_asset_key: str = field(repr=False)
     generation_attempt: int = 0
+    generation_claim_token: str | None = field(default=None, repr=False)
     narrative: str | None = field(default=None, repr=False)
     image_asset_key: str | None = field(default=None, repr=False)
 
@@ -241,6 +243,10 @@ class MemorialGenerationJob:
             or not self.upload_asset_key
             or not self.result_asset_key
             or self.generation_attempt < 0
+            or (
+                self.generation_claim_token is not None
+                and _GENERATION_CLAIM_TOKEN.fullmatch(self.generation_claim_token) is None
+            )
         ):
             raise ValueError("memorial generation job is invalid")
         _require_utc(self.unlocked_at, label="memorial unlock timestamp")
@@ -362,6 +368,7 @@ class MemorialRepository(Protocol):
         *,
         job: MemorialGenerationJob,
         released_at: datetime,
+        refund_attempt: bool = False,
     ) -> None: ...
 
     def fail_generation(
@@ -718,6 +725,7 @@ class MemorialGenerationService:
             return None
         if job.generation_attempt < 1:
             raise MemorialFailure("MEMORIAL_JOB_INVALID", 503)
+        paid_call_started = False
         try:
             recent: tuple[str, ...] | None = None
             source_image: bytes | None = None
@@ -751,6 +759,7 @@ class MemorialGenerationService:
                         else MEMORIAL_IMAGE_START_BUDGET
                     ),
                 )
+                paid_call_started = True
                 narrative = self._generator.generate_narrative(
                     participant=job.participant,
                     requester_display_name=job.requester_display_name,
@@ -774,6 +783,7 @@ class MemorialGenerationService:
                     if source_image is None:
                         raise MemorialFailure("MEMORIAL_CHECKPOINT_INVALID", 503)
                     self._require_budget(deadline, MEMORIAL_IMAGE_START_BUDGET)
+                    paid_call_started = True
                     generated = self._generator.generate_image(
                         participant=job.participant,
                         requester_display_name=job.requester_display_name,
@@ -799,8 +809,18 @@ class MemorialGenerationService:
                 raise MemorialFailure("MEMORIAL_CHECKPOINT_INVALID", 503)
             self._assets.delete_upload(job)
             return self._repository.complete_generation(job=job, generated_at=now)
-        except Exception:
-            if job.generation_attempt < max_generation_attempts:
+        except Exception as error:
+            if (
+                isinstance(error, MemorialFailure)
+                and error.code == "MEMORIAL_GENERATION_DEADLINE"
+                and not paid_call_started
+            ):
+                self._repository.release_generation_to_queue(
+                    job=job,
+                    released_at=now,
+                    refund_attempt=True,
+                )
+            elif job.generation_attempt < max_generation_attempts:
                 self._repository.release_generation_to_queue(job=job, released_at=now)
             else:
                 preserve_derived = generated_asset_key is not None

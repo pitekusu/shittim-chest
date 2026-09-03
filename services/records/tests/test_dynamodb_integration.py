@@ -546,10 +546,56 @@ def test_memorial_transactions_queue_idempotency_and_atomic_reset(
         is None
     )
 
-    job = repository.claim_generation(
+    first_job = repository.claim_generation(
         requester_key=requester_key,
         cycle=1,
         now=unlocked_at + timedelta(minutes=2),
+    )
+    assert first_job is not None
+    assert first_job.generation_attempt == 1
+    repository.release_generation_to_queue(
+        job=first_job,
+        released_at=unlocked_at + timedelta(minutes=2, seconds=1),
+        refund_attempt=True,
+    )
+    repository.release_generation_to_queue(
+        job=first_job,
+        released_at=unlocked_at + timedelta(minutes=2, seconds=1),
+        refund_attempt=True,
+    )
+    second_job = repository.claim_generation(
+        requester_key=requester_key,
+        cycle=1,
+        now=unlocked_at + timedelta(minutes=2, seconds=2),
+    )
+    assert second_job is not None
+    assert second_job.generation_attempt == 1
+    assert second_job.generation_claim_token != first_job.generation_claim_token
+    with pytest.raises(MemorialFailure) as stale_release:
+        repository.release_generation_to_queue(
+            job=first_job,
+            released_at=unlocked_at + timedelta(minutes=2, seconds=3),
+            refund_attempt=True,
+        )
+    assert stale_release.value.code == "MEMORIAL_STATE_CONFLICT"
+    repository.release_generation_to_queue(
+        job=second_job,
+        released_at=unlocked_at + timedelta(minutes=2, seconds=3),
+        refund_attempt=True,
+    )
+    refunded_checkpoint = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=statistics_table,
+            Key=marshal_item(checkpoint_key),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert refunded_checkpoint["state"] == "queued"
+    assert refunded_checkpoint["generation_attempt"] == 0
+    job = repository.claim_generation(
+        requester_key=requester_key,
+        cycle=1,
+        now=unlocked_at + timedelta(minutes=2, seconds=4),
     )
     assert job is not None
     assert job.generation_attempt == 1

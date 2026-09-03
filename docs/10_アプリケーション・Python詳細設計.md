@@ -82,6 +82,9 @@ active runtime promptを完全検証して読み込む。active pointerがない
 participant promptを使い、欠落・checksum不一致・不正revisionでは生成を開始しない。
 worker claimはgeneration attemptをcheckpoint内でCAS incrementし、paid generationは3回を上限とする。Standard SQSの
 `ApproximateReceiveCount`は参考情報に留め、再送や重複で変わる物理receive回数を終端判定の正本にしない。
+そのclaimでpaid callをまだ一度も開始していないdeadline preflightで残時間不足を検出した場合は、claim固有tokenを
+含む同じCAS条件でcheckpointを`queued`へ戻し、claim時のincrementを1だけ払い戻す。保存済みの文章や画像参照、
+upload原本は維持する。一度でもpaid callを開始したclaimは払い戻さず、logical attempt上限を迂回させない。
 
 workerは文章と最終画像を個別にcheckpointし、両方が永続化された後にだけ`ready`を確定する。
 logical attempt 3回の後は新しいpaid provider callを開始しない。検証済み最終画像のobjectまたはcheckpointと
@@ -89,7 +92,10 @@ logical attempt 3回の後は新しいpaid provider callを開始しない。検
 terminal化時に破棄し、reset可能な`failed`へ収束させる。部分成果は`ready`までAPIへ公開しない。成功時または
 再試行不能なterminal失敗時にupload原本を削除し、一時障害ではSQS retryへ委ねる。provider callは各120秒、
 OpenAI SDKの自動retryは0回とし、Lambda hard deadlineからcleanup用15秒を差し引いた残時間が不足する場合は
-paid callの前にqueueへ戻す。resetはAPIだけがsource v9 profileと
+そのclaimでpaid callを開始していない場合だけattemptを払い戻してqueueへ戻す。SQS redriveは最大4 receiveとするが、
+paid可否は物理receive回数ではなく永続counterだけで判定する。`generation_attempt=3`のclaimがhard timeout／OOM／
+runtime crashとなり次の配送が残る場合、再claimはattempt 4となり、保存済み成果のcompletion-only回復または
+providerを呼ばないterminal化だけを行う。resetはAPIだけがsource v9 profileと
 当該cycle checkpointを1 transactionで更新し、3スコアを500、reset回数とcycleを各+1へ進める。
 
 ## 4. Concurrency and cancellation

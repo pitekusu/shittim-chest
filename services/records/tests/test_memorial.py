@@ -533,6 +533,7 @@ class WorkerRepository:
         self.narrative_checkpoints = 0
         self.image_checkpoints = 0
         self.preserve_derived: list[bool] = []
+        self.refunded_attempts = 0
 
     def claim_generation(self, **kwargs: Any) -> MemorialGenerationJob | None:
         assert kwargs["requester_key"] == REQUESTER_KEY
@@ -564,6 +565,12 @@ class WorkerRepository:
 
     def release_generation_to_queue(self, **kwargs: Any) -> None:
         self.released += 1
+        if kwargs.get("refund_attempt", False):
+            self.refunded_attempts += 1
+            self.job = replace(
+                self.job,
+                generation_attempt=self.job.generation_attempt - 1,
+            )
 
     def fail_generation(self, **kwargs: Any) -> None:
         self.failed += 1
@@ -780,6 +787,32 @@ def test_completion_only_recovery_is_allowed_after_paid_attempt_limit() -> None:
     assert repository.completed == 1
 
 
+def test_recovery_delivery_terminalizes_without_starting_a_fourth_paid_attempt() -> None:
+    repository = WorkerRepository(generation_job(generation_attempt=4))
+    assets = WorkerAssets()
+    generator = Generator()
+    service = MemorialGenerationService(
+        repository=cast(Any, repository),
+        assets=cast(Any, assets),
+        questions=Questions(),
+        generator=generator,
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(MemorialFailure) as failure:
+        service.process(
+            requester_key=REQUESTER_KEY,
+            cycle=1,
+            receive_count=4,
+            now=NOW,
+            deadline=NOW + timedelta(minutes=5),
+        )
+
+    assert failure.value.code == "MEMORIAL_GENERATION_ATTEMPTS_EXHAUSTED"
+    assert (generator.narratives, generator.images) == (0, 0)
+    assert (repository.released, repository.failed, assets.deleted) == (0, 1, 1)
+
+
 def test_terminal_image_failure_drops_partial_narrative_when_no_image_was_stored() -> None:
     class ImageFailureGenerator(Generator):
         def generate_image(self, **kwargs: Any) -> GeneratedMemorialImage:
@@ -909,6 +942,73 @@ def test_generation_preflights_images_before_paid_calls_and_stops_near_deadline(
     assert failure.value.code == "MEMORIAL_GENERATION_DEADLINE"
     assert (generator.validations, generator.narratives, generator.images) == (1, 0, 0)
     assert repository.released == 1
+    assert repository.refunded_attempts == 1
+    assert repository.job.generation_attempt == 0
+
+
+@pytest.mark.parametrize(
+    ("narrative", "elapsed_seconds"),
+    ((None, 46), ("保存済みの文章", 166)),
+)
+def test_final_attempt_deadline_preflight_refunds_without_terminal_failure(
+    narrative: str | None,
+    elapsed_seconds: int,
+) -> None:
+    repository = WorkerRepository(generation_job(narrative=narrative, generation_attempt=3))
+    assets = WorkerAssets()
+    generator = Generator()
+    service = MemorialGenerationService(
+        repository=cast(Any, repository),
+        assets=cast(Any, assets),
+        questions=Questions(),
+        generator=generator,
+        clock=lambda: NOW + timedelta(seconds=elapsed_seconds),
+    )
+
+    with pytest.raises(MemorialFailure) as failure:
+        service.process(
+            requester_key=REQUESTER_KEY,
+            cycle=1,
+            receive_count=3,
+            now=NOW,
+            deadline=NOW + timedelta(minutes=5),
+        )
+
+    assert failure.value.code == "MEMORIAL_GENERATION_DEADLINE"
+    assert (generator.narratives, generator.images) == (0, 0)
+    assert (repository.released, repository.refunded_attempts, repository.failed) == (1, 1, 0)
+    assert repository.job.generation_attempt == 2
+    assert assets.deleted == 0
+
+
+def test_image_deadline_after_paid_narrative_does_not_refund_the_logical_attempt() -> None:
+    repository = WorkerRepository(generation_job(generation_attempt=3))
+    assets = WorkerAssets()
+    generator = Generator()
+    clock_values = iter((NOW, NOW + timedelta(seconds=166)))
+    service = MemorialGenerationService(
+        repository=cast(Any, repository),
+        assets=cast(Any, assets),
+        questions=Questions(),
+        generator=generator,
+        clock=lambda: next(clock_values),
+    )
+
+    with pytest.raises(MemorialFailure) as failure:
+        service.process(
+            requester_key=REQUESTER_KEY,
+            cycle=1,
+            receive_count=3,
+            now=NOW,
+            deadline=NOW + timedelta(minutes=5),
+        )
+
+    assert failure.value.code == "MEMORIAL_GENERATION_DEADLINE"
+    assert (generator.narratives, generator.images) == (1, 0)
+    assert repository.narrative_checkpoints == 1
+    assert repository.job.narrative == "ふたりの大切な思い出です。"
+    assert repository.job.generation_attempt == 3
+    assert (repository.refunded_attempts, repository.failed, assets.deleted) == (0, 1, 1)
 
 
 def test_achievement_date_uses_japan_time() -> None:

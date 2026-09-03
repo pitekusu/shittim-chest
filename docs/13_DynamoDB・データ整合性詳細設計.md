@@ -93,7 +93,11 @@ exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正
 - queue投入済みの`queued`は不変のresult asset keyを保持したままSQSへ再送でき、APIとSQSの間の
   crashでjobを失わない。worker claim、生成完了／失敗はowner、cycle、stateを条件付き更新し、
   claimごとにcheckpointのgeneration attemptをCAS incrementする。paid generationは3回を上限とし、Standard SQSの
-  物理receive countを正本にしない。counterはfailed後のupload予約更新とqueue再投入でも引き継ぐ。
+  物理receive countを正本にしない。各claimにはrandomなcontent-free tokenを付け、生成checkpoint、完了、失敗、
+  queue復帰をattemptとtokenの両方でfenceする。条件付き更新の応答喪失を回復するidempotent fallbackも、
+  terminal／queued stateに残るtokenが一致する場合だけ成功扱いする。そのclaimでproviderをまだ開始していないdeadline preflight失敗だけは
+  `queued`へ戻し、incrementを1だけ原子的に払い戻す。再claim後の旧tokenでは更新できず、二重払い戻しを許さない。
+  uploadとpartial checkpointは維持する。counterはfailed後のupload予約更新とqueue再投入でも引き継ぐ。
   SQS再配送で画像や文章を二重生成・上書きしない。上限後は
   paid callを禁止し、検証済み最終画像と文章が残る場合だけ同じcycle／result asset keyの
   completion-only回復を許可する。最終画像がない文章だけのpartial checkpointはterminal化時に除去する。

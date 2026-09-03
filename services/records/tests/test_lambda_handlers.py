@@ -606,6 +606,35 @@ def test_memorial_worker_rejects_private_or_malformed_queue_content_without_logg
     assert "secret" not in caplog.text
 
 
+def test_memorial_worker_accepts_the_fourth_recovery_delivery(
+    monkeypatch: Any,
+) -> None:
+    private_requester = "a" * 43
+    received: list[int] = []
+
+    class Worker:
+        def process(self, **kwargs: Any) -> None:
+            received.append(kwargs["receive_count"])
+
+    monkeypatch.setattr(lambda_handlers, "_MEMORIAL_WORKER", cast(Any, Worker()))
+
+    result = lambda_handlers.memorial_worker_handler(
+        {
+            "Records": [
+                {
+                    "messageId": "message-recovery",
+                    "body": f'{{"cycle":1,"requesterKey":"{private_requester}"}}',
+                    "attributes": {"ApproximateReceiveCount": "4"},
+                }
+            ]
+        },
+        SimpleNamespace(get_remaining_time_in_millis=lambda: 280_000),
+    )
+
+    assert result == {"batchItemFailures": []}
+    assert received == [4]
+
+
 @pytest.mark.parametrize("remaining", [None, True, 0, -1, 1.0])
 def test_memorial_worker_fails_closed_without_a_valid_lambda_deadline(
     monkeypatch: Any,
