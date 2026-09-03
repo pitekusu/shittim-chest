@@ -49,11 +49,11 @@ describe("RecordsApplicationStack", () => {
     expect(checks.validateScope(stack).success).toBe(true);
   });
 
-  test("creates nine Python 3.14 ARM64 functions from one immutable S3 version", () => {
+  test("creates eleven Python 3.14 ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = synthesize();
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 9);
+    template.resourceCountIs("AWS::Lambda::Function", 11);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
@@ -64,6 +64,8 @@ describe("RecordsApplicationStack", () => {
       "shittim-chest-production-records-read",
       "shittim-chest-production-records-admin-config",
       "shittim-chest-production-records-admin-status",
+      "shittim-chest-production-records-memorial-api",
+      "shittim-chest-production-records-memorial-worker",
     ]) {
       template.hasResourceProperties("AWS::Lambda::Function", {
         Architectures: ["arm64"],
@@ -73,7 +75,7 @@ describe("RecordsApplicationStack", () => {
           S3ObjectVersion: { Ref: "RecordsBundleObjectVersion" },
         },
         FunctionName: functionName,
-        MemorySize: 512,
+        MemorySize: functionName.endsWith("memorial-worker") ? 1024 : 512,
         Runtime: "python3.14",
       });
     }
@@ -106,7 +108,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = synthesize();
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 10);
+    template.resourceCountIs("AWS::Logs::LogGroup", 12);
     for (const functionName of [
       "shittim-chest-production-records-projector",
       "shittim-chest-production-records-backfill",
@@ -117,6 +119,8 @@ describe("RecordsApplicationStack", () => {
       "shittim-chest-production-records-read",
       "shittim-chest-production-records-admin-config",
       "shittim-chest-production-records-admin-status",
+      "shittim-chest-production-records-memorial-api",
+      "shittim-chest-production-records-memorial-worker",
     ]) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
         ([, resource]) =>
@@ -138,13 +142,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes four isolated aliases behind exactly sixteen HTTP API routes", () => {
+  test("publishes five isolated aliases behind exactly twenty-one HTTP API routes", () => {
     const { template } = synthesize();
 
-    template.resourceCountIs("AWS::Lambda::Version", 4);
-    template.resourceCountIs("AWS::Lambda::Alias", 4);
+    template.resourceCountIs("AWS::Lambda::Version", 5);
+    template.resourceCountIs("AWS::Lambda::Alias", 5);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 16);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 21);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -176,6 +180,11 @@ describe("RecordsApplicationStack", () => {
     expect(serialized).toContain("POST /api/v1/admin/prompts/rollback");
     expect(serialized).toContain("GET /api/v1/admin/status");
     expect(serialized).toContain("POST /api/v1/admin/status/refresh");
+    expect(serialized).toContain("GET /api/v1/memorial");
+    expect(serialized).toContain("POST /api/v1/memorial/upload");
+    expect(serialized).toContain("POST /api/v1/memorial/generate");
+    expect(serialized).toContain("GET /api/v1/memorial/memories/{cycle}");
+    expect(serialized).toContain("POST /api/v1/memorial/reset");
     expect(template.toJSON().Parameters.RecordsBundleCodeSha256.Default).toBeUndefined();
     for (const alias of Object.values(template.findResources("AWS::Lambda::Alias"))) {
       expect(alias.Properties.Name).toBe("live");
@@ -311,6 +320,227 @@ describe("RecordsApplicationStack", () => {
     });
   });
 
+  test("isolates memorial API and generation worker resources and permissions", () => {
+    const { template } = synthesize();
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-memorial-api",
+      Handler: "shittim_records.lambda_handlers.memorial_api_handler",
+      MemorySize: 512,
+      ReservedConcurrentExecutions: 2,
+      Runtime: "python3.14",
+      Timeout: 15,
+      Environment: {
+        Variables: {
+          SESSION_TABLE_NAME: "shittim-chest-production-records-sessions",
+          SOURCE_TABLE_NAME: { Ref: "SourceDebateTableName" },
+          STATISTICS_TABLE_NAME: "shittim-chest-production-records-statistics",
+          MEMORIAL_UPLOAD_BUCKET_NAME:
+            "shittim-chest-production-records-memorial-upload-000000000000",
+          MEDIA_BUCKET_NAME: "shittim-chest-production-records-media-000000000000",
+          MEMORIAL_GENERATION_QUEUE_URL: Match.anyValue(),
+          OAUTH_CONFIG_PARAMETER_NAME:
+            "/shittim-chest/production/records/discord/oauth/v0001",
+          SESSION_KEY_PARAMETER_NAME:
+            "/shittim-chest/production/records/session-key",
+        },
+      },
+    });
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-memorial-worker",
+      Handler: "shittim_records.lambda_handlers.memorial_worker_handler",
+      MemorySize: 1024,
+      ReservedConcurrentExecutions: 1,
+      Runtime: "python3.14",
+      Timeout: 300,
+      Environment: {
+        Variables: {
+          ARCHIVE_TABLE_NAME: "shittim-chest-production-records",
+          STATISTICS_TABLE_NAME: "shittim-chest-production-records-statistics",
+          MEMORIAL_UPLOAD_BUCKET_NAME:
+            "shittim-chest-production-records-memorial-upload-000000000000",
+          MEDIA_BUCKET_NAME: "shittim-chest-production-records-media-000000000000",
+          MEMORIAL_OPENAI_API_KEY_PARAMETER_NAME:
+            "/shittim-chest/production/records/openai/memorial-api-key",
+          RUNTIME_PROMPTS_PARAMETER_ROOT:
+            "/shittim-chest/production/runtime-prompts",
+          RUNTIME_PROMPTS_ACTIVE_PARAMETER_NAME:
+            "/shittim-chest/production/runtime-prompts/active",
+          LEGACY_PERSONA_PARTICIPANT_A_PARAMETER_NAME: Match.anyValue(),
+          LEGACY_PERSONA_PARTICIPANT_B_PARAMETER_NAME: Match.anyValue(),
+          LEGACY_PERSONA_PARTICIPANT_C_PARAMETER_NAME: Match.anyValue(),
+        },
+      },
+    });
+    template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
+      BatchSize: 1,
+      EventSourceArn: Match.objectLike({
+        "Fn::Join": Match.anyValue(),
+      }),
+      FunctionName: {
+        Ref: Match.stringLikeRegexp("^MemorialWorkerFunction"),
+      },
+      FunctionResponseTypes: ["ReportBatchItemFailures"],
+      ScalingConfig: Match.absent(),
+    });
+
+    const aliases = Object.values(template.findResources("AWS::Lambda::Alias"));
+    const memorialAlias = aliases.find((alias) =>
+      JSON.stringify(alias.Properties.FunctionName).includes("MemorialApiFunction"),
+    );
+    expect(memorialAlias?.Properties.Name).toBe("live");
+    expect(JSON.stringify(memorialAlias?.Properties.FunctionVersion)).toContain(
+      "MemorialApiVersion",
+    );
+
+    const policies = template.findResources("AWS::IAM::Policy");
+    const apiPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("MemorialApiFunctionRole"),
+    );
+    const workerPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("MemorialWorkerFunctionRole"),
+    );
+    expect(apiPolicy).toBeDefined();
+    expect(workerPolicy).toBeDefined();
+
+    const apiText = JSON.stringify(apiPolicy);
+    expect(apiText).toContain("SESSION#*");
+    expect(apiText).toContain("AFFECTION#REQUESTER#*");
+    expect(apiText).toContain("MEMORIAL#REQUESTER#*");
+    expect(apiText).toContain("dynamodb:ConditionCheckItem");
+    expect(apiText).toContain("dynamodb:EnclosingOperation");
+    expect(apiText).not.toContain("dynamodb:TransactWriteItems");
+    expect(apiText).toContain("dynamodb:Query");
+    expect(apiText).toContain("s3:GetObject");
+    expect(apiText).toContain("s3:PutObject");
+    expect(apiText).toContain("s3:DeleteObject");
+    expect(apiText).toContain("s3:ListBucket");
+    expect(apiText).toContain("sqs:SendMessage");
+    expect(apiText).toContain("ssm:GetParameters");
+    expect(apiText).toContain("/records/discord/oauth/v0001");
+    expect(apiText).toContain("/memorials/*");
+    expect(apiText).not.toContain("sqs:ReceiveMessage");
+    expect(apiText).not.toContain("/records/openai/memorial-api-key");
+    expect(apiText).not.toContain("/participants/*");
+
+    const workerText = JSON.stringify(workerPolicy);
+    expect(workerText).toContain("MEMORIAL#REQUESTER#*");
+    expect(workerText).toContain("dynamodb:GetItem");
+    expect(workerText).toContain("dynamodb:UpdateItem");
+    expect(workerText).toContain("dynamodb:Query");
+    expect(workerText).toContain("/index/gsi3");
+    expect(workerText).toContain("/participants/*");
+    expect(workerText).toContain("/memorials/*");
+    expect(workerText).toContain("s3:GetObject");
+    expect(workerText).toContain("s3:PutObject");
+    expect(workerText).toContain("s3:DeleteObject");
+    expect(workerText).toContain("s3:ListBucket");
+    expect(workerText).toContain("/records/openai/memorial-api-key");
+    expect(workerText).toContain("/runtime-prompts/active");
+    expect(workerText).toContain("/runtime-prompts/r??????????????????????????/*");
+    expect(workerText).toContain("/participant-a");
+    expect(workerText).toContain("/participant-b");
+    expect(workerText).toContain("/participant-c");
+    expect(workerText).toContain("sqs:ReceiveMessage");
+    expect(workerText).toContain("sqs:DeleteMessage");
+    expect(workerText).not.toContain("AFFECTION#REQUESTER#*");
+    expect(workerText).not.toContain("SESSION#*");
+    expect(workerText).not.toContain("dynamodb:PutItem");
+    expect(workerText).not.toContain("dynamodb:TransactWriteItems");
+
+    const apiStatements = apiPolicy?.Properties.PolicyDocument.Statement as Array<{
+      readonly Action: string | string[];
+      readonly Condition?: Record<string, unknown>;
+      readonly Resource: unknown;
+    }>;
+    const actionsOf = (statement: (typeof apiStatements)[number]) =>
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const uploadDelete = apiStatements.find((statement) =>
+      actionsOf(statement).includes("s3:DeleteObject"),
+    );
+    expect(JSON.stringify(uploadDelete?.Resource)).toContain(
+      "shittim-chest-production-records-memorial-upload",
+    );
+    expect(JSON.stringify(uploadDelete?.Resource)).not.toContain("/memorials/*");
+    const apiListStatements = apiStatements.filter((statement) =>
+      actionsOf(statement).includes("s3:ListBucket"),
+    );
+    expect(apiListStatements).toHaveLength(2);
+    expect(apiListStatements.map((statement) => statement.Condition)).toEqual(
+      expect.arrayContaining([
+        { StringLike: { "s3:prefix": ["uploads/*"] } },
+        { StringLike: { "s3:prefix": ["memorials/*"] } },
+      ]),
+    );
+    expect(
+      apiListStatements.every(
+        (statement) => !JSON.stringify(statement.Resource).includes("/*"),
+      ),
+    ).toBe(true);
+    const workerStatements = workerPolicy?.Properties.PolicyDocument.Statement as Array<{
+      readonly Action: string | string[];
+      readonly Condition?: Record<string, unknown>;
+      readonly Resource: unknown;
+    }>;
+    const workerListStatements = workerStatements.filter((statement) =>
+      actionsOf(statement).includes("s3:ListBucket"),
+    );
+    expect(workerListStatements).toHaveLength(1);
+    expect(workerListStatements[0]?.Condition).toEqual({
+      StringLike: { "s3:prefix": ["memorials/*"] },
+    });
+    expect(
+      workerListStatements.every(
+        (statement) => !JSON.stringify(statement.Resource).includes("/*"),
+      ),
+    ).toBe(true);
+    const sourceWrite = apiStatements.find(
+      (statement) =>
+        actionsOf(statement).includes("dynamodb:UpdateItem") &&
+        JSON.stringify(statement.Resource).includes("SourceDebateTableName"),
+    );
+    expect(sourceWrite?.Condition).toEqual({
+      StringEquals: {
+        "dynamodb:EnclosingOperation": "TransactWriteItems",
+      },
+      "ForAllValues:StringLike": {
+        "dynamodb:LeadingKeys": ["AFFECTION#REQUESTER#*"],
+      },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+    const memorialWrite = apiStatements.find(
+      (statement) =>
+        actionsOf(statement).includes("dynamodb:PutItem") &&
+        JSON.stringify(statement.Resource).includes(
+          "table/shittim-chest-production-records-statistics",
+        ),
+    );
+    expect(memorialWrite?.Condition).toEqual({
+      StringEquals: {
+        "dynamodb:EnclosingOperation": "TransactWriteItems",
+      },
+      "ForAllValues:StringLike": {
+        "dynamodb:LeadingKeys": ["MEMORIAL#REQUESTER#*"],
+      },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+    for (const statement of apiStatements.filter((candidate) =>
+      actionsOf(candidate).some((action) =>
+        [
+          "dynamodb:ConditionCheckItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+        ].includes(action),
+      ),
+    )) {
+      expect(statement.Condition).toMatchObject({
+        StringEquals: {
+          "dynamodb:EnclosingOperation": "TransactWriteItems",
+        },
+      });
+    }
+  });
+
   test("keeps Auth, Read, Ranking, Cost, and translation IAM exact and disjoint", () => {
     const { template } = synthesize();
     const policies = template.findResources("AWS::IAM::Policy");
@@ -436,7 +666,7 @@ describe("RecordsApplicationStack", () => {
     );
 
     expect(configPolicy).toBeDefined();
-    expect(statusPolicies).toHaveLength(3);
+    expect(statusPolicies).toHaveLength(5);
     const configText = JSON.stringify(configPolicy);
     const statusText = JSON.stringify(statusPolicies);
     expect(configText).toContain("/records/admin/discord-user-id");
@@ -533,6 +763,10 @@ describe("RecordsApplicationStack", () => {
           RUNTIME_SCHEDULER_NAME: "shittim-chest-production-runtime-reconciler",
           SIGNING_PROFILE_NAME: "shittim_chest_ecr",
           COST_ANOMALY_SUBSCRIPTION_NAME: "shittim-chest-production-cost-anomalies",
+          MEMORIAL_UPLOAD_BUCKET_NAME:
+            "shittim-chest-production-records-memorial-upload-000000000000",
+          MEMORIAL_GENERATION_QUEUE_URL: Match.anyValue(),
+          MEMORIAL_GENERATION_DLQ_URL: Match.anyValue(),
         },
       },
     });
@@ -541,7 +775,7 @@ describe("RecordsApplicationStack", () => {
       JSON.stringify(policy).includes("AdminStatusFunctionRole"),
     );
 
-    expect(statusPolicies).toHaveLength(3);
+    expect(statusPolicies).toHaveLength(5);
     const statusText = JSON.stringify(statusPolicies);
 
     for (const action of [
@@ -565,6 +799,7 @@ describe("RecordsApplicationStack", () => {
       "inspector2:ListFindings",
       "lambda:GetFunctionConcurrency",
       "s3:GetEncryptionConfiguration",
+      "s3:GetLifecycleConfiguration",
       "scheduler:GetSchedule",
       "signer:GetSigningProfile",
       "sns:GetTopicAttributes",
@@ -574,6 +809,12 @@ describe("RecordsApplicationStack", () => {
       expect(statusText).toContain(action);
     }
     expect(statusText).toContain("/records/admin/discord-user-id");
+    expect(statusText).toContain(
+      "shittim-chest-production-records-memorial-generation",
+    );
+    expect(statusText).toContain(
+      "shittim-chest-production-records-memorial-generation-dlq",
+    );
     expect(statusText).not.toContain("ssm:PutParameter");
     expect(statusText).not.toContain("ssm:DeleteParameters");
     expect(statusText).not.toContain("dynamodb:PutItem");
@@ -639,12 +880,12 @@ describe("RecordsApplicationStack", () => {
     expect(JSON.stringify(statusEventBridgeArns)).not.toContain(
       "ShittimChest-Prod-RecordsApplication-*",
     );
-    const statusLambdaRead = statusStatements.find((statement) =>
+    const statusLambdaReads = statusStatements.filter((statement) =>
       statusActionsOf(statement).includes("lambda:GetFunctionConfiguration"),
     );
-    expect(Array.isArray(statusLambdaRead?.Resource)).toBe(true);
+    expect(statusLambdaReads).toHaveLength(2);
     const statusLambdaArns = (
-      statusLambdaRead?.Resource as Array<{
+      statusLambdaReads.flatMap((statement) => statement.Resource) as Array<{
         readonly "Fn::Join": readonly [
           string,
           ReadonlyArray<string | { readonly Ref: string }>,
@@ -674,6 +915,8 @@ describe("RecordsApplicationStack", () => {
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-backfill",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-cost",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-inspector-translation",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-memorial-api",
+        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-memorial-worker",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-projector",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-ranking",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-read",

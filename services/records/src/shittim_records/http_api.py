@@ -281,6 +281,9 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "RECORD_NOT_FOUND": "指定された記録は見つかりませんでした。",
         "ROUTE_NOT_FOUND": "指定されたAPIは存在しません。",
         "REQUEST_INVALID": "リクエストが正しくありません。",
+        "CSRF_INVALID": "画面を再読み込みしてから、もう一度お試しください。",
+        "ORIGIN_INVALID": "この画面からは操作できません。",
+        "IDEMPOTENCY_KEY_INVALID": "操作識別子が正しくありません。",
         "CURSOR_INVALID": "ページ情報が正しくありません。",
         "INSIGHTS_UNAVAILABLE": "集計を準備しています。",
         "ADMIN_ACCESS_DENIED": "この操作を実行する権限がありません。",
@@ -296,6 +299,27 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "PROMPT_CONFIGURATION_CONFLICT": "プロンプトの保存内容が競合しました。",
         "PROMPT_CONFIGURATION_UNAVAILABLE": "プロンプト設定を利用できません。",
         "PROMPT_CONFIGURATION_INVALID": "プロンプト設定を確認できません。",
+        "MEMORIAL_NOT_UNLOCKED": "まだメモリアルロビーにはログインできません。",
+        "MEMORIAL_UPLOAD_NOT_ALLOWED": "現在は画像をアップロードできません。",
+        "MEMORIAL_UPLOAD_REQUIRED": "画像をアップロードしてから開放してください。",
+        "MEMORIAL_UPLOAD_EXPIRED": "画像のアップロード期限が切れました。",
+        "MEMORIAL_GENERATION_CONFIRMATION_REQUIRED": "画像生成の確認が必要です。",
+        "MEMORIAL_RESET_CONFIRMATION_REQUIRED": "親愛度リセットの確認が必要です。",
+        "MEMORIAL_RESET_NOT_ALLOWED": "生成中は親愛度をリセットできません。",
+        "MEMORIAL_STATE_CONFLICT": "メモリアルロビーの状態が更新されました。",
+        "MEMORIAL_RECOVERY_REQUIRED": (
+            "生成結果が残っています。もう一度メモリアルロビーを開放してください。"
+        ),
+        "MEMORIAL_GENERATION_ATTEMPTS_EXHAUSTED": (
+            "画像生成の試行上限に達しました。親愛度をリセットして再度開放してください。"
+        ),
+        "MEMORIAL_NOT_FOUND": "指定された思い出は見つかりませんでした。",
+        "MEMORIAL_PROVIDER_RATE_LIMITED": "画像生成が混み合っています。",
+        "MEMORIAL_PROVIDER_UNAVAILABLE": "画像生成を一時的に利用できません。",
+        "MEMORIAL_QUEUE_UNAVAILABLE": "画像生成の受付を一時的に利用できません。",
+        "MEMORIAL_UPLOAD_UNAVAILABLE": "画像アップロードを一時的に利用できません。",
+        "MEMORIAL_STORAGE_UNAVAILABLE": "思い出の保存先を一時的に利用できません。",
+        "MEMORIAL_UNAVAILABLE": "メモリアルロビーを一時的に利用できません。",
     }.get(code, "議事録サービスを利用できません。")
     payload = ErrorResponse(error=ErrorBody(code=code, message=message, request_id=request_id))
     return json_response(status, payload.model_dump(by_alias=True, mode="json"))

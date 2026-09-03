@@ -217,6 +217,8 @@ const adminFunctionKeys = [
   "records_ranking",
   "records_cost",
   "records_inspector_translation",
+  "records_memorial_api",
+  "records_memorial_worker",
   "records_admin_status",
   "records_admin_config",
 ] as const;
@@ -376,11 +378,18 @@ const adminStatus = {
       service: "s3",
       state: "healthy",
       summary: "Bucket保護設定を確認しました。",
-      metrics: ["web", "media", "release"].flatMap((key) => [
-        { name: `${key}_versioning`, value: "Enabled" },
-        { name: `${key}_encrypted`, value: true },
-        { name: `${key}_public_access_blocked`, value: true },
-      ]),
+      metrics: [
+        ...["web", "media", "release"].flatMap((key) => [
+          { name: `${key}_versioning`, value: "Enabled" },
+          { name: `${key}_encrypted`, value: true },
+          { name: `${key}_public_access_blocked`, value: true },
+        ]),
+        { name: "memorial_upload_versioning", value: "Disabled" },
+        { name: "memorial_upload_encrypted", value: true },
+        { name: "memorial_upload_public_access_blocked", value: true },
+        { name: "memorial_upload_expiration_days", value: 1 },
+        { name: "memorial_upload_abort_days", value: 1 },
+      ],
     },
     {
       service: "dynamodb",
@@ -438,7 +447,7 @@ const adminStatus = {
     {
       service: "sqs",
       state: "healthy",
-      summary: "記録・親愛度投影DLQは空で保護設定も正常です。",
+      summary: "投影DLQとメモリアル生成キューの状態は正常です。",
       metrics: [
         { name: "visible_messages", value: 0 },
         { name: "inflight_messages", value: 0 },
@@ -446,6 +455,18 @@ const adminStatus = {
         { name: "oldest_message_age_seconds", value: "0.000" },
         { name: "encrypted", value: true },
         { name: "retention_seconds", value: 1_209_600 },
+        { name: "memorial_queued_messages", value: 0 },
+        { name: "memorial_inflight_messages", value: 0 },
+        { name: "memorial_delayed_messages", value: 0 },
+        { name: "memorial_oldest_message_age_seconds", value: "0.000" },
+        { name: "memorial_encrypted", value: true },
+        { name: "memorial_retention_seconds", value: 86_400 },
+        { name: "memorial_dlq_visible_messages", value: 0 },
+        { name: "memorial_dlq_inflight_messages", value: 0 },
+        { name: "memorial_dlq_delayed_messages", value: 0 },
+        { name: "memorial_dlq_oldest_message_age_seconds", value: "0.000" },
+        { name: "memorial_dlq_encrypted", value: true },
+        { name: "memorial_dlq_retention_seconds", value: 1_209_600 },
       ],
     },
     {
@@ -2130,7 +2151,9 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(dynamodbCard).toContainText("プロフィール7 人");
   await expect(page.getByRole("rowheader", { name: "記録・親愛度投影" })).toBeVisible();
   await expect(page.getByRole("rowheader", { name: "ランキング・親愛度集計" })).toHaveCount(2);
-  await expect(page.getByText("記録・親愛度投影DLQ", { exact: true })).toBeVisible();
+  await expect(page.getByText("非同期処理・失敗イベント", { exact: true })).toBeVisible();
+  await expect(page.getByText("メモリアル生成待ち", { exact: true })).toBeVisible();
+  await expect(page.getByText("生成DLQ・未処理", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "CloudFormation Stack状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "予算状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "外部集計状態" })).toBeVisible();

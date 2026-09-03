@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 # AWS・CDK詳細設計
@@ -21,6 +21,8 @@ workloadは単一accountの`ap-northeast-1`、account-globalなcost resourceだ�
 | Runtime | Tokyo | network、API、4 Lambda、ECS、retained admission log、scheduler | replaceable runtime |
 | Operations | Tokyo | metric filter、alarm、dashboard、SNS、EventBridge | replaceable monitoring |
 | CostGovernance | Virginia | Budgets、anomaly subscription | global cost control |
+| RecordsStateful | Tokyo | Archive／Statistics／Session、Media、Memorial upload／queue | termination protection、RETAIN |
+| RecordsApplication | Tokyo | Records API／Projector／collector／ADMIN／Memorial Lambda | replaceable application |
 
 通常Production ReleaseがChange Setを作る順序はStateful、Runtime、Operations、CostGovernanceである。
 ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立した先行更新工程とする。
@@ -33,6 +35,14 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 - ECRはproduction imageのimmutable tag、enhanced continuous scan、暗号化を有効にする。
 - lifecycleはtagged imageの最新3世代、untagged imageの最新3世代を残す。
 - AWS Signer／Notation用profileとECR referrerをrelease supply chainに用いる。
+- RecordsのMemorial upload bucketはversioningなし、S3 managed encryption、全public access block、TLS必須、
+  RETAINとする。production originからのpresigned POSTだけをCORSで許可し、原本と未完了multipart uploadは
+  1日で期限切れにする。access logは既存Media access-log bucketの専用prefixへ送る。
+- Memorial generation queueはSQS managed encryption、TLS必須、retention 1日、visibility timeout 30分、
+  batch 1とする。最大4 receive後は14日retentionの専用DLQへ移し、Projector DLQと混在させない。
+  永続checkpointのpaid logical attempt上限は3のままとし、物理receive回数でpaid可否を決めない。通常の3回に加えた
+  物理配送余地により、`generation_attempt=3`のclaimがhard timeout／OOM／runtime crashとなった場合も、次の配送が
+  stale leaseをattempt 4として回収し、completion-onlyまたはproviderを呼ばないterminal化へ収束できるようにする。
 
 ## 3. Runtime network and compute
 
@@ -55,6 +65,8 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 | Image Admission Lambda | task definition、image digest、signature／attestationを検証 |
 | Records Admin Status Lambda | allowlist済みAWS／CloudWatch状態のread-only集約、reserved concurrency 2 |
 | Records Admin Config Lambda | runtime promptの参照、immutable revision作成、rollback、audit、reserved concurrency 2 |
+| Records Memorial API Lambda | owner-onlyの状態／upload／生成／履歴／reset API、15秒、reserved concurrency 2 |
+| Records Memorial Worker Lambda | SQS 1件ずつの画像／文章生成、5分、1,024 MiB、reserved concurrency 1 |
 
 EventBridge SchedulerがRuntime Reconcilerを1分間隔で起動する。LambdaはVPC外に置き、external APIと
 AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管理画面の並行readを受理しつつ、
@@ -73,6 +85,16 @@ AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管�
   `ssm:Overwrite=false`だけを許し、overwriteを明示的に拒否する。保持期限を過ぎた非active revisionには
   fixed-length revision subtreeだけの`ssm:DeleteParameters`を許し、`active` parameterは削除対象resourceへ
   含めない。Admin StatusのAWS状態取得権限を共有しない。
+- Memorial API roleはSession read、source v9 affection profileのGet／Update／transaction、Statisticsの
+  owner memorial partitionだけのGet／Query／Put／Update／transaction、temporary upload object、generation
+  queue send、Session key／OAuth Origin設定の読込、private memorial画像Getへ限定する。S3の不存在判定に必要な
+  bucket-level `ListBucket`は、APIではupload bucketの`uploads/*`とMedia bucketの`memorials/*`、
+  WorkerではMedia bucketの`memorials/*`だけをprefix conditionで許可する。Workerに一時写真の列挙権限を
+  与えず、どちらもbucket全体を列挙させない。Worker roleはsource tableを読まず、Statistics checkpointの
+  Get／Update、Archive GSI3 Query、temporary uploadのGet／Delete、participant画像Get、memorial画像Put、
+  generation queue consume、OpenAI keyとactive／legacy participant promptのexact readだけを許可する。
+- Admin Status roleはMemorial API／WorkerのLambda状態とgeneration queue／DLQ属性だけを追加で読み、
+  message本文、upload object、owner checkpointを取得しない。既存のProjector DLQ表示と権限を維持する。
 - `ecs:DescribeTaskDefinition`はresource-level permission非対応のため、Image Admission、Release Deploy、
   Records Admin Status Lambda roleで独立statementの`Resource: "*"`を用いる。Image Admissionと
   Release Deployはfamily、revision、container、digestをapplicationでexact validationする。Admin Status
@@ -93,6 +115,8 @@ AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管�
   Admin Config Lambdaへ渡す。Lambdaはactive pointerがない間だけ、そのversionの5本文をlegacy sourceとして読む。
 - setup toolはv0003からv0004を再構成する場合もsecret本文を表示／local保存しない。
 - CDKはsecret valueをlookupせず、parameter nameとmetadataだけを扱う。
+- Memorial OpenAI keyは専用setup toolのhidden inputで上書きせず登録し、Records ReleaseはSecureStringの
+  metadataだけを事前確認する。値はLambda環境変数、CloudFormation、workflow、artifactへ渡さない。
 
 ## 7. Operations and cost
 

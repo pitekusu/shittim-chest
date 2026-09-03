@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 # DynamoDB・データ整合性詳細設計
@@ -55,6 +55,7 @@ deployment lock、immutable acquire auditを1 transactionで書き、v8/openま�
 | `ADMIN#PROMPT` | current revision、content-free revision audit、hashed idempotency state |
 | `AFFECTION#REQUESTER#<opaque requester key> / PROFILE` | 3人の0〜1,000点、CAS version、reset回数、cycle、解放状態 |
 | `DEBATE#<Debate ID> / AFFECTION` | 評価状態、変更前、質問評価、実増減、変更後、今回のメモリアル解放 |
+| `MEMORIAL#REQUESTER#<opaque requester key> / CYCLE#<cycle>` | owner別のupload予約、生成checkpoint、画像参照、思い出文、reset metadata |
 
 exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正とする。
 
@@ -85,6 +86,32 @@ exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正
   選出した1人の解放metadataをprofileと討論評価へ
   同じtransactionで保存する。通常到達かv8遡及解放かをcontent-freeなbooleanで保持し、通常v9の
   到達条件を緩めない。既に解放済みのcycleでは後続到達を無視する。
+- メモリアル生成はStatisticsのowner partitionへcycle checkpointとhashed idempotency stateを保存する。
+  upload予約、queue投入、resetの全POSTはrequestの`expectedCycle`とsource profileのcurrent cycleを
+  transaction conditionで一致させ、stale requestを409でfenceする。DynamoDB expressionでは`cycle`を
+  `#cycle`でaliasし、LocalとAWSで同じtransaction contractを使う。
+- queue投入済みの`queued`は不変のresult asset keyを保持したままSQSへ再送でき、APIとSQSの間の
+  crashでjobを失わない。worker claim、生成完了／失敗はowner、cycle、stateを条件付き更新し、
+  claimごとにcheckpointのgeneration attemptをCAS incrementする。paid generationは3回を上限とし、Standard SQSの
+  物理receive countを正本にしない。各claimにはrandomなcontent-free tokenを付け、生成checkpoint、完了、失敗、
+  queue復帰をattemptとtokenの両方でfenceする。条件付き更新の応答喪失を回復するidempotent fallbackも、
+  terminal／queued stateに残るtokenが一致する場合だけ成功扱いする。そのclaimでproviderをまだ開始していないdeadline preflight失敗だけは
+  `queued`へ戻し、incrementを1だけ原子的に払い戻す。再claim後の旧tokenでは更新できず、二重払い戻しを許さない。
+  uploadとpartial checkpointは維持する。counterはfailed後のupload予約更新とqueue再投入でも引き継ぐ。
+  SQS再配送で画像や文章を二重生成・上書きしない。上限後は
+  paid callを禁止し、検証済み最終画像と文章が残る場合だけ同じcycle／result asset keyの
+  completion-only回復を許可する。最終画像がない文章だけのpartial checkpointはterminal化時に除去する。
+  生成物を公開できるのは画像参照と文章が
+  揃った`ready`だけであり、partial outputはowner APIへ返さない。
+- resetはsource v9の`AFFECTION#REQUESTER#... / PROFILE`とStatisticsのcycle状態を同一transactionで
+  fenceする。解放済みcycleはcheckpointがない`unlocked`、回復可能なpartial outputがない終端の`failed`、
+  または`ready`で
+  resetでき、`queued`または`generating`は409で拒否する。初回の`locked`は未解放のためresetできず、
+  文章と検証済み最終画像を持つ`failed`はcompletion-only回復が必要なためreset／上書きを409で拒否する。
+  reset完了後の次cycleが`locked`の場合は同じidempotency keyによる完了済みresetの再試行だけを
+  受理する。次cycleが再解放済みなら過去cycleのreset再送は409とする。3スコアを500へ戻し、
+  reset回数とmemorial cycleを各1増やし、解放metadataを除去する。
+  source profileだけ、またはcheckpointだけが進む状態や二重加算を許可しない。
 
 ## 5. Lease and fencing
 
@@ -113,6 +140,8 @@ nonretryable error、最大3 delivery attempt、stageから15分のdeadlineで�
 - base tableの整合性判断は`ConsistentRead=true`を用いる。
 - Query／Scanは`LastEvaluatedKey`が消えるまで処理し、上限到達を完全結果とみなさない。
 - GSIのeventual consistencyをlockやwinner判断へ使わない。
+- メモリアルの直近質問はArchive GSI3を降順で最大10件だけ読む。生成可否、owner認可、cycleの正しさは
+  GSI結果へ依存せず、source profileとStatistics checkpointの条件付きbase-table操作で決める。
 - repositoryはnative Python valueをapplicationへ返し、SDK AttributeValueを漏らさない。
 
 ## 8. Privacy and telemetry

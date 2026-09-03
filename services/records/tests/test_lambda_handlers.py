@@ -6,6 +6,7 @@ import logging
 import subprocess
 import sys
 import traceback
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
@@ -439,6 +440,7 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
     monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", controller)
     monkeypatch.setattr(lambda_handlers, "_READ_CONTROLLER", controller)
     monkeypatch.setattr(lambda_handlers, "_ADMIN_CONFIG_CONTROLLER", controller)
+    monkeypatch.setattr(lambda_handlers, "_MEMORIAL_API_CONTROLLER", controller)
     event = {"routeKey": "GET /api/v1/session"}
 
     assert lambda_handlers.auth_handler(event, object()) == {
@@ -450,6 +452,10 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
         "event": event,
     }
     assert lambda_handlers.admin_config_handler(event, object()) == {
+        "statusCode": 200,
+        "event": event,
+    }
+    assert lambda_handlers.memorial_api_handler(event, object()) == {
         "statusCode": 200,
         "event": event,
     }
@@ -468,6 +474,11 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
             "_admin_status_controller",
             "admin_status_handler",
             "ADMIN_STATUS_UNAVAILABLE",
+        ),
+        (
+            "_memorial_api_controller",
+            "memorial_api_handler",
+            "MEMORIAL_UNAVAILABLE",
         ),
     ),
 )
@@ -504,6 +515,154 @@ def test_http_handler_controller_validation_failure_is_content_free(
     assert expected_code in response["body"]
     assert private_user_id not in response["body"]
     assert private_user_id not in caplog.text
+
+
+def test_memorial_worker_handles_success_skip_and_partial_failure_without_content_leak(
+    monkeypatch: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_requester = "a" * 43
+    calls: list[tuple[str, int, int]] = []
+
+    class Worker:
+        def process(
+            self,
+            *,
+            requester_key: str,
+            cycle: int,
+            receive_count: int,
+            now: object,
+            deadline: object,
+        ) -> object | None:
+            assert isinstance(now, datetime)
+            assert isinstance(deadline, datetime)
+            assert deadline - now == timedelta(seconds=280)
+            calls.append((requester_key, cycle, receive_count))
+            if cycle == 2:
+                return None
+            if cycle == 3:
+                raise RuntimeError("private " + requester_key)
+            return object()
+
+    monkeypatch.setattr(lambda_handlers, "_MEMORIAL_WORKER", cast(Any, Worker()))
+    caplog.set_level(logging.INFO)
+    event = {
+        "Records": [
+            {
+                "messageId": f"message-{cycle}",
+                "body": f'{{"cycle":{cycle},"requesterKey":"{private_requester}"}}',
+                "attributes": {"ApproximateReceiveCount": str(cycle)},
+            }
+            for cycle in (1, 2, 3)
+        ]
+    }
+
+    result = lambda_handlers.memorial_worker_handler(
+        event,
+        SimpleNamespace(get_remaining_time_in_millis=lambda: 280_000),
+    )
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "message-3"}]}
+    assert calls == [
+        (private_requester, 1, 1),
+        (private_requester, 2, 2),
+        (private_requester, 3, 3),
+    ]
+    assert private_requester not in caplog.text
+    assert "private" not in caplog.text
+    assert '"processed":1' in caplog.text
+    assert '"skipped":1' in caplog.text
+    assert '"failed":1' in caplog.text
+
+
+def test_memorial_worker_rejects_private_or_malformed_queue_content_without_logging_it(
+    monkeypatch: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_body = '{"requesterKey":"private-raw-user","cycle":1,"extra":"secret"}'
+    monkeypatch.setattr(
+        lambda_handlers,
+        "_MEMORIAL_WORKER",
+        cast(Any, SimpleNamespace(process=lambda **_kwargs: object())),
+    )
+    caplog.set_level(logging.INFO)
+
+    result = lambda_handlers.memorial_worker_handler(
+        {
+            "Records": [
+                {
+                    "messageId": "message-invalid",
+                    "body": private_body,
+                    "attributes": {"ApproximateReceiveCount": "1"},
+                }
+            ]
+        },
+        SimpleNamespace(get_remaining_time_in_millis=lambda: 280_000),
+    )
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "message-invalid"}]}
+    assert private_body not in caplog.text
+    assert "private-raw-user" not in caplog.text
+    assert "secret" not in caplog.text
+
+
+def test_memorial_worker_accepts_the_fourth_recovery_delivery(
+    monkeypatch: Any,
+) -> None:
+    private_requester = "a" * 43
+    received: list[int] = []
+
+    class Worker:
+        def process(self, **kwargs: Any) -> None:
+            received.append(kwargs["receive_count"])
+
+    monkeypatch.setattr(lambda_handlers, "_MEMORIAL_WORKER", cast(Any, Worker()))
+
+    result = lambda_handlers.memorial_worker_handler(
+        {
+            "Records": [
+                {
+                    "messageId": "message-recovery",
+                    "body": f'{{"cycle":1,"requesterKey":"{private_requester}"}}',
+                    "attributes": {"ApproximateReceiveCount": "4"},
+                }
+            ]
+        },
+        SimpleNamespace(get_remaining_time_in_millis=lambda: 280_000),
+    )
+
+    assert result == {"batchItemFailures": []}
+    assert received == [4]
+
+
+@pytest.mark.parametrize("remaining", [None, True, 0, -1, 1.0])
+def test_memorial_worker_fails_closed_without_a_valid_lambda_deadline(
+    monkeypatch: Any,
+    remaining: object,
+) -> None:
+    private_requester = "a" * 43
+    worker = SimpleNamespace(process=lambda **_kwargs: object())
+    monkeypatch.setattr(lambda_handlers, "_MEMORIAL_WORKER", cast(Any, worker))
+    context = (
+        object()
+        if remaining is None
+        else SimpleNamespace(get_remaining_time_in_millis=lambda: remaining)
+    )
+
+    result = lambda_handlers.memorial_worker_handler(
+        {
+            "Records": [
+                {
+                    "messageId": "message-deadline",
+                    "body": f'{{"cycle":1,"requesterKey":"{private_requester}"}}',
+                    "attributes": {"ApproximateReceiveCount": "1"},
+                }
+            ]
+        },
+        context,
+    )
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "message-deadline"}]}
 
 
 def test_s3_presigning_client_uses_the_lambda_region_endpoint(monkeypatch: Any) -> None:
