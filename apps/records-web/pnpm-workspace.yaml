@@ -2,6 +2,7 @@ packages:
   - "."
 
 overrides:
+  fast-uri: "3.1.6"
   vite: "npm:@voidzero-dev/vite-plus-core@0.2.9"
   vitest: "4.1.10"
 
