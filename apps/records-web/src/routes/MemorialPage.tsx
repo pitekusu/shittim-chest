@@ -692,8 +692,16 @@ export default function MemorialPage({
                 onDrop={(event) => {
                   event.preventDefault();
                   setDragging(false);
-                  if (!busy && canSelectFile && generationAttempt === null)
-                    chooseFile(event.dataTransfer.files[0]);
+                  const droppedFile = event.dataTransfer.files[0];
+                  if (
+                    droppedFile !== undefined &&
+                    !busy &&
+                    canSelectFile &&
+                    generationAttempt === null
+                  ) {
+                    if (fileInputRef.current !== null) fileInputRef.current.value = "";
+                    chooseFile(droppedFile);
+                  }
                 }}
               >
                 <span className={styles.uploadGlyph} aria-hidden="true">

@@ -449,22 +449,35 @@ describe("MemorialPage", () => {
     expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeEnabled();
   });
 
-  it("accepts a supported image through drag and drop", async () => {
+  it("clears the picker after a dropped image replaces its selection", async () => {
     vi.useFakeTimers();
     renderMemorial(unlockedState());
     await finishStandardEntry();
     vi.useRealTimers();
 
+    const input = screen.getByLabelText("メモリアル用の画像を選択");
     const dropZone = screen.getByRole("button", { name: /画像をドロップ/u });
-    const source = new File([Uint8Array.of(1, 2, 3)], "dropped.webp", {
+    const picked = new File([Uint8Array.of(1)], "picked.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [picked] } });
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      value: String.raw`C:\fakepath\picked.png`,
+      writable: true,
+    });
+
+    const dropped = new File([Uint8Array.of(1, 2, 3)], "dropped.webp", {
       type: "image/webp",
     });
     fireEvent.dragEnter(dropZone);
     expect(dropZone).toHaveAttribute("data-dragging", "true");
-    fireEvent.drop(dropZone, { dataTransfer: { files: [source] } });
+    fireEvent.drop(dropZone, { dataTransfer: { files: [dropped] } });
 
     expect(dropZone).toHaveAttribute("data-dragging", "false");
+    expect(input).toHaveValue("");
     expect(screen.getByText(/dropped\.webp/u)).toBeVisible();
+
+    fireEvent.change(input, { target: { files: [picked] } });
+    expect(screen.getByText(/picked\.png/u)).toBeVisible();
     expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeEnabled();
   });
 

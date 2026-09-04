@@ -2071,7 +2071,7 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   }
 });
 
-test("Memorial and SYSTEM ACCESS remain reachable in the 320px mobile navigation", async ({
+test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile navigation", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
@@ -2090,11 +2090,18 @@ test("Memorial and SYSTEM ACCESS remain reachable in the 320px mobile navigation
   await expect(mobileNavigation.getByRole("link", { name: "メモリアルロビー" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "サービス状態確認" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "プロンプト管理" })).toBeVisible();
-  const viewport = await page.evaluate(() => ({
-    clientWidth: document.documentElement.clientWidth,
-    scrollWidth: document.documentElement.scrollWidth,
-  }));
-  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+  for (const width of [320, 340, 360, 377, 378]) {
+    await page.setViewportSize({ width, height: 720 });
+    const viewport = await page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+    const targetWidths = await mobileNavigation
+      .locator(":scope > a, :scope > button")
+      .evaluateAll((targets) => targets.map((target) => target.getBoundingClientRect().width));
+    expect(Math.min(...targetWidths)).toBeGreaterThanOrEqual(44);
+  }
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
