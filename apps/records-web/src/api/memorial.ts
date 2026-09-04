@@ -83,13 +83,19 @@ function isMemorialStateResponse(value: unknown): value is MemorialStateResponse
   );
 }
 
-function isMemorialMemoryResponse(value: unknown, expectedCycle: number): value is MemoryResponse {
+function isMemorialMemoryResponse(
+  value: unknown,
+  expected: MemorialMemorySummary,
+): value is MemoryResponse {
   if (!memorialMemoryResponseValidator(value)) return false;
   const memory = value as MemoryResponse;
   const unlockedAt = timestamp(memory.unlockedAt);
   const generatedAt = timestamp(memory.generatedAt);
   return (
-    memory.cycle === expectedCycle &&
+    memory.cycle === expected.cycle &&
+    memory.participant === expected.participant &&
+    memory.unlockedAt === expected.unlockedAt &&
+    memory.generatedAt === expected.generatedAt &&
     unlockedAt !== null &&
     generatedAt !== null &&
     generatedAt >= unlockedAt
@@ -207,9 +213,9 @@ export function queueMemorialGeneration(
   });
 }
 
-export function getMemorialMemory(cycle: number): Promise<MemoryResponse> {
-  return requestJson(`/api/v1/memorial/memories/${cycle}`, (value) =>
-    isMemorialMemoryResponse(value, cycle),
+export function getMemorialMemory(summary: MemorialMemorySummary): Promise<MemoryResponse> {
+  return requestJson(`/api/v1/memorial/memories/${summary.cycle}`, (value) =>
+    isMemorialMemoryResponse(value, summary),
   );
 }
 

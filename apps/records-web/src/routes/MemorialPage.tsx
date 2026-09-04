@@ -437,10 +437,19 @@ export default function MemorialPage({
     if (latest !== null && latest !== undefined) setSelectedCycle(latest);
   }, [stateQuery.data?.latestReadyCycle]);
 
+  const selectedMemorySummary =
+    stateQuery.data?.memories.find((memory) => memory.cycle === selectedCycle) ?? null;
   const memoryQuery = useQuery({
-    queryKey: ["memorial", "memory", selectedCycle],
-    queryFn: () => getMemorialMemory(selectedCycle!),
-    enabled: selectedCycle !== null,
+    queryKey: [
+      "memorial",
+      "memory",
+      selectedMemorySummary?.cycle ?? null,
+      selectedMemorySummary?.participant ?? null,
+      selectedMemorySummary?.unlockedAt ?? null,
+      selectedMemorySummary?.generatedAt ?? null,
+    ],
+    queryFn: () => getMemorialMemory(selectedMemorySummary!),
+    enabled: selectedMemorySummary !== null,
   });
   useAuthenticationRecovery(memoryQuery.error);
 

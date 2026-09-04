@@ -1035,7 +1035,7 @@ describe("MemorialPage", () => {
 
   it("loads the latest ready memory and switches owner-only history tabs", async () => {
     useReducedMotion();
-    getMemoryMock.mockImplementation((cycle) => Promise.resolve(memory(cycle as 1 | 2)));
+    getMemoryMock.mockImplementation((summary) => Promise.resolve(memory(summary.cycle as 1 | 2)));
     renderMemorial(readyState());
 
     expect(await screen.findByRole("heading", { name: "メモリアルロビー" })).toBeVisible();
@@ -1055,8 +1055,8 @@ describe("MemorialPage", () => {
     fireEvent.click(tabs[0]!);
 
     expect(await screen.findByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
-    expect(getMemoryMock).toHaveBeenNthCalledWith(1, 2);
-    expect(getMemoryMock).toHaveBeenNthCalledWith(2, 1);
+    expect(getMemoryMock).toHaveBeenNthCalledWith(1, MEMORY_SUMMARIES[1]);
+    expect(getMemoryMock).toHaveBeenNthCalledWith(2, MEMORY_SUMMARIES[0]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
   });
 
@@ -1070,15 +1070,15 @@ describe("MemorialPage", () => {
       latestReadyCycle: 1,
       memories: [MEMORY_SUMMARIES[0]!],
     };
-    getMemoryMock.mockImplementation((cycle) => Promise.resolve(memory(cycle as 1 | 2)));
+    getMemoryMock.mockImplementation((summary) => Promise.resolve(memory(summary.cycle as 1 | 2)));
     const { client } = renderMemorial(generatingCycleTwo);
 
     expect(await screen.findByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
     await act(async () => client.setQueryData(["memorial"], readyState()));
 
     expect(await screen.findByRole("img", { name: "プラナとのメモリアルロビー" })).toBeVisible();
-    expect(getMemoryMock).toHaveBeenNthCalledWith(1, 1);
-    expect(getMemoryMock).toHaveBeenNthCalledWith(2, 2);
+    expect(getMemoryMock).toHaveBeenNthCalledWith(1, MEMORY_SUMMARIES[0]);
+    expect(getMemoryMock).toHaveBeenNthCalledWith(2, MEMORY_SUMMARIES[1]);
   });
 
   it("shows a history-level error and retries only that memory", async () => {

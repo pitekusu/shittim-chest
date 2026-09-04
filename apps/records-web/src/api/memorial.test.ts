@@ -309,11 +309,25 @@ describe("Memorial API", () => {
     ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
   });
 
-  it("validates the requested memory cycle and timestamp ordering", async () => {
+  it("binds a memory detail to the selected immutable summary", async () => {
+    const summary = readyState().memories[0]!;
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(memoryResponse()))
       .mockResolvedValueOnce(jsonResponse({ ...memoryResponse(), cycle: 2 }))
+      .mockResolvedValueOnce(jsonResponse({ ...memoryResponse(), participant: "participant-b" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ...memoryResponse(),
+          unlockedAt: "2026-09-03T10:00:00+09:00",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ...memoryResponse(),
+          generatedAt: "2026-09-03T10:05:00+09:00",
+        }),
+      )
       .mockResolvedValueOnce(
         jsonResponse({
           ...memoryResponse(),
@@ -322,9 +336,22 @@ describe("Memorial API", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getMemorialMemory(1)).resolves.toEqual(memoryResponse());
+    await expect(getMemorialMemory(summary)).resolves.toEqual(memoryResponse());
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/memorial/memories/1");
-    await expect(getMemorialMemory(1)).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
-    await expect(getMemorialMemory(1)).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    await expect(getMemorialMemory(summary)).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    });
+    await expect(getMemorialMemory(summary)).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    });
+    await expect(getMemorialMemory(summary)).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    });
+    await expect(getMemorialMemory(summary)).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    });
+    await expect(getMemorialMemory(summary)).rejects.toMatchObject({
+      code: "INVALID_API_RESPONSE",
+    });
   });
 });
