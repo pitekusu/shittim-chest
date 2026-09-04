@@ -154,7 +154,7 @@ jobs:
       - name: Test Records browser flows and visual contracts
         run: pnpm exec playwright test
       - name: Audit Records web dependencies
-        run: pnpm audit --audit-level=low
+        run: python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low
 
   records-infra:
     name: records-infra
@@ -176,7 +176,7 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Audit and test the Records infrastructure
         run: |
-          npm run audit:infra
+          python3 tools/run_npm_audit.py -- npm run audit:infra
           npm run build
           npx vitest run \
             infra/test/records-stateful-stack.test.ts \

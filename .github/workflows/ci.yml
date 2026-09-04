@@ -268,7 +268,7 @@ jobs:
       - name: Install locked CDK dependencies
         run: npm ci
       - name: Audit locked CDK dependencies
-        run: npm run audit:infra
+        run: python3 tools/run_npm_audit.py -- npm run audit:infra
       - name: Type-check, test, and synthesize CDK
         run: npm run check:infra
 

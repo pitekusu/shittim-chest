@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-03
+updated: 2026-09-04
 ---
 
 # GitHub・CI-CD詳細設計
@@ -35,6 +35,12 @@ updated: 2026-09-03
 
 CodeQL default setupはPython、JavaScript／TypeScript、Actionsを解析する。branch rulesetのcheck名を
 workflow名と一致させ、rerunでflaky failureを隠さない。
+
+`npm audit`／`pnpm audit`は通常どおり必須とする。ただしnpm公式StatuspageがSecurity Audit componentの
+劣化と、そのcomponentに紐づくactive incidentを同時に示す間だけ、Node系の外部auditを当該runで
+skipしてwarningを残す。Statuspageの取得失敗、schema不正、componentだけが劣化してincidentを確認
+できない場合はfail closedとし、audit commandのfindingや通常の非0終了をskip理由にしない。build、test、
+CodeQL、Grype、dependency reviewなど他のgateは継続する。
 
 ## 3. Container evidence
 
