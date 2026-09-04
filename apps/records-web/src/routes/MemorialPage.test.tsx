@@ -417,18 +417,29 @@ describe("MemorialPage", () => {
     vi.useRealTimers();
 
     const input = screen.getByLabelText("メモリアル用の画像を選択");
+    const source = new File([Uint8Array.of(1)], "first.png", { type: "image/png" });
     fireEvent.change(input, {
       target: {
-        files: [new File([Uint8Array.of(1)], "first.png", { type: "image/png" })],
+        files: [source],
       },
+    });
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      value: String.raw`C:\fakepath\first.png`,
+      writable: true,
     });
     fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
     fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
 
     fireEvent.click(await screen.findByRole("button", { name: "画像を選び直す" }));
     expect(input).toBeEnabled();
+    expect(input).toHaveValue("");
     expect(screen.getByText("画像をドロップ、またはファイルを選択")).toBeVisible();
     expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeDisabled();
+
+    fireEvent.change(input, { target: { files: [source] } });
+    expect(screen.getByText(/first\.png/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeEnabled();
   });
 
   it("accepts a supported image through drag and drop", async () => {

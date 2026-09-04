@@ -657,6 +657,7 @@ export default function MemorialPage({
                       type="button"
                       disabled={busy}
                       onClick={() => {
+                        if (fileInputRef.current !== null) fileInputRef.current.value = "";
                         setSelectedFile(null);
                         setGenerationAttempt(null);
                         setActionError(null);

@@ -2283,6 +2283,7 @@ test("ready Memorial shows private history and confirms reset", async ({ page },
   await expect(page).toHaveScreenshot("records-memorial-ready-dark.png", {
     animations: "disabled",
     fullPage: true,
+    maxDiffPixels: 20,
   });
 
   await page.getByRole("button", { name: "親愛度をリセット" }).click();

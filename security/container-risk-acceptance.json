@@ -1,5 +1,42 @@
 {
   "schema_version": 6,
   "maximum_validity_days": 90,
-  "acceptances": []
+  "acceptances": [
+    {
+      "vulnerability_id": "CVE-2026-85091",
+      "package": "zlib1g",
+      "image_config_digests": {
+        "production": [
+          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "The pinned Debian 13.6 DHI runtime has no vendor fix or verified VEX for this finding.",
+      "impact": "A successful non-blocking gzwrite exploit could corrupt the isolated task process heap and affect its integrity or availability.",
+      "exploitability": "No application call to gzwrite, gzprintf, or gzvprintf was found; the task has zero ingress and runs non-root with a read-only root filesystem.",
+      "evidence": "The 2026-09-04 Grype report identified the package as not-fixed, and the verified DHI VEX did not suppress the finding.",
+      "approved_on": "2026-09-04",
+      "expires_on": "2026-10-04",
+      "reevaluation_conditions": "Reevaluate when DHI publishes a new runtime digest, Debian publishes a fixed zlib package, verified VEX changes, or task exposure changes.",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-85091",
+      "package": "zlib1g-dev",
+      "image_config_digests": {
+        "production": [
+          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "The pinned Debian 13.6 DHI runtime has no vendor fix or verified VEX for this finding.",
+      "impact": "A successful non-blocking gzwrite exploit could corrupt the isolated task process heap and affect its integrity or availability.",
+      "exploitability": "No application call to gzwrite, gzprintf, or gzvprintf was found; the task has zero ingress and runs non-root with a read-only root filesystem.",
+      "evidence": "The 2026-09-04 Grype report identified the package as not-fixed, and the verified DHI VEX did not suppress the finding.",
+      "approved_on": "2026-09-04",
+      "expires_on": "2026-10-04",
+      "reevaluation_conditions": "Reevaluate when DHI publishes a new runtime digest, Debian publishes a fixed zlib package, verified VEX changes, or task exposure changes.",
+      "owner": "pitekusu"
+    }
+  ]
 }
