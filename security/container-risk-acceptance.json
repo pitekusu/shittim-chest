@@ -7,6 +7,7 @@
       "package": "zlib1g",
       "image_config_digests": {
         "production": [
+          "sha256:4b7017c329230a6d10801f2b569ec78279a6752897091bc873d531aae291fb1b",
           "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b"
         ]
       },
@@ -25,6 +26,7 @@
       "package": "zlib1g-dev",
       "image_config_digests": {
         "production": [
+          "sha256:4b7017c329230a6d10801f2b569ec78279a6752897091bc873d531aae291fb1b",
           "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b"
         ]
       },
