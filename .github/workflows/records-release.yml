@@ -189,6 +189,7 @@ jobs:
           done
           [[ "${SOURCE_STREAM_ARN}" =~ ^arn:[^:]+:dynamodb:${AWS_REGION}:[0-9]{12}:table/shittim-chest-production/stream/.+$ ]]
           [[ "${PUBLIC_HOSTNAME}" =~ ^[a-z0-9.-]+$ ]]
+          test "${PUBLIC_HOSTNAME}" = "shittim.pitekusu.dev"
           [[ "${HOSTED_ZONE_ID}" =~ ^Z[A-Z0-9]+$ ]]
       - name: Acquire Records plan credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -368,7 +369,8 @@ jobs:
                 --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}" \
                 --expected-parameter "RecordsHostedZoneId=${HOSTED_ZONE_ID}" \
                 --expected-parameter "RecordsApiOriginDomain=${api_origin_domain}" \
-                --expected-parameter "RecordsMediaOriginDomain=${media_origin_domain}"
+                --expected-parameter "RecordsMediaOriginDomain=${media_origin_domain}" \
+                --expected-parameter "RecordsMemorialUploadOriginDomain=${memorial_upload_origin_domain}"
             fi
             uv run --project services/records --frozen python \
               tools/records_release_manifest.py create-entry \
@@ -423,6 +425,8 @@ jobs:
           api_origin_domain=${api_endpoint#https://}
           api_origin_domain=${api_origin_domain%/}
           media_origin_domain="shittim-chest-production-records-media-${account}.s3.${AWS_REGION}.amazonaws.com"
+          memorial_upload_origin_domain="shittim-chest-production-records-memorial-upload-${account}.s3.${AWS_REGION}.amazonaws.com"
+          [[ "${memorial_upload_origin_domain}" =~ ^shittim-chest-production-records-memorial-upload-[0-9]{12}\.s3\.ap-northeast-1\.amazonaws\.com$ ]]
           set -e
           create_plan stateful ShittimChest-Prod-RecordsStateful \
             "${STATEFUL_CHANGE_SET}" "${stateful_region}" "${EXECUTION_ROLE_ARN}" \
@@ -445,11 +449,13 @@ jobs:
               ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}" \
               ParameterKey=RecordsHostedZoneId,ParameterValue="${HOSTED_ZONE_ID}" \
               ParameterKey=RecordsApiOriginDomain,ParameterValue="${api_origin_domain}" \
-              ParameterKey=RecordsMediaOriginDomain,ParameterValue="${media_origin_domain}"
+              ParameterKey=RecordsMediaOriginDomain,ParameterValue="${media_origin_domain}" \
+              ParameterKey=RecordsMemorialUploadOriginDomain,ParameterValue="${memorial_upload_origin_domain}"
       - name: Record Records release evidence
         id: evidence
         env:
           BUNDLE_HASH: ${{ steps.bundle.outputs.bundle_hash }}
+          PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           WEB_HASH: ${{ steps.web.outputs.web_hash }}
           WEB_SBOM_HASH: ${{ steps.web_sbom.outputs.web_sbom_hash }}
         run: |
@@ -460,6 +466,7 @@ jobs:
             --application-plan "${RUNNER_TEMP}/records-release-application-plan.json" \
             --edge-plan "${RUNNER_TEMP}/records-release-edge-plan.json" \
             --commit-sha "${GITHUB_SHA}" --bundle-sha256 "${BUNDLE_HASH}" \
+            --records-public-hostname "${PUBLIC_HOSTNAME}" \
             --web-artifact-sha256 "${WEB_HASH}" \
             --web-sbom-sha256 "${WEB_SBOM_HASH}" \
             --output "${RUNNER_TEMP}/records-release-manifest.json"
@@ -633,6 +640,14 @@ jobs:
                   "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
                   --expected-arn "${arn}" --expected-stack "${stack}" \
                   --expected-parameter "RecordsBundleCodeSha256=${bundle_code_sha256}"
+              elif [ "${logical_name}" = edge ]; then
+                account=$(aws sts get-caller-identity --query Account --output text)
+                memorial_upload_origin_domain="shittim-chest-production-records-memorial-upload-${account}.s3.${AWS_REGION}.amazonaws.com"
+                uv run --project services/records --frozen python \
+                  tools/release_supply_chain.py validate-change-set \
+                  "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
+                  --expected-arn "${arn}" --expected-stack "${stack}" \
+                  --expected-parameter "RecordsMemorialUploadOriginDomain=${memorial_upload_origin_domain}"
               fi
               uv run --project services/records --frozen python \
                 tools/records_release_manifest.py create-entry \
@@ -677,6 +692,34 @@ jobs:
           execute stateful
           execute application
           execute edge
+      - name: Verify the deployed Records hostname against attested evidence
+        run: |
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          hostname=$(jq --exit-status --raw-output '.records_public_hostname' "${manifest}")
+          aws cloudformation describe-stacks --region "${AWS_REGION}" \
+            --stack-name ShittimChest-Prod-RecordsApplication \
+            > "${RUNNER_TEMP}/records-application-deployed.json"
+          aws cloudformation describe-stacks --region us-east-1 \
+            --stack-name ShittimChest-Prod-RecordsEdge \
+            > "${RUNNER_TEMP}/records-edge-deployed.json"
+          application_hostname=$(jq --exit-status --raw-output '
+            [.Stacks[] | .Parameters[] |
+             select(.ParameterKey == "RecordsPublicHostname") | .ParameterValue]
+            | if length == 1 then .[0] else error("expected one application hostname") end
+          ' "${RUNNER_TEMP}/records-application-deployed.json")
+          edge_hostname=$(jq --exit-status --raw-output '
+            [.Stacks[] | .Parameters[] |
+             select(.ParameterKey == "RecordsPublicHostname") | .ParameterValue]
+            | if length == 1 then .[0] else error("expected one edge hostname") end
+          ' "${RUNNER_TEMP}/records-edge-deployed.json")
+          public_origin=$(jq --exit-status --raw-output '
+            [.Stacks[] | .Outputs[] |
+             select(.OutputKey == "RecordsPublicOrigin") | .OutputValue]
+            | if length == 1 then .[0] else error("expected one public origin") end
+          ' "${RUNNER_TEMP}/records-edge-deployed.json")
+          test "${hostname}" = "${application_hostname}"
+          test "${application_hostname}" = "${edge_hostname}"
+          test "${public_origin}" = "https://${hostname}"
       - name: Publish the attested Records Web artifact
         run: |
           web_archive="${RUNNER_TEMP}/records-evidence/records-web.zip"
@@ -768,10 +811,16 @@ jobs:
           endpoint=$(cat "${RUNNER_TEMP}/records-public-origin")
           [[ "${endpoint}" =~ ^https://[a-z0-9.-]+$ ]]
           index_status=$(curl --silent --show-error --location \
+            --dump-header "${RUNNER_TEMP}/records-index.headers" \
             --output "${RUNNER_TEMP}/records-index.html" --write-out '%{http_code}' \
             "${endpoint}/")
           test "${index_status}" = 200
           grep --quiet '<div id="root"></div>' "${RUNNER_TEMP}/records-index.html"
+          account=$(aws sts get-caller-identity --query Account --output text)
+          expected_upload_origin="https://shittim-chest-production-records-memorial-upload-${account}.s3.${AWS_REGION}.amazonaws.com"
+          grep --ignore-case --fixed-strings --quiet \
+            "connect-src 'self' ${expected_upload_origin}" \
+            "${RUNNER_TEMP}/records-index.headers"
           session_status=$(curl --silent --show-error \
             --dump-header "${RUNNER_TEMP}/records-session.headers" \
             --output "${RUNNER_TEMP}/records-session.json" \

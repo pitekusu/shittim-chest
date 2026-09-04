@@ -564,6 +564,7 @@ def prepare_terminal_outbox_operations(
     created_at: datetime,
     error_code: str | None = None,
     participant_display_names: Mapping[ParticipantSlot, str] | None = None,
+    records_memorial_url: str | None = None,
 ) -> tuple[OutboxOperation, ...]:
     """Build deterministic required delivery for one terminal outcome."""
 
@@ -651,6 +652,7 @@ def prepare_terminal_outbox_operations(
             plan_id=plan_id,
             created_at=created_at,
             delivery_sequence=COMPLETED_AFFECTION_DELIVERY_SEQUENCE,
+            records_memorial_url=records_memorial_url,
         )
         return (*result_operations, *decision_operations, *affection_operations)
     if len(chunks) > MAX_TERMINAL_OUTBOX_CHUNKS:
@@ -713,6 +715,7 @@ def prepare_terminal_outbox_operations(
         plan_id=plan_id,
         created_at=created_at,
         delivery_sequence=affection_sequence,
+        records_memorial_url=records_memorial_url,
     )
     return (*notice_operations, *affection_operations)
 
@@ -1002,6 +1005,7 @@ def _prepare_affection_result_operations(
     plan_id: str,
     created_at: datetime,
     delivery_sequence: int,
+    records_memorial_url: str | None,
 ) -> tuple[OutboxOperation, ...]:
     """Build one moderator-owned parent-channel result from durable assessment data."""
 
@@ -1011,6 +1015,7 @@ def _prepare_affection_result_operations(
     content = _affection_result_content(
         snapshot,
         participant_display_names=participant_display_names,
+        records_memorial_url=records_memorial_url,
     )
     chunks = split_discord_message(content)
     if len(chunks) != MAX_AFFECTION_RESULT_CHUNKS:
@@ -1046,6 +1051,7 @@ def _affection_result_content(
     snapshot: DebateSnapshot,
     *,
     participant_display_names: Mapping[ParticipantSlot, str],
+    records_memorial_url: str | None,
 ) -> str:
     """Render one graphical, rationale-free affection result for the parent channel."""
 
@@ -1080,6 +1086,21 @@ def _affection_result_content(
                 f"> {heart_bar}",
                 f"> **{item.after}点** / 1000　"
                 f"{delta_icons[delta_direction]} **{item.applied_delta:+d}**",
+            )
+        )
+    unlock = assessment.memorial_unlock
+    if unlock is not None:
+        if records_memorial_url is None:
+            raise ValueError("memorial unlock delivery requires the Records Memorial URL")
+        _require_text(records_memorial_url, label="Records Memorial URL")
+        participant_name = sanitize_discord_model_text(
+            participant_display_names[unlock.participant]
+        )
+        sections.extend(
+            (
+                "## 🎉 メモリアルロビーが開放されました！",  # noqa: RUF001
+                f"> 💞 **{participant_name}**との特別なロビーが利用できます。",
+                f"> 🔗 [メモリアルロビーを開く]({records_memorial_url})",
             )
         )
     return "\n".join(sections)

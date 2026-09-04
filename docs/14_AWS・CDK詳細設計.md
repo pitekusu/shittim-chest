@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-03
+updated: 2026-09-04
 ---
 
 # AWS・CDK詳細設計
@@ -53,6 +53,9 @@ ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立し
 - ECS Exec用の専用image／task definitionとwrite／root境界はprovisionしない。
 - `stopTimeout=120`秒、Container Insightsは個人規模の費用を考慮して無効とする。
 - production imageはsource SHAからcanonical ARM64条件でbuildし、digestでtask definitionへ固定する。
+- RuntimeはReleaseからstrictな`RecordsPublicHostname` parameterを受け、
+  `SHITTIM_RECORDS_MEMORIAL_URL=https://<hostname>/memorial`をproduction taskへ渡す。URL本文やhostnameを
+  secret parameterへ複製せず、Discordの公開解放導線だけに使用する。
 
 ## 4. API and Lambda
 
@@ -117,6 +120,9 @@ AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管�
 - CDKはsecret valueをlookupせず、parameter nameとmetadataだけを扱う。
 - Memorial OpenAI keyは専用setup toolのhidden inputで上書きせず登録し、Records ReleaseはSecureStringの
   metadataだけを事前確認する。値はLambda環境変数、CloudFormation、workflow、artifactへ渡さない。
+- RecordsEdgeはReleaseが同account／regionのMemorial upload bucketから決定したexact regional S3 domainを
+  `RecordsMemorialUploadOriginDomain` parameterで受け、CSPの`connect-src`を`'self'`とそのoriginだけへ限定する。
+  bucket wildcardや任意URLは許可しない。
 
 ## 7. Operations and cost
 

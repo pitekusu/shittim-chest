@@ -115,6 +115,7 @@ def make_application(
     lease_renewal: float = 20.0,
     outbox_recovery: FakeOutboxRecovery | None = None,
     participant_display_names: dict[ParticipantSlot, str] | None = None,
+    records_memorial_url: str = "https://records.example.invalid/memorial",
     lease_owner: str = "worker-1",
     terminal_delivery_conflict_retry_seconds: float = 0.0,
 ) -> DebateApplication:
@@ -138,6 +139,7 @@ def make_application(
             if participant_display_names is None
             else participant_display_names
         ),
+        records_memorial_url=records_memorial_url,
         lease_owner=lease_owner,
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
@@ -182,6 +184,22 @@ def test_application_rejects_renderer_incompatible_participant_display_name(
                 ParticipantSlot.PARTICIPANT_C: "Generic C",
             },
         )
+
+
+def test_application_requires_a_bootstrap_validated_records_memorial_url(
+    dependencies: tuple[
+        FakeClock,
+        FakeIds,
+        FakeMetrics,
+        FakeDiscord,
+        FakeEvidence,
+        FakeOpenAI,
+        FakeRepository,
+        FakeCandidateOrderer,
+    ],
+) -> None:
+    with pytest.raises(ValueError, match="Records Memorial URL must not be empty"):
+        make_application(dependencies, records_memorial_url=" ")
 
 
 def request(*, requester_id: str = "requester") -> AcceptDebateRequest:

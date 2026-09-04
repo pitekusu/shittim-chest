@@ -37,6 +37,14 @@ const ROUTES = {
       "/src/generated/admin-revision-response-validator.mjs",
     ],
   },
+  MemorialPage: {
+    facade: "/src/routes/MemorialPage.tsx",
+    ownedModules: [
+      "/src/generated/memorial-state-response-validator.mjs",
+      "/src/generated/memorial-upload-response-validator.mjs",
+      "/src/generated/memorial-memory-response-validator.mjs",
+    ],
+  },
 } as const;
 
 const INITIAL_MODULES = [

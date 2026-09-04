@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("App shell", () => {
-  it("shows both SYSTEM ACCESS links and opens service status for a member", async () => {
+  it("shows Memorial and both SYSTEM ACCESS links and opens service status for a member", async () => {
     window.history.replaceState(null, "", "/admin");
     const requests = mockApi();
 
@@ -38,8 +38,22 @@ describe("App shell", () => {
     expect(screen.queryByRole("heading", { name: "ACCESS DENIED" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "サービス状態確認" })).toHaveLength(2);
     expect(screen.getAllByRole("link", { name: "プロンプト管理" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "メモリアルロビー" })).toHaveLength(2);
     expect(screen.getByText("SYSTEM ACCESS")).toBeVisible();
     expect(requests).toEqual(["/api/v1/session?contract=admin-v1", "/api/v1/admin/status"]);
+  });
+
+  it("opens the owner-only Memorial route for an authenticated member", async () => {
+    window.history.replaceState(null, "", "/memorial");
+    const requests = mockApi();
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "メモリアルロビー" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "まだメモリアルロビーにはログインできません" }),
+    ).toBeVisible();
+    expect(requests).toEqual(["/api/v1/session?contract=admin-v1", "/api/v1/memorial"]);
   });
 
   it("coordinates branded motion and heading focus across internal routes", async () => {

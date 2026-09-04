@@ -282,6 +282,7 @@ def _validate_release(directory: Path) -> None:
     if _permission_blocks(text) != (
         (),
         (
+            ("actions", "read"),
             ("attestations", "write"),
             ("checks", "read"),
             ("contents", "read"),
@@ -294,6 +295,76 @@ def _validate_release(directory: Path) -> None:
             "Release permissions are not the canonical plan/deploy/cleanup split"
         )
     _validate_release_main_checks(text)
+    records_release_gate = _workflow_step_block(text, "Require successful same-SHA Records release")
+    required_records_release_markers = (
+        "id: records_release",
+        "actions/workflows/records-release.yml/runs",
+        "gh api --paginate --slurp",
+        ".head_sha == $sha",
+        '.head_branch == "main"',
+        '.event == "workflow_dispatch"',
+        '.status == "completed"',
+        "status=completed",
+        "sort_by(.updated_at, .id, .run_attempt) | last",
+        "run_id=$(jq --exit-status --raw-output '.id'",
+        "run_attempt=$(jq --exit-status --raw-output '.run_attempt'",
+        "updated_at=$(jq --exit-status --raw-output '.updated_at'",
+        "conclusion=$(jq --exit-status --raw-output '.conclusion'",
+        '[[ "${run_id}" =~ ^[1-9][0-9]*$ ]]',
+        '[[ "${run_attempt}" =~ ^[1-9][0-9]*$ ]]',
+        '[[ "${updated_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T',
+        'test "${conclusion}" = success',
+        'echo "artifact_name=records-plan-${run_id}-${run_attempt}"',
+    )
+    if any(marker not in records_release_gate for marker in required_records_release_markers):
+        raise WorkflowPolicyError(
+            "Release must require a successful same-SHA Records release before Core planning"
+        )
+    records_evidence_download = _workflow_step_block(
+        text, "Download the successful same-SHA Records evidence"
+    )
+    required_records_download_markers = (
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "name: ${{ steps.records_release.outputs.artifact_name }}",
+        "path: ${{ runner.temp }}/records-release-evidence",
+        "github-token: ${{ github.token }}",
+        "repository: ${{ github.repository }}",
+        "run-id: ${{ steps.records_release.outputs.run_id }}",
+    )
+    if any(marker not in records_evidence_download for marker in required_records_download_markers):
+        raise WorkflowPolicyError(
+            "Release must download the exact successful same-SHA Records artifact"
+        )
+    records_hostname_evidence = _workflow_step_block(
+        text, "Verify the same-SHA Records hostname evidence"
+    )
+    required_records_hostname_markers = (
+        "id: records_evidence",
+        "records-release-manifest.json",
+        'gh attestation verify "${manifest}"',
+        "--deny-self-hosted-runners",
+        "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml",
+        '--signer-digest "${GITHUB_SHA}"',
+        "--source-ref refs/heads/main",
+        '--source-digest "${GITHUB_SHA}"',
+        'validate-manifest "${manifest}" --expected-commit-sha "${GITHUB_SHA}"',
+        "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
+        'test "${#hostname}" -le 253',
+        'test "${hostname}" = "shittim.pitekusu.dev"',
+        'echo "hostname=${hostname}" >> "${GITHUB_OUTPUT}"',
+    )
+    if any(marker not in records_hostname_evidence for marker in required_records_hostname_markers):
+        raise WorkflowPolicyError(
+            "Release must verify the attested same-SHA Records hostname evidence"
+        )
+    if (
+        "Bind Records hostname to the deployed Records stacks" in text
+        or "--stack-name ShittimChest-Prod-RecordsApplication" in text
+        or "--stack-name ShittimChest-Prod-RecordsEdge" in text
+    ):
+        raise WorkflowPolicyError(
+            "Core Release must consume Records hostname evidence without Records stack access"
+        )
     required = (
         "name: Production Release",
         "group: production-release",
@@ -427,6 +498,27 @@ def _validate_release(directory: Path) -> None:
     ):
         raise WorkflowPolicyError(
             "Release must bind the exact Lambda bundle checksum to the published version"
+        )
+    if (
+        "RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}" in text
+        or text.count("records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}")
+        != 1
+        or text.count("RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}")
+        != 1
+        or text.count("RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}")
+        != 2
+        or text.count(
+            '"ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}"'
+        )
+        != 1
+        or text.count('--expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}"')
+        != 2
+        or text.count('test "${#hostname}" -le 253') != 1
+        or text.count('expected_memorial_url="https://${RECORDS_PUBLIC_HOSTNAME}/memorial"') != 1
+        or text.count('select(.name == "SHITTIM_RECORDS_MEMORIAL_URL")') != 1
+    ):
+        raise WorkflowPolicyError(
+            "Release must bind the exact Records Memorial URL through its plan/deploy boundary"
         )
     if (
         text.count("PYTHONDONTWRITEBYTECODE") != 1
@@ -1263,6 +1355,12 @@ def _validate_records_workflows(directory: Path) -> None:
             "Records Release web gates must not resolve pnpm from the repository root"
         )
 
+    plan_handles = _workflow_step_block(release, "Validate Records plan handles")
+    if 'test "${PUBLIC_HOSTNAME}" = "shittim.pitekusu.dev"' not in plan_handles:
+        raise WorkflowPolicyError(
+            "Records Release hostname must match the fixed Memorial upload CORS origin"
+        )
+
     executable_filter = (
         '| if type == "boolean" then tostring else error("executable must be boolean") end'
     )
@@ -1286,6 +1384,24 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Records Release must scope replacements to immutable application resources "
             "and the exact edge alias migration"
+        )
+    deployed_hostname = _workflow_step_block(
+        release, "Verify the deployed Records hostname against attested evidence"
+    )
+    required_deployed_hostname_markers = (
+        "records-release-manifest.json",
+        "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
+        "--stack-name ShittimChest-Prod-RecordsApplication",
+        "--stack-name ShittimChest-Prod-RecordsEdge",
+        'select(.ParameterKey == "RecordsPublicHostname")',
+        'select(.OutputKey == "RecordsPublicOrigin")',
+        'test "${hostname}" = "${application_hostname}"',
+        'test "${application_hostname}" = "${edge_hostname}"',
+        'test "${public_origin}" = "https://${hostname}"',
+    )
+    if any(marker not in deployed_hostname for marker in required_deployed_hostname_markers):
+        raise WorkflowPolicyError(
+            "Records Release must bind its attested hostname to the deployed Records stacks"
         )
     change_set_calls = (
         "create_plan stateful ShittimChest-Prod-RecordsStateful",
@@ -1317,6 +1433,27 @@ def _validate_records_workflows(directory: Path) -> None:
     ):
         raise WorkflowPolicyError(
             "Records Release must allow Edge recovery without a pre-existing distribution"
+        )
+    if (
+        release.count(
+            'memorial_upload_origin_domain="shittim-chest-production-records-memorial-upload-'
+            '${account}.s3.${AWS_REGION}.amazonaws.com"'
+        )
+        != 2
+        or release.count(
+            "ParameterKey=RecordsMemorialUploadOriginDomain,"
+            'ParameterValue="${memorial_upload_origin_domain}"'
+        )
+        != 1
+        or release.count(
+            '--expected-parameter "RecordsMemorialUploadOriginDomain='
+            '${memorial_upload_origin_domain}"'
+        )
+        != 2
+        or release.count("\"connect-src 'self' ${expected_upload_origin}\"") != 1
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must bind and verify the exact Memorial upload origin"
         )
 
     release_markers = (
@@ -1369,6 +1506,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "web_artifact_sha256",
         "records-web-sbom.cdx.json",
         "web_sbom_sha256",
+        "records_public_hostname",
         "cloudfront create-invalidation",
         "Restore the previous Records entry point after a post-publish failure",
         "records-previous-index-version",
@@ -1376,6 +1514,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "s3api delete-object",
         "tools/records_release_manifest.py create-entry",
         "tools/records_release_manifest.py create-manifest",
+        '--records-public-hostname "${PUBLIC_HOSTNAME}"',
         "tools/records_release_manifest.py validate-manifest",
         "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml",
         "--source-ref refs/heads/main",

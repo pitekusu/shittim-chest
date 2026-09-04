@@ -53,6 +53,9 @@ async def test_production_composition_builds_and_closes_without_external_request
     assert drainer._context is ingress_runtime
     assert ingress_runtime._application is drainer._commands._application
     assert lifecycle._interactions._application is ingress_runtime._application
+    assert ingress_runtime._application._records_memorial_url == (
+        "https://records.example.invalid/memorial"
+    )
     await runtime.aclose()
     await runtime.aclose()
 
@@ -485,6 +488,7 @@ def _environment() -> dict[str, str]:
         "AWS_REGION": "ap-northeast-1",
         "SHITTIM_DYNAMODB_TABLE": "local-table",
         "SHITTIM_STATUS_PUBLISHER_FUNCTION": "shittim-status-publisher",
+        "SHITTIM_RECORDS_MEMORIAL_URL": "https://records.example.invalid/memorial",
         "IDENTITY_HMAC_PARAMETER_NAME": IDENTITY_HMAC_PARAMETER_NAME,
         "OPENAI_API_KEY": "openai-key-placeholder",
         "DISCORD_TOKEN_MODERATOR": "token-moderator-placeholder",

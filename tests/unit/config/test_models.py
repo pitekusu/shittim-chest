@@ -27,6 +27,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
     assert config.aws_region == "ap-northeast-1"
     assert config.table_name == "shittim-chest-production"
     assert config.status_publisher_function == "shittim-status-publisher"
+    assert config.records_memorial_url == "https://records.example.invalid/memorial"
     assert config.config_version == "v0001"
     assert config.identity_hmac_parameter_name == IDENTITY_HMAC_PARAMETER_NAME
     assert config.runtime.guild_id == "101"
@@ -56,6 +57,7 @@ def test_load_bootstrap_config_validates_and_maps_private_inputs() -> None:
         {"SHITTIM_DYNAMODB_TABLE": ""},
         {"SHITTIM_DYNAMODB_TABLE": "invalid/table"},
         {"SHITTIM_STATUS_PUBLISHER_FUNCTION": "invalid/function"},
+        {"SHITTIM_RECORDS_MEMORIAL_URL": ""},
         {"OPENAI_API_KEY": ""},
         {"DISCORD_TOKEN_PARTICIPANT_C": "token-moderator-placeholder"},
         {"SHITTIM_PREVIOUS_COMMAND_SCHEMA_HASH": "not-a-hash"},
@@ -93,6 +95,31 @@ def test_load_bootstrap_config_redacts_invalid_private_values() -> None:
 
     assert private_marker not in str(captured.value)
     assert private_marker not in repr(captured.value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://records.example.invalid/memorial",
+        "https://records.example.invalid/",
+        "https://records.example.invalid/memorial/",
+        "https://records.example.invalid/memorial?cycle=1",
+        "https://records.example.invalid/memorial#unlock",
+        "https://user" + "@records.example.invalid/memorial",
+        "https://records.example.invalid:443/memorial",
+        "https://RECORDS.example.invalid/memorial",
+        " https://records.example.invalid/memorial",
+        "https://localhost/memorial",
+    ),
+)
+def test_load_bootstrap_config_rejects_noncanonical_records_memorial_url(url: str) -> None:
+    environment = _valid_environment()
+    environment["SHITTIM_RECORDS_MEMORIAL_URL"] = url
+
+    with pytest.raises(StartupConfigurationError) as captured:
+        load_bootstrap_config(environment)
+
+    assert str(captured.value) == "startup_configuration_invalid"
 
 
 def test_identity_hmac_key_is_validated_and_redacted() -> None:
@@ -279,6 +306,7 @@ def _valid_environment() -> dict[str, str]:
         "AWS_REGION": "ap-northeast-1",
         "SHITTIM_DYNAMODB_TABLE": "shittim-chest-production",
         "SHITTIM_STATUS_PUBLISHER_FUNCTION": "shittim-status-publisher",
+        "SHITTIM_RECORDS_MEMORIAL_URL": "https://records.example.invalid/memorial",
         "SHITTIM_LOG_LEVEL": "INFO",
         "IDENTITY_HMAC_PARAMETER_NAME": IDENTITY_HMAC_PARAMETER_NAME,
         "OPENAI_API_KEY": "openai-key-placeholder",

@@ -51,6 +51,12 @@ describe("RuntimeStack", () => {
       AllowedPattern: "^v[0-9]{4}$",
       Default: "v0004",
     });
+    expect(parameters.RecordsPublicHostname).toEqual({
+      AllowedPattern:
+        "^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+      Description: "Exact Records public hostname used for the Memorial deep link",
+      Type: "String",
+    });
     expect(parameters.LambdaBundleBucketName).toMatchObject({
       AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$",
     });
@@ -558,6 +564,15 @@ describe("RuntimeStack", () => {
     expect(environment).toContainEqual({
       Name: "IDENTITY_HMAC_PARAMETER_NAME",
       Value: "/shittim-chest/production/records/identity-hmac-key",
+    });
+    expect(environment).toContainEqual({
+      Name: "SHITTIM_RECORDS_MEMORIAL_URL",
+      Value: {
+        "Fn::Join": [
+          "",
+          ["https://", { Ref: "RecordsPublicHostname" }, "/memorial"],
+        ],
+      },
     });
     expect(JSON.stringify(environment)).not.toContain("{{resolve:ssm-secure:");
   });

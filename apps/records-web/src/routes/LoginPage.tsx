@@ -23,6 +23,7 @@ export function LoginPage({ session }: { readonly session: SessionResponse }): R
     requestedPath === "/" ||
     requestedPath === "/insights" ||
     requestedPath === "/admin" ||
+    requestedPath === "/memorial" ||
     /^\/records\/[A-Za-z0-9_-]{43}$/.test(requestedPath)
       ? requestedPath
       : "/";

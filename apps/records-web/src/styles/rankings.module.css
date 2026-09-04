@@ -645,6 +645,42 @@
   font-variant-numeric: tabular-nums;
 }
 
+.affectionMeta {
+  display: flex;
+  min-width: max-content;
+  align-items: center;
+  justify-content: end;
+  gap: 7px;
+}
+
+.memorialCrown {
+  display: inline-flex;
+  min-width: 36px;
+  min-height: 25px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 3px 6px;
+  border: 1px solid rgb(232 184 79 / 46%);
+  border-radius: 999px;
+  background: color-mix(in srgb, #e8b84f 13%, var(--records-ranking-label-surface));
+  box-shadow: 0 4px 12px rgb(134 91 20 / 10%);
+  color: #b67c19;
+  font-size: 0.66rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.memorialCrown svg {
+  width: 14px;
+  height: 14px;
+  fill: color-mix(in srgb, #e8b84f 36%, transparent);
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
 .affectionHearts {
   display: grid;
   width: min(100%, 150px);

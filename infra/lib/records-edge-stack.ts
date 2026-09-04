@@ -51,6 +51,16 @@ export class RecordsEdgeStack extends Stack {
       allowedPattern:
         "^shittim-chest-production-records-media-[0-9]{12}\\.s3\\.ap-northeast-1\\.amazonaws\\.com$",
     });
+    const memorialUploadOriginDomain = new CfnParameter(
+      this,
+      "RecordsMemorialUploadOriginDomain",
+      {
+        type: "String",
+        allowedPattern:
+          "^shittim-chest-production-records-memorial-upload-[0-9]{12}\\.s3\\.ap-northeast-1\\.amazonaws\\.com$",
+        description: "Exact regional S3 origin used by Memorial presigned POST uploads",
+      },
+    );
 
     const hostedZone = route53.HostedZone.fromHostedZoneId(
       this,
@@ -95,7 +105,7 @@ export class RecordsEdgeStack extends Stack {
             contentSecurityPolicy: [
               "default-src 'self'",
               "base-uri 'self'",
-              "connect-src 'self'",
+              `connect-src 'self' https://${memorialUploadOriginDomain.valueAsString}`,
               "font-src 'self'",
               `img-src 'self' data: https://${mediaOriginDomain.valueAsString}`,
               "object-src 'none'",

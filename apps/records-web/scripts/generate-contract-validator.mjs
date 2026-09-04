@@ -21,6 +21,9 @@ const validators = [
   ["AdminPromptApplyResponse", "admin-apply-response-validator.mjs"],
   ["AdminPromptRevisionsResponse", "admin-revisions-response-validator.mjs"],
   ["AdminPromptRevisionResponse", "admin-revision-response-validator.mjs"],
+  ["MemorialStateResponse", "memorial-state-response-validator.mjs"],
+  ["MemorialUploadResponse", "memorial-upload-response-validator.mjs"],
+  ["MemorialMemoryResponse", "memorial-memory-response-validator.mjs"],
 ];
 const expectedOutputFilenames = new Set(
   validators.flatMap(([, filename]) => [filename, filename.replace(/\.mjs$/, ".d.mts")]),

@@ -11,6 +11,11 @@ from typing import Any
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
+_PUBLIC_HOSTNAME = re.compile(
+    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+"
+)
+_MEMORIAL_UPLOAD_CORS_HOSTNAME = "shittim.pitekusu.dev"
 _CHANGE_SET_NAME = re.compile(
     r"records-release-[1-9][0-9]*-[1-9][0-9]*-(stateful|application|edge)"
 )
@@ -309,6 +314,7 @@ def create_manifest(
     bundle_sha256: str,
     commit_sha: str,
     edge_plan: object,
+    records_public_hostname: str,
     stateful_plan: object,
     web_artifact_sha256: str,
     web_sbom_sha256: str,
@@ -316,8 +322,9 @@ def create_manifest(
     """Bind the fixed commit, Lambda/Web evidence, and three normalized plans."""
 
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "commit_sha": commit_sha,
+        "records_public_hostname": records_public_hostname,
         "bundle_sha256": bundle_sha256,
         "web_artifact_sha256": web_artifact_sha256,
         "web_sbom_sha256": web_sbom_sha256,
@@ -338,19 +345,30 @@ def validate_manifest(value: object, *, expected_commit_sha: str | None = None) 
     if set(root) != {
         "schema_version",
         "commit_sha",
+        "records_public_hostname",
         "bundle_sha256",
         "web_artifact_sha256",
         "web_sbom_sha256",
         "change_sets",
     }:
         raise ValueError("Records Release manifest fields are invalid")
-    if root.get("schema_version") != 3:
+    if root.get("schema_version") != 4:
         raise ValueError("Records Release manifest schema is invalid")
     commit_sha = root.get("commit_sha")
     if not isinstance(commit_sha, str) or _COMMIT_SHA.fullmatch(commit_sha) is None:
         raise ValueError("Records Release manifest commit is invalid")
     if expected_commit_sha is not None and commit_sha != expected_commit_sha:
         raise ValueError("Records Release manifest commit does not match the workflow")
+    records_public_hostname = root.get("records_public_hostname")
+    if (
+        not isinstance(records_public_hostname, str)
+        or _PUBLIC_HOSTNAME.fullmatch(records_public_hostname) is None
+    ):
+        raise ValueError("Records Release public hostname is invalid")
+    if records_public_hostname != _MEMORIAL_UPLOAD_CORS_HOSTNAME:
+        raise ValueError(
+            "Records Release public hostname does not match the Memorial upload CORS origin"
+        )
     bundle_sha256 = root.get("bundle_sha256")
     if not isinstance(bundle_sha256, str) or _SHA256.fullmatch(bundle_sha256) is None:
         raise ValueError("Records Release bundle hash is invalid")
@@ -427,6 +445,7 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--application-plan", type=Path, required=True)
     create.add_argument("--edge-plan", type=Path, required=True)
     create.add_argument("--commit-sha", required=True)
+    create.add_argument("--records-public-hostname", required=True)
     create.add_argument("--bundle-sha256", required=True)
     create.add_argument("--web-artifact-sha256", required=True)
     create.add_argument("--web-sbom-sha256", required=True)
@@ -464,6 +483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 application_plan=_read(args.application_plan),
                 edge_plan=_read(args.edge_plan),
                 commit_sha=args.commit_sha,
+                records_public_hostname=args.records_public_hostname,
                 bundle_sha256=args.bundle_sha256,
                 web_artifact_sha256=args.web_artifact_sha256,
                 web_sbom_sha256=args.web_sbom_sha256,

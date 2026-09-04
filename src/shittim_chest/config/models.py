@@ -10,6 +10,7 @@ from hashlib import sha256
 from types import MappingProxyType
 from typing import Literal
 from unicodedata import normalize
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -26,6 +27,7 @@ PRODUCTION_ENVIRONMENT = "production"
 DEFAULT_AWS_REGION = "ap-northeast-1"
 
 _RUNTIME_CONFIG_ENV = "SHITTIM_RUNTIME_CONFIG_JSON"
+_RECORDS_MEMORIAL_URL_ENV = "SHITTIM_RECORDS_MEMORIAL_URL"
 IDENTITY_HMAC_PARAMETER_NAME = "/shittim-chest/production/records/identity-hmac-key"
 _IDENTITY_HMAC_PARAMETER_ENV = "IDENTITY_HMAC_PARAMETER_NAME"
 RUNTIME_PROMPTS_ACTIVE_PARAMETER = "/shittim-chest/production/runtime-prompts/active"
@@ -39,6 +41,10 @@ RUNTIME_PROMPT_NAMES = (
 )
 _RUNTIME_PROMPT_REVISION_PATTERN = r"^r[0-9a-hjkmnp-tv-z]{26}$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_RECORDS_HOSTNAME_PATTERN = (
+    r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
+)
 _PERSONA_ENV = {
     DiscordBotSlot.MODERATOR: "SHITTIM_PERSONA_MODERATOR_JSON",
     DiscordBotSlot.PARTICIPANT_A: "SHITTIM_PERSONA_PARTICIPANT_A_JSON",
@@ -164,6 +170,7 @@ class BootstrapConfig:
     aws_region: str
     table_name: str
     status_publisher_function: str
+    records_memorial_url: str
     log_level: str
     runtime: DiscordRuntimeConfig
     config_version: str
@@ -274,6 +281,9 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         )
         if re.fullmatch(r"[A-Za-z0-9-_]{1,64}", status_publisher_function) is None:
             raise ValueError("invalid status publisher function name")
+        records_memorial_url = _validated_records_memorial_url(
+            _required(environ, _RECORDS_MEMORIAL_URL_ENV)
+        )
         log_level = environ.get("SHITTIM_LOG_LEVEL", "INFO").strip().upper()
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("unsupported log level")
@@ -324,6 +334,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             aws_region=aws_region,
             table_name=table_name,
             status_publisher_function=status_publisher_function,
+            records_memorial_url=records_memorial_url,
             log_level=log_level,
             runtime=runtime,
             config_version=runtime_version,
@@ -342,6 +353,23 @@ def _required(environ: Mapping[str, str], name: str) -> str:
     value = environ[name]
     if not value.strip():
         raise ValueError("required environment value is blank")
+    return value
+
+
+def _validated_records_memorial_url(value: str) -> str:
+    """Accept only the canonical HTTPS route rendered into a public Discord post."""
+
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+    except ValueError:
+        raise ValueError("invalid Records Memorial URL") from None
+    if (
+        hostname is None
+        or re.fullmatch(_RECORDS_HOSTNAME_PATTERN, hostname) is None
+        or value != f"https://{hostname}/memorial"
+    ):
+        raise ValueError("invalid Records Memorial URL")
     return value
 
 

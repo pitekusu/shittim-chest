@@ -405,7 +405,7 @@
     bottom: 10px;
     left: 12px;
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: 5px;
     padding: 7px;
     border: 1px solid var(--records-panel-border-soft);
@@ -425,6 +425,12 @@
     padding-inline: 2px;
     font-size: 0.62rem;
     line-height: 1.25;
+    white-space: normal;
+  }
+  .mobileNav .mobileMemorialLink {
+    padding-inline: 1px;
+    font-size: 0.58rem;
+    line-height: 1.2;
     white-space: normal;
   }
   .mobileNav .themeSwitchCompact {
@@ -452,12 +458,17 @@
   }
 }
 
-@media (max-width: 389px) {
+@media (max-width: 377px) {
+  .appShell {
+    padding-bottom: 128px;
+  }
+
   .mobileNav {
     right: 6px;
     left: 6px;
     gap: 3px;
     padding: 5px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .mobileNav .navLink,
@@ -466,6 +477,10 @@
   }
 
   .mobileNav .mobileAdminLink {
+    font-size: 0.56rem;
+  }
+
+  .mobileNav .mobileMemorialLink {
     font-size: 0.56rem;
   }
 }

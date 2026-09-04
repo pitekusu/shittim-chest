@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-03
+updated: 2026-09-04
 ---
 
 # アプリケーション・Python詳細設計
@@ -65,6 +65,10 @@ Generationはlogical outputごとに最大2 SDK callを許す。結果保存のC
 v8からopaque v9へ移行する成功評価だけは、移行前から1,000点の人格も候補へ含める。通常のv9評価では
 今回`before < 1000`から`after = 1000`になった人格だけを新規到達として扱う。
 評価不能時は旧profileのopaque key移行も解放判定も行わない。
+
+Core起動設定は`SHITTIM_RECORDS_MEMORIAL_URL`を必須とし、port、query、fragment、userinfoを持たない
+canonicalな`https://<hostname>/memorial`だけを受理する。このURLは公開Discord messageへ描画する値であり、
+Runtimeの`RecordsPublicHostname`から構成してtaskへ渡す。
 
 ### Memorial backend
 

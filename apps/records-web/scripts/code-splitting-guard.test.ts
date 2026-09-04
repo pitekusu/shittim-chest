@@ -63,6 +63,18 @@ function canonicalChunks(): GuardChunk[] {
         `${root}/src/generated/admin-revision-response-validator.mjs`,
       ],
     },
+    {
+      facadeModuleId: `${root}/src/routes/MemorialPage.tsx`,
+      fileName: "assets/MemorialPage.js",
+      imports: ["assets/index.js"],
+      isEntry: false,
+      moduleIds: [
+        `${root}/src/routes/MemorialPage.tsx`,
+        `${root}/src/generated/memorial-state-response-validator.mjs`,
+        `${root}/src/generated/memorial-upload-response-validator.mjs`,
+        `${root}/src/generated/memorial-memory-response-validator.mjs`,
+      ],
+    },
   ];
 }
 
@@ -103,6 +115,16 @@ describe("code splitting module ownership", () => {
     const chunks = canonicalChunks();
     chunks[0]?.moduleIds.push(`${root}/src/generated/admin-status-response-validator.mjs`);
     chunks[4]?.moduleIds.splice(1, 1);
+
+    expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
+      "code_splitting_module_graph_wrong_owner",
+    );
+  });
+
+  test("rejects a Memorial validator hoisted into the initial entry", () => {
+    const chunks = canonicalChunks();
+    chunks[0]?.moduleIds.push(`${root}/src/generated/memorial-state-response-validator.mjs`);
+    chunks[5]?.moduleIds.splice(1, 1);
 
     expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
       "code_splitting_module_graph_wrong_owner",

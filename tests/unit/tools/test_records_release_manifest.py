@@ -19,6 +19,7 @@ BUNDLE_SHA = "b" * 64
 WEB_SHA = "c" * 64
 WEB_SBOM_SHA = "d" * 64
 ACCOUNT = "000000000000"
+RECORDS_PUBLIC_HOSTNAME = "shittim.pitekusu.dev"
 EDGE_HOSTNAME = "shittim.example.com"
 EDGE_ZONE_ID = "Z0123456789EXAMPLE"
 EDGE_ZONE_NAME = "example.com"
@@ -71,6 +72,7 @@ def manifest() -> dict[str, object]:
         application_plan=plan("application", "CREATE"),
         edge_plan=plan("edge", "CREATE"),
         commit_sha=COMMIT_SHA,
+        records_public_hostname=RECORDS_PUBLIC_HOSTNAME,
         bundle_sha256=BUNDLE_SHA,
         web_artifact_sha256=WEB_SHA,
         web_sbom_sha256=WEB_SBOM_SHA,
@@ -391,7 +393,8 @@ def test_manifest_binds_fixed_sha_stack_name_type_and_execution() -> None:
 
     validate_manifest(value, expected_commit_sha=COMMIT_SHA)
 
-    assert value["schema_version"] == 3
+    assert value["schema_version"] == 4
+    assert value["records_public_hostname"] == RECORDS_PUBLIC_HOSTNAME
     assert value["web_artifact_sha256"] == WEB_SHA
     assert value["web_sbom_sha256"] == WEB_SBOM_SHA
     assert value["change_sets"] == {
@@ -404,7 +407,9 @@ def test_manifest_binds_fixed_sha_stack_name_type_and_execution() -> None:
 @pytest.mark.parametrize(
     ("path", "replacement"),
     (
+        (("schema_version",), 3),
         (("commit_sha",), "c" * 40),
+        (("records_public_hostname",), "HTTPS://shittim.example.com"),
         (("web_sbom_sha256",), "not-a-hash"),
         (("change_sets", "stateful", "stack"), "WrongStack"),
         (("change_sets", "stateful", "name"), "records-release-123-1-application"),
@@ -425,3 +430,41 @@ def test_manifest_rejects_tampered_execution_contract(
 
     with pytest.raises(ValueError):
         validate_manifest(value, expected_commit_sha=COMMIT_SHA)
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    (
+        "localhost",
+        ".example.com",
+        "example..com",
+        f"{'a' * 64}.example.com",
+        f"{'a' * 63}.{'b' * 63}.{'c' * 63}.{'d' * 62}",
+    ),
+)
+def test_manifest_rejects_invalid_public_hostname(hostname: str) -> None:
+    value = manifest()
+    value["records_public_hostname"] = hostname
+
+    with pytest.raises(ValueError, match="public hostname"):
+        validate_manifest(value, expected_commit_sha=COMMIT_SHA)
+
+
+def test_manifest_rejects_valid_hostname_that_does_not_match_upload_cors() -> None:
+    value = manifest()
+    value["records_public_hostname"] = "records.example.com"
+
+    with pytest.raises(ValueError, match="Memorial upload CORS origin"):
+        validate_manifest(value, expected_commit_sha=COMMIT_SHA)
+
+    with pytest.raises(ValueError, match="Memorial upload CORS origin"):
+        create_manifest(
+            stateful_plan=plan("stateful"),
+            application_plan=plan("application", "CREATE"),
+            edge_plan=plan("edge", "CREATE"),
+            commit_sha=COMMIT_SHA,
+            records_public_hostname="records.example.com",
+            bundle_sha256=BUNDLE_SHA,
+            web_artifact_sha256=WEB_SHA,
+            web_sbom_sha256=WEB_SBOM_SHA,
+        )
