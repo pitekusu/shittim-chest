@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import styles from "../styles/memorial.module.css";
 
@@ -17,14 +17,19 @@ export function MemorialEntryTransition({
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
+  const onCompleteRef = useRef(onComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     const timeout = window.setTimeout(
-      onComplete,
+      () => onCompleteRef.current(),
       reducedMotion ? REDUCED_DURATION_MS : STANDARD_DURATION_MS,
     );
     return () => window.clearTimeout(timeout);
-  }, [onComplete, reducedMotion]);
+  }, [reducedMotion]);
 
   return (
     <section

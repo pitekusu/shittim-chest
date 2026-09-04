@@ -268,6 +268,27 @@ describe("MemorialPage", () => {
     expect(screen.getByRole("heading", { name: "メモリアルロビー" })).toBeVisible();
   });
 
+  it("does not restart the entry timer when memorial state refreshes", async () => {
+    vi.useFakeTimers();
+    const { client } = renderMemorial(unlockedState());
+
+    const transition = screen.getByLabelText("メモリアルロビーへログインしています");
+    await act(async () => vi.advanceTimersByTime(2_999));
+
+    await act(async () => {
+      client.setQueryData(["memorial"], {
+        ...unlockedState(),
+        uploadReady: true,
+      });
+    });
+    expect(transition).toBeInTheDocument();
+
+    await act(async () => vi.advanceTimersByTime(1));
+
+    expect(transition).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "メモリアルロビー" })).toBeVisible();
+  });
+
   it("shortens the entry transition for reduced-motion visitors", async () => {
     vi.useFakeTimers();
     useReducedMotion();
