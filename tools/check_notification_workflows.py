@@ -282,6 +282,7 @@ def _validate_release(directory: Path) -> None:
     if _permission_blocks(text) != (
         (),
         (
+            ("actions", "read"),
             ("attestations", "write"),
             ("checks", "read"),
             ("contents", "read"),
@@ -294,6 +295,22 @@ def _validate_release(directory: Path) -> None:
             "Release permissions are not the canonical plan/deploy/cleanup split"
         )
     _validate_release_main_checks(text)
+    records_release_gate = _workflow_step_block(
+        text, "Require successful same-SHA Records release"
+    )
+    required_records_release_markers = (
+        "actions/workflows/records-release.yml/runs",
+        "gh api --paginate --slurp",
+        ".head_sha == $sha",
+        '.head_branch == "main"',
+        '.event == "workflow_dispatch"',
+        '.status == "completed"',
+        '.conclusion == "success"',
+    )
+    if any(marker not in records_release_gate for marker in required_records_release_markers):
+        raise WorkflowPolicyError(
+            "Release must require a successful same-SHA Records release before Core planning"
+        )
     required = (
         "name: Production Release",
         "group: production-release",

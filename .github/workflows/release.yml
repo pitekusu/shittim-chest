@@ -42,6 +42,7 @@ jobs:
       evidence_name: ${{ steps.evidence.outputs.artifact_name }}
       plan_attempt: ${{ steps.evidence.outputs.run_attempt }}
     permissions:
+      actions: read
       attestations: write
       checks: read
       contents: read
@@ -104,6 +105,21 @@ jobs:
              .repository_owner_id == "12059348" and
              .ref == "refs/heads/main"' \
             "${RUNNER_TEMP}/oidc-claims.json" >/dev/null
+      - name: Require successful same-SHA Records release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/records-release.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=100" \
+            > "${RUNNER_TEMP}/records-release-runs.json"
+          jq --exit-status --arg sha "${GITHUB_SHA}" \
+            '[.[].workflow_runs[] |
+              select(.head_sha == $sha and
+                     .head_branch == "main" and
+                     .event == "workflow_dispatch" and
+                     .status == "completed" and
+                     .conclusion == "success")] | length >= 1' \
+            "${RUNNER_TEMP}/records-release-runs.json" >/dev/null
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:

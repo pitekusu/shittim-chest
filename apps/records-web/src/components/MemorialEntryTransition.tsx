@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import styles from "../styles/memorial.module.css";
 
@@ -18,10 +19,23 @@ export function MemorialEntryTransition({
       window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   const onCompleteRef = useRef(onComplete);
+  const transitionRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
+
+  useEffect(() => {
+    const element = transitionRef.current;
+    if (element === null) return;
+    if (typeof element.showModal === "function") element.showModal();
+    else element.setAttribute("open", "");
+    element.focus();
+    return () => {
+      if (element.open && typeof element.close === "function") element.close();
+      else element.removeAttribute("open");
+    };
+  }, []);
 
   useEffect(() => {
     const timeout = window.setTimeout(
@@ -31,13 +45,18 @@ export function MemorialEntryTransition({
     return () => window.clearTimeout(timeout);
   }, [reducedMotion]);
 
-  return (
-    <section
+  return createPortal(
+    <dialog
+      ref={transitionRef}
       className={styles.entryTransition}
       data-reduced-motion={reducedMotion}
       aria-label="メモリアルロビーへログインしています"
       aria-live="polite"
       aria-busy="true"
+      tabIndex={-1}
+      onCancel={(event) => {
+        event.preventDefault();
+      }}
     >
       <div className={styles.entryGeometry} aria-hidden="true">
         <span />
@@ -58,6 +77,7 @@ export function MemorialEntryTransition({
       <p className={styles.entryStatus} lang="en">
         AFFECTION LINK / AUTHORIZED
       </p>
-    </section>
+    </dialog>,
+    document.body,
   );
 }

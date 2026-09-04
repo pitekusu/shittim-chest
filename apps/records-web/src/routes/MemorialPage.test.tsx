@@ -258,6 +258,11 @@ describe("MemorialPage", () => {
     const transition = screen.getByLabelText("メモリアルロビーへログインしています");
     expect(transition).toHaveAttribute("aria-busy", "true");
     expect(transition).toHaveAttribute("data-reduced-motion", "false");
+    expect(transition.parentElement).toBe(document.body);
+    expect(transition).toHaveAttribute("open");
+    expect(transition).toHaveFocus();
+    fireEvent(transition, new Event("cancel", { bubbles: false, cancelable: true }));
+    expect(transition).toHaveAttribute("open");
     expect(screen.getByRole("heading", { name: "先生" })).toBeVisible();
 
     await act(async () => vi.advanceTimersByTime(2_999));
@@ -265,7 +270,19 @@ describe("MemorialPage", () => {
     await act(async () => vi.advanceTimersByTime(1));
 
     expect(transition).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "メモリアルロビー" })).toBeVisible();
+    const heading = screen.getByRole("heading", { name: "メモリアルロビー" });
+    expect(heading).toBeVisible();
+    expect(heading).toHaveFocus();
+  });
+
+  it("does not make the temporary state-loading heading the route focus target", () => {
+    getStateMock.mockReturnValue(new Promise<MemorialStateResponse>(() => undefined));
+
+    renderMemorial();
+
+    expect(screen.getByRole("heading", { name: "思い出を確認しています" })).not.toHaveAttribute(
+      "tabindex",
+    );
   });
 
   it("does not restart the entry timer when memorial state refreshes", async () => {
@@ -300,6 +317,26 @@ describe("MemorialPage", () => {
     expect(transition).toBeInTheDocument();
     await act(async () => vi.advanceTimersByTime(1));
     expect(transition).not.toBeInTheDocument();
+  });
+
+  it("refreshes a stable locked state and starts entry when the lobby unlocks", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    client.setQueryData(["memorial"], lockedState());
+    getStateMock.mockResolvedValue(unlockedState());
+    render(
+      <QueryClientProvider client={client}>
+        <MemorialPage csrfToken="csrf-token" requester={REQUESTER} />
+      </QueryClientProvider>,
+    );
+
+    await act(async () => vi.advanceTimersByTimeAsync(29_999));
+    expect(getStateMock).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+
+    expect(getStateMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("メモリアルロビーへログインしています")).toBeVisible();
   });
 
   it.each([
@@ -642,6 +679,41 @@ describe("MemorialPage", () => {
     expect(await screen.findByText("CYCLE 2")).toBeVisible();
     expect(screen.queryByText("メモリアル生成を受け付けました")).not.toBeInTheDocument();
     expect(client.getQueryData<MemorialStateResponse>(["memorial"])).toEqual(nextState);
+  });
+
+  it("cancels an older state refresh before applying a generation response", async () => {
+    vi.useFakeTimers();
+    const initialState = unlockedState();
+    const staleRefresh = deferred<MemorialStateResponse>();
+    prepareUploadMock.mockResolvedValue(uploadTicket());
+    uploadSourceMock.mockResolvedValue(undefined);
+    queueGenerationMock.mockResolvedValue(unlockedState("queued"));
+    const { client } = renderMemorial(initialState);
+    await finishStandardEntry();
+    vi.useRealTimers();
+
+    getStateMock.mockReset();
+    getStateMock.mockReturnValue(staleRefresh.promise);
+    const refresh = client.invalidateQueries({ queryKey: ["memorial"], exact: true });
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+
+    const source = new File([Uint8Array.of(1)], "queued.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
+      target: { files: [source] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
+    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+
+    await waitFor(() =>
+      expect(client.getQueryData<MemorialStateResponse>(["memorial"])?.state).toBe("queued"),
+    );
+    await act(async () => {
+      staleRefresh.resolve(initialState);
+      await staleRefresh.promise;
+      await refresh;
+    });
+
+    expect(client.getQueryData<MemorialStateResponse>(["memorial"])?.state).toBe("queued");
   });
 
   it("clears the picker after a dropped image replaces its selection", async () => {

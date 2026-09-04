@@ -1305,6 +1305,47 @@ def test_release_rejects_cross_run_same_sha_config_comparison(tmp_path: Path) ->
         validate_notification_workflows(directory)
 
 
+def test_release_plan_requires_actions_read_for_records_release_gate(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "      actions: read\n      attestations: write",
+            "      attestations: write",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="canonical plan/deploy/cleanup split"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    ("marker", "replacement"),
+    (
+        ("actions/workflows/records-release.yml/runs", "actions/runs"),
+        (".head_sha == $sha", ".head_sha != $sha"),
+        (
+            '.status == "completed" and\n                     .conclusion == "success"',
+            '.status == "completed" and\n                     .conclusion == "failure"',
+        ),
+    ),
+)
+def test_release_requires_successful_same_sha_records_release(
+    tmp_path: Path, marker: str, replacement: str
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, replacement, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="successful same-SHA Records release"):
+        validate_notification_workflows(directory)
+
+
 def test_release_attests_only_registry_confirmed_manifest_digests(tmp_path: Path) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / RELEASE_WORKFLOW

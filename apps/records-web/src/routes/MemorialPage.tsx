@@ -387,7 +387,7 @@ export default function MemorialPage({
     queryFn: getMemorialState,
     refetchInterval: (query) => {
       const state = (query.state.data as MemorialStateResponse | undefined)?.state;
-      return state === "queued" || state === "generating" ? 3_000 : false;
+      return state === "queued" || state === "generating" ? 3_000 : 30_000;
     },
   });
   useAuthenticationRecovery(stateQuery.error);
@@ -446,6 +446,11 @@ export default function MemorialPage({
     [client],
   );
 
+  const cancelStateRefresh = useCallback(
+    () => client.cancelQueries({ queryKey: ["memorial"], exact: true }),
+    [client],
+  );
+
   const generation = useMutation({
     mutationFn: async (attempt: GenerationAttempt) => {
       const epoch = generationEpochRef.current;
@@ -491,8 +496,17 @@ export default function MemorialPage({
       );
       return cycleIsCurrent() ? next : null;
     },
-    onSuccess: (next) => {
+    onSuccess: async (next, attempt) => {
       if (next === null) return;
+      await cancelStateRefresh();
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (
+        observedCycleRef.current !== attempt.cycle ||
+        cached?.cycle !== attempt.cycle ||
+        (cached.state !== "unlocked" && cached.state !== "failed")
+      ) {
+        return;
+      }
       if (fileInputRef.current !== null) fileInputRef.current.value = "";
       client.setQueryData(["memorial"], next);
       setSelectedFile(null);
@@ -528,7 +542,8 @@ export default function MemorialPage({
         recovery.idempotencyKey,
       );
     },
-    onSuccess: (next, request) => {
+    onSuccess: async (next, request) => {
+      await cancelStateRefresh();
       const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
       if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
       setActionError(null);
@@ -552,7 +567,8 @@ export default function MemorialPage({
       }
       return resetMemorial(cycle, RESET_CONFIRMATION, csrfToken, recovery.idempotencyKey);
     },
-    onSuccess: (next) => {
+    onSuccess: async (next) => {
+      await cancelStateRefresh();
       const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
       if (cached !== undefined && cached.cycle > next.cycle) return;
       setActionError(null);
@@ -600,6 +616,10 @@ export default function MemorialPage({
     return `${selectedFile.name} · ${(selectedFile.size / 1024 / 1024).toFixed(1)} MiB`;
   }, [selectedFile]);
 
+  useEffect(() => {
+    if (!entryPending) pageHeadingRef.current?.focus();
+  }, [entryPending]);
+
   if (stateQuery.isPending) {
     return (
       <section className={styles.loadingPage} aria-live="polite" aria-busy="true">
@@ -607,7 +627,7 @@ export default function MemorialPage({
           ♥
         </span>
         <p lang="en">MEMORIAL LOBBY</p>
-        <h1 tabIndex={-1}>思い出を確認しています</h1>
+        <h1>思い出を確認しています</h1>
       </section>
     );
   }
