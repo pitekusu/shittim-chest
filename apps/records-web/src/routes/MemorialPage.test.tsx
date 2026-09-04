@@ -371,6 +371,10 @@ describe("MemorialPage", () => {
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     const generateButton = screen.getByRole("button", { name: "メモリアルロビーを開放" });
     expect(input).toHaveAttribute("accept", "image/jpeg,image/png,image/webp");
+    expect(input).toHaveAttribute("tabindex", "-1");
+    expect(
+      screen.getByRole("button", { name: /画像をドロップ、またはファイルを選択/ }),
+    ).toBeEnabled();
     expect(generateButton).toBeDisabled();
 
     fireEvent.change(input, {

@@ -806,6 +806,7 @@ export default function MemorialPage({
                 ref={fileInputRef}
                 className={styles.fileInput}
                 type="file"
+                tabIndex={-1}
                 aria-label="メモリアル用の画像を選択"
                 accept="image/jpeg,image/png,image/webp"
                 disabled={busy || !canSelectFile || generationAttempt !== null}

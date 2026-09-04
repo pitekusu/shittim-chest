@@ -70,7 +70,9 @@ function hasConsistentMemorialState(response: MemorialStateResponse): boolean {
 
   const latest = response.memories.at(-1);
   if (response.latestReadyCycle !== (latest?.cycle ?? null)) return false;
-  if (response.state !== "ready") return true;
+  if (response.state !== "ready") {
+    return response.latestReadyCycle === null || response.latestReadyCycle < response.cycle;
+  }
   if (
     latest === undefined ||
     latest.cycle !== response.cycle ||

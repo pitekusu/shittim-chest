@@ -160,6 +160,47 @@ describe("Memorial API", () => {
     await expect(getMemorialState()).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
   });
 
+  it.each(["locked", "unlocked", "queued", "generating", "failed"] as const)(
+    "rejects a current-cycle memory while the state is %s",
+    async (state) => {
+      const response: MemorialStateResponse = {
+        ...(state === "locked" ? lockedState() : unlockedState()),
+        state,
+        uploadReady: state === "unlocked",
+        latestReadyCycle: 1,
+        memories: readyState().memories,
+      };
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response)));
+
+      await expect(getMemorialState()).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    },
+  );
+
+  it.each(["locked", "unlocked", "queued", "generating", "failed"] as const)(
+    "accepts a %s state with no generated memory",
+    async (state) => {
+      const response: MemorialStateResponse = {
+        ...(state === "locked" ? lockedState() : unlockedState()),
+        state,
+        uploadReady: state === "unlocked",
+      };
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response)));
+
+      await expect(getMemorialState()).resolves.toEqual(response);
+    },
+  );
+
+  it("accepts the previous cycle's memory after a reset", async () => {
+    const response: MemorialStateResponse = {
+      ...lockedState(2),
+      latestReadyCycle: 1,
+      memories: readyState().memories,
+    };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response)));
+
+    await expect(getMemorialState()).resolves.toEqual(response);
+  });
+
   it("hashes the image in the browser and sends CSRF and idempotency headers", async () => {
     const digest = installDigest();
     const ticket = uploadResponse();
