@@ -319,6 +319,7 @@ describe("MemorialPage", () => {
     );
 
     await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("heading", { name: "メモリアルロビー" })).toHaveFocus();
     expect(prepareUploadMock).toHaveBeenCalledWith(
       source,
       1,
@@ -491,14 +492,26 @@ describe("MemorialPage", () => {
     getMemoryMock.mockResolvedValue(memory(1));
     resetMock.mockResolvedValue(resetLockedState());
 
-    fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
+    const resetButton = screen.getByRole("button", { name: "親愛度をリセット" });
+    resetButton.focus();
+    fireEvent.click(resetButton);
     const dialog = screen.getByRole("dialog", { name: "親愛度をリセットしますか？" });
     expect(within(dialog).getByText("3人の親愛度をすべて500点に戻します。")).toBeVisible();
     expect(within(dialog).getByText(/もう一度誰かとの親愛度を1000点/)).toBeVisible();
     expect(within(dialog).getByText("これまでに生成したメモリアルは残ります。")).toBeVisible();
-    fireEvent.click(within(dialog).getByRole("button", { name: "500点にリセット" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "キャンセル" }));
+    expect(resetButton).toHaveFocus();
+
+    fireEvent.click(resetButton);
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
+        "button",
+        { name: "500点にリセット" },
+      ),
+    );
 
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("heading", { name: "メモリアルロビー" })).toHaveFocus();
     expect(resetMock).toHaveBeenCalledWith(
       1,
       "RESET AFFECTION",

@@ -177,31 +177,41 @@ function MemorialProgress({
 function ConfirmationDialog({
   kind,
   participantName,
+  completionFocusRef,
   onCancel,
   onConfirm,
 }: {
   readonly kind: "generate" | "reset";
   readonly participantName?: string;
+  readonly completionFocusRef: React.RefObject<HTMLHeadingElement | null>;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): React.JSX.Element {
   const generate = kind === "generate";
   const dialogRef = useRef<HTMLDialogElement>(null);
   const primaryActionRef = useRef<HTMLButtonElement>(null);
+  const confirmedRef = useRef(false);
 
   useEffect(() => {
     const element = dialogRef.current;
     const previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const completionFocus = completionFocusRef.current;
     if (element === null) return;
     if (typeof element.showModal === "function") element.showModal();
     else element.setAttribute("open", "");
     primaryActionRef.current?.focus();
     return () => {
       if (element.open && typeof element.close === "function") element.close();
-      previousFocus?.focus();
+      const triggerIsUsable =
+        previousFocus !== null &&
+        previousFocus.isConnected &&
+        !(previousFocus instanceof HTMLButtonElement && previousFocus.disabled);
+      const focusTarget =
+        !confirmedRef.current && triggerIsUsable ? previousFocus : completionFocus;
+      focusTarget?.focus();
     };
-  }, []);
+  }, [completionFocusRef]);
 
   return (
     <div className={styles.dialogBackdrop}>
@@ -244,7 +254,10 @@ function ConfirmationDialog({
             ref={primaryActionRef}
             className={commonStyles.primaryButton}
             type="button"
-            onClick={onConfirm}
+            onClick={() => {
+              confirmedRef.current = true;
+              onConfirm();
+            }}
           >
             {generate ? "理解して生成する" : "500点にリセット"}
           </button>
@@ -356,6 +369,7 @@ export default function MemorialPage({
   const [selectedCycle, setSelectedCycle] = useState<number | null>(null);
   const [generationAttempt, setGenerationAttempt] = useState<GenerationAttempt | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pageHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const stateQuery = useQuery({
     queryKey: ["memorial"],
@@ -523,7 +537,7 @@ export default function MemorialPage({
         <p className={commonStyles.eyebrow} lang="en">
           MEMORIAL LOBBY
         </p>
-        <h1 className={commonStyles.japaneseHeading} tabIndex={-1}>
+        <h1 ref={pageHeadingRef} className={commonStyles.japaneseHeading} tabIndex={-1}>
           メモリアルロビー
         </h1>
         <div className={styles.requesterIdentity}>
@@ -756,6 +770,7 @@ export default function MemorialPage({
         <ConfirmationDialog
           kind="generate"
           participantName={participant.name}
+          completionFocusRef={pageHeadingRef}
           onCancel={() => setDialog(null)}
           onConfirm={() => {
             setDialog(null);
@@ -775,6 +790,7 @@ export default function MemorialPage({
       {dialog === "reset" && (
         <ConfirmationDialog
           kind="reset"
+          completionFocusRef={pageHeadingRef}
           onCancel={() => setDialog(null)}
           onConfirm={() => {
             setDialog(null);
