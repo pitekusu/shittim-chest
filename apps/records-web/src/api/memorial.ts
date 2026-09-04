@@ -198,7 +198,9 @@ export function queueMemorialGeneration(
   idempotencyKey: string,
 ): Promise<MemorialStateResponse> {
   const request: MemorialGenerateRequest = { schemaVersion: 1, expectedCycle, confirmation };
-  return requestJson("/api/v1/memorial/generate", isMemorialStateResponse, {
+  const validate = (value: unknown): value is MemorialStateResponse =>
+    isMemorialStateResponse(value) && value.cycle === expectedCycle;
+  return requestJson("/api/v1/memorial/generate", validate, {
     method: "POST",
     headers: mutationHeaders(csrfToken, idempotencyKey),
     body: JSON.stringify(request),
@@ -218,7 +220,9 @@ export function resetMemorial(
   idempotencyKey: string,
 ): Promise<MemorialStateResponse> {
   const request: MemorialResetRequest = { schemaVersion: 1, expectedCycle, confirmation };
-  return requestJson("/api/v1/memorial/reset", isMemorialStateResponse, {
+  const validate = (value: unknown): value is MemorialStateResponse =>
+    isMemorialStateResponse(value) && value.cycle === expectedCycle + 1;
+  return requestJson("/api/v1/memorial/reset", validate, {
     method: "POST",
     headers: mutationHeaders(csrfToken, idempotencyKey),
     body: JSON.stringify(request),

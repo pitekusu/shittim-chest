@@ -36,6 +36,12 @@ updated: 2026-09-04
 CodeQL default setupはPython、JavaScript／TypeScript、Actionsを解析する。branch rulesetのcheck名を
 workflow名と一致させ、rerunでflaky failureを隠さない。
 
+`npm audit`／`pnpm audit`は通常どおり必須とする。ただしnpm公式StatuspageがSecurity Audit componentの
+劣化と、そのcomponentに紐づくactive incidentを同時に示す間だけ、Node系の外部auditを当該runで
+skipしてwarningを残す。Statuspageの取得失敗、schema不正、componentだけが劣化してincidentを確認
+できない場合はfail closedとし、audit commandのfindingや通常の非0終了をskip理由にしない。build、test、
+CodeQL、Grype、dependency reviewなど他のgateは継続する。
+
 ## 3. Container evidence
 
 - canonical ARM64 path contextとDocker exporterでproduction imageを固定SHAからbuildする。
@@ -96,10 +102,13 @@ active prompt切替などのlive writeを行っていない。
 PR3はまずRecords ReleaseでWeb lobby、sidebar／mobile導線、ranking王冠とEdge CSPを配信し、その後の
 Core Production ReleaseでDiscord解放通知と`RecordsPublicHostname`から構成したcanonical `/memorial` URLを
 taskへ配信する。Records ReleaseはMemorial upload bucketのexact regional S3 domainを
-`RecordsMemorialUploadOriginDomain`としてEdge Change Setへ渡し、Core Releaseはexisting Records public hostnameを
-Runtime Change Setへ渡してtask environmentをstructural smokeで照合する。PR3はPR2のAPI、storage、generation、
-IAM契約を変更せず、新しいAWS resourceを作らない。各Releaseは既存の承認境界に従い、生成やresetのlive writeを
-自動実行しない。
+`RecordsMemorialUploadOriginDomain`としてEdge Change Setへ渡す。Records Release manifest schema v4は公開hostnameを
+同一SHAの署名済みevidenceへ固定し、配信後にApplication／Edge parameterとEdge public originが一致することを
+確認する。Core Releaseは同一SHAで最新のcompleted Records Releaseだけを選び、そのlatest attemptが成功していない
+場合は過去の成功runへfallbackしない。exact run／attemptのartifact、signer／source digest、manifest SHAを検証して
+得たhostnameだけをRuntime Change Setとstructural smokeへ渡し、mutableなrepository variableやRecords Stackの
+追加参照へ依存しない。PR3はPR2のAPI、storage、generation、IAM契約を変更せず、新しいAWS resourceを作らない。
+各Releaseは既存の承認境界に従い、生成やresetのlive writeを自動実行しない。
 Records Lambda bundleのnative dependencyはPython 3.14の`aarch64-manylinux_2_28`に対応するbinary wheelだけを
 hash検証付きで解決する。x86_64 runner上の現在architectureでPillow等をinstallせず、ARM64 Lambdaで
 loadできないnative extensionをartifactへ混入させない。

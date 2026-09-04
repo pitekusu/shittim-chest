@@ -297,17 +297,72 @@ def _validate_release(directory: Path) -> None:
     _validate_release_main_checks(text)
     records_release_gate = _workflow_step_block(text, "Require successful same-SHA Records release")
     required_records_release_markers = (
+        "id: records_release",
         "actions/workflows/records-release.yml/runs",
         "gh api --paginate --slurp",
         ".head_sha == $sha",
         '.head_branch == "main"',
         '.event == "workflow_dispatch"',
         '.status == "completed"',
-        '.conclusion == "success"',
+        "status=completed",
+        "sort_by(.updated_at, .id, .run_attempt) | last",
+        "run_id=$(jq --exit-status --raw-output '.id'",
+        "run_attempt=$(jq --exit-status --raw-output '.run_attempt'",
+        "updated_at=$(jq --exit-status --raw-output '.updated_at'",
+        "conclusion=$(jq --exit-status --raw-output '.conclusion'",
+        '[[ "${run_id}" =~ ^[1-9][0-9]*$ ]]',
+        '[[ "${run_attempt}" =~ ^[1-9][0-9]*$ ]]',
+        '[[ "${updated_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T',
+        'test "${conclusion}" = success',
+        'echo "artifact_name=records-plan-${run_id}-${run_attempt}"',
     )
     if any(marker not in records_release_gate for marker in required_records_release_markers):
         raise WorkflowPolicyError(
             "Release must require a successful same-SHA Records release before Core planning"
+        )
+    records_evidence_download = _workflow_step_block(
+        text, "Download the successful same-SHA Records evidence"
+    )
+    required_records_download_markers = (
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "name: ${{ steps.records_release.outputs.artifact_name }}",
+        "path: ${{ runner.temp }}/records-release-evidence",
+        "github-token: ${{ github.token }}",
+        "repository: ${{ github.repository }}",
+        "run-id: ${{ steps.records_release.outputs.run_id }}",
+    )
+    if any(marker not in records_evidence_download for marker in required_records_download_markers):
+        raise WorkflowPolicyError(
+            "Release must download the exact successful same-SHA Records artifact"
+        )
+    records_hostname_evidence = _workflow_step_block(
+        text, "Verify the same-SHA Records hostname evidence"
+    )
+    required_records_hostname_markers = (
+        "id: records_evidence",
+        "records-release-manifest.json",
+        'gh attestation verify "${manifest}"',
+        "--deny-self-hosted-runners",
+        "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml",
+        '--signer-digest "${GITHUB_SHA}"',
+        "--source-ref refs/heads/main",
+        '--source-digest "${GITHUB_SHA}"',
+        'validate-manifest "${manifest}" --expected-commit-sha "${GITHUB_SHA}"',
+        "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
+        'test "${#hostname}" -le 253',
+        'echo "hostname=${hostname}" >> "${GITHUB_OUTPUT}"',
+    )
+    if any(marker not in records_hostname_evidence for marker in required_records_hostname_markers):
+        raise WorkflowPolicyError(
+            "Release must verify the attested same-SHA Records hostname evidence"
+        )
+    if (
+        "Bind Records hostname to the deployed Records stacks" in text
+        or "--stack-name ShittimChest-Prod-RecordsApplication" in text
+        or "--stack-name ShittimChest-Prod-RecordsEdge" in text
+    ):
+        raise WorkflowPolicyError(
+            "Core Release must consume Records hostname evidence without Records stack access"
         )
     required = (
         "name: Production Release",
@@ -444,14 +499,20 @@ def _validate_release(directory: Path) -> None:
             "Release must bind the exact Lambda bundle checksum to the published version"
         )
     if (
-        text.count("RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}") != 4
+        "RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}" in text
+        or text.count("records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}")
+        != 1
+        or text.count("RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}")
+        != 1
+        or text.count("RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}")
+        != 2
         or text.count(
             '"ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}"'
         )
         != 1
         or text.count('--expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}"')
         != 2
-        or text.count('test "${#RECORDS_PUBLIC_HOSTNAME}" -le 253') != 1
+        or text.count('test "${#hostname}" -le 253') != 1
         or text.count('expected_memorial_url="https://${RECORDS_PUBLIC_HOSTNAME}/memorial"') != 1
         or text.count('select(.name == "SHITTIM_RECORDS_MEMORIAL_URL")') != 1
     ):
@@ -1120,6 +1181,10 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         raise WorkflowPolicyError(
             "CI CDK job must reserve time for dependency installation, audit, and validation"
         )
+    if cdk.count("python3 tools/run_npm_audit.py -- npm run audit:infra") != 1:
+        raise WorkflowPolicyError(
+            "CI CDK job must use the fail-closed npm outage-aware audit runner"
+        )
 
     records_triggers = _top_level_triggers(records_text)
     if records_triggers != ("pull_request", "push", "workflow_dispatch"):
@@ -1201,12 +1266,18 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "pnpm exec vp check",
         "pnpm exec vp test",
         "pnpm exec vp build",
-        "pnpm audit --audit-level=low",
+        "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
     )
     if any(marker not in records_web for marker in required_records_web):
         raise WorkflowPolicyError("Records CI must use the pinned pnpm and Vite+ toolchain")
     if "npm ci" in records_web or "package-lock.json" in records_web:
         raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
+
+    records_infra = _workflow_job_block(records_text, "records-infra")
+    if records_infra.count("python3 tools/run_npm_audit.py -- npm run audit:infra") != 1:
+        raise WorkflowPolicyError(
+            "Records CI infrastructure must use the fail-closed npm outage-aware audit runner"
+        )
 
     records_gate = _workflow_job_block(records_text, "records-gate")
     required_records_gate = (
@@ -1275,7 +1346,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "            pnpm exec vp check\n"
         "            pnpm exec vp test\n"
         "            pnpm exec vp build\n"
-        "            pnpm audit --audit-level=low\n"
+        "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"
         "          )"
     )
     if release_gate_step.count(app_local_web_gates) != 1:
@@ -1310,6 +1381,24 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Records Release must scope replacements to immutable application resources "
             "and the exact edge alias migration"
+        )
+    deployed_hostname = _workflow_step_block(
+        release, "Verify the deployed Records hostname against attested evidence"
+    )
+    required_deployed_hostname_markers = (
+        "records-release-manifest.json",
+        "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
+        "--stack-name ShittimChest-Prod-RecordsApplication",
+        "--stack-name ShittimChest-Prod-RecordsEdge",
+        'select(.ParameterKey == "RecordsPublicHostname")',
+        'select(.OutputKey == "RecordsPublicOrigin")',
+        'test "${hostname}" = "${application_hostname}"',
+        'test "${application_hostname}" = "${edge_hostname}"',
+        'test "${public_origin}" = "https://${hostname}"',
+    )
+    if any(marker not in deployed_hostname for marker in required_deployed_hostname_markers):
+        raise WorkflowPolicyError(
+            "Records Release must bind its attested hostname to the deployed Records stacks"
         )
     change_set_calls = (
         "create_plan stateful ShittimChest-Prod-RecordsStateful",
@@ -1414,6 +1503,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "web_artifact_sha256",
         "records-web-sbom.cdx.json",
         "web_sbom_sha256",
+        "records_public_hostname",
         "cloudfront create-invalidation",
         "Restore the previous Records entry point after a post-publish failure",
         "records-previous-index-version",
@@ -1421,6 +1511,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "s3api delete-object",
         "tools/records_release_manifest.py create-entry",
         "tools/records_release_manifest.py create-manifest",
+        '--records-public-hostname "${PUBLIC_HOSTNAME}"',
         "tools/records_release_manifest.py validate-manifest",
         "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml",
         "--source-ref refs/heads/main",

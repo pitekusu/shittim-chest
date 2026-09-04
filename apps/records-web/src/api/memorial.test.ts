@@ -290,6 +290,25 @@ describe("Memorial API", () => {
     expect(resetHeaders.get("X-Idempotency-Key")).toBe("reset-idempotency-key");
   });
 
+  it("rejects generation and reset responses for unexpected cycles", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(lockedState(2), 202))
+      .mockResolvedValueOnce(jsonResponse(lockedState(1)))
+      .mockResolvedValueOnce(jsonResponse(lockedState(3)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      queueMemorialGeneration(1, "GENERATE MEMORIAL", "csrf-token", "generate-idempotency-key"),
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    await expect(
+      resetMemorial(1, "RESET AFFECTION", "csrf-token", "reset-idempotency-key"),
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    await expect(
+      resetMemorial(1, "RESET AFFECTION", "csrf-token", "reset-idempotency-key"),
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+  });
+
   it("validates the requested memory cycle and timestamp ordering", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

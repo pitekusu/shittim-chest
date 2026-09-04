@@ -57,6 +57,31 @@ def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("workflow_name", "marker"),
+    (
+        ("ci.yml", "python3 tools/run_npm_audit.py -- npm run audit:infra"),
+        (
+            RECORDS_CI_WORKFLOW,
+            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
+        ),
+        (RECORDS_CI_WORKFLOW, "python3 tools/run_npm_audit.py -- npm run audit:infra"),
+    ),
+)
+def test_node_audits_require_the_outage_aware_runner(
+    tmp_path: Path, workflow_name: str, marker: str
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / workflow_name
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "npm audit --audit-level=low", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"outage-aware|pinned pnpm"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
     "marker",
     (
         "timeout-minutes: 90",
@@ -470,6 +495,51 @@ def test_records_release_binds_exact_memorial_upload_origin(
 @pytest.mark.parametrize(
     "marker",
     [
+        "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
+        "--stack-name ShittimChest-Prod-RecordsApplication",
+        "--stack-name ShittimChest-Prod-RecordsEdge",
+        'select(.OutputKey == "RecordsPublicOrigin")',
+        'test "${hostname}" = "${application_hostname}"',
+        'test "${application_hostname}" = "${edge_hostname}"',
+        'test "${public_origin}" = "https://${hostname}"',
+    ],
+)
+def test_records_release_verifies_attested_hostname_against_deployment(
+    tmp_path: Path, marker: str
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    step = text.index(
+        "      - name: Verify the deployed Records hostname against attested evidence"
+    )
+    marker_index = text.index(marker, step)
+    path.write_text(
+        text[:marker_index] + text[marker_index:].replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"attested hostname.*deployed Records stacks"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_attests_the_validated_public_hostname(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '--records-public-hostname "${PUBLIC_HOSTNAME}"', "", 1
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="immutable plan/deploy boundary"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
         "/shittim-chest/production/records/admin/discord-user-id",
         "RecordsPublicHostname",
     ],
@@ -487,7 +557,7 @@ def test_records_release_binds_admin_and_status_inputs(
 
     with pytest.raises(
         WorkflowPolicyError,
-        match=r"plan/deploy boundary|pre-existing distribution",
+        match=r"plan/deploy boundary|pre-existing distribution|attested hostname",
     ):
         validate_notification_workflows(directory)
 
@@ -1326,10 +1396,19 @@ def test_release_plan_requires_actions_read_for_records_release_gate(tmp_path: P
     (
         ("actions/workflows/records-release.yml/runs", "actions/runs"),
         (".head_sha == $sha", ".head_sha != $sha"),
+        ("status=completed", "status=success"),
+        ("sort_by(.updated_at, .id, .run_attempt) | last", "sort_by(.id) | last"),
         (
-            '.status == "completed" and\n                     .conclusion == "success"',
-            '.status == "completed" and\n                     .conclusion == "failure"',
+            "run_attempt=$(jq --exit-status --raw-output '.run_attempt'",
+            "run_attempt=$(jq --exit-status --raw-output '.run_number'",
         ),
+        (".updated_at", ".created_at"),
+        ('test "${conclusion}" = success', 'test "${conclusion}" = failure'),
+        (
+            'echo "artifact_name=records-plan-${run_id}-${run_attempt}"',
+            'echo "artifact_name=records-plan-${run_id}"',
+        ),
+        ('.status == "completed"', '.status == "in_progress"'),
     ),
 )
 def test_release_requires_successful_same_sha_records_release(
@@ -1343,6 +1422,71 @@ def test_release_requires_successful_same_sha_records_release(
     )
 
     with pytest.raises(WorkflowPolicyError, match="successful same-SHA Records release"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    ("marker", "message"),
+    [
+        (
+            "name: ${{ steps.records_release.outputs.artifact_name }}",
+            "exact successful same-SHA Records artifact",
+        ),
+        (
+            "run-id: ${{ steps.records_release.outputs.run_id }}",
+            "exact successful same-SHA Records artifact",
+        ),
+        (
+            'gh attestation verify "${manifest}"',
+            "attested same-SHA Records hostname evidence",
+        ),
+        ("--deny-self-hosted-runners", "attested same-SHA Records hostname evidence"),
+        ('--signer-digest "${GITHUB_SHA}"', "attested same-SHA Records hostname evidence"),
+        ('--source-digest "${GITHUB_SHA}"', "attested same-SHA Records hostname evidence"),
+        (
+            'validate-manifest "${manifest}" --expected-commit-sha "${GITHUB_SHA}"',
+            "attested same-SHA Records hostname evidence",
+        ),
+        (
+            "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
+            "attested same-SHA Records hostname evidence",
+        ),
+        (
+            'echo "hostname=${hostname}" >> "${GITHUB_OUTPUT}"',
+            "attested same-SHA Records hostname evidence",
+        ),
+    ],
+)
+def test_release_consumes_attested_same_sha_records_hostname(
+    tmp_path: Path, marker: str, message: str
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=message):
+        validate_notification_workflows(directory)
+
+
+def test_core_release_cannot_read_records_stacks_for_hostname_binding(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "      - name: Require the active Project cost-allocation tag",
+            "      - name: Bind Records hostname to the deployed Records stacks\n"
+            "        run: aws cloudformation describe-stacks "
+            "--stack-name ShittimChest-Prod-RecordsApplication\n"
+            "      - name: Require the active Project cost-allocation tag",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="without Records stack access"):
         validate_notification_workflows(directory)
 
 
@@ -1606,6 +1750,9 @@ def test_release_binds_lambda_version_to_exact_bundle_checksum(
 @pytest.mark.parametrize(
     "marker",
     [
+        "records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}",
+        "RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}",
+        "RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}",
         '"ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}"',
         '--expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}"',
         'select(.name == "SHITTIM_RECORDS_MEMORIAL_URL")',

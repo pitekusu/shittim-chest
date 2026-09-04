@@ -41,6 +41,7 @@ jobs:
     outputs:
       evidence_name: ${{ steps.evidence.outputs.artifact_name }}
       plan_attempt: ${{ steps.evidence.outputs.run_attempt }}
+      records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}
     permissions:
       actions: read
       attestations: write
@@ -106,20 +107,41 @@ jobs:
              .ref == "refs/heads/main"' \
             "${RUNNER_TEMP}/oidc-claims.json" >/dev/null
       - name: Require successful same-SHA Records release
+        id: records_release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api --paginate --slurp \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/records-release.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=100" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/records-release.yml/runs?branch=main&event=workflow_dispatch&status=completed&per_page=100" \
             > "${RUNNER_TEMP}/records-release-runs.json"
-          jq --exit-status --arg sha "${GITHUB_SHA}" \
-            '[.[].workflow_runs[] |
-              select(.head_sha == $sha and
-                     .head_branch == "main" and
-                     .event == "workflow_dispatch" and
-                     .status == "completed" and
-                     .conclusion == "success")] | length >= 1' \
-            "${RUNNER_TEMP}/records-release-runs.json" >/dev/null
+          run=$(jq --exit-status --compact-output --arg sha "${GITHUB_SHA}" '
+            [.[].workflow_runs[] |
+             select(.head_sha == $sha and
+                    .head_branch == "main" and
+                    .event == "workflow_dispatch" and
+                    .status == "completed")]
+            | sort_by(.updated_at, .id, .run_attempt) | last
+              // error("completed same-SHA Records release not found")
+          ' "${RUNNER_TEMP}/records-release-runs.json")
+          run_id=$(jq --exit-status --raw-output '.id' <<< "${run}")
+          run_attempt=$(jq --exit-status --raw-output '.run_attempt' <<< "${run}")
+          updated_at=$(jq --exit-status --raw-output '.updated_at' <<< "${run}")
+          conclusion=$(jq --exit-status --raw-output '.conclusion' <<< "${run}")
+          [[ "${run_id}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${run_attempt}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${updated_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          test "${conclusion}" = success
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "run_attempt=${run_attempt}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_name=records-plan-${run_id}-${run_attempt}" >> "${GITHUB_OUTPUT}"
+      - name: Download the successful same-SHA Records evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.records_release.outputs.artifact_name }}
+          path: ${{ runner.temp }}/records-release-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.records_release.outputs.run_id }}
       - name: Set up uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -136,6 +158,25 @@ jobs:
         run: |
           uv sync --frozen --all-groups
           npm ci --ignore-scripts
+      - name: Verify the same-SHA Records hostname evidence
+        id: records_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          manifest="${RUNNER_TEMP}/records-release-evidence/records-release-manifest.json"
+          gh attestation verify "${manifest}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --deny-self-hosted-runners \
+            --signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml \
+            --signer-digest "${GITHUB_SHA}" \
+            --source-ref refs/heads/main \
+            --source-digest "${GITHUB_SHA}"
+          uv run --frozen python tools/records_release_manifest.py \
+            validate-manifest "${manifest}" --expected-commit-sha "${GITHUB_SHA}"
+          hostname=$(jq --exit-status --raw-output '.records_public_hostname' "${manifest}")
+          test "${#hostname}" -le 253
+          [[ "${hostname}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+          echo "hostname=${hostname}" >> "${GITHUB_OUTPUT}"
       - name: Re-run release-critical local gates
         run: |
           uv run --frozen pytest
@@ -148,7 +189,6 @@ jobs:
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
           OPERATOR_EMAIL: ${{ secrets.OPERATOR_NOTIFICATION_EMAIL }}
           PLAN_ROLE_ARN: ${{ vars.AWS_RELEASE_PLAN_ROLE_ARN }}
-          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
           TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
         run: |
@@ -159,7 +199,6 @@ jobs:
             "${MONITOR_ARN}" \
             "${OPERATOR_EMAIL}" \
             "${PLAN_ROLE_ARN}" \
-            "${RECORDS_PUBLIC_HOSTNAME}" \
             "${SIGNING_PROFILE_ARN}" \
             "${TOKYO_EXECUTION_ROLE}"
           do
@@ -169,8 +208,6 @@ jobs:
             *.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest) ;;
             *) exit 1 ;;
           esac
-          test "${#RECORDS_PUBLIC_HOSTNAME}" -le 253
-          [[ "${RECORDS_PUBLIC_HOSTNAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
       - name: Acquire plan-only AWS credentials
         id: plan_aws
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -721,7 +758,7 @@ jobs:
           COST_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_US_EAST_1 }}
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
           OPERATOR_EMAIL: ${{ secrets.OPERATOR_NOTIFICATION_EMAIL }}
-          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
+          RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}
           RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
           RUNTIME_TEMPLATE_KEY: ${{ env.RUNTIME_TEMPLATE_KEY }}
           TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
@@ -1197,7 +1234,7 @@ jobs:
           ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
-          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
+          RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
         run: |
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
@@ -1358,7 +1395,7 @@ jobs:
           deploy_stack ShittimChest-Prod-CostGovernance "${COST_REGION}"
       - name: Run content-free post-deploy structural smoke checks
         env:
-          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
+          RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}
         run: |
           service=$(aws ecs describe-services \
             --cluster shittim-chest-production \

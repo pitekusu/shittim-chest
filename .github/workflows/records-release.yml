@@ -107,7 +107,7 @@ jobs:
             pnpm exec vp check
             pnpm exec vp test
             pnpm exec vp build
-            pnpm audit --audit-level=low
+            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low
           )
       - name: Build deterministic Records Lambda bundle and SBOM
         id: bundle
@@ -454,6 +454,7 @@ jobs:
         id: evidence
         env:
           BUNDLE_HASH: ${{ steps.bundle.outputs.bundle_hash }}
+          PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           WEB_HASH: ${{ steps.web.outputs.web_hash }}
           WEB_SBOM_HASH: ${{ steps.web_sbom.outputs.web_sbom_hash }}
         run: |
@@ -464,6 +465,7 @@ jobs:
             --application-plan "${RUNNER_TEMP}/records-release-application-plan.json" \
             --edge-plan "${RUNNER_TEMP}/records-release-edge-plan.json" \
             --commit-sha "${GITHUB_SHA}" --bundle-sha256 "${BUNDLE_HASH}" \
+            --records-public-hostname "${PUBLIC_HOSTNAME}" \
             --web-artifact-sha256 "${WEB_HASH}" \
             --web-sbom-sha256 "${WEB_SBOM_HASH}" \
             --output "${RUNNER_TEMP}/records-release-manifest.json"
@@ -689,6 +691,34 @@ jobs:
           execute stateful
           execute application
           execute edge
+      - name: Verify the deployed Records hostname against attested evidence
+        run: |
+          manifest="${RUNNER_TEMP}/records-evidence/records-release-manifest.json"
+          hostname=$(jq --exit-status --raw-output '.records_public_hostname' "${manifest}")
+          aws cloudformation describe-stacks --region "${AWS_REGION}" \
+            --stack-name ShittimChest-Prod-RecordsApplication \
+            > "${RUNNER_TEMP}/records-application-deployed.json"
+          aws cloudformation describe-stacks --region us-east-1 \
+            --stack-name ShittimChest-Prod-RecordsEdge \
+            > "${RUNNER_TEMP}/records-edge-deployed.json"
+          application_hostname=$(jq --exit-status --raw-output '
+            [.Stacks[] | .Parameters[] |
+             select(.ParameterKey == "RecordsPublicHostname") | .ParameterValue]
+            | if length == 1 then .[0] else error("expected one application hostname") end
+          ' "${RUNNER_TEMP}/records-application-deployed.json")
+          edge_hostname=$(jq --exit-status --raw-output '
+            [.Stacks[] | .Parameters[] |
+             select(.ParameterKey == "RecordsPublicHostname") | .ParameterValue]
+            | if length == 1 then .[0] else error("expected one edge hostname") end
+          ' "${RUNNER_TEMP}/records-edge-deployed.json")
+          public_origin=$(jq --exit-status --raw-output '
+            [.Stacks[] | .Outputs[] |
+             select(.OutputKey == "RecordsPublicOrigin") | .OutputValue]
+            | if length == 1 then .[0] else error("expected one public origin") end
+          ' "${RUNNER_TEMP}/records-edge-deployed.json")
+          test "${hostname}" = "${application_hostname}"
+          test "${application_hostname}" = "${edge_hostname}"
+          test "${public_origin}" = "https://${hostname}"
       - name: Publish the attested Records Web artifact
         run: |
           web_archive="${RUNNER_TEMP}/records-evidence/records-web.zip"
