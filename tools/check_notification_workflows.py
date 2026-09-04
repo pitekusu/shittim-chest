@@ -501,20 +501,45 @@ def _validate_release(directory: Path) -> None:
         )
     if (
         "RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}" in text
-        or text.count("records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}")
-        != 1
+        or "records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}" in text
+        or "${{ needs.plan.outputs.records_public_hostname }}" in text
         or text.count("RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}")
         != 1
-        or text.count("RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}")
+        or text.count("${{ runner.temp }}/records-release-evidence/records-release-manifest.json")
+        != 1
+        or text.count(
+            'records_manifest="${RUNNER_TEMP}/release/records-release-evidence/'
+            'records-release-manifest.json"'
+        )
+        != 3
+        or text.count(
+            "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml"
+        )
         != 2
+        or text.count('gh attestation verify "${records_manifest}"') != 1
+        or text.count("uv run --frozen python tools/records_release_manifest.py validate-manifest")
+        != 1
+        or text.count('"${records_manifest}" --expected-commit-sha "${GITHUB_SHA}"') != 1
+        or text.count("records_public_hostname=$(jq --exit-status --raw-output") != 2
+        or text.count("'.records_public_hostname' \"${records_manifest}\")") != 2
+        or text.count('test "${#records_public_hostname}" -le 253') != 2
+        or text.count(
+            '[[ "${records_public_hostname}" =~ ^[a-z0-9]'
+            "([a-z0-9-]{0,61}[a-z0-9])?"
+            "(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]"
+        )
+        != 2
+        or text.count('test "${records_public_hostname}" = "shittim.pitekusu.dev"') != 2
         or text.count(
             '"ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}"'
         )
         != 1
         or text.count('--expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}"')
-        != 2
+        != 1
+        or text.count('--expected-parameter "RecordsPublicHostname=${records_public_hostname}"')
+        != 1
         or text.count('test "${#hostname}" -le 253') != 1
-        or text.count('expected_memorial_url="https://${RECORDS_PUBLIC_HOSTNAME}/memorial"') != 1
+        or text.count('expected_memorial_url="https://${records_public_hostname}/memorial"') != 1
         or text.count('select(.name == "SHITTIM_RECORDS_MEMORIAL_URL")') != 1
     ):
         raise WorkflowPolicyError(

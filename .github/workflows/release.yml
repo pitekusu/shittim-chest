@@ -41,7 +41,6 @@ jobs:
     outputs:
       evidence_name: ${{ steps.evidence.outputs.artifact_name }}
       plan_attempt: ${{ steps.evidence.outputs.run_attempt }}
-      records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}
     permissions:
       actions: read
       attestations: write
@@ -975,6 +974,7 @@ jobs:
           name: ${{ steps.evidence.outputs.artifact_name }}
           path: |
             ${{ runner.temp }}/release-manifest.json
+            ${{ runner.temp }}/records-release-evidence/records-release-manifest.json
             ${{ runner.temp }}/normal.spdx.json
             ${{ runner.temp }}/normal.*.json
             ${{ runner.temp }}/normal.digest
@@ -1068,6 +1068,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
+          records_manifest="${RUNNER_TEMP}/release/records-release-evidence/records-release-manifest.json"
           uv run --frozen python tools/release_supply_chain.py validate-manifest "${manifest}"
           gh attestation verify "${manifest}" \
             --deny-self-hosted-runners \
@@ -1077,6 +1078,15 @@ jobs:
             --source-digest "${GITHUB_SHA}" \
             --source-ref refs/heads/main >/dev/null
           test "$(jq --raw-output .commit_sha "${manifest}")" = "${GITHUB_SHA}"
+          gh attestation verify "${records_manifest}" \
+            --deny-self-hosted-runners \
+            --repo pitekusu/shittim-chest \
+            --signer-digest "${GITHUB_SHA}" \
+            --signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml \
+            --source-digest "${GITHUB_SHA}" \
+            --source-ref refs/heads/main >/dev/null
+          uv run --frozen python tools/records_release_manifest.py validate-manifest \
+            "${records_manifest}" --expected-commit-sha "${GITHUB_SHA}"
           check_hash() {
             local path="$1" expected="$2"
             test "$(sha256sum "${path}" | cut -d ' ' -f 1)" = "${expected}"
@@ -1237,10 +1247,15 @@ jobs:
           ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
-          RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
         run: |
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
+          records_manifest="${RUNNER_TEMP}/release/records-release-evidence/records-release-manifest.json"
+          records_public_hostname=$(jq --exit-status --raw-output \
+            '.records_public_hostname' "${records_manifest}")
+          test "${#records_public_hostname}" -le 253
+          [[ "${records_public_hostname}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+          test "${records_public_hostname}" = "shittim.pitekusu.dev"
           repository="${ECR_REPOSITORY_URI##*/}"
           coverage_filter=$(jq --compact-output --null-input --arg repository "${repository}" \
             '{ecrRepositoryName:[{comparison:"EQUALS",value:$repository}]}')
@@ -1306,7 +1321,7 @@ jobs:
           validate_change_set ShittimChest-Prod-Runtime "${AWS_REGION}" Runtime \
             --expected-parameter "RuntimeImageDigest=${normal_digest}" \
             --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
-            --expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}" \
+            --expected-parameter "RecordsPublicHostname=${records_public_hostname}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
             --expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"
@@ -1397,9 +1412,13 @@ jobs:
           deploy_stack ShittimChest-Prod-Operations "${AWS_REGION}"
           deploy_stack ShittimChest-Prod-CostGovernance "${COST_REGION}"
       - name: Run content-free post-deploy structural smoke checks
-        env:
-          RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}
         run: |
+          records_manifest="${RUNNER_TEMP}/release/records-release-evidence/records-release-manifest.json"
+          records_public_hostname=$(jq --exit-status --raw-output \
+            '.records_public_hostname' "${records_manifest}")
+          test "${#records_public_hostname}" -le 253
+          [[ "${records_public_hostname}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+          test "${records_public_hostname}" = "shittim.pitekusu.dev"
           service=$(aws ecs describe-services \
             --cluster shittim-chest-production \
             --services shittim-chest-production --output json)
@@ -1416,7 +1435,7 @@ jobs:
             '[.taskDefinition.containerDefinitions[] |
               select(.name == "application") | .image] == [$expected]' \
             "${RUNNER_TEMP}/deployed-task-definition.json" >/dev/null
-          expected_memorial_url="https://${RECORDS_PUBLIC_HOSTNAME}/memorial"
+          expected_memorial_url="https://${records_public_hostname}/memorial"
           jq --exit-status --arg expected "${expected_memorial_url}" \
             '[.taskDefinition.containerDefinitions[] |
               select(.name == "application") | .environment[]? |
