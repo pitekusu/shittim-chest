@@ -1100,6 +1100,12 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         if text.count("python3 tools/classify_ci_paths.py") != 1:
             raise WorkflowPolicyError(f"{workflow} must use the canonical path classifier once")
 
+    cdk = _workflow_job_block(ci_text, "cdk")
+    if cdk.count("timeout-minutes: 20") != 1:
+        raise WorkflowPolicyError(
+            "CI CDK job must reserve time for dependency installation, audit, and validation"
+        )
+
     records_triggers = _top_level_triggers(records_text)
     if records_triggers != ("pull_request", "push", "workflow_dispatch"):
         raise WorkflowPolicyError(
