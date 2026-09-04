@@ -371,6 +371,7 @@ export default function MemorialPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const observedCycleRef = useRef<number | null>(null);
+  const observedUploadCapableRef = useRef<boolean | null>(null);
   const generationEpochRef = useRef(0);
   const recoveryGenerationRef = useRef<{
     readonly cycle: number;
@@ -408,10 +409,16 @@ export default function MemorialPage({
     const observedCycle = observedCycleRef.current;
     if (observedCycle === null) {
       observedCycleRef.current = state.cycle;
+      observedUploadCapableRef.current = state.state === "unlocked" || state.state === "failed";
       return;
     }
     const cycleAdvanced = state.cycle > observedCycle;
-    const generationStateEnded = state.state !== "unlocked" && state.state !== "failed";
+    const uploadCapable = state.state === "unlocked" || state.state === "failed";
+    const generationStateEnded =
+      state.cycle === observedCycle && observedUploadCapableRef.current === true && !uploadCapable;
+    if (cycleAdvanced || state.cycle === observedCycle) {
+      observedUploadCapableRef.current = uploadCapable;
+    }
     if (!cycleAdvanced && !generationStateEnded) return;
     if (cycleAdvanced) observedCycleRef.current = state.cycle;
     generationEpochRef.current += 1;

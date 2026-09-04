@@ -925,6 +925,21 @@ describe("MemorialPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("keeps the reset warning open across a same-cycle ready refetch", async () => {
+    useReducedMotion();
+    getMemoryMock.mockResolvedValue(memory(2));
+    const initial = { ...readyState(), memories: [MEMORY_SUMMARIES[1]!] };
+    const { client } = renderMemorial(initial);
+
+    expect(await screen.findByRole("img", { name: "プラナとのメモリアルロビー" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
+    expect(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).toBeVisible();
+
+    await act(async () => client.setQueryData(["memorial"], readyState()));
+
+    expect(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).toBeVisible();
+  });
+
   it("ignores a stale reset error after the same cycle state advances", async () => {
     vi.useFakeTimers();
     const pendingReset = deferred<MemorialStateResponse>();
