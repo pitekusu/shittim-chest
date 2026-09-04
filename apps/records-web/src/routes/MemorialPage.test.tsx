@@ -769,6 +769,34 @@ describe("MemorialPage", () => {
     expect(uploadSourceMock).not.toHaveBeenCalled();
   });
 
+  it("only offers the retained upload attempt after its generation response is lost", async () => {
+    vi.useFakeTimers();
+    prepareUploadMock.mockResolvedValue(uploadTicket());
+    uploadSourceMock.mockResolvedValue(undefined);
+    queueGenerationMock.mockRejectedValue(new Error("response lost"));
+    renderMemorial(unlockedState("failed"));
+    await finishStandardEntry();
+    vi.useRealTimers();
+
+    const source = new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
+      target: { files: [source] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
+    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+
+    const retainedRetry = await screen.findByRole("button", { name: "生成受付を再試行" });
+    expect(screen.queryByRole("button", { name: "前回の生成を再開" })).not.toBeInTheDocument();
+    const firstKey = queueGenerationMock.mock.calls[0]?.[3];
+    expect(firstKey).toEqual(expect.any(String));
+
+    fireEvent.click(retainedRetry);
+
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(2));
+    expect(queueGenerationMock.mock.calls[1]?.[3]).toBe(firstKey);
+    expect(screen.queryByRole("button", { name: "前回の生成を再開" })).not.toBeInTheDocument();
+  });
+
   it.each(["success", "error"] as const)(
     "ignores a stale retry %s after the same cycle becomes ready",
     async (outcome) => {

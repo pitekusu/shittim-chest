@@ -863,7 +863,7 @@ export default function MemorialPage({
                     準備済みの画像で生成を続ける
                   </button>
                 )}
-              {state.state === "failed" && (
+              {state.state === "failed" && generationAttempt === null && (
                 <button
                   className={`${commonStyles.secondaryButton} ${styles.retryButton}`}
                   type="button"
