@@ -81,7 +81,7 @@ function hasConsistentMemorialState(response: MemorialStateResponse): boolean {
   ) {
     return false;
   }
-  return timestamp(latest.unlockedAt) === timestamp(response.unlockedAt);
+  return latest.unlockedAt === response.unlockedAt;
 }
 
 function isMemorialStateResponse(value: unknown): value is MemorialStateResponse {

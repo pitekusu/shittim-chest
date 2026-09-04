@@ -201,6 +201,22 @@ describe("Memorial API", () => {
     await expect(getMemorialState()).resolves.toEqual(response);
   });
 
+  it("rejects a ready state whose unlock timestamps differ below millisecond precision", async () => {
+    const response: MemorialStateResponse = {
+      ...readyState(),
+      unlockedAt: "2026-09-03T01:00:00.000001Z",
+      memories: [
+        {
+          ...readyState().memories[0]!,
+          unlockedAt: "2026-09-03T01:00:00.000002Z",
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response)));
+
+    await expect(getMemorialState()).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+  });
+
   it("hashes the image in the browser and sends CSRF and idempotency headers", async () => {
     const digest = installDigest();
     const ticket = uploadResponse();
