@@ -102,9 +102,11 @@ active prompt切替などのlive writeを行っていない。
 PR3はまずRecords ReleaseでWeb lobby、sidebar／mobile導線、ranking王冠とEdge CSPを配信し、その後の
 Core Production ReleaseでDiscord解放通知と`RecordsPublicHostname`から構成したcanonical `/memorial` URLを
 taskへ配信する。Records ReleaseはMemorial upload bucketのexact regional S3 domainを
-`RecordsMemorialUploadOriginDomain`としてEdge Change Setへ渡す。Records Release manifest schema v4は公開hostnameを
-同一SHAの署名済みevidenceへ固定し、配信後にApplication／Edge parameterとEdge public originが一致することを
-確認する。Core Releaseは同一SHAで最新のcompleted Records Releaseだけを選び、そのlatest attemptが成功していない
+`RecordsMemorialUploadOriginDomain`としてEdge Change Setへ渡す。Memorial upload bucketのCORS originは
+`https://shittim.pitekusu.dev`へ固定しているため、Records Releaseは公開hostnameがこのoriginのhostnameと完全一致しない
+場合に計画を拒否する。Records Release manifest schema v4も同じ完全一致を検証して公開hostnameを同一SHAの署名済み
+evidenceへ固定し、配信後にApplication／Edge parameterとEdge public originが一致することを確認する。Core Releaseは
+同一SHAで最新のcompleted Records Releaseだけを選び、そのlatest attemptが成功していない
 場合は過去の成功runへfallbackしない。exact run／attemptのartifact、signer／source digest、manifest SHAを検証して
 得たhostnameだけをRuntime Change Setとstructural smokeへ渡し、mutableなrepository variableやRecords Stackの
 追加参照へ依存しない。PR3はPR2のAPI、storage、generation、IAM契約を変更せず、新しいAWS resourceを作らない。

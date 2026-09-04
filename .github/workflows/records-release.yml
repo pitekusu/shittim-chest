@@ -189,6 +189,7 @@ jobs:
           done
           [[ "${SOURCE_STREAM_ARN}" =~ ^arn:[^:]+:dynamodb:${AWS_REGION}:[0-9]{12}:table/shittim-chest-production/stream/.+$ ]]
           [[ "${PUBLIC_HOSTNAME}" =~ ^[a-z0-9.-]+$ ]]
+          test "${PUBLIC_HOSTNAME}" = "shittim.pitekusu.dev"
           [[ "${HOSTED_ZONE_ID}" =~ ^Z[A-Z0-9]+$ ]]
       - name: Acquire Records plan credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3

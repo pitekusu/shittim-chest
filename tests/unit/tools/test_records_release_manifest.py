@@ -19,6 +19,7 @@ BUNDLE_SHA = "b" * 64
 WEB_SHA = "c" * 64
 WEB_SBOM_SHA = "d" * 64
 ACCOUNT = "000000000000"
+RECORDS_PUBLIC_HOSTNAME = "shittim.pitekusu.dev"
 EDGE_HOSTNAME = "shittim.example.com"
 EDGE_ZONE_ID = "Z0123456789EXAMPLE"
 EDGE_ZONE_NAME = "example.com"
@@ -71,7 +72,7 @@ def manifest() -> dict[str, object]:
         application_plan=plan("application", "CREATE"),
         edge_plan=plan("edge", "CREATE"),
         commit_sha=COMMIT_SHA,
-        records_public_hostname=EDGE_HOSTNAME,
+        records_public_hostname=RECORDS_PUBLIC_HOSTNAME,
         bundle_sha256=BUNDLE_SHA,
         web_artifact_sha256=WEB_SHA,
         web_sbom_sha256=WEB_SBOM_SHA,
@@ -393,7 +394,7 @@ def test_manifest_binds_fixed_sha_stack_name_type_and_execution() -> None:
     validate_manifest(value, expected_commit_sha=COMMIT_SHA)
 
     assert value["schema_version"] == 4
-    assert value["records_public_hostname"] == EDGE_HOSTNAME
+    assert value["records_public_hostname"] == RECORDS_PUBLIC_HOSTNAME
     assert value["web_artifact_sha256"] == WEB_SHA
     assert value["web_sbom_sha256"] == WEB_SBOM_SHA
     assert value["change_sets"] == {
@@ -447,3 +448,23 @@ def test_manifest_rejects_invalid_public_hostname(hostname: str) -> None:
 
     with pytest.raises(ValueError, match="public hostname"):
         validate_manifest(value, expected_commit_sha=COMMIT_SHA)
+
+
+def test_manifest_rejects_valid_hostname_that_does_not_match_upload_cors() -> None:
+    value = manifest()
+    value["records_public_hostname"] = "records.example.com"
+
+    with pytest.raises(ValueError, match="Memorial upload CORS origin"):
+        validate_manifest(value, expected_commit_sha=COMMIT_SHA)
+
+    with pytest.raises(ValueError, match="Memorial upload CORS origin"):
+        create_manifest(
+            stateful_plan=plan("stateful"),
+            application_plan=plan("application", "CREATE"),
+            edge_plan=plan("edge", "CREATE"),
+            commit_sha=COMMIT_SHA,
+            records_public_hostname="records.example.com",
+            bundle_sha256=BUNDLE_SHA,
+            web_artifact_sha256=WEB_SHA,
+            web_sbom_sha256=WEB_SBOM_SHA,
+        )

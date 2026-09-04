@@ -178,6 +178,7 @@ jobs:
           hostname=$(jq --exit-status --raw-output '.records_public_hostname' "${manifest}")
           test "${#hostname}" -le 253
           [[ "${hostname}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
+          test "${hostname}" = "shittim.pitekusu.dev"
           echo "hostname=${hostname}" >> "${GITHUB_OUTPUT}"
       - name: Re-run release-critical local gates
         run: |

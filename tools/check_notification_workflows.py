@@ -350,6 +350,7 @@ def _validate_release(directory: Path) -> None:
         'validate-manifest "${manifest}" --expected-commit-sha "${GITHUB_SHA}"',
         "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
         'test "${#hostname}" -le 253',
+        'test "${hostname}" = "shittim.pitekusu.dev"',
         'echo "hostname=${hostname}" >> "${GITHUB_OUTPUT}"',
     )
     if any(marker not in records_hostname_evidence for marker in required_records_hostname_markers):
@@ -1352,6 +1353,12 @@ def _validate_records_workflows(directory: Path) -> None:
     if "pnpm --dir apps/records-web" in release_gate_step:
         raise WorkflowPolicyError(
             "Records Release web gates must not resolve pnpm from the repository root"
+        )
+
+    plan_handles = _workflow_step_block(release, "Validate Records plan handles")
+    if 'test "${PUBLIC_HOSTNAME}" = "shittim.pitekusu.dev"' not in plan_handles:
+        raise WorkflowPolicyError(
+            "Records Release hostname must match the fixed Memorial upload CORS origin"
         )
 
     executable_filter = (

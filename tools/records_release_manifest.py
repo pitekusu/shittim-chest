@@ -15,6 +15,7 @@ _PUBLIC_HOSTNAME = re.compile(
     r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
     r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+"
 )
+_MEMORIAL_UPLOAD_CORS_HOSTNAME = "shittim.pitekusu.dev"
 _CHANGE_SET_NAME = re.compile(
     r"records-release-[1-9][0-9]*-[1-9][0-9]*-(stateful|application|edge)"
 )
@@ -364,6 +365,10 @@ def validate_manifest(value: object, *, expected_commit_sha: str | None = None) 
         or _PUBLIC_HOSTNAME.fullmatch(records_public_hostname) is None
     ):
         raise ValueError("Records Release public hostname is invalid")
+    if records_public_hostname != _MEMORIAL_UPLOAD_CORS_HOSTNAME:
+        raise ValueError(
+            "Records Release public hostname does not match the Memorial upload CORS origin"
+        )
     bundle_sha256 = root.get("bundle_sha256")
     if not isinstance(bundle_sha256, str) or _SHA256.fullmatch(bundle_sha256) is None:
         raise ValueError("Records Release bundle hash is invalid")

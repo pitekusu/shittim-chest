@@ -538,6 +538,22 @@ def test_records_release_attests_the_validated_public_hostname(tmp_path: Path) -
         validate_notification_workflows(directory)
 
 
+def test_records_release_requires_public_hostname_to_match_upload_cors(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            '          test "${PUBLIC_HOSTNAME}" = "shittim.pitekusu.dev"\n',
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="fixed Memorial upload CORS origin"):
+        validate_notification_workflows(directory)
+
+
 @pytest.mark.parametrize(
     "marker",
     [
@@ -1450,6 +1466,10 @@ def test_release_requires_successful_same_sha_records_release(
         ),
         (
             "hostname=$(jq --exit-status --raw-output '.records_public_hostname'",
+            "attested same-SHA Records hostname evidence",
+        ),
+        (
+            'test "${hostname}" = "shittim.pitekusu.dev"',
             "attested same-SHA Records hostname evidence",
         ),
         (
