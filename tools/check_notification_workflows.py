@@ -1085,6 +1085,12 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         if text.count("python3 tools/classify_ci_paths.py") != 1:
             raise WorkflowPolicyError(f"{workflow} must use the canonical path classifier once")
 
+    cdk = _workflow_job_block(ci_text, "cdk")
+    if cdk.count("python3 tools/run_npm_audit.py -- npm run audit:infra") != 1:
+        raise WorkflowPolicyError(
+            "CI CDK job must use the fail-closed npm outage-aware audit runner"
+        )
+
     records_triggers = _top_level_triggers(records_text)
     if records_triggers != ("pull_request", "push", "workflow_dispatch"):
         raise WorkflowPolicyError(
@@ -1165,12 +1171,18 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "pnpm exec vp check",
         "pnpm exec vp test",
         "pnpm exec vp build",
-        "pnpm audit --audit-level=low",
+        "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
     )
     if any(marker not in records_web for marker in required_records_web):
         raise WorkflowPolicyError("Records CI must use the pinned pnpm and Vite+ toolchain")
     if "npm ci" in records_web or "package-lock.json" in records_web:
         raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
+
+    records_infra = _workflow_job_block(records_text, "records-infra")
+    if records_infra.count("python3 tools/run_npm_audit.py -- npm run audit:infra") != 1:
+        raise WorkflowPolicyError(
+            "Records CI infrastructure must use the fail-closed npm outage-aware audit runner"
+        )
 
     records_gate = _workflow_job_block(records_text, "records-gate")
     required_records_gate = (
@@ -1239,7 +1251,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "            pnpm exec vp check\n"
         "            pnpm exec vp test\n"
         "            pnpm exec vp build\n"
-        "            pnpm audit --audit-level=low\n"
+        "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"
         "          )"
     )
     if release_gate_step.count(app_local_web_gates) != 1:

@@ -107,7 +107,7 @@ jobs:
             pnpm exec vp check
             pnpm exec vp test
             pnpm exec vp build
-            pnpm audit --audit-level=low
+            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low
           )
       - name: Build deterministic Records Lambda bundle and SBOM
         id: bundle
