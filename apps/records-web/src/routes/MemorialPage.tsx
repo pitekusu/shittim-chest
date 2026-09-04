@@ -375,6 +375,10 @@ export default function MemorialPage({
     readonly state: "unlocked" | "failed";
     readonly idempotencyKey: string;
   } | null>(null);
+  const recoveryResetRef = useRef<{
+    readonly cycle: number;
+    readonly idempotencyKey: string;
+  } | null>(null);
 
   const stateQuery = useQuery({
     queryKey: ["memorial"],
@@ -390,6 +394,13 @@ export default function MemorialPage({
     const state = stateQuery.data;
     if (recovery !== null && (state?.cycle !== recovery.cycle || state.state !== recovery.state)) {
       recoveryGenerationRef.current = null;
+    }
+    if (
+      recoveryResetRef.current !== null &&
+      state !== undefined &&
+      state.cycle !== recoveryResetRef.current.cycle
+    ) {
+      recoveryResetRef.current = null;
     }
   }, [stateQuery.data]);
 
@@ -482,8 +493,14 @@ export default function MemorialPage({
   });
 
   const reset = useMutation({
-    mutationFn: (cycle: number) =>
-      resetMemorial(cycle, RESET_CONFIRMATION, csrfToken, idempotencyKey()),
+    mutationFn: (cycle: number) => {
+      let recovery = recoveryResetRef.current;
+      if (recovery === null || recovery.cycle !== cycle) {
+        recovery = { cycle, idempotencyKey: idempotencyKey() };
+        recoveryResetRef.current = recovery;
+      }
+      return resetMemorial(cycle, RESET_CONFIRMATION, csrfToken, recovery.idempotencyKey);
+    },
     onSuccess: (next) => {
       setActionError(null);
       setSelectedFile(null);

@@ -565,6 +565,50 @@ describe("MemorialPage", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["affection-rankings"] });
   });
 
+  it("reuses the reset key after response loss until the cycle changes", async () => {
+    vi.useFakeTimers();
+    resetMock.mockRejectedValue(new Error("response lost"));
+    const { client } = renderMemorial(unlockedState());
+    await finishStandardEntry();
+    vi.useRealTimers();
+
+    const confirmReset = () => {
+      fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
+      fireEvent.click(
+        within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
+          "button",
+          { name: "500点にリセット" },
+        ),
+      );
+    };
+
+    confirmReset();
+    await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "親愛度をリセット" })).toBeEnabled(),
+    );
+    const firstKey = resetMock.mock.calls[0]?.[3];
+    expect(firstKey).toEqual(expect.any(String));
+
+    confirmReset();
+    await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "親愛度をリセット" })).toBeEnabled(),
+    );
+    expect(resetMock.mock.calls[1]?.[3]).toBe(firstKey);
+
+    await act(async () =>
+      client.setQueryData(["memorial"], {
+        ...unlockedState(),
+        cycle: 2,
+        resetCount: 1,
+      }),
+    );
+    confirmReset();
+    await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(3));
+    expect(resetMock.mock.calls[2]?.[3]).not.toBe(firstKey);
+  });
+
   it("plays the entry transition when a reset owner revisits the archive-only lobby", async () => {
     vi.useFakeTimers();
     getMemoryMock.mockResolvedValue(memory(1));
