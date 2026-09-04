@@ -350,8 +350,8 @@ describe("Memorial API", () => {
     await expect(getMemorialMemory(summary)).rejects.toMatchObject({
       code: "INVALID_API_RESPONSE",
     });
-    await expect(getMemorialMemory(summary)).rejects.toMatchObject({
-      code: "INVALID_API_RESPONSE",
-    });
+    await expect(
+      getMemorialMemory({ ...summary, generatedAt: "2026-09-03T00:59:00Z" }),
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
   });
 });
