@@ -21,6 +21,12 @@ const MEMORIAL_UPLOAD_CONTENT_TYPES = new Set<MemorialUploadContentType>([
   "image/png",
   "image/webp",
 ]);
+const MEMORIAL_GENERATION_RESPONSE_STATES = new Set<MemorialStateResponse["state"]>([
+  "queued",
+  "generating",
+  "ready",
+  "failed",
+]);
 
 function mutationHeaders(csrfToken: string, idempotencyKey: string): HeadersInit {
   return {
@@ -205,7 +211,9 @@ export function queueMemorialGeneration(
 ): Promise<MemorialStateResponse> {
   const request: MemorialGenerateRequest = { schemaVersion: 1, expectedCycle, confirmation };
   const validate = (value: unknown): value is MemorialStateResponse =>
-    isMemorialStateResponse(value) && value.cycle === expectedCycle;
+    isMemorialStateResponse(value) &&
+    value.cycle === expectedCycle &&
+    MEMORIAL_GENERATION_RESPONSE_STATES.has(value.state);
   return requestJson("/api/v1/memorial/generate", validate, {
     method: "POST",
     headers: mutationHeaders(csrfToken, idempotencyKey),
@@ -227,7 +235,7 @@ export function resetMemorial(
 ): Promise<MemorialStateResponse> {
   const request: MemorialResetRequest = { schemaVersion: 1, expectedCycle, confirmation };
   const validate = (value: unknown): value is MemorialStateResponse =>
-    isMemorialStateResponse(value) && value.cycle === expectedCycle + 1;
+    isMemorialStateResponse(value) && value.cycle === expectedCycle + 1 && value.state === "locked";
   return requestJson("/api/v1/memorial/reset", validate, {
     method: "POST",
     headers: mutationHeaders(csrfToken, idempotencyKey),

@@ -309,6 +309,69 @@ describe("Memorial API", () => {
     ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
   });
 
+  it.each(["queued", "generating", "ready", "failed"] as const)(
+    "accepts a %s response after generation is accepted",
+    async (state) => {
+      const response =
+        state === "ready" ? readyState() : { ...unlockedState(), state, uploadReady: false };
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response, 202)));
+
+      await expect(
+        queueMemorialGeneration(1, "GENERATE MEMORIAL", "csrf-token", "generate-idempotency-key"),
+      ).resolves.toMatchObject({ state });
+    },
+  );
+
+  it.each(["locked", "unlocked"] as const)(
+    "rejects a %s response that does not prove generation was accepted",
+    async (state) => {
+      const response = state === "locked" ? lockedState() : unlockedState();
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response, 202)));
+
+      await expect(
+        queueMemorialGeneration(1, "GENERATE MEMORIAL", "csrf-token", "generate-idempotency-key"),
+      ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    },
+  );
+
+  it.each(["unlocked", "queued", "generating", "failed"] as const)(
+    "rejects a %s response after reset advances the cycle",
+    async (state) => {
+      const response: MemorialStateResponse = {
+        ...unlockedState(),
+        state,
+        cycle: 2,
+        resetCount: 1,
+        uploadReady: state === "unlocked",
+      };
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response)));
+
+      await expect(
+        resetMemorial(1, "RESET AFFECTION", "csrf-token", "reset-idempotency-key"),
+      ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+    },
+  );
+
+  it("rejects a ready response after reset advances the cycle", async () => {
+    const response: MemorialStateResponse = {
+      ...readyState(),
+      cycle: 2,
+      resetCount: 1,
+      latestReadyCycle: 2,
+      memories: [
+        {
+          ...readyState().memories[0]!,
+          cycle: 2,
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response)));
+
+    await expect(
+      resetMemorial(1, "RESET AFFECTION", "csrf-token", "reset-idempotency-key"),
+    ).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
+  });
+
   it("binds a memory detail to the selected immutable summary", async () => {
     const summary = readyState().memories[0]!;
     const fetchMock = vi
