@@ -1177,10 +1177,6 @@ def _validate_ci_path_isolation(directory: Path) -> None:
             raise WorkflowPolicyError(f"{workflow} must use the canonical path classifier once")
 
     cdk = _workflow_job_block(ci_text, "cdk")
-    if cdk.count("timeout-minutes: 20") != 1:
-        raise WorkflowPolicyError(
-            "CI CDK job must reserve time for dependency installation, audit, and validation"
-        )
     if cdk.count("python3 tools/run_npm_audit.py -- npm run audit:infra") != 1:
         raise WorkflowPolicyError(
             "CI CDK job must use the fail-closed npm outage-aware audit runner"

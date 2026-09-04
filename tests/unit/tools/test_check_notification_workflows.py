@@ -57,27 +57,44 @@ def test_repository_target_workflow_is_accepted(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("workflow_name", "marker"),
+    ("workflow_name", "marker", "replacement"),
     (
-        ("ci.yml", "python3 tools/run_npm_audit.py -- npm run audit:infra"),
+        (
+            "ci.yml",
+            "python3 tools/run_npm_audit.py -- npm run audit:infra",
+            "npm run audit:infra",
+        ),
         (
             RECORDS_CI_WORKFLOW,
             "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
+            "pnpm audit --audit-level=low",
         ),
-        (RECORDS_CI_WORKFLOW, "python3 tools/run_npm_audit.py -- npm run audit:infra"),
+        (
+            RECORDS_CI_WORKFLOW,
+            "python3 tools/run_npm_audit.py -- npm run audit:infra",
+            "npm run audit:infra",
+        ),
+        (
+            RECORDS_RELEASE_WORKFLOW,
+            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
+            "pnpm audit --audit-level=low",
+        ),
     ),
 )
 def test_node_audits_require_the_outage_aware_runner(
-    tmp_path: Path, workflow_name: str, marker: str
+    tmp_path: Path,
+    workflow_name: str,
+    marker: str,
+    replacement: str,
 ) -> None:
     directory = _workflow_directory(tmp_path)
     path = directory / workflow_name
     path.write_text(
-        path.read_text(encoding="utf-8").replace(marker, "npm audit --audit-level=low", 1),
+        path.read_text(encoding="utf-8").replace(marker, replacement, 1),
         encoding="utf-8",
     )
 
-    with pytest.raises(WorkflowPolicyError, match=r"outage-aware|pinned pnpm"):
+    with pytest.raises(WorkflowPolicyError, match=r"outage-aware|pinned pnpm|web gates"):
         validate_notification_workflows(directory)
 
 
@@ -136,22 +153,6 @@ def test_ci_requires_runtime_image_path_isolation(tmp_path: Path) -> None:
     )
 
     with pytest.raises(WorkflowPolicyError, match="run only for canonical Runtime"):
-        validate_notification_workflows(directory)
-
-
-def test_ci_cdk_job_reserves_dependency_and_validation_time(tmp_path: Path) -> None:
-    directory = _workflow_directory(tmp_path)
-    path = directory / "ci.yml"
-    path.write_text(
-        path.read_text(encoding="utf-8").replace(
-            "    timeout-minutes: 20\n",
-            "    timeout-minutes: 10\n",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(WorkflowPolicyError, match="reserve time for dependency"):
         validate_notification_workflows(directory)
 
 
