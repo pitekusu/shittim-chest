@@ -371,6 +371,7 @@ export default function MemorialPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const observedCycleRef = useRef<number | null>(null);
+  const generationEpochRef = useRef(0);
   const recoveryGenerationRef = useRef<{
     readonly cycle: number;
     readonly state: "unlocked" | "failed";
@@ -409,8 +410,11 @@ export default function MemorialPage({
       observedCycleRef.current = state.cycle;
       return;
     }
-    if (state.cycle <= observedCycle) return;
-    observedCycleRef.current = state.cycle;
+    const cycleAdvanced = state.cycle > observedCycle;
+    const generationStateEnded = state.state !== "unlocked" && state.state !== "failed";
+    if (!cycleAdvanced && !generationStateEnded) return;
+    if (cycleAdvanced) observedCycleRef.current = state.cycle;
+    generationEpochRef.current += 1;
     if (fileInputRef.current !== null) fileInputRef.current.value = "";
     setSelectedFile(null);
     setGenerationAttempt(null);
@@ -444,6 +448,17 @@ export default function MemorialPage({
 
   const generation = useMutation({
     mutationFn: async (attempt: GenerationAttempt) => {
+      const epoch = generationEpochRef.current;
+      const cycleIsCurrent = () => {
+        const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+        return (
+          generationEpochRef.current === epoch &&
+          observedCycleRef.current === attempt.cycle &&
+          cached?.cycle === attempt.cycle &&
+          (cached.state === "unlocked" || cached.state === "failed")
+        );
+      };
+      if (!cycleIsCurrent()) return null;
       setActionError(null);
       let current = attempt;
       if (current.ticket === null) {
@@ -454,6 +469,7 @@ export default function MemorialPage({
           csrfToken,
           current.prepareIdempotencyKey,
         );
+        if (!cycleIsCurrent()) return null;
         current = { ...current, ticket };
         setGenerationAttempt(current);
       }
@@ -461,25 +477,37 @@ export default function MemorialPage({
         if (current.ticket === null) throw new Error("Memorial upload ticket is unavailable");
         setLocalProgress("uploading");
         await uploadMemorialSource(current.ticket, current.file);
+        if (!cycleIsCurrent()) return null;
         current = { ...current, uploaded: true };
         setGenerationAttempt(current);
       }
+      if (!cycleIsCurrent()) return null;
       setLocalProgress("queueing");
-      return queueMemorialGeneration(
+      const next = await queueMemorialGeneration(
         current.cycle,
         GENERATE_CONFIRMATION,
         csrfToken,
         current.generateIdempotencyKey,
       );
+      return cycleIsCurrent() ? next : null;
     },
     onSuccess: (next) => {
+      if (next === null) return;
       if (fileInputRef.current !== null) fileInputRef.current.value = "";
       client.setQueryData(["memorial"], next);
       setSelectedFile(null);
       setGenerationAttempt(null);
       setLocalProgress("idle");
     },
-    onError: (error) => {
+    onError: (error, attempt) => {
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (
+        observedCycleRef.current !== attempt.cycle ||
+        cached?.cycle !== attempt.cycle ||
+        (cached.state !== "unlocked" && cached.state !== "failed")
+      ) {
+        return;
+      }
       setLocalProgress("idle");
       setActionError(apiMessage(error));
       void refreshAfterConflict(error);
@@ -500,18 +528,23 @@ export default function MemorialPage({
         recovery.idempotencyKey,
       );
     },
-    onSuccess: (next) => {
+    onSuccess: (next, request) => {
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
       setActionError(null);
       client.setQueryData(["memorial"], next);
     },
-    onError: (error) => {
+    onError: (error, request) => {
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
       setActionError(apiMessage(error));
       void refreshAfterConflict(error);
     },
   });
 
   const reset = useMutation({
-    mutationFn: (cycle: number) => {
+    mutationFn: (request: { cycle: number; state: "unlocked" | "failed" | "ready" }) => {
+      const { cycle } = request;
       let recovery = recoveryResetRef.current;
       if (recovery === null || recovery.cycle !== cycle) {
         recovery = { cycle, idempotencyKey: idempotencyKey() };
@@ -519,7 +552,9 @@ export default function MemorialPage({
       }
       return resetMemorial(cycle, RESET_CONFIRMATION, csrfToken, recovery.idempotencyKey);
     },
-    onSuccess: (next) => {
+    onSuccess: (next, request) => {
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
       setActionError(null);
       if (fileInputRef.current !== null) fileInputRef.current.value = "";
       setSelectedFile(null);
@@ -527,7 +562,9 @@ export default function MemorialPage({
       client.setQueryData(["memorial"], next);
       void client.invalidateQueries({ queryKey: ["affection-rankings"] });
     },
-    onError: (error) => {
+    onError: (error, request) => {
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
       setActionError(apiMessage(error));
       void refreshAfterConflict(error);
     },
@@ -866,7 +903,9 @@ export default function MemorialPage({
           onCancel={() => setDialog(null)}
           onConfirm={() => {
             setDialog(null);
-            reset.mutate(state.cycle);
+            if (state.state === "unlocked" || state.state === "failed" || state.state === "ready") {
+              reset.mutate({ cycle: state.cycle, state: state.state });
+            }
           }}
         />
       )}
