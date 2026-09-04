@@ -150,6 +150,7 @@ export function affectionRankingsResponse() {
       displayName: "パワー系ウナギ",
       avatar: placeholder("パワー系ウナギ", "cyan"),
       score: 987,
+      resetCount: 2,
     },
     {
       rank: 2,
@@ -275,6 +276,21 @@ export function mockApi(
               activeAlarms: [],
             },
             sections: [],
+          }),
+        );
+      }
+      if (path === "/api/v1/memorial") {
+        return Promise.resolve(
+          response({
+            schemaVersion: 1,
+            state: "locked",
+            cycle: 1,
+            resetCount: 0,
+            unlockedParticipant: null,
+            unlockedAt: null,
+            uploadReady: false,
+            latestReadyCycle: null,
+            memories: [],
           }),
         );
       }

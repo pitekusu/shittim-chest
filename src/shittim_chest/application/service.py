@@ -133,6 +133,7 @@ class DebateApplication:
         candidate_orderer: CandidateOrderer,
         outbox_recovery: DiscordOutboxDrainer,
         participant_display_names: Mapping[ParticipantSlot, str],
+        records_memorial_url: str,
         lease_owner: str,
         session_timeout_seconds: float = DEFAULT_SESSION_TIMEOUT_SECONDS,
         phase_timeout_seconds: float = DEFAULT_PHASE_TIMEOUT_SECONDS,
@@ -163,6 +164,8 @@ class DebateApplication:
             raise ValueError("participant display name must not be empty")
         for name in copied_display_names.values():
             sanitize_discord_model_text(name)
+        if not records_memorial_url.strip():
+            raise ValueError("Records Memorial URL must not be empty")
         self._clock = clock
         self._ids = ids
         self._metrics = metrics
@@ -173,6 +176,7 @@ class DebateApplication:
         self._candidate_orderer = candidate_orderer
         self._outbox_recovery = outbox_recovery
         self._participant_display_names = MappingProxyType(copied_display_names)
+        self._records_memorial_url = records_memorial_url
         self._lease_owner = lease_owner
         self._session_timeout_seconds = session_timeout_seconds
         self._phase_timeout_seconds = phase_timeout_seconds
@@ -2067,6 +2071,7 @@ class DebateApplication:
             created_at=staged_at,
             error_code=error_code,
             participant_display_names=self._participant_display_names,
+            records_memorial_url=self._records_memorial_url,
         )
         delivery = PhaseDeliveryPlan(
             plan_id=operations[0].plan_id or f"terminal-{target.value}",

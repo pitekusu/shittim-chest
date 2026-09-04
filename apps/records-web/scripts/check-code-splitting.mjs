@@ -5,7 +5,13 @@ import { gzipSync } from "node:zlib";
 const projectDirectory = fileURLToPath(new URL("..", import.meta.url));
 const outputDirectory = new URL("../dist/", import.meta.url);
 const indexPath = new URL("index.html", outputDirectory);
-const expectedRouteChunks = ["RecordsHome", "RecordDetail", "RankingsPage", "AdminPage"];
+const expectedRouteChunks = [
+  "RecordsHome",
+  "RecordDetail",
+  "RankingsPage",
+  "AdminPage",
+  "MemorialPage",
+];
 const maximumEntryGzipBytes = 113_560;
 const voteGraphJavaScriptMarker = "vote-graph";
 const voteGraphStyleMarker = "--vote-line";

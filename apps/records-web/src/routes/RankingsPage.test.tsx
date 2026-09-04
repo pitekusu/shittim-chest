@@ -118,6 +118,9 @@ describe("RankingsPage", () => {
       name: "安倍晋三AIから先生への親愛度 480点（1000点満点、ハート10個中4個）",
     });
     expect(fourHearts.querySelectorAll('svg[data-filled="true"]')).toHaveLength(4);
+    expect(
+      within(affection).getAllByText("メモリアルロビーのリセット 2回", { exact: true }),
+    ).toHaveLength(3);
   });
 
   it("uses the current persona name for its icon without making hearts live regions", async () => {

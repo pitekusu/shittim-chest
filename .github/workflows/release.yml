@@ -132,6 +132,7 @@ jobs:
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
           OPERATOR_EMAIL: ${{ secrets.OPERATOR_NOTIFICATION_EMAIL }}
           PLAN_ROLE_ARN: ${{ vars.AWS_RELEASE_PLAN_ROLE_ARN }}
+          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
           TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
         run: |
@@ -142,6 +143,7 @@ jobs:
             "${MONITOR_ARN}" \
             "${OPERATOR_EMAIL}" \
             "${PLAN_ROLE_ARN}" \
+            "${RECORDS_PUBLIC_HOSTNAME}" \
             "${SIGNING_PROFILE_ARN}" \
             "${TOKYO_EXECUTION_ROLE}"
           do
@@ -151,6 +153,8 @@ jobs:
             *.dkr.ecr.ap-northeast-1.amazonaws.com/shittim-chest) ;;
             *) exit 1 ;;
           esac
+          test "${#RECORDS_PUBLIC_HOSTNAME}" -le 253
+          [[ "${RECORDS_PUBLIC_HOSTNAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]
       - name: Acquire plan-only AWS credentials
         id: plan_aws
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
@@ -701,6 +705,7 @@ jobs:
           COST_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_US_EAST_1 }}
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
           OPERATOR_EMAIL: ${{ secrets.OPERATOR_NOTIFICATION_EMAIL }}
+          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
           RUNTIME_TEMPLATE_KEY: ${{ env.RUNTIME_TEMPLATE_KEY }}
           TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
@@ -816,6 +821,7 @@ jobs:
             --parameters \
               "ParameterKey=RuntimeImageDigest,ParameterValue=${NORMAL_DIGEST}" \
               "ParameterKey=RuntimeConfigVersion,ParameterValue=${RUNTIME_CONFIG_VERSION}" \
+              "ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}" \
               "ParameterKey=LambdaBundleBucketName,ParameterValue=${ASSET_BUCKET}" \
               "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}" \
               "ParameterKey=LambdaBundleCodeSha256,ParameterValue=${bundle_code_sha256}"
@@ -841,6 +847,7 @@ jobs:
           validate_change_set ShittimChest-Prod-Runtime Runtime \
             --expected-parameter "RuntimeImageDigest=${NORMAL_DIGEST}" \
             --expected-parameter "RuntimeConfigVersion=${RUNTIME_CONFIG_VERSION}" \
+            --expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
             --expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"
@@ -1174,6 +1181,7 @@ jobs:
           ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
+          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
         run: |
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
@@ -1242,6 +1250,7 @@ jobs:
           validate_change_set ShittimChest-Prod-Runtime "${AWS_REGION}" Runtime \
             --expected-parameter "RuntimeImageDigest=${normal_digest}" \
             --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
+            --expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
             --expected-parameter "LambdaBundleCodeSha256=${bundle_code_sha256}"
@@ -1332,6 +1341,8 @@ jobs:
           deploy_stack ShittimChest-Prod-Operations "${AWS_REGION}"
           deploy_stack ShittimChest-Prod-CostGovernance "${COST_REGION}"
       - name: Run content-free post-deploy structural smoke checks
+        env:
+          RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
         run: |
           service=$(aws ecs describe-services \
             --cluster shittim-chest-production \
@@ -1348,6 +1359,12 @@ jobs:
           jq --exit-status --arg expected "${expected_image}" \
             '[.taskDefinition.containerDefinitions[] |
               select(.name == "application") | .image] == [$expected]' \
+            "${RUNNER_TEMP}/deployed-task-definition.json" >/dev/null
+          expected_memorial_url="https://${RECORDS_PUBLIC_HOSTNAME}/memorial"
+          jq --exit-status --arg expected "${expected_memorial_url}" \
+            '[.taskDefinition.containerDefinitions[] |
+              select(.name == "application") | .environment[]? |
+              select(.name == "SHITTIM_RECORDS_MEMORIAL_URL") | .value] == [$expected]' \
             "${RUNNER_TEMP}/deployed-task-definition.json" >/dev/null
           aws lambda get-function-configuration \
             --function-name shittim-chest-production-image-admission \

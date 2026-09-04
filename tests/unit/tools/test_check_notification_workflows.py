@@ -431,6 +431,29 @@ def test_records_release_revalidates_bundle_checksum_before_deploy(tmp_path: Pat
 @pytest.mark.parametrize(
     "marker",
     [
+        'ParameterKey=RecordsMemorialUploadOriginDomain,ParameterValue="${memorial_upload_origin_domain}"',
+        '--expected-parameter "RecordsMemorialUploadOriginDomain=${memorial_upload_origin_domain}"',
+        "\"connect-src 'self' ${expected_upload_origin}\"",
+    ],
+)
+def test_records_release_binds_exact_memorial_upload_origin(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RECORDS_RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact Memorial upload origin"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
         "/shittim-chest/production/records/admin/discord-user-id",
         "RecordsPublicHostname",
     ],
@@ -1520,6 +1543,29 @@ def test_release_binds_lambda_version_to_exact_bundle_checksum(
     )
 
     with pytest.raises(WorkflowPolicyError, match="exact Lambda bundle checksum"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        '"ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}"',
+        '--expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}"',
+        'select(.name == "SHITTIM_RECORDS_MEMORIAL_URL")',
+    ],
+)
+def test_release_binds_exact_records_memorial_url(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact Records Memorial URL"):
         validate_notification_workflows(directory)
 
 

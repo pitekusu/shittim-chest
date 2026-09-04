@@ -368,7 +368,8 @@ jobs:
                 --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}" \
                 --expected-parameter "RecordsHostedZoneId=${HOSTED_ZONE_ID}" \
                 --expected-parameter "RecordsApiOriginDomain=${api_origin_domain}" \
-                --expected-parameter "RecordsMediaOriginDomain=${media_origin_domain}"
+                --expected-parameter "RecordsMediaOriginDomain=${media_origin_domain}" \
+                --expected-parameter "RecordsMemorialUploadOriginDomain=${memorial_upload_origin_domain}"
             fi
             uv run --project services/records --frozen python \
               tools/records_release_manifest.py create-entry \
@@ -423,6 +424,8 @@ jobs:
           api_origin_domain=${api_endpoint#https://}
           api_origin_domain=${api_origin_domain%/}
           media_origin_domain="shittim-chest-production-records-media-${account}.s3.${AWS_REGION}.amazonaws.com"
+          memorial_upload_origin_domain="shittim-chest-production-records-memorial-upload-${account}.s3.${AWS_REGION}.amazonaws.com"
+          [[ "${memorial_upload_origin_domain}" =~ ^shittim-chest-production-records-memorial-upload-[0-9]{12}\.s3\.ap-northeast-1\.amazonaws\.com$ ]]
           set -e
           create_plan stateful ShittimChest-Prod-RecordsStateful \
             "${STATEFUL_CHANGE_SET}" "${stateful_region}" "${EXECUTION_ROLE_ARN}" \
@@ -445,7 +448,8 @@ jobs:
               ParameterKey=RecordsPublicHostname,ParameterValue="${PUBLIC_HOSTNAME}" \
               ParameterKey=RecordsHostedZoneId,ParameterValue="${HOSTED_ZONE_ID}" \
               ParameterKey=RecordsApiOriginDomain,ParameterValue="${api_origin_domain}" \
-              ParameterKey=RecordsMediaOriginDomain,ParameterValue="${media_origin_domain}"
+              ParameterKey=RecordsMediaOriginDomain,ParameterValue="${media_origin_domain}" \
+              ParameterKey=RecordsMemorialUploadOriginDomain,ParameterValue="${memorial_upload_origin_domain}"
       - name: Record Records release evidence
         id: evidence
         env:
@@ -633,6 +637,14 @@ jobs:
                   "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
                   --expected-arn "${arn}" --expected-stack "${stack}" \
                   --expected-parameter "RecordsBundleCodeSha256=${bundle_code_sha256}"
+              elif [ "${logical_name}" = edge ]; then
+                account=$(aws sts get-caller-identity --query Account --output text)
+                memorial_upload_origin_domain="shittim-chest-production-records-memorial-upload-${account}.s3.${AWS_REGION}.amazonaws.com"
+                uv run --project services/records --frozen python \
+                  tools/release_supply_chain.py validate-change-set \
+                  "${RUNNER_TEMP}/${logical_name}-deploy-change-set.json" \
+                  --expected-arn "${arn}" --expected-stack "${stack}" \
+                  --expected-parameter "RecordsMemorialUploadOriginDomain=${memorial_upload_origin_domain}"
               fi
               uv run --project services/records --frozen python \
                 tools/records_release_manifest.py create-entry \
@@ -768,10 +780,16 @@ jobs:
           endpoint=$(cat "${RUNNER_TEMP}/records-public-origin")
           [[ "${endpoint}" =~ ^https://[a-z0-9.-]+$ ]]
           index_status=$(curl --silent --show-error --location \
+            --dump-header "${RUNNER_TEMP}/records-index.headers" \
             --output "${RUNNER_TEMP}/records-index.html" --write-out '%{http_code}' \
             "${endpoint}/")
           test "${index_status}" = 200
           grep --quiet '<div id="root"></div>' "${RUNNER_TEMP}/records-index.html"
+          account=$(aws sts get-caller-identity --query Account --output text)
+          expected_upload_origin="https://shittim-chest-production-records-memorial-upload-${account}.s3.${AWS_REGION}.amazonaws.com"
+          grep --ignore-case --fixed-strings --quiet \
+            "connect-src 'self' ${expected_upload_origin}" \
+            "${RUNNER_TEMP}/records-index.headers"
           session_status=$(curl --silent --show-error \
             --dump-header "${RUNNER_TEMP}/records-session.headers" \
             --output "${RUNNER_TEMP}/records-session.json" \

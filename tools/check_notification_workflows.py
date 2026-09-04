@@ -429,6 +429,21 @@ def _validate_release(directory: Path) -> None:
             "Release must bind the exact Lambda bundle checksum to the published version"
         )
     if (
+        text.count("RECORDS_PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}") != 4
+        or text.count(
+            '"ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}"'
+        )
+        != 1
+        or text.count('--expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}"')
+        != 2
+        or text.count('test "${#RECORDS_PUBLIC_HOSTNAME}" -le 253') != 1
+        or text.count('expected_memorial_url="https://${RECORDS_PUBLIC_HOSTNAME}/memorial"') != 1
+        or text.count('select(.name == "SHITTIM_RECORDS_MEMORIAL_URL")') != 1
+    ):
+        raise WorkflowPolicyError(
+            "Release must bind the exact Records Memorial URL through its plan/deploy boundary"
+        )
+    if (
         text.count("PYTHONDONTWRITEBYTECODE") != 1
         or '  PYTHONDONTWRITEBYTECODE: "1"' not in text[: text.index("\njobs:")]
     ):
@@ -1305,6 +1320,27 @@ def _validate_records_workflows(directory: Path) -> None:
     ):
         raise WorkflowPolicyError(
             "Records Release must allow Edge recovery without a pre-existing distribution"
+        )
+    if (
+        release.count(
+            'memorial_upload_origin_domain="shittim-chest-production-records-memorial-upload-'
+            '${account}.s3.${AWS_REGION}.amazonaws.com"'
+        )
+        != 2
+        or release.count(
+            "ParameterKey=RecordsMemorialUploadOriginDomain,"
+            'ParameterValue="${memorial_upload_origin_domain}"'
+        )
+        != 1
+        or release.count(
+            '--expected-parameter "RecordsMemorialUploadOriginDomain='
+            '${memorial_upload_origin_domain}"'
+        )
+        != 2
+        or release.count("\"connect-src 'self' ${expected_upload_origin}\"") != 1
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must bind and verify the exact Memorial upload origin"
         )
 
     release_markers = (

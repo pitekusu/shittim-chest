@@ -94,9 +94,15 @@ describe("RecordsEdgeStack", () => {
       "RecordsHostedZoneId",
       "RecordsApiOriginDomain",
       "RecordsMediaOriginDomain",
+      "RecordsMemorialUploadOriginDomain",
     ]) {
       expect(json.Parameters[parameter].Default).toBeUndefined();
     }
+    expect(json.Parameters.RecordsMemorialUploadOriginDomain).toMatchObject({
+      AllowedPattern:
+        "^shittim-chest-production-records-memorial-upload-[0-9]{12}\\.s3\\.ap-northeast-1\\.amazonaws\\.com$",
+      Type: "String",
+    });
     template.resourceCountIs("AWS::CertificateManager::Certificate", 1);
     template.hasResourceProperties("AWS::CertificateManager::Certificate", {
       KeyAlgorithm: "EC_prime256v1",
@@ -116,6 +122,22 @@ describe("RecordsEdgeStack", () => {
     expect(serialized).toContain("StrictTransportSecurity");
     expect(serialized).toContain("Permissions-Policy");
     expect(serialized).toContain("RecordsMediaOriginDomain");
+    expect(serialized).toContain("RecordsMemorialUploadOriginDomain");
+    const policies = template.findResources("AWS::CloudFront::ResponseHeadersPolicy");
+    const csp = Object.values(policies)[0]?.Properties.ResponseHeadersPolicyConfig
+      .SecurityHeadersConfig.ContentSecurityPolicy.ContentSecurityPolicy;
+    expect(csp).toEqual({
+      "Fn::Join": [
+        "",
+        [
+          "default-src 'self'; base-uri 'self'; connect-src 'self' https://",
+          { Ref: "RecordsMemorialUploadOriginDomain" },
+          "; font-src 'self'; img-src 'self' data: https://",
+          { Ref: "RecordsMediaOriginDomain" },
+          "; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self'",
+        ],
+      ],
+    });
   });
 
   test("publishes only operational edge outputs", () => {

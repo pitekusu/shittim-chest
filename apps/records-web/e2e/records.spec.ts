@@ -9,6 +9,7 @@ const AUTHENTICATED_ROUTE_CHUNK_NAMES = [
   "RecordDetail",
   "RankingsPage",
   "AdminPage",
+  "MemorialPage",
 ] as const;
 
 function observeAssetRequests(page: Page): Set<string> {
@@ -169,6 +170,7 @@ const affectionRankings = {
         displayName: "パワー系ウナギ",
         avatar: placeholder("パワー系ウナギ", "cyan"),
         score: [625, 755, 987][participantIndex],
+        resetCount: 2,
       },
       {
         rank: 2,
@@ -643,12 +645,87 @@ const adminPromptRevisions = {
   nextCursor: null,
 };
 
+const TEST_AWS_ACCOUNT = ["123456", "789012"].join("");
+const MEMORIAL_UPLOAD_ORIGIN = `https://shittim-chest-production-records-memorial-upload-${TEST_AWS_ACCOUNT}.s3.ap-northeast-1.amazonaws.com`;
+const MEMORIAL_MEDIA_ORIGIN = `https://shittim-chest-production-records-media-${TEST_AWS_ACCOUNT}.s3.ap-northeast-1.amazonaws.com`;
+
+const memorialLocked = {
+  schemaVersion: 1,
+  state: "locked",
+  cycle: 1,
+  resetCount: 0,
+  unlockedParticipant: null,
+  unlockedAt: null,
+  uploadReady: false,
+  latestReadyCycle: null,
+  memories: [],
+} as const;
+
+const memorialUnlocked = {
+  schemaVersion: 1,
+  state: "unlocked",
+  cycle: 1,
+  resetCount: 0,
+  unlockedParticipant: "participant-a",
+  unlockedAt: "2026-09-03T03:04:00Z",
+  uploadReady: false,
+  latestReadyCycle: null,
+  memories: [],
+} as const;
+
+const memorialReady = {
+  ...memorialUnlocked,
+  state: "ready",
+  uploadReady: false,
+  latestReadyCycle: 1,
+  memories: [
+    {
+      cycle: 1,
+      participant: "participant-a",
+      unlockedAt: memorialUnlocked.unlockedAt,
+      generatedAt: "2026-09-03T03:12:00Z",
+    },
+  ],
+} as const;
+
+const memorialQueued = {
+  ...memorialUnlocked,
+  state: "queued",
+  uploadReady: false,
+} as const;
+
+const memorialReset = {
+  ...memorialReady,
+  state: "locked",
+  cycle: 2,
+  resetCount: 1,
+  unlockedParticipant: null,
+  unlockedAt: null,
+  uploadReady: false,
+} as const;
+
+const memorialMemory = {
+  schemaVersion: 1,
+  cycle: 1,
+  participant: "participant-a",
+  unlockedAt: memorialUnlocked.unlockedAt,
+  generatedAt: "2026-09-03T03:12:00Z",
+  image: {
+    url: `${MEMORIAL_MEDIA_ORIGIN}/memorial/result.webp`,
+    width: 1920,
+    height: 1080,
+    alt: "アロナとのメモリアルロビー",
+  },
+  narrative:
+    "閲覧者さんと交わした質問を思い返すと、何でもない選択にも一緒に悩んだ時間が詰まっています。これからも、ふたりだけの大切な思い出を重ねていきましょう。",
+} as const;
+
 const PRODUCTION_CSP = [
   "default-src 'self'",
   "base-uri 'self'",
-  "connect-src 'self'",
+  `connect-src 'self' ${MEMORIAL_UPLOAD_ORIGIN}`,
   "font-src 'self'",
-  "img-src 'self' data:",
+  `img-src 'self' data: ${MEMORIAL_MEDIA_ORIGIN}`,
   "object-src 'none'",
   "frame-ancestors 'none'",
   "script-src 'self'",
@@ -719,6 +796,7 @@ async function mockAuthenticatedApi(
     return route.fulfill({ json: { ...costs, period } });
   });
   await page.route("**/api/v1/admin/status*", (route) => route.fulfill({ json: adminStatus }));
+  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialLocked }));
   await page.route("**/api/v1/admin/prompts**", (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
@@ -1406,6 +1484,9 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
     name: "安倍晋三AIから先生への親愛度 480点（1000点満点、ハート10個中4個）",
   });
   await expect(fourHearts.locator('svg[data-filled="true"]')).toHaveCount(4);
+  await expect(affection.getByText("メモリアルロビーのリセット 2回", { exact: true })).toHaveCount(
+    3,
+  );
   await expect(
     affection.getByRole("button", { name: "親愛度ランキングの続きを読み込む" }),
   ).toBeVisible();
@@ -1990,7 +2071,7 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   }
 });
 
-test("SYSTEM ACCESS remains reachable in the six-column 320px mobile navigation", async ({
+test("Memorial and SYSTEM ACCESS remain reachable in the 320px mobile navigation", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
@@ -2005,7 +2086,8 @@ test("SYSTEM ACCESS remains reachable in the six-column 320px mobile navigation"
     name: "モバイルナビゲーション",
   });
   await expect(mobileNavigation).toBeVisible();
-  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(6);
+  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(7);
+  await expect(mobileNavigation.getByRole("link", { name: "メモリアルロビー" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "サービス状態確認" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "プロンプト管理" })).toBeVisible();
   const viewport = await page.evaluate(() => ({
@@ -2014,6 +2096,207 @@ test("SYSTEM ACCESS remains reachable in the six-column 320px mobile navigation"
   }));
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("locked Memorial stays private, responsive, and visually clear", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await mockAuthenticatedApi(page);
+
+  await page.goto("/memorial");
+
+  await expect(page.getByRole("heading", { name: "メモリアルロビー", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "まだメモリアルロビーにはログインできません" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("MEMORIAL OWNER", { exact: true }).locator("..").getByText("閲覧者", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByLabel("メモリアルロビーへログインしています")).toHaveCount(0);
+  await expect(page.getByLabel("メモリアル用の画像を選択")).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-memorial-locked.png", {
+    animations: "disabled",
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await expect(page.getByRole("navigation", { name: "モバイルナビゲーション" })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-memorial-locked-mobile.png", {
+    animations: "disabled",
+    fullPage: true,
+  });
+});
+
+test("unlocked Memorial plays the three-second entry before opening creation", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialUnlocked }));
+
+  await page.goto("/memorial");
+
+  const transition = page.getByLabel("メモリアルロビーへログインしています");
+  await expect(transition).toBeVisible();
+  await expect(transition).toHaveAttribute("aria-busy", "true");
+  await expect(transition).toHaveAttribute("data-reduced-motion", "false");
+  await expect(transition).toHaveCSS("animation-duration", "3s");
+  await expect(transition.getByRole("heading", { name: "閲覧者" })).toBeVisible();
+  await expect(transition).toHaveCount(0, { timeout: 5_000 });
+
+  await expect(
+    page.getByRole("heading", { name: "アロナとのロビーが開放されています" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ふたりの一枚をつくる" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /画像をドロップ/u })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("Memorial uploads once and queues generation through the signed S3 form", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialUnlocked }));
+  const source = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const sha256Hex = createHash("sha256").update(source).digest("hex");
+  const sha256Base64 = createHash("sha256").update(source).digest("base64");
+  const operations: string[] = [];
+  await page.route("**/api/v1/memorial/upload", async (route) => {
+    operations.push("prepare");
+    expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
+    expect(route.request().headers()["x-idempotency-key"]).toMatch(/^memorial-/u);
+    expect(route.request().postDataJSON()).toEqual({
+      schemaVersion: 1,
+      expectedCycle: 1,
+      contentType: "image/png",
+      sizeBytes: source.length,
+      sha256: sha256Hex,
+    });
+    await route.fulfill({
+      json: {
+        schemaVersion: 1,
+        cycle: 1,
+        method: "POST",
+        uploadUrl: `${MEMORIAL_UPLOAD_ORIGIN}/`,
+        expiresAt: "2026-09-03T03:14:00Z",
+        fields: {
+          key: "source/opaque-key",
+          "Content-Type": "image/png",
+          "x-amz-checksum-sha256": sha256Base64,
+          "x-amz-algorithm": "AWS4-HMAC-SHA256",
+          "x-amz-credential": "credential/scope",
+          "x-amz-date": "20260903T031300Z",
+          policy: "cG9saWN5",
+          "x-amz-signature": "d".repeat(64),
+        },
+      },
+    });
+  });
+  await page.route(`${MEMORIAL_UPLOAD_ORIGIN}/`, async (route) => {
+    operations.push("upload");
+    expect(route.request().method()).toBe("POST");
+    const body = route.request().postDataBuffer()?.toString("utf8") ?? "";
+    expect(body).toContain("memorial-source");
+    expect(body).toContain(sha256Base64);
+    await route.fulfill({ status: 204 });
+  });
+  await page.route("**/api/v1/memorial/generate", async (route) => {
+    operations.push("generate");
+    expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
+    expect(route.request().headers()["x-idempotency-key"]).toMatch(/^memorial-/u);
+    expect(route.request().postDataJSON()).toEqual({
+      schemaVersion: 1,
+      expectedCycle: 1,
+      confirmation: "GENERATE MEMORIAL",
+    });
+    await route.fulfill({ json: memorialQueued });
+  });
+
+  await page.goto("/memorial");
+  await expect(page.getByLabel("メモリアルロビーへログインしています")).toHaveCount(0, {
+    timeout: 1_000,
+  });
+  await page.getByLabel("メモリアル用の画像を選択").setInputFiles({
+    name: "private-avatar.png",
+    mimeType: "image/png",
+    buffer: source,
+  });
+  await page.getByRole("button", { name: "メモリアルロビーを開放" }).click();
+  const dialog = page.getByRole("dialog", { name: "この思い出を一度だけ生成します" });
+  await expect(dialog).toContainText("このcycleで生成に成功できるのは一度だけです。");
+  await dialog.getByRole("button", { name: "理解して生成する" }).click();
+
+  await expect(page.getByText("メモリアル生成を受け付けました")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "メモリアル生成の進捗" })).not.toHaveAttribute(
+    "value",
+  );
+  expect(operations).toEqual(["prepare", "upload", "generate"]);
+});
+
+test("ready Memorial shows private history and confirms reset", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialReady }));
+  await page.route("**/api/v1/memorial/memories/1", (route) =>
+    route.fulfill({ json: memorialMemory }),
+  );
+  await page.route(`${MEMORIAL_MEDIA_ORIGIN}/**`, (route) =>
+    route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    }),
+  );
+  await page.route("**/api/v1/memorial/reset", async (route) => {
+    expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
+    expect(route.request().postDataJSON()).toEqual({
+      schemaVersion: 1,
+      expectedCycle: 1,
+      confirmation: "RESET AFFECTION",
+    });
+    await route.fulfill({ json: memorialReset });
+  });
+
+  await page.goto("/memorial");
+  await expect(page.getByLabel("メモリアルロビーへログインしています")).toHaveCount(0, {
+    timeout: 1_000,
+  });
+  await expect(page.getByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
+  await expect(page.getByText(memorialMemory.narrative)).toBeVisible();
+  await expect(page.getByText("THE SHITTIM CHEST", { exact: true })).toHaveCSS(
+    "font-family",
+    /Delogy/u,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-memorial-ready-dark.png", {
+    animations: "disabled",
+    fullPage: true,
+  });
+
+  await page.getByRole("button", { name: "親愛度をリセット" }).click();
+  const dialog = page.getByRole("dialog", { name: "親愛度をリセットしますか？" });
+  await expect(dialog).toContainText("3人の親愛度をすべて500点に戻します。");
+  await dialog.getByRole("button", { name: "500点にリセット" }).click();
+  await expect(
+    page.getByRole("heading", {
+      name: "次のメモリアルロビーはまだ開放されていません",
+    }),
+  ).toBeVisible();
+  await expect(page.getByText(/これまでの思い出はいつでも閲覧できます/u)).toBeVisible();
+  await expect(page.getByText("CYCLE 2", { exact: true })).toBeVisible();
+  await expect(page.getByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
 });
 
 test("prompt management is read-only for a non-admin member", async ({ page }, testInfo) => {
@@ -2352,6 +2635,7 @@ for (const directRoute of [
   { path: "/", chunkName: "RecordsHome", heading: "議論の記録" },
   { path: `/records/${RECORD_ID}`, chunkName: "RecordDetail", heading: detail.question },
   { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
+  { path: "/memorial", chunkName: "MemorialPage", heading: "メモリアルロビー" },
   { path: "/admin", chunkName: "AdminPage", heading: "サービス状態確認" },
 ] as const) {
   test(`direct ${directRoute.path} navigation loads its route chunk`, async ({
@@ -2362,7 +2646,9 @@ for (const directRoute of [
     await mockAuthenticatedApi(page);
 
     await page.goto(directRoute.path);
-    await expect(page.getByRole("heading", { name: directRoute.heading })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: directRoute.heading, exact: true }),
+    ).toBeVisible();
 
     const requiredRouteAssets = matchingChunkAssets(requestedAssets, directRoute.chunkName);
     expect(

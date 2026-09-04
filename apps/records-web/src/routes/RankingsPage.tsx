@@ -453,7 +453,21 @@ function AffectionRankingCard({
               </span>
               <Avatar avatar={entry.avatar} />
               <span className={rankingStyles.affectionName}>{entry.displayName}</span>
-              <strong className={rankingStyles.affectionScore}>{entry.score}</strong>
+              <span className={rankingStyles.affectionMeta}>
+                <strong className={rankingStyles.affectionScore}>{entry.score}</strong>
+                {(entry.resetCount ?? 0) > 0 && (
+                  <span className={rankingStyles.memorialCrown}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="m3 7 5 4 4-7 4 7 5-4-2 11H5Z" />
+                      <path d="M6 21h12" />
+                    </svg>
+                    <span aria-hidden="true">×{entry.resetCount}</span>
+                    <span className={commonStyles.visuallyHidden}>
+                      メモリアルロビーのリセット {entry.resetCount}回
+                    </span>
+                  </span>
+                )}
+              </span>
               <AffectionHearts
                 participantName={ranking.displayName}
                 requesterName={entry.displayName}

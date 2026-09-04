@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, discord, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-08-31
+updated: 2026-09-04
 ---
 
 # Discord詳細設計
@@ -56,6 +56,11 @@ Guildとallowed channelを起動時／操作時に検証し、participantへcomm
 3人の評価を完了できなかった場合は、部分的な点数や0点を表示せず、全員の親愛度を
 変更しなかったことだけを独立messageで表示する。評価確定後に討論が失敗または取消となった場合も、
 同じ独立messageで永続profileへ反映済みの変更を利用者から隠さない。評価前の失敗／取消では送信しない。
+
+同cycleで初めて親愛度1,000点へ到達してparticipantが選出された場合は、別messageを増やさず、同じ
+親愛度の独立messageへ「メモリアルロビーが開放されました！」、選出participant名、canonicalな
+`/memorial` linkを追記する。保存済みの解放metadataから同じOutbox operationを構成し、delivery retryでも
+解放通知を一度だけ送る。private identifierや質問本文は通知へ含めない。
 
 ## 5. Ordered Outbox delivery
 

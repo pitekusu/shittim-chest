@@ -23,6 +23,7 @@ from shittim_chest.domain import (
     AFFECTION_RULES_VERSION,
     AffectionAssessment,
     AffectionAssessmentStatus,
+    AffectionProfile,
     AttemptId,
     DebateId,
     DebatePhase,
@@ -32,6 +33,7 @@ from shittim_chest.domain import (
     ParticipantSlot,
     RecoveryState,
     Vote,
+    assess_affection,
 )
 
 NOW = datetime(2026, 7, 27, 1, 0, tzinfo=UTC)
@@ -186,6 +188,52 @@ def test_completed_delivery_reports_effective_affection_changes() -> None:
     assert "### 💜 安倍晋三" in affection.content
     assert "💗💗💗💗💗💗💗💗💗💗" in affection.content
     assert "**1000点** / 1000　📈 **+13**" in affection.content
+    assert "メモリアルロビーが開放されました！" not in affection.content  # noqa: RUF001
+
+
+def test_affection_channel_post_adds_the_memorial_link_only_for_the_persisted_unlock() -> None:
+    source = snapshot(final_decision=final_decision())
+    profile = AffectionProfile(
+        requester_key="A" * 43,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        scores=(500, 990, 500),
+        version=1,
+        updated_at=NOW,
+    )
+    _, assessment = assess_affection(
+        profile,
+        scores=(0, 10, 0),
+        assessed_at=NOW,
+        debate_id=source.state.debate_id,
+        operation_seed="memorial-notice",
+    )
+    source = replace(source, affection_assessment=assessment)
+    memorial_url = "https://records.example.invalid/memorial"
+
+    operations = prepare_terminal_outbox_operations(
+        snapshot=source,
+        target_phase=DebatePhase.COMPLETED,
+        created_at=NOW,
+        participant_display_names=DISPLAY_NAMES,
+        records_memorial_url=memorial_url,
+    )
+
+    affection = operations[-1]
+    assert affection.operation_id == "terminal-completed-affection-0000"
+    assert affection.delivery_target is DiscordDeliveryTarget.CHANNEL
+    assert "## 🎉 メモリアルロビーが開放されました！" in affection.content  # noqa: RUF001
+    assert "> 💞 **プラナ**との特別なロビーが利用できます。" in affection.content
+    assert f"> 🔗 [メモリアルロビーを開く]({memorial_url})" in affection.content
+    assert all(memorial_url not in operation.content for operation in operations[:-1])
+
+    with pytest.raises(ValueError, match="requires the Records Memorial URL"):
+        prepare_terminal_outbox_operations(
+            snapshot=source,
+            target_phase=DebatePhase.COMPLETED,
+            created_at=NOW,
+            participant_display_names=DISPLAY_NAMES,
+        )
 
 
 def test_affection_channel_post_matches_the_requester_facing_result_contract() -> None:

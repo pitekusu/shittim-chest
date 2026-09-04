@@ -103,6 +103,89 @@ export interface DebateAffection {
   readonly participants: readonly ParticipantAffectionChange[];
 }
 
+export type MemorialState = "locked" | "unlocked" | "queued" | "generating" | "ready" | "failed";
+export type MemorialUploadContentType = "image/jpeg" | "image/png" | "image/webp";
+
+export interface MemorialMemorySummary {
+  readonly cycle: number;
+  readonly participant: ParticipantSlot;
+  readonly unlockedAt: string;
+  readonly generatedAt: string;
+}
+
+export interface MemorialStateResponse {
+  readonly schemaVersion: 1;
+  readonly state: MemorialState;
+  readonly cycle: number;
+  readonly resetCount: number;
+  readonly unlockedParticipant: ParticipantSlot | null;
+  readonly unlockedAt: string | null;
+  readonly uploadReady: boolean;
+  readonly latestReadyCycle: number | null;
+  readonly memories: readonly MemorialMemorySummary[];
+}
+
+export interface MemorialUploadRequest {
+  readonly schemaVersion: 1;
+  readonly expectedCycle: number;
+  readonly contentType: MemorialUploadContentType;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+}
+
+export interface MemorialUploadFields {
+  readonly key: string;
+  readonly "Content-Type": MemorialUploadContentType;
+  readonly "x-amz-checksum-sha256": string;
+  readonly "x-amz-algorithm": "AWS4-HMAC-SHA256";
+  readonly "x-amz-credential": string;
+  readonly "x-amz-date": string;
+  readonly "x-amz-security-token"?: string | null;
+  readonly policy: string;
+  readonly "x-amz-signature": string;
+}
+
+export interface UploadResponse {
+  readonly schemaVersion: 1;
+  readonly cycle: number;
+  readonly method: "POST";
+  readonly uploadUrl: string;
+  readonly expiresAt: string;
+  readonly fields: MemorialUploadFields;
+}
+
+export interface MemorialGenerateRequest {
+  readonly schemaVersion: 1;
+  readonly expectedCycle: number;
+  readonly confirmation: "GENERATE MEMORIAL";
+}
+
+export interface MemorialResetRequest {
+  readonly schemaVersion: 1;
+  readonly expectedCycle: number;
+  readonly confirmation: "RESET AFFECTION";
+}
+
+export interface MemorialImage {
+  readonly url: string;
+  readonly width: 1920;
+  readonly height: 1080;
+  readonly alt: string;
+}
+
+export interface MemoryResponse {
+  readonly schemaVersion: 1;
+  readonly cycle: number;
+  readonly participant: ParticipantSlot;
+  readonly unlockedAt: string;
+  readonly generatedAt: string;
+  readonly image: MemorialImage;
+  readonly narrative: string;
+}
+
+export type MemorialUploadResponse = UploadResponse;
+export type MemorialMemoryResponse = MemoryResponse;
+
 export type CostPeriod = "today" | "week" | "month" | "all";
 
 export interface CostsResponse {

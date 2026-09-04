@@ -27,6 +27,8 @@ import containerPolicy from "../../container-policy.json";
 
 const IMAGE_DIGEST_PATTERN = "^sha256:[0-9a-f]{64}$";
 const CONFIG_VERSION_PATTERN = "^v[0-9]{4}$";
+const RECORDS_PUBLIC_HOSTNAME_PATTERN =
+  "^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$";
 const LAMBDA_BUNDLE_BUCKET_PATTERN = "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$";
 const LAMBDA_BUNDLE_KEY_PATTERN =
   "^lambda/shittim-chest/[0-9a-f]{64}/shittim-chest-lambda-arm64\\.zip$";
@@ -180,6 +182,11 @@ export class RuntimeStack extends Stack {
       description: "Versioned private runtime and persona configuration path",
       type: "String",
     });
+    const recordsPublicHostname = new CfnParameter(this, "RecordsPublicHostname", {
+      allowedPattern: RECORDS_PUBLIC_HOSTNAME_PATTERN,
+      description: "Exact Records public hostname used for the Memorial deep link",
+      type: "String",
+    });
 
     const dataProtectionPolicy = new logs.DataProtectionPolicy({
       name: "shittim-chest-production-log-protection",
@@ -278,6 +285,7 @@ export class RuntimeStack extends Stack {
       imageRepository: props.imageRepository,
       logging,
       parameters,
+      recordsPublicHostname: recordsPublicHostname.valueAsString,
       taskId: "NormalTaskDefinition",
       taskRole: normalTaskRole,
     });
@@ -1051,6 +1059,7 @@ export class RuntimeStack extends Stack {
     readonly imageRepository: ecr.IRepository;
     readonly logging: ecs.LogDriver;
     readonly parameters: RuntimeParameters;
+    readonly recordsPublicHostname: string;
     readonly taskId: string;
     readonly taskRole: iam.IRole;
   }): ecs.FargateTaskDefinition {
@@ -1077,6 +1086,11 @@ export class RuntimeStack extends Stack {
         SHITTIM_DYNAMODB_TABLE: "shittim-chest-production",
         SHITTIM_ENVIRONMENT: "production",
         SHITTIM_LOG_LEVEL: "INFO",
+        SHITTIM_RECORDS_MEMORIAL_URL: Fn.join("", [
+          "https://",
+          options.recordsPublicHostname,
+          "/memorial",
+        ]),
         SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER: RUNTIME_PROMPTS_ACTIVE_PARAMETER,
         SHITTIM_STATUS_PUBLISHER_FUNCTION: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
       },

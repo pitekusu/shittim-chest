@@ -99,6 +99,12 @@ export function Layout({
             >
               いろいろな記録
             </NavLink>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/memorial"
+            >
+              メモリアルロビー
+            </NavLink>
           </div>
           <section className={styles.systemAccess} aria-labelledby="system-access-label">
             <p className={styles.systemAccessLabel} id="system-access-label" lang="en">
@@ -147,6 +153,15 @@ export function Layout({
           to="/insights"
         >
           いろいろ
+        </NavLink>
+        <NavLink
+          aria-label="メモリアルロビー"
+          className={({ isActive }) =>
+            `${isActive ? styles.navActive : styles.navLink} ${styles.mobileMemorialLink}`
+          }
+          to="/memorial"
+        >
+          メモリアル
         </NavLink>
         <NavLink
           aria-label="サービス状態確認"

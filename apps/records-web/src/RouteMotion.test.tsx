@@ -93,6 +93,7 @@ describe("routeMotionKind", () => {
     expect(routeMotionKind("/")).toBe("archive");
     expect(routeMotionKind("/insights")).toBe("insights");
     expect(routeMotionKind("/admin")).toBe("admin");
+    expect(routeMotionKind("/memorial")).toBe("memorial");
     expect(routeMotionKind(`/records/${"r".repeat(43)}`)).toBe("detail");
     expect(routeMotionKind("/missing")).toBe("other");
   });
