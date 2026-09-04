@@ -552,14 +552,16 @@ export default function MemorialPage({
       }
       return resetMemorial(cycle, RESET_CONFIRMATION, csrfToken, recovery.idempotencyKey);
     },
-    onSuccess: (next, request) => {
+    onSuccess: (next) => {
       const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
+      if (cached !== undefined && cached.cycle > next.cycle) return;
       setActionError(null);
       if (fileInputRef.current !== null) fileInputRef.current.value = "";
       setSelectedFile(null);
       setGenerationAttempt(null);
-      client.setQueryData(["memorial"], next);
+      if (cached === undefined || cached.cycle < next.cycle) {
+        client.setQueryData(["memorial"], next);
+      }
       void client.invalidateQueries({ queryKey: ["affection-rankings"] });
     },
     onError: (error, request) => {

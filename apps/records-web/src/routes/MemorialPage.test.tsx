@@ -796,44 +796,71 @@ describe("MemorialPage", () => {
     expect(input).toHaveValue("");
   });
 
-  it.each(["success", "error"] as const)(
-    "ignores a stale reset %s after the same cycle state advances",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const pendingReset = deferred<MemorialStateResponse>();
-      resetMock.mockReturnValue(pendingReset.promise);
-      getMemoryMock.mockResolvedValue(memory(1));
-      const { client } = renderMemorial(unlockedState());
-      await finishStandardEntry();
-      vi.useRealTimers();
+  it("applies a successful reset after a same-cycle state refresh", async () => {
+    vi.useFakeTimers();
+    const pendingReset = deferred<MemorialStateResponse>();
+    resetMock.mockReturnValue(pendingReset.promise);
+    getMemoryMock.mockResolvedValue(memory(1));
+    const { client } = renderMemorial(unlockedState());
+    const invalidateQueries = vi.spyOn(client, "invalidateQueries");
+    await finishStandardEntry();
+    vi.useRealTimers();
 
-      fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
-      fireEvent.click(
-        within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
-          "button",
-          { name: "500点にリセット" },
-        ),
-      );
-      await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
+        "button",
+        { name: "500点にリセット" },
+      ),
+    );
+    await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
 
-      const progressed = sameCycleReadyState();
-      await act(async () => {
-        client.setQueryData(["memorial"], progressed);
-        if (outcome === "success") pendingReset.resolve(resetLockedState());
-        else pendingReset.reject(new Error("stale reset failed"));
-        await pendingReset.promise.catch(() => undefined);
-      });
+    const next = resetLockedState();
+    await act(async () => {
+      client.setQueryData(["memorial"], sameCycleReadyState());
+      pendingReset.resolve(next);
+      await pendingReset.promise;
+    });
 
-      expect(await screen.findByText("メモリアルが完成しました")).toBeVisible();
-      expect(client.getQueryData<MemorialStateResponse>(["memorial"])).toEqual(progressed);
-      expect(
-        screen.queryByRole("heading", {
-          name: "次のメモリアルロビーはまだ開放されていません",
-        }),
-      ).not.toBeInTheDocument();
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    },
-  );
+    expect(
+      await screen.findByRole("heading", {
+        name: "次のメモリアルロビーはまだ開放されていません",
+      }),
+    ).toBeVisible();
+    expect(client.getQueryData<MemorialStateResponse>(["memorial"])).toEqual(next);
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["affection-rankings"] });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("ignores a stale reset error after the same cycle state advances", async () => {
+    vi.useFakeTimers();
+    const pendingReset = deferred<MemorialStateResponse>();
+    resetMock.mockReturnValue(pendingReset.promise);
+    getMemoryMock.mockResolvedValue(memory(1));
+    const { client } = renderMemorial(unlockedState());
+    await finishStandardEntry();
+    vi.useRealTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
+        "button",
+        { name: "500点にリセット" },
+      ),
+    );
+    await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
+
+    const progressed = sameCycleReadyState();
+    await act(async () => {
+      client.setQueryData(["memorial"], progressed);
+      pendingReset.reject(new Error("stale reset failed"));
+      await pendingReset.promise.catch(() => undefined);
+    });
+
+    expect(await screen.findByText("メモリアルが完成しました")).toBeVisible();
+    expect(client.getQueryData<MemorialStateResponse>(["memorial"])).toEqual(progressed);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
 
   it("reuses the reset key after response loss until the cycle changes", async () => {
     vi.useFakeTimers();
