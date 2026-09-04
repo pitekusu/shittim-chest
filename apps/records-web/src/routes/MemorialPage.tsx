@@ -370,6 +370,7 @@ export default function MemorialPage({
   const [generationAttempt, setGenerationAttempt] = useState<GenerationAttempt | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
+  const observedCycleRef = useRef<number | null>(null);
   const recoveryGenerationRef = useRef<{
     readonly cycle: number;
     readonly state: "unlocked" | "failed";
@@ -402,6 +403,22 @@ export default function MemorialPage({
     ) {
       recoveryResetRef.current = null;
     }
+    if (state === undefined) return;
+    const observedCycle = observedCycleRef.current;
+    if (observedCycle === null) {
+      observedCycleRef.current = state.cycle;
+      return;
+    }
+    if (state.cycle <= observedCycle) return;
+    observedCycleRef.current = state.cycle;
+    if (fileInputRef.current !== null) fileInputRef.current.value = "";
+    setSelectedFile(null);
+    setGenerationAttempt(null);
+    setFileError(null);
+    setActionError(null);
+    setDragging(false);
+    setDialog(null);
+    setLocalProgress("idle");
   }, [stateQuery.data]);
 
   useEffect(() => {

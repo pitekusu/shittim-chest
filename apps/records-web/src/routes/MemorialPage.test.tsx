@@ -449,6 +449,57 @@ describe("MemorialPage", () => {
     expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeEnabled();
   });
 
+  it("discards a stale local attempt only when the observed cycle advances", async () => {
+    vi.useFakeTimers();
+    const initialState = unlockedState();
+    const nextState = { ...unlockedState(), cycle: 2, resetCount: 1 };
+    prepareUploadMock.mockRejectedValue(
+      new RecordsApiError(
+        409,
+        "MEMORIAL_STATE_CONFLICT",
+        "状態が更新されました。",
+        "request-cycle-conflict",
+      ),
+    );
+    const { client } = renderMemorial(initialState);
+    getStateMock.mockReset();
+    getStateMock.mockResolvedValueOnce(initialState).mockResolvedValue(nextState);
+    await finishStandardEntry();
+    vi.useRealTimers();
+
+    const input = screen.getByLabelText("メモリアル用の画像を選択");
+    const source = new File([Uint8Array.of(1)], "same.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [source] } });
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      value: String.raw`C:\fakepath\same.png`,
+      writable: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
+    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+
+    expect(await screen.findByRole("button", { name: "生成準備を再試行" })).toBeVisible();
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    expect(input).toHaveValue(String.raw`C:\fakepath\same.png`);
+    expect(screen.getByText(/same\.png/u)).toBeVisible();
+
+    await act(async () => client.invalidateQueries({ queryKey: ["memorial"], exact: true }));
+    expect(await screen.findByText("CYCLE 2")).toBeVisible();
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(input).toHaveValue("");
+    expect(screen.getByText("画像をドロップ、またはファイルを選択")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "生成準備を再試行" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("progressbar", { name: "メモリアル生成の進捗" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { files: [source] } });
+    expect(screen.getByText(/same\.png/u)).toBeVisible();
+    expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeEnabled();
+  });
+
   it("clears the picker after a dropped image replaces its selection", async () => {
     vi.useFakeTimers();
     renderMemorial(unlockedState());
@@ -634,6 +685,7 @@ describe("MemorialPage", () => {
         resetCount: 1,
       }),
     );
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(3));
     expect(resetMock.mock.calls[2]?.[3]).not.toBe(firstKey);
