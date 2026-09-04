@@ -1771,11 +1771,18 @@ def test_release_binds_lambda_version_to_exact_bundle_checksum(
 @pytest.mark.parametrize(
     "marker",
     [
-        "records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}",
+        "${{ runner.temp }}/records-release-evidence/records-release-manifest.json",
         "RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}",
-        "RECORDS_PUBLIC_HOSTNAME: ${{ needs.plan.outputs.records_public_hostname }}",
+        'records_manifest="${RUNNER_TEMP}/release/records-release-evidence/records-release-manifest.json"',
+        "records_public_hostname=$(jq --exit-status --raw-output",
+        'test "${#records_public_hostname}" -le 253',
+        '[[ "${records_public_hostname}" =~ ^[a-z0-9]'
+        "([a-z0-9-]{0,61}[a-z0-9])?"
+        "(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]",
+        'test "${records_public_hostname}" = "shittim.pitekusu.dev"',
         '"ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}"',
-        '--expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}"',
+        '--expected-parameter "RecordsPublicHostname=${records_public_hostname}"',
+        'expected_memorial_url="https://${records_public_hostname}/memorial"',
         'select(.name == "SHITTIM_RECORDS_MEMORIAL_URL")',
     ],
 )
@@ -1787,6 +1794,74 @@ def test_release_binds_exact_records_memorial_url(
     path = directory / RELEASE_WORKFLOW
     path.write_text(
         path.read_text(encoding="utf-8").replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact Records Memorial URL"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        'gh attestation verify "${records_manifest}"',
+        "--signer-workflow pitekusu/shittim-chest/.github/workflows/records-release.yml",
+        "uv run --frozen python tools/records_release_manifest.py validate-manifest",
+        '"${records_manifest}" --expected-commit-sha "${GITHUB_SHA}"',
+    ],
+)
+def test_release_deploy_revalidates_attested_records_hostname(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    text = path.read_text(encoding="utf-8")
+    step = text.index("      - name: Revalidate the manifest and its GitHub attestation")
+    marker_index = text.index(marker, step)
+    path.write_text(
+        text[:marker_index] + text[marker_index:].replace(marker, "", 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact Records Memorial URL"):
+        validate_notification_workflows(directory)
+
+
+def test_release_rejects_raw_hostname_job_output(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "      plan_attempt: ${{ steps.evidence.outputs.run_attempt }}\n",
+            "      plan_attempt: ${{ steps.evidence.outputs.run_attempt }}\n"
+            "      records_public_hostname: ${{ steps.records_evidence.outputs.hostname }}\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="exact Records Memorial URL"):
+        validate_notification_workflows(directory)
+
+
+def test_release_rejects_raw_hostname_job_output_consumer(tmp_path: Path) -> None:
+    directory = _workflow_directory(tmp_path)
+    path = directory / RELEASE_WORKFLOW
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}\n"
+            "          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}\n"
+            "          MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}\n"
+            "          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}\n",
+            "          ASSET_BUCKET: ${{ vars.CDK_ASSET_BUCKET }}\n"
+            "          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}\n"
+            "          MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}\n"
+            "          RECORDS_PUBLIC_HOSTNAME: "
+            "${{ needs.plan.outputs.records_public_hostname }}\n"
+            "          SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}\n",
+            1,
+        ),
         encoding="utf-8",
     )
 

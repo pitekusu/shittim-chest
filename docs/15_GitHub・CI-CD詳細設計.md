@@ -107,9 +107,11 @@ taskへ配信する。Records ReleaseはMemorial upload bucketのexact regional 
 場合に計画を拒否する。Records Release manifest schema v4も同じ完全一致を検証して公開hostnameを同一SHAの署名済み
 evidenceへ固定し、配信後にApplication／Edge parameterとEdge public originが一致することを確認する。Core Releaseは
 同一SHAで最新のcompleted Records Releaseだけを選び、そのlatest attemptが成功していない
-場合は過去の成功runへfallbackしない。exact run／attemptのartifact、signer／source digest、manifest SHAを検証して
-得たhostnameだけをRuntime Change Setとstructural smokeへ渡し、mutableなrepository variableやRecords Stackの
-追加参照へ依存しない。PR3はPR2のAPI、storage、generation、IAM契約を変更せず、新しいAWS resourceを作らない。
+場合は過去の成功runへfallbackしない。exact run／attemptのartifact、signer／source digest、manifest SHAを検証する。
+検証済みRecords manifest自体をCore evidence artifactへ同梱し、deploy jobでもRecords Releaseのsignerと同一SHAを
+再検証してから、必要な各stepがhostnameを直接抽出する。secret maskingで抑止され得るGitHub job outputやmutableな
+repository variable、Records Stackの追加参照へhostnameを依存させない。PR3はPR2のAPI、storage、generation、IAM契約を
+変更せず、新しいAWS resourceを作らない。
 各Releaseは既存の承認境界に従い、生成やresetのlive writeを自動実行しない。
 Records Lambda bundleのnative dependencyはPython 3.14の`aarch64-manylinux_2_28`に対応するbinary wheelだけを
 hash検証付きで解決する。x86_64 runner上の現在architectureでPillow等をinstallせず、ARM64 Lambdaで
