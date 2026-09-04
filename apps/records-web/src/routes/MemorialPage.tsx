@@ -370,6 +370,11 @@ export default function MemorialPage({
   const [generationAttempt, setGenerationAttempt] = useState<GenerationAttempt | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
+  const recoveryGenerationRef = useRef<{
+    readonly cycle: number;
+    readonly state: "unlocked" | "failed";
+    readonly idempotencyKey: string;
+  } | null>(null);
 
   const stateQuery = useQuery({
     queryKey: ["memorial"],
@@ -380,6 +385,13 @@ export default function MemorialPage({
     },
   });
   useAuthenticationRecovery(stateQuery.error);
+  useEffect(() => {
+    const recovery = recoveryGenerationRef.current;
+    const state = stateQuery.data;
+    if (recovery !== null && (state?.cycle !== recovery.cycle || state.state !== recovery.state)) {
+      recoveryGenerationRef.current = null;
+    }
+  }, [stateQuery.data]);
 
   useEffect(() => {
     const latest = stateQuery.data?.latestReadyCycle;
@@ -446,8 +458,19 @@ export default function MemorialPage({
   });
 
   const retryGeneration = useMutation({
-    mutationFn: (cycle: number) =>
-      queueMemorialGeneration(cycle, GENERATE_CONFIRMATION, csrfToken, idempotencyKey()),
+    mutationFn: ({ cycle, state }: { cycle: number; state: "unlocked" | "failed" }) => {
+      let recovery = recoveryGenerationRef.current;
+      if (recovery === null || recovery.cycle !== cycle || recovery.state !== state) {
+        recovery = { cycle, state, idempotencyKey: idempotencyKey() };
+        recoveryGenerationRef.current = recovery;
+      }
+      return queueMemorialGeneration(
+        cycle,
+        GENERATE_CONFIRMATION,
+        csrfToken,
+        recovery.idempotencyKey,
+      );
+    },
     onSuccess: (next) => {
       setActionError(null);
       client.setQueryData(["memorial"], next);
@@ -473,6 +496,9 @@ export default function MemorialPage({
       void refreshAfterConflict(error);
     },
   });
+  useAuthenticationRecovery(generation.error);
+  useAuthenticationRecovery(retryGeneration.error);
+  useAuthenticationRecovery(reset.error);
 
   const chooseFile = useCallback((file: File | undefined) => {
     if (file === undefined) return;
@@ -711,7 +737,9 @@ export default function MemorialPage({
                     className={`${commonStyles.secondaryButton} ${styles.retryButton}`}
                     type="button"
                     disabled={busy}
-                    onClick={() => retryGeneration.mutate(state.cycle)}
+                    onClick={() =>
+                      retryGeneration.mutate({ cycle: state.cycle, state: "unlocked" })
+                    }
                   >
                     準備済みの画像で生成を続ける
                   </button>
@@ -721,7 +749,7 @@ export default function MemorialPage({
                   className={`${commonStyles.secondaryButton} ${styles.retryButton}`}
                   type="button"
                   disabled={busy}
-                  onClick={() => retryGeneration.mutate(state.cycle)}
+                  onClick={() => retryGeneration.mutate({ cycle: state.cycle, state: "failed" })}
                 >
                   前回の生成を再開
                 </button>

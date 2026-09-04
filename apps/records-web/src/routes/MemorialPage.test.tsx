@@ -483,6 +483,43 @@ describe("MemorialPage", () => {
     expect(uploadSourceMock).not.toHaveBeenCalled();
   });
 
+  it("reuses a recovery key after response loss until the cycle or state changes", async () => {
+    vi.useFakeTimers();
+    queueGenerationMock.mockRejectedValue(new Error("response lost"));
+    const { client } = renderMemorial(unlockedState("failed"));
+    await finishStandardEntry();
+    vi.useRealTimers();
+
+    const failedRetry = screen.getByRole("button", { name: "前回の生成を再開" });
+    fireEvent.click(failedRetry);
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(failedRetry).toBeEnabled());
+    const firstKey = queueGenerationMock.mock.calls[0]?.[3];
+
+    fireEvent.click(failedRetry);
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(failedRetry).toBeEnabled());
+    expect(queueGenerationMock.mock.calls[1]?.[3]).toBe(firstKey);
+
+    await act(async () => client.setQueryData(["memorial"], unlockedState("unlocked", true)));
+    expect(client.getQueryData<MemorialStateResponse>(["memorial"])?.state).toBe("unlocked");
+    fireEvent.click(await screen.findByRole("button", { name: "準備済みの画像で生成を続ける" }));
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(3));
+    const secondKey = queueGenerationMock.mock.calls[2]?.[3];
+    expect(secondKey).not.toBe(firstKey);
+
+    await act(async () =>
+      client.setQueryData(["memorial"], {
+        ...unlockedState("unlocked", true),
+        cycle: 2,
+        resetCount: 1,
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "準備済みの画像で生成を続ける" }));
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(4));
+    expect(queueGenerationMock.mock.calls[3]?.[3]).not.toBe(secondKey);
+  });
+
   it("requires the reset warning before resetting affection and starting the next cycle", async () => {
     vi.useFakeTimers();
     const { client } = renderMemorial(unlockedState());
@@ -673,5 +710,41 @@ describe("MemorialPage", () => {
     const predicate = removeQueries.mock.calls[0]?.[0]?.predicate;
     expect(predicate?.({ queryKey: ["memorial"] } as never)).toBe(true);
     expect(predicate?.({ queryKey: ["costs"] } as never)).toBe(false);
+  });
+
+  it("recovers authentication when a Memorial mutation reports an expired session", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    client.setQueryData(["records-session"], { authenticated: true });
+    const invalidateQueries = vi.spyOn(client, "invalidateQueries");
+    const removeQueries = vi.spyOn(client, "removeQueries");
+    prepareUploadMock.mockRejectedValue(
+      new RecordsApiError(
+        401,
+        "AUTHENTICATION_REQUIRED",
+        "ログインし直してください。",
+        "request-mutation-auth",
+      ),
+    );
+    renderMemorial(unlockedState(), client);
+    await finishStandardEntry();
+    vi.useRealTimers();
+
+    const source = new File([Uint8Array.of(1)], "memory.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
+      target: { files: [source] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
+    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+
+    await waitFor(() =>
+      expect(invalidateQueries).toHaveBeenCalledWith({
+        queryKey: ["records-session"],
+        exact: true,
+      }),
+    );
+    await waitFor(() => expect(removeQueries).toHaveBeenCalledTimes(1));
+    const predicate = removeQueries.mock.calls[0]?.[0]?.predicate;
+    expect(predicate?.({ queryKey: ["memorial"] } as never)).toBe(true);
   });
 });
