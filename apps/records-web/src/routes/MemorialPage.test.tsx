@@ -1079,13 +1079,34 @@ describe("MemorialPage", () => {
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(2);
     expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+    expect(tabs[1]).toHaveAttribute("tabindex", "0");
+    expect(tabs[0]).toHaveAttribute("tabindex", "-1");
+    expect(tabs[1]).toHaveAttribute("aria-controls", "memorial-memory-panel");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", tabs[1]!.id);
 
-    fireEvent.click(tabs[0]!);
+    fireEvent.keyDown(tabs[1]!, { key: "ArrowRight" });
 
     expect(await screen.findByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
     expect(getMemoryMock).toHaveBeenNthCalledWith(1, MEMORY_SUMMARIES[1]);
     expect(getMemoryMock).toHaveBeenNthCalledWith(2, MEMORY_SUMMARIES[0]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+    expect(tabs[0]).toHaveAttribute("tabindex", "0");
+    expect(tabs[1]).toHaveAttribute("tabindex", "-1");
+    expect(tabs[0]).toHaveFocus();
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", tabs[0]!.id);
+
+    fireEvent.keyDown(tabs[0]!, { key: "ArrowLeft" });
+    expect(tabs[1]).toHaveFocus();
+    expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(tabs[1]!, { key: "Home" });
+    expect(tabs[0]).toHaveFocus();
+    fireEvent.keyDown(tabs[0]!, { key: "End" });
+    expect(tabs[1]).toHaveFocus();
+    fireEvent.keyDown(tabs[1]!, { key: "ArrowUp" });
+    expect(tabs[0]).toHaveFocus();
+    fireEvent.keyDown(tabs[0]!, { key: "ArrowDown" });
+    expect(tabs[1]).toHaveFocus();
   });
 
   it("switches from an older memory to the newly completed cycle", async () => {

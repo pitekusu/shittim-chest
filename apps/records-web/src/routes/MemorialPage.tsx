@@ -102,6 +102,24 @@ function apiMessage(error: unknown): string {
   return known[error.code] ?? error.message;
 }
 
+function memoryTabTarget(
+  memories: MemorialStateResponse["memories"],
+  currentCycle: number,
+  key: string,
+): number | null {
+  const currentIndex = memories.findIndex((memory) => memory.cycle === currentCycle);
+  if (currentIndex < 0) return null;
+  if (key === "Home") return memories[0]?.cycle ?? null;
+  if (key === "End") return memories.at(-1)?.cycle ?? null;
+  if (key === "ArrowRight" || key === "ArrowDown") {
+    return memories[(currentIndex + 1) % memories.length]?.cycle ?? null;
+  }
+  if (key === "ArrowLeft" || key === "ArrowUp") {
+    return memories[(currentIndex - 1 + memories.length) % memories.length]?.cycle ?? null;
+  }
+  return null;
+}
+
 function validateSelectedFile(file: File): string | null {
   if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
     return "JPEG、PNG、WebPのいずれかを選んでください。";
@@ -283,6 +301,16 @@ function MemoryGallery({
   readonly onRetryMemory: () => void;
 }): React.JSX.Element | null {
   if (state.memories.length === 0) return null;
+  const effectiveSelectedCycle =
+    state.memories.find((item) => item.cycle === selectedCycle)?.cycle ??
+    state.memories.find((item) => item.cycle === state.latestReadyCycle)?.cycle ??
+    state.memories.at(-1)!.cycle;
+  const selectedTabId = `memorial-memory-tab-${effectiveSelectedCycle}`;
+  const tabPanelProps = {
+    id: "memorial-memory-panel",
+    role: "tabpanel" as const,
+    "aria-labelledby": selectedTabId,
+  };
   return (
     <section className={styles.memoryPanel} aria-labelledby="memory-history-title">
       <header>
@@ -300,10 +328,20 @@ function MemoryGallery({
           return (
             <button
               key={item.cycle}
+              id={`memorial-memory-tab-${item.cycle}`}
               type="button"
               role="tab"
-              aria-selected={selectedCycle === item.cycle}
+              aria-controls="memorial-memory-panel"
+              aria-selected={effectiveSelectedCycle === item.cycle}
+              tabIndex={effectiveSelectedCycle === item.cycle ? 0 : -1}
               onClick={() => onSelect(item.cycle)}
+              onKeyDown={(event) => {
+                const target = memoryTabTarget(state.memories, item.cycle, event.key);
+                if (target === null) return;
+                event.preventDefault();
+                onSelect(target);
+                document.querySelector<HTMLElement>(`#memorial-memory-tab-${target}`)?.focus();
+              }}
             >
               <span>#{item.cycle}</span>
               <strong>{participant.name}</strong>
@@ -313,14 +351,16 @@ function MemoryGallery({
         })}
       </div>
       {memoryError ? (
-        <div className={styles.memoryLoading} role="alert">
-          <p>{apiMessage(memoryError)}</p>
-          <button className={commonStyles.secondaryButton} type="button" onClick={onRetryMemory}>
-            もう一度読み込む
-          </button>
+        <div {...tabPanelProps}>
+          <div className={styles.memoryLoading} role="alert">
+            <p>{apiMessage(memoryError)}</p>
+            <button className={commonStyles.secondaryButton} type="button" onClick={onRetryMemory}>
+              もう一度読み込む
+            </button>
+          </div>
         </div>
       ) : memory ? (
-        <article className={styles.memoryDetail}>
+        <article className={styles.memoryDetail} {...tabPanelProps}>
           <figure>
             <img
               src={memory.image.url}
@@ -343,9 +383,11 @@ function MemoryGallery({
           </div>
         </article>
       ) : (
-        <p className={styles.memoryLoading} aria-live="polite">
-          思い出を読み込んでいます。
-        </p>
+        <div {...tabPanelProps}>
+          <p className={styles.memoryLoading} aria-live="polite">
+            思い出を読み込んでいます。
+          </p>
+        </div>
       )}
     </section>
   );
