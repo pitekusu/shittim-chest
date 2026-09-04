@@ -275,7 +275,7 @@ describe("MemorialPage", () => {
     expect(screen.queryByRole("button", { name: "親愛度をリセット" })).not.toBeInTheDocument();
   });
 
-  it("selects a file, confirms the one-generation warning, and calls APIs in order", async () => {
+  it("selects a file, clears the input after generation, and calls APIs in order", async () => {
     vi.useFakeTimers();
     const state = unlockedState();
     const ticket = uploadTicket();
@@ -299,6 +299,11 @@ describe("MemorialPage", () => {
 
     const source = new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [source] } });
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      value: String.raw`C:\fakepath\memory.png`,
+      writable: true,
+    });
     expect(screen.getByText(/memory\.png/)).toBeVisible();
     expect(generateButton).toBeEnabled();
     generateButton.focus();
@@ -340,6 +345,7 @@ describe("MemorialPage", () => {
       queueGenerationMock.mock.invocationCallOrder[0]!,
     );
     expect(await screen.findByText("メモリアル生成を受け付けました")).toBeVisible();
+    expect(input).toHaveValue("");
   });
 
   it("reuses both idempotency keys and the upload ticket across safe retries", async () => {
@@ -520,7 +526,7 @@ describe("MemorialPage", () => {
     expect(queueGenerationMock.mock.calls[3]?.[3]).not.toBe(secondKey);
   });
 
-  it("requires the reset warning before resetting affection and starting the next cycle", async () => {
+  it("requires the reset warning, clears the input, and starts the next cycle", async () => {
     vi.useFakeTimers();
     const { client } = renderMemorial(unlockedState());
     await finishStandardEntry();
@@ -528,6 +534,16 @@ describe("MemorialPage", () => {
     const invalidateQueries = vi.spyOn(client, "invalidateQueries");
     getMemoryMock.mockResolvedValue(memory(1));
     resetMock.mockResolvedValue(resetLockedState());
+
+    const input = screen.getByLabelText("メモリアル用の画像を選択");
+    fireEvent.change(input, {
+      target: { files: [new File([Uint8Array.of(1)], "memory.png", { type: "image/png" })] },
+    });
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      value: String.raw`C:\fakepath\memory.png`,
+      writable: true,
+    });
 
     const resetButton = screen.getByRole("button", { name: "親愛度をリセット" });
     resetButton.focus();
@@ -563,6 +579,7 @@ describe("MemorialPage", () => {
     expect(screen.getByText("CYCLE 2")).toBeVisible();
     expect(screen.getByRole("heading", { name: "ふたりの思い出" })).toBeVisible();
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["affection-rankings"] });
+    expect(input).toHaveValue("");
   });
 
   it("reuses the reset key after response loss until the cycle changes", async () => {

@@ -456,6 +456,7 @@ export default function MemorialPage({
       );
     },
     onSuccess: (next) => {
+      if (fileInputRef.current !== null) fileInputRef.current.value = "";
       client.setQueryData(["memorial"], next);
       setSelectedFile(null);
       setGenerationAttempt(null);
@@ -503,6 +504,7 @@ export default function MemorialPage({
     },
     onSuccess: (next) => {
       setActionError(null);
+      if (fileInputRef.current !== null) fileInputRef.current.value = "";
       setSelectedFile(null);
       setGenerationAttempt(null);
       client.setQueryData(["memorial"], next);
