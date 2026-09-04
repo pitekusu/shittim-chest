@@ -360,28 +360,32 @@ function MemoryGallery({
           </div>
         </div>
       ) : memory ? (
-        <article className={styles.memoryDetail} {...tabPanelProps}>
-          <figure>
-            <img
-              src={memory.image.url}
-              width={memory.image.width}
-              height={memory.image.height}
-              alt={memory.image.alt}
-              referrerPolicy="no-referrer"
-            />
-            <figcaption>
-              <span lang="en">THE SHITTIM CHEST</span>
-              <time dateTime={memory.unlockedAt}>{formatCompletedDateTime(memory.unlockedAt)}</time>
-            </figcaption>
-          </figure>
-          <div className={styles.memoryNarrative}>
-            <p className={commonStyles.eyebrow} lang="en">
-              OUR STORY
-            </p>
-            <h3>{PARTICIPANT_PRESENTATION[memory.participant].name}からあなたへ</h3>
-            <p>{memory.narrative}</p>
-          </div>
-        </article>
+        <div {...tabPanelProps}>
+          <article className={styles.memoryDetail}>
+            <figure>
+              <img
+                src={memory.image.url}
+                width={memory.image.width}
+                height={memory.image.height}
+                alt={memory.image.alt}
+                referrerPolicy="no-referrer"
+              />
+              <figcaption>
+                <span lang="en">THE SHITTIM CHEST</span>
+                <time dateTime={memory.unlockedAt}>
+                  {formatCompletedDateTime(memory.unlockedAt)}
+                </time>
+              </figcaption>
+            </figure>
+            <div className={styles.memoryNarrative}>
+              <p className={commonStyles.eyebrow} lang="en">
+                OUR STORY
+              </p>
+              <h3>{PARTICIPANT_PRESENTATION[memory.participant].name}からあなたへ</h3>
+              <p>{memory.narrative}</p>
+            </div>
+          </article>
+        </div>
       ) : (
         <div {...tabPanelProps}>
           <p className={styles.memoryLoading} aria-live="polite">
