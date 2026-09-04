@@ -295,9 +295,7 @@ def _validate_release(directory: Path) -> None:
             "Release permissions are not the canonical plan/deploy/cleanup split"
         )
     _validate_release_main_checks(text)
-    records_release_gate = _workflow_step_block(
-        text, "Require successful same-SHA Records release"
-    )
+    records_release_gate = _workflow_step_block(text, "Require successful same-SHA Records release")
     required_records_release_markers = (
         "actions/workflows/records-release.yml/runs",
         "gh api --paginate --slurp",
