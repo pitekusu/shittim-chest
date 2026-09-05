@@ -36,6 +36,7 @@ from shittim_records.memorial import (
     MemorialUploadReservation,
 )
 from shittim_records.memorial_adapters import (
+    MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
     DynamoMemorialRepository,
     DynamoRecentQuestionSource,
     MemorialConfigurationRepository,
@@ -929,7 +930,7 @@ def _asset_store(client: S3Recorder) -> S3MemorialAssetStore:
         cast(Any, client),
         upload_bucket_name="uploads",
         media_bucket_name="media",
-        participant_asset_keys=PARTICIPANT_AVATAR_ASSET_KEYS,
+        participant_asset_keys=MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
     )
 
 
@@ -961,6 +962,56 @@ def test_asset_store_normalizes_source_and_reuses_a_valid_generated_object() -> 
         assert image.size == (80, 64)
         assert not image.info
     assert store.existing_generated(_job()) == RESULT_KEY
+
+
+def test_participant_references_use_generation_images_without_changing_web_avatars() -> None:
+    client = S3Recorder()
+    client.objects[("media", "participants/participant-a/memorial-reference.png")] = (
+        _png((750, 1295)),
+        "image/png",
+    )
+    plana_reference = io.BytesIO()
+    Image.new("RGB", (1000, 1905)).save(plana_reference, format="WEBP", lossless=True)
+    client.objects[("media", "participants/participant-b/memorial-reference.webp")] = (
+        plana_reference.getvalue(),
+        "image/webp",
+    )
+    shinzo_reference = io.BytesIO()
+    Image.new("RGB", (439, 568)).save(shinzo_reference, format="WEBP", lossless=True)
+    client.objects[("media", "participants/participant-c/memorial-reference.webp")] = (
+        shinzo_reference.getvalue(),
+        "image/webp",
+    )
+    store = _asset_store(client)
+
+    for slot, dimensions in (
+        ("participant-a", (750, 1295)),
+        ("participant-b", (806, 1536)),
+        ("participant-c", (439, 568)),
+    ):
+        with Image.open(io.BytesIO(store.load_participant_reference(slot))) as image:
+            assert image.format == "PNG"
+            assert image.mode == "RGB"
+            assert image.size == dimensions
+    assert PARTICIPANT_AVATAR_ASSET_KEYS == {
+        "participant-a": "participants/participant-a/avatar.webp",
+        "participant-b": "participants/participant-b/avatar.webp",
+        "participant-c": "participants/participant-c/avatar.webp",
+    }
+    assert client.puts == client.deletes == []
+
+
+def test_participant_references_reject_unconfigured_asset_keys() -> None:
+    with pytest.raises(ValueError, match="generation references"):
+        S3MemorialAssetStore(
+            cast(Any, S3Recorder()),
+            upload_bucket_name="uploads",
+            media_bucket_name="media",
+            participant_asset_keys={
+                **MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
+                "participant-a": "memorials/other.png",
+            },
+        )
 
 
 def test_asset_store_treats_only_explicit_s3_not_found_as_absent() -> None:

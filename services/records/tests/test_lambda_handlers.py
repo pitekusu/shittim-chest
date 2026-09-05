@@ -31,10 +31,13 @@ from shittim_records.memorial import (
     MAX_UPLOAD_BYTES,
     MemorialUploadReservation,
 )
-from shittim_records.memorial_adapters import MEMORIAL_UPLOAD_TTL, S3MemorialAssetStore
+from shittim_records.memorial_adapters import (
+    MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
+    MEMORIAL_UPLOAD_TTL,
+    S3MemorialAssetStore,
+)
 from shittim_records.memorial_http import _upload_response
 from shittim_records.projector import BackfillResult, ProjectionResult
-from shittim_records.read_api import PARTICIPANT_AVATAR_ASSET_KEYS
 
 
 def test_lambda_handlers_import_without_boto3_type_stubs() -> None:
@@ -725,7 +728,7 @@ def test_s3_presigning_client_produces_the_memorial_upload_contract(monkeypatch:
         client,
         upload_bucket_name="test-memorial-upload",
         media_bucket_name="test-memorial-media",
-        participant_asset_keys=PARTICIPANT_AVATAR_ASSET_KEYS,
+        participant_asset_keys=MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
     )
     source = b"synthetic-source"
     digest = hashlib.sha256(source).digest()

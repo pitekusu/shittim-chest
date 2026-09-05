@@ -59,7 +59,13 @@ from shittim_records.memorial import (
     MemorialUploadReservation,
     MemorialUploadTicket,
 )
-from shittim_records.read_api import PARTICIPANT_AVATAR_ASSET_KEYS
+
+# Generation references are independent of the small Records presentation avatars.
+MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS: dict[ParticipantSlot, str] = {
+    "participant-a": "participants/participant-a/memorial-reference.png",
+    "participant-b": "participants/participant-b/memorial-reference.webp",
+    "participant-c": "participants/participant-c/memorial-reference.webp",
+}
 
 MEMORIAL_IMAGE_MODEL = "gpt-image-2"
 MEMORIAL_TEXT_MODEL = "gpt-5.6-luna"
@@ -90,7 +96,7 @@ _GENERATION_CLAIM_TOKEN = re.compile(r"[A-Za-z0-9_-]{22}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _UPLOAD_ASSET_KEY = re.compile(r"uploads/[A-Za-z0-9_-]{43}\.bin\Z")
 _MEMORY_ASSET_KEY = re.compile(r"memorials/[A-Za-z0-9_-]{43}\.png\Z")
-_PARTICIPANTS = frozenset(PARTICIPANT_AVATAR_ASSET_KEYS)
+_PARTICIPANTS = frozenset(MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS)
 _PROFILE_UNLOCK_FIELDS = (
     "unlocked_participant",
     "unlocked_at",
@@ -223,7 +229,7 @@ class MemorialConfigurationRepository:
             "/shittim-chest/production/runtime-prompts"
         ):
             raise ValueError("Memorial runtime prompt root is invalid")
-        if set(legacy_persona_parameter_names) != set(PARTICIPANT_AVATAR_ASSET_KEYS):
+        if set(legacy_persona_parameter_names) != _PARTICIPANTS:
             raise ValueError("Memorial legacy persona configuration is incomplete")
         for slot, name in legacy_persona_parameter_names.items():
             match = _LEGACY_PERSONA_PARAMETER.fullmatch(name)
@@ -1759,8 +1765,8 @@ class S3MemorialAssetStore:
     ) -> None:
         if not upload_bucket_name or not media_bucket_name:
             raise ValueError("Memorial bucket configuration is incomplete")
-        if participant_asset_keys != PARTICIPANT_AVATAR_ASSET_KEYS:
-            raise ValueError("Memorial participant assets do not match the Records presentation")
+        if participant_asset_keys != MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS:
+            raise ValueError("Memorial participant assets do not match the generation references")
         self._client = client
         self._upload_bucket = upload_bucket_name
         self._media_bucket = media_bucket_name

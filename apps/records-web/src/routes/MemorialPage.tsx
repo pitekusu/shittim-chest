@@ -95,9 +95,9 @@ function apiMessage(error: unknown): string {
     MEMORIAL_UPLOAD_NOT_ALLOWED: "現在の状態では画像をアップロードできません。",
     MEMORIAL_RECOVERY_REQUIRED: "生成済みデータを確認しています。少し待ってから再開してください。",
     MEMORIAL_GENERATION_ATTEMPTS_EXHAUSTED:
-      "自動再試行の上限に達しました。状態を確認してからリセットしてください。",
+      "自動再試行の上限に達しました。管理者に復旧を依頼してください。",
     MEMORIAL_QUEUE_UNAVAILABLE: "生成の受付が混み合っています。しばらくしてからお試しください。",
-    MEMORIAL_RESET_NOT_ALLOWED: "生成処理中は親愛度をリセットできません。",
+    MEMORIAL_RESET_NOT_ALLOWED: "生成が完了するまで親愛度をリセットできません。",
   };
   return known[error.code] ?? error.message;
 }
@@ -128,6 +128,41 @@ function validateSelectedFile(file: File): string | null {
     return "画像は10 MiB以下にしてください。";
   }
   return null;
+}
+
+function SelectedImagePreview({ file }: { readonly file: File }): React.JSX.Element {
+  const [preview, setPreview] = useState<{ readonly file: File; readonly url: string } | null>(
+    null,
+  );
+  const [failedFile, setFailedFile] = useState<File | null>(null);
+
+  useEffect(() => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setPreview({ file, url: reader.result });
+      else setFailedFile(file);
+    };
+    reader.onerror = () => setFailedFile(file);
+    reader.readAsDataURL(file);
+    return () => {
+      reader.onload = null;
+      reader.onerror = null;
+      if (reader.readyState === FileReader.LOADING) reader.abort();
+    };
+  }, [file]);
+
+  if (failedFile === file) return <small>画像のプレビューを表示できません。</small>;
+  if (preview?.file !== file) return <small>プレビューを読み込んでいます。</small>;
+  return (
+    <img
+      className={styles.uploadPreview}
+      src={preview.url}
+      width={160}
+      height={160}
+      alt="選択した画像のプレビュー"
+      onError={() => setFailedFile(file)}
+    />
+  );
 }
 
 function MemorialProgress({
@@ -161,7 +196,7 @@ function MemorialProgress({
         : localProgress === "queueing" || state === "queued"
           ? "メモリアル生成を受け付けました"
           : state === "generating"
-            ? "思い出を画像と文章にしています"
+            ? "ふたりの思い出をつくっています"
             : "メモリアルが完成しました";
   return (
     <section className={styles.generationProgress} aria-live="polite" aria-busy={!complete}>
@@ -249,13 +284,15 @@ function ConfirmationDialog({
           {generate ? "ONE-TIME GENERATION" : "RESET AFFECTION"}
         </p>
         <h2 id={`${kind}-dialog-title`}>
-          {generate ? "この思い出を一度だけ生成します" : "親愛度をリセットしますか？"}
+          {generate ? "思い出を一度だけ生成します。" : "親愛度をリセットしますか？"}
         </h2>
         {generate ? (
           <ul>
-            <li>このcycleで生成に成功できるのは一度だけです。</li>
-            <li>選んだ画像をAI生成に使用し、処理後に原本を削除します。</li>
-            <li>{participantName}との画像と、思い出を語る文章を生成します。</li>
+            <li>
+              このメモリアルロビーで生成できる{participantName}との思い出は
+              <strong className={styles.onceOnly}>一度だけ</strong>です。
+            </li>
+            <li>選んだ画像が{participantName}との思い出の生成に使用されます。</li>
           </ul>
         ) : (
           <ul>
@@ -404,7 +441,7 @@ function MemoryGallery({
                 document.querySelector<HTMLElement>(`#memorial-memory-tab-${target}`)?.focus();
               }}
             >
-              <span>#{item.cycle}</span>
+              <span>{item.cycle}回目</span>
               <strong>{participant.name}</strong>
               <time dateTime={item.generatedAt}>{formatCompletedDateTime(item.generatedAt)}</time>
             </button>
@@ -702,8 +739,10 @@ export default function MemorialPage({
   });
 
   const reset = useMutation({
-    mutationFn: (request: { cycle: number; state: "unlocked" | "failed" | "ready" }) => {
+    mutationFn: async (request: { cycle: number; state: "ready" }) => {
       const { cycle } = request;
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (cached?.cycle !== cycle || cached.state !== "ready") return null;
       let recovery = recoveryResetRef.current;
       if (recovery === null || recovery.cycle !== cycle) {
         recovery = { cycle, idempotencyKey: idempotencyKey() };
@@ -712,6 +751,7 @@ export default function MemorialPage({
       return resetMemorial(cycle, RESET_CONFIRMATION, csrfToken, recovery.idempotencyKey);
     },
     onSuccess: async (next) => {
+      if (next === null) return;
       await cancelStateRefresh();
       const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
       if (cached !== undefined && cached.cycle > next.cycle) return;
@@ -833,7 +873,7 @@ export default function MemorialPage({
                 : "3人のうち誰か1人との親愛度が1000点に達すると、特別な思い出を開放できます。"}
             </p>
           </div>
-          <span className={styles.cycleBadge}>CYCLE {state.cycle}</span>
+          <span className={styles.cycleBadge}>{state.cycle}回目</span>
         </section>
       ) : (
         <>
@@ -849,7 +889,9 @@ export default function MemorialPage({
               <p className={commonStyles.eyebrow} lang="en">
                 AFFECTION MAX
               </p>
-              <h2 id="memorial-unlock-title">{participant?.name}とのロビーが開放されています</h2>
+              <h2 id="memorial-unlock-title">
+                {participant?.name}とのメモリアルロビーが解放されました
+              </h2>
               {state.unlockedAt && (
                 <p>
                   達成日{" "}
@@ -864,7 +906,7 @@ export default function MemorialPage({
               <span>♥</span>
               <span>♥</span>
             </div>
-            <span className={styles.cycleBadge}>CYCLE {state.cycle}</span>
+            <span className={styles.cycleBadge}>{state.cycle}回目</span>
           </section>
 
           <MemorialProgress state={state.state} localProgress={localProgress} />
@@ -893,7 +935,6 @@ export default function MemorialPage({
                   </p>
                   <h2 id="memorial-create-title">ふたりの一枚をつくる</h2>
                 </div>
-                <span>1920 × 1080</span>
               </header>
               <input
                 ref={fileInputRef}
@@ -936,9 +977,13 @@ export default function MemorialPage({
                   }
                 }}
               >
-                <span className={styles.uploadGlyph} aria-hidden="true">
-                  ＋
-                </span>
+                {selectedFile ? (
+                  <SelectedImagePreview file={selectedFile} />
+                ) : (
+                  <span className={styles.uploadGlyph} aria-hidden="true">
+                    ＋
+                  </span>
+                )}
                 <strong>{selectedFileLabel}</strong>
                 <small>JPEG / PNG / WebP · 最大10 MiB</small>
               </button>
@@ -1037,15 +1082,15 @@ export default function MemorialPage({
         <section className={styles.resetPanel} aria-labelledby="memorial-reset-title">
           <div>
             <p className={commonStyles.eyebrow} lang="en">
-              NEW CYCLE
+              NEW MEMORY
             </p>
             <h2 id="memorial-reset-title">新しい思い出をはじめる</h2>
-            <p>親愛度を500点へ戻すと、次のメモリアル開放を目指せます。</p>
+            <p>親愛度を全てリセットし、最初からやり直します。</p>
           </div>
           <button
             className={commonStyles.secondaryButton}
             type="button"
-            disabled={busy}
+            disabled={busy || state.state !== "ready"}
             onClick={() => setDialog("reset")}
           >
             親愛度をリセット
@@ -1074,14 +1119,14 @@ export default function MemorialPage({
           }}
         />
       )}
-      {dialog === "reset" && (
+      {dialog === "reset" && state.state === "ready" && (
         <ConfirmationDialog
           kind="reset"
           completionFocusRef={pageHeadingRef}
           onCancel={() => setDialog(null)}
           onConfirm={() => {
             setDialog(null);
-            if (state.state === "unlocked" || state.state === "failed" || state.state === "ready") {
+            if (state.state === "ready" && !busy) {
               reset.mutate({ cycle: state.cycle, state: state.state });
             }
           }}

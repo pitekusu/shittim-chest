@@ -1684,6 +1684,7 @@ test("locked Memorial stays private, responsive, and visually clear", async ({
   ).toBeVisible();
   await expect(page.getByLabel("メモリアルロビーへログインしています")).toHaveCount(0);
   await expect(page.getByLabel("メモリアル用の画像を選択")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toHaveCount(0);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await expect(page).toHaveScreenshot("records-memorial-locked.png", {
     animations: "disabled",
@@ -1718,21 +1719,41 @@ test("unlocked Memorial plays the three-second entry before opening creation", a
   await expect(transition).toHaveCount(0, { timeout: 5_000 });
 
   await expect(
-    page.getByRole("heading", { name: "アロナとのロビーが開放されています" }),
+    page.getByRole("heading", { name: "アロナとのメモリアルロビーが解放されました" }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "ふたりの一枚をつくる" })).toBeVisible();
   await expect(page.getByRole("button", { name: /画像をドロップ/u })).toBeVisible();
+  await expect(page.getByText("1回目", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toBeDisabled();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
-test("Memorial uploads once and queues generation through the signed S3 form", async ({
+test("Memorial previews an image under production CSP and queues generation once", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
   await page.emulateMedia({ reducedMotion: "reduce" });
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.setViewportSize({ width: 320, height: 800 });
+  }
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route(
+    (url) => url.pathname === "/memorial",
+    async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: { ...response.headers(), "content-security-policy": PRODUCTION_CSP },
+      });
+    },
+  );
   await mockAuthenticatedApi(page);
   await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialUnlocked }));
-  const source = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  // Synthetic 160 x 120 landscape, with no user-supplied image data.
+  const source = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAKAAAAB4CAIAAAD6wG44AAAB5klEQVR4nO3R4U0DQQwF4RSWZugjSlPUQgG0kAbCj0NCOkVAdu21MzfSFODn7/T+eTNwp/ILLDWB4QkMT2B4AsMTGJ7A8ASGJzA8geEJDE9geALDExiewPAEzur+8fZ7a84QOL4/aVcyCxzcU7oLjAUOa4B2AbPAMU3q5hkLHJPA5EJ0k4wFni1QN8NY4NkEJheuG24s8FQCwxMYnsDwBIYnMDyB4QkMT2B4AsMTmF9nXYEDEphfW12Bw+qpK3BYAvNrqCtwfH1otwSOr4+uwImV024JDE9geALDExiewPAEhicwPIHhCQxPYHgCwxMYnsDwBIYnMDyB4QkMT2B4AsMTGJ7A8ASGJzA8geGlAJ+vl+HKPwIrDHgGVey8ZoEzXMWuB17mKvNS4CpXpdOBy0VlzgIuV1Q6C7icTebJztfLY+ByKpnnabf2wOU8MkfR7oHLSWSOpf0BLmeQOYP2G7j8+zIn0R4OGMb8z72HAwYwP7X0oMAvyjyw8dDAL8Q8vE7g7syTuwRuKh01R+B2zLFDBO4inXS/wMXY2TcLPFhb0V0CwxMYnsDwBIYnMDyB4QkMT2B4AsMTGJ7A8ASGJzA8geEJDE9geALDExiewPAEhicwPIHhCQxPYHgCwxMYnsDwBIb3BeSb7U0kGuAAAAAAAElFTkSuQmCC",
+    "base64",
+  );
   const sha256Hex = createHash("sha256").update(source).digest("hex");
   const sha256Base64 = createHash("sha256").update(source).digest("base64");
   const operations: string[] = [];
@@ -1791,21 +1812,76 @@ test("Memorial uploads once and queues generation through the signed S3 form", a
   await expect(page.getByLabel("メモリアルロビーへログインしています")).toHaveCount(0, {
     timeout: 1_000,
   });
+  const preview = page.getByRole("img", { name: "選択した画像のプレビュー", exact: true });
+  await expect(preview).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "メモリアルロビーを開放" })).toBeDisabled();
   await page.getByLabel("メモリアル用の画像を選択").setInputFiles({
-    name: "private-avatar.png",
+    name: "synthetic-landscape.png",
     mimeType: "image/png",
     buffer: source,
   });
+  await expect(preview).toBeVisible();
+  await expect(preview).toHaveAttribute(
+    "src",
+    `data:image/png;base64,${source.toString("base64")}`,
+  );
+  await expect(preview).toHaveJSProperty("naturalWidth", 160);
+  await expect(preview).toHaveJSProperty("naturalHeight", 120);
+  await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  if (testInfo.project.name === "mobile-chromium") {
+    await page
+      .getByRole("region", { name: "ふたりの一枚をつくる" })
+      .evaluate((region) => region.scrollIntoView({ block: "start" }));
+  }
+  await expect(page).toHaveScreenshot("records-memorial-selected-preview.png", {
+    animations: "disabled",
+    fullPage: testInfo.project.name !== "mobile-chromium",
+  });
   await page.getByRole("button", { name: "メモリアルロビーを開放" }).click();
-  const dialog = page.getByRole("dialog", { name: "この思い出を一度だけ生成します" });
-  await expect(dialog).toContainText("このcycleで生成に成功できるのは一度だけです。");
+  const dialog = page.getByRole("dialog", { name: "思い出を一度だけ生成します。" });
+  await expect(dialog).toContainText(
+    "このメモリアルロビーで生成できるアロナとの思い出は一度だけです。",
+  );
+  await expect(dialog.locator("strong")).toHaveText("一度だけ");
+  await expect(dialog).toContainText("選んだ画像がアロナとの思い出の生成に使用されます。");
+  await expect(dialog).not.toContainText("思い出を語る文章を生成します。");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await expect(page).toHaveScreenshot("records-memorial-generation-confirmation.png", {
+    animations: "disabled",
+  });
   await dialog.getByRole("button", { name: "理解して生成する" }).click();
 
   await expect(page.getByText("メモリアル生成を受け付けました")).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "メモリアル生成の進捗" })).not.toHaveAttribute(
     "value",
   );
+  await expect(preview).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
   expect(operations).toEqual(["prepare", "upload", "generate"]);
+});
+
+test("failed Memorial keeps reset disabled while allowing generation recovery", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/memorial", (route) =>
+    route.fulfill({ json: { ...memorialUnlocked, state: "failed" } }),
+  );
+
+  await page.goto("/memorial");
+
+  await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "前回の生成を再開", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("メモリアル用の画像を選択")).toBeEnabled();
+  await expect(page.getByText("NEW MEMORY", { exact: true })).toBeVisible();
+  await expect(page.getByText("親愛度を全てリセットし、最初からやり直します。")).toBeVisible();
 });
 
 test("queued Memorial can resend an existing request after reload", async ({ page }, testInfo) => {
@@ -1814,7 +1890,10 @@ test("queued Memorial can resend an existing request after reload", async ({ pag
     await page.setViewportSize({ width: 320, height: 800 });
   }
   await mockAuthenticatedApi(page);
-  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialQueued }));
+  let generationState: "queued" | "generating" = "queued";
+  await page.route("**/api/v1/memorial", (route) =>
+    route.fulfill({ json: { ...memorialQueued, state: generationState } }),
+  );
   const keys: string[] = [];
   await page.route("**/api/v1/memorial/generate", async (route) => {
     const headers = route.request().headers();
@@ -1837,7 +1916,8 @@ test("queued Memorial can resend an existing request after reload", async ({ pag
         },
       });
     } else {
-      await route.fulfill({ json: { ...memorialQueued, state: "generating" } });
+      generationState = "generating";
+      await route.fulfill({ json: { ...memorialQueued, state: generationState } });
     }
   });
   await page.goto("/memorial");
@@ -1857,7 +1937,7 @@ test("queued Memorial can resend an existing request after reload", async ({ pag
     maxDiffPixels: 20,
   });
   await resend.click();
-  await expect(page.getByText("思い出を画像と文章にしています")).toBeVisible();
+  await expect(page.getByText("ふたりの思い出をつくっています")).toBeVisible();
   expect(keys).toHaveLength(2);
   expect(keys[0]).toMatch(/^memorial-/u);
   expect(keys[1]).toBe(keys[0]);
@@ -1953,6 +2033,8 @@ test("ready Memorial shows private history and confirms reset", async ({ page },
   });
   await expect(page.getByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
   await expect(page.getByText(memorialMemory.narrative)).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^1回目 アロナ/u })).toBeVisible();
+  await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toBeEnabled();
   await expect(page.getByText("THE SHITTIM CHEST", { exact: true })).toHaveCSS(
     "font-family",
     /Delogy/u,
@@ -1974,7 +2056,7 @@ test("ready Memorial shows private history and confirms reset", async ({ page },
     }),
   ).toBeVisible();
   await expect(page.getByText(/これまでの思い出はいつでも閲覧できます/u)).toBeVisible();
-  await expect(page.getByText("CYCLE 2", { exact: true })).toBeVisible();
+  await expect(page.getByText("2回目", { exact: true })).toBeVisible();
   await expect(page.getByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
 });
 
