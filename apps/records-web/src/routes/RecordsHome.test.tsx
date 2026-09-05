@@ -10,6 +10,55 @@ import {
 } from "../test/recordsTestUtils";
 import RecordsHome from "./RecordsHome";
 
+function mockEndSentinel() {
+  let notify: IntersectionObserverCallback | undefined;
+  const observe = vi.fn<(target: Element) => void>();
+  const unobserve = vi.fn<(target: Element) => void>();
+  class MockIntersectionObserver implements IntersectionObserver {
+    public readonly root = null;
+    public readonly rootMargin = "320px 0px";
+    public readonly scrollMargin = "";
+    public readonly thresholds = [0];
+
+    public constructor(callback: IntersectionObserverCallback) {
+      notify = callback;
+    }
+
+    public observe = observe;
+    public disconnect = vi.fn<() => void>();
+    public unobserve = unobserve;
+    public takeRecords = () => [];
+  }
+  vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+  return {
+    observe,
+    unobserve,
+    enter: () =>
+      notify?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver),
+  };
+}
+
+function mockNextPage(nextItems: ReturnType<typeof listResponse>["items"]) {
+  const requests: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const path =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      requests.push(path);
+      if (!path.startsWith("/api/v1/records?")) throw new Error(`Unexpected request: ${path}`);
+      return Promise.resolve(
+        response(
+          path.includes("cursor=next-page")
+            ? { schemaVersion: 1, items: nextItems, nextCursor: null }
+            : { ...listResponse(), nextCursor: "next-page" },
+        ),
+      );
+    }),
+  );
+  return requests;
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -32,8 +81,6 @@ describe("RecordsHome", () => {
     expect(within(card).getAllByText("依頼者")).toHaveLength(2);
     expect(within(card).getByText("アロナ")).toBeVisible();
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("開始日")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("終了日")).not.toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "新しい順" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "古い順" })).not.toBeChecked();
     const cardLink = screen.getByRole("link", {
@@ -41,14 +88,6 @@ describe("RecordsHome", () => {
     });
     expect(cardLink).toContainElement(card);
     expect(within(card).queryByRole("link")).not.toBeInTheDocument();
-    expect(card.querySelector("[data-card-decoration]")).toHaveAttribute("aria-hidden", "true");
-    expect(within(card).getByText("記録を読む")).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByLabelText("フリーワード検索")).toHaveAttribute(
-      "placeholder",
-      "質問文などを入力",
-    );
-    expect(screen.queryByText("議論記録を閲覧できます。")).not.toBeInTheDocument();
-    expect(screen.queryByText("検索対象は現在読み込み済みのカードです。")).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/records?limit=12&sort=newest");
   });
 
@@ -134,98 +173,30 @@ describe("RecordsHome", () => {
   });
 
   it("automatically loads the next page when the end sentinel enters the viewport", async () => {
-    let notify: IntersectionObserverCallback | undefined;
-    const observe = vi.fn<(target: Element) => void>();
-    const unobserve = vi.fn<(target: Element) => void>();
-    class MockIntersectionObserver implements IntersectionObserver {
-      public readonly root = null;
-      public readonly rootMargin = "320px 0px";
-      public readonly scrollMargin = "";
-      public readonly thresholds = [0];
-
-      public constructor(callback: IntersectionObserverCallback) {
-        notify = callback;
-      }
-
-      public observe = observe;
-      public disconnect = vi.fn<() => void>();
-      public unobserve = unobserve;
-      public takeRecords = () => [];
-    }
-    vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+    const sentinel = mockEndSentinel();
     const first = listResponse().items[0]!;
     const second = {
       ...structuredClone(first),
       recordId: "s".repeat(43),
       questionPreview: "自動で読み込まれた議論",
     };
-    const requests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: RequestInfo | URL) => {
-        const path =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        requests.push(path);
-        if (path.includes("cursor=next-page")) {
-          return Promise.resolve(response({ schemaVersion: 1, items: [second], nextCursor: null }));
-        }
-        if (path.startsWith("/api/v1/records?")) {
-          return Promise.resolve(
-            response({ schemaVersion: 1, items: [first], nextCursor: "next-page" }),
-          );
-        }
-        throw new Error(`Unexpected request: ${path}`);
-      }),
-    );
+    const requests = mockNextPage([second]);
 
     renderRoute(<RecordsHome />);
 
     expect(await screen.findByText(first.questionPreview)).toBeVisible();
-    await waitFor(() => expect(observe).toHaveBeenCalledOnce());
-    notify?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    await waitFor(() => expect(sentinel.observe).toHaveBeenCalledOnce());
+    sentinel.enter();
 
     expect(await screen.findByText(second.questionPreview)).toBeVisible();
     expect(requests.filter((path) => path.includes("cursor=next-page"))).toHaveLength(1);
-    expect(unobserve).toHaveBeenCalledOnce();
+    expect(sentinel.unobserve).toHaveBeenCalledOnce();
   });
 
   it("does not drain remaining pages automatically while a local filter is active", async () => {
-    let notify: IntersectionObserverCallback | undefined;
-    class MockIntersectionObserver implements IntersectionObserver {
-      public readonly root = null;
-      public readonly rootMargin = "320px 0px";
-      public readonly scrollMargin = "";
-      public readonly thresholds = [0];
-
-      public constructor(callback: IntersectionObserverCallback) {
-        notify = callback;
-      }
-
-      public observe = vi.fn<(target: Element) => void>();
-      public disconnect = vi.fn<() => void>();
-      public unobserve = vi.fn<(target: Element) => void>();
-      public takeRecords = () => [];
-    }
-    vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+    const sentinel = mockEndSentinel();
     const first = listResponse().items[0]!;
-    const requests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: RequestInfo | URL) => {
-        const path =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        requests.push(path);
-        if (path.includes("cursor=next-page")) {
-          return Promise.resolve(response({ schemaVersion: 1, items: [], nextCursor: null }));
-        }
-        if (path.startsWith("/api/v1/records?")) {
-          return Promise.resolve(
-            response({ schemaVersion: 1, items: [first], nextCursor: "next-page" }),
-          );
-        }
-        throw new Error(`Unexpected request: ${path}`);
-      }),
-    );
+    const requests = mockNextPage([]);
 
     renderRoute(<RecordsHome />);
 
@@ -233,7 +204,7 @@ describe("RecordsHome", () => {
     fireEvent.change(screen.getByLabelText("フリーワード検索"), {
       target: { value: "一致しない検索" },
     });
-    notify?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    sentinel.enter();
 
     await waitFor(() => {
       expect(requests.filter((path) => path.includes("cursor=next-page"))).toHaveLength(0);

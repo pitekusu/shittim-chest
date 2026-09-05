@@ -151,22 +151,30 @@ def new_snapshot(*, offset: int = 0) -> DebateSnapshot:
     )
 
 
+async def begin_affection_scoring(
+    repository: DynamoDbDebateRepository,
+    snapshot: DebateSnapshot,
+    *,
+    at: datetime,
+) -> DebateSnapshot:
+    """Enter scoring through the real repository, preserving its CAS checks."""
+
+    return await repository.replace(
+        expected=snapshot,
+        updated=replace(
+            snapshot,
+            state=snapshot.state.transition_to(DebatePhase.SCORING_AFFECTION, at=at),
+        ),
+    )
+
+
 async def settle_unavailable_affection(
     repository: DynamoDbDebateRepository,
     snapshot: DebateSnapshot,
     *,
     scoring_at: datetime,
 ) -> DebateSnapshot:
-    scoring = await repository.replace(
-        expected=snapshot,
-        updated=replace(
-            snapshot,
-            state=snapshot.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=scoring_at,
-            ),
-        ),
-    )
+    scoring = await begin_affection_scoring(repository, snapshot, at=scoring_at)
     return await repository.settle_affection(
         expected=scoring,
         scores=None,
@@ -233,6 +241,33 @@ async def claimed_ingress(
     return claimed, fence
 
 
+def delivery_plan(
+    operations: tuple[OutboxOperation, ...],
+    *,
+    plan_id: str,
+    source_phase: DebatePhase,
+    target_phase: DebatePhase,
+    staged_at: datetime,
+    deadline_at: datetime | None = None,
+) -> PhaseDeliveryPlan:
+    """Build a fixture plan; each test still chooses its phase and operations."""
+
+    return PhaseDeliveryPlan(
+        plan_id=plan_id,
+        source_phase=source_phase,
+        target_phase=target_phase,
+        operation_ids=tuple(operation.operation_id for operation in operations),
+        content_hashes=tuple(operation.content_hash for operation in operations),
+        delivery_sequences=tuple(
+            operation.delivery_sequence
+            for operation in operations
+            if operation.delivery_sequence is not None
+        ),
+        staged_at=staged_at,
+        deadline_at=deadline_at or staged_at + timedelta(minutes=15),
+    )
+
+
 async def finalize_terminal_delivery(
     *,
     debates: DynamoDbDebateRepository,
@@ -260,19 +295,12 @@ async def finalize_terminal_delivery(
         error_code=error_code,
         participant_display_names=DISPLAY_NAMES,
     )
-    plan = PhaseDeliveryPlan(
+    plan = delivery_plan(
+        operations,
         plan_id=operations[0].plan_id or f"terminal-{target_phase.value}",
         source_phase=expected.state.phase,
         target_phase=target_phase,
-        operation_ids=tuple(operation.operation_id for operation in operations),
-        content_hashes=tuple(operation.content_hash for operation in operations),
-        delivery_sequences=tuple(
-            operation.delivery_sequence
-            for operation in operations
-            if operation.delivery_sequence is not None
-        ),
         staged_at=staged_at,
-        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = replace(
         expected,
@@ -493,16 +521,7 @@ async def test_completed_terminal_finalize_accepts_plan_without_separate_affecti
         operation_id="pre-affection-post-plan",
         lease_owner="worker-1",
     )
-    scoring = await debates.replace(
-        expected=accepted,
-        updated=replace(
-            accepted,
-            state=accepted.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(microseconds=1),
-            ),
-        ),
-    )
+    scoring = await begin_affection_scoring(debates, accepted, at=NOW + timedelta(microseconds=1))
     assessed = await debates.settle_affection(
         expected=scoring,
         scores=(10, -20, 100),
@@ -599,19 +618,12 @@ async def test_initial_opinion_delivery_stages_and_finalizes_without_releasing_t
         snapshot=collecting,
         created_at=staged_at,
     )
-    plan = PhaseDeliveryPlan(
+    plan = delivery_plan(
+        operations,
         plan_id="initial-opinions",
         source_phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
         target_phase=DebatePhase.DISCUSSING,
-        operation_ids=tuple(operation.operation_id for operation in operations),
-        content_hashes=tuple(operation.content_hash for operation in operations),
-        delivery_sequences=tuple(
-            operation.delivery_sequence
-            for operation in operations
-            if operation.delivery_sequence is not None
-        ),
         staged_at=staged_at,
-        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = await debates.stage_terminal_delivery(
         expected=collecting,
@@ -740,19 +752,12 @@ async def test_final_proposal_delivery_stages_and_finalizes_in_its_reserved_rang
         created_at=staged_at,
     )
     assert tuple(operation.delivery_sequence for operation in operations) == (100, 108, 116)
-    plan = PhaseDeliveryPlan(
+    plan = delivery_plan(
+        operations,
         plan_id="final-proposals",
         source_phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
         target_phase=DebatePhase.SELECTING_WINNER,
-        operation_ids=tuple(operation.operation_id for operation in operations),
-        content_hashes=tuple(operation.content_hash for operation in operations),
-        delivery_sequences=tuple(
-            operation.delivery_sequence
-            for operation in operations
-            if operation.delivery_sequence is not None
-        ),
         staged_at=staged_at,
-        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = await debates.stage_terminal_delivery(
         expected=collecting_final,
@@ -916,19 +921,12 @@ async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
         created_at=staged_at,
     )
     assert tuple(operation.delivery_sequence for operation in operations) == (200, 208, 216)
-    plan = PhaseDeliveryPlan(
+    plan = delivery_plan(
+        operations,
         plan_id="votes",
         source_phase=DebatePhase.SELECTING_WINNER,
         target_phase=DebatePhase.GENERATING_DECISION,
-        operation_ids=tuple(operation.operation_id for operation in operations),
-        content_hashes=tuple(operation.content_hash for operation in operations),
-        delivery_sequences=tuple(
-            operation.delivery_sequence
-            for operation in operations
-            if operation.delivery_sequence is not None
-        ),
         staged_at=staged_at,
-        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = await debates.stage_terminal_delivery(
         expected=selecting,
@@ -2254,16 +2252,7 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
         operation_id="affection-first",
         lease_owner="worker-1",
     )
-    first = await repository.replace(
-        expected=first,
-        updated=replace(
-            first,
-            state=first.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(microseconds=1),
-            ),
-        ),
-    )
+    first = await begin_affection_scoring(repository, first, at=NOW + timedelta(microseconds=1))
 
     settled, replay = await asyncio.gather(
         repository.settle_affection(
@@ -2305,31 +2294,13 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
         operation_id="affection-second",
         lease_owner="worker-2",
     )
-    second = await repository.replace(
-        expected=second,
-        updated=replace(
-            second,
-            state=second.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(seconds=11),
-            ),
-        ),
-    )
+    second = await begin_affection_scoring(repository, second, at=NOW + timedelta(seconds=11))
     third = await repository.create(
         new_snapshot(offset=20),
         operation_id="affection-third",
         lease_owner="worker-3",
     )
-    third = await repository.replace(
-        expected=third,
-        updated=replace(
-            third,
-            state=third.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(seconds=21),
-            ),
-        ),
-    )
+    third = await begin_affection_scoring(repository, third, at=NOW + timedelta(seconds=21))
     second, third = await asyncio.gather(
         repository.settle_affection(
             expected=second,
@@ -2376,15 +2347,8 @@ async def test_first_unavailable_affection_assessment_does_not_create_a_profile(
         operation_id="affection-unavailable-first",
         lease_owner="worker-1",
     )
-    scoring = await repository.replace(
-        expected=accepted,
-        updated=replace(
-            accepted,
-            state=accepted.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=accepted.created_at + timedelta(seconds=1),
-            ),
-        ),
+    scoring = await begin_affection_scoring(
+        repository, accepted, at=accepted.created_at + timedelta(seconds=1)
     )
     settled = await repository.settle_affection(
         expected=scoring,
@@ -2435,15 +2399,8 @@ async def test_successful_affection_atomically_migrates_the_v8_raw_profile(
         operation_id="affection-v8-migration",
         lease_owner="worker-1",
     )
-    scoring = await repository.replace(
-        expected=accepted,
-        updated=replace(
-            accepted,
-            state=accepted.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(microseconds=1),
-            ),
-        ),
+    scoring = await begin_affection_scoring(
+        repository, accepted, at=NOW + timedelta(microseconds=1)
     )
 
     settled = await repository.settle_affection(
@@ -2497,15 +2454,8 @@ async def test_new_affection_profile_retries_when_a_v8_profile_appears_after_the
         operation_id="affection-v8-race",
         lease_owner="worker-1",
     )
-    scoring = await repository.replace(
-        expected=accepted,
-        updated=replace(
-            accepted,
-            state=accepted.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(microseconds=1),
-            ),
-        ),
+    scoring = await begin_affection_scoring(
+        repository, accepted, at=NOW + timedelta(microseconds=1)
     )
     legacy_key = {"PK": f"AFFECTION#REQUESTER#{requester_id}", "SK": "PROFILE"}
     legacy_item: DynamoItem = {
@@ -2611,16 +2561,7 @@ async def test_unavailable_affection_assessment_does_not_rewrite_an_existing_pro
         operation_id="affection-profile-source",
         lease_owner="worker-1",
     )
-    applied = await repository.replace(
-        expected=applied,
-        updated=replace(
-            applied,
-            state=applied.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(microseconds=1),
-            ),
-        ),
-    )
+    applied = await begin_affection_scoring(repository, applied, at=NOW + timedelta(microseconds=1))
     applied = await repository.settle_affection(
         expected=applied,
         scores=(10, -20, 100),
@@ -2684,15 +2625,8 @@ async def test_failed_attempt_retry_is_atomic_and_does_not_consume_quota(
         operation_id="accept",
         lease_owner="worker-1",
     )
-    accepted = await repository.replace(
-        expected=accepted,
-        updated=replace(
-            accepted,
-            state=accepted.state.transition_to(
-                DebatePhase.SCORING_AFFECTION,
-                at=NOW + timedelta(microseconds=100),
-            ),
-        ),
+    accepted = await begin_affection_scoring(
+        repository, accepted, at=NOW + timedelta(microseconds=100)
     )
     accepted = await repository.settle_affection(
         expected=accepted,
@@ -3039,19 +2973,12 @@ async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
         target_phase=DebatePhase.CANCELLED,
         created_at=staged_at,
     )
-    plan = PhaseDeliveryPlan(
+    plan = delivery_plan(
+        operations,
         plan_id=operations[0].plan_id or "terminal-cancelled",
         source_phase=bound.state.phase,
         target_phase=DebatePhase.CANCELLED,
-        operation_ids=tuple(operation.operation_id for operation in operations),
-        content_hashes=tuple(operation.content_hash for operation in operations),
-        delivery_sequences=tuple(
-            operation.delivery_sequence
-            for operation in operations
-            if operation.delivery_sequence is not None
-        ),
         staged_at=staged_at,
-        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = replace(
         bound,
@@ -3217,17 +3144,11 @@ async def test_phase_outbox_requires_atomic_stage_and_complete_predecessors(
     with pytest.raises(RepositoryConflict, match="staged atomically"):
         await outbox.prepare(expected=bound, operation=operations[0])
 
-    plan = PhaseDeliveryPlan(
+    plan = delivery_plan(
+        operations,
         plan_id="terminal-cancelled",
         source_phase=bound.state.phase,
         target_phase=DebatePhase.CANCELLED,
-        operation_ids=tuple(operation.operation_id for operation in operations),
-        content_hashes=tuple(operation.content_hash for operation in operations),
-        delivery_sequences=tuple(
-            operation.delivery_sequence
-            for operation in operations
-            if operation.delivery_sequence is not None
-        ),
         staged_at=staged_at,
         deadline_at=deadline_at,
     )
@@ -3346,19 +3267,12 @@ async def test_phase_abandonment_atomically_clears_mixed_outbox_activity(
         )
         for sequence in range(3)
     )
-    plan = PhaseDeliveryPlan(
+    plan = delivery_plan(
+        operations,
         plan_id="terminal-cancelled",
         source_phase=bound.state.phase,
         target_phase=DebatePhase.CANCELLED,
-        operation_ids=tuple(operation.operation_id for operation in operations),
-        content_hashes=tuple(operation.content_hash for operation in operations),
-        delivery_sequences=tuple(
-            operation.delivery_sequence
-            for operation in operations
-            if operation.delivery_sequence is not None
-        ),
         staged_at=staged_at,
-        deadline_at=staged_at + timedelta(minutes=15),
     )
     staged = await debates.stage_terminal_delivery(
         expected=bound,

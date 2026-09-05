@@ -1006,7 +1006,7 @@ def manifest(tmp_path: Path) -> dict[str, object]:
 
 
 def test_manifest_binds_all_immutable_release_outputs(tmp_path: Path) -> None:
-    value = manifest(tmp_path)
+    value = json.loads(json.dumps(manifest(tmp_path)))
 
     validate_manifest(value)
 
@@ -1213,7 +1213,3 @@ def task(name: str, image: str) -> dict[str, object]:
         "Type": "AWS::ECS::TaskDefinition",
         "Properties": {"ContainerDefinitions": [{"Name": name, "Image": image}]},
     }
-
-
-def test_manifest_is_json_serializable(tmp_path: Path) -> None:
-    json.dumps(manifest(tmp_path))

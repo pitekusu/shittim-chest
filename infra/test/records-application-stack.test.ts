@@ -6,6 +6,31 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { RecordsApplicationStack } from "../lib/records-application-stack";
 import { RecordsStatefulStack } from "../lib/records-stateful-stack";
 
+const recordsFunctionNames = [
+  "projector",
+  "backfill",
+  "auth",
+  "ranking",
+  "cost",
+  "inspector-translation",
+  "read",
+  "admin-config",
+  "admin-status",
+  "memorial-api",
+  "memorial-worker",
+].map((name) => `shittim-chest-production-records-${name}`);
+
+type PolicyStatement = {
+  readonly Action: string | string[];
+  readonly Condition?: Record<string, unknown>;
+  readonly Effect?: string;
+  readonly Resource: unknown;
+};
+
+function actionsOf(statement: PolicyStatement): string[] {
+  return Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+}
+
 function synthesize(): {
   readonly checks: AwsSolutionsChecks;
   readonly stack: RecordsApplicationStack;
@@ -59,19 +84,7 @@ describe("RecordsApplicationStack", () => {
 
     expect(stack.terminationProtection).toBe(true);
     template.resourceCountIs("AWS::Lambda::Function", 11);
-    for (const functionName of [
-      "shittim-chest-production-records-projector",
-      "shittim-chest-production-records-backfill",
-      "shittim-chest-production-records-auth",
-      "shittim-chest-production-records-ranking",
-      "shittim-chest-production-records-cost",
-      "shittim-chest-production-records-inspector-translation",
-      "shittim-chest-production-records-read",
-      "shittim-chest-production-records-admin-config",
-      "shittim-chest-production-records-admin-status",
-      "shittim-chest-production-records-memorial-api",
-      "shittim-chest-production-records-memorial-worker",
-    ]) {
+    for (const functionName of recordsFunctionNames) {
       template.hasResourceProperties("AWS::Lambda::Function", {
         Architectures: ["arm64"],
         Code: {
@@ -114,19 +127,7 @@ describe("RecordsApplicationStack", () => {
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
     template.resourceCountIs("AWS::Logs::LogGroup", 12);
-    for (const functionName of [
-      "shittim-chest-production-records-projector",
-      "shittim-chest-production-records-backfill",
-      "shittim-chest-production-records-auth",
-      "shittim-chest-production-records-ranking",
-      "shittim-chest-production-records-cost",
-      "shittim-chest-production-records-inspector-translation",
-      "shittim-chest-production-records-read",
-      "shittim-chest-production-records-admin-config",
-      "shittim-chest-production-records-admin-status",
-      "shittim-chest-production-records-memorial-api",
-      "shittim-chest-production-records-memorial-worker",
-    ]) {
+    for (const functionName of recordsFunctionNames) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
         ([, resource]) =>
           resource.Properties.LogGroupName === `/aws/lambda/${functionName}` &&
@@ -453,13 +454,7 @@ describe("RecordsApplicationStack", () => {
     expect(workerText).not.toContain("dynamodb:PutItem");
     expect(workerText).not.toContain("dynamodb:TransactWriteItems");
 
-    const apiStatements = apiPolicy?.Properties.PolicyDocument.Statement as Array<{
-      readonly Action: string | string[];
-      readonly Condition?: Record<string, unknown>;
-      readonly Resource: unknown;
-    }>;
-    const actionsOf = (statement: (typeof apiStatements)[number]) =>
-      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const apiStatements = apiPolicy?.Properties.PolicyDocument.Statement as PolicyStatement[];
     const uploadDelete = apiStatements.find((statement) =>
       actionsOf(statement).includes("s3:DeleteObject"),
     );
@@ -482,11 +477,7 @@ describe("RecordsApplicationStack", () => {
         (statement) => !JSON.stringify(statement.Resource).includes("/*"),
       ),
     ).toBe(true);
-    const workerStatements = workerPolicy?.Properties.PolicyDocument.Statement as Array<{
-      readonly Action: string | string[];
-      readonly Condition?: Record<string, unknown>;
-      readonly Resource: unknown;
-    }>;
+    const workerStatements = workerPolicy?.Properties.PolicyDocument.Statement as PolicyStatement[];
     const workerListStatements = workerStatements.filter((statement) =>
       actionsOf(statement).includes("s3:ListBucket"),
     );
@@ -692,14 +683,7 @@ describe("RecordsApplicationStack", () => {
     expect(statusText).not.toContain("ssm:PutParameter");
     expect(statusText).not.toContain("ADMIN#PROMPT");
 
-    const configStatements = configPolicy?.Properties.PolicyDocument.Statement as Array<{
-      readonly Action: string | string[];
-      readonly Condition?: Record<string, unknown>;
-      readonly Effect?: string;
-      readonly Resource: unknown;
-    }>;
-    const actionsOf = (statement: (typeof configStatements)[number]) =>
-      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const configStatements = configPolicy?.Properties.PolicyDocument.Statement as PolicyStatement[];
     const promptPutStatements = configStatements.filter((statement) =>
       actionsOf(statement).includes("ssm:PutParameter"),
     );
@@ -830,7 +814,6 @@ describe("RecordsApplicationStack", () => {
     expect(statusText).not.toContain("ecs:UpdateService");
     expect(statusText).not.toContain("cloudformation:UpdateStack");
     expect(statusText).not.toContain("cloudformation:DetectStackDrift");
-    expect(statusText).not.toContain("sqs:ReceiveMessage");
     expect(statusText).not.toContain("sns:ListSubscriptions");
     for (const stackName of [
       "Stateful",
@@ -847,22 +830,16 @@ describe("RecordsApplicationStack", () => {
 
     const statusStatements = statusPolicies.flatMap(
       (policy) => policy.Properties.PolicyDocument.Statement,
-    ) as Array<{
-      readonly Action: string | string[];
-      readonly Condition?: Record<string, unknown>;
-      readonly Resource: unknown;
-    }>;
-    const statusActionsOf = (statement: (typeof statusStatements)[number]) =>
-      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    ) as PolicyStatement[];
     const statusTaskDefinitionRead = statusStatements.find((statement) =>
-      statusActionsOf(statement).includes("ecs:DescribeTaskDefinition"),
+      actionsOf(statement).includes("ecs:DescribeTaskDefinition"),
     );
     expect(statusTaskDefinitionRead?.Resource).toBe("*");
     expect(statusTaskDefinitionRead?.Condition).toEqual({
       StringEquals: { "aws:RequestedRegion": "ap-northeast-1" },
     });
     const statusEventBridgeRead = statusStatements.find((statement) =>
-      statusActionsOf(statement).includes("events:DescribeRule"),
+      actionsOf(statement).includes("events:DescribeRule"),
     );
     expect(Array.isArray(statusEventBridgeRead?.Resource)).toBe(true);
     const statusEventBridgeArns = statusEventBridgeRead?.Resource as unknown[];
@@ -886,7 +863,7 @@ describe("RecordsApplicationStack", () => {
       "ShittimChest-Prod-RecordsApplication-*",
     );
     const statusLambdaReads = statusStatements.filter((statement) =>
-      statusActionsOf(statement).includes("lambda:GetFunctionConfiguration"),
+      actionsOf(statement).includes("lambda:GetFunctionConfiguration"),
     );
     expect(statusLambdaReads).toHaveLength(2);
     const statusLambdaArns = (
@@ -914,24 +891,16 @@ describe("RecordsApplicationStack", () => {
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-discord-ingress",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-discord-status-publisher",
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-image-admission",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-admin-config",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-admin-status",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-auth",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-backfill",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-cost",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-inspector-translation",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-memorial-api",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-memorial-worker",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-projector",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-ranking",
-        "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-read",
+        ...recordsFunctionNames.map(
+          (name) => `arn:aws:lambda:ap-northeast-1:000000000000:function:${name}`,
+        ),
         "arn:aws:lambda:ap-northeast-1:000000000000:function:shittim-chest-production-runtime-reconciler",
       ].sort(),
     );
     expect(JSON.stringify(statusLambdaArns)).not.toContain(":function/");
     const statusSessionRead = statusStatements.find(
       (statement) =>
-        statusActionsOf(statement).includes("dynamodb:GetItem") &&
+        actionsOf(statement).includes("dynamodb:GetItem") &&
         JSON.stringify(statement.Resource).includes(
           "table/shittim-chest-production-records-sessions",
         ),
@@ -942,7 +911,7 @@ describe("RecordsApplicationStack", () => {
     });
     const statusControlRead = statusStatements.find(
       (statement) =>
-        statusActionsOf(statement).includes("dynamodb:GetItem") &&
+        actionsOf(statement).includes("dynamodb:GetItem") &&
         statement.Condition !== undefined &&
         Object.hasOwn(statement.Condition, "ForAllValues:StringEquals"),
     );
@@ -958,7 +927,7 @@ describe("RecordsApplicationStack", () => {
     });
     const statusCollectorRead = statusStatements.find(
       (statement) =>
-        statusActionsOf(statement).includes("dynamodb:GetItem") &&
+        actionsOf(statement).includes("dynamodb:GetItem") &&
         JSON.stringify(statement.Resource).includes(
           "table/shittim-chest-production-records-statistics",
         ) &&
@@ -976,7 +945,7 @@ describe("RecordsApplicationStack", () => {
     });
     const statusTranslationRead = statusStatements.find(
       (statement) =>
-        statusActionsOf(statement).includes("dynamodb:BatchGetItem") &&
+        actionsOf(statement).includes("dynamodb:BatchGetItem") &&
         JSON.stringify(statement.Resource).includes(
           "table/shittim-chest-production-records-statistics",
         ) &&

@@ -14,6 +14,22 @@ function installThemeColorMeta(): HTMLMetaElement {
   return themeColor;
 }
 
+function mockFixedMedia(matches: boolean): void {
+  vi.spyOn(window, "matchMedia").mockImplementation(
+    (query) =>
+      ({
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  );
+}
+
 afterEach(() => {
   focusManager.setFocused(undefined);
   cleanup();
@@ -162,19 +178,7 @@ describe("App shell", () => {
 
   it("prefers a saved theme over the OS preference", async () => {
     localStorage.setItem(THEME_STORAGE_KEY, "light");
-    vi.spyOn(window, "matchMedia").mockImplementation(
-      (query) =>
-        ({
-          matches: true,
-          media: query,
-          onchange: null,
-          addEventListener: () => undefined,
-          removeEventListener: () => undefined,
-          addListener: () => undefined,
-          removeListener: () => undefined,
-          dispatchEvent: () => false,
-        }) as MediaQueryList,
-    );
+    mockFixedMedia(true);
     mockApi();
     render(<App />);
 
@@ -232,19 +236,7 @@ describe("App shell", () => {
   });
 
   it("finishes goodbye cleanup even if the session refreshes during the transition", async () => {
-    vi.spyOn(window, "matchMedia").mockImplementation(
-      (query) =>
-        ({
-          matches: false,
-          media: query,
-          onchange: null,
-          addEventListener: () => undefined,
-          removeEventListener: () => undefined,
-          addListener: () => undefined,
-          removeListener: () => undefined,
-          dispatchEvent: () => false,
-        }) as MediaQueryList,
-    );
+    mockFixedMedia(false);
     const requests = mockApi();
     render(<App />);
 

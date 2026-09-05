@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   RECORD_ID,
+  costsResponse as fixtureCostsResponse,
   listResponse,
   placeholder,
   recordDetail,
@@ -89,28 +90,14 @@ it("accepts affection ranking entries with or without optional resetCount", () =
 });
 
 function costsResponse() {
+  const base = fixtureCostsResponse();
   return {
-    schemaVersion: 1,
-    period: "week",
-    timeZone: "Asia/Tokyo",
-    startDate: "2026-08-17",
-    endDate: "2026-08-23",
-    currency: "JPY",
-    total: "123.456789",
+    ...base,
     breakdown: {
+      ...base.breakdown,
       fargate: "10.000000",
-      lambda: "2.000000",
-      openai: "100.000000",
       otherAws: "11.456789",
     },
-    conversion: {
-      source: "frankfurter-v2",
-      method: "daily-reference-rate",
-      baseCurrency: "USD",
-      updatedAt: "2026-08-23T12:17:00+09:00",
-    },
-    updatedAt: "2026-08-23T12:17:00+09:00",
-    status: "partial",
   };
 }
 

@@ -5,6 +5,26 @@ import { assertCodeSplittingModuleOwnership, type GuardChunk } from "./code-spli
 const root = "/workspace/apps/records-web";
 
 function canonicalChunks(): GuardChunk[] {
+  const routeModules = {
+    RecordsHome: ["generated/record-list-response-validator.mjs"],
+    RecordDetail: ["generated/record-detail-response-validator.mjs", "components/VoteGraph.tsx"],
+    RankingsPage: [
+      "generated/rankings-response-validator.mjs",
+      "generated/costs-response-validator.mjs",
+    ],
+    AdminPage: [
+      "generated/admin-status-response-validator.mjs",
+      "generated/admin-prompts-response-validator.mjs",
+      "generated/admin-apply-response-validator.mjs",
+      "generated/admin-revisions-response-validator.mjs",
+      "generated/admin-revision-response-validator.mjs",
+    ],
+    MemorialPage: [
+      "generated/memorial-state-response-validator.mjs",
+      "generated/memorial-upload-response-validator.mjs",
+      "generated/memorial-memory-response-validator.mjs",
+    ],
+  };
   return [
     {
       facadeModuleId: `${root}/index.html`,
@@ -17,64 +37,13 @@ function canonicalChunks(): GuardChunk[] {
         `${root}/src/generated/session-response-validator.mjs`,
       ],
     },
-    {
-      facadeModuleId: `${root}/src/routes/RecordsHome.tsx`,
-      fileName: "assets/RecordsHome.js",
+    ...Object.entries(routeModules).map(([route, modules]) => ({
+      facadeModuleId: `${root}/src/routes/${route}.tsx`,
+      fileName: `assets/${route}.js`,
       imports: ["assets/index.js"],
       isEntry: false,
-      moduleIds: [
-        `${root}/src/routes/RecordsHome.tsx`,
-        `${root}/src/generated/record-list-response-validator.mjs`,
-      ],
-    },
-    {
-      facadeModuleId: `${root}/src/routes/RecordDetail.tsx`,
-      fileName: "assets/RecordDetail.js",
-      imports: ["assets/index.js"],
-      isEntry: false,
-      moduleIds: [
-        `${root}/src/routes/RecordDetail.tsx`,
-        `${root}/src/generated/record-detail-response-validator.mjs`,
-        `${root}/src/components/VoteGraph.tsx`,
-      ],
-    },
-    {
-      facadeModuleId: `${root}/src/routes/RankingsPage.tsx`,
-      fileName: "assets/RankingsPage.js",
-      imports: ["assets/index.js"],
-      isEntry: false,
-      moduleIds: [
-        `${root}/src/routes/RankingsPage.tsx`,
-        `${root}/src/generated/rankings-response-validator.mjs`,
-        `${root}/src/generated/costs-response-validator.mjs`,
-      ],
-    },
-    {
-      facadeModuleId: `${root}/src/routes/AdminPage.tsx`,
-      fileName: "assets/AdminPage.js",
-      imports: ["assets/index.js"],
-      isEntry: false,
-      moduleIds: [
-        `${root}/src/routes/AdminPage.tsx`,
-        `${root}/src/generated/admin-status-response-validator.mjs`,
-        `${root}/src/generated/admin-prompts-response-validator.mjs`,
-        `${root}/src/generated/admin-apply-response-validator.mjs`,
-        `${root}/src/generated/admin-revisions-response-validator.mjs`,
-        `${root}/src/generated/admin-revision-response-validator.mjs`,
-      ],
-    },
-    {
-      facadeModuleId: `${root}/src/routes/MemorialPage.tsx`,
-      fileName: "assets/MemorialPage.js",
-      imports: ["assets/index.js"],
-      isEntry: false,
-      moduleIds: [
-        `${root}/src/routes/MemorialPage.tsx`,
-        `${root}/src/generated/memorial-state-response-validator.mjs`,
-        `${root}/src/generated/memorial-upload-response-validator.mjs`,
-        `${root}/src/generated/memorial-memory-response-validator.mjs`,
-      ],
-    },
+      moduleIds: [`routes/${route}.tsx`, ...modules].map((module) => `${root}/src/${module}`),
+    })),
   ];
 }
 
@@ -83,15 +52,18 @@ describe("code splitting module ownership", () => {
     expect(() => assertCodeSplittingModuleOwnership(canonicalChunks())).not.toThrow();
   });
 
-  test("rejects a route validator hoisted into the initial entry", () => {
-    const chunks = canonicalChunks();
-    chunks[0]?.moduleIds.push(`${root}/src/generated/record-list-response-validator.mjs`);
-    chunks[1]?.moduleIds.pop();
+  test.each(["RecordsHome", "AdminPage", "MemorialPage"])(
+    "rejects a %s validator hoisted into the initial entry",
+    (route) => {
+      const chunks = canonicalChunks();
+      const owner = chunks.find((chunk) => chunk.fileName === `assets/${route}.js`)!;
+      chunks[0]!.moduleIds.push(owner.moduleIds.splice(1, 1)[0]!);
 
-    expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
-      "code_splitting_module_graph_wrong_owner",
-    );
-  });
+      expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
+        "code_splitting_module_graph_wrong_owner",
+      );
+    },
+  );
 
   test("rejects VoteGraph shared with an unrelated route", () => {
     const chunks = canonicalChunks();
@@ -108,26 +80,6 @@ describe("code splitting module ownership", () => {
 
     expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
       "code_splitting_module_graph_shared_route_module",
-    );
-  });
-
-  test("rejects an Admin validator hoisted into the initial entry", () => {
-    const chunks = canonicalChunks();
-    chunks[0]?.moduleIds.push(`${root}/src/generated/admin-status-response-validator.mjs`);
-    chunks[4]?.moduleIds.splice(1, 1);
-
-    expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
-      "code_splitting_module_graph_wrong_owner",
-    );
-  });
-
-  test("rejects a Memorial validator hoisted into the initial entry", () => {
-    const chunks = canonicalChunks();
-    chunks[0]?.moduleIds.push(`${root}/src/generated/memorial-state-response-validator.mjs`);
-    chunks[5]?.moduleIds.splice(1, 1);
-
-    expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow(
-      "code_splitting_module_graph_wrong_owner",
     );
   });
 });

@@ -45,6 +45,30 @@ def message(
     }
 
 
+def public_thread(
+    parent_id: str = "103", *, archived: bool = False, locked: bool = False
+) -> dict[str, object]:
+    return {
+        "id": CHANNEL_ID,
+        "guild_id": GUILD_ID,
+        "type": 11,
+        "parent_id": parent_id,
+        "thread_metadata": {"archived": archived, "locked": locked},
+    }
+
+
+def thread_parent(
+    channel_id: str, *, guild_id: str = GUILD_ID, category_id: str | None = None
+) -> dict[str, object]:
+    return {
+        "id": channel_id,
+        "guild_id": guild_id,
+        "type": 0,
+        "parent_id": category_id,
+        "permission_overwrites": [],
+    }
+
+
 @pytest.mark.asyncio
 async def test_create_uses_bot_auth_nonce_dedup_and_no_mentions() -> None:
     requests: list[httpx.Request] = []
@@ -215,23 +239,11 @@ async def test_public_thread_uses_parent_overwrites_and_thread_send_permission()
 
     def permissions(request: httpx.Request) -> httpx.Response:
         if request.url.path == f"/api/v10/channels/{CHANNEL_ID}":
-            payload: object = {
-                "id": CHANNEL_ID,
-                "guild_id": GUILD_ID,
-                "type": 11,
-                "parent_id": parent_id,
-                "thread_metadata": {"archived": False, "locked": False},
-            }
-            return httpx.Response(200, json=payload, request=request)
+            return httpx.Response(200, json=public_thread(parent_id), request=request)
         if request.url.path == f"/api/v10/channels/{parent_id}":
-            payload = {
-                "id": parent_id,
-                "guild_id": GUILD_ID,
-                "type": 0,
-                "parent_id": "104",
-                "permission_overwrites": [],
-            }
-            return httpx.Response(200, json=payload, request=request)
+            return httpx.Response(
+                200, json=thread_parent(parent_id, category_id="104"), request=request
+            )
         return _default_permission_response(request)
 
     result = await gateway_with(
@@ -261,23 +273,9 @@ async def test_public_thread_rejects_send_messages_without_send_messages_in_thre
 
     def permissions(request: httpx.Request) -> httpx.Response:
         if request.url.path == f"/api/v10/channels/{CHANNEL_ID}":
-            payload: object = {
-                "id": CHANNEL_ID,
-                "guild_id": GUILD_ID,
-                "type": 11,
-                "parent_id": parent_id,
-                "thread_metadata": {"archived": False, "locked": False},
-            }
-            return httpx.Response(200, json=payload, request=request)
+            return httpx.Response(200, json=public_thread(parent_id), request=request)
         if request.url.path == f"/api/v10/channels/{parent_id}":
-            payload = {
-                "id": parent_id,
-                "guild_id": GUILD_ID,
-                "type": 0,
-                "parent_id": None,
-                "permission_overwrites": [],
-            }
-            return httpx.Response(200, json=payload, request=request)
+            return httpx.Response(200, json=thread_parent(parent_id), request=request)
         if request.url.path == f"/api/v10/guilds/{GUILD_ID}/roles":
             permissions_without_thread_send = STATUS_PERMISSIONS & ~(1 << 38)
             return httpx.Response(
@@ -320,27 +318,11 @@ async def test_create_in_an_archived_public_thread_relies_on_discord_auto_unarch
         if request.url.path == f"/api/v10/channels/{CHANNEL_ID}":
             return httpx.Response(
                 200,
-                json={
-                    "id": CHANNEL_ID,
-                    "guild_id": GUILD_ID,
-                    "type": 11,
-                    "parent_id": parent_id,
-                    "thread_metadata": {"archived": True, "locked": False},
-                },
+                json=public_thread(parent_id, archived=True),
                 request=request,
             )
         if request.url.path == f"/api/v10/channels/{parent_id}":
-            return httpx.Response(
-                200,
-                json={
-                    "id": parent_id,
-                    "guild_id": GUILD_ID,
-                    "type": 0,
-                    "parent_id": None,
-                    "permission_overwrites": [],
-                },
-                request=request,
-            )
+            return httpx.Response(200, json=thread_parent(parent_id), request=request)
         return _default_permission_response(request)
 
     result = await gateway_with(respond, permission_handler=permissions).create_message(
@@ -373,27 +355,11 @@ async def test_edit_unarchives_an_unlocked_public_thread_then_rechecks_permissio
                 archived = False
             return httpx.Response(
                 200,
-                json={
-                    "id": CHANNEL_ID,
-                    "guild_id": GUILD_ID,
-                    "type": 11,
-                    "parent_id": parent_id,
-                    "thread_metadata": {"archived": archived, "locked": False},
-                },
+                json=public_thread(parent_id, archived=archived),
                 request=request,
             )
         if request.url.path == f"/api/v10/channels/{parent_id}":
-            return httpx.Response(
-                200,
-                json={
-                    "id": parent_id,
-                    "guild_id": GUILD_ID,
-                    "type": 0,
-                    "parent_id": None,
-                    "permission_overwrites": [],
-                },
-                request=request,
-            )
+            return httpx.Response(200, json=thread_parent(parent_id), request=request)
         return _default_permission_response(request)
 
     result = await gateway_with(respond, permission_handler=permissions).edit_message(
@@ -428,27 +394,11 @@ async def test_edit_stops_if_thread_locks_during_post_unarchive_permission_reche
             locked = request.method == "GET" and channel_gets == 2
             return httpx.Response(
                 200,
-                json={
-                    "id": CHANNEL_ID,
-                    "guild_id": GUILD_ID,
-                    "type": 11,
-                    "parent_id": parent_id,
-                    "thread_metadata": {"archived": archived, "locked": locked},
-                },
+                json=public_thread(parent_id, archived=archived, locked=locked),
                 request=request,
             )
         if request.url.path == f"/api/v10/channels/{parent_id}":
-            return httpx.Response(
-                200,
-                json={
-                    "id": parent_id,
-                    "guild_id": GUILD_ID,
-                    "type": 0,
-                    "parent_id": None,
-                    "permission_overwrites": [],
-                },
-                request=request,
-            )
+            return httpx.Response(200, json=thread_parent(parent_id), request=request)
         return _default_permission_response(request)
 
     with pytest.raises(StatusDeliveryError) as caught:
@@ -479,27 +429,11 @@ async def test_ambiguous_unarchive_never_attempts_the_message_edit() -> None:
                 return httpx.Response(503, text="provider-secret", request=request)
             return httpx.Response(
                 200,
-                json={
-                    "id": CHANNEL_ID,
-                    "guild_id": GUILD_ID,
-                    "type": 11,
-                    "parent_id": parent_id,
-                    "thread_metadata": {"archived": True, "locked": False},
-                },
+                json=public_thread(parent_id, archived=True),
                 request=request,
             )
         if request.url.path == f"/api/v10/channels/{parent_id}":
-            return httpx.Response(
-                200,
-                json={
-                    "id": parent_id,
-                    "guild_id": GUILD_ID,
-                    "type": 0,
-                    "parent_id": None,
-                    "permission_overwrites": [],
-                },
-                request=request,
-            )
+            return httpx.Response(200, json=thread_parent(parent_id), request=request)
         return _default_permission_response(request)
 
     with pytest.raises(StatusWriteAmbiguous) as caught:
@@ -527,13 +461,7 @@ async def test_locked_public_thread_fails_before_parent_or_message_requests() ->
         assert request.url.path == f"/api/v10/channels/{CHANNEL_ID}"
         return httpx.Response(
             200,
-            json={
-                "id": CHANNEL_ID,
-                "guild_id": GUILD_ID,
-                "type": 11,
-                "parent_id": "103",
-                "thread_metadata": {"archived": True, "locked": True},
-            },
+            json=public_thread(archived=True, locked=True),
             request=request,
         )
 
@@ -589,27 +517,11 @@ async def test_public_thread_parent_guild_mismatch_fails_before_message_create()
 
     def permissions(request: httpx.Request) -> httpx.Response:
         if request.url.path == f"/api/v10/channels/{CHANNEL_ID}":
-            return httpx.Response(
-                200,
-                json={
-                    "id": CHANNEL_ID,
-                    "guild_id": GUILD_ID,
-                    "type": 11,
-                    "parent_id": parent_id,
-                    "thread_metadata": {"archived": False, "locked": False},
-                },
-                request=request,
-            )
+            return httpx.Response(200, json=public_thread(parent_id), request=request)
         if request.url.path == f"/api/v10/channels/{parent_id}":
             return httpx.Response(
                 200,
-                json={
-                    "id": parent_id,
-                    "guild_id": "999",
-                    "type": 0,
-                    "parent_id": None,
-                    "permission_overwrites": [],
-                },
+                json=thread_parent(parent_id, guild_id="999"),
                 request=request,
             )
         return _default_permission_response(request)

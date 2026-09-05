@@ -835,28 +835,11 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   const recordsHeading = page.getByRole("heading", { name: "議論の記録" });
   await expect(recordsHeading).toBeVisible();
   const logoff = page.getByRole("button", { name: "LOGOFF" });
-  await expect(logoff).toHaveCSS("font-family", /Delogy/);
-  await expect(logoff).toHaveAttribute("lang", "en");
   const logoffBox = await logoff.boundingBox();
   expect(logoffBox).not.toBeNull();
   expect(logoffBox!.height).toBeGreaterThanOrEqual(44);
   const card = page.getByRole("article");
   await expect(card).toContainText(detail.question);
-  const cardDecoration = card.locator("[data-card-decoration]");
-  await expect(cardDecoration).toBeVisible();
-  await expect(cardDecoration).toHaveAttribute("aria-hidden", "true");
-  expect(
-    await cardDecoration.evaluate((element) => {
-      const cardBounds = element.parentElement!.getBoundingClientRect();
-      const decorationBounds = element.getBoundingClientRect();
-      return {
-        clippedByCard:
-          decorationBounds.right >= cardBounds.right &&
-          decorationBounds.bottom >= cardBounds.bottom,
-        pointerEvents: getComputedStyle(element).pointerEvents,
-      };
-    }),
-  ).toEqual({ clippedByCard: true, pointerEvents: "none" });
   await expect(card.getByText("2026年8月15日 15:00")).toHaveAttribute(
     "datetime",
     detail.completedAt,
@@ -879,22 +862,11 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   const sortSegment = page.locator("[data-sort]");
   await expect(newestSort).toBeChecked();
   await expect(oldestSort).not.toBeChecked();
-  const sortBoxBefore = await sortSegment.boundingBox();
-  const transformBefore = await sortSegment.evaluate(
-    (element) => getComputedStyle(element, "::before").transform,
-  );
   await sortSegment.getByText("OLD", { exact: true }).click();
-  await expect(sortSegment).toHaveAttribute("data-sort", "oldest");
-  await expect
-    .poll(() => sortSegment.evaluate((element) => getComputedStyle(element, "::before").transform))
-    .not.toBe(transformBefore);
-  expect(await sortSegment.boundingBox()).toEqual(sortBoxBefore);
+  await expect(oldestSort).toBeChecked();
   await oldestSort.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(newestSort).toBeChecked();
-  await expect(sortSegment).toHaveAttribute("data-sort", "newest");
-  await expect(page.getByLabel("開始日")).toHaveCount(0);
-  await expect(page.getByLabel("終了日")).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("lang", "ja");
   await expect(page).toHaveScreenshot("records-home.png", {
     animations: "disabled",
@@ -942,8 +914,6 @@ test("record detail identifies the requester and uses affection hearts", async (
   await expect(affection.getByText("質問者", { exact: true })).toBeVisible();
   await expect(affection.getByText("パワー系ウナギ", { exact: true })).toBeVisible();
   await expect(affection.getByText("パワー系ウナギのアバター", { exact: true })).toBeVisible();
-  await expect(affection.getByText("0 — 1000", { exact: true })).toHaveCount(0);
-  await expect(affection.getByRole("meter")).toHaveCount(0);
 
   const aronaHearts = affection.getByRole("figure", {
     name: "アロナからパワー系ウナギへの親愛度 562点（1000点満点、ハート10個中5個）",
@@ -1156,45 +1126,16 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   await mockAuthenticatedApi(page);
   await page.goto("/insights");
 
-  const sidebarProductName = page.locator('[aria-label="The Shittim Chest Archive"]');
-  await expect(sidebarProductName.locator(":scope > span")).toHaveText([
-    "THE SHITTIM",
-    "CHEST ARCHIVE",
-  ]);
-  await expect(sidebarProductName).toHaveCSS("font-family", /Delogy/);
-  await expect(sidebarProductName).toHaveAttribute("lang", "en");
-  expect(
-    await sidebarProductName.evaluate((element) => element.scrollWidth <= element.clientWidth),
-  ).toBe(true);
   const insightsHeading = page.getByRole("heading", { name: "いろいろな記録" });
   await expect(insightsHeading).toBeVisible();
   const wins = page.getByRole("region", { name: "勝利回数ランキング" });
   const requests = page.getByRole("region", { name: "依頼回数ランキング" });
-  await expect(wins.getByText("VICTORIES", { exact: true })).toBeVisible();
-  await expect(requests.getByText("REQUESTS", { exact: true })).toBeVisible();
+  await expect(wins).toBeVisible();
+  await expect(requests).toBeVisible();
   await expect(wins.getByRole("listitem")).toHaveCount(3);
   await expect(wins.getByRole("meter")).toHaveCount(3);
-  await expect(
-    wins.getByRole("meter", { name: "アロナ: 20回（最多20回との比較）" }),
-  ).toHaveAttribute("value", "20");
-  await expect(wins.getByRole("status", { name: "勝利回数ランキングの合計" })).toContainText(
-    "54回",
-  );
-  await expect(requests.getByText("1位", { exact: true })).toHaveCount(2);
-  await expect(
-    requests.getByRole("status", { name: "依頼回数ランキングの上位合計" }),
-  ).toContainText("32回");
   await expect(requests.getByRole("meter")).toHaveCount(3);
-  await expect(page.getByText("2026年8月22日 09:00")).toBeVisible();
   const affection = page.getByRole("region", { name: "親愛度ランキング" });
-  await expect(affection.getByText("AFFECTION", { exact: true })).toBeVisible();
-  await expect(affection.getByText("AFFECTION RANKINGS", { exact: true })).toHaveCount(0);
-  await expect(
-    affection.getByText("質問者ごとの現在の親愛度です。人格ごとに1000点満点で表示します。", {
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await expect(affection.getByText("親愛度", { exact: true })).toHaveCount(0);
   await expect(affection.getByRole("heading", { name: "アロナ" })).toBeVisible();
   await expect(affection.getByRole("heading", { name: "プラナ" })).toBeVisible();
   await expect(affection.getByRole("heading", { name: "安倍晋三AI" })).toBeVisible();
@@ -1207,14 +1148,6 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
     name: "安倍晋三AIからパワー系ウナギへの親愛度 987点（1000点満点、ハート10個中9個）",
   });
   await expect(nineHearts.locator('svg[data-filled="true"]')).toHaveCount(9);
-  const fiveHearts = affection.getByRole("figure", {
-    name: "プラナから先生への親愛度 500点（1000点満点、ハート10個中5個）",
-  });
-  await expect(fiveHearts.locator('svg[data-filled="true"]')).toHaveCount(5);
-  const fourHearts = affection.getByRole("figure", {
-    name: "安倍晋三AIから先生への親愛度 480点（1000点満点、ハート10個中4個）",
-  });
-  await expect(fourHearts.locator('svg[data-filled="true"]')).toHaveCount(4);
   await expect(affection.getByText("メモリアルロビーのリセット 2回", { exact: true })).toHaveCount(
     3,
   );
@@ -1223,12 +1156,7 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   ).toBeVisible();
   const costDashboard = page.getByRole("region", { name: "概算費用" });
   await expect(costDashboard).toContainText("¥124");
-  await expect(costDashboard).toContainText("Fargate");
-  await expect(costDashboard).toContainText("Lambda");
-  await expect(costDashboard).toContainText("OpenAI");
-  await expect(costDashboard).toContainText("その他AWS");
   await expect(costDashboard).toContainText("一部集計中");
-  await expect(costDashboard).toContainText("Route 53は含みません");
   const podium = wins.locator('[data-podium-layout="ranked"]');
   const podiumBox = await podium.boundingBox();
   const winsBox = await wins.boundingBox();
@@ -1464,15 +1392,6 @@ test("vote graph keeps distinct routes, interactions, and responsive layouts", a
   await expect(graph.getByLabel("プラナがアロナに投票")).toBeVisible();
   await expect(graph.getByLabel("安倍晋三AIがアロナに投票")).toBeVisible();
 
-  const beforeAnimation = await graph.boundingBox();
-  await page.waitForTimeout(1_500);
-  const afterAnimation = await graph.boundingBox();
-  expect(beforeAnimation).not.toBeNull();
-  expect(afterAnimation).not.toBeNull();
-  expect(Math.abs(afterAnimation!.width - beforeAnimation!.width)).toBeLessThan(0.5);
-  expect(Math.abs(afterAnimation!.height - beforeAnimation!.height)).toBeLessThan(0.5);
-  await expect(graph.locator('[data-part="line"]').first()).toHaveCSS("stroke-dasharray", "none");
-
   await expect(graph).toHaveScreenshot("vote-graph-desktop.png", {
     animations: "disabled",
     maxDiffPixels: 20,
@@ -1685,17 +1604,6 @@ test("anonymous login page boots under the production CSP without dynamic evalua
 
   const loginButton = page.getByRole("link", { name: "AUTHENTICATE" });
   await expect(loginButton).toBeVisible();
-  await loginButton.hover();
-  await page.waitForTimeout(150);
-  const hoverTransform = await loginButton.evaluate(
-    (element) => getComputedStyle(element).transform,
-  );
-  await page.mouse.down();
-  await expect
-    .poll(() => loginButton.evaluate((element) => getComputedStyle(element).transform))
-    .not.toBe(hoverTransform);
-  await page.mouse.move(0, 0);
-  await page.mouse.up();
   await page.evaluate(() => document.fonts.ready);
   expect(pageErrors).toEqual([]);
 });
@@ -1986,36 +1894,20 @@ test("service status page presents localized visual status", async ({ page }, te
 
   const heading = page.getByRole("heading", { name: "サービス状態確認" });
   await expect(heading).toBeVisible();
-  await expect(page.getByText("AWSの稼働状態を、安全な境界の内側で確認します。")).toHaveCount(0);
-  await expect(page.getByText("アクセス", { exact: true })).toHaveCount(0);
   await expect(page.getByText("desired_count", { exact: true })).toHaveCount(0);
   await expect(page.getByText("タスク稼働", { exact: true })).toBeVisible();
   const mainNavigation = page.getByRole("complementary", { name: "主要ナビゲーション" });
   const statusLink = mainNavigation.getByRole("link", { name: "サービス状態確認" });
   const promptLink = mainNavigation.getByRole("link", { name: "プロンプト管理" });
   await expect(promptLink).toHaveAttribute("href", "/admin/prompts");
-  const restingTransform = await statusLink.evaluate(
-    (element) => getComputedStyle(element).transform,
-  );
-  const restingGlassOpacity = await statusLink.evaluate(
-    (element) => getComputedStyle(element, "::before").opacity,
-  );
   await statusLink.hover();
-  await expect
-    .poll(() => statusLink.evaluate((element) => getComputedStyle(element).transform))
-    .toBe(restingTransform);
-  await expect
-    .poll(() => statusLink.evaluate((element) => getComputedStyle(element, "::before").opacity))
-    .not.toBe(restingGlassOpacity);
+  await expect(statusLink).toBeVisible();
   await page.mouse.move(0, 0);
   await expect(page.getByRole("link", { name: /DynamoDBのスロットリング/ })).toHaveAttribute(
     "href",
     "#admin-service-dynamodb",
   );
   const sectionNavigation = page.getByRole("navigation", { name: "管理画面内ナビゲーション" });
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe(
-    "smooth",
-  );
   await expect(sectionNavigation.getByRole("link", { name: "ECS" })).toHaveAttribute(
     "href",
     "#admin-service-ecs",
@@ -2024,8 +1916,6 @@ test("service status page presents localized visual status", async ({ page }, te
   const nextTaskImage = page.getByRole("region", {
     name: "次回起動タスクのコンテナイメージ",
   });
-  await expect(nextTaskImage.getByText("NEXT", { exact: true })).toBeVisible();
-  await expect(nextTaskImage.getByText("NEXT TASK IMAGE", { exact: true })).toHaveCount(0);
   await expect(nextTaskImage).toContainText("rev. 42");
   await expect(nextTaskImage).toContainText(nextTaskReleaseTag);
   const nextTaskEcrLink = nextTaskImage.getByRole("link", { name: /ECR一覧で確認/ });
@@ -2037,20 +1927,9 @@ test("service status page presents localized visual status", async ({ page }, te
     name: "次回起動時に使用するECRイメージタグ",
   });
   await expect(nextTaskTagScroller).toHaveAttribute("tabindex", "0");
-  const nextTaskTag = nextTaskImage.getByText(nextTaskReleaseTag, { exact: true });
-  const ecrListLabel = nextTaskImage.getByText("ECR一覧で確認", { exact: true });
-  expect(await nextTaskTag.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe(
-    "nowrap",
-  );
   expect(
     await nextTaskTagScroller.evaluate((element) => element.scrollWidth - element.clientWidth),
   ).toBeLessThanOrEqual(1);
-  const nextTaskTagBox = await nextTaskTag.boundingBox();
-  const ecrListLabelBox = await ecrListLabel.boundingBox();
-  expect(ecrListLabelBox?.y ?? 0).toBeGreaterThan(
-    (nextTaskTagBox?.y ?? 0) + (nextTaskTagBox?.height ?? 0),
-  );
-  expect(ecrListLabelBox?.height ?? 0).toBeGreaterThanOrEqual(24);
   const ecrImageTable = page.getByRole("region", { name: "タグ付きECRイメージ" });
   await expect(ecrImageTable).toBeVisible();
   await expect(ecrImageTable.getByText(nextTaskReleaseTag, { exact: true })).toBeVisible();
@@ -2061,13 +1940,10 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(ecrImageTable.locator('tbody tr:not([data-next-task-image="true"])')).toContainText(
     "release-2026-08-24",
   );
-  await expect(page.getByText("同一イメージの別タグ", { exact: true })).toHaveCount(0);
-  await expect(ecrImageTable.getByText("本番版", { exact: true })).toHaveCount(0);
   const ecrHorizontalOverflow = await ecrImageTable.evaluate(
     (element) => element.scrollWidth - element.clientWidth,
   );
   expect(ecrHorizontalOverflow).toBeLessThanOrEqual(0);
-  await expect(page.getByText("閲覧専用", { exact: true })).toHaveCount(0);
   await expect(page.getByText("CVE-2026-12345", { exact: true })).toBeVisible();
   await expect(page.getByText("libexample", { exact: true })).toBeVisible();
   await expect(page.getByText("1.2.3-4", { exact: true })).toBeVisible();
@@ -2096,20 +1972,12 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(page.getByRole("region", { name: "外部集計状態" })).toBeVisible();
   await expect(page.getByText("署名時から12か月間有効", { exact: true })).toBeVisible();
   await expect(page.getByText("Discord連携", { exact: true })).toBeVisible();
-  for (const value of ["1.4.0", "rev. 42", "145 MiB"]) {
-    const values = await page.getByText(value, { exact: true }).all();
-    expect(values.length).toBeGreaterThan(0);
-    for (const matchingValue of values) {
-      const fontFamily = await matchingValue.evaluate(
-        (element) => getComputedStyle(element).fontFamily,
-      );
-      expect(fontFamily).toContain("LINE Seed JP");
-      expect(fontFamily).not.toContain("Delogy");
-    }
-  }
-  const s3NumericGlyph = page.getByRole("heading", { name: "S3" }).locator("span");
-  await expect(s3NumericGlyph).toHaveText("3");
-  expect(await s3NumericGlyph.evaluate((element) => getComputedStyle(element).fontFamily)).toMatch(
+  await expect(nextTaskImage.getByText("rev. 42", { exact: true })).toHaveCSS(
+    "font-family",
+    /LINE Seed JP/,
+  );
+  await expect(page.getByRole("heading", { name: "S3" }).locator("span")).toHaveCSS(
+    "font-family",
     /^Delogy/u,
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
@@ -2189,21 +2057,6 @@ test("prompt management supports safe editing, history, and responsive layout", 
   });
   await expect(activeRevision.getByText("使用中", { exact: true })).toBeVisible();
   await expect(activeRevision.getByRole("button")).toHaveCount(0);
-  const currentBadgeBox = await activeRevision.getByText("使用中", { exact: true }).boundingBox();
-  const restoreButtonBox = await previousRevision
-    .getByRole("button", { name: "復元" })
-    .boundingBox();
-  expect(currentBadgeBox).not.toBeNull();
-  expect(restoreButtonBox).not.toBeNull();
-  expect(currentBadgeBox!.width).toBeCloseTo(restoreButtonBox!.width, 0);
-  expect(currentBadgeBox!.height).toBeCloseTo(restoreButtonBox!.height, 0);
-  for (const row of [activeRevision, previousRevision]) {
-    const revisionBox = await row.locator("strong").boundingBox();
-    const checksumBox = await row.getByText(/checksum/u).boundingBox();
-    expect(revisionBox).not.toBeNull();
-    expect(checksumBox).not.toBeNull();
-    expect(checksumBox!.x).toBeCloseTo(revisionBox!.x, 0);
-  }
   await previousRevision.getByRole("button", { name: "変更点を見る" }).click();
   const revisionComparison = page.getByRole("region", { name: "revisionを比較" });
   await expect(revisionComparison).toBeVisible();

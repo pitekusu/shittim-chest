@@ -560,7 +560,7 @@ async def test_one_affection_provider_failure_discards_all_scores_and_continues(
 
 
 @pytest.mark.asyncio
-async def test_initial_opinions_are_persisted_then_delivered_by_each_participant_in_order(
+async def test_generated_phases_are_persisted_then_delivered_by_each_participant_in_order(
     dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
@@ -570,99 +570,73 @@ async def test_initial_opinions_are_persisted_then_delivered_by_each_participant
 
     await app.run_debate(accepted.debate_id)
 
-    initial_stage = next(
-        snapshot
-        for snapshot in repository.terminal_stages
-        if isinstance(snapshot.terminal_delivery, PhaseDeliveryPlan)
-        and snapshot.terminal_delivery.plan_id == "initial-opinions"
+    phases = (
+        (
+            "initial-opinions",
+            DebatePhase.COLLECTING_INITIAL_OPINIONS,
+            DebatePhase.DISCUSSING,
+            (0, 8, 16),
+        ),
+        (
+            "final-proposals",
+            DebatePhase.COLLECTING_FINAL_PROPOSALS,
+            DebatePhase.SELECTING_WINNER,
+            (100, 108, 116),
+        ),
+        (
+            "votes",
+            DebatePhase.SELECTING_WINNER,
+            DebatePhase.GENERATING_DECISION,
+            (200, 208, 216),
+        ),
     )
-    operations = tuple(
-        operation
-        for operation in repository.terminal_operations.values()
-        if operation.plan_id == "initial-opinions"
-    )
-    assert tuple(operation.bot_slot for operation in operations) == (
-        DiscordBotSlot.PARTICIPANT_A,
-        DiscordBotSlot.PARTICIPANT_B,
-        DiscordBotSlot.PARTICIPANT_C,
-    )
-    assert tuple(operation.delivery_sequence for operation in operations) == (0, 8, 16)
-    assert initial_stage.state.phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
-    assert repository.phase_delivery_finalizations[0].state.phase is DebatePhase.DISCUSSING
-    assert repository.phase_delivery_finalizations[0].terminal_delivery is None
-    assert discord.delivery_checks[:3] == [
-        (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
-        (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
-        (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
-    ]
-    persisted_counts = [
-        len(snapshot.initial_opinions)
-        for snapshot in repository.history[accepted.debate_id]
-        if snapshot.state.phase is DebatePhase.COLLECTING_INITIAL_OPINIONS
-        and snapshot.initial_opinions
-    ]
-    assert persisted_counts[:3] == [1, 2, 3]
+    for index, (plan_id, phase, next_phase, sequences) in enumerate(phases):
+        stage = next(
+            snapshot
+            for snapshot in repository.terminal_stages
+            if isinstance(snapshot.terminal_delivery, PhaseDeliveryPlan)
+            and snapshot.terminal_delivery.plan_id == plan_id
+        )
+        operations = tuple(
+            operation
+            for operation in repository.terminal_operations.values()
+            if operation.plan_id == plan_id
+        )
+        assert tuple(operation.bot_slot for operation in operations) == (
+            DiscordBotSlot.PARTICIPANT_A,
+            DiscordBotSlot.PARTICIPANT_B,
+            DiscordBotSlot.PARTICIPANT_C,
+        )
+        assert tuple(operation.delivery_sequence for operation in operations) == sequences
+        assert stage.state.phase is phase
+        if plan_id == "votes":
+            assert len(stage.votes) == 3
+        finalized = repository.phase_delivery_finalizations[index]
+        assert finalized.state.phase is next_phase
+        assert finalized.terminal_delivery is None
+        assert discord.delivery_checks[index * 3 : (index + 1) * 3] == [
+            (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
+            (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
+            (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
+        ]
+
+    persisted_counts: dict[DebatePhase, list[int]] = {phase: [] for _, phase, _, _ in phases}
     for snapshot in repository.history[accepted.debate_id]:
-        for opinion in snapshot.initial_opinions:
-            checkpoint = snapshot.checkpoint_for(
-                phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
-                participant=opinion.participant,
-            )
-            assert checkpoint is not None
-            assert checkpoint.status is GenerationStatus.COMPLETED
-
-
-@pytest.mark.asyncio
-async def test_final_proposals_are_persisted_then_delivered_by_each_participant_in_order(
-    dependencies: Dependencies,
-) -> None:
-    app = make_application(dependencies)
-    discord = dependencies[3]
-    repository = dependencies[6]
-    accepted = await accept_bound_debate(app)
-
-    await app.run_debate(accepted.debate_id)
-
-    final_stage = next(
-        snapshot
-        for snapshot in repository.terminal_stages
-        if isinstance(snapshot.terminal_delivery, PhaseDeliveryPlan)
-        and snapshot.terminal_delivery.plan_id == "final-proposals"
-    )
-    operations = tuple(
-        operation
-        for operation in repository.terminal_operations.values()
-        if operation.plan_id == "final-proposals"
-    )
-    assert tuple(operation.bot_slot for operation in operations) == (
-        DiscordBotSlot.PARTICIPANT_A,
-        DiscordBotSlot.PARTICIPANT_B,
-        DiscordBotSlot.PARTICIPANT_C,
-    )
-    assert tuple(operation.delivery_sequence for operation in operations) == (100, 108, 116)
-    assert final_stage.state.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
-    assert repository.phase_delivery_finalizations[1].state.phase is DebatePhase.SELECTING_WINNER
-    assert repository.phase_delivery_finalizations[1].terminal_delivery is None
-    assert discord.delivery_checks[3:6] == [
-        (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
-        (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
-        (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
-    ]
-    persisted_counts = [
-        len(snapshot.final_proposals)
-        for snapshot in repository.history[accepted.debate_id]
-        if snapshot.state.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
-        and snapshot.final_proposals
-    ]
-    assert persisted_counts[:3] == [1, 2, 3]
-    for snapshot in repository.history[accepted.debate_id]:
-        for proposal in snapshot.final_proposals:
-            checkpoint = snapshot.checkpoint_for(
-                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
-                participant=proposal.participant,
-            )
-            assert checkpoint is not None
-            assert checkpoint.status is GenerationStatus.COMPLETED
+        for phase, outputs in (
+            (DebatePhase.COLLECTING_INITIAL_OPINIONS, snapshot.initial_opinions),
+            (DebatePhase.COLLECTING_FINAL_PROPOSALS, snapshot.final_proposals),
+            (DebatePhase.SELECTING_WINNER, snapshot.votes),
+        ):
+            if snapshot.state.phase is phase and outputs:
+                persisted_counts[phase].append(len(outputs))
+            for output in outputs:
+                checkpoint = snapshot.checkpoint_for(
+                    phase=phase,
+                    participant=output.voter if isinstance(output, Vote) else output.participant,
+                )
+                assert checkpoint is not None
+                assert checkpoint.status is GenerationStatus.COMPLETED
+    assert all(counts[:3] == [1, 2, 3] for counts in persisted_counts.values())
 
 
 @pytest.mark.asyncio
@@ -791,59 +765,6 @@ async def test_final_proposal_recovery_uses_one_successor_call_per_participant(
     assert all(checkpoint.status is GenerationStatus.COMPLETED for checkpoint in recovered)
     assert all(checkpoint.logical_attempt == 2 for checkpoint in recovered)
     assert set(openai.proposal_calls) == set(PARTICIPANTS)
-
-
-@pytest.mark.asyncio
-async def test_votes_are_persisted_privately_then_delivered_by_each_participant_in_order(
-    dependencies: Dependencies,
-) -> None:
-    app = make_application(dependencies)
-    discord = dependencies[3]
-    repository = dependencies[6]
-    accepted = await accept_bound_debate(app)
-
-    await app.run_debate(accepted.debate_id)
-
-    vote_stage = next(
-        snapshot
-        for snapshot in repository.terminal_stages
-        if isinstance(snapshot.terminal_delivery, PhaseDeliveryPlan)
-        and snapshot.terminal_delivery.plan_id == "votes"
-    )
-    operations = tuple(
-        operation
-        for operation in repository.terminal_operations.values()
-        if operation.plan_id == "votes"
-    )
-    assert len(vote_stage.votes) == 3
-    assert tuple(operation.bot_slot for operation in operations) == (
-        DiscordBotSlot.PARTICIPANT_A,
-        DiscordBotSlot.PARTICIPANT_B,
-        DiscordBotSlot.PARTICIPANT_C,
-    )
-    assert tuple(operation.delivery_sequence for operation in operations) == (200, 208, 216)
-    assert vote_stage.state.phase is DebatePhase.SELECTING_WINNER
-    assert repository.phase_delivery_finalizations[2].state.phase is DebatePhase.GENERATING_DECISION
-    assert repository.phase_delivery_finalizations[2].terminal_delivery is None
-    assert discord.delivery_checks[6:9] == [
-        (DiscordBotSlot.PARTICIPANT_A, "guild", "102"),
-        (DiscordBotSlot.PARTICIPANT_B, "guild", "102"),
-        (DiscordBotSlot.PARTICIPANT_C, "guild", "102"),
-    ]
-    persisted_counts = [
-        len(snapshot.votes)
-        for snapshot in repository.history[accepted.debate_id]
-        if snapshot.state.phase is DebatePhase.SELECTING_WINNER and snapshot.votes
-    ]
-    assert persisted_counts[:3] == [1, 2, 3]
-    for snapshot in repository.history[accepted.debate_id]:
-        for vote in snapshot.votes:
-            checkpoint = snapshot.checkpoint_for(
-                phase=DebatePhase.SELECTING_WINNER,
-                participant=vote.voter,
-            )
-            assert checkpoint is not None
-            assert checkpoint.status is GenerationStatus.COMPLETED
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -200,7 +201,7 @@ class Assets:
         )
 
     def verify_upload(self, reservation: MemorialUploadReservation) -> bool:
-        assert reservation == reservation
+        assert reservation.asset_key == "private/upload"
         return self.verified
 
     def existing_generated(self, job: MemorialGenerationJob) -> str | None:
@@ -645,17 +646,27 @@ def generation_job(**overrides: Any) -> MemorialGenerationJob:
     return MemorialGenerationJob(**values)
 
 
-def test_generation_checkpoints_each_paid_call_and_deletes_upload_on_success() -> None:
-    repository = WorkerRepository(generation_job())
-    assets = WorkerAssets()
-    generator = Generator()
-    service = MemorialGenerationService(
+def worker_service(
+    repository: WorkerRepository,
+    assets: WorkerAssets,
+    generator: Generator,
+    *,
+    clock: Callable[[], datetime] = lambda: NOW,
+) -> MemorialGenerationService:
+    return MemorialGenerationService(
         repository=cast(Any, repository),
         assets=cast(Any, assets),
         questions=Questions(),
         generator=generator,
-        clock=lambda: NOW,
+        clock=clock,
     )
+
+
+def test_generation_checkpoints_each_paid_call_and_deletes_upload_on_success() -> None:
+    repository = WorkerRepository(generation_job())
+    assets = WorkerAssets()
+    generator = Generator()
+    service = worker_service(repository, assets, generator)
 
     memory = service.process(
         requester_key=REQUESTER_KEY,
@@ -673,33 +684,44 @@ def test_generation_checkpoints_each_paid_call_and_deletes_upload_on_success() -
     assert repository.completed == 1
 
 
-def test_generation_retry_reuses_paid_checkpoints() -> None:
+@pytest.mark.parametrize(
+    ("image_asset_key", "generation_attempt", "receive_count", "image_checkpoints"),
+    (
+        pytest.param("private/generated", 1, 2, 0, id="checkpointed-image"),
+        pytest.param(None, 1, 2, 1, id="stored-before-checkpoint"),
+        pytest.param(None, 4, 1, 1, id="completion-after-paid-attempt-limit"),
+    ),
+)
+def test_generation_recovers_stored_image_without_another_paid_call(
+    image_asset_key: str | None,
+    generation_attempt: int,
+    receive_count: int,
+    image_checkpoints: int,
+) -> None:
     repository = WorkerRepository(
         generation_job(
             narrative="保存済みの文章",
-            image_asset_key="private/generated",
+            image_asset_key=image_asset_key,
+            generation_attempt=generation_attempt,
         )
     )
     assets = WorkerAssets(existing="private/generated")
     generator = Generator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
-        clock=lambda: NOW,
-    )
+    service = worker_service(repository, assets, generator)
 
-    service.process(
+    result = service.process(
         requester_key=REQUESTER_KEY,
         cycle=1,
-        receive_count=2,
+        receive_count=receive_count,
         now=NOW,
         deadline=NOW + timedelta(minutes=5),
     )
 
+    assert result is not None
     assert (generator.narratives, generator.images) == (0, 0)
     assert (assets.loaded, assets.stored, assets.deleted) == (0, 0, 1)
+    assert repository.image_checkpoints == image_checkpoints
+    assert repository.completed == 1
 
 
 def test_generation_fails_closed_when_checkpointed_image_is_missing() -> None:
@@ -712,13 +734,7 @@ def test_generation_fails_closed_when_checkpointed_image_is_missing() -> None:
     )
     assets = WorkerAssets(existing=None)
     generator = Generator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
-        clock=lambda: NOW,
-    )
+    service = worker_service(repository, assets, generator)
 
     with pytest.raises(MemorialFailure) as captured:
         service.process(
@@ -736,68 +752,11 @@ def test_generation_fails_closed_when_checkpointed_image_is_missing() -> None:
     assert repository.preserve_derived == [False]
 
 
-def test_generation_retry_recovers_stored_image_before_another_paid_call() -> None:
-    repository = WorkerRepository(generation_job(narrative="保存済みの文章"))
-    assets = WorkerAssets(existing="private/generated")
-    generator = Generator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
-        clock=lambda: NOW,
-    )
-
-    service.process(
-        requester_key=REQUESTER_KEY,
-        cycle=1,
-        receive_count=2,
-        now=NOW,
-        deadline=NOW + timedelta(minutes=5),
-    )
-
-    assert (generator.narratives, generator.images) == (0, 0)
-    assert (assets.loaded, assets.stored, assets.deleted) == (0, 0, 1)
-    assert repository.image_checkpoints == 1
-
-
-def test_completion_only_recovery_is_allowed_after_paid_attempt_limit() -> None:
-    repository = WorkerRepository(generation_job(narrative="保存済みの文章", generation_attempt=4))
-    assets = WorkerAssets(existing="private/generated")
-    generator = Generator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
-        clock=lambda: NOW,
-    )
-
-    result = service.process(
-        requester_key=REQUESTER_KEY,
-        cycle=1,
-        receive_count=1,
-        now=NOW,
-        deadline=NOW + timedelta(minutes=5),
-    )
-
-    assert result is not None
-    assert (generator.narratives, generator.images) == (0, 0)
-    assert (assets.loaded, assets.stored, assets.deleted) == (0, 0, 1)
-    assert repository.completed == 1
-
-
 def test_recovery_delivery_terminalizes_without_starting_a_fourth_paid_attempt() -> None:
     repository = WorkerRepository(generation_job(generation_attempt=4))
     assets = WorkerAssets()
     generator = Generator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
-        clock=lambda: NOW,
-    )
+    service = worker_service(repository, assets, generator)
 
     with pytest.raises(MemorialFailure) as failure:
         service.process(
@@ -822,13 +781,7 @@ def test_terminal_image_failure_drops_partial_narrative_when_no_image_was_stored
     repository = WorkerRepository(generation_job(narrative="保存済みの文章", generation_attempt=3))
     assets = WorkerAssets()
     generator = ImageFailureGenerator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
-        clock=lambda: NOW,
-    )
+    service = worker_service(repository, assets, generator)
 
     with pytest.raises(RuntimeError, match="private image provider detail"):
         service.process(
@@ -857,13 +810,7 @@ def test_generation_failure_preserves_upload_until_terminal_attempt(
 ) -> None:
     repository = WorkerRepository(generation_job(generation_attempt=generation_attempt))
     assets = WorkerAssets()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=Generator(RuntimeError("private provider detail")),
-        clock=lambda: NOW,
-    )
+    service = worker_service(repository, assets, Generator(RuntimeError("private provider detail")))
 
     with pytest.raises(RuntimeError, match="private provider detail"):
         service.process(
@@ -894,13 +841,7 @@ def test_new_sqs_messages_share_the_persisted_three_attempt_limit() -> None:
 
     repository = LogicalAttemptRepository()
     assets = WorkerAssets()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=Generator(RuntimeError("private provider detail")),
-        clock=lambda: NOW,
-    )
+    service = worker_service(repository, assets, Generator(RuntimeError("private provider detail")))
 
     for _new_message in range(3):
         with pytest.raises(RuntimeError, match="private provider detail"):
@@ -918,50 +859,28 @@ def test_new_sqs_messages_share_the_persisted_three_attempt_limit() -> None:
     assert assets.deleted == 1
 
 
-def test_generation_preflights_images_before_paid_calls_and_stops_near_deadline() -> None:
-    repository = WorkerRepository(generation_job())
-    assets = WorkerAssets()
-    generator = Generator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
-        clock=lambda: NOW + timedelta(seconds=46),
-    )
-
-    with pytest.raises(MemorialFailure) as failure:
-        service.process(
-            requester_key=REQUESTER_KEY,
-            cycle=1,
-            receive_count=1,
-            now=NOW,
-            deadline=NOW + timedelta(minutes=5),
-        )
-
-    assert failure.value.code == "MEMORIAL_GENERATION_DEADLINE"
-    assert (generator.validations, generator.narratives, generator.images) == (1, 0, 0)
-    assert repository.released == 1
-    assert repository.refunded_attempts == 1
-    assert repository.job.generation_attempt == 0
-
-
 @pytest.mark.parametrize(
-    ("narrative", "elapsed_seconds"),
-    ((None, 46), ("保存済みの文章", 166)),
+    ("narrative", "generation_attempt", "elapsed_seconds"),
+    (
+        pytest.param(None, 1, 46, id="first-narrative-attempt"),
+        pytest.param(None, 3, 46, id="last-narrative-attempt"),
+        pytest.param("保存済みの文章", 3, 166, id="last-image-attempt"),
+    ),
 )
-def test_final_attempt_deadline_preflight_refunds_without_terminal_failure(
+def test_deadline_preflight_refunds_without_paid_call_or_terminal_failure(
     narrative: str | None,
+    generation_attempt: int,
     elapsed_seconds: int,
 ) -> None:
-    repository = WorkerRepository(generation_job(narrative=narrative, generation_attempt=3))
+    repository = WorkerRepository(
+        generation_job(narrative=narrative, generation_attempt=generation_attempt)
+    )
     assets = WorkerAssets()
     generator = Generator()
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
+    service = worker_service(
+        repository,
+        assets,
+        generator,
         clock=lambda: NOW + timedelta(seconds=elapsed_seconds),
     )
 
@@ -969,15 +888,15 @@ def test_final_attempt_deadline_preflight_refunds_without_terminal_failure(
         service.process(
             requester_key=REQUESTER_KEY,
             cycle=1,
-            receive_count=3,
+            receive_count=generation_attempt,
             now=NOW,
             deadline=NOW + timedelta(minutes=5),
         )
 
     assert failure.value.code == "MEMORIAL_GENERATION_DEADLINE"
-    assert (generator.narratives, generator.images) == (0, 0)
+    assert (generator.validations, generator.narratives, generator.images) == (1, 0, 0)
     assert (repository.released, repository.refunded_attempts, repository.failed) == (1, 1, 0)
-    assert repository.job.generation_attempt == 2
+    assert repository.job.generation_attempt == generation_attempt - 1
     assert assets.deleted == 0
 
 
@@ -986,11 +905,10 @@ def test_image_deadline_after_paid_narrative_does_not_refund_the_logical_attempt
     assets = WorkerAssets()
     generator = Generator()
     clock_values = iter((NOW, NOW + timedelta(seconds=166)))
-    service = MemorialGenerationService(
-        repository=cast(Any, repository),
-        assets=cast(Any, assets),
-        questions=Questions(),
-        generator=generator,
+    service = worker_service(
+        repository,
+        assets,
+        generator,
         clock=lambda: next(clock_values),
     )
 
