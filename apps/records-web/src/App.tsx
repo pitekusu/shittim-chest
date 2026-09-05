@@ -33,8 +33,20 @@ const MemorialPage = lazy(() => import("./routes/MemorialPage"));
 function LoadingScreen(): React.JSX.Element {
   return (
     <main className={authStyles.loadingScreen} aria-busy="true">
-      <BrandMark />
-      <p>記録庫を開いています</p>
+      <div className={authStyles.loadingEmblem} aria-hidden="true">
+        <BrandMark />
+      </div>
+      <div className={authStyles.loadingStatus}>
+        <span className={authStyles.loadingLabel} lang="en" aria-hidden="true">
+          NOW LOADING
+        </span>
+        <h1 className={authStyles.loadingMessage}>
+          <output>記録庫を開いています</output>
+        </h1>
+        <span className={authStyles.loadingTrack} aria-hidden="true">
+          <span />
+        </span>
+      </div>
     </main>
   );
 }
