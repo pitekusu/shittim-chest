@@ -192,7 +192,7 @@ jobs:
           test "${PUBLIC_HOSTNAME}" = "shittim.pitekusu.dev"
           [[ "${HOSTED_ZONE_ID}" =~ ^Z[A-Z0-9]+$ ]]
       - name: Acquire Records plan credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ vars.AWS_RECORDS_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -600,7 +600,7 @@ jobs:
             "${RUNNER_TEMP}/records-evidence/records-web-sbom.cdx.json" | cut -d' ' -f1)
           test "${actual_web_sbom_hash}" = "${expected_web_sbom_hash}"
       - name: Acquire Records deploy credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ vars.AWS_RECORDS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
