@@ -200,7 +200,9 @@ def record_link_message(public_hostname: str, record_id: str) -> str:
         raise ValueError("Records public hostname is invalid")
     _require_record_id(record_id)
     url = f"https://{public_hostname}/records/{record_id}"
-    return f"議論結果はこちらからも確認できます。\n[Webで議論結果を見る]({url})"
+    return (
+        f"議論結果はこちらからも確認できます。\n[Webで議論結果を見る]({url})\n識別子: {record_id}"
+    )
 
 
 def _notification_nonce(record_id: str) -> str:

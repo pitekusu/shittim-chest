@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from shittim_chest.application.status_publication import DiscordStatusMessage
+from shittim_chest.application.status_publication import (
+    DiscordStatusMessage,
+    has_exact_status_publication_marker,
+)
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import project_completed_debate
@@ -85,7 +88,12 @@ class FakeGateway:
         self.find_calls.append(kwargs)
         if not self.existing:
             return None
-        return self._message(kwargs)
+        message = replace(self._message(kwargs), nonce=None)
+        if not has_exact_status_publication_marker(
+            message.content, str(kwargs["operation_marker"])
+        ):
+            return None
+        return message
 
     async def create_message(self, **kwargs: object) -> DiscordStatusMessage:
         self.create_calls.append(kwargs)
@@ -134,7 +142,8 @@ PROJECTION = project_completed_debate(
 )
 EXPECTED_CONTENT = (
     "議論結果はこちらからも確認できます。\n"
-    f"[Webで議論結果を見る](https://shittim.pitekusu.dev/records/{PROJECTION.record_id})"
+    f"[Webで議論結果を見る](https://shittim.pitekusu.dev/records/{PROJECTION.record_id})\n"
+    f"識別子: {PROJECTION.record_id}"
 )
 
 
