@@ -2,26 +2,39 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import logging
 import subprocess
 import sys
 import traceback
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from botocore.exceptions import ClientError
+from botocore.httpsession import URLLib3Session
 from pydantic import BaseModel, Field, ValidationError
 
 from shittim_records import lambda_handlers
+from shittim_records.contracts import MemorialUploadResponse
 from shittim_records.costs import (
     CollectionSummary,
     CostCollectionFailed,
     CostProviderUnavailable,
 )
 from shittim_records.inspector_translations import InspectorTranslationUnavailable
+from shittim_records.memorial import (
+    MAX_UPLOAD_BYTES,
+    MemorialUploadReservation,
+)
+from shittim_records.memorial_adapters import MEMORIAL_UPLOAD_TTL, S3MemorialAssetStore
+from shittim_records.memorial_http import _upload_response
 from shittim_records.projector import BackfillResult, ProjectionResult
+from shittim_records.read_api import PARTICIPANT_AVATAR_ASSET_KEYS
 
 
 def test_lambda_handlers_import_without_boto3_type_stubs() -> None:
@@ -687,6 +700,77 @@ def test_s3_presigning_client_uses_the_lambda_region_endpoint(monkeypatch: Any) 
             },
         )
     ]
+
+
+def test_s3_presigning_client_produces_the_memorial_upload_contract(monkeypatch: Any) -> None:
+    def reject_network(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Presigning must not send network requests")
+
+    monkeypatch.setattr(URLLib3Session, "send", reject_network)
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    monkeypatch.setenv("AWS_CONFIG_FILE", "/dev/null")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setattr(
+        lambda_handlers.boto3,
+        "DEFAULT_SESSION",
+        lambda_handlers.boto3.Session(
+            aws_access_key_id="testing",
+            aws_secret_access_key="testing",  # noqa: S106 - dummy offline signing credentials.
+            aws_session_token="testing",  # noqa: S106 - exercise Lambda temporary credentials.
+        ),
+    )
+    client = lambda_handlers._regional_s3_client()
+    assets = S3MemorialAssetStore(
+        client,
+        upload_bucket_name="test-memorial-upload",
+        media_bucket_name="test-memorial-media",
+        participant_asset_keys=PARTICIPANT_AVATAR_ASSET_KEYS,
+    )
+    source = b"synthetic-source"
+    digest = hashlib.sha256(source).digest()
+    reservation = MemorialUploadReservation(
+        requester_key="a" * 43,
+        cycle=1,
+        asset_key=f"uploads/{'b' * 43}.bin",
+        content_type="image/png",
+        size_bytes=len(source),
+        sha256=digest.hex(),
+        expires_at=datetime.now(UTC) + MEMORIAL_UPLOAD_TTL,
+    )
+
+    ticket = assets.create_upload_ticket(reservation)
+    response = _upload_response(cycle=reservation.cycle, ticket=ticket)
+    payload = MemorialUploadResponse.model_validate_json(response["body"])
+
+    assert response["statusCode"] == 200
+    assert payload.cycle == reservation.cycle
+    assert payload.expires_at == reservation.expires_at
+    assert payload.fields.algorithm == "AWS4-HMAC-SHA256"
+    assert payload.fields.security_token is not None
+    assert payload.fields.content_type == reservation.content_type
+    assert payload.fields.checksum_sha256 == base64.b64encode(digest).decode()
+    assert urlsplit(payload.upload_url).hostname == (
+        "test-memorial-upload.s3.ap-northeast-1.amazonaws.com"
+    )
+    policy = json.loads(base64.b64decode(payload.fields.policy))
+    assert {"Content-Type": reservation.content_type} in policy["conditions"]
+    assert {"x-amz-checksum-sha256": payload.fields.checksum_sha256} in policy["conditions"]
+    assert {"key": reservation.asset_key} in policy["conditions"]
+    assert ["content-length-range", 1, MAX_UPLOAD_BYTES] in policy["conditions"]
+    signed_at = datetime.strptime(payload.fields.signing_date, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    expires_at = datetime.fromisoformat(policy["expiration"])
+    assert timedelta(0) < expires_at - signed_at <= MEMORIAL_UPLOAD_TTL
+
+    download = urlsplit(
+        client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": "test-memorial-media", "Key": "memorials/test.png"},
+            ExpiresIn=300,
+        ),
+    )
+    assert download.hostname == "test-memorial-media.s3.ap-northeast-1.amazonaws.com"
+    assert parse_qs(download.query)["X-Amz-Algorithm"] == ["AWS4-HMAC-SHA256"]
 
 
 def test_admin_status_s3_client_allows_bucket_region_redirects(monkeypatch: Any) -> None:

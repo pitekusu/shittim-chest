@@ -123,7 +123,9 @@ SDK_CONFIG = Config(
     connect_timeout=2,
     read_timeout=5,
 )
-S3_SDK_CONFIG = SDK_CONFIG.merge(Config(s3={"addressing_style": "virtual"}))
+S3_SDK_CONFIG = SDK_CONFIG.merge(
+    Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
+)
 
 
 def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
