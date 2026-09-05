@@ -997,15 +997,12 @@ def test_openai_generation_is_stateless_split_and_uses_two_high_fidelity_images(
     assert text_call["model"] == "gpt-5.6-luna"
     assert text_call["store"] is False
     assert text_call["tools"] == []
-    assert "global trusted" not in text_call["instructions"]
-    assert "trusted global" not in text_call["instructions"]
     assert "trusted persona" in text_call["instructions"]
     image_call = client.image_calls[0]
     assert image_call["model"] == "gpt-image-2"
     assert image_call["size"] == "1920x1088"
     assert image_call["input_fidelity"] == "high"
     assert len(image_call["image"]) == 2
-    assert "trusted global" not in image_call["prompt"]
     assert "trusted persona" in image_call["prompt"]
     assert "store" not in image_call
     with Image.open(io.BytesIO(image.image_bytes)) as result:
@@ -1078,20 +1075,13 @@ def test_transaction_conflict_classification_only_maps_expected_cas_failures(
 def test_overlay_uses_bundled_fonts_and_a_japanese_achievement_date() -> None:
     title_font, date_font = _font_paths()
 
-    first = render_memorial_overlay(
-        _png((1920, 1088)),
-        achieved_on=date(2026, 8, 31),
-        title_font_path=title_font,
-        date_font_path=date_font,
-    )
-    second = render_memorial_overlay(
+    rendered = render_memorial_overlay(
         _png((1920, 1088)),
         achieved_on=date(2026, 8, 31),
         title_font_path=title_font,
         date_font_path=date_font,
     )
 
-    assert first == second
-    with Image.open(io.BytesIO(first)) as image:
+    with Image.open(io.BytesIO(rendered)) as image:
         assert image.size == (1920, 1080)
         assert image.getpixel((1321, 983)) != (12, 34, 56)

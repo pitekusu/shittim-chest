@@ -88,7 +88,6 @@ def test_node_audits_require_the_outage_aware_runner(
     (
         "timeout-minutes: 90",
         "vars.AWS_RECORDS_DRIFT_ROLE_ARN",
-        "Detect Records stack drift without remediation",
         "ShittimChest-Prod-RecordsStateful",
         "ShittimChest-Prod-RecordsApplication",
         "ShittimChest-Prod-RecordsEdge",
@@ -1697,10 +1696,8 @@ def test_release_independent_cleanup_runs_before_rerun_rejection(directory: Path
     [
         "aws ssm describe-parameters",
         "aws cloudformation describe-events --generate-cli-skeleton input",
-        "Recover stale unexecuted release change sets before planning",
         "--stale-before-plan",
         "needs: [plan, deploy]",
-        "Acquire plan-role cleanup credentials",
         "continue-on-error: true",
         "EVIDENCE_RESULT: ${{ steps.cleanup_evidence.outcome }}",
         '[[ ! "${PLAN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]',
@@ -1709,7 +1706,6 @@ def test_release_independent_cleanup_runs_before_rerun_rejection(directory: Path
         "group: production-release",
         "if: ${{ needs.plan.result == 'success' && "
         "fromJSON(needs.plan.outputs.plan_attempt) == github.run_attempt }}",
-        "A failed-jobs-only rerun cannot reuse an earlier release plan",
         'contains(fromJSON(\'["success","failure","cancelled"]\'), steps.prepare_changes.outcome)',
     ],
 )

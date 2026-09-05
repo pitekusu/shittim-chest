@@ -121,52 +121,22 @@ def searched_response(
 
 
 def no_search_response() -> SimpleNamespace:
-    typed = Response.model_validate(
-        {
-            "id": "resp_no_search",
-            "object": "response",
-            "created_at": 1_752_710_400,
-            "status": "completed",
-            "completed_at": 1_752_710_401,
-            "error": None,
-            "incomplete_details": None,
-            "model": "gpt-5.6-luna",
-            "output": [
-                {
-                    "id": "msg_1",
-                    "type": "message",
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": '{"summary":""}',
-                            "annotations": [],
-                        }
-                    ],
-                }
-            ],
-            "parallel_tool_calls": False,
-            "tool_choice": "auto",
-            "tools": [{"type": "web_search", "search_context_size": "medium"}],
-            "usage": {
-                "input_tokens": 10,
-                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
-                "output_tokens": 2,
-                "output_tokens_details": {"reasoning_tokens": 0},
-                "total_tokens": 12,
-            },
+    response = searched_response(summary="")
+    response.id = "resp_no_search"
+    response.output = [response.output[1]]
+    response.output[0].content[0].text = '{"summary":""}'
+    response.output[0].content[0].annotations = []
+    response.usage = response.usage.model_copy(
+        update={
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "output_tokens_details": response.usage.output_tokens_details.model_copy(
+                update={"reasoning_tokens": 0}
+            ),
+            "total_tokens": 12,
         }
     )
-    return SimpleNamespace(
-        id=typed.id,
-        model=typed.model,
-        status=typed.status,
-        incomplete_details=typed.incomplete_details,
-        output=typed.output,
-        usage=typed.usage,
-        output_parsed=EvidenceDigestOutputV2(summary=""),
-    )
+    return response
 
 
 def realtime_feed_response(provider: str = "oai-weather") -> SimpleNamespace:

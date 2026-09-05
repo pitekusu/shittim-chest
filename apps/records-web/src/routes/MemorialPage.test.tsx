@@ -230,6 +230,18 @@ async function enterMemorial(state = unlockedState(), client = createClient()) {
   return view;
 }
 
+function selectImage(source: File): HTMLInputElement {
+  const input = screen.getByLabelText<HTMLInputElement>("メモリアル用の画像を選択");
+  fireEvent.change(input, { target: { files: [source] } });
+  // jsdom does not populate the browser's fake path when files are assigned.
+  Object.defineProperty(input, "value", {
+    configurable: true,
+    value: `C:\\fakepath\\${source.name}`,
+    writable: true,
+  });
+  return input;
+}
+
 function confirmGeneration(): void {
   fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
   fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
@@ -403,12 +415,7 @@ describe("MemorialPage", () => {
     expect(generateButton).toBeDisabled();
 
     const source = new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" });
-    fireEvent.change(input, { target: { files: [source] } });
-    Object.defineProperty(input, "value", {
-      configurable: true,
-      value: String.raw`C:\fakepath\memory.png`,
-      writable: true,
-    });
+    selectImage(source);
     expect(screen.getByText(/memory\.png/)).toBeVisible();
     expect(generateButton).toBeEnabled();
     generateButton.focus();
@@ -464,9 +471,7 @@ describe("MemorialPage", () => {
     await enterMemorial(state);
 
     const source = new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
-      target: { files: [source] },
-    });
+    selectImage(source);
     confirmGeneration();
 
     const prepareRetry = await screen.findByRole("button", { name: "生成準備を再試行" });
@@ -498,7 +503,7 @@ describe("MemorialPage", () => {
     const source = new File([Uint8Array.of(1, 2, 3)], "replacement.png", {
       type: "image/png",
     });
-    fireEvent.change(input, { target: { files: [source] } });
+    selectImage(source);
     expect(
       screen.queryByRole("button", { name: "準備済みの画像で生成を続ける" }),
     ).not.toBeInTheDocument();
@@ -517,18 +522,8 @@ describe("MemorialPage", () => {
     prepareUploadMock.mockRejectedValue(new Error("upload reservation unavailable"));
     await enterMemorial(unlockedState());
 
-    const input = screen.getByLabelText("メモリアル用の画像を選択");
     const source = new File([Uint8Array.of(1)], "first.png", { type: "image/png" });
-    fireEvent.change(input, {
-      target: {
-        files: [source],
-      },
-    });
-    Object.defineProperty(input, "value", {
-      configurable: true,
-      value: String.raw`C:\fakepath\first.png`,
-      writable: true,
-    });
+    const input = selectImage(source);
     confirmGeneration();
 
     fireEvent.click(await screen.findByRole("button", { name: "画像を選び直す" }));
@@ -557,14 +552,8 @@ describe("MemorialPage", () => {
     getStateMock.mockReset();
     getStateMock.mockResolvedValueOnce(initialState).mockResolvedValue(nextState);
 
-    const input = screen.getByLabelText("メモリアル用の画像を選択");
     const source = new File([Uint8Array.of(1)], "same.png", { type: "image/png" });
-    fireEvent.change(input, { target: { files: [source] } });
-    Object.defineProperty(input, "value", {
-      configurable: true,
-      value: String.raw`C:\fakepath\same.png`,
-      writable: true,
-    });
+    const input = selectImage(source);
 
     confirmGeneration();
 
@@ -598,14 +587,8 @@ describe("MemorialPage", () => {
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
     const { client } = await enterMemorial(initialState);
 
-    const input = screen.getByLabelText("メモリアル用の画像を選択");
     const source = new File([Uint8Array.of(1)], "in-flight.png", { type: "image/png" });
-    fireEvent.change(input, { target: { files: [source] } });
-    Object.defineProperty(input, "value", {
-      configurable: true,
-      value: String.raw`C:\fakepath\in-flight.png`,
-      writable: true,
-    });
+    const input = selectImage(source);
     confirmGeneration();
     await waitFor(() => expect(uploadSourceMock).toHaveBeenCalledTimes(1));
 
@@ -632,9 +615,7 @@ describe("MemorialPage", () => {
     const { client } = await enterMemorial(unlockedState());
 
     const source = new File([Uint8Array.of(1)], "in-flight.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
-      target: { files: [source] },
-    });
+    selectImage(source);
     confirmGeneration();
     await waitFor(() => expect(uploadSourceMock).toHaveBeenCalledTimes(1));
 
@@ -658,9 +639,7 @@ describe("MemorialPage", () => {
     const { client } = await enterMemorial(unlockedState());
 
     const source = new File([Uint8Array.of(1)], "queued.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
-      target: { files: [source] },
-    });
+    selectImage(source);
     confirmGeneration();
     await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
 
@@ -690,9 +669,7 @@ describe("MemorialPage", () => {
     await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
 
     const source = new File([Uint8Array.of(1)], "queued.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
-      target: { files: [source] },
-    });
+    selectImage(source);
     confirmGeneration();
 
     await waitFor(() =>
@@ -710,15 +687,9 @@ describe("MemorialPage", () => {
   it("clears the picker after a dropped image replaces its selection", async () => {
     await enterMemorial(unlockedState());
 
-    const input = screen.getByLabelText("メモリアル用の画像を選択");
     const dropZone = screen.getByRole("button", { name: /画像をドロップ/u });
     const picked = new File([Uint8Array.of(1)], "picked.png", { type: "image/png" });
-    fireEvent.change(input, { target: { files: [picked] } });
-    Object.defineProperty(input, "value", {
-      configurable: true,
-      value: String.raw`C:\fakepath\picked.png`,
-      writable: true,
-    });
+    const input = selectImage(picked);
 
     const dropped = new File([Uint8Array.of(1, 2, 3)], "dropped.webp", {
       type: "image/webp",
@@ -761,9 +732,7 @@ describe("MemorialPage", () => {
     await enterMemorial(unlockedState("failed"));
 
     const source = new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
-      target: { files: [source] },
-    });
+    selectImage(source);
     confirmGeneration();
 
     const retainedRetry = await screen.findByRole("button", { name: "生成受付を再試行" });
@@ -842,15 +811,7 @@ describe("MemorialPage", () => {
     getMemoryMock.mockResolvedValue(memory(1));
     resetMock.mockResolvedValue(resetLockedState());
 
-    const input = screen.getByLabelText("メモリアル用の画像を選択");
-    fireEvent.change(input, {
-      target: { files: [new File([Uint8Array.of(1)], "memory.png", { type: "image/png" })] },
-    });
-    Object.defineProperty(input, "value", {
-      configurable: true,
-      value: String.raw`C:\fakepath\memory.png`,
-      writable: true,
-    });
+    const input = selectImage(new File([Uint8Array.of(1)], "memory.png", { type: "image/png" }));
 
     const resetButton = screen.getByRole("button", { name: "親愛度をリセット" });
     resetButton.focus();
@@ -1168,9 +1129,7 @@ describe("MemorialPage", () => {
     await enterMemorial(unlockedState(), client);
 
     const source = new File([Uint8Array.of(1)], "memory.png", { type: "image/png" });
-    fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
-      target: { files: [source] },
-    });
+    selectImage(source);
     confirmGeneration();
 
     await waitFor(() =>

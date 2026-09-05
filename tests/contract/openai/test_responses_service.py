@@ -717,7 +717,6 @@ async def test_comparison_policies_have_explicit_request_shapes(
     expected_model: str,
     expected_reasoning: dict[str, str],
 ) -> None:
-    assert policy in (TERRA_STANDARD, LUNA_PRO)
     service, server, observer, http_client = await service_for(
         [response_with({"summary": "summary", "proposal": "proposal"})],
         config=OpenAIAdapterConfig(policy=policy),

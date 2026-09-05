@@ -157,43 +157,29 @@ def _record_detail_payload() -> dict[str, object]:
 
 
 def test_public_contracts_use_camel_case_and_reject_unknown_fields() -> None:
-    response = SessionResponse.model_validate(
-        {
-            "schemaVersion": 1,
-            "authenticated": True,
-            "user": {
-                "displayName": "利用者",
-                "avatar": {
-                    "kind": "placeholder",
-                    "alt": "利用者のアバター",
-                    "fallbackVariant": "cyan",
-                },
+    session = {
+        "schemaVersion": 1,
+        "authenticated": True,
+        "user": {
+            "displayName": "利用者",
+            "avatar": {
+                "kind": "placeholder",
+                "alt": "利用者のアバター",
+                "fallbackVariant": "cyan",
             },
-            "csrfToken": "csrf-example",
-            "isAdmin": True,
-        }
-    )
+        },
+        "csrfToken": "csrf-example",
+        "isAdmin": True,
+    }
+    response = SessionResponse.model_validate(session)
 
     payload = response.model_dump(by_alias=True, mode="json")
 
     assert payload["schemaVersion"] == 1
     assert payload["user"]["displayName"] == "利用者"
 
-    legacy_response = SessionResponse.model_validate(
-        {
-            "schemaVersion": 1,
-            "authenticated": True,
-            "user": {
-                "displayName": "利用者",
-                "avatar": {
-                    "kind": "placeholder",
-                    "alt": "利用者のアバター",
-                    "fallbackVariant": "cyan",
-                },
-            },
-            "csrfToken": "csrf-example",
-        }
-    )
+    session.pop("isAdmin")
+    legacy_response = SessionResponse.model_validate(session)
     assert legacy_response.root.is_admin is False
     with pytest.raises(ValidationError):
         SessionResponse.model_validate({"authenticated": False, "privateId": "forbidden"})
@@ -312,11 +298,14 @@ def test_avatar_contract_requires_url_only_for_images() -> None:
         )
 
 
-def test_error_envelope_is_strict() -> None:
-    response = ErrorResponse(
-        error={"code": "RECORD_NOT_FOUND", "message": "見つかりません", "requestId": "r1"}
-    )
-    assert response.error.code == "RECORD_NOT_FOUND"
+def test_error_envelope_rejects_unknown_fields() -> None:
+    error = {"code": "RECORD_NOT_FOUND", "message": "見つかりません", "requestId": "r1"}
+    for invalid in (
+        {"error": error, "privateId": "forbidden"},
+        {"error": {**error, "privateId": "forbidden"}},
+    ):
+        with pytest.raises(ValidationError, match="extra_forbidden"):
+            ErrorResponse.model_validate(invalid)
 
 
 def test_versioned_responses_require_the_exact_schema_version() -> None:
@@ -441,6 +430,13 @@ def test_record_detail_requires_one_canonical_winner() -> None:
     payload = _record_detail_payload()
     assert RecordDetailResponse.model_validate(payload).result.winner == "participant-a"
 
+    final_decision = payload["finalDecision"]
+    assert isinstance(final_decision, dict)
+    final_decision["winner"] = "participant-b"
+
+    with pytest.raises(ValidationError, match="must identify the same winner"):
+        RecordDetailResponse.model_validate(payload)
+
 
 def test_record_detail_affection_requires_all_three_consistent_changes() -> None:
     payload = _record_detail_payload()
@@ -484,12 +480,6 @@ def test_record_detail_affection_requires_all_three_consistent_changes() -> None
     invalid["affection"] = invalid_affection
     with pytest.raises(ValidationError, match="applied_delta"):
         RecordDetailResponse.model_validate(invalid)
-    final_decision = payload["finalDecision"]
-    assert isinstance(final_decision, dict)
-    final_decision["winner"] = "participant-b"
-
-    with pytest.raises(ValidationError, match="must identify the same winner"):
-        RecordDetailResponse.model_validate(payload)
 
 
 def test_record_result_requires_complete_consistent_vote_counts() -> None:

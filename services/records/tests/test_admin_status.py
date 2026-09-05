@@ -313,6 +313,51 @@ def inspector_finding(*, severity: str, digest: str = RUNTIME_DIGEST) -> dict[st
     }
 
 
+class Inspector:
+    def __init__(
+        self,
+        *,
+        counts: dict[str, int],
+        findings: list[dict[str, Any]],
+        aggregation_type: str | None = None,
+    ) -> None:
+        aggregation: dict[str, Any] = {
+            "responses": [
+                {
+                    "awsEcrContainerAggregation": {
+                        "imageSha": RUNTIME_DIGEST,
+                        "severityCounts": counts,
+                    }
+                }
+            ]
+        }
+        if aggregation_type is not None:
+            aggregation["aggregationType"] = aggregation_type
+        self.aggregations = Paginator([aggregation])
+        self.findings = Paginator([{"findings": findings}])
+        self.coverage = Paginator(
+            [
+                {
+                    "coveredResources": [
+                        {
+                            "resourceId": RUNTIME_DIGEST,
+                            "accountId": AWS_ACCOUNT_ID,
+                            "scanStatus": {"statusCode": "ACTIVE"},
+                            "lastScannedAt": NOW,
+                        }
+                    ]
+                }
+            ]
+        )
+
+    def get_paginator(self, name: str) -> Paginator:
+        return {
+            "list_finding_aggregations": self.aggregations,
+            "list_findings": self.findings,
+            "list_coverage": self.coverage,
+        }[name]
+
+
 def distribution_pages() -> Paginator:
     return Paginator(
         [
@@ -983,49 +1028,11 @@ def test_cloudfront_state_includes_certificate_health(
 
 @pytest.mark.parametrize("aggregation_type", ("AWS_ECR_CONTAINER", "AWS_CONTAINER"))
 def test_inspector_includes_repository_coverage_and_last_scan(aggregation_type: str) -> None:
-    aggregation_pages = Paginator(
-        [
-            {
-                "aggregationType": aggregation_type,
-                "responses": [
-                    {
-                        "awsEcrContainerAggregation": {
-                            "imageSha": RUNTIME_DIGEST,
-                            "severityCounts": {
-                                "all": 1,
-                                "critical": 0,
-                                "high": 1,
-                                "medium": 0,
-                            },
-                        }
-                    }
-                ],
-            }
-        ]
+    inspector = Inspector(
+        counts={"all": 1, "critical": 0, "high": 1, "medium": 0},
+        findings=[inspector_finding(severity="HIGH")],
+        aggregation_type=aggregation_type,
     )
-    finding_pages = Paginator([{"findings": [inspector_finding(severity="HIGH")]}])
-    coverage_pages = Paginator(
-        [
-            {
-                "coveredResources": [
-                    {
-                        "resourceId": RUNTIME_DIGEST,
-                        "accountId": AWS_ACCOUNT_ID,
-                        "scanStatus": {"statusCode": "ACTIVE"},
-                        "lastScannedAt": NOW,
-                    }
-                ]
-            }
-        ]
-    )
-
-    class Inspector:
-        def get_paginator(self, name: str) -> Paginator:
-            return {
-                "list_finding_aggregations": aggregation_pages,
-                "list_findings": finding_pages,
-                "list_coverage": coverage_pages,
-            }[name]
 
     translation_source = inspector_description(
         vulnerability_id="CVE-2026-12345",
@@ -1047,7 +1054,7 @@ def test_inspector_includes_repository_coverage_and_last_scan(aggregation_type: 
 
     section = source(
         ecr=EcrInventory([tagged_image_detail(tags=["release-2026-08-24", "stable"])]),
-        inspector=Inspector(),
+        inspector=inspector,
         translations=Translations(),
     )._inspector_section()
     values = metrics(section)
@@ -1071,7 +1078,7 @@ def test_inspector_includes_repository_coverage_and_last_scan(aggregation_type: 
     assert RUNTIME_DIGEST not in section.model_dump_json()
     assert AWS_ACCOUNT_ID not in section.model_dump_json()
     assert INSPECTOR_DESCRIPTION not in section.model_dump_json()
-    assert aggregation_pages.calls == [
+    assert inspector.aggregations.calls == [
         {
             "aggregationType": "AWS_ECR_CONTAINER",
             "aggregationRequest": {
@@ -1093,7 +1100,7 @@ def test_inspector_includes_repository_coverage_and_last_scan(aggregation_type: 
 
     pending = source(
         ecr=EcrInventory([tagged_image_detail(tags=["release-2026-08-24", "stable"])]),
-        inspector=Inspector(),
+        inspector=inspector,
         translations=UnavailableTranslations(),
     )._inspector_section()
 
@@ -1106,7 +1113,7 @@ def test_inspector_includes_repository_coverage_and_last_scan(aggregation_type: 
 
     uncached = source(
         ecr=EcrInventory([tagged_image_detail(tags=["release-2026-08-24", "stable"])]),
-        inspector=Inspector(),
+        inspector=inspector,
     )._inspector_section()
     uncached_values = metrics(uncached)
     assert uncached_values["translation_cache_count"] == 0
@@ -1115,46 +1122,12 @@ def test_inspector_includes_repository_coverage_and_last_scan(aggregation_type: 
 
 
 def test_inspector_treats_untriaged_findings_as_warning() -> None:
-    aggregation_pages = Paginator(
-        [
-            {
-                "responses": [
-                    {
-                        "awsEcrContainerAggregation": {
-                            "imageSha": RUNTIME_DIGEST,
-                            "severityCounts": {"all": 1},
-                        }
-                    }
-                ]
-            }
-        ]
-    )
-    finding_pages = Paginator([{"findings": [inspector_finding(severity="UNTRIAGED")]}])
-    coverage_pages = Paginator(
-        [
-            {
-                "coveredResources": [
-                    {
-                        "resourceId": RUNTIME_DIGEST,
-                        "scanStatus": {"statusCode": "ACTIVE"},
-                        "lastScannedAt": NOW,
-                    }
-                ]
-            }
-        ]
-    )
-
-    class Inspector:
-        def get_paginator(self, name: str) -> Paginator:
-            return {
-                "list_finding_aggregations": aggregation_pages,
-                "list_findings": finding_pages,
-                "list_coverage": coverage_pages,
-            }[name]
-
     section = source(
         ecr=EcrInventory([tagged_image_detail()]),
-        inspector=Inspector(),
+        inspector=Inspector(
+            counts={"all": 1},
+            findings=[inspector_finding(severity="UNTRIAGED")],
+        ),
     )._inspector_section()
 
     assert section.state == "warning"
@@ -1163,34 +1136,6 @@ def test_inspector_treats_untriaged_findings_as_warning() -> None:
 
 @pytest.mark.parametrize("severity", ("CRITICAL", "HIGH"))
 def test_inspector_rejects_details_that_exceed_severity_aggregates(severity: str) -> None:
-    aggregation_pages = Paginator(
-        [
-            {
-                "responses": [
-                    {
-                        "awsEcrContainerAggregation": {
-                            "imageSha": RUNTIME_DIGEST,
-                            "severityCounts": {
-                                "all": 1,
-                                "critical": 0,
-                                "high": 0,
-                                "medium": 1,
-                            },
-                        }
-                    }
-                ]
-            }
-        ]
-    )
-    finding_pages = Paginator([{"findings": [inspector_finding(severity=severity)]}])
-
-    class Inspector:
-        def get_paginator(self, name: str) -> Paginator:
-            return {
-                "list_finding_aggregations": aggregation_pages,
-                "list_findings": finding_pages,
-            }[name]
-
     class Translations:
         def load(self, _keys: tuple[str, ...]) -> dict[str, InspectorJapaneseSummary]:
             raise AssertionError("inconsistent findings must fail before cache access")
@@ -1198,7 +1143,10 @@ def test_inspector_rejects_details_that_exceed_severity_aggregates(severity: str
     with pytest.raises(ValueError, match="details exceed severity aggregates"):
         source(
             ecr=EcrInventory([tagged_image_detail()]),
-            inspector=Inspector(),
+            inspector=Inspector(
+                counts={"all": 1, "critical": 0, "high": 0, "medium": 1},
+                findings=[inspector_finding(severity=severity)],
+            ),
             translations=Translations(),
         )._inspector_section()
 
