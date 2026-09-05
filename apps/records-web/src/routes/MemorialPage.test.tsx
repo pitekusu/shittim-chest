@@ -383,7 +383,12 @@ describe("MemorialPage", () => {
     await finishStandardEntry();
 
     expect(screen.getByText(message)).toBeVisible();
-    expect(screen.getByText("進行中", { exact: true })).toBeVisible();
+    expect(screen.getByText(`${state === "queued" ? 2 : 3} / 4 工程`)).toBeVisible();
+    expect(screen.getByText("3分程度")).toBeVisible();
+    const steps = within(screen.getByRole("list", { name: "生成の工程" })).getAllByRole("listitem");
+    expect(steps[state === "queued" ? 1 : 2]).toHaveAttribute("aria-current", "step");
+    expect(steps[state === "queued" ? 1 : 2]).not.toHaveAttribute("data-complete", "true");
+    expect(steps[0]).toHaveAttribute("data-complete", "true");
     expect(screen.getByRole("progressbar", { name: "メモリアル生成の進捗" })).not.toHaveAttribute(
       "value",
     );
@@ -1193,6 +1198,54 @@ describe("MemorialPage", () => {
     expect(tabs[0]).toHaveFocus();
     fireEvent.keyDown(tabs[0]!, { key: "ArrowDown" });
     expect(tabs[1]).toHaveFocus();
+  });
+
+  it("refreshes an owner's selected image URL before downloading without regenerating", async () => {
+    useReducedMotion();
+    getMemoryMock.mockResolvedValueOnce(memory(2));
+    const refresh = deferred<MemoryResponse>();
+    getMemoryMock.mockReturnValueOnce(refresh.promise);
+    const downloads: HTMLAnchorElement[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function (this: HTMLAnchorElement) {
+        downloads.push(this);
+      },
+    );
+    renderMemorial(readyState());
+    fireEvent.click(await screen.findByRole("button", { name: "画像を保存" }));
+    expect(screen.getByRole("button", { name: "保存を準備しています" })).toBeDisabled();
+    const fresh = {
+      ...memory(2),
+      image: { ...memory(2).image, url: "https://records.example.invalid/fresh.png" },
+    };
+    await act(async () => refresh.resolve(fresh));
+
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]).toHaveAttribute("href", fresh.image.url);
+    expect(downloads[0]).toHaveAttribute("download", "the-shittim-chest-memorial-2.png");
+    expect(downloads[0]).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(downloads[0]?.isConnected).toBe(false);
+    expect(screen.getByRole("button", { name: "画像を保存" })).toBeEnabled();
+    expect(getMemoryMock).toHaveBeenCalledTimes(2);
+    expect(queueGenerationMock).not.toHaveBeenCalled();
+    expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the gallery usable after a failed download and retries with a new URL", async () => {
+    useReducedMotion();
+    getMemoryMock.mockResolvedValueOnce(memory(2)).mockRejectedValueOnce(new Error("network"));
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    renderMemorial(readyState());
+    fireEvent.click(await screen.findByRole("button", { name: "画像を保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("通信状態を確認して");
+    expect(click).not.toHaveBeenCalled();
+    expect(screen.getByText("プラナとの思い出です。")).toBeVisible();
+    getMemoryMock.mockResolvedValueOnce(memory(2));
+    fireEvent.click(screen.getByRole("button", { name: "画像を保存" }));
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("switches from an older memory to the newly completed cycle", async () => {

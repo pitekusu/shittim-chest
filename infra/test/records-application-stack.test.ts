@@ -971,7 +971,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
-      BatchSize: 10,
+      BatchSize: 1,
       BisectBatchOnFunctionError: true,
       EventSourceArn: { Ref: "SourceDebateTableStreamArn" },
       FilterCriteria: {
@@ -1008,16 +1008,26 @@ describe("RecordsApplicationStack", () => {
     const projectionText = JSON.stringify(projectionPolicies);
 
     expect(projectionText).not.toContain("dynamodb:DeleteItem");
-    expect(projectionText).not.toContain("dynamodb:UpdateItem");
     expect(projectionText).not.toContain("dynamodb:BatchWriteItem");
     const projectorPolicy = Object.values(policies).find((policy) =>
       JSON.stringify(policy).includes("ProjectorFunctionRole"),
     );
     expect(projectorPolicy).toBeDefined();
     const projectorText = JSON.stringify(projectorPolicy);
+    const backfillPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify(policy).includes("BackfillFunctionRole"),
+    );
+    const backfillText = JSON.stringify(backfillPolicy);
     expect(projectorText).not.toContain("dynamodb:Scan");
     expect(projectorText).toContain("AFFECTION#REQUESTER#*");
     expect(projectorText).toContain("AFFECTION#PROFILE");
+    expect(projectorText).toContain("dynamodb:UpdateItem");
+    expect(projectorText).toContain("RECORD_LINK_NOTIFICATION");
+    expect(projectorText).toContain("ssm:GetParameter");
+    expect(projectorText).toContain("/shittim-chest/production/discord/moderator/token");
+    expect(backfillText).not.toContain("dynamodb:UpdateItem");
+    expect(backfillText).not.toContain("RECORD_LINK_NOTIFICATION");
+    expect(backfillText).not.toContain("discord/moderator/token");
     expect(serialized).toContain("dynamodb:Query");
     expect(serialized).toContain("dynamodb:PutItem");
     expect(serialized).toContain("ssm:GetParameters");
@@ -1052,7 +1062,13 @@ describe("RecordsApplicationStack", () => {
         return (
           actions.length === 1 &&
           actions[0] === "dynamodb:PutItem" &&
-          JSON.stringify(statement.Resource).includes("table/shittim-chest-production-records")
+          JSON.stringify(statement.Resource).includes("table/shittim-chest-production-records") &&
+          JSON.stringify(statement.Condition) ===
+            JSON.stringify({
+              StringEquals: {
+                "dynamodb:EnclosingOperation": "TransactWriteItems",
+              },
+            })
         );
       });
       expect(archivePutStatements).toHaveLength(1);
@@ -1060,6 +1076,26 @@ describe("RecordsApplicationStack", () => {
         StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
       });
     }
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-projector",
+      Environment: {
+        Variables: Match.objectLike({
+          RECORDS_PUBLIC_HOSTNAME: { Ref: "RecordsPublicHostname" },
+          SHITTIM_MODERATOR_TOKEN_PARAMETER:
+            "/shittim-chest/production/discord/moderator/token",
+          SHITTIM_RUNTIME_CONFIG_PARAMETER: Match.anyValue(),
+        }),
+      },
+    });
+    const functions = template.findResources("AWS::Lambda::Function");
+    const backfill = Object.values(functions).find(
+      (resource) =>
+        resource.Properties.FunctionName === "shittim-chest-production-records-backfill",
+    );
+    expect(backfill?.Properties.Environment.Variables).not.toHaveProperty(
+      "SHITTIM_MODERATOR_TOKEN_PARAMETER",
+    );
   });
 
   test("does not recreate the source debate table", () => {

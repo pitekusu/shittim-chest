@@ -1955,6 +1955,9 @@ class S3MemorialAssetStore:
                     "Bucket": self._media_bucket,
                     "Key": memory.image_asset_key,
                     "ResponseContentType": "image/png",
+                    "ResponseContentDisposition": (
+                        f'attachment; filename="the-shittim-chest-memorial-{memory.cycle}.png"'
+                    ),
                 },
                 ExpiresIn=MEMORIAL_IMAGE_URL_TTL_SECONDS,
             )

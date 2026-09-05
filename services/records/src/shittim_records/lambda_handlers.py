@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_ssm.client import SSMClient
 
+from shittim_chest.adapters.aws import SsmParameterReader
+from shittim_chest.adapters.discord import create_discord_status_http_client
 from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
 
 from shittim_records.adapters import (
@@ -97,6 +99,11 @@ from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoR
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
 from shittim_records.read_api import CursorCodec, RecordsReadService
+from shittim_records.record_link_adapters import (
+    DiscordRecordLinkGatewayFactory,
+    DynamoRecordLinkNotificationStore,
+)
+from shittim_records.record_link_notifications import RecordLinkNotificationService
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
@@ -128,6 +135,7 @@ S3_SDK_CONFIG = SDK_CONFIG.merge(
 def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
     """Handle one DynamoDB Streams batch using partial batch failures."""
 
+    HTTPX_LOGGER.setLevel(logging.WARNING)
     failures: list[dict[str, str]] = []
     created = 0
     skipped = 0
@@ -379,7 +387,11 @@ def _projector_service() -> ProjectorService:
     global _PROJECTOR
     if _PROJECTOR is None:
         dynamodb = boto3.client("dynamodb")
-        _PROJECTOR = _build_projector(dynamodb, boto3.client("ssm"))
+        _PROJECTOR = _build_projector(
+            dynamodb,
+            boto3.client("ssm"),
+            enable_record_link_notifications=True,
+        )
     return _PROJECTOR
 
 
@@ -794,15 +806,41 @@ def _build_projector(
     ssm: SSMClient,
     *,
     source: SourceDebateRepository | None = None,
+    enable_record_link_notifications: bool = False,
 ) -> ProjectorService:
+    statistics_table_name = _environment("STATISTICS_TABLE_NAME")
+    record_link_notifications = (
+        RecordLinkNotificationService(
+            store=DynamoRecordLinkNotificationStore(
+                dynamodb,
+                statistics_table_name,
+            ),
+            gateway_factory=DiscordRecordLinkGatewayFactory(
+                reader=SsmParameterReader(client=ssm),
+                http_client=create_discord_status_http_client(),
+                runtime_parameter_name=_environment("SHITTIM_RUNTIME_CONFIG_PARAMETER"),
+                moderator_token_parameter_name=_environment("SHITTIM_MODERATOR_TOKEN_PARAMETER"),
+            ),
+            public_hostname=_environment("RECORDS_PUBLIC_HOSTNAME"),
+        )
+        if enable_record_link_notifications
+        else None
+    )
     return ProjectorService(
         source=source or SourceDebateRepository(dynamodb, _environment("SOURCE_TABLE_NAME")),
-        archive=ArchiveRepository(dynamodb, _environment("ARCHIVE_TABLE_NAME")),
+        archive=ArchiveRepository(
+            dynamodb,
+            _environment("ARCHIVE_TABLE_NAME"),
+            notification_table_name=(
+                statistics_table_name if enable_record_link_notifications else None
+            ),
+        ),
         configuration=ConfigurationRepository(
             ssm,
             identity_hmac_parameter_name=_environment("IDENTITY_HMAC_PARAMETER_NAME"),
             presentation_parameter_name=_environment("PRESENTATION_PARAMETER_NAME"),
         ),
+        record_link_notifications=record_link_notifications,
     )
 
 

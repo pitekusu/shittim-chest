@@ -30,6 +30,7 @@ const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const GENERATE_CONFIRMATION = "GENERATE MEMORIAL";
 const RESET_CONFIRMATION = "RESET AFFECTION";
+const GENERATION_STEPS = ["画像確認", "生成受付", "思い出生成", "完成"] as const;
 
 const PARTICIPANT_PRESENTATION: Readonly<
   Record<
@@ -206,22 +207,49 @@ function MemorialProgress({
           <p lang="en">MEMORY SYNTHESIS</p>
           <strong>{message}</strong>
         </div>
-        <span>{complete ? "完了" : "進行中"}</span>
+        <span>{complete ? "完了" : `${stage} / 4 工程`}</span>
       </div>
+      {!complete && (
+        <p className={styles.generationEstimate}>
+          生成には<strong>3分程度</strong>かかります。
+          <span>状況により前後します。</span>
+        </p>
+      )}
       <progress
         className={commonStyles.visuallyHidden}
         aria-label="メモリアル生成の進捗"
+        aria-valuetext={`${stage} / 4 工程：${message}`}
         value={complete ? 100 : undefined}
         max={100}
       />
-      <div className={styles.progressTrack} data-indeterminate={!complete} aria-hidden="true">
-        <span />
+      <div className={styles.progressTrack} aria-hidden="true">
+        {GENERATION_STEPS.map((label, index) => (
+          <span
+            key={label}
+            data-complete={complete || stage > index + 1}
+            data-current={!complete && stage === index + 1}
+          >
+            <span />
+          </span>
+        ))}
       </div>
-      <ol className={styles.progressSteps} aria-hidden="true">
-        <li data-complete={stage >= 1}>画像確認</li>
-        <li data-complete={stage >= 2}>生成受付</li>
-        <li data-complete={stage >= 3}>思い出生成</li>
-        <li data-complete={complete}>完成</li>
+      <ol className={styles.progressSteps} aria-label="生成の工程">
+        {GENERATION_STEPS.map((label, index) => (
+          <li
+            key={label}
+            data-complete={complete || stage > index + 1}
+            aria-current={!complete && stage === index + 1 ? "step" : undefined}
+          >
+            {label}
+            <span className={commonStyles.visuallyHidden}>
+              {complete || stage > index + 1
+                ? "（完了）"
+                : stage === index + 1
+                  ? "（進行中）"
+                  : "（待機）"}
+            </span>
+          </li>
+        ))}
       </ol>
     </section>
   );
@@ -332,6 +360,39 @@ function MemoryArtwork({
   const [imageFailed, setImageFailed] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [imageAttempt, setImageAttempt] = useState(0);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<unknown>(null);
+  const mounted = useRef(true);
+  useAuthenticationRecovery(downloadError);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const downloadImage = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      // Refresh the owner-authorized URL; a displayed image can outlive its signature.
+      const freshMemory = await getMemorialMemory(memory);
+      if (!mounted.current) return;
+      const link = document.createElement("a");
+      link.href = freshMemory.image.url;
+      link.download = `the-shittim-chest-memorial-${memory.cycle}.png`;
+      link.rel = "noreferrer";
+      link.setAttribute("referrerpolicy", "no-referrer");
+      document.body.append(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      if (mounted.current) setDownloadError(error);
+    } finally {
+      if (mounted.current) setDownloading(false);
+    }
+  };
 
   const retryImage = async () => {
     setRetrying(true);
@@ -346,40 +407,62 @@ function MemoryArtwork({
   };
 
   return (
-    <figure>
-      {imageFailed ? (
-        <div className={styles.memoryImageError} role="alert" aria-busy={retrying}>
-          <p>
-            画像を読み込めませんでした。通信状態や画像URLの有効期限を確認するため、再取得してください。
-          </p>
-          <button
-            className={commonStyles.secondaryButton}
-            type="button"
-            disabled={retrying}
-            onClick={() => void retryImage()}
+    <div className={styles.memoryArtwork}>
+      <figure>
+        {imageFailed ? (
+          <div className={styles.memoryImageError} role="alert" aria-busy={retrying}>
+            <p>
+              画像を読み込めませんでした。通信状態や画像URLの有効期限を確認するため、再取得してください。
+            </p>
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              disabled={retrying}
+              onClick={() => void retryImage()}
+            >
+              {retrying ? "画像を再取得しています" : "画像を再取得"}
+            </button>
+            <small>完成した画像だけを読み直します。再生成は行いません。</small>
+          </div>
+        ) : (
+          <>
+            <img
+              key={imageAttempt}
+              src={memory.image.url}
+              width={memory.image.width}
+              height={memory.image.height}
+              alt={memory.image.alt}
+              referrerPolicy="no-referrer"
+              onError={() => setImageFailed(true)}
+            />
+            <figcaption>
+              <span lang="en">THE SHITTIM CHEST</span>
+              <time dateTime={memory.unlockedAt}>{formatCompletedDateTime(memory.unlockedAt)}</time>
+            </figcaption>
+          </>
+        )}
+      </figure>
+      <div className={styles.memoryDownload}>
+        <button
+          className={commonStyles.secondaryButton}
+          type="button"
+          disabled={downloading || retrying}
+          onClick={() => void downloadImage()}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            aria-hidden="true"
           >
-            {retrying ? "画像を再取得しています" : "画像を再取得"}
-          </button>
-          <small>完成した画像だけを読み直します。再生成は行いません。</small>
-        </div>
-      ) : (
-        <>
-          <img
-            key={imageAttempt}
-            src={memory.image.url}
-            width={memory.image.width}
-            height={memory.image.height}
-            alt={memory.image.alt}
-            referrerPolicy="no-referrer"
-            onError={() => setImageFailed(true)}
-          />
-          <figcaption>
-            <span lang="en">THE SHITTIM CHEST</span>
-            <time dateTime={memory.unlockedAt}>{formatCompletedDateTime(memory.unlockedAt)}</time>
-          </figcaption>
-        </>
-      )}
-    </figure>
+            <path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" />
+          </svg>
+          {downloading ? "保存を準備しています" : "画像を保存"}
+        </button>
+        {downloadError !== null && <p role="alert">{apiMessage(downloadError)}</p>}
+      </div>
+    </div>
   );
 }
 

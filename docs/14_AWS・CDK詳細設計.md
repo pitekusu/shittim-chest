@@ -33,6 +33,7 @@ flowchart TD
   ecs --> discord
   source --> projector[Records Projector]
   projector --> records[(議事録・統計)]
+  projector --> discord
   browser[ブラウザー] --> edge[CloudFront]
   edge --> web[Web用 S3]
   edge --> api[Records API]
@@ -113,6 +114,7 @@ Runtimeは配信で検証された`RecordsPublicHostname`から`SHITTIM_RECORDS_
 | Status Publisher | 永続化された公開状態をDiscord RESTの表示へ反映 |
 | Runtime Reconciler | 永続状態に従いECSの希望タスク数を0/1へ収束 |
 | Image Admission | タスク定義、イメージ、署名、アテステーションを検証 |
+| Records Projector | 完了討論をArchiveへ投影し、保存後に元チャットへWeb記録リンクを投稿 |
 | Records Admin Status | 許可されたAWS/CloudWatch状態だけを集約。予約同時実行数2 |
 | Records Admin Config | プロンプトの参照・更新・復元・履歴保持。予約同時実行数2 |
 | Records Memorial API | 本人の状態、アップロード、生成、履歴、リセット。15秒、予約同時実行数2 |
@@ -130,6 +132,7 @@ HTTP関数のバージョン/エイリアス、SnapStart、各タイムアウト
 | タスク実行ロール | 本番イメージ取得、指定SSMの注入、ログ出力 | アプリケーション全体のデータ操作 |
 | タスクロール | 必要なDynamoDB区画、Status Publisher呼出し、指定の識別子HMAC設定読込 | SSMパスの列挙、任意Lambda呼出し |
 | 各Lambdaロール | ハンドラーごとのテーブルキー・関数・サービス・ログ | 関数間で共有した管理権限 |
+| Records Projector | 元討論の読込、Archiveのトランザクション書込、Statisticsの`RECORD_LINK_NOTIFICATION`、固定RuntimeConfig／モデレーターtokenの読込 | Backfillからの投稿、元討論の変更、任意SSM／Statistics操作 |
 | Admin Config | セッションの`SESSION#*`読込、Statisticsの`ADMIN#PROMPT`操作、指定SSM | AWS状態収集や任意設定の書換え |
 | Admin Status | 許可リソースの状態とメトリクス読込 | メッセージ本文取得、シークレット復号、業務データ変更、任意呼出し |
 | Memorial API | セッション、本人の親愛度/チェックポイント、一時画像、生成キュー送信、完成画像読込 | 任意の所有者やバケット全体の列挙 |

@@ -11,9 +11,12 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from urllib.parse import parse_qs, urlparse
 
+import boto3
 import httpx2
 import pytest
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from openai import OpenAI
 from PIL import Image
@@ -32,6 +35,7 @@ from shittim_records.memorial import (
     GeneratedMemorialImage,
     MemorialFailure,
     MemorialGenerationJob,
+    MemorialMemory,
     MemorialSnapshot,
     MemorialUploadReservation,
 )
@@ -944,6 +948,41 @@ def test_presigned_post_fixes_key_type_checksum_and_bounded_length() -> None:
     assert request["Fields"]["Content-Type"] == "image/png"
     assert request["Fields"]["x-amz-checksum-sha256"] == ticket.fields["x-amz-checksum-sha256"]
     assert ["content-length-range", 1, 10 * 1024 * 1024] in request["Conditions"]
+
+
+def test_memory_image_url_signs_a_download_filename_without_exposing_owner() -> None:
+    client = boto3.client(
+        "s3",
+        region_name="ap-northeast-1",
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",  # noqa: S106 - dummy offline signing credentials.
+        config=Config(signature_version="s3v4"),
+    )
+    store = S3MemorialAssetStore(
+        client,
+        upload_bucket_name="uploads",
+        media_bucket_name="media",
+        participant_asset_keys=MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
+    )
+    memory = MemorialMemory(
+        cycle=2,
+        participant="participant-b",
+        unlocked_at=NOW,
+        generated_at=NOW,
+        image_asset_key=RESULT_KEY,
+        narrative=NARRATIVE,
+    )
+
+    url = store.memory_image_url(memory)
+    query = parse_qs(urlparse(url).query)
+
+    assert query["response-content-disposition"] == [
+        'attachment; filename="the-shittim-chest-memorial-2.png"'
+    ]
+    assert query["response-content-type"] == ["image/png"]
+    assert query["X-Amz-Expires"] == ["300"]
+    assert urlparse(url).path.endswith(RESULT_KEY)
+    assert REQUESTER_KEY not in url
 
 
 def test_asset_store_normalizes_source_and_reuses_a_valid_generated_object() -> None:

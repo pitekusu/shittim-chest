@@ -454,7 +454,6 @@ function AffectionRankingCard({
               <Avatar avatar={entry.avatar} />
               <span className={rankingStyles.affectionName}>{entry.displayName}</span>
               <span className={rankingStyles.affectionMeta}>
-                <strong className={rankingStyles.affectionScore}>{entry.score}</strong>
                 {(entry.resetCount ?? 0) > 0 && (
                   <span className={rankingStyles.memorialCrown}>
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -467,6 +466,7 @@ function AffectionRankingCard({
                     </span>
                   </span>
                 )}
+                <strong className={rankingStyles.affectionScore}>{entry.score}</strong>
               </span>
               <AffectionHearts
                 participantName={ranking.displayName}

@@ -166,14 +166,23 @@ def affection_stream_event() -> dict[str, object]:
     }
 
 
-def test_projector_handler_returns_empty_partial_failure_list(monkeypatch: Any) -> None:
-    service = FakeProjector()
+def test_projector_handler_returns_empty_partial_failure_list(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    class LoggingProjector(FakeProjector):
+        def project_partition(self, partition_key: str, *, now: object) -> ProjectionResult:
+            logging.getLogger("httpx").info("HTTP Request: /channels/private-channel/messages")
+            return super().project_partition(partition_key, now=now)
+
+    service = LoggingProjector()
     monkeypatch.setattr(lambda_handlers, "_PROJECTOR", cast(Any, service))
 
-    result = lambda_handlers.projector_handler(stream_event(), object())
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        result = lambda_handlers.projector_handler(stream_event(), object())
 
     assert result == {"batchItemFailures": []}
     assert service.partitions == ["DEBATE#opaque"]
+    assert "private-channel" not in caplog.text
 
 
 def test_projector_handler_routes_affection_profile_without_logging_private_identity(

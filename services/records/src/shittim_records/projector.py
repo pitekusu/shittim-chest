@@ -8,6 +8,7 @@ from typing import cast
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem, DynamoValue
+from shittim_chest.application import DebateSnapshot
 
 from shittim_records.adapters import (
     AffectionProjectionRepository,
@@ -23,6 +24,7 @@ from shittim_records.archive import (
     derive_requester_key,
     project_completed_debate,
 )
+from shittim_records.record_link_notifications import RecordLinkNotificationService
 
 PARTICIPANT_SLOTS = ("participant-a", "participant-b", "participant-c")
 LEGACY_AFFECTION_SCHEMA_VERSION = 8
@@ -44,29 +46,50 @@ class ProjectorService:
         source: SourceDebateRepository,
         archive: ArchiveRepository,
         configuration: ConfigurationRepository,
+        record_link_notifications: RecordLinkNotificationService | None = None,
     ) -> None:
         self._source = source
         self._archive = archive
         self._configuration = configuration
+        self._record_link_notifications = record_link_notifications
 
     def project_partition(self, partition_key: str, *, now: datetime) -> ProjectionResult:
-        projection = self._prepare_partition(partition_key, now=now)
-        return ProjectionResult(created=self._archive.put_projection(projection))
+        projection, snapshot = self._prepare_partition(partition_key, now=now)
+        created = self._archive.put_projection(
+            projection,
+            notification_created_at=(now if self._record_link_notifications is not None else None),
+        )
+        if self._record_link_notifications is not None:
+            self._record_link_notifications.publish(
+                snapshot=snapshot,
+                record_id=projection.record_id,
+                source_fingerprint=projection.source_fingerprint,
+                now=now,
+            )
+        return ProjectionResult(created=created)
 
     def validate_partition(self, partition_key: str, *, now: datetime) -> None:
         """Run the complete source validation without writing the Archive."""
 
         self._prepare_partition(partition_key, now=now)
 
-    def _prepare_partition(self, partition_key: str, *, now: datetime) -> ArchiveProjection:
+    def _prepare_partition(
+        self,
+        partition_key: str,
+        *,
+        now: datetime,
+    ) -> tuple[ArchiveProjection, DebateSnapshot]:
         config = self._configuration.load()
         loaded = self._source.load_partition_for_projection(partition_key)
-        return project_completed_debate(
+        return (
+            project_completed_debate(
+                loaded.snapshot,
+                identity_hmac_key=config.identity_hmac_key,
+                presentation=config.presentation,
+                projected_at=now,
+                source_schema_version=loaded.schema_version,
+            ),
             loaded.snapshot,
-            identity_hmac_key=config.identity_hmac_key,
-            presentation=config.presentation,
-            projected_at=now,
-            source_schema_version=loaded.schema_version,
         )
 
 

@@ -1143,6 +1143,19 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
     await expect(
       affection.getByRole("img", { name: `${participantName}のアイコン` }),
     ).toBeVisible();
+    const ranking = affection.getByRole("region", { name: participantName });
+    const scoreEdges = await ranking
+      .locator("li strong")
+      .evaluateAll((scores) => scores.map((score) => score.getBoundingClientRect().right));
+    expect(Math.max(...scoreEdges) - Math.min(...scoreEdges)).toBeLessThan(1);
+    const crownedRow = ranking.getByRole("listitem").filter({
+      hasText: "メモリアルロビーのリセット 2回",
+    });
+    const crown = await crownedRow.getByText("×2", { exact: true }).boundingBox();
+    const score = await crownedRow.locator("strong").boundingBox();
+    expect(crown).not.toBeNull();
+    expect(score).not.toBeNull();
+    expect(crown!.x + crown!.width).toBeLessThan(score!.x);
   }
   const nineHearts = affection.getByRole("figure", {
     name: "安倍晋三AIからパワー系ウナギへの親愛度 987点（1000点満点、ハート10個中9個）",
@@ -1938,6 +1951,19 @@ test("queued Memorial can resend an existing request after reload", async ({ pag
   });
   await resend.click();
   await expect(page.getByText("ふたりの思い出をつくっています")).toBeVisible();
+  await expect(page.getByText("3分程度", { exact: true })).toBeVisible();
+  await expect(page.getByText("3 / 4 工程", { exact: true })).toBeVisible();
+  await expect(page.getByRole("listitem").filter({ hasText: "思い出生成" })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+  await expect(page.getByRole("progressbar", { name: "メモリアル生成の進捗" })).not.toHaveAttribute(
+    "value",
+  );
+  await expect(page).toHaveScreenshot("records-memorial-generating.png", {
+    animations: "disabled",
+    fullPage: true,
+  });
   expect(keys).toHaveLength(2);
   expect(keys[0]).toMatch(/^memorial-/u);
   expect(keys[1]).toBe(keys[0]);
@@ -1999,22 +2025,52 @@ test("Memorial image failure reloads only the signed image and keeps the story",
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("ready Memorial shows private history and confirms reset", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
+test("ready Memorial downloads the selected image and confirms reset", async ({
+  page,
+}, testInfo) => {
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.setViewportSize({ width: 320, height: 800 });
+  }
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
+  await page.route(
+    (url) => url.pathname === "/memorial",
+    async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: { ...response.headers(), "content-security-policy": PRODUCTION_CSP },
+      });
+    },
+  );
   await mockAuthenticatedApi(page);
   await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialReady }));
-  await page.route("**/api/v1/memorial/memories/1", (route) =>
-    route.fulfill({ json: memorialMemory }),
+  let memoryReads = 0;
+  await page.route("**/api/v1/memorial/memories/1", (route) => {
+    memoryReads += 1;
+    return route.fulfill({
+      json: {
+        ...memorialMemory,
+        image: {
+          ...memorialMemory.image,
+          url: `${MEMORIAL_MEDIA_ORIGIN}/memorial/result.png?signature=${memoryReads}`,
+        },
+      },
+    });
+  });
+  // The real S3 response uses attachment for both the embedded image and download.
+  const imageBytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
   );
   await page.route(`${MEMORIAL_MEDIA_ORIGIN}/**`, (route) =>
     route.fulfill({
       contentType: "image/png",
-      body: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-        "base64",
-      ),
+      headers: {
+        "content-disposition": 'attachment; filename="the-shittim-chest-memorial-1.png"',
+        "cache-control": "private, no-store",
+      },
+      body: imageBytes,
     }),
   );
   await page.route("**/api/v1/memorial/reset", async (route) => {
@@ -2032,6 +2088,22 @@ test("ready Memorial shows private history and confirms reset", async ({ page },
     timeout: 1_000,
   });
   await expect(page.getByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "アロナとのメモリアルロビー" })).toHaveJSProperty(
+    "naturalWidth",
+    1,
+  );
+  const downloadEvent = page.waitForEvent("download");
+  await page.getByRole("button", { name: "画像を保存", exact: true }).click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toBe("the-shittim-chest-memorial-1.png");
+  expect(download.url()).toBe(`${MEMORIAL_MEDIA_ORIGIN}/memorial/result.png?signature=2`);
+  expect(await download.failure()).toBeNull();
+  const content = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of content) chunks.push(Buffer.from(chunk));
+  expect(Buffer.concat(chunks)).toEqual(imageBytes);
+  expect(memoryReads).toBe(2);
+  await expect(page).toHaveURL(/\/memorial$/u);
   await expect(page.getByText(memorialMemory.narrative)).toBeVisible();
   await expect(page.getByRole("tab", { name: /^1回目 アロナ/u })).toBeVisible();
   await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toBeEnabled();
@@ -2040,6 +2112,9 @@ test("ready Memorial shows private history and confirms reset", async ({ page },
     /Delogy/u,
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
   await expect(page).toHaveScreenshot("records-memorial-ready-dark.png", {
     animations: "disabled",
     fullPage: true,
