@@ -140,6 +140,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    # Match the Node 24 runtime; change this alongside a runtime major upgrade.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "npm"
@@ -162,4 +167,15 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
+      # Upgrade Vite+ and its core/Vitest overrides together in a dedicated change.
+      - dependency-name: "vite-plus"
+        versions:
+          - ">=0.3"
+      - dependency-name: "vitest"
+        versions:
+          - ">4.1.10"
     open-pull-requests-limit: 5

@@ -17,6 +17,9 @@ updated: 2026-09-05
   含めない。
 - normal PR、required checks、CodeQL、squash mergeを用い、mainへ直接pushしない。
 - Actionsとthird-party toolはversion／digest／full commit SHAでpinする。
+- 依存更新は脆弱性・互換性・CI結果から採否を決める。Nodeの型定義は実行環境のmajorに揃え、
+  WebのVite+／core alias／Vitest overrideは一組で移行する。対応を見送る更新は理由を記録し、
+  現行構成と両立しない自動更新をDependabot設定で抑制する。
 
 ## 2. Continuous Integration
 
