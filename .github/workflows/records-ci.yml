@@ -15,9 +15,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  NODE_VERSION: "24.18.0"
+  NODE_VERSION: "24.20.0"
   PYTHON_VERSION: "3.14.6"
-  UV_VERSION: "0.11.29"
+  UV_VERSION: "0.11.33"
 
 jobs:
   records-changes:
@@ -140,7 +140,7 @@ jobs:
       - name: Enable the package-manager version declared by Records web
         run: |
           corepack enable pnpm
-          test "$(pnpm --version)" = "11.21.0"
+          test "$(pnpm --version)" = "11.25.0"
       - name: Install locked Records web dependencies
         run: pnpm install --frozen-lockfile
       - name: Check Records web formatting, lint, and types

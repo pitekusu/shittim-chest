@@ -9,45 +9,87 @@
       "version": "1.7.12"
     },
     "betterleaks": {
-      "archive_name": "betterleaks_1.6.1_linux_x64.tar.gz",
-      "archive_sha256": "fbefc700a0bd4522cc952dd2a8f259cdb80526d7e60114aca19bb2d6fdc80f81",
-      "certificate_identity": "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/v1.6.1",
+      "archive_name": "betterleaks_1.8.1_linux_x64.tar.gz",
+      "archive_sha256": "efa407244e1ea8e35f582b8a42becdeac08bdead04f68eb752adda722d583c2a",
+      "certificate_identity": "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/v1.8.1",
       "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
       "checksums_name": "checksums.txt",
-      "checksums_sha256": "eccb3a1c4ee7eee8f2a2a4d81d22f91ee199e222a47bc4c0398f94c50ec01264",
+      "checksums_sha256": "08caab663c63b92f976014986cecd54e9411033578ff46a8de2c2ccbbfba5da5",
       "repository": "betterleaks/betterleaks",
       "signature_bundle_name": "checksums.txt.sigstore.json",
-      "signature_bundle_sha256": "1aa906a890b58df3fbef558e6c37dd6906b9539858c37a78e9d1270381350a0f",
+      "signature_bundle_sha256": "28abe579d38828d088b7d9e146f9dc858147a42aa80561076eb4bf9ddd83a7c4",
       "tag_prefix": "v",
-      "version": "1.6.1"
+      "version": "1.8.1"
     },
     "docker-scout": {
-      "archive_name": "docker-scout_1.23.1_linux_arm64.tar.gz",
-      "archive_sha256": "88eecb7273f19bd18300d70e6f85b2e7d784e9e4f3cbb4a2b400db6b8355a52a",
+      "archive_name": "docker-scout_1.24.0_linux_arm64.tar.gz",
+      "archive_sha256": "8b21594c72d4d9403a82a49e9dbdfc04c27c6a21933906f1eefbb0beabe22d58",
       "repository": "docker/scout-cli",
       "tag_prefix": "v",
-      "version": "1.23.1"
+      "version": "1.24.0"
     },
     "syft": {
-      "archive_name": "syft_1.49.0_linux_arm64.tar.gz",
-      "archive_sha256": "c7c32de183c32368de197edba75e8dba7632915f7761bacd55149a9ca7fe0fa4",
+      "archive_name": "syft_1.51.1_linux_arm64.tar.gz",
+      "archive_sha256": "a7fd2b784e6664acd44719270574f6cd8c6864fc2b1700bf9099bd1cccda7d7f",
       "repository": "anchore/syft",
       "tag_prefix": "v",
-      "version": "1.49.0"
+      "version": "1.51.1"
     },
     "grype": {
-      "archive_name": "grype_0.116.0_linux_amd64.tar.gz",
-      "archive_sha256": "40aff724297312f91ea390d003bed8d8651c74cc7f5b26732db80b3a408d2fc5",
+      "archive_name": "grype_0.118.0_linux_amd64.tar.gz",
+      "archive_sha256": "1d444c5e7360471815f7158f71935fcecc68a3c417d85c7344f770854300bba2",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.116.0"
+      "version": "0.118.0"
     },
     "grype-arm64": {
-      "archive_name": "grype_0.116.0_linux_arm64.tar.gz",
-      "archive_sha256": "7af3eed24f469b0cf3ab5ec4508d9c12f4bb9c2c6be714f32973c7b5d63cb6a5",
+      "archive_name": "grype_0.118.0_linux_arm64.tar.gz",
+      "archive_sha256": "32aceeb8ee837244775fcb522372c8b3a47914986385f3148f4ee2c930482a84",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.116.0"
+      "version": "0.118.0"
+    }
+  },
+  "sources": {
+    "buildx": {
+      "repository": "docker/buildx", "tag_prefix": "v",
+      "files": {".github/workflows/*.yml": "version: v([0-9.]+)"}
+    },
+    "buildkit": {
+      "repository": "moby/buildkit", "tag_prefix": "v",
+      "files": {".github/workflows/*.yml": "image=moby/buildkit:v([0-9.]+)@sha256:"}
+    },
+    "cosign": {
+      "repository": "sigstore/cosign", "tag_prefix": "v",
+      "files": {".github/workflows/ci.yml": "cosign-release: v([0-9.]+)"}
+    },
+    "ecr-credential-helper": {
+      "repository": "awslabs/amazon-ecr-credential-helper", "tag_prefix": "v",
+      "files": {".github/workflows/release.yml": "ECR_CREDENTIAL_HELPER_VERSION: ([0-9.]+)"}
+    },
+    "notation": {
+      "repository": "notaryproject/notation", "tag_prefix": "v",
+      "files": {".github/workflows/release.yml": "NOTATION_CLI_VERSION: ([0-9.]+)"}
+    },
+    "aws-signer-plugin": {
+      "repository": "aws/aws-signer-notation-plugin", "tag_prefix": "v",
+      "files": {".github/workflows/release.yml": "AWS_SIGNER_NOTATION_PLUGIN_VERSION: ([0-9.]+)"}
+    },
+    "python": {
+      "repository": "python/cpython", "tag_prefix": "v", "release_prefix": "v3.14.",
+      "files": {".github/workflows/*.yml": "PYTHON_VERSION: \"?([0-9.]+)", ".python-version": "^([0-9.]+)"}
+    },
+    "node": {
+      "repository": "nodejs/node", "tag_prefix": "v", "release_prefix": "v24.",
+      "files": {".github/workflows/*.yml": "(?:NODE_VERSION|node-version): \"?([0-9.]+)"}
+    },
+    "uv": {
+      "repository": "astral-sh/uv", "tag_prefix": "", "release_prefix": "0.11.",
+      "files": {".github/workflows/*.yml": "UV_VERSION: \"?([0-9.]+)"}
+    },
+    "pnpm": {
+      "repository": "pnpm/pnpm", "tag_prefix": "v", "release_prefix": "v11.",
+      "files": {"apps/records-web/package.json": "\"packageManager\": \"pnpm@([0-9.]+)"}
     }
   }
 }

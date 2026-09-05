@@ -15,16 +15,63 @@ concurrency:
 jobs:
   check-release-tools:
     name: check-release-tools
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Check out the default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Validate pins and compare latest stable releases
+        id: audit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python tools/check_tool_versions.py validate .github/tool-versions.json
-          python tools/check_tool_versions.py latest .github/tool-versions.json
+          status=0
+          python tools/check_tool_versions.py latest .github/tool-versions.json \
+            --report "${RUNNER_TEMP}/tool-versions.md" || status=$?
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          test -f "${RUNNER_TEMP}/tool-versions.md"
+          cat "${RUNNER_TEMP}/tool-versions.md" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Maintain one actionable update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_STATUS: ${{ steps.audit.outputs.status }}
+        run: |
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/issues?state=open&per_page=100" \
+            > "${RUNNER_TEMP}/open-issues.json"
+          issues=$(jq '[.[][] | select(.pull_request == null and
+            .user.login == "github-actions[bot]" and
+            ((.body // "") | startswith("<!-- release-tool-versions -->")))]' \
+            "${RUNNER_TEMP}/open-issues.json")
+          test "$(jq 'length' <<< "${issues}")" -le 1
+          issue=$(jq --raw-output '.[0].number // empty' <<< "${issues}")
+          if [ "${AUDIT_STATUS}" = 0 ]; then
+            if [ -n "${issue}" ]; then
+              gh issue close "${issue}" --repo "${GITHUB_REPOSITORY}" --reason completed
+            fi
+          elif [ "${AUDIT_STATUS}" = 1 ] || [ "${AUDIT_STATUS}" = 2 ]; then
+            if [ -n "${issue}" ]; then
+              if ! jq --exit-status --rawfile body "${RUNNER_TEMP}/tool-versions.md" \
+                '.[0].body == $body' <<< "${issues}" >/dev/null; then
+                gh issue edit "${issue}" --repo "${GITHUB_REPOSITORY}" \
+                  --body-file "${RUNNER_TEMP}/tool-versions.md"
+              fi
+            else
+              gh issue create --repo "${GITHUB_REPOSITORY}" \
+                --title "固定ツールの更新・取得状況を確認する" \
+                --body-file "${RUNNER_TEMP}/tool-versions.md"
+            fi
+          else
+            exit 1
+          fi
+      - name: Preserve the update or lookup-failure signal
+        env:
+          AUDIT_STATUS: ${{ steps.audit.outputs.status }}
+        run: test "${AUDIT_STATUS}" = 0
