@@ -16,6 +16,24 @@ export default defineConfig({
   lint: {
     ignorePatterns: ["dist/**", "node_modules/**", "src/generated/**"],
     plugins: ["eslint", "typescript", "unicorn", "oxc", "react", "import", "jsx-a11y", "vitest"],
+    // React Compiler is not enabled. Preserve these existing DOM/query synchronization
+    // paths during the toolchain upgrade; new files keep the compiler-readiness rules.
+    overrides: [
+      {
+        files: ["src/theme.ts", "src/RouteMotion.tsx", "src/routes/RecordsHome.tsx"],
+        rules: { "react/refs": "off" },
+      },
+      {
+        files: [
+          "src/RouteMotion.tsx",
+          "src/components/VoteGraph.tsx",
+          "src/routes/RecordsHome.tsx",
+          "src/routes/MemorialPage.tsx",
+          "src/components/AdminPromptManager.tsx",
+        ],
+        rules: { "react/set-state-in-effect": "off" },
+      },
+    ],
     options: {
       typeAware: true,
       typeCheck: true,

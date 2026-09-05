@@ -20,9 +20,13 @@ updated: 2026-09-05
 - 依存更新は脆弱性・互換性・CI結果から採否を決める。Nodeの型定義は実行環境のmajorに揃え、
   WebのVite+／core alias／Vitest overrideは一組で移行する。対応を見送る更新は理由を記録し、
   現行構成と両立しない自動更新をDependabot設定で抑制する。
-- OpenAI SDK 3系はCore／RecordsのHTTP client・timeout・例外型をhttpx2へ移行する必要があるため、
-  両projectのDependabotで一時保留する。2系の更新は継続し、専用の互換性移行で両lockfileと
-  HTTP境界の試験を揃えてから保留を解除する。モデル・persona設定の変更とは分ける。
+- OpenAI SDKはCore／Recordsとも3系を使用し、HTTPX2のclient・timeout・例外に関する契約試験を
+  維持する。3系のDependabot更新保留は解除し、両projectのlockとHTTP境界を揃えて更新する。
+  モデル・persona設定の変更とは分ける。
+- Nodeの正式toolchainはAWS CDKのLTSサポート対象である24系とし、現在のpinは24.20.0とする。
+  `.node-version`をローカル用pinとし、固定ツール検査でCI／Releaseのpinとの一致を確認する。
+  root／Webのenginesは`>=24.20.0 <25`、Node型定義も24系に揃える。Node 26は互換性評価の対象に
+  留め、採用時にはCDKの対応、Corepackの別途導入、jsdomとNode標準Web APIの競合を確認する。
 - Core／Recordsのuvとbuild backendは検証済みの0.12系列とし、Dependabotが使用する0.12.7も許可する。
   系列変更時は両projectの`required-version`／`uv_build`、workflow、Docker stage／container policy、
   Dependabotのignore境界、固定ツール監視の系列を同じPRで揃える。lock／build／SBOMの互換性を確認し、

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-import httpx
+import httpx2
 from botocore.exceptions import BotoCoreError, ClientError
 from openai import (
     APIConnectionError,
@@ -269,7 +269,7 @@ class OpenAIInspectorSummaryTranslator:
             client = OpenAI(
                 api_key=self._configuration.load_api_key(),
                 max_retries=1,
-                timeout=httpx.Timeout(45.0, connect=5.0, write=15.0, pool=5.0),
+                timeout=httpx2.Timeout(45.0, connect=5.0, write=15.0, pool=5.0),
             )
             self._client = client
         input_text = json.dumps(

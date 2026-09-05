@@ -7,10 +7,10 @@
       "package": "zlib1g",
       "image_config_digests": {
         "production": [
-          "sha256:4b7017c329230a6d10801f2b569ec78279a6752897091bc873d531aae291fb1b",
           "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b",
           "sha256:538e142deedb5fbfc0e4e4238c4ecb8739a0be8f7ed677e81ad5593f9df5832c",
-          "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15"
+          "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15",
+          "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec"
         ]
       },
       "status": "under_investigation",
@@ -28,10 +28,10 @@
       "package": "zlib1g-dev",
       "image_config_digests": {
         "production": [
-          "sha256:4b7017c329230a6d10801f2b569ec78279a6752897091bc873d531aae291fb1b",
           "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b",
           "sha256:538e142deedb5fbfc0e4e4238c4ecb8739a0be8f7ed677e81ad5593f9df5832c",
-          "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15"
+          "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15",
+          "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec"
         ]
       },
       "status": "under_investigation",

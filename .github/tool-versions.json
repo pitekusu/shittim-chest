@@ -81,7 +81,7 @@
     },
     "node": {
       "repository": "nodejs/node", "tag_prefix": "v", "release_prefix": "v24.",
-      "files": {".github/workflows/*.yml": "(?:NODE_VERSION|node-version): \"?([0-9.]+)"}
+      "files": {".github/workflows/*.yml": "(?:NODE_VERSION|node-version): \"?([0-9.]+)", ".node-version": "^([0-9.]+)"}
     },
     "uv": {
       "repository": "astral-sh/uv", "tag_prefix": "", "release_prefix": "0.12.",

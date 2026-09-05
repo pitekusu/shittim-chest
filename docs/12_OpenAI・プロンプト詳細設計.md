@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-03
+updated: 2026-09-05
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -12,6 +12,9 @@ updated: 2026-09-03
 ## 1. Client policy
 
 - process単位で1つの`AsyncOpenAI`を再利用し、stable Responses APIの`responses.parse()`を使う。
+- Core／RecordsはOpenAI SDK 3系とHTTPX2 2系を使用し、検証済みversionを両lockfileへ固定する。
+  OpenAI向けclient、timeout、モックHTTP transportはHTTPX2型に揃える。Discord、認証、費用取得など
+  OpenAI以外のHTTPX 0.28系とは境界を分け、移行に伴うmodel、prompt、timeout、retryの変更は行わない。
 - 全requestで`store=false`を明示し、SDK型をadapter外へ返さない。
 - productionは`gpt-5.6-luna` standardへ固定し、自動model escalationを行わない。
 - initial opinion／final proposal／decisionはreasoning high、親愛度評価／voteはmediumとする。

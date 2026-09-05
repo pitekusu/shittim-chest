@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import TypeVar
 
-import httpx
+import httpx2
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -81,13 +81,13 @@ _OutputT = TypeVar("_OutputT", bound=BaseModel)
 def create_openai_client(
     *,
     api_key: str,
-    http_client: httpx.AsyncClient | None = None,
+    http_client: httpx2.AsyncClient | None = None,
 ) -> AsyncOpenAI:
     """Create the one process-level client with three total SDK attempts."""
 
     if not api_key.strip():
         raise ValueError("OpenAI API key must not be empty")
-    timeout = httpx.Timeout(60.0, connect=5.0, write=30.0, pool=5.0)
+    timeout = httpx2.Timeout(60.0, connect=5.0, write=30.0, pool=5.0)
     return AsyncOpenAI(
         api_key=api_key,
         max_retries=2,

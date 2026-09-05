@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import APITimeoutError, AsyncOpenAI, AuthenticationError
 from openai.types.responses.response import Response
