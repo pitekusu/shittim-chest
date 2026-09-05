@@ -2,151 +2,206 @@
 aliases:
   - The Shittim Chest AWS詳細設計
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
-status: production-1.0
+status: current
 created: 2026-07-16
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 # AWS・CDK詳細設計
 
-## 1. Environment and stacks
+[ドキュメント索引へ戻る](00_シッテムの箱_ドキュメント索引.md)
 
-workloadは単一accountの`ap-northeast-1`、account-globalなcost resourceだけ`us-east-1`へ置く。
-全resourceにProject／Environment／ManagedBy tagを付ける。
+## この文書の役割
 
-| Stack | Region | Ownership | Protection |
+AWSリソースの配置、所有スタック、保護設定、権限の分担を定義する。
+配信手順は[GitHub・CI/CD設計](15_GitHub・CI-CD詳細設計.md)、障害時の確認順は
+[運用保守設計](17_運用保守・監視・障害対応設計.md)、Web/APIの契約は
+[議事録設計](24_シッテムの箱%20議事録設計.md)を参照する。
+
+## 1. 全体構成とスタックの責務
+
+単一AWSアカウントを使い、討論・API・データを東京リージョンに置く。
+費用管理とCloudFront向け証明書・Web配信スタックはバージニア北部に置く。
+全リソースに`Project`、`Environment`、`ManagedBy`タグを付与する。
+
+```mermaid
+flowchart TD
+  discord[Discord] --> ingress[受付 Lambda]
+  ingress --> source[(討論テーブル)]
+  scheduler[毎分の起動調整] --> ecs[ECS / Fargate]
+  ecs <--> source
+  ecs --> discord
+  source --> projector[Records Projector]
+  projector --> records[(議事録・統計)]
+  browser[ブラウザー] --> edge[CloudFront]
+  edge --> web[Web用 S3]
+  edge --> api[Records API]
+  api --> records
+  api --> queue[メモリアル生成 SQS]
+  queue --> worker[生成 Worker]
+  worker --> media[非公開画像 S3]
+```
+
+図はデータと呼出しの関係を示す。スタック間の詳細な参照はCDKを正とする。
+
+| スタック | リージョン | 所有するもの | 保護・変更の扱い |
 |---|---|---|---|
-| Stateful | Tokyo | DynamoDB、ECR、Signer | termination protection、RETAIN |
-| ReleaseIdentity | Tokyo | Runtime用とRecords用の分離されたGitHub OIDC role | termination protection |
-| Runtime | Tokyo | network、API、4 Lambda、ECS、retained admission log、scheduler | replaceable runtime |
-| Operations | Tokyo | metric filter、alarm、dashboard、SNS、EventBridge | replaceable monitoring |
-| CostGovernance | Virginia | Budgets、anomaly subscription | global cost control |
-| RecordsStateful | Tokyo | Archive／Statistics／Session、Media、Memorial upload／queue | termination protection、RETAIN |
-| RecordsApplication | Tokyo | Records API／Projector／collector／ADMIN／Memorial Lambda | replaceable application |
+| Stateful | 東京 | 討論DynamoDB、ECR、Signer | 終了保護。永続リソースは`RETAIN` |
+| ReleaseIdentity | 東京 | Core/Records別のGitHub OIDCロール | 終了保護。必要時に単独で先行更新 |
+| Runtime | 東京 | ネットワーク、受付API、4 Lambda、ECS、Scheduler、ログ | 通常のCore配信で更新 |
+| Operations | 東京 | メトリクス、アラーム、ダッシュボード、SNS、EventBridge | 通常のCore配信で更新 |
+| CostGovernance | バージニア北部 | Budgets、費用異常通知 | 通常のCore配信で更新 |
+| RecordsStateful | 東京 | Archive/Statistics/Session、画像、一時アップロード、生成キュー/DLQ | 終了保護。テーブル・画像・生成キューを保持 |
+| RecordsApplication | 東京 | 認証/閲覧API、Projector、集計、管理、メモリアルのLambda | 終了保護。アプリケーションを更新 |
+| RecordsEdge | バージニア北部 | Web用S3、CloudFront、証明書、DNSレコード、セキュリティヘッダー | 終了保護。Webバケットを保持 |
 
-通常Production ReleaseがChange Setを作る順序はStateful、Runtime、Operations、CostGovernanceである。
-ReleaseIdentityはそのworkflow自身の権限なので、変更時は独立した先行更新工程とする。
+Core配信の変更セット実行順はStateful → Runtime → Operations → CostGovernance。
+ReleaseIdentityは配信を実行する権限そのものなので、この順序へ含めない。
 
-## 2. Stateful resources
+## 2. 永続リソースと保持
 
-- DynamoDBはon-demand、PITR 35日、deletion protection、RETAINとする。
-- DebateTableは`NEW_IMAGE` Streamを公開し、Records Projectorは後続Stackで購読する。source tableの
-  key、index、retentionは変更しない。
-- ECRはproduction imageのimmutable tag、enhanced continuous scan、暗号化を有効にする。
-- lifecycleはtagged imageの最新3世代、untagged imageの最新3世代を残す。
-- AWS Signer／Notation用profileとECR referrerをrelease supply chainに用いる。
-- RecordsのMemorial upload bucketはversioningなし、S3 managed encryption、全public access block、TLS必須、
-  RETAINとする。production originからのpresigned POSTだけをCORSで許可し、原本と未完了multipart uploadは
-  1日で期限切れにする。access logは既存Media access-log bucketの専用prefixへ送る。
-- Memorial generation queueはSQS managed encryption、TLS必須、retention 1日、visibility timeout 30分、
-  batch 1とする。最大4 receive後は14日retentionの専用DLQへ移し、Projector DLQと混在させない。
-  永続checkpointのpaid logical attempt上限は3のままとし、物理receive回数でpaid可否を決めない。通常の3回に加えた
-  物理配送余地により、`generation_attempt=3`のclaimがhard timeout／OOM／runtime crashとなった場合も、次の配送が
-  stale leaseをattempt 4として回収し、completion-onlyまたはproviderを呼ばないterminal化へ収束できるようにする。
+| 対象 | 設定 | 保持上の注意 |
+|---|---|---|
+| DynamoDB | オンデマンド、暗号化、PITR 35日、削除保護、`RETAIN` | Sessionのみ`expiresAt`によるTTLを使用 |
+| 討論テーブルのStream | `NEW_IMAGE` | Records Projectorが購読。元テーブルのキー・インデックス・保持を変えない |
+| ECR | タグ変更不可、暗号化、継続的な拡張スキャン | タグ付き・タグなしをそれぞれ最新3世代保持 |
+| Signer/Notation | 署名プロファイルとECR参照成果物を使用 | 配信時に署名・来歴・SBOMを検証 |
+| Media用S3 | バージョニング、暗号化、公開アクセス遮断、TLS、`RETAIN` | アクセスログは専用バケットへ保存 |
+| Web用S3 | バージョニング、暗号化、公開アクセス遮断、TLS、`RETAIN` | CloudFront経由で配信。アクセスログは90日保持 |
+| 一時アップロード用S3 | バージョニングなし、暗号化、公開アクセス遮断、TLS、`RETAIN` | 原本と未完了マルチパートを1日で期限切れにする |
 
-## 3. Runtime network and compute
+一時アップロードは本番オリジンからの署名付きPOSTだけをCORSで許可する。
+アクセスログは既存Mediaログ用バケットの専用プレフィックスへ分離する。
 
-- VPCはpublic subnetのみ、NAT Gateway 0、taskへpublic IPv4を付ける。
-- task security groupはingress 0、HTTPS egressだけを許可する。
-- ECS serviceはARM64 On-Demand Fargate、512 CPU units、1,024 MiB、通常desired 0、最大1 task。
-- production taskはread-only root filesystem、tmpfs、non-root userを使う。
-- ECS Exec用の専用image／task definitionとwrite／root境界はprovisionしない。
-- `stopTimeout=120`秒、Container Insightsは個人規模の費用を考慮して無効とする。
-- production imageはsource SHAからcanonical ARM64条件でbuildし、digestでtask definitionへ固定する。
-- RuntimeはReleaseからstrictな`RecordsPublicHostname` parameterを受け、
-  `SHITTIM_RECORDS_MEMORIAL_URL=https://<hostname>/memorial`をproduction taskへ渡す。URL本文やhostnameを
-  secret parameterへ複製せず、Discordの公開解放導線だけに使用する。
+### メモリアル生成の配送と課金上限
 
-## 4. API and Lambda
-
-| Component | Main contract |
+| 項目 | 値・責務 |
 |---|---|
-| HTTP API | moderator Interactionのpublic endpoint、TLS、throttle |
-| Ingress Lambda | ARM64、署名検証、durable acceptance、SnapStart alias |
-| Status Publisher Lambda | desired public StatusをDiscord RESTへ収束 |
-| Runtime Reconciler Lambda | durable stateとECS desired 0／1を収束 |
-| Image Admission Lambda | task definition、image digest、signature／attestationを検証 |
-| Records Admin Status Lambda | allowlist済みAWS／CloudWatch状態のread-only集約、reserved concurrency 2 |
-| Records Admin Config Lambda | runtime promptの参照、immutable revision作成、rollback、audit、reserved concurrency 2 |
-| Records Memorial API Lambda | owner-onlyの状態／upload／生成／履歴／reset API、15秒、reserved concurrency 2 |
-| Records Memorial Worker Lambda | SQS 1件ずつの画像／文章生成、5分、1,024 MiB、reserved concurrency 1 |
+| 生成キュー | SQS管理暗号化、TLS必須、保持1日、可視性タイムアウト30分 |
+| 生成DLQ | 専用キュー、保持14日。Projector DLQとは分離 |
+| Worker | 1メッセージずつ処理 |
+| DLQへの移動 | 最大受信回数4 |
+| 有料生成の論理試行 | 永続チェックポイントで最大3回 |
 
-EventBridge SchedulerがRuntime Reconcilerを1分間隔で起動する。LambdaはVPC外に置き、external APIと
-AWS APIへの到達にNATを不要とする。Admin Config／Statusは同一管理画面の並行readを受理しつつ、
-下流を保護する上限としてreserved concurrency 2を使う。reserved concurrencyとtimeoutはconstruct testで固定する。
+SQSの受信回数と有料生成の回数は別の制限である。
+最後の有料試行中にタイムアウトやOOMで停止しても、次の配送が期限切れリースを回収できる。
+この回収は保存済み成果物の確定、またはプロバイダーを呼ばない失敗確定だけを行い、4回目の有料生成を許可しない。
 
-## 5. IAM boundaries
+## 3. 討論コンテナとネットワーク
 
-- task roleはDynamoDBの必要partitionとStatus Publisher invokeだけを許可する。
-- Runtimeがsource親愛度profileをopaque key化するため、task roleは既存Records identity HMAC parameterの
-  exact ARNに対する`ssm:GetParameters`だけを持つ。container環境変数へはparameter名だけを渡し、
-  CloudFormation dynamic referenceやsecret値を置かない。
-- execution roleはnormal image pull、exact SSM secret injection、log writeだけを許可する。
-- Lambda roleはhandlerごとに分離し、table leading key、function、service、log groupを限定する。
-- Records Admin Config roleはSessionの`SESSION#*`読込、Statisticsの`ADMIN#PROMPT` transaction、
-  exact legacy／管理者parameter読込、runtime prompt subtreeの条件付きPutに限定する。revision Putは
-  `ssm:Overwrite=false`だけを許し、overwriteを明示的に拒否する。保持期限を過ぎた非active revisionには
-  fixed-length revision subtreeだけの`ssm:DeleteParameters`を許し、`active` parameterは削除対象resourceへ
-  含めない。Admin StatusのAWS状態取得権限を共有しない。
-- Memorial API roleはSession read、source v9 affection profileのGet／Update／transaction、Statisticsの
-  owner memorial partitionだけのGet／Query／Put／Update／transaction、temporary upload object、generation
-  queue send、Session key／OAuth Origin設定の読込、private memorial画像Getへ限定する。S3の不存在判定に必要な
-  bucket-level `ListBucket`は、APIではupload bucketの`uploads/*`とMedia bucketの`memorials/*`、
-  WorkerではMedia bucketの`memorials/*`だけをprefix conditionで許可する。Workerに一時写真の列挙権限を
-  与えず、どちらもbucket全体を列挙させない。Worker roleはsource tableを読まず、Statistics checkpointの
-  Get／Update、Archive GSI3 Query、temporary uploadのGet／Delete、participant画像Get、memorial画像Put、
-  generation queue consume、OpenAI keyとactive／legacy participant promptのexact readだけを許可する。
-- Admin Status roleはMemorial API／WorkerのLambda状態とgeneration queue／DLQ属性だけを追加で読み、
-  message本文、upload object、owner checkpointを取得しない。既存のProjector DLQ表示と権限を維持する。
-- `ecs:DescribeTaskDefinition`はresource-level permission非対応のため、Image Admission、Release Deploy、
-  Records Admin Status Lambda roleで独立statementの`Resource: "*"`を用いる。Image Admissionと
-  Release Deployはfamily、revision、container、digestをapplicationでexact validationする。Admin Status
-  roleは`aws:RequestedRegion`をproduction regionへ限定し、handlerでexact ECS service task definition ARN、
-  application container、ECR repository、digestを検証してからtagを解決する。
-- Release roleは固定stack／`release-*` Change Set、ECR repository、Signer、artifact bucketへ限定する。
-- Records plan／deploy／backfill／drift roleは既存Runtime Release roleから分離する。plan／driftは
-  immutable main subject、deploy／backfillは`production` Environment subjectだけを信頼し、
-  Records roleへsource DebateTableのread／write権限を付与しない。
-- GitHub runnerへlong-lived AWS keyを渡さず、immutable repository identityのOIDCだけを使う。
+| 項目 | 本番設定 |
+|---|---|
+| サブネット | パブリックのみ。NAT Gatewayなし |
+| タスク通信 | パブリックIPv4あり。受信許可なし、送信はHTTPSのみ |
+| 実行基盤 | ARM64 On-Demand Fargate |
+| リソース | CPU 512ユニット、メモリ1,024 MiB |
+| タスク数 | 平常`desiredCount=0`、最大1タスク |
+| コンテナ保護 | `root`以外のユーザー、読み取り専用ルートファイルシステム、tmpfs |
+| 停止猶予 | `stopTimeout=120`秒 |
+| Container Insights | 個人規模の費用を考慮し無効 |
+| イメージ指定 | 固定ソースSHAからARM64でビルドし、ダイジェストで固定 |
 
-## 6. Private configuration
+ECS Exec用の専用イメージや特権タスク定義は作らない。
+Runtimeは配信で検証された`RecordsPublicHostname`から`SHITTIM_RECORDS_MEMORIAL_URL`を構成する。
+用途はDiscordの公開解放リンクであり、秘密設定へURLを複製しない。
 
-- RuntimeConfig pointerは`v0004`、schemaはv2。4 Bot、Guild、allowed channels、farewell channelを
-  exact validationする。
-- PersonaConfig schema v1を4 slot分用意し、本文をCloudFormation parameterやrepositoryへ含めない。
-- RecordsApplicationはReleaseがRuntime Stackから検証した`vNNNN`のlegacy config versionとparameter名だけを
-  Admin Config Lambdaへ渡す。Lambdaはactive pointerがない間だけ、そのversionの5本文をlegacy sourceとして読む。
-- setup toolはv0003からv0004を再構成する場合もsecret本文を表示／local保存しない。
-- CDKはsecret valueをlookupせず、parameter nameとmetadataだけを扱う。
-- Memorial OpenAI keyは専用setup toolのhidden inputで上書きせず登録し、Records ReleaseはSecureStringの
-  metadataだけを事前確認する。値はLambda環境変数、CloudFormation、workflow、artifactへ渡さない。
-- RecordsEdgeはReleaseが同account／regionのMemorial upload bucketから決定したexact regional S3 domainを
-  `RecordsMemorialUploadOriginDomain` parameterで受け、CSPの`connect-src`を`'self'`とそのoriginだけへ限定する。
-  bucket wildcardや任意URLは許可しない。
+## 4. APIとLambdaの分担
 
-## 7. Operations and cost
+| コンポーネント | 主な責務 |
+|---|---|
+| HTTP API/Ingress | Discord Interaction受付、未加工本文の署名検証、受付の永続化 |
+| Status Publisher | 永続化された公開状態をDiscord RESTの表示へ反映 |
+| Runtime Reconciler | 永続状態に従いECSの希望タスク数を0/1へ収束 |
+| Image Admission | タスク定義、イメージ、署名、アテステーションを検証 |
+| Records Admin Status | 許可されたAWS/CloudWatch状態だけを集約。予約同時実行数2 |
+| Records Admin Config | プロンプトの参照・更新・復元・履歴保持。予約同時実行数2 |
+| Records Memorial API | 本人の状態、アップロード、生成、履歴、リセット。15秒、予約同時実行数2 |
+| Records Memorial Worker | SQSから画像・文章を生成。5分、1,024 MiB、予約同時実行数1 |
 
-- CloudWatch Logsはdedicated group、retention、data protection policyを持つ。
-- application EMFは固定namespace／dimension／metric allowlistで出力する。LambdaのJSON log envelopeへ
-  EMF payloadを文字列として入れず、`_aws`をrootに持つ1行のJSON eventとして標準出力へ直接書く。
-- critical／warning composite alarm、dashboard、abnormal ECS STOPPED EventBridge通知を作る。
-- SNS email subscriptionはoperatorのconfirmationを必要とする。
-- Project budget 20 USD、account budget 30 USD、actual／forecast通知とAWS managed service anomaly
-  monitorのdaily subscriptionを使う。Budget metricは`NetUnblendedCost`である。
+LambdaはVPC外で動かし、外部APIへの到達にNATを必要としない。
+EventBridge SchedulerがReconcilerを毎分起動する。
+HTTP関数のバージョン/エイリアス、SnapStart、各タイムアウトの実値はCDKの関数定義で管理する。
+管理APIの同時実行数は並行した閲覧を受け付けつつ下流負荷を制限する値である。
 
-## 8. CDK quality
+## 5. IAMの責務分離
 
-- root `package-lock.json`をdependency正本とし、strict TypeScript、Vitest、CDK assertions、cdk-nag、
-  credentialなしsynthをCIで実行する。
-- logical ID、stack name、cross-stack exportをtestで固定し、意図しないreplacementを検出する。
-- CDK sourceとlive stackの差は週次drift workflowでread-only検出し、自動修復しない。
+| ロール | 許可する範囲 | 許可しないもの |
+|---|---|---|
+| タスク実行ロール | 本番イメージ取得、指定SSMの注入、ログ出力 | アプリケーション全体のデータ操作 |
+| タスクロール | 必要なDynamoDB区画、Status Publisher呼出し、指定の識別子HMAC設定読込 | SSMパスの列挙、任意Lambda呼出し |
+| 各Lambdaロール | ハンドラーごとのテーブルキー・関数・サービス・ログ | 関数間で共有した管理権限 |
+| Admin Config | セッションの`SESSION#*`読込、Statisticsの`ADMIN#PROMPT`操作、指定SSM | AWS状態収集や任意設定の書換え |
+| Admin Status | 許可リソースの状態とメトリクス読込 | メッセージ本文取得、シークレット復号、業務データ変更、任意呼出し |
+| Memorial API | セッション、本人の親愛度/チェックポイント、一時画像、生成キュー送信、完成画像読込 | 任意の所有者やバケット全体の列挙 |
+| Memorial Worker | Statisticsチェックポイント、Archive GSI3、対象画像、キュー消費、専用OpenAIキー/人格設定 | 元の討論テーブル読込、一時写真の列挙 |
+| Release | 固定スタック、`release-*`変更セット、ECR、Signer、成果物バケット | 任意スタックの配信 |
 
-## 9. 公式資料確認記録
+Admin Configのリビジョン作成は`ssm:Overwrite=false`に限定し、上書きを明示的に拒否する。
+保持対象から外れた未使用リビジョンの削除は、固定長リビジョン配下の`DeleteParameters`だけを許可する。
+`active`は削除可能なリソース集合に含めず、更新は専用の権限で行う。
+
+S3の不存在判定に必要な`ListBucket`は、APIでは一時バケットの`uploads/*`とMediaの`memorials/*`、
+WorkerではMediaの`memorials/*`だけをプレフィックス条件で許可する。
+Admin Statusが確認できるメモリアル情報は関数状態とキュー/DLQ属性だけであり、所有者や画像を読まない。
+
+`ecs:DescribeTaskDefinition`はリソース単位の権限制御に対応しないため、独立した`Resource: "*"`の文を使う。
+Admission/Releaseはファミリー、リビジョン、コンテナ、ダイジェストを厳密に照合する。
+Admin StatusはリージョンをIAMで限定し、実サービスが参照するタスク定義、アプリケーションコンテナ、
+ECRリポジトリ、ダイジェストを検証してからタグを解決する。
+
+GitHubでは長期AWSキーを使わず、変更不能なリポジトリ識別情報に基づくOIDCを使う。
+Core用とRecords用の計画・配信・バックフィル・ドリフト検査ロールを分ける。
+計画/ドリフト検査は`main`、配信/バックフィルはGitHubの`production`環境に紐づく認証主体だけを信頼する。
+Recordsの配信ロールには元の討論テーブルの読み書きを許可しない。
+
+## 6. 非公開設定とWebオリジン
+
+- RuntimeConfigはバージョン付きの設定で、スキーマv2として4体のBot、Discordサーバー、許可チャンネル、帰宅挨拶先を検証する。
+  現在選択されたバージョンはRuntimeスタックの`RuntimeConfigVersion`を正とし、文書へ固定しない。
+- PersonaConfigはスキーマv1の4枠。CDKは本文を読み込まず、名前とメタデータだけを扱う。
+- Records配信はRuntimeの`vNNNN`形式の設定バージョンを検証し、`LegacyRuntimeConfigVersion`として渡す。
+  Admin Configは有効リビジョンの参照先が未登録の場合だけ、この既存設定から5種類のプロンプトを読む。
+- 設定移行やキー登録では本文を表示・ローカル保存しない。メモリアル用OpenAIキーは専用登録ツールを使い、
+  配信はSecureStringのメタデータだけを確認する。値をCloudFormation、Lambda環境変数、成果物へ出さない。
+- RecordsEdgeは同じアカウント/リージョンの一時アップロードバケットから得た正確なS3ドメインを受け取る。
+  CSPの`connect-src`は`'self'`とそのオリジンだけを許可し、バケットのワイルドカードや任意URLを許可しない。
+
+RecordsEdgeはOACで非公開S3へ接続し、Route 53のA/AAAAレコードを管理する。
+公開証明書はECDSA P-256、CloudFrontの閲覧者向けTLSポリシーは`TLSv1.3_2025`。
+`/api/*`はキャッシュせずCookieをAPI Gatewayへ転送し、`/assets/*`だけを変更不能なアセットとしてキャッシュする。
+過去のRSAからECDSAへの一度限りの変更を、今後の証明書置換への包括承認として扱わない。
+
+## 7. 監視・費用・変更の検証
+
+CloudWatch Logsはコンポーネント別に分け、保持期間とデータ保護ポリシーを設定する。
+EMFは固定した名前空間・ディメンション・メトリクスだけを使い、`_aws`をルートに持つ1行JSONとして出力する。
+Lambdaのログメッセージへ文字列として二重に格納しない。
+重大/警告の複合アラーム、ダッシュボード、ECS異常停止通知を設け、SNSメールは運用者の購読確認を必要とする。
+
+費用管理はプロジェクト20 USD、アカウント30 USDの予算と実績/予測通知を使う。
+指標は`NetUnblendedCost`。AWS管理のサービス別費用異常モニターから日次通知を受ける。
+
+CDKの依存はルートのロックファイルで固定する。TypeScript、Vitest、CDKアサーション、cdk-nag、認証不要のテンプレート生成で
+論理ID・スタック名・エクスポート・権限・保持設定を検証する。
+週次ドリフト検査は構成差分を報告するだけで、自動修復しない。
+
+## 実装への入口
+
+| 対象 | 実装 |
+|---|---|
+| Coreのスタック組立て | [infra/bin/shittim-chest.ts](https://github.com/pitekusu/shittim-chest/blob/main/infra/bin/shittim-chest.ts) |
+| Recordsのスタック組立て | [infra/bin/shittim-records.ts](https://github.com/pitekusu/shittim-chest/blob/main/infra/bin/shittim-records.ts) |
+| リソース・IAM・パラメーター | [infra/lib](https://github.com/pitekusu/shittim-chest/tree/main/infra/lib) |
+| 構成の回帰試験 | [infra/test](https://github.com/pitekusu/shittim-chest/tree/main/infra/test) |
+
+## 公式資料確認記録
+
+以下は設計時の確認記録であり、この文書の整理日を再確認日として扱わない。
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
-| 2026-08-14 | Fargate networking | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html | awsvpcとpublic IP |
-| 2026-08-14 | Fargate capacity | https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html | On-Demand scale-to-zero |
-| 2026-08-29 | ECS IAM | https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html | DescribeTaskDefinition wildcardとAdmin Status application境界 |
-| 2026-08-14 | AWS CDK | https://docs.aws.amazon.com/cdk/v2/guide/home.html | stack ownershipとsynth |
-| 2026-08-14 | AWS Budgets | https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html | budget notification |
+| 2026-08-14 | Fargateの通信 | [タスクネットワーク](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html) | awsvpcとパブリックIP |
+| 2026-08-14 | Fargateの実行容量 | [キャパシティープロバイダー](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-capacity-providers.html) | On-DemandとScale-to-Zero |
+| 2026-08-29 | ECS IAM | [サービス認可](https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonelasticcontainerservice.html) | DescribeTaskDefinitionの権限とアプリ側検証 |
+| 2026-08-14 | AWS CDK | [CDKガイド](https://docs.aws.amazon.com/cdk/v2/guide/home.html) | スタック責務とテンプレート生成 |
+| 2026-08-14 | AWS Budgets | [予算管理](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html) | 予算通知 |

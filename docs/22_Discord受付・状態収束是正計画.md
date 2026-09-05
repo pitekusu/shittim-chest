@@ -4,32 +4,43 @@ aliases:
 tags: [project, discord, lambda, dynamodb, scale-to-zero, retrospective]
 status: completed
 created: 2026-08-04
-updated: 2026-08-14
+updated: 2026-09-05
 ---
 
 # Discord受付・状態収束是正 完了記録
 
-## 1. Background
+[文書索引へ戻る](00_シッテムの箱_ドキュメント索引.md)
 
-production受入で次の3問題を確認し、独立した変更として是正した。
+> 完了した改善の経緯を残す文書。現行の運用手順や未実装の計画ではない。
+> 今後の仕様変更は、末尾の現行設計へ反映する。
 
-1. Runtime起動済みの2件目も`STARTING`と表示され、別debateの遅延更新が混在した。
-2. cold invocationがDiscordのinitial response期限を超え、永続受付後も利用者へ失敗表示が出た。
-3. thread panelがterminalでもchannel Statusが`ACCEPTED`に残った。
+## 1. 背景と対応
 
-## 2. Resolution
+本番受入で、永続化された状態と利用者が見る表示の食い違いを確認し、独立した変更として是正した。
 
-- 公開StatusをDebate ID／Attempt IDでfenceし、共有Runtime状態から直接上書きしない。
-- signed HTTP ingressを短い受付に限定し、SnapStart aliasでcold pathを短縮した。
-- Status Publisherをdesired／observed stateの冪等reconcilerとし、terminalを優先して収束させた。
-- stale event、別attempt、missing message、Discord errorを分類し、無関係なdebateを更新しない。
+| 確認した問題 | 原因となる境界 | 導入した対策 |
+|---|---|---|
+| 起動済みでも2件目が`STARTING`となり、別討論の更新が混在 | 共通の実行環境の状態と個別討論の公開状態 | 討論ID・試行IDで更新対象を固定し、別の討論から更新させない |
+| 初回応答期限を超え、保存済みの受付もDiscord上では失敗表示 | HTTP受付のコールド起動 | 署名付きHTTP受付を短い処理に限定し、SnapStartエイリアスを使用 |
+| スレッドは終了済みなのにチャンネル状態が`ACCEPTED`のまま | 状態確定とDiscord表示の非同期更新 | 表示すべき状態・表示済み状態を比較し、終了状態を優先して収束 |
 
-## 3. Acceptance
+古いイベント、別試行、メッセージ欠落、Discordエラーを分類し、無関係な討論を更新しない設計にした。
 
-- 初回Interactionで「アプリケーションが応答しませんでした」を表示しない。
-- 連続した2件が互いのStatusを変更しない。
-- thread panelとchannel Statusが同じCOMPLETED／FAILED／CANCELLEDへ収束する。
-- 失敗時もdurable activityとECSが最終的にsafe stateへ戻る。
+## 2. 導入時の受入観点
 
-現行契約は[[11_Discord詳細設計]]、[[13_DynamoDB・データ整合性詳細設計]]、
-[[17_運用保守・監視・障害対応設計]]を正とする。本書へ新仕様を追記しない。
+| 観点 | 確認した振る舞い |
+|---|---|
+| 初回受付 | 「アプリケーションが応答しませんでした」を表示しない |
+| 連続受付 | 連続する2件が互いの公開状態を変更しない |
+| 終了表示 | スレッドと元チャンネルが同じ完了・失敗・取消へ収束 |
+| 障害後 | 永続稼働状態とECSが安全な状態へ戻る |
+
+これらは導入時の受入記録であり、文書整理時に本番試験を再実行したことを意味しない。
+
+## 3. 現行設計の参照先
+
+- [Discord詳細設計](11_Discord詳細設計.md)：署名検証、受付、公開状態の収束。
+- [データ整合性詳細設計](13_DynamoDB・データ整合性詳細設計.md)：試行・世代・保存条件。
+- [運用保守・障害対応設計](17_運用保守・監視・障害対応設計.md)：異常時の確認と復旧。
+
+本書には新仕様や現在の配信版を追記しない。実施時の細部はGit履歴と検証記録を参照する。

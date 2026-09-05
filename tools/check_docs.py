@@ -8,6 +8,7 @@ import re
 import sys
 from datetime import date
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from tools.sync_docs import (
     ALLOWED_DESTINATION_EXTRAS,
@@ -26,6 +27,7 @@ WIKI_LINK = re.compile(r"\[\[([^\]]+)\]\]")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 HEADING = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?$")
 INLINE_CODE = re.compile(r"(`+)(.+?)\1")
+MARKDOWN_LINK = re.compile(r"\[[^\]\n]*\]\((?:<([^>\n]+)>|([^\s)]+))\)")
 
 
 class DocumentationError(RuntimeError):
@@ -203,6 +205,33 @@ def wiki_links(text: str) -> frozenset[tuple[str, str | None]]:
     return frozenset(links)
 
 
+def validate_markdown_links(text: str, source: Path, root: Path) -> None:
+    """Check local inline links used by both Obsidian and GitHub, without network I/O."""
+
+    for line in markdown_content_lines(text):
+        for match in MARKDOWN_LINK.finditer(line):
+            destination = next(value for value in match.groups() if value is not None)
+            url = urlsplit(destination)
+            if url.scheme or url.netloc:
+                continue
+            target = (source.parent / unquote(url.path)).resolve() if url.path else source.resolve()
+            if not target.is_relative_to(root.resolve()):
+                raise DocumentationError(f"Markdown link leaves document root: {source.name}")
+            if not target.exists():
+                raise DocumentationError(
+                    f"missing Markdown link target in {source.name}: {destination}"
+                )
+            if url.fragment and target.suffix == ".md":
+                anchors = {
+                    re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+                    for heading in markdown_headings(read_markdown(target))
+                }
+                if unquote(url.fragment) not in anchors:
+                    raise DocumentationError(
+                        f"missing Markdown link heading in {source.name}: {destination}"
+                    )
+
+
 def validate_official_sources(text: str, filename: str) -> None:
     """Require a populated official-source table in every detailed design."""
 
@@ -310,6 +339,7 @@ def validate_docs_directory(directory: Path) -> int:
             text = texts[filename]
             parse_frontmatter(text, filename)
             validate_fences(text, filename)
+            validate_markdown_links(text, directory / filename, directory)
             for target, heading in wiki_links(text):
                 if target not in available_targets:
                     raise DocumentationError(f"missing Wiki link target in {filename}: {target}")
@@ -326,6 +356,7 @@ def validate_docs_directory(directory: Path) -> int:
         try:
             text = read_markdown(directory / extra)
             validate_fences(text, extra)
+            validate_markdown_links(text, directory / extra, directory)
         except DocumentationError as error:
             findings.append(str(error))
 
@@ -338,6 +369,8 @@ def main() -> int:
     try:
         count = validate_docs_directory(DEFAULT_DOCS_DIRECTORY)
         validate_license_scope(REPOSITORY_ROOT)
+        readme = REPOSITORY_ROOT / "README.md"
+        validate_markdown_links(read_markdown(readme), readme, REPOSITORY_ROOT)
     except DocumentationError as error:
         print(error, file=sys.stderr)
         return 1
