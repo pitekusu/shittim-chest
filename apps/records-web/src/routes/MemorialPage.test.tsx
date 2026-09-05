@@ -279,7 +279,7 @@ describe("MemorialPage", () => {
     expect(
       screen.getByRole("heading", { name: "まだメモリアルロビーにはログインできません" }),
     ).toBeVisible();
-    expect(screen.getByText("CYCLE 1")).toBeVisible();
+    expect(screen.getByText("1回目")).toBeVisible();
     expect(screen.queryByLabelText("メモリアルロビーへログインしています")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("メモリアル用の画像を選択")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "親愛度をリセット" })).not.toBeInTheDocument();
@@ -375,7 +375,7 @@ describe("MemorialPage", () => {
 
   it.each([
     ["queued", "メモリアル生成を受け付けました"],
-    ["generating", "思い出を画像と文章にしています"],
+    ["generating", "ふたりの思い出をつくっています"],
   ] as const)("renders the %s state as indeterminate progress", async (state, message) => {
     vi.useFakeTimers();
     renderMemorial(unlockedState(state));
@@ -399,6 +399,9 @@ describe("MemorialPage", () => {
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
     await enterMemorial(state);
 
+    expect(
+      screen.getByRole("heading", { name: "アロナとのメモリアルロビーが解放されました" }),
+    ).toBeVisible();
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     const generateButton = screen.getByRole("button", { name: "メモリアルロビーを開放" });
     expect(input).toHaveAttribute("accept", "image/jpeg,image/png,image/webp");
@@ -421,12 +424,16 @@ describe("MemorialPage", () => {
     generateButton.focus();
     fireEvent.click(generateButton);
 
-    const dialog = screen.getByRole("dialog", { name: "この思い出を一度だけ生成します" });
+    const dialog = screen.getByRole("dialog", { name: "思い出を一度だけ生成します。" });
     const confirm = within(dialog).getByRole("button", { name: "理解して生成する" });
     expect(confirm).toHaveFocus();
-    expect(within(dialog).getByText("このcycleで生成に成功できるのは一度だけです。")).toBeVisible();
-    expect(within(dialog).getByText(/選んだ画像をAI生成に使用/)).toBeVisible();
-    expect(within(dialog).getByText(/アロナとの画像/)).toBeVisible();
+    expect(dialog).toHaveTextContent(
+      "このメモリアルロビーで生成できるアロナとの思い出は一度だけです。",
+    );
+    expect(within(dialog).getByText("一度だけ", { selector: "strong" })).toBeVisible();
+    expect(
+      within(dialog).getByText("選んだ画像がアロナとの思い出の生成に使用されます。"),
+    ).toBeVisible();
     fireEvent(dialog, new Event("cancel", { bubbles: false, cancelable: true }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(generateButton).toHaveFocus();
@@ -458,6 +465,34 @@ describe("MemorialPage", () => {
     );
     expect(await screen.findByText("メモリアル生成を受け付けました")).toBeVisible();
     expect(input).toHaveValue("");
+    expect(screen.queryByRole("img", { name: "選択した画像のプレビュー" })).not.toBeInTheDocument();
+  });
+
+  it("previews a selected local image without uploading or storing it and clears an invalid replacement", async () => {
+    const store = vi.spyOn(Storage.prototype, "setItem");
+    await enterMemorial(unlockedState());
+    expect(screen.queryByRole("img", { name: "選択した画像のプレビュー" })).not.toBeInTheDocument();
+
+    const input = selectImage(
+      new File([Uint8Array.of(1, 2, 3)], "preview.png", { type: "image/png" }),
+    );
+
+    expect(await screen.findByRole("img", { name: "選択した画像のプレビュー" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,AQID",
+    );
+    expect(prepareUploadMock).not.toHaveBeenCalled();
+    expect(uploadSourceMock).not.toHaveBeenCalled();
+    expect(queueGenerationMock).not.toHaveBeenCalled();
+    expect(store).not.toHaveBeenCalled();
+
+    fireEvent.change(input, {
+      target: { files: [new File(["unsupported"], "replacement.gif", { type: "image/gif" })] },
+    });
+
+    expect(screen.queryByRole("img", { name: "選択した画像のプレビュー" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("JPEG、PNG、WebPのいずれか");
+    expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeDisabled();
   });
 
   it("reuses both idempotency keys and the upload ticket across safe retries", async () => {
@@ -524,6 +559,10 @@ describe("MemorialPage", () => {
 
     const source = new File([Uint8Array.of(1)], "first.png", { type: "image/png" });
     const input = selectImage(source);
+    expect(await screen.findByRole("img", { name: "選択した画像のプレビュー" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,AQ==",
+    );
     confirmGeneration();
 
     fireEvent.click(await screen.findByRole("button", { name: "画像を選び直す" }));
@@ -531,6 +570,7 @@ describe("MemorialPage", () => {
     expect(input).toHaveValue("");
     expect(screen.getByText("画像をドロップ、またはファイルを選択")).toBeVisible();
     expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeDisabled();
+    expect(screen.queryByRole("img", { name: "選択した画像のプレビュー" })).not.toBeInTheDocument();
 
     fireEvent.change(input, { target: { files: [source] } });
     expect(screen.getByText(/first\.png/u)).toBeVisible();
@@ -563,7 +603,7 @@ describe("MemorialPage", () => {
     expect(screen.getByText(/same\.png/u)).toBeVisible();
 
     await act(async () => client.invalidateQueries({ queryKey: ["memorial"], exact: true }));
-    expect(await screen.findByText("CYCLE 2")).toBeVisible();
+    expect(await screen.findByText("2回目")).toBeVisible();
     await waitFor(() => expect(input).toBeEnabled());
     expect(input).toHaveValue("");
     expect(screen.getByText("画像をドロップ、またはファイルを選択")).toBeVisible();
@@ -598,7 +638,7 @@ describe("MemorialPage", () => {
       await pendingUpload.promise;
     });
 
-    expect(await screen.findByText("CYCLE 2")).toBeVisible();
+    expect(await screen.findByText("2回目")).toBeVisible();
     await waitFor(() => expect(input).toBeEnabled());
     expect(queueGenerationMock).not.toHaveBeenCalled();
     expect(input).toHaveValue("");
@@ -650,7 +690,7 @@ describe("MemorialPage", () => {
       await pendingQueue.promise;
     });
 
-    expect(await screen.findByText("CYCLE 2")).toBeVisible();
+    expect(await screen.findByText("2回目")).toBeVisible();
     expect(screen.queryByText("メモリアル生成を受け付けました")).not.toBeInTheDocument();
     expect(client.getQueryData<MemorialStateResponse>(["memorial"])).toEqual(nextState);
   });
@@ -690,6 +730,10 @@ describe("MemorialPage", () => {
     const dropZone = screen.getByRole("button", { name: /画像をドロップ/u });
     const picked = new File([Uint8Array.of(1)], "picked.png", { type: "image/png" });
     const input = selectImage(picked);
+    expect(await screen.findByRole("img", { name: "選択した画像のプレビュー" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,AQ==",
+    );
 
     const dropped = new File([Uint8Array.of(1, 2, 3)], "dropped.webp", {
       type: "image/webp",
@@ -701,10 +745,22 @@ describe("MemorialPage", () => {
     expect(dropZone).toHaveAttribute("data-dragging", "false");
     expect(input).toHaveValue("");
     expect(screen.getByText(/dropped\.webp/u)).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "選択した画像のプレビュー" })).toHaveAttribute(
+        "src",
+        "data:image/webp;base64,AQID",
+      ),
+    );
 
     fireEvent.change(input, { target: { files: [picked] } });
     expect(screen.getByText(/picked\.png/u)).toBeVisible();
     expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeEnabled();
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "選択した画像のプレビュー" })).toHaveAttribute(
+        "src",
+        "data:image/png;base64,AQ==",
+      ),
+    );
   });
 
   it("offers a failed generation retry without preparing another upload", async () => {
@@ -826,7 +882,7 @@ describe("MemorialPage", () => {
 
     queueGenerationMock.mockResolvedValueOnce(unlockedState("generating"));
     fireEvent.click(resend);
-    expect(await screen.findByText("思い出を画像と文章にしています")).toBeVisible();
+    expect(await screen.findByText("ふたりの思い出をつくっています")).toBeVisible();
     expect(queueGenerationMock).toHaveBeenLastCalledWith(
       1,
       "GENERATE MEMORIAL",
@@ -875,15 +931,52 @@ describe("MemorialPage", () => {
     );
   });
 
-  it("requires the reset warning, clears the input, and starts the next cycle", async () => {
+  it.each([
+    ["unlocked", false, false],
+    ["unlocked", true, false],
+    ["unlocked", false, true],
+    ["unlocked", true, true],
+    ["failed", false, false],
+    ["failed", true, false],
+    ["failed", false, true],
+    ["failed", true, true],
+  ] as const)(
+    "disables reset in %s with uploadReady=%s and older memories=%s",
+    async (state, uploadReady, hasHistory) => {
+      getMemoryMock.mockResolvedValue(memory(1));
+      await enterMemorial({
+        ...unlockedState(state, uploadReady),
+        ...(hasHistory
+          ? {
+              cycle: 2,
+              resetCount: 1,
+              latestReadyCycle: 1,
+              memories: [MEMORY_SUMMARIES[0]!],
+            }
+          : {}),
+      });
+
+      const resetButton = screen.getByRole("button", { name: "親愛度をリセット" });
+      expect(resetButton).toBeVisible();
+      expect(resetButton).toBeDisabled();
+      fireEvent.click(resetButton);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(resetMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires the reset warning after generation completes and starts the next cycle", async () => {
+    getMemoryMock.mockResolvedValue(memory(1));
     const { client } = await enterMemorial(unlockedState());
     const invalidateQueries = vi.spyOn(client, "invalidateQueries");
-    getMemoryMock.mockResolvedValue(memory(1));
     resetMock.mockResolvedValue(resetLockedState());
 
-    const input = selectImage(new File([Uint8Array.of(1)], "memory.png", { type: "image/png" }));
-
     const resetButton = screen.getByRole("button", { name: "親愛度をリセット" });
+    expect(resetButton).toBeDisabled();
+    await act(async () => client.setQueryData(["memorial"], sameCycleReadyState()));
+    await waitFor(() => expect(resetButton).toBeEnabled());
+    expect(screen.getByText("NEW MEMORY")).toBeVisible();
+    expect(screen.getByText("親愛度を全てリセットし、最初からやり直します。")).toBeVisible();
     resetButton.focus();
     fireEvent.click(resetButton);
     const dialog = screen.getByRole("dialog", { name: "親愛度をリセットしますか？" });
@@ -914,25 +1007,26 @@ describe("MemorialPage", () => {
         name: "次のメモリアルロビーはまだ開放されていません",
       }),
     ).toBeVisible();
-    expect(screen.getByText("CYCLE 2")).toBeVisible();
+    expect(screen.getByText("2回目")).toBeVisible();
     expect(screen.getByRole("heading", { name: "ふたりの思い出" })).toBeVisible();
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["affection-rankings"] });
-    expect(input).toHaveValue("");
+    expect(screen.queryByLabelText("メモリアル用の画像を選択")).not.toBeInTheDocument();
   });
 
   it("applies a successful reset after a same-cycle state refresh", async () => {
     const pendingReset = deferred<MemorialStateResponse>();
     resetMock.mockReturnValue(pendingReset.promise);
-    getMemoryMock.mockResolvedValue(memory(1));
-    const { client } = await enterMemorial(unlockedState());
+    getMemoryMock.mockResolvedValue(memory(2));
+    const { client } = await enterMemorial({ ...readyState(), memories: [MEMORY_SUMMARIES[1]!] });
     const invalidateQueries = vi.spyOn(client, "invalidateQueries");
 
     confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "親愛度をリセット" })).toBeDisabled();
 
-    const next = resetLockedState();
+    const next = { ...lockedState(3), latestReadyCycle: 2, memories: MEMORY_SUMMARIES };
     await act(async () => {
-      client.setQueryData(["memorial"], sameCycleReadyState());
+      client.setQueryData(["memorial"], readyState());
       pendingReset.resolve(next);
       await pendingReset.promise;
     });
@@ -962,30 +1056,52 @@ describe("MemorialPage", () => {
     expect(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).toBeVisible();
   });
 
-  it("ignores a stale reset error after the same cycle state advances", async () => {
+  it("does not submit an open reset confirmation after cached readiness changes", async () => {
+    getMemoryMock.mockResolvedValue(memory(1));
+    const { client } = await enterMemorial(sameCycleReadyState());
+    fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
+    const confirm = within(
+      screen.getByRole("dialog", { name: "親愛度をリセットしますか？" }),
+    ).getByRole("button", { name: "500点にリセット" });
+
+    await act(async () => {
+      client.setQueryData(["memorial"], unlockedState("failed"));
+      fireEvent.click(confirm);
+    });
+
+    expect(resetMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "親愛度をリセット" })).toBeDisabled();
+  });
+
+  it("ignores a stale reset error after the cached cycle advances", async () => {
     const pendingReset = deferred<MemorialStateResponse>();
     resetMock.mockReturnValue(pendingReset.promise);
     getMemoryMock.mockResolvedValue(memory(1));
-    const { client } = await enterMemorial(unlockedState());
+    const { client } = await enterMemorial(sameCycleReadyState());
 
     confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
 
-    const progressed = sameCycleReadyState();
+    const progressed = resetLockedState();
     await act(async () => {
       client.setQueryData(["memorial"], progressed);
       pendingReset.reject(new Error("stale reset failed"));
       await pendingReset.promise.catch(() => undefined);
     });
 
-    expect(await screen.findByText("メモリアルが完成しました")).toBeVisible();
+    expect(
+      await screen.findByRole("heading", {
+        name: "次のメモリアルロビーはまだ開放されていません",
+      }),
+    ).toBeVisible();
     expect(client.getQueryData<MemorialStateResponse>(["memorial"])).toEqual(progressed);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("reuses the reset key after response loss until the cycle changes", async () => {
     resetMock.mockRejectedValue(new Error("response lost"));
-    const { client } = await enterMemorial(unlockedState());
+    getMemoryMock.mockImplementation((summary) => Promise.resolve(memory(summary.cycle as 1 | 2)));
+    const { client } = await enterMemorial(sameCycleReadyState());
 
     confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
@@ -1002,13 +1118,7 @@ describe("MemorialPage", () => {
     );
     expect(resetMock.mock.calls[1]?.[3]).toBe(firstKey);
 
-    await act(async () =>
-      client.setQueryData(["memorial"], {
-        ...unlockedState(),
-        cycle: 2,
-        resetCount: 1,
-      }),
-    );
+    await act(async () => client.setQueryData(["memorial"], readyState()));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(3));
@@ -1031,6 +1141,7 @@ describe("MemorialPage", () => {
     expect(screen.getByText(/これまでの思い出はいつでも閲覧できます/u)).toBeVisible();
     expect(screen.getByRole("heading", { name: "ふたりの思い出" })).toBeVisible();
     expect(screen.queryByLabelText("メモリアル用の画像を選択")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "親愛度をリセット" })).not.toBeInTheDocument();
   });
 
   it("loads the latest ready memory and switches owner-only history tabs", async () => {
@@ -1047,9 +1158,12 @@ describe("MemorialPage", () => {
     expect(latestImage).toHaveAttribute("width", "1920");
     expect(latestImage).toHaveAttribute("height", "1080");
     expect(latestImage).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(screen.queryByText(/1920\s*×\s*1080/u)).not.toBeInTheDocument();
     expect(screen.getByText("プラナとの思い出です。")).toBeVisible();
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(2);
+    expect(tabs[0]).toHaveTextContent("1回目");
+    expect(tabs[1]).toHaveTextContent("2回目");
     expect(tabs[1]).toHaveAttribute("aria-selected", "true");
     expect(tabs[1]).toHaveAttribute("tabindex", "0");
     expect(tabs[0]).toHaveAttribute("tabindex", "-1");
@@ -1150,9 +1264,14 @@ describe("MemorialPage", () => {
           : nextMemory;
       await act(async () => pending.resolve(next));
 
-      const retriedImage = await screen.findByRole("img", { name: "プラナとのメモリアルロビー" });
+      await waitFor(() =>
+        expect(screen.getByRole("img", { name: "プラナとのメモリアルロビー" })).toHaveAttribute(
+          "src",
+          next.image.url,
+        ),
+      );
+      const retriedImage = screen.getByRole("img", { name: "プラナとのメモリアルロビー" });
       expect(retriedImage).not.toBe(failedImage);
-      expect(retriedImage).toHaveAttribute("src", next.image.url);
       expect(getMemoryMock).toHaveBeenCalledTimes(2);
       expect(getStateMock).not.toHaveBeenCalled();
       expect(queueGenerationMock).not.toHaveBeenCalled();

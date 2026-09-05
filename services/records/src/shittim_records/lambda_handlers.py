@@ -76,6 +76,7 @@ from shittim_records.memorial import (
     MemorialService,
 )
 from shittim_records.memorial_adapters import (
+    MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
     DynamoMemorialRepository,
     DynamoRecentQuestionSource,
     MemorialConfigurationRepository,
@@ -95,11 +96,7 @@ from shittim_records.projector import (
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
-from shittim_records.read_api import (
-    PARTICIPANT_AVATAR_ASSET_KEYS,
-    CursorCodec,
-    RecordsReadService,
-)
+from shittim_records.read_api import CursorCodec, RecordsReadService
 
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
@@ -674,7 +671,7 @@ def _memorial_api_controller() -> MemorialHttpController:
             _regional_s3_client(),
             upload_bucket_name=_environment("MEMORIAL_UPLOAD_BUCKET_NAME"),
             media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
-            participant_asset_keys=PARTICIPANT_AVATAR_ASSET_KEYS,
+            participant_asset_keys=MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
         )
         _MEMORIAL_API_CONTROLLER = MemorialHttpController(
             authorizer=MemorialAuthorizer(
@@ -710,7 +707,7 @@ def _memorial_worker_service() -> MemorialGenerationService:
             _regional_s3_client(),
             upload_bucket_name=_environment("MEMORIAL_UPLOAD_BUCKET_NAME"),
             media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
-            participant_asset_keys=PARTICIPANT_AVATAR_ASSET_KEYS,
+            participant_asset_keys=MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
         )
         configuration = MemorialConfigurationRepository(
             ssm,

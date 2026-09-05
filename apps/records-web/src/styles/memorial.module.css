@@ -190,9 +190,9 @@
   border-radius: 999px;
   background: var(--records-control-background-soft);
   color: var(--records-ink-600);
-  font-family: var(--records-font-display);
-  font-size: 0.58rem;
-  letter-spacing: 0.1em;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .unlockPanel {
@@ -417,7 +417,6 @@
   border-bottom: 1px solid var(--records-line);
 }
 
-.creationPanel > header > span,
 .memoryPanel > header > span {
   padding: 7px 11px;
   border: 1px solid var(--records-line);
@@ -430,6 +429,7 @@
 
 .dropZone {
   display: grid;
+  width: 100%;
   min-height: 210px;
   margin-top: 24px;
   place-content: center;
@@ -495,6 +495,19 @@
   color: var(--records-cyan-ink);
   font-size: 1.7rem;
   font-weight: 300;
+}
+
+.uploadPreview {
+  display: block;
+  width: 160px;
+  max-width: 100%;
+  height: 160px;
+  margin-bottom: 5px;
+  padding: 8px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 16px;
+  background: var(--records-control-background);
+  object-fit: contain;
 }
 
 .dropZone strong {
@@ -584,9 +597,9 @@
 }
 
 .memoryTabs button > span {
-  font-family: var(--records-font-display);
-  font-size: 0.55rem;
-  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .memoryTabs button strong {
@@ -770,6 +783,15 @@
   font-size: 0.78rem;
   line-height: 1.65;
   text-align: left;
+}
+
+.onceOnly {
+  padding-inline: 0.15em;
+  background: var(--records-pink-100);
+  color: var(--records-pink-ink);
+  font-size: 1.08em;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 .dialogActions {
