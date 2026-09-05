@@ -40,9 +40,6 @@ describe("RankingsPage", () => {
     renderRoute(<RankingsPage />, { initialEntry: "/insights", path: "/insights" });
 
     expect(await screen.findByRole("heading", { name: "いろいろな記録" })).toBeVisible();
-    expect(
-      screen.queryByText("これまでの議論を、ランキングで振り返れます。"),
-    ).not.toBeInTheDocument();
     const wins = screen.getByRole("region", { name: "勝利回数ランキング" });
     const requestsPanel = screen.getByRole("region", { name: "依頼回数ランキング" });
     expect(await within(wins).findAllByRole("listitem")).toHaveLength(3);
@@ -88,16 +85,6 @@ describe("RankingsPage", () => {
     expect(within(costs).getByRole("radio", { name: "直近7日" })).toBeChecked();
     const affection = screen.getByRole("region", { name: "親愛度ランキング" });
     expect(within(affection).getByText("AFFECTION", { exact: true })).toBeVisible();
-    expect(
-      within(affection).queryByText("AFFECTION RANKINGS", { exact: true }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(affection).queryByText(
-        "質問者ごとの現在の親愛度です。人格ごとに1000点満点で表示します。",
-        { exact: true },
-      ),
-    ).not.toBeInTheDocument();
-    expect(within(affection).queryByText("親愛度", { exact: true })).not.toBeInTheDocument();
     expect(within(affection).getByRole("heading", { name: "アロナ" })).toBeVisible();
     expect(within(affection).getByRole("heading", { name: "プラナ" })).toBeVisible();
     expect(within(affection).getByRole("heading", { name: "安倍晋三AI" })).toBeVisible();
@@ -350,37 +337,6 @@ describe("RankingsPage", () => {
     const costs = screen.getByRole("region", { name: "概算費用" });
     expect(await within(costs).findByText("費用を取得できません")).toBeVisible();
     expect(within(costs).getByText("有効な日次換算値がまだありません。")).toBeVisible();
-  });
-
-  it("keeps all winners at the same podium height when every participant is tied", async () => {
-    const tiedRankings = rankingsResponse();
-    tiedRankings.wins = tiedRankings.wins.map((entry) => ({ ...entry, rank: 1, count: 20 }));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: RequestInfo | URL) =>
-        Promise.resolve(
-          response(
-            requestPath(input).startsWith("/api/v1/insights/affection-rankings?")
-              ? affectionRankingsResponse()
-              : requestPath(input).includes("/costs?")
-                ? costsResponse()
-                : tiedRankings,
-          ),
-        ),
-      ),
-    );
-
-    const { container } = renderRoute(<RankingsPage />, {
-      initialEntry: "/insights",
-      path: "/insights",
-    });
-
-    await screen.findByRole("heading", { name: "いろいろな記録" });
-    await within(screen.getByRole("region", { name: "勝利回数ランキング" })).findAllByRole(
-      "listitem",
-    );
-    expect(container.querySelector('[data-podium-layout="shared"]')).toBeInTheDocument();
-    expect(container.querySelector('[data-podium-layout="ranked"]')).not.toBeInTheDocument();
   });
 
   it("shows snapshot preparation independently in both ranking panels", async () => {

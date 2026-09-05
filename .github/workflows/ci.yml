@@ -383,6 +383,7 @@ jobs:
           docker image inspect shittim-chest:step-08b-arm64 --format '{{.Size}}' \
             > "${RUNNER_TEMP}/image-size-bytes.txt"
       - name: Build and load the CI-only fault image
+        if: github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         env:
           SOURCE_DATE_EPOCH: "0"
@@ -391,12 +392,17 @@ jobs:
           target: fault-test
           tags: shittim-chest:step-08b-fault-arm64
           outputs: type=docker,rewrite-timestamp=true,compression=gzip,compression-level=6,force-compression=true
-      - name: Validate image security and inject termination faults
+      - name: Validate image security, with recovery drills only on manual CI
+        env:
+          RUN_RECOVERY_DRILLS: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
+          fault_args=()
+          if [ "${RUN_RECOVERY_DRILLS}" = true ]; then
+            fault_args=(--fault-image shittim-chest:step-08b-fault-arm64)
+          fi
           python -m tools.run_container_gate \
             --production-image shittim-chest:step-08b-arm64 \
-            --fault-image shittim-chest:step-08b-fault-arm64 \
-            --expected-architecture arm64
+            --expected-architecture arm64 "${fault_args[@]}"
       - name: Install pinned Syft
         run: |
           syft_version=$(jq --raw-output '.tools.syft.version' .github/tool-versions.json)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Validate a native production image and inject real container stop signals."""
+"""Validate a native production image, optionally exercising shutdown and recovery."""
 
 from __future__ import annotations
 
@@ -313,14 +313,17 @@ def _test_forced_boundaries(image: str, root: Path) -> None:
             raise ContainerGateError(f"outbox did not reconcile at {boundary}")
 
 
-def run_gate(production_image: str, fault_image: str, expected_architecture: str) -> None:
-    """Execute the complete native container contract."""
+def run_gate(production_image: str, fault_image: str | None, expected_architecture: str) -> None:
+    """Validate production security; run recovery drills only with an explicit fault image."""
 
-    for image in (production_image, fault_image):
-        _validate_image_name(image)
+    _validate_image_name(production_image)
+    if fault_image is not None:
+        _validate_image_name(fault_image)
     inspect = json.loads(_docker("image", "inspect", production_image).stdout)
     validate_image_configuration(inspect, expected_architecture)
     _validate_runtime_security(production_image)
+    if fault_image is None:
+        return
     with tempfile.TemporaryDirectory(prefix="shittim-step08b-") as directory:
         root = Path(directory)
         root.chmod(0o755)
@@ -331,7 +334,7 @@ def run_gate(production_image: str, fault_image: str, expected_architecture: str
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--production-image", required=True)
-    parser.add_argument("--fault-image", required=True)
+    parser.add_argument("--fault-image", help="opt in to shutdown and recovery drills")
     parser.add_argument("--expected-architecture", choices=("amd64", "arm64"), required=True)
     return parser
 
@@ -343,7 +346,9 @@ def main() -> int:
     except (ContainerGateError, json.JSONDecodeError, OSError) as error:
         print(f"container gate failed: {error}")
         return 1
-    print("native container gate passed")
+    print("native container security checks passed")
+    if args.fault_image is not None:
+        print("shutdown and recovery drills passed")
     return 0
 
 

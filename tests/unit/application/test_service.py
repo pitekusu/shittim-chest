@@ -8,6 +8,7 @@ import json
 import logging
 from dataclasses import replace
 from datetime import datetime, timedelta
+from itertools import groupby
 
 import pytest
 
@@ -74,9 +75,7 @@ from tests.unit.application.fakes import (
     FakeRepository,
 )
 
-
-@pytest.fixture
-def dependencies() -> tuple[
+type Dependencies = tuple[
     FakeClock,
     FakeIds,
     FakeMetrics,
@@ -85,7 +84,11 @@ def dependencies() -> tuple[
     FakeOpenAI,
     FakeRepository,
     FakeCandidateOrderer,
-]:
+]
+
+
+@pytest.fixture
+def dependencies() -> Dependencies:
     return (
         FakeClock(),
         FakeIds(),
@@ -99,16 +102,7 @@ def dependencies() -> tuple[
 
 
 def make_application(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
     *,
     session_timeout: float = DEFAULT_SESSION_TIMEOUT_SECONDS,
     phase_timeout: float = DEFAULT_PHASE_TIMEOUT_SECONDS,
@@ -164,16 +158,7 @@ def test_default_timeout_budgets_include_affection_scoring_headroom() -> None:
 
 
 def test_application_rejects_renderer_incompatible_participant_display_name(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     with pytest.raises(ValueError, match="forbidden Unicode"):
         make_application(
@@ -187,16 +172,7 @@ def test_application_rejects_renderer_incompatible_participant_display_name(
 
 
 def test_application_requires_a_bootstrap_validated_records_memorial_url(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     with pytest.raises(ValueError, match="Records Memorial URL must not be empty"):
         make_application(dependencies, records_memorial_url=" ")
@@ -254,16 +230,7 @@ def ingress_claim(
 
 @pytest.mark.asyncio
 async def test_ingress_accept_replay_reclaims_expired_lease_without_changing_ids(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     repository = dependencies[6]
     original_app = make_application(dependencies, lease_owner="old-worker")
@@ -305,16 +272,7 @@ async def test_ingress_accept_replay_reclaims_expired_lease_without_changing_ids
 
 @pytest.mark.asyncio
 async def test_pre_activation_failure_keeps_quota_semantics_but_releases_attempt_lease(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies, lease_owner="new-worker")
     repository = dependencies[6]
@@ -353,16 +311,7 @@ async def test_pre_activation_failure_keeps_quota_semantics_but_releases_attempt
 
 @pytest.mark.asyncio
 async def test_bound_retry_pre_activation_failure_waits_for_required_outbox(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies, lease_owner="new-worker")
     clock, _, _, _, _, _, repository, _ = dependencies
@@ -424,16 +373,7 @@ async def test_bound_retry_pre_activation_failure_waits_for_required_outbox(
 
 @pytest.mark.asyncio
 async def test_bind_discord_context_is_idempotent_and_rebinding_fails(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     repository = dependencies[6]
@@ -456,16 +396,7 @@ async def test_bind_discord_context_is_idempotent_and_rebinding_fails(
 
 @pytest.mark.asyncio
 async def test_bind_discord_context_rejects_started_debate(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     repository = dependencies[6]
@@ -492,16 +423,7 @@ async def test_bind_discord_context_rejects_started_debate(
 
 @pytest.mark.asyncio
 async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     _, _, metrics, _, evidence, openai, repository, orderer = dependencies
@@ -559,35 +481,15 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
         operation.content for operation in completed_operations[1:-1]
     )
     assert MetricEvent.COMPLETED in {event for event, _ in metrics.events}
-    assert [item.state.phase for item in repository.history[accepted.debate_id]] == [
-        DebatePhase.ACCEPTED,
+    phases = (item.state.phase for item in repository.history[accepted.debate_id])
+    assert [phase for phase, _ in groupby(phases)] == [
         DebatePhase.ACCEPTED,
         DebatePhase.SCORING_AFFECTION,
         DebatePhase.PREPARING_EVIDENCE,
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
-        DebatePhase.COLLECTING_INITIAL_OPINIONS,
-        DebatePhase.COLLECTING_INITIAL_OPINIONS,
-        DebatePhase.COLLECTING_INITIAL_OPINIONS,
-        DebatePhase.COLLECTING_INITIAL_OPINIONS,
-        DebatePhase.COLLECTING_INITIAL_OPINIONS,
         DebatePhase.DISCUSSING,
         DebatePhase.COLLECTING_FINAL_PROPOSALS,
-        DebatePhase.COLLECTING_FINAL_PROPOSALS,
-        DebatePhase.COLLECTING_FINAL_PROPOSALS,
-        DebatePhase.COLLECTING_FINAL_PROPOSALS,
-        DebatePhase.COLLECTING_FINAL_PROPOSALS,
-        DebatePhase.COLLECTING_FINAL_PROPOSALS,
         DebatePhase.SELECTING_WINNER,
-        DebatePhase.SELECTING_WINNER,
-        DebatePhase.SELECTING_WINNER,
-        DebatePhase.SELECTING_WINNER,
-        DebatePhase.SELECTING_WINNER,
-        DebatePhase.SELECTING_WINNER,
-        DebatePhase.SELECTING_WINNER,
-        DebatePhase.SELECTING_WINNER,
-        DebatePhase.GENERATING_DECISION,
-        DebatePhase.GENERATING_DECISION,
-        DebatePhase.GENERATING_DECISION,
         DebatePhase.GENERATING_DECISION,
         DebatePhase.COMPLETED,
     ]
@@ -595,16 +497,7 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
 
 @pytest.mark.asyncio
 async def test_affection_scores_are_all_applied_before_persona_responses(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     openai = dependencies[5]
@@ -633,16 +526,7 @@ async def test_affection_scores_are_all_applied_before_persona_responses(
 
 @pytest.mark.asyncio
 async def test_one_affection_provider_failure_discards_all_scores_and_continues(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     openai = dependencies[5]
@@ -677,16 +561,7 @@ async def test_one_affection_provider_failure_discards_all_scores_and_continues(
 
 @pytest.mark.asyncio
 async def test_initial_opinions_are_persisted_then_delivered_by_each_participant_in_order(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     discord = dependencies[3]
@@ -739,16 +614,7 @@ async def test_initial_opinions_are_persisted_then_delivered_by_each_participant
 
 @pytest.mark.asyncio
 async def test_final_proposals_are_persisted_then_delivered_by_each_participant_in_order(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     discord = dependencies[3]
@@ -801,16 +667,7 @@ async def test_final_proposals_are_persisted_then_delivered_by_each_participant_
 
 @pytest.mark.asyncio
 async def test_final_proposal_preflight_failure_stops_before_every_proposal_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     discord = dependencies[3]
     openai = dependencies[5]
@@ -838,16 +695,7 @@ async def test_final_proposal_preflight_failure_stops_before_every_proposal_call
 
 @pytest.mark.asyncio
 async def test_known_final_proposal_failure_keeps_other_completed_outputs_durable(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -880,16 +728,7 @@ async def test_known_final_proposal_failure_keeps_other_completed_outputs_durabl
 
 @pytest.mark.asyncio
 async def test_final_proposal_recovery_uses_one_successor_call_per_participant(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     clock, ids, _, _, _, openai, repository, _ = dependencies
     debate_id = ids.new_debate_id()
@@ -956,16 +795,7 @@ async def test_final_proposal_recovery_uses_one_successor_call_per_participant(
 
 @pytest.mark.asyncio
 async def test_votes_are_persisted_privately_then_delivered_by_each_participant_in_order(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     discord = dependencies[3]
@@ -1018,16 +848,7 @@ async def test_votes_are_persisted_privately_then_delivered_by_each_participant_
 
 @pytest.mark.asyncio
 async def test_vote_preflight_failure_stops_before_every_vote_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     discord = dependencies[3]
     openai = dependencies[5]
@@ -1058,16 +879,7 @@ async def test_vote_preflight_failure_stops_before_every_vote_call(
 
 @pytest.mark.asyncio
 async def test_known_vote_failure_keeps_other_votes_private_and_durable(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -1103,16 +915,7 @@ async def test_known_vote_failure_keeps_other_votes_private_and_durable(
 
 @pytest.mark.asyncio
 async def test_vote_recovery_uses_one_successor_call_per_participant(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     clock, ids, _, _, _, openai, repository, _ = dependencies
     debate_id = ids.new_debate_id()
@@ -1183,16 +986,7 @@ async def test_vote_recovery_uses_one_successor_call_per_participant(
 
 @pytest.mark.asyncio
 async def test_vote_participant_mismatch_fails_without_public_vote_delivery(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -1212,16 +1006,7 @@ async def test_vote_participant_mismatch_fails_without_public_vote_delivery(
 
 @pytest.mark.asyncio
 async def test_vote_generation_exhaustion_stops_before_a_third_logical_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     clock, ids, _, _, _, openai, repository, _ = dependencies
     debate_id = ids.new_debate_id()
@@ -1300,16 +1085,7 @@ async def test_vote_generation_exhaustion_stops_before_a_third_logical_call(
 
 @pytest.mark.asyncio
 async def test_complete_legacy_ballot_is_delivered_without_regeneration(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     clock, ids, _, _, _, openai, repository, _ = dependencies
     debate_id = ids.new_debate_id()
@@ -1386,16 +1162,7 @@ async def test_complete_legacy_ballot_is_delivered_without_regeneration(
 
 @pytest.mark.asyncio
 async def test_initial_opinion_preflight_failure_stops_before_every_provider_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     discord = dependencies[3]
     openai = dependencies[5]
@@ -1426,16 +1193,7 @@ async def test_initial_opinion_preflight_failure_stops_before_every_provider_cal
 
 @pytest.mark.asyncio
 async def test_initial_opinion_generation_recovery_uses_one_successor_call_per_participant(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     clock, ids, _, _, _, openai, repository, _ = dependencies
     debate_id = ids.new_debate_id()
@@ -1495,16 +1253,7 @@ async def test_initial_opinion_generation_recovery_uses_one_successor_call_per_p
 
 @pytest.mark.asyncio
 async def test_initial_opinion_generation_stops_before_a_third_logical_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     clock, ids, _, _, _, openai, repository, _ = dependencies
     debate_id = ids.new_debate_id()
@@ -1565,16 +1314,7 @@ async def test_initial_opinion_generation_stops_before_a_third_logical_call(
 
 @pytest.mark.asyncio
 async def test_known_initial_provider_failure_keeps_other_completed_outputs_durable(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -1607,16 +1347,7 @@ async def test_known_initial_provider_failure_keeps_other_completed_outputs_dura
 
 @pytest.mark.asyncio
 async def test_initial_provider_participant_mismatch_fails_without_persisting_the_wrong_output(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -1639,16 +1370,7 @@ async def test_initial_provider_participant_mismatch_fails_without_persisting_th
 
 @pytest.mark.asyncio
 async def test_run_renews_lease_while_a_phase_is_in_progress(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies, lease_renewal=0.001)
     _, _, _, _, evidence, _, repository, _ = dependencies
@@ -1663,16 +1385,7 @@ async def test_run_renews_lease_while_a_phase_is_in_progress(
 
 @pytest.mark.asyncio
 async def test_accept_fails_closed_when_runtime_or_channel_is_not_ready(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     discord = dependencies[3]
@@ -1691,16 +1404,7 @@ async def test_accept_fails_closed_when_runtime_or_channel_is_not_ready(
 
 @pytest.mark.asyncio
 async def test_accept_operation_is_idempotent_and_bound_to_request(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     discord = dependencies[3]
@@ -1790,16 +1494,7 @@ def test_accept_request_preserves_unicode_names_without_normalization() -> None:
 
 @pytest.mark.asyncio
 async def test_cancel_is_authorized_idempotent_and_terminal(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     repository = dependencies[6]
@@ -1822,16 +1517,7 @@ async def test_cancel_is_authorized_idempotent_and_terminal(
 
 @pytest.mark.asyncio
 async def test_stale_runtime_cannot_cancel_with_the_replacement_runtime_lease(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     stale = make_application(dependencies, lease_owner="stale-runtime")
     replacement = make_application(dependencies, lease_owner="replacement-runtime")
@@ -1865,16 +1551,7 @@ async def test_stale_runtime_cannot_cancel_with_the_replacement_runtime_lease(
 
 @pytest.mark.asyncio
 async def test_expired_debate_lease_cannot_authorize_cancellation(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     repository = dependencies[6]
@@ -1894,16 +1571,7 @@ async def test_expired_debate_lease_cannot_authorize_cancellation(
 
 @pytest.mark.asyncio
 async def test_completed_debate_cannot_be_cancelled(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     accepted = await accept_bound_debate(app)
@@ -1917,16 +1585,7 @@ async def test_completed_debate_cannot_be_cancelled(
 
 @pytest.mark.asyncio
 async def test_panel_cancel_rejects_a_different_source_attempt(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     accepted = await app.accept_debate(request())
@@ -1944,16 +1603,7 @@ async def test_panel_cancel_rejects_a_different_source_attempt(
 
 @pytest.mark.asyncio
 async def test_failed_attempt_retry_preserves_source_and_reuses_completed_artifacts(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     clock, _, _, _, _, _, repository, _ = dependencies
@@ -1979,16 +1629,7 @@ async def test_failed_attempt_retry_preserves_source_and_reuses_completed_artifa
 
 @pytest.mark.asyncio
 async def test_retry_reuses_partial_final_proposals_and_generates_only_the_missing_output(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -2037,16 +1678,7 @@ async def test_retry_reuses_partial_final_proposals_and_generates_only_the_missi
 
 @pytest.mark.asyncio
 async def test_retry_operation_is_idempotent(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     clock = dependencies[0]
@@ -2070,16 +1702,7 @@ async def test_retry_operation_is_idempotent(
 
 @pytest.mark.asyncio
 async def test_retry_requires_authorized_actor_and_failed_state(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     accepted = await app.accept_debate(request())
@@ -2094,16 +1717,7 @@ async def test_retry_requires_authorized_actor_and_failed_state(
 
 @pytest.mark.asyncio
 async def test_panel_retry_rejects_a_different_source_attempt(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     clock = dependencies[0]
@@ -2130,16 +1744,7 @@ async def test_panel_retry_rejects_a_different_source_attempt(
 
 @pytest.mark.asyncio
 async def test_phase_timeout_marks_attempt_failed(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     evidence = dependencies[4]
     repository = dependencies[6]
@@ -2158,16 +1763,7 @@ async def test_phase_timeout_marks_attempt_failed(
 
 @pytest.mark.asyncio
 async def test_session_timeout_has_distinct_stable_error_code(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     dependencies[4].delay = 0.05
     repository = dependencies[6]
@@ -2183,16 +1779,7 @@ async def test_session_timeout_has_distinct_stable_error_code(
 
 @pytest.mark.asyncio
 async def test_task_group_cancels_siblings_and_persists_failure(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -2212,16 +1799,7 @@ async def test_task_group_cancels_siblings_and_persists_failure(
 
 @pytest.mark.asyncio
 async def test_external_cancellation_checkpoints_and_propagates_cancelled_error(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     dependencies[4].delay = 10.0
     repository = dependencies[6]
@@ -2241,16 +1819,7 @@ async def test_external_cancellation_checkpoints_and_propagates_cancelled_error(
 
 @pytest.mark.asyncio
 async def test_resume_recoverable_resumes_checkpointed_attempt(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     outbox_recovery = FakeOutboxRecovery()
     app = make_application(dependencies, outbox_recovery=outbox_recovery)
@@ -2273,16 +1842,7 @@ async def test_resume_recoverable_resumes_checkpointed_attempt(
 
 @pytest.mark.asyncio
 async def test_generation_recovery_persists_claim_before_call_and_completes_on_second_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -2320,16 +1880,7 @@ async def test_generation_recovery_persists_claim_before_call_and_completes_on_s
 
 @pytest.mark.asyncio
 async def test_generation_recovery_fails_without_a_third_provider_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -2366,16 +1917,7 @@ async def test_generation_recovery_fails_without_a_third_provider_call(
 
 @pytest.mark.asyncio
 async def test_generation_settlement_uses_a_heartbeat_renewed_lease(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -2401,16 +1943,7 @@ async def test_generation_settlement_uses_a_heartbeat_renewed_lease(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retryable", [False, True])
 async def test_known_generation_provider_failure_records_one_logical_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
     *,
     retryable: bool,
 ) -> None:
@@ -2443,16 +1976,7 @@ async def test_known_generation_provider_failure_records_one_logical_call(
 
 @pytest.mark.asyncio
 async def test_winner_delivery_preflight_failure_stops_before_the_provider_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     discord = dependencies[3]
     openai = dependencies[5]
@@ -2492,16 +2016,7 @@ async def test_winner_delivery_preflight_failure_stops_before_the_provider_call(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("checkpoint_shape", ["wrong_participant", "duplicate"])
 async def test_decision_generation_rejects_an_ambiguous_checkpoint_set_before_external_calls(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
     checkpoint_shape: str,
 ) -> None:
     discord = dependencies[3]
@@ -2555,16 +2070,7 @@ async def test_decision_generation_rejects_an_ambiguous_checkpoint_set_before_ex
 
 @pytest.mark.asyncio
 async def test_cancel_settles_an_in_flight_generation_without_another_provider_call(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     openai = dependencies[5]
     repository = dependencies[6]
@@ -2593,16 +2099,7 @@ async def test_cancel_settles_an_in_flight_generation_without_another_provider_c
 
 @pytest.mark.asyncio
 async def test_bounded_delivery_reconciles_before_abandonment(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     class BoundAtTerminalRecovery(FakeOutboxRecovery):
         async def drain(self, *, expected: DebateSnapshot) -> None:
@@ -2628,16 +2125,7 @@ async def test_bounded_delivery_reconciles_before_abandonment(
 
 @pytest.mark.asyncio
 async def test_completed_delivery_abandonment_converges_through_best_effort_failed_notice(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     class AbandonEveryPlan(FakeOutboxRecovery):
         async def drain(self, *, expected: DebateSnapshot) -> None:
@@ -2661,16 +2149,7 @@ async def test_completed_delivery_abandonment_converges_through_best_effort_fail
 
 @pytest.mark.asyncio
 async def test_cancelled_notice_abandonment_does_not_block_terminal_convergence(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     class AbandonEveryPlan(FakeOutboxRecovery):
         async def drain(self, *, expected: DebateSnapshot) -> None:
@@ -2696,16 +2175,7 @@ async def test_cancelled_notice_abandonment_does_not_block_terminal_convergence(
 
 @pytest.mark.asyncio
 async def test_claim_recoverable_does_not_start_phase_work(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     repository = dependencies[6]
@@ -2722,16 +2192,7 @@ async def test_claim_recoverable_does_not_start_phase_work(
 
 @pytest.mark.asyncio
 async def test_nonretryable_outbox_recovery_failure_preserves_required_delivery_plan(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     outbox_recovery = FakeOutboxRecovery(error=OutboxRecoveryFailed("DISCORD_OUTBOX_CONFLICT"))
     app = make_application(dependencies, outbox_recovery=outbox_recovery)
@@ -2752,16 +2213,7 @@ async def test_nonretryable_outbox_recovery_failure_preserves_required_delivery_
 
 @pytest.mark.asyncio
 async def test_typed_outbox_transaction_conflict_retries_without_waiting_for_recovery(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class ConflictOnceTerminalOutbox(FakeOutboxRecovery):
@@ -2812,16 +2264,7 @@ async def test_typed_outbox_transaction_conflict_retries_without_waiting_for_rec
 
 @pytest.mark.asyncio
 async def test_terminal_attempt_cas_conflict_logs_action_and_retries(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     repository = dependencies[6]
@@ -2867,16 +2310,7 @@ async def test_terminal_attempt_cas_conflict_logs_action_and_retries(
 
 @pytest.mark.asyncio
 async def test_terminal_outbox_condition_conflict_fails_closed_without_hot_retry(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     repository = dependencies[6]
@@ -2915,16 +2349,7 @@ async def test_terminal_outbox_condition_conflict_fails_closed_without_hot_retry
 
 @pytest.mark.asyncio
 async def test_terminal_delivery_conflict_exhaustion_remains_durable_and_is_not_hidden(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     class ConflictingTerminalOutbox(FakeOutboxRecovery):
         async def drain(self, *, expected: DebateSnapshot) -> None:
@@ -2951,16 +2376,7 @@ async def test_terminal_delivery_conflict_exhaustion_remains_durable_and_is_not_
 
 @pytest.mark.asyncio
 async def test_outbox_recovery_wait_is_outside_session_deadline_and_renews_lease(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     outbox_recovery = FakeOutboxRecovery(delay=0.03)
     app = make_application(
@@ -2980,16 +2396,7 @@ async def test_outbox_recovery_wait_is_outside_session_deadline_and_renews_lease
 
 @pytest.mark.asyncio
 async def test_outbox_fencing_conflict_does_not_terminalize_the_attempt(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(
         dependencies,
@@ -3010,16 +2417,7 @@ async def test_outbox_fencing_conflict_does_not_terminalize_the_attempt(
 
 @pytest.mark.asyncio
 async def test_recovery_reuses_every_completed_phase_artifact(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
     clock, ids, _, _, evidence_service, openai, repository, orderer = dependencies
@@ -3077,16 +2475,7 @@ async def test_recovery_reuses_every_completed_phase_artifact(
 
 @pytest.mark.asyncio
 async def test_not_found_and_invalid_timeout_configuration(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+    dependencies: Dependencies,
 ) -> None:
     app = make_application(dependencies)
 
@@ -3097,42 +2486,13 @@ async def test_not_found_and_invalid_timeout_configuration(
 
 
 @pytest.mark.asyncio
-async def test_corrupt_candidate_order_fails_attempt(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
+@pytest.mark.parametrize("invalid_order", ["missing", "duplicate"])
+async def test_invalid_candidate_order_fails_attempt(
+    dependencies: Dependencies,
+    invalid_order: str,
 ) -> None:
-    dependencies[7].corrupt = True
-    repository = dependencies[6]
-    app = make_application(dependencies)
-    accepted = await accept_bound_debate(app)
-
-    await app.run_debate(accepted.debate_id)
-
-    assert repository.current[accepted.debate_id].state.phase is DebatePhase.FAILED
-
-
-@pytest.mark.asyncio
-async def test_duplicate_candidate_order_fails_attempt(
-    dependencies: tuple[
-        FakeClock,
-        FakeIds,
-        FakeMetrics,
-        FakeDiscord,
-        FakeEvidence,
-        FakeOpenAI,
-        FakeRepository,
-        FakeCandidateOrderer,
-    ],
-) -> None:
-    dependencies[7].duplicate = True
+    dependencies[7].corrupt = invalid_order == "missing"
+    dependencies[7].duplicate = invalid_order == "duplicate"
     repository = dependencies[6]
     app = make_application(dependencies)
     accepted = await accept_bound_debate(app)

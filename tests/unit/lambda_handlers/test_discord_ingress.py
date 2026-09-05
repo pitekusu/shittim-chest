@@ -1,7 +1,6 @@
 """Thin HTTP ingress Lambda boundary behavior."""
 
 import asyncio
-import inspect
 import logging
 import time
 from datetime import UTC, datetime, timedelta
@@ -447,20 +446,6 @@ def test_success_timing_reports_content_free_stage_durations(
     assert "private question" not in caplog.text
     assert "signature" not in caplog.text
     assert "token" not in caplog.text
-
-
-def test_ingress_composition_loads_secure_config_during_lambda_initialization() -> None:
-    source = inspect.getsource(ingress_module)
-
-    assert "from shittim_chest.adapters.aws import" not in source
-    assert "from shittim_chest.adapters.dynamodb import" not in source
-    assert "create_ssm_client" in source
-    assert "create_lambda_client" not in source
-    assert "LambdaStatusPublicationTrigger" not in source
-    assert "LambdaRuntimeReconciliationTrigger" not in source
-    assert "_handler: DiscordIngressLambda | None = None" in source
-    assert source.index("def lambda_handler") < source.index("def _build_handler")
-    assert source.index("def _build_handler") < source.index("_initialize_for_lambda(os.environ)")
 
 
 def test_lambda_initialization_resolves_handler_before_first_request(

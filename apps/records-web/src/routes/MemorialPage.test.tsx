@@ -222,6 +222,28 @@ async function finishStandardEntry(): Promise<void> {
   expect(screen.getByRole("heading", { name: "メモリアルロビー" })).toBeVisible();
 }
 
+async function enterMemorial(state = unlockedState(), client = createClient()) {
+  vi.useFakeTimers();
+  const view = renderMemorial(state, client);
+  await finishStandardEntry();
+  vi.useRealTimers();
+  return view;
+}
+
+function confirmGeneration(): void {
+  fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
+  fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+}
+
+function confirmReset(): void {
+  fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
+  fireEvent.click(
+    within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole("button", {
+      name: "500点にリセット",
+    }),
+  );
+}
+
 beforeEach(() => {
   getMemoryMock.mockReset();
   getStateMock.mockReset();
@@ -358,15 +380,12 @@ describe("MemorialPage", () => {
   });
 
   it("selects a file, clears the input after generation, and calls APIs in order", async () => {
-    vi.useFakeTimers();
     const state = unlockedState();
     const ticket = uploadTicket();
     prepareUploadMock.mockResolvedValue(ticket);
     uploadSourceMock.mockResolvedValue(undefined);
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
-    renderMemorial(state);
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(state);
 
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     const generateButton = screen.getByRole("button", { name: "メモリアルロビーを開放" });
@@ -435,7 +454,6 @@ describe("MemorialPage", () => {
   });
 
   it("reuses both idempotency keys and the upload ticket across safe retries", async () => {
-    vi.useFakeTimers();
     const state = unlockedState();
     const ticket = uploadTicket();
     prepareUploadMock
@@ -443,16 +461,13 @@ describe("MemorialPage", () => {
       .mockResolvedValueOnce(ticket);
     uploadSourceMock.mockRejectedValueOnce(new Error("upload interrupted")).mockResolvedValueOnce();
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
-    renderMemorial(state);
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(state);
 
     const source = new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
       target: { files: [source] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
 
     const prepareRetry = await screen.findByRole("button", { name: "生成準備を再試行" });
     const firstPrepareKey = prepareUploadMock.mock.calls[0]?.[3];
@@ -470,14 +485,11 @@ describe("MemorialPage", () => {
   });
 
   it("allows an expired upload reservation to be replaced after a reload", async () => {
-    vi.useFakeTimers();
     const ticket = uploadTicket();
     prepareUploadMock.mockResolvedValue(ticket);
     uploadSourceMock.mockResolvedValue(undefined);
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
-    renderMemorial(unlockedState("unlocked", true));
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(unlockedState("unlocked", true));
 
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     expect(input).toBeEnabled();
@@ -490,8 +502,7 @@ describe("MemorialPage", () => {
     expect(
       screen.queryByRole("button", { name: "準備済みの画像で生成を続ける" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
 
     await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
     expect(prepareUploadMock).toHaveBeenCalledWith(
@@ -503,11 +514,8 @@ describe("MemorialPage", () => {
   });
 
   it("can discard a failed local upload attempt and select the image again", async () => {
-    vi.useFakeTimers();
     prepareUploadMock.mockRejectedValue(new Error("upload reservation unavailable"));
-    renderMemorial(unlockedState());
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(unlockedState());
 
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     const source = new File([Uint8Array.of(1)], "first.png", { type: "image/png" });
@@ -521,8 +529,7 @@ describe("MemorialPage", () => {
       value: String.raw`C:\fakepath\first.png`,
       writable: true,
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
 
     fireEvent.click(await screen.findByRole("button", { name: "画像を選び直す" }));
     expect(input).toBeEnabled();
@@ -536,7 +543,6 @@ describe("MemorialPage", () => {
   });
 
   it("discards a stale local attempt only when the observed cycle advances", async () => {
-    vi.useFakeTimers();
     const initialState = unlockedState();
     const nextState = { ...unlockedState(), cycle: 2, resetCount: 1 };
     prepareUploadMock.mockRejectedValue(
@@ -547,11 +553,9 @@ describe("MemorialPage", () => {
         "request-cycle-conflict",
       ),
     );
-    const { client } = renderMemorial(initialState);
+    const { client } = await enterMemorial(initialState);
     getStateMock.mockReset();
     getStateMock.mockResolvedValueOnce(initialState).mockResolvedValue(nextState);
-    await finishStandardEntry();
-    vi.useRealTimers();
 
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     const source = new File([Uint8Array.of(1)], "same.png", { type: "image/png" });
@@ -562,8 +566,7 @@ describe("MemorialPage", () => {
       writable: true,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
 
     expect(await screen.findByRole("button", { name: "生成準備を再試行" })).toBeVisible();
     await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
@@ -587,16 +590,13 @@ describe("MemorialPage", () => {
   });
 
   it("does not restore an upload attempt after the cached cycle advances", async () => {
-    vi.useFakeTimers();
     const initialState = unlockedState();
     const nextState = { ...unlockedState(), cycle: 2, resetCount: 1 };
     const pendingUpload = deferred<void>();
     prepareUploadMock.mockResolvedValue(uploadTicket());
     uploadSourceMock.mockReturnValue(pendingUpload.promise);
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
-    const { client } = renderMemorial(initialState);
-    await finishStandardEntry();
-    vi.useRealTimers();
+    const { client } = await enterMemorial(initialState);
 
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     const source = new File([Uint8Array.of(1)], "in-flight.png", { type: "image/png" });
@@ -606,8 +606,7 @@ describe("MemorialPage", () => {
       value: String.raw`C:\fakepath\in-flight.png`,
       writable: true,
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
     await waitFor(() => expect(uploadSourceMock).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -626,21 +625,17 @@ describe("MemorialPage", () => {
   });
 
   it("does not continue an upload after the same cycle becomes ready", async () => {
-    vi.useFakeTimers();
     const pendingUpload = deferred<void>();
     prepareUploadMock.mockResolvedValue(uploadTicket());
     uploadSourceMock.mockReturnValue(pendingUpload.promise);
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
-    const { client } = renderMemorial(unlockedState());
-    await finishStandardEntry();
-    vi.useRealTimers();
+    const { client } = await enterMemorial(unlockedState());
 
     const source = new File([Uint8Array.of(1)], "in-flight.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
       target: { files: [source] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
     await waitFor(() => expect(uploadSourceMock).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -656,21 +651,17 @@ describe("MemorialPage", () => {
   });
 
   it("does not apply a generation response after the cached cycle advances", async () => {
-    vi.useFakeTimers();
     const pendingQueue = deferred<MemorialStateResponse>();
     prepareUploadMock.mockResolvedValue(uploadTicket());
     uploadSourceMock.mockResolvedValue(undefined);
     queueGenerationMock.mockReturnValue(pendingQueue.promise);
-    const { client } = renderMemorial(unlockedState());
-    await finishStandardEntry();
-    vi.useRealTimers();
+    const { client } = await enterMemorial(unlockedState());
 
     const source = new File([Uint8Array.of(1)], "queued.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
       target: { files: [source] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
     await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
 
     const nextState = { ...unlockedState(), cycle: 2, resetCount: 1 };
@@ -686,15 +677,12 @@ describe("MemorialPage", () => {
   });
 
   it("cancels an older state refresh before applying a generation response", async () => {
-    vi.useFakeTimers();
     const initialState = unlockedState();
     const staleRefresh = deferred<MemorialStateResponse>();
     prepareUploadMock.mockResolvedValue(uploadTicket());
     uploadSourceMock.mockResolvedValue(undefined);
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
-    const { client } = renderMemorial(initialState);
-    await finishStandardEntry();
-    vi.useRealTimers();
+    const { client } = await enterMemorial(initialState);
 
     getStateMock.mockReset();
     getStateMock.mockReturnValue(staleRefresh.promise);
@@ -705,8 +693,7 @@ describe("MemorialPage", () => {
     fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
       target: { files: [source] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
 
     await waitFor(() =>
       expect(client.getQueryData<MemorialStateResponse>(["memorial"])?.state).toBe("queued"),
@@ -721,10 +708,7 @@ describe("MemorialPage", () => {
   });
 
   it("clears the picker after a dropped image replaces its selection", async () => {
-    vi.useFakeTimers();
-    renderMemorial(unlockedState());
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(unlockedState());
 
     const input = screen.getByLabelText("メモリアル用の画像を選択");
     const dropZone = screen.getByRole("button", { name: /画像をドロップ/u });
@@ -753,11 +737,8 @@ describe("MemorialPage", () => {
   });
 
   it("offers a failed generation retry without preparing another upload", async () => {
-    vi.useFakeTimers();
     queueGenerationMock.mockResolvedValue(unlockedState("queued"));
-    renderMemorial(unlockedState("failed"));
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(unlockedState("failed"));
 
     expect(screen.getByLabelText("メモリアル用の画像を選択")).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "前回の生成を再開" }));
@@ -774,20 +755,16 @@ describe("MemorialPage", () => {
   });
 
   it("only offers the retained upload attempt after its generation response is lost", async () => {
-    vi.useFakeTimers();
     prepareUploadMock.mockResolvedValue(uploadTicket());
     uploadSourceMock.mockResolvedValue(undefined);
     queueGenerationMock.mockRejectedValue(new Error("response lost"));
-    renderMemorial(unlockedState("failed"));
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(unlockedState("failed"));
 
     const source = new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
       target: { files: [source] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
 
     const retainedRetry = await screen.findByRole("button", { name: "生成受付を再試行" });
     expect(screen.queryByRole("button", { name: "前回の生成を再開" })).not.toBeInTheDocument();
@@ -804,12 +781,9 @@ describe("MemorialPage", () => {
   it.each(["success", "error"] as const)(
     "ignores a stale retry %s after the same cycle becomes ready",
     async (outcome) => {
-      vi.useFakeTimers();
       const pendingRetry = deferred<MemorialStateResponse>();
       queueGenerationMock.mockReturnValue(pendingRetry.promise);
-      const { client } = renderMemorial(unlockedState("failed"));
-      await finishStandardEntry();
-      vi.useRealTimers();
+      const { client } = await enterMemorial(unlockedState("failed"));
 
       fireEvent.click(screen.getByRole("button", { name: "前回の生成を再開" }));
       await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
@@ -829,11 +803,8 @@ describe("MemorialPage", () => {
   );
 
   it("reuses a recovery key after response loss until the cycle or state changes", async () => {
-    vi.useFakeTimers();
     queueGenerationMock.mockRejectedValue(new Error("response lost"));
-    const { client } = renderMemorial(unlockedState("failed"));
-    await finishStandardEntry();
-    vi.useRealTimers();
+    const { client } = await enterMemorial(unlockedState("failed"));
 
     const failedRetry = screen.getByRole("button", { name: "前回の生成を再開" });
     fireEvent.click(failedRetry);
@@ -866,10 +837,7 @@ describe("MemorialPage", () => {
   });
 
   it("requires the reset warning, clears the input, and starts the next cycle", async () => {
-    vi.useFakeTimers();
-    const { client } = renderMemorial(unlockedState());
-    await finishStandardEntry();
-    vi.useRealTimers();
+    const { client } = await enterMemorial(unlockedState());
     const invalidateQueries = vi.spyOn(client, "invalidateQueries");
     getMemoryMock.mockResolvedValue(memory(1));
     resetMock.mockResolvedValue(resetLockedState());
@@ -922,22 +890,13 @@ describe("MemorialPage", () => {
   });
 
   it("applies a successful reset after a same-cycle state refresh", async () => {
-    vi.useFakeTimers();
     const pendingReset = deferred<MemorialStateResponse>();
     resetMock.mockReturnValue(pendingReset.promise);
     getMemoryMock.mockResolvedValue(memory(1));
-    const { client } = renderMemorial(unlockedState());
+    const { client } = await enterMemorial(unlockedState());
     const invalidateQueries = vi.spyOn(client, "invalidateQueries");
-    await finishStandardEntry();
-    vi.useRealTimers();
 
-    fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
-    fireEvent.click(
-      within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
-        "button",
-        { name: "500点にリセット" },
-      ),
-    );
+    confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
 
     const next = resetLockedState();
@@ -973,21 +932,12 @@ describe("MemorialPage", () => {
   });
 
   it("ignores a stale reset error after the same cycle state advances", async () => {
-    vi.useFakeTimers();
     const pendingReset = deferred<MemorialStateResponse>();
     resetMock.mockReturnValue(pendingReset.promise);
     getMemoryMock.mockResolvedValue(memory(1));
-    const { client } = renderMemorial(unlockedState());
-    await finishStandardEntry();
-    vi.useRealTimers();
+    const { client } = await enterMemorial(unlockedState());
 
-    fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
-    fireEvent.click(
-      within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
-        "button",
-        { name: "500点にリセット" },
-      ),
-    );
+    confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
 
     const progressed = sameCycleReadyState();
@@ -1003,21 +953,8 @@ describe("MemorialPage", () => {
   });
 
   it("reuses the reset key after response loss until the cycle changes", async () => {
-    vi.useFakeTimers();
     resetMock.mockRejectedValue(new Error("response lost"));
-    const { client } = renderMemorial(unlockedState());
-    await finishStandardEntry();
-    vi.useRealTimers();
-
-    const confirmReset = () => {
-      fireEvent.click(screen.getByRole("button", { name: "親愛度をリセット" }));
-      fireEvent.click(
-        within(screen.getByRole("dialog", { name: "親愛度をリセットしますか？" })).getByRole(
-          "button",
-          { name: "500点にリセット" },
-        ),
-      );
-    };
+    const { client } = await enterMemorial(unlockedState());
 
     confirmReset();
     await waitFor(() => expect(resetMock).toHaveBeenCalledTimes(1));
@@ -1216,7 +1153,6 @@ describe("MemorialPage", () => {
   });
 
   it("recovers authentication when a Memorial mutation reports an expired session", async () => {
-    vi.useFakeTimers();
     const client = createClient();
     client.setQueryData(["records-session"], { authenticated: true });
     const invalidateQueries = vi.spyOn(client, "invalidateQueries");
@@ -1229,16 +1165,13 @@ describe("MemorialPage", () => {
         "request-mutation-auth",
       ),
     );
-    renderMemorial(unlockedState(), client);
-    await finishStandardEntry();
-    vi.useRealTimers();
+    await enterMemorial(unlockedState(), client);
 
     const source = new File([Uint8Array.of(1)], "memory.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("メモリアル用の画像を選択"), {
       target: { files: [source] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }));
-    fireEvent.click(screen.getByRole("button", { name: "理解して生成する" }));
+    confirmGeneration();
 
     await waitFor(() =>
       expect(invalidateQueries).toHaveBeenCalledWith({

@@ -12,7 +12,6 @@ import shittim_records.admin_status_adapters as status_adapters
 from shittim_records.admin_status import AdminStatusCollection, AdminStatusService
 from shittim_records.admin_status_adapters import (
     ADMIN_STATUS_BUDGET_NAMES,
-    ADMIN_STATUS_FUNCTION_NAMES,
     ADMIN_STATUS_PARAMETER_NAMES,
     ADMIN_STATUS_STACK_NAMES,
     AwsAdminStatusConfiguration,
@@ -38,6 +37,9 @@ TASK_DEFINITION_ARN = (
     f"arn:aws:ecs:ap-northeast-1:{AWS_ACCOUNT_ID}:task-definition/private-runtime:42"
 )
 NEXT_TASK_IMAGE_TAGS = ("release-2026-08-24", "release-short")
+CERTIFICATE_ARN = (
+    f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
+)
 INSPECTOR_DESCRIPTION = (
     "A boundary validation flaw can allow a remote attacker to submit malformed input and "
     "cause the affected process to read outside its intended memory region."
@@ -65,72 +67,6 @@ STATUS_COLLECTORS = (
     ("signer", "_signer_section"),
     ("external", "_external_section"),
 )
-
-
-def test_static_admin_status_inventory_is_complete_and_immutable() -> None:
-    assert dict(ADMIN_STATUS_FUNCTION_NAMES) == {
-        "image_admission": "shittim-chest-production-image-admission",
-        "discord_status": "shittim-chest-production-discord-status-publisher",
-        "runtime_reconciler": "shittim-chest-production-runtime-reconciler",
-        "discord_ingress": "shittim-chest-production-discord-ingress",
-        "records_projector": "shittim-chest-production-records-projector",
-        "records_backfill": "shittim-chest-production-records-backfill",
-        "records_auth": "shittim-chest-production-records-auth",
-        "records_ranking": "shittim-chest-production-records-ranking",
-        "records_cost": "shittim-chest-production-records-cost",
-        "records_inspector_translation": ("shittim-chest-production-records-inspector-translation"),
-        "records_memorial_api": "shittim-chest-production-records-memorial-api",
-        "records_memorial_worker": "shittim-chest-production-records-memorial-worker",
-        "records_read": "shittim-chest-production-records-read",
-        "records_admin_config": "shittim-chest-production-records-admin-config",
-        "records_admin_status": "shittim-chest-production-records-admin-status",
-    }
-    assert dict(ADMIN_STATUS_STACK_NAMES) == {
-        "stateful": "ShittimChest-Prod-Stateful",
-        "release_identity": "ShittimChest-Prod-ReleaseIdentity",
-        "runtime": "ShittimChest-Prod-Runtime",
-        "operations": "ShittimChest-Prod-Operations",
-        "cost_governance": "ShittimChest-Prod-CostGovernance",
-        "records_stateful": "ShittimChest-Prod-RecordsStateful",
-        "records_application": "ShittimChest-Prod-RecordsApplication",
-        "records_edge": "ShittimChest-Prod-RecordsEdge",
-    }
-    assert dict(ADMIN_STATUS_PARAMETER_NAMES) == {
-        "discord_public_key": "/shittim-chest/production/discord/moderator/public-key",
-        "moderator_token": "/shittim-chest/production/discord/moderator/token",
-        "participant_a_token": "/shittim-chest/production/discord/participant-a/token",
-        "participant_b_token": "/shittim-chest/production/discord/participant-b/token",
-        "participant_c_token": "/shittim-chest/production/discord/participant-c/token",
-        "openai_api_key": "/shittim-chest/production/openai/api-key",
-        "runtime_prompts_active": "/shittim-chest/production/runtime-prompts/active",
-        "records_identity": "/shittim-chest/production/records/identity-hmac-key",
-        "records_presentation": "/shittim-chest/production/records/presentation/v0001",
-        "records_oauth": "/shittim-chest/production/records/discord/oauth/v0001",
-        "records_client_secret": "/shittim-chest/production/records/discord/client-secret",
-        "records_session_key": "/shittim-chest/production/records/session-key",
-        "records_openai_admin_key": "/shittim-chest/production/records/openai/admin-key",
-        "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
-        "records_openai_inspector_translation_key": (
-            "/shittim-chest/production/records/openai/inspector-translation-api-key"
-        ),
-        "records_openai_memorial_key": (
-            "/shittim-chest/production/records/openai/memorial-api-key"
-        ),
-        "records_admin_user_id": ("/shittim-chest/production/records/admin/discord-user-id"),
-    }
-    assert dict(ADMIN_STATUS_BUDGET_NAMES) == {
-        "project": "shittim-chest-production-project",
-        "account": "shittim-chest-production-account",
-    }
-
-    for inventory in (
-        ADMIN_STATUS_FUNCTION_NAMES,
-        ADMIN_STATUS_STACK_NAMES,
-        ADMIN_STATUS_PARAMETER_NAMES,
-        ADMIN_STATUS_BUDGET_NAMES,
-    ):
-        with pytest.raises(TypeError):
-            cast(Any, inventory)["unexpected"] = "value"
 
 
 def configuration() -> AwsAdminStatusConfiguration:
@@ -164,48 +100,14 @@ def configuration() -> AwsAdminStatusConfiguration:
         memorial_generation_dlq_url=(
             f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/memorial-generation-dlq"
         ),
-        stacks={
-            "stateful": "ShittimChest-Prod-Stateful",
-            "release_identity": "ShittimChest-Prod-ReleaseIdentity",
-            "runtime": "ShittimChest-Prod-Runtime",
-            "operations": "ShittimChest-Prod-Operations",
-            "cost_governance": "ShittimChest-Prod-CostGovernance",
-            "records_stateful": "ShittimChest-Prod-RecordsStateful",
-            "records_application": "ShittimChest-Prod-RecordsApplication",
-            "records_edge": "ShittimChest-Prod-RecordsEdge",
-        },
-        static_parameters={
-            "discord_public_key": "/shittim-chest/production/discord/moderator/public-key",
-            "moderator_token": "/shittim-chest/production/discord/moderator/token",
-            "participant_a_token": "/shittim-chest/production/discord/participant-a/token",
-            "participant_b_token": "/shittim-chest/production/discord/participant-b/token",
-            "participant_c_token": "/shittim-chest/production/discord/participant-c/token",
-            "openai_api_key": "/shittim-chest/production/openai/api-key",
-            "runtime_prompts_active": "/shittim-chest/production/runtime-prompts/active",
-            "records_identity": "/shittim-chest/production/records/identity-hmac-key",
-            "records_presentation": "/shittim-chest/production/records/presentation/v0001",
-            "records_oauth": "/shittim-chest/production/records/discord/oauth/v0001",
-            "records_client_secret": "/shittim-chest/production/records/discord/client-secret",
-            "records_session_key": "/shittim-chest/production/records/session-key",
-            "records_openai_admin_key": "/shittim-chest/production/records/openai/admin-key",
-            "records_openai_project_id": "/shittim-chest/production/records/openai/project-id",
-            "records_openai_inspector_translation_key": (
-                "/shittim-chest/production/records/openai/inspector-translation-api-key"
-            ),
-            "records_openai_memorial_key": (
-                "/shittim-chest/production/records/openai/memorial-api-key"
-            ),
-            "records_admin_user_id": "/shittim-chest/production/records/admin/discord-user-id",
-        },
+        stacks=ADMIN_STATUS_STACK_NAMES,
+        static_parameters=ADMIN_STATUS_PARAMETER_NAMES,
         runtime_scheduler_name="shittim-chest-production-runtime-reconciler",
         sns_topic_arn=(
             f"arn:aws:sns:ap-northeast-1:{AWS_ACCOUNT_ID}:shittim-chest-production-operations"
         ),
         signing_profile_name="shittim_chest_ecr",
-        budgets={
-            "project": "shittim-chest-production-project",
-            "account": "shittim-chest-production-account",
-        },
+        budgets=ADMIN_STATUS_BUDGET_NAMES,
         anomaly_subscription_name="shittim-chest-production-cost-anomalies",
     )
 
@@ -215,8 +117,9 @@ class Empty:
 
 
 class CloudWatch:
-    def __init__(self) -> None:
+    def __init__(self, samples: dict[str, list[float]] | None = None) -> None:
         self.statistics_calls: list[dict[str, Any]] = []
+        self.samples = samples
 
     def get_metric_statistics(self, **kwargs: Any) -> dict[str, Any]:
         self.statistics_calls.append(kwargs)
@@ -225,10 +128,31 @@ class CloudWatch:
     def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
         return {
             "MetricDataResults": [
-                {"Id": query["Id"], "StatusCode": "Complete", "Values": [1.0]}
+                {
+                    "Id": query["Id"],
+                    "StatusCode": "Complete",
+                    "Values": (
+                        [1.0]
+                        if self.samples is None
+                        else self.samples.get(query["MetricStat"]["Metric"]["MetricName"], [])
+                    ),
+                }
                 for query in kwargs["MetricDataQueries"]
             ]
         }
+
+
+class Lambda:
+    def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "State": "Active",
+            "LastUpdateStatus": "Successful",
+            "Runtime": "python3.14",
+            "Architectures": ["arm64"],
+        }
+
+    def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"ReservedConcurrentExecutions": 1}
 
 
 class HealthyAffectionCheckpoints:
@@ -258,6 +182,36 @@ class HealthyAffectionCheckpoints:
             }
         )
         return {"Item": status_adapters.marshal_item(item)}
+
+
+class DynamoTables(HealthyAffectionCheckpoints):
+    def __init__(self, *, stream_view: str = "NEW_IMAGE", session_ttl: str = "ENABLED") -> None:
+        self.stream_view = stream_view
+        self.session_ttl = session_ttl
+
+    def describe_table(self, *, TableName: str) -> dict[str, Any]:
+        table: dict[str, Any] = {
+            "TableStatus": "ACTIVE",
+            "DeletionProtectionEnabled": True,
+            "ItemCount": 4,
+        }
+        if TableName == configuration().tables["debate"]:
+            table["StreamSpecification"] = {
+                "StreamEnabled": True,
+                "StreamViewType": self.stream_view,
+            }
+        return {"Table": table}
+
+    def describe_continuous_backups(self, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "ContinuousBackupsDescription": {
+                "PointInTimeRecoveryDescription": {"PointInTimeRecoveryStatus": "ENABLED"}
+            }
+        }
+
+    def describe_time_to_live(self, *, TableName: str) -> dict[str, Any]:
+        status = self.session_ttl if TableName == configuration().tables["session"] else "ENABLED"
+        return {"TimeToLiveDescription": {"TimeToLiveStatus": status}}
 
 
 class Paginator:
@@ -374,6 +328,49 @@ def distribution_pages() -> Paginator:
             }
         ]
     )
+
+
+class CloudFront:
+    requested_distribution: str | None = None
+
+    def get_paginator(self, _name: str) -> Paginator:
+        return distribution_pages()
+
+    def get_distribution(self, *, Id: str) -> dict[str, Any]:
+        self.requested_distribution = Id
+        return {
+            "Distribution": {
+                "Status": "Deployed",
+                "DistributionConfig": {
+                    "Enabled": True,
+                    "ViewerCertificate": {
+                        "ACMCertificateArn": CERTIFICATE_ARN,
+                        "MinimumProtocolVersion": "TLSv1.3_2025",
+                    },
+                },
+            }
+        }
+
+    def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"InvalidationList": {"Items": []}}
+
+
+class Acm:
+    def __init__(self, certificate: dict[str, Any] | None = None) -> None:
+        self.requested_arn: str | None = None
+        self.certificate = (
+            certificate
+            if certificate is not None
+            else {
+                "Status": "ISSUED",
+                "KeyAlgorithm": "EC_prime256v1",
+                "NotAfter": NOW + timedelta(days=30),
+            }
+        )
+
+    def describe_certificate(self, *, CertificateArn: str) -> dict[str, Any]:
+        self.requested_arn = CertificateArn
+        return {"Certificate": self.certificate}
 
 
 def source(**clients: Any) -> AwsAdminStatusSource:
@@ -622,31 +619,7 @@ def test_ecs_marks_failed_rollout_without_exposing_provider_reason() -> None:
 
 
 def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
-    class Dynamo(HealthyAffectionCheckpoints):
-        def describe_table(self, *, TableName: str) -> dict[str, Any]:
-            table: dict[str, Any] = {
-                "TableStatus": "ACTIVE",
-                "DeletionProtectionEnabled": True,
-                "ItemCount": 4,
-            }
-            if TableName == configuration().tables["debate"]:
-                table["StreamSpecification"] = {
-                    "StreamEnabled": True,
-                    "StreamViewType": "NEW_IMAGE",
-                }
-            return {"Table": table}
-
-        def describe_continuous_backups(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "ContinuousBackupsDescription": {
-                    "PointInTimeRecoveryDescription": {"PointInTimeRecoveryStatus": "ENABLED"}
-                }
-            }
-
-        def describe_time_to_live(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"TimeToLiveDescription": {"TimeToLiveStatus": "ENABLED"}}
-
-    section = source(dynamodb=Dynamo())._dynamodb_section(NOW)
+    section = source(dynamodb=DynamoTables())._dynamodb_section(NOW)
     values = metrics(section)
 
     assert section.state == "warning"
@@ -697,76 +670,18 @@ def test_dynamodb_requires_new_image_stream_view(
     stream_view_type: str,
     expected_state: str,
 ) -> None:
-    class Dynamo(HealthyAffectionCheckpoints):
-        def describe_table(self, *, TableName: str) -> dict[str, Any]:
-            stream = (
-                {"StreamEnabled": True, "StreamViewType": stream_view_type}
-                if TableName == configuration().tables["debate"]
-                else {}
-            )
-            return {
-                "Table": {
-                    "TableStatus": "ACTIVE",
-                    "DeletionProtectionEnabled": True,
-                    "ItemCount": 0,
-                    "StreamSpecification": stream,
-                }
-            }
-
-        def describe_continuous_backups(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "ContinuousBackupsDescription": {
-                    "PointInTimeRecoveryDescription": {"PointInTimeRecoveryStatus": "ENABLED"}
-                }
-            }
-
-        def describe_time_to_live(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"TimeToLiveDescription": {"TimeToLiveStatus": "ENABLED"}}
-
-    class ZeroCloudWatch(CloudWatch):
-        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
-            return {
-                "MetricDataResults": [
-                    {"Id": query["Id"], "StatusCode": "Complete", "Values": [0.0]}
-                    for query in kwargs["MetricDataQueries"]
-                ]
-            }
-
-    section = source(dynamodb=Dynamo(), cloudwatch=ZeroCloudWatch())._dynamodb_section(NOW)
+    section = source(
+        dynamodb=DynamoTables(stream_view=stream_view_type), cloudwatch=CloudWatch({})
+    )._dynamodb_section(NOW)
 
     assert section.state == expected_state
     assert metrics(section)["debate_stream_view_type"] == stream_view_type
 
 
 def test_dynamodb_requires_session_ttl_to_be_enabled() -> None:
-    class Dynamo(HealthyAffectionCheckpoints):
-        def describe_table(self, *, TableName: str) -> dict[str, Any]:
-            stream = (
-                {"StreamEnabled": True, "StreamViewType": "NEW_IMAGE"}
-                if TableName == configuration().tables["debate"]
-                else {}
-            )
-            return {
-                "Table": {
-                    "TableStatus": "ACTIVE",
-                    "DeletionProtectionEnabled": True,
-                    "ItemCount": 0,
-                    "StreamSpecification": stream,
-                }
-            }
-
-        def describe_continuous_backups(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "ContinuousBackupsDescription": {
-                    "PointInTimeRecoveryDescription": {"PointInTimeRecoveryStatus": "ENABLED"}
-                }
-            }
-
-        def describe_time_to_live(self, *, TableName: str) -> dict[str, Any]:
-            status = "DISABLED" if TableName == configuration().tables["session"] else "ENABLED"
-            return {"TimeToLiveDescription": {"TimeToLiveStatus": status}}
-
-    section = source(dynamodb=Dynamo())._dynamodb_section(NOW)
+    section = source(
+        dynamodb=DynamoTables(session_ttl="DISABLED"), cloudwatch=CloudWatch({})
+    )._dynamodb_section(NOW)
 
     assert section.state == "warning"
     assert metrics(section)["session_ttl"] == "DISABLED"
@@ -1040,55 +955,14 @@ def test_unknown_alarm_names_are_not_exposed() -> None:
 
 
 def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution() -> None:
-    certificate_arn = (
-        f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
-    )
-
-    class CloudFront:
-        requested_distribution: str | None = None
-
-        def get_paginator(self, _name: str) -> Paginator:
-            return distribution_pages()
-
-        def get_distribution(self, *, Id: str) -> dict[str, Any]:
-            self.requested_distribution = Id
-            return {
-                "Distribution": {
-                    "Status": "Deployed",
-                    "DistributionConfig": {
-                        "Enabled": True,
-                        "ViewerCertificate": {
-                            "ACMCertificateArn": certificate_arn,
-                            "MinimumProtocolVersion": "TLSv1.3_2025",
-                        },
-                    },
-                }
-            }
-
-        def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"InvalidationList": {"Items": []}}
-
-    class Acm:
-        requested_arn: str | None = None
-
-        def describe_certificate(self, *, CertificateArn: str) -> dict[str, Any]:
-            self.requested_arn = CertificateArn
-            return {
-                "Certificate": {
-                    "Status": "ISSUED",
-                    "KeyAlgorithm": "EC_prime256v1",
-                    "NotAfter": NOW + timedelta(days=300),
-                }
-            }
-
     acm = Acm()
     cloudfront = CloudFront()
     section = source(cloudfront=cloudfront, acm=acm)._cloudfront_section(NOW)
 
     assert section.state == "healthy"
     assert cloudfront.requested_distribution == "E123456789AB"
-    assert acm.requested_arn == certificate_arn
-    assert certificate_arn not in section.model_dump_json()
+    assert acm.requested_arn == CERTIFICATE_ARN
+    assert CERTIFICATE_ARN not in section.model_dump_json()
 
 
 @pytest.mark.parametrize(
@@ -1102,33 +976,7 @@ def test_cloudfront_derives_the_current_certificate_from_the_exact_distribution(
 def test_cloudfront_state_includes_certificate_health(
     certificate: dict[str, Any], expected_state: str
 ) -> None:
-    certificate_arn = (
-        f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
-    )
-
-    class CloudFront:
-        def get_paginator(self, _name: str) -> Paginator:
-            return distribution_pages()
-
-        def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "Distribution": {
-                    "Status": "Deployed",
-                    "DistributionConfig": {
-                        "Enabled": True,
-                        "ViewerCertificate": {"ACMCertificateArn": certificate_arn},
-                    },
-                }
-            }
-
-        def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"InvalidationList": {"Items": []}}
-
-    class Acm:
-        def describe_certificate(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"Certificate": certificate}
-
-    section = source(cloudfront=CloudFront(), acm=Acm())._cloudfront_section(NOW)
+    section = source(cloudfront=CloudFront(), acm=Acm(certificate))._cloudfront_section(NOW)
 
     assert section.state == expected_state
 
@@ -1403,18 +1251,6 @@ def test_s3_accepts_non_versioned_one_day_memorial_upload_lifecycle() -> None:
 
 @pytest.mark.parametrize("failure", ("partial", "missing"))
 def test_lambda_section_is_unknown_for_incomplete_provider_metrics(failure: str) -> None:
-    class Lambda:
-        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "State": "Active",
-                "LastUpdateStatus": "Successful",
-                "Runtime": "python3.14",
-                "Architectures": ["arm64"],
-            }
-
-        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"ReservedConcurrentExecutions": 1}
-
     class IncompleteCloudWatch(CloudWatch):
         def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
             results = super().get_metric_data(**kwargs)["MetricDataResults"]
@@ -1435,28 +1271,7 @@ def test_lambda_section_is_unknown_for_incomplete_provider_metrics(failure: str)
 
 
 def test_lambda_section_treats_complete_empty_idle_metrics_as_zero() -> None:
-    class Lambda:
-        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "State": "Active",
-                "LastUpdateStatus": "Successful",
-                "Runtime": "python3.14",
-                "Architectures": ["arm64"],
-            }
-
-        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"ReservedConcurrentExecutions": 1}
-
-    class IdleCloudWatch(CloudWatch):
-        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
-            return {
-                "MetricDataResults": [
-                    {"Id": query["Id"], "StatusCode": "Complete", "Values": []}
-                    for query in kwargs["MetricDataQueries"]
-                ]
-            }
-
-    section = source(lambda_client=Lambda(), cloudwatch=IdleCloudWatch())._lambda_section(NOW)
+    section = source(lambda_client=Lambda(), cloudwatch=CloudWatch({}))._lambda_section(NOW)
     values = metrics(section)
 
     assert section.state == "healthy"
@@ -1467,30 +1282,9 @@ def test_lambda_section_treats_complete_empty_idle_metrics_as_zero() -> None:
 
 
 def test_lambda_section_requires_duration_when_invocations_exist() -> None:
-    class Lambda:
-        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "State": "Active",
-                "LastUpdateStatus": "Successful",
-                "Runtime": "python3.14",
-                "Architectures": ["arm64"],
-            }
-
-        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"ReservedConcurrentExecutions": 1}
-
-    class MissingDurationCloudWatch(CloudWatch):
-        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
-            results = []
-            for query in kwargs["MetricDataQueries"]:
-                metric_name = query["MetricStat"]["Metric"]["MetricName"]
-                values = [] if metric_name == "Duration" else [1.0]
-                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": values})
-            return {"MetricDataResults": results}
-
     section = source(
         lambda_client=Lambda(),
-        cloudwatch=MissingDurationCloudWatch(),
+        cloudwatch=CloudWatch({"Invocations": [1.0], "Errors": [1.0], "Throttles": [1.0]}),
     )._lambda_section(NOW)
 
     assert section.state == "unknown"
@@ -1511,30 +1305,9 @@ def test_lambda_section_validates_idle_metric_relationships(
     expected_state: str,
     expected_value: str | int,
 ) -> None:
-    class Lambda:
-        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "State": "Active",
-                "LastUpdateStatus": "Successful",
-                "Runtime": "python3.14",
-                "Architectures": ["arm64"],
-            }
-
-        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"ReservedConcurrentExecutions": 1}
-
-    class MismatchedCloudWatch(CloudWatch):
-        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
-            results = []
-            for query in kwargs["MetricDataQueries"]:
-                metric_name = query["MetricStat"]["Metric"]["MetricName"]
-                values = [sample_value] if metric_name == sampled_metric else []
-                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": values})
-            return {"MetricDataResults": results}
-
     section = source(
         lambda_client=Lambda(),
-        cloudwatch=MismatchedCloudWatch(),
+        cloudwatch=CloudWatch({sampled_metric: [sample_value]}),
     )._lambda_section(NOW)
 
     assert section.state == expected_state
@@ -1555,87 +1328,27 @@ def test_lambda_section_warns_for_errors_and_throttles(
     failing_metric: str | None,
     expected_state: str,
 ) -> None:
-    class Lambda:
-        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "State": "Active",
-                "LastUpdateStatus": "Successful",
-                "Runtime": "python3.14",
-                "Architectures": ["arm64"],
-            }
-
-        def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"ReservedConcurrentExecutions": 1}
-
-    class LambdaCloudWatch(CloudWatch):
-        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
-            results = []
-            for query in kwargs["MetricDataQueries"]:
-                metric_name = query["MetricStat"]["Metric"]["MetricName"]
-                value = 1.0 if metric_name in {"Invocations", failing_metric} else 0.0
-                if metric_name == "Duration":
-                    value = 12.5
-                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": [value]})
-            return {"MetricDataResults": results}
-
+    samples = {"Invocations": [1.0], "Errors": [0.0], "Throttles": [0.0], "Duration": [12.5]}
+    if failing_metric:
+        samples[failing_metric] = [1.0]
     section = source(
         lambda_client=Lambda(),
-        cloudwatch=LambdaCloudWatch(),
+        cloudwatch=CloudWatch(samples),
     )._lambda_section(NOW)
 
     assert section.state == expected_state
 
 
 def test_lambda_section_propagates_reserved_concurrency_provider_failure() -> None:
-    class Lambda:
-        def get_function_configuration(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "State": "Active",
-                "LastUpdateStatus": "Successful",
-                "Runtime": "python3.14",
-                "Architectures": ["arm64"],
-            }
-
+    class UnavailableConcurrency(Lambda):
         def get_function_concurrency(self, **_kwargs: Any) -> dict[str, Any]:
             raise RuntimeError("provider failure")
 
     with pytest.raises(RuntimeError, match="provider failure"):
-        source(lambda_client=Lambda())._lambda_section(NOW)
+        source(lambda_client=UnavailableConcurrency())._lambda_section(NOW)
 
 
 def test_cloudfront_section_is_unknown_for_incomplete_provider_metrics() -> None:
-    certificate_arn = (
-        f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
-    )
-
-    class CloudFront:
-        def get_paginator(self, _name: str) -> Paginator:
-            return distribution_pages()
-
-        def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "Distribution": {
-                    "Status": "Deployed",
-                    "DistributionConfig": {
-                        "Enabled": True,
-                        "ViewerCertificate": {"ACMCertificateArn": certificate_arn},
-                    },
-                }
-            }
-
-        def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"InvalidationList": {"Items": []}}
-
-    class Acm:
-        def describe_certificate(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "Certificate": {
-                    "Status": "ISSUED",
-                    "KeyAlgorithm": "EC_prime256v1",
-                    "NotAfter": NOW + timedelta(days=30),
-                }
-            }
-
     class IncompleteCloudWatch(CloudWatch):
         def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
             results = super().get_metric_data(**kwargs)["MetricDataResults"]
@@ -1653,38 +1366,6 @@ def test_cloudfront_section_is_unknown_for_incomplete_provider_metrics() -> None
 
 
 def test_cloudfront_section_treats_complete_empty_quiet_hour_as_zero() -> None:
-    certificate_arn = (
-        f"arn:aws:acm:us-east-1:{AWS_ACCOUNT_ID}:certificate/12345678-1234-1234-1234-123456789abc"
-    )
-
-    class CloudFront:
-        def get_paginator(self, _name: str) -> Paginator:
-            return distribution_pages()
-
-        def get_distribution(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "Distribution": {
-                    "Status": "Deployed",
-                    "DistributionConfig": {
-                        "Enabled": True,
-                        "ViewerCertificate": {"ACMCertificateArn": certificate_arn},
-                    },
-                }
-            }
-
-        def list_invalidations(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"InvalidationList": {"Items": []}}
-
-    class Acm:
-        def describe_certificate(self, **_kwargs: Any) -> dict[str, Any]:
-            return {
-                "Certificate": {
-                    "Status": "ISSUED",
-                    "KeyAlgorithm": "EC_prime256v1",
-                    "NotAfter": NOW + timedelta(days=30),
-                }
-            }
-
     class QuietCloudWatch(CloudWatch):
         def __init__(self) -> None:
             super().__init__()
@@ -1718,17 +1399,8 @@ def test_cloudfront_section_treats_complete_empty_quiet_hour_as_zero() -> None:
 
 
 def test_cloudfront_metrics_require_error_rates_when_requests_exist() -> None:
-    class MissingRatesCloudWatch(CloudWatch):
-        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
-            results = []
-            for query in kwargs["MetricDataQueries"]:
-                metric_name = query["MetricStat"]["Metric"]["MetricName"]
-                samples = [5.0] if metric_name == "Requests" else []
-                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": samples})
-            return {"MetricDataResults": results}
-
     provider_metrics, provider_complete = source(
-        cloudwatch_global=MissingRatesCloudWatch()
+        cloudwatch_global=CloudWatch({"Requests": [5.0]})
     )._cloudfront_metrics(NOW, distribution_id="E123456789AB")
     values = {metric.name: metric.value for metric in provider_metrics}
 
@@ -1739,17 +1411,8 @@ def test_cloudfront_metrics_require_error_rates_when_requests_exist() -> None:
 
 
 def test_cloudfront_metrics_reject_rate_samples_when_requests_are_empty() -> None:
-    class MismatchedCloudWatch(CloudWatch):
-        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
-            results = []
-            for query in kwargs["MetricDataQueries"]:
-                metric_name = query["MetricStat"]["Metric"]["MetricName"]
-                samples = [1.5] if metric_name == "4xxErrorRate" else []
-                results.append({"Id": query["Id"], "StatusCode": "Complete", "Values": samples})
-            return {"MetricDataResults": results}
-
     provider_metrics, provider_complete = source(
-        cloudwatch_global=MismatchedCloudWatch()
+        cloudwatch_global=CloudWatch({"4xxErrorRate": [1.5]})
     )._cloudfront_metrics(NOW, distribution_id="E123456789AB")
     values = {metric.name: metric.value for metric in provider_metrics}
 

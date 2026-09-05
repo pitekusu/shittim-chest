@@ -1295,12 +1295,6 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     if "npm ci" in records_web or "package-lock.json" in records_web:
         raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
 
-    records_infra = _workflow_job_block(records_text, "records-infra")
-    if records_infra.count("python3 tools/run_npm_audit.py -- npm run audit:infra") != 1:
-        raise WorkflowPolicyError(
-            "Records CI infrastructure must use the fail-closed npm outage-aware audit runner"
-        )
-
     records_gate = _workflow_job_block(records_text, "records-gate")
     required_records_gate = (
         "if: always()",

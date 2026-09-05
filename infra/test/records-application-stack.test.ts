@@ -1,7 +1,7 @@
 import { App, Tags, Validations } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { AwsSolutionsChecks } from "cdk-nag";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 
 import { RecordsApplicationStack } from "../lib/records-application-stack";
 import { RecordsStatefulStack } from "../lib/records-stateful-stack";
@@ -35,6 +35,11 @@ function synthesize(): {
 }
 
 describe("RecordsApplicationStack", () => {
+  let fixture: ReturnType<typeof synthesize>;
+  beforeAll(() => {
+    fixture = synthesize();
+  });
+
   test("synthesizes when the deployment account is unresolved", () => {
     const app = new App();
     const stack = new RecordsApplicationStack(app, "RecordsApplication", {
@@ -50,7 +55,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("creates eleven Python 3.14 ARM64 functions from one immutable S3 version", () => {
-    const { stack, template } = synthesize();
+    const { stack, template } = fixture;
 
     expect(stack.terminationProtection).toBe(true);
     template.resourceCountIs("AWS::Lambda::Function", 11);
@@ -82,7 +87,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("keeps fixed ADMIN inventory out of the Lambda environment", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const adminStatusFunction = Object.values(
       template.findResources("AWS::Lambda::Function"),
     ).find(
@@ -105,7 +110,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("binds each function to one explicit 90-day log group", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
     template.resourceCountIs("AWS::Logs::LogGroup", 12);
@@ -143,7 +148,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("publishes five isolated aliases behind exactly twenty-one HTTP API routes", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.resourceCountIs("AWS::Lambda::Version", 5);
     template.resourceCountIs("AWS::Lambda::Alias", 5);
@@ -192,7 +197,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("rebuilds rankings every 15 minutes without asynchronous retries", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-ranking",
@@ -233,7 +238,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("collects AWS, OpenAI, and Frankfurter cost inputs on bounded schedules", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-cost",
@@ -283,7 +288,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("translates Inspector descriptions hourly with isolated least privilege", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-inspector-translation",
@@ -321,7 +326,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("isolates memorial API and generation worker resources and permissions", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-memorial-api",
@@ -542,7 +547,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("keeps Auth, Read, Ranking, Cost, and translation IAM exact and disjoint", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const policies = template.findResources("AWS::IAM::Policy");
     const auth = Object.values(policies).find((policy) =>
       JSON.stringify(policy).includes("AuthFunctionRole"),
@@ -633,7 +638,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("isolates ADMIN prompt writes from sanitized read-only status access", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-admin-config",
       Handler: "shittim_records.lambda_handlers.admin_config_handler",
@@ -749,7 +754,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("keeps ADMIN status access read-only and least privilege", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-admin-status",
       ReservedConcurrentExecutions: 2,
@@ -994,7 +999,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("filters completed metadata and bounds every stream retry dimension", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
       BatchSize: 10,
@@ -1024,7 +1029,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("keeps source writes and projector scans out of both execution roles", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const policies = template.findResources("AWS::IAM::Policy");
     const serialized = JSON.stringify(policies);
     const projectionPolicies = Object.values(policies).filter((policy) => {
@@ -1089,7 +1094,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("does not recreate the source debate table", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.resourceCountIs("AWS::DynamoDB::Table", 0);
     expect(template.toJSON().Parameters).toHaveProperty("SourceDebateTableName");
@@ -1097,7 +1102,7 @@ describe("RecordsApplicationStack", () => {
   });
 
   test("has no unacknowledged AWS Solutions findings", () => {
-    const { checks, stack } = synthesize();
+    const { checks, stack } = fixture;
 
     expect(checks.validateScope(stack).success).toBe(true);
   });

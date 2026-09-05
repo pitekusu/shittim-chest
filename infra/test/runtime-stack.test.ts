@@ -1,7 +1,7 @@
 import { App, Tags, Validations } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { AwsSolutionsChecks } from "cdk-nag";
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 
 import { RuntimeStack } from "../lib/runtime-stack";
 import { StatefulStack } from "../lib/stateful-stack";
@@ -37,8 +37,13 @@ function synthesize(): {
 }
 
 describe("RuntimeStack", () => {
+  let fixture: ReturnType<typeof synthesize>;
+  beforeAll(() => {
+    fixture = synthesize();
+  });
+
   test("requires validated image digests and accepts only versioned runtime config", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const parameters = template.toJSON().Parameters;
 
     expect(parameters.RuntimeImageDigest).toEqual({
@@ -72,7 +77,7 @@ describe("RuntimeStack", () => {
   });
 
   test("creates a two-AZ public-only VPC without paid network appliances", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.resourceCountIs("AWS::EC2::VPC", 1);
     template.hasResourceProperties("AWS::EC2::VPC", { CidrBlock: "10.42.0.0/24" });
@@ -85,7 +90,7 @@ describe("RuntimeStack", () => {
   });
 
   test("allows no ingress and only IPv4 HTTPS egress", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.resourceCountIs("AWS::EC2::SecurityGroupIngress", 0);
     template.hasResourceProperties("AWS::EC2::SecurityGroup", {
@@ -102,7 +107,7 @@ describe("RuntimeStack", () => {
   });
 
   test("starts at zero on Fargate On-Demand with stop-before-start deployment", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.hasResourceProperties("AWS::ECS::Cluster", {
       Configuration: Match.absent(),
@@ -129,7 +134,7 @@ describe("RuntimeStack", () => {
   });
 
   test("creates three control-plane Lambdas plus one image admission Lambda", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const functions = Object.values(template.findResources("AWS::Lambda::Function"));
     const applicationFunctions = functions.filter((resource) =>
       String(resource.Properties.Handler).startsWith("shittim_chest.lambda_handlers."),
@@ -183,7 +188,7 @@ describe("RuntimeStack", () => {
   });
 
   test("routes Discord ingress only through one content-bound SnapStart alias", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const functions = template.findResources("AWS::Lambda::Function");
     const ingressEntry = Object.entries(functions).find(
       ([, resource]) =>
@@ -250,7 +255,7 @@ describe("RuntimeStack", () => {
   });
 
   test("fails closed before scale-up unless the release image is admitted", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.hasResourceProperties("AWS::ECS::Service", {
       DeploymentConfiguration: Match.objectLike({
@@ -306,7 +311,7 @@ describe("RuntimeStack", () => {
   });
 
   test("wires only versioned parameter names and content-free function references", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const functions = Object.values(template.findResources("AWS::Lambda::Function"));
     const byHandler = (handler: string) =>
       functions.find((resource) => resource.Properties.Handler === handler)?.Properties;
@@ -357,7 +362,7 @@ describe("RuntimeStack", () => {
   });
 
   test("exposes only the signed Discord POST route through HTTP API v2", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
     template.resourceCountIs("AWS::ApiGatewayV2::Integration", 1);
@@ -412,7 +417,7 @@ describe("RuntimeStack", () => {
   });
 
   test("schedules a bounded one-minute reconciliation and async retries", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.resourceCountIs("AWS::Scheduler::Schedule", 1);
     template.hasResourceProperties("AWS::Scheduler::Schedule", {
@@ -466,7 +471,7 @@ describe("RuntimeStack", () => {
   });
 
   test("uses one digest-only hardened production task definition", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     const taskDefinitions = Object.values(template.findResources("AWS::ECS::TaskDefinition"));
     expect(taskDefinitions).toHaveLength(1);
@@ -529,7 +534,7 @@ describe("RuntimeStack", () => {
   });
 
   test("injects private runtime values from versioned SSM paths", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     const normal = Object.values(template.findResources("AWS::ECS::TaskDefinition")).find(
       (task) => task.Properties.Family.endsWith("-normal"),
@@ -578,7 +583,7 @@ describe("RuntimeStack", () => {
   });
 
   test("keeps production task permissions bounded without interactive access", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
     const execution = policies.find((policy) =>
       JSON.stringify(policy.Properties.Roles).includes("ExecutionRole"),
@@ -633,7 +638,7 @@ describe("RuntimeStack", () => {
   });
 
   test("grants each application Lambda only its underlying DynamoDB operations", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
     const policyFor = (roleId: string) => {
       const policy = policies.find((resource) =>
@@ -695,7 +700,7 @@ describe("RuntimeStack", () => {
   });
 
   test("reserves deployment lock and audit writes for deployment tooling", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
     const expectedPartitionsByRole = new Map([
       [
@@ -904,7 +909,7 @@ describe("RuntimeStack", () => {
   });
 
   test("retains logs after normal deletion but removes them after a failed first create", () => {
-    const { template } = synthesize();
+    const { template } = fixture;
 
     template.resourceCountIs("AWS::Logs::LogGroup", 6);
     template.hasResource("AWS::Logs::LogGroup", {
@@ -927,7 +932,7 @@ describe("RuntimeStack", () => {
   });
 
   test("has no unsuppressed AWS Solutions findings", () => {
-    const { checks, runtime } = synthesize();
+    const { checks, runtime } = fixture;
 
     expect(checks.validateScope(runtime).success).toBe(true);
   });

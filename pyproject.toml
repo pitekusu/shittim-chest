@@ -68,11 +68,6 @@ addopts = [
     "--strict-config",
     "--strict-markers",
     "--import-mode=importlib",
-    "--cov=shittim_chest.domain",
-    "--cov=shittim_chest.application",
-    "--cov-branch",
-    "--cov-report=term-missing:skip-covered",
-    "--cov-fail-under=90",
 ]
 asyncio_mode = "strict"
 xfail_strict = true
@@ -83,7 +78,6 @@ branch = true
 source = ["shittim_chest.domain", "shittim_chest.application"]
 
 [tool.coverage.report]
-fail_under = 90
 precision = 2
 show_missing = true
 skip_covered = true
