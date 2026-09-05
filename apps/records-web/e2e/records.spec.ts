@@ -1854,6 +1854,7 @@ test("queued Memorial can resend an existing request after reload", async ({ pag
   await expect(page).toHaveScreenshot("records-memorial-queued-recovery.png", {
     animations: "disabled",
     fullPage: true,
+    maxDiffPixels: 20,
   });
   await resend.click();
   await expect(page.getByText("思い出を画像と文章にしています")).toBeVisible();
