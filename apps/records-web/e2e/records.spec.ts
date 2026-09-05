@@ -1808,6 +1808,116 @@ test("Memorial uploads once and queues generation through the signed S3 form", a
   expect(operations).toEqual(["prepare", "upload", "generate"]);
 });
 
+test("queued Memorial can resend an existing request after reload", async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.setViewportSize({ width: 320, height: 800 });
+  }
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialQueued }));
+  const keys: string[] = [];
+  await page.route("**/api/v1/memorial/generate", async (route) => {
+    const headers = route.request().headers();
+    keys.push(headers["x-idempotency-key"] ?? "");
+    expect(headers["x-csrf-token"]).toBe("csrf-token");
+    expect(route.request().postDataJSON()).toEqual({
+      schemaVersion: 1,
+      expectedCycle: 1,
+      confirmation: "GENERATE MEMORIAL",
+    });
+    if (keys.length === 1) {
+      await route.fulfill({
+        status: 503,
+        json: {
+          error: {
+            code: "MEMORIAL_QUEUE_UNAVAILABLE",
+            message: "生成の受付が混み合っています。",
+            requestId: "synthetic-queue-error",
+          },
+        },
+      });
+    } else {
+      await route.fulfill({ json: { ...memorialQueued, state: "generating" } });
+    }
+  });
+  await page.goto("/memorial");
+  const resend = page.getByRole("button", { name: "生成受付を再送", exact: true });
+  await expect(resend).toBeVisible();
+  expect(keys).toHaveLength(0);
+  await resend.click();
+  await expect(page.getByRole("alert")).toContainText("生成の受付が混み合っています");
+  await expect(resend).toBeEnabled();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
+  await expect(page).toHaveScreenshot("records-memorial-queued-recovery.png", {
+    animations: "disabled",
+    fullPage: true,
+  });
+  await resend.click();
+  await expect(page.getByText("思い出を画像と文章にしています")).toBeVisible();
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toMatch(/^memorial-/u);
+  expect(keys[1]).toBe(keys[0]);
+  await expect(resend).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "親愛度をリセット", exact: true })).toHaveCount(0);
+});
+
+test("Memorial image failure reloads only the signed image and keeps the story", async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.setViewportSize({ width: 320, height: 800 });
+  }
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialReady }));
+  let memoryReads = 0;
+  let imageReads = 0;
+  let generationCalls = 0;
+  await page.route("**/api/v1/memorial/memories/1", (route) => {
+    memoryReads += 1;
+    return route.fulfill({ json: memorialMemory });
+  });
+  await page.route("**/api/v1/memorial/generate", (route) => {
+    generationCalls += 1;
+    return route.abort();
+  });
+  await page.route(`${MEMORIAL_MEDIA_ORIGIN}/**`, (route) => {
+    imageReads += 1;
+    return imageReads === 1
+      ? route.fulfill({ status: 403, headers: { "cache-control": "private, no-store" } })
+      : route.fulfill({
+          contentType: "image/png",
+          headers: { "cache-control": "private, no-store" },
+          body: Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+          ),
+        });
+  });
+  await page.goto("/memorial");
+  await expect(page.getByRole("alert")).toContainText("画像を読み込めませんでした");
+  await expect(page.getByText(memorialMemory.narrative)).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
+  await expect(page).toHaveScreenshot("records-memorial-image-recovery.png", {
+    animations: "disabled",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "画像を再取得", exact: true }).click();
+  const restoredImage = page.getByRole("img", { name: "アロナとのメモリアルロビー" });
+  await expect(restoredImage).toBeVisible();
+  await expect(restoredImage).toHaveJSProperty("naturalWidth", 1);
+  expect(memoryReads).toBe(2);
+  expect(imageReads).toBe(2);
+  expect(generationCalls).toBe(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 test("ready Memorial shows private history and confirms reset", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });

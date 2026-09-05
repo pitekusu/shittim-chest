@@ -14,7 +14,13 @@ import boto3
 import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION, DynamoItem
+from shittim_chest.adapters.dynamodb.serializer import (
+    deserialize_affection_profile,
+    serialize_affection_profile,
+)
+from shittim_chest.domain.affection import AffectionProfile, MemorialUnlock
+from shittim_chest.domain.debate_content import ParticipantSlot
+from shittim_chest.domain.identifiers import DebateId
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.adapters import ArchiveRepository
@@ -32,6 +38,7 @@ from shittim_records.inspector_translations import (
 )
 from shittim_records.memorial import MemorialFailure
 from shittim_records.memorial_adapters import DynamoMemorialRepository
+from shittim_records.projector import project_affection_profile
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
@@ -136,6 +143,34 @@ def memorial_source_table(dynamodb_client: DynamoDBClient) -> Iterator[str]:
         yield table_name
     finally:
         dynamodb_client.delete_table(TableName=table_name)
+
+
+@pytest.fixture
+def memorial_source_profile(
+    dynamodb_client: DynamoDBClient,
+    memorial_source_table: str,
+) -> AffectionProfile:
+    unlocked_at = datetime(2026, 9, 3, 1, 2, 3, 123456, tzinfo=UTC)
+    profile = AffectionProfile(
+        requester_key=uuid.uuid4().hex.ljust(43, "r"),
+        requester_username="owner",
+        requester_display_name="質問者",
+        scores=(1000, 830, 410),
+        version=7,
+        updated_at=unlocked_at,
+        memorial_unlock=MemorialUnlock(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            unlocked_at=unlocked_at,
+            debate_id=DebateId.new(),
+            requester_display_name="質問者",
+            memorial_cycle=1,
+        ),
+    )
+    dynamodb_client.put_item(
+        TableName=memorial_source_table,
+        Item=marshal_item(serialize_affection_profile(profile)),
+    )
+    return profile
 
 
 def test_oauth_claim_session_and_archive_pagination(
@@ -380,36 +415,15 @@ def test_memorial_transactions_queue_idempotency_and_atomic_reset(
     dynamodb_client: DynamoDBClient,
     table_names: tuple[str, str, str],
     memorial_source_table: str,
+    memorial_source_profile: AffectionProfile,
 ) -> None:
     statistics_table = table_names[2]
-    requester_key = "r" * 43
+    requester_key = memorial_source_profile.requester_key
     profile_key = {
         "PK": f"AFFECTION#REQUESTER#{requester_key}",
         "SK": "PROFILE",
     }
-    unlocked_at = datetime(2026, 9, 3, 1, 2, 3, tzinfo=UTC)
-    source_profile: DynamoItem = {
-        **profile_key,
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "record_type": "affection_profile",
-        "requester_key": requester_key,
-        "requester_username": "owner",
-        "requester_display_name": "質問者",
-        "scores": [1000, 830, 410],
-        "version": 7,
-        "updated_at": unlocked_at.isoformat(),
-        "reset_count": 0,
-        "memorial_cycle": 1,
-        "unlocked_participant": "participant-a",
-        "unlocked_at": unlocked_at.isoformat(),
-        "unlock_debate_id": "d" * 43,
-        "unlock_display_name": "質問者",
-        "unlock_retroactive": False,
-    }
-    dynamodb_client.put_item(
-        TableName=memorial_source_table,
-        Item=marshal_item(source_profile),
-    )
+    unlocked_at = memorial_source_profile.updated_at
     repository = DynamoMemorialRepository(
         dynamodb_client,
         source_table_name=memorial_source_table,
@@ -625,6 +639,18 @@ def test_memorial_transactions_queue_idempotency_and_atomic_reset(
     assert updated_profile["reset_count"] == 1
     assert updated_profile["memorial_cycle"] == 2
     assert updated_profile["version"] == 8
+    parsed_profile = deserialize_affection_profile(updated_profile)
+    assert parsed_profile.scores == (500, 500, 500)
+    assert parsed_profile.updated_at == unlocked_at + timedelta(minutes=4)
+    assert parsed_profile.memorial_unlock is None
+    projected = project_affection_profile(updated_profile, identity_hmac_key=b"i" * 32)
+    assert projected["scores"] == {
+        "participant-a": 500,
+        "participant-b": 500,
+        "participant-c": 500,
+    }
+    assert projected["reset_count"] == 1
+    assert projected["source_version"] == 8
     assert not {
         "unlocked_participant",
         "unlocked_at",
@@ -658,6 +684,93 @@ def test_memorial_transactions_queue_idempotency_and_atomic_reset(
     assert replayed_reset.state == "locked"
     assert replayed_reset.cycle == 2
     assert replayed_reset.reset_count == 1
+
+
+def test_memorial_repeated_failed_recovery_preserves_image_and_attempts_with_same_key(
+    dynamodb_client: DynamoDBClient,
+    table_names: tuple[str, str, str],
+    memorial_source_table: str,
+    memorial_source_profile: AffectionProfile,
+) -> None:
+    repository = DynamoMemorialRepository(
+        dynamodb_client,
+        source_table_name=memorial_source_table,
+        statistics_table_name=table_names[2],
+    )
+    owner = memorial_source_profile.requester_key
+    now = memorial_source_profile.updated_at
+    repository.reserve_upload(
+        requester_key=owner,
+        expected_cycle=1,
+        content_type="image/png",
+        size_bytes=1024,
+        sha256="4" * 64,
+        idempotency_hash="1" * 64,
+        now=now,
+    )
+    repository.queue_generation(
+        requester_key=owner,
+        expected_cycle=1,
+        idempotency_hash="2" * 64,
+        now=now + timedelta(seconds=1),
+    )
+    for attempt in (1, 2):
+        job = repository.claim_generation(
+            requester_key=owner, cycle=1, now=now + timedelta(seconds=attempt * 2)
+        )
+        assert job is not None
+        assert job.generation_attempt == attempt
+        repository.release_generation_to_queue(
+            job=job, released_at=now + timedelta(seconds=attempt * 2 + 1)
+        )
+    job = repository.claim_generation(requester_key=owner, cycle=1, now=now + timedelta(seconds=6))
+    assert job is not None
+    assert job.generation_attempt == 3
+    result_key = job.result_asset_key
+    job = repository.checkpoint_narrative(
+        job=job, narrative="思" * 700, now=now + timedelta(seconds=7)
+    )
+    job = repository.checkpoint_image(
+        job=job, image_asset_key=result_key, now=now + timedelta(seconds=8)
+    )
+    repository.fail_generation(job=job, failed_at=now + timedelta(seconds=9), preserve_derived=True)
+
+    # A lost HTTP response can hide queued -> failed, so the browser retries the same key.
+    recovery_hash = "3" * 64
+    for attempt in (4, 5):
+        recovered_at = now + timedelta(seconds=attempt * 3)
+        queued = repository.queue_generation(
+            requester_key=owner,
+            expected_cycle=1,
+            idempotency_hash=recovery_hash,
+            now=recovered_at,
+        )
+        assert queued.state == "queued"
+        job = repository.claim_generation(requester_key=owner, cycle=1, now=recovered_at)
+        assert job is not None
+        assert job.generation_attempt == attempt
+        assert job.result_asset_key == job.image_asset_key == result_key
+        assert job.narrative == "思" * 700
+        if attempt == 4:
+            repository.fail_generation(job=job, failed_at=recovered_at, preserve_derived=True)
+
+    # Completion-only recovery may exceed the paid-attempt budget, but creates no new work.
+    repository.complete_generation(job=job, generated_at=now + timedelta(seconds=20))
+    replayed = repository.queue_generation(
+        requester_key=owner,
+        expected_cycle=1,
+        idempotency_hash=recovery_hash,
+        now=now + timedelta(seconds=21),
+    )
+    assert replayed.state == "ready"
+    assert len(replayed.memories) == 1
+    memory = repository.get_memory(requester_key=owner, cycle=1)
+    assert memory is not None
+    assert memory.image_asset_key == result_key
+    assert (
+        repository.claim_generation(requester_key=owner, cycle=1, now=now + timedelta(seconds=22))
+        is None
+    )
 
 
 class _NoopS3:

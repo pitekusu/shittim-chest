@@ -622,6 +622,21 @@
   object-fit: cover;
 }
 
+.memoryImageError {
+  display: grid;
+  min-height: 260px;
+  gap: 18px;
+  padding: 28px;
+  place-content: center;
+  justify-items: start;
+  color: var(--records-ink-600);
+  line-height: 1.8;
+}
+
+.memoryImageError p {
+  margin: 0;
+}
+
 .memoryDetail figcaption {
   position: absolute;
   right: 14px;

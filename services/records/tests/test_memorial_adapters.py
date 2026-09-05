@@ -18,7 +18,14 @@ from botocore.exceptions import ClientError
 from openai import OpenAI
 from PIL import Image
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION, DynamoItem
+from shittim_chest.adapters.dynamodb.serializer import (
+    DynamoItem,
+    deserialize_affection_profile,
+    serialize_affection_profile,
+)
+from shittim_chest.domain.affection import AffectionProfile, MemorialUnlock
+from shittim_chest.domain.debate_content import ParticipantSlot
+from shittim_chest.domain.identifiers import DebateId
 
 from shittim_records.admin import PromptValues
 from shittim_records.memorial import (
@@ -39,6 +46,7 @@ from shittim_records.memorial_adapters import (
     _is_transaction_conflict,
     render_memorial_overlay,
 )
+from shittim_records.projector import project_affection_profile
 from shittim_records.read_api import PARTICIPANT_AVATAR_ASSET_KEYS
 
 NOW = datetime(2026, 9, 3, 1, 2, 3, tzinfo=UTC)
@@ -49,32 +57,36 @@ RESULT_KEY = "memorials/" + "m" * 43 + ".png"
 NARRATIVE = "思" * 700
 
 
-def _profile(*, unlocked: bool = True, cycle: int = 1, reset_count: int = 0) -> DynamoItem:
-    item: DynamoItem = {
-        "PK": f"AFFECTION#REQUESTER#{REQUESTER_KEY}",
-        "SK": "PROFILE",
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "record_type": "affection_profile",
-        "requester_key": REQUESTER_KEY,
-        "requester_username": "owner",
-        "requester_display_name": "質問者",
-        "scores": [1000, 500, 500],
-        "version": 4,
-        "updated_at": NOW.isoformat(),
-        "reset_count": reset_count,
-        "memorial_cycle": cycle,
-    }
-    if unlocked:
-        item.update(
-            {
-                "unlocked_participant": "participant-a",
-                "unlocked_at": NOW.isoformat(),
-                "unlock_debate_id": "d" * 43,
-                "unlock_display_name": "質問者",
-                "unlock_retroactive": False,
-            }
+def _profile(
+    *,
+    unlocked: bool = True,
+    cycle: int = 1,
+    reset_count: int = 0,
+    updated_at: datetime = NOW,
+) -> DynamoItem:
+    return serialize_affection_profile(
+        AffectionProfile(
+            requester_key=REQUESTER_KEY,
+            requester_username="owner",
+            requester_display_name="質問者",
+            scores=(1000, 500, 500),
+            version=4,
+            updated_at=updated_at,
+            reset_count=reset_count,
+            memorial_cycle=cycle,
+            memorial_unlock=(
+                MemorialUnlock(
+                    participant=ParticipantSlot.PARTICIPANT_A,
+                    unlocked_at=NOW,
+                    debate_id=DebateId.parse("019faaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"),
+                    requester_display_name="質問者",
+                    memorial_cycle=cycle,
+                )
+                if unlocked
+                else None
+            ),
         )
-    return item
+    )
 
 
 def _checkpoint(
@@ -146,6 +158,12 @@ class DynamoRecorder:
         return {"Items": [marshal_item(item) for item in self.query_items]}
 
     def transact_write_items(self, **kwargs: Any) -> dict[str, Any]:
+        for action in kwargs["TransactItems"]:
+            operation = next(iter(action.values()))
+            if operation["TableName"] == "source":
+                assert self.profile is not None
+                values = unmarshal_item(operation["ExpressionAttributeValues"])
+                assert values[":unlocked_at"] == self.profile["unlocked_at"]
         self.transactions.append(kwargs)
         return {}
 
@@ -169,6 +187,49 @@ class ConditionalUpdateDynamoRecorder(DynamoRecorder):
             ),
             "UpdateItem",
         )
+
+
+def _apply_update(item: DynamoItem, update: dict[str, Any]) -> None:
+    """Apply the assignment-only SET/REMOVE subset used by queueing and reset."""
+
+    values = unmarshal_item(update["ExpressionAttributeValues"])
+    names = update.get("ExpressionAttributeNames", {})
+    assignments, _, removals = update["UpdateExpression"].removeprefix("SET ").partition(" REMOVE ")
+    for assignment in assignments.split(","):
+        name, value = (part.strip() for part in assignment.split("="))
+        item[names.get(name, name)] = values[value]
+    for removal in removals.split(","):
+        if removal:
+            name = removal.strip()
+            item.pop(names.get(name, name), None)
+
+
+class QueueTransactionDynamoRecorder(DynamoRecorder):
+    """Enforce DynamoDB token identity and persist queue transitions for replay tests."""
+
+    def __init__(self) -> None:
+        super().__init__(profile=_profile(), checkpoint=_checkpoint(state="unlocked"))
+        self.accepted_tokens: dict[str, object] = {}
+
+    def transact_write_items(self, **kwargs: Any) -> dict[str, Any]:
+        token = kwargs["ClientRequestToken"]
+        actions = kwargs["TransactItems"]
+        previous = self.accepted_tokens.get(token)
+        if previous is not None:
+            if previous != actions:
+                raise ClientError(
+                    {"Error": {"Code": "IdempotentParameterMismatchException"}},
+                    "TransactWriteItems",
+                )
+            return {}
+        assert self.checkpoint is not None
+        update = actions[1]["Update"]
+        values = unmarshal_item(update["ExpressionAttributeValues"])
+        assert self.checkpoint["state"] == values[":prior_state"]
+        super().transact_write_items(**kwargs)
+        _apply_update(self.checkpoint, update)
+        self.accepted_tokens[token] = actions
+        return {}
 
 
 def _repository(client: DynamoRecorder, *, with_source: bool = True) -> DynamoMemorialRepository:
@@ -351,6 +412,38 @@ def test_failed_checkpoint_with_paid_progress_requeues_without_new_result_key(
     assert "narrative = :narrative" in update["ConditionExpression"]
 
 
+def test_failed_recovery_reuses_http_key_without_reusing_a_different_dynamo_transaction() -> None:
+    client = QueueTransactionDynamoRecorder()
+    repository = _repository(client)
+    request = {
+        "requester_key": REQUESTER_KEY,
+        "expected_cycle": 1,
+        "idempotency_hash": IDEMPOTENCY_HASH,
+    }
+    assert repository.queue_generation(**request, now=NOW).state == "queued"
+    assert client.checkpoint is not None
+    result_key = client.checkpoint["result_asset_key"]
+    for attempt in (1, 2):
+        client.checkpoint.update(
+            {"state": "failed", "generation_attempt": attempt, "narrative": NARRATIVE}
+        )
+        recovered = repository.queue_generation(
+            **request,
+            now=NOW + timedelta(minutes=attempt),
+        )
+        assert recovered.state == "queued"
+        assert client.checkpoint["generation_attempt"] == attempt
+        assert client.checkpoint["result_asset_key"] == result_key
+        assert client.checkpoint["narrative"] == NARRATIVE
+        replay = repository.queue_generation(
+            **request,
+            now=NOW + timedelta(minutes=attempt, seconds=1),
+        )
+        assert replay == recovered
+        assert len(client.transactions) == attempt + 1
+    assert len(client.accepted_tokens) == 3
+
+
 def test_claim_and_generation_checkpoints_use_only_statistics_table() -> None:
     queued = _checkpoint()
     client = DynamoRecorder(checkpoint=queued)
@@ -517,11 +610,14 @@ def test_terminal_failure_clears_only_unrecoverable_partial_output(
     assert values[":generation_claim_token"] == checkpoint["generation_claim_token"]
 
 
+@pytest.mark.parametrize("profile_updated_at", (NOW, NOW + timedelta(seconds=1)))
 def test_reset_transaction_fences_generation_and_atomically_resets_profile(
     monkeypatch: pytest.MonkeyPatch,
+    profile_updated_at: datetime,
 ) -> None:
     ready = _checkpoint(state="ready", narrative=NARRATIVE, image_asset_key=RESULT_KEY)
-    client = DynamoRecorder(profile=_profile(), checkpoint=ready)
+    profile = _profile(updated_at=profile_updated_at)
+    client = DynamoRecorder(profile=profile, checkpoint=ready)
     repository = _repository(client)
     post_reset = MemorialSnapshot(
         requester_key=REQUESTER_KEY,
@@ -556,6 +652,14 @@ def test_reset_transaction_fences_generation_and_atomically_resets_profile(
     receipt = unmarshal_item(actions[2]["Put"]["Item"])
     assert receipt["record_type"] == "memorial_reset"
     assert receipt["idempotency_hash"] == IDEMPOTENCY_HASH
+    _apply_update(profile, source_update)
+    reloaded = deserialize_affection_profile(profile, requester_key=REQUESTER_KEY)
+    projected = project_affection_profile(profile, identity_hmac_key=b"x" * 32)
+    assert reloaded.updated_at == max(NOW, profile_updated_at)
+    assert reloaded.scores == (500, 500, 500)
+    assert reloaded.memorial_unlock is None
+    assert projected["reset_count"] == 1
+    assert projected["memorial_cycle"] == 2
 
 
 class SqsRecorder:
@@ -1003,7 +1107,7 @@ def test_openai_generation_is_stateless_split_and_uses_two_high_fidelity_images(
     image_call = client.image_calls[0]
     assert image_call["model"] == "gpt-image-2"
     assert image_call["size"] == "1920x1088"
-    assert image_call["input_fidelity"] == "high"
+    assert "input_fidelity" not in image_call
     assert len(image_call["image"]) == 2
     assert "trusted persona" in image_call["prompt"]
     assert "store" not in image_call

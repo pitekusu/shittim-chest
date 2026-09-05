@@ -805,6 +805,76 @@ describe("MemorialPage", () => {
     expect(queueGenerationMock.mock.calls[3]?.[3]).not.toBe(secondKey);
   });
 
+  it("keeps a safe resend with the original key after a failed queue send is polled as queued", async () => {
+    prepareUploadMock.mockResolvedValue(uploadTicket());
+    uploadSourceMock.mockResolvedValue(undefined);
+    queueGenerationMock.mockRejectedValueOnce(
+      new RecordsApiError(503, "MEMORIAL_QUEUE_UNAVAILABLE", "queue unavailable", "request-queue"),
+    );
+    const { client } = await enterMemorial(unlockedState());
+    selectImage(new File([Uint8Array.of(1, 2, 3)], "memory.png", { type: "image/png" }));
+    confirmGeneration();
+    expect(await screen.findByRole("button", { name: "生成受付を再試行" })).toBeEnabled();
+    const originalKey = queueGenerationMock.mock.calls[0]?.[3];
+
+    getStateMock.mockResolvedValue(unlockedState("queued"));
+    await act(async () => client.refetchQueries({ queryKey: ["memorial"], exact: true }));
+    const resend = await screen.findByRole("button", { name: "生成受付を再送" });
+    expect(resend).toBeEnabled();
+    expect(queueGenerationMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "親愛度をリセット" })).not.toBeInTheDocument();
+
+    queueGenerationMock.mockResolvedValueOnce(unlockedState("generating"));
+    fireEvent.click(resend);
+    expect(await screen.findByText("思い出を画像と文章にしています")).toBeVisible();
+    expect(queueGenerationMock).toHaveBeenLastCalledWith(
+      1,
+      "GENERATE MEMORIAL",
+      "csrf-token",
+      originalKey,
+    );
+    expect(prepareUploadMock).toHaveBeenCalledTimes(1);
+    expect(uploadSourceMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "生成受付を再送" })).not.toBeInTheDocument();
+  });
+
+  it("resends queued work after reload, preserving its key across transport failure", async () => {
+    queueGenerationMock
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce(unlockedState("queued"));
+    await enterMemorial(unlockedState("queued"));
+    expect(queueGenerationMock).not.toHaveBeenCalled();
+
+    const resend = screen.getByRole("button", { name: "生成受付を再送" });
+    fireEvent.click(resend);
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(resend).toBeEnabled());
+    const firstKey = queueGenerationMock.mock.calls[0]?.[3];
+    fireEvent.click(resend);
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(2));
+    expect(queueGenerationMock.mock.calls[1]?.[3]).toBe(firstKey);
+    expect(prepareUploadMock).not.toHaveBeenCalled();
+    expect(uploadSourceMock).not.toHaveBeenCalled();
+    expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores an outstanding queued resend after the cycle advances", async () => {
+    const pending = deferred<MemorialStateResponse>();
+    queueGenerationMock.mockReturnValue(pending.promise);
+    const { client } = await enterMemorial(unlockedState("queued"));
+    fireEvent.click(screen.getByRole("button", { name: "生成受付を再送" }));
+    await waitFor(() => expect(queueGenerationMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      client.setQueryData(["memorial"], lockedState(2));
+      pending.resolve(unlockedState("queued"));
+      await pending.promise;
+    });
+    expect(client.getQueryData<MemorialStateResponse>(["memorial"])).toEqual(lockedState(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "生成受付を再送" })).not.toBeInTheDocument(),
+    );
+  });
+
   it("requires the reset warning, clears the input, and starts the next cycle", async () => {
     const { client } = await enterMemorial(unlockedState());
     const invalidateQueries = vi.spyOn(client, "invalidateQueries");
@@ -1054,6 +1124,76 @@ describe("MemorialPage", () => {
     expect(await screen.findByRole("img", { name: "プラナとのメモリアルロビー" })).toBeVisible();
     expect(getMemoryMock).toHaveBeenCalledTimes(2);
     expect(getStateMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["same", "fresh"] as const)(
+    "reloads a failed image through a fresh memory GET even with a %s URL",
+    async (urlKind) => {
+      getMemoryMock.mockResolvedValue(memory(2));
+      await enterMemorial(readyState());
+      const failedImage = await screen.findByRole("img", { name: "プラナとのメモリアルロビー" });
+      fireEvent.error(failedImage);
+      const retry = screen.getByRole("button", { name: "画像を再取得" });
+      expect(screen.getByRole("alert")).toHaveTextContent("画像を読み込めませんでした");
+      expect(screen.getByText("プラナとの思い出です。")).toBeVisible();
+      const pending = deferred<MemoryResponse>();
+      getMemoryMock.mockReturnValueOnce(pending.promise);
+      fireEvent.click(retry);
+      expect(await screen.findByRole("button", { name: "画像を再取得しています" })).toBeDisabled();
+      const nextMemory = memory(2);
+      const next =
+        urlKind === "fresh"
+          ? {
+              ...nextMemory,
+              image: { ...nextMemory.image, url: `${nextMemory.image.url}?renewed=1` },
+            }
+          : nextMemory;
+      await act(async () => pending.resolve(next));
+
+      const retriedImage = await screen.findByRole("img", { name: "プラナとのメモリアルロビー" });
+      expect(retriedImage).not.toBe(failedImage);
+      expect(retriedImage).toHaveAttribute("src", next.image.url);
+      expect(getMemoryMock).toHaveBeenCalledTimes(2);
+      expect(getStateMock).not.toHaveBeenCalled();
+      expect(queueGenerationMock).not.toHaveBeenCalled();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not leak image errors or late retries into another history selection", async () => {
+    getMemoryMock.mockImplementation((summary) => Promise.resolve(memory(summary.cycle as 1 | 2)));
+    await enterMemorial(readyState());
+    fireEvent.error(await screen.findByRole("img", { name: "プラナとのメモリアルロビー" }));
+    const pending = deferred<MemoryResponse>();
+    getMemoryMock.mockReturnValueOnce(pending.promise);
+    fireEvent.click(screen.getByRole("button", { name: "画像を再取得" }));
+    await waitFor(() => expect(getMemoryMock).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getAllByRole("tab")[0]!);
+    expect(await screen.findByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
+    await act(async () => pending.resolve(memory(2)));
+    expect(screen.getByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a memory API failure while renewing an image and can recover without generation", async () => {
+    getMemoryMock
+      .mockResolvedValueOnce(memory(2))
+      .mockRejectedValueOnce(
+        new RecordsApiError(
+          503,
+          "MEMORIAL_MEMORY_UNAVAILABLE",
+          "思い出を読み込めませんでした。",
+          "request-memory",
+        ),
+      )
+      .mockResolvedValueOnce(memory(2));
+    await enterMemorial(readyState());
+    fireEvent.error(await screen.findByRole("img", { name: "プラナとのメモリアルロビー" }));
+    fireEvent.click(screen.getByRole("button", { name: "画像を再取得" }));
+    fireEvent.click(await screen.findByRole("button", { name: "もう一度読み込む" }));
+    expect(await screen.findByRole("img", { name: "プラナとのメモリアルロビー" })).toBeVisible();
+    expect(getMemoryMock).toHaveBeenCalledTimes(3);
+    expect(queueGenerationMock).not.toHaveBeenCalled();
   });
 
   it("shows the state request error and recovers through its retry action", async () => {

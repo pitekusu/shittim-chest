@@ -134,6 +134,7 @@ class _SourceProfile:
     display_name: str
     scores: tuple[int, int, int]
     version: int
+    updated_at: datetime
     reset_count: int
     cycle: int
     participant: ParticipantSlot | None
@@ -534,7 +535,7 @@ class DynamoMemorialRepository:
                             ":version": profile.version,
                             ":cycle": expected_cycle,
                             ":participant": cast(str, profile.participant),
-                            ":unlocked_at": _timestamp(cast(datetime, profile.unlocked_at)),
+                            ":unlocked_at": _core_timestamp(cast(datetime, profile.unlocked_at)),
                             ":debate": cast(str, profile.unlock_debate_id),
                             ":display_name": cast(str, profile.unlock_display_name),
                             ":retroactive": cast(bool, profile.unlock_retroactive),
@@ -669,8 +670,8 @@ class DynamoMemorialRepository:
             narrative = None
             result_asset_key = f"memorials/{secrets.token_urlsafe(32)}.png"
         try:
-            self._client.transact_write_items(
-                TransactItems=[
+            self._transact_generation_queue(
+                [
                     {
                         "ConditionCheck": {
                             "TableName": self._require_source_table(),
@@ -693,7 +694,9 @@ class DynamoMemorialRepository:
                                     ":version": profile.version,
                                     ":cycle": expected_cycle,
                                     ":participant": cast(str, profile.participant),
-                                    ":unlocked_at": _timestamp(cast(datetime, profile.unlocked_at)),
+                                    ":unlocked_at": _core_timestamp(
+                                        cast(datetime, profile.unlocked_at)
+                                    ),
                                     ":debate": cast(str, profile.unlock_debate_id),
                                     ":display_name": cast(str, profile.unlock_display_name),
                                     ":retroactive": cast(bool, profile.unlock_retroactive),
@@ -752,12 +755,6 @@ class DynamoMemorialRepository:
                         }
                     },
                 ],
-                ClientRequestToken=_transaction_token(
-                    "queue",
-                    requester_key,
-                    expected_cycle,
-                    idempotency_hash,
-                ),
             )
         except ClientError as error:
             if not _is_transaction_conflict(error):
@@ -778,6 +775,14 @@ class DynamoMemorialRepository:
                 return self.get_snapshot(requester_key=requester_key)
             raise MemorialFailure("MEMORIAL_STATE_CONFLICT", 409) from error
         return self.get_snapshot(requester_key=requester_key)
+
+    def _transact_generation_queue(self, actions: list[TransactWriteItemTypeDef]) -> None:
+        # HTTP retries converge through the checkpoint; DynamoDB tokens identify exact writes.
+        payload = json.dumps(actions, sort_keys=True, separators=(",", ":")).encode()
+        self._client.transact_write_items(
+            TransactItems=actions,
+            ClientRequestToken="mem-" + hashlib.sha256(payload).hexdigest()[:32],
+        )
 
     def get_memory(self, *, requester_key: str, cycle: int) -> MemorialMemory | None:
         _require_requester_key(requester_key)
@@ -834,7 +839,7 @@ class DynamoMemorialRepository:
         }:
             raise MemorialFailure("MEMORIAL_RESET_NOT_ALLOWED", 409)
         next_cycle = expected_cycle + 1
-        updated_at = _timestamp(now)
+        updated_at = _core_timestamp(max(now, profile.updated_at))
         reset_item: DynamoItem = {
             **self._reset_key(requester_key, expected_cycle),
             "schema_version": 1,
@@ -843,7 +848,7 @@ class DynamoMemorialRepository:
             "cycle": expected_cycle,
             "reset_to_cycle": next_cycle,
             "idempotency_hash": idempotency_hash,
-            "reset_at": updated_at,
+            "reset_at": _timestamp(now),
         }
         try:
             self._client.transact_write_items(
@@ -882,7 +887,9 @@ class DynamoMemorialRepository:
                                     ":old_reset_count": profile.reset_count,
                                     ":cycle": expected_cycle,
                                     ":participant": cast(str, profile.participant),
-                                    ":unlocked_at": _timestamp(cast(datetime, profile.unlocked_at)),
+                                    ":unlocked_at": _core_timestamp(
+                                        cast(datetime, profile.unlocked_at)
+                                    ),
                                     ":debate": cast(str, profile.unlock_debate_id),
                                     ":display_name": cast(str, profile.unlock_display_name),
                                     ":retroactive": cast(bool, profile.unlock_retroactive),
@@ -1417,6 +1424,7 @@ class DynamoMemorialRepository:
                 ),
                 scores=cast(tuple[int, int, int], tuple(scores_raw)),
                 version=version,
+                updated_at=_datetime(item.get("updated_at"), "profile timestamp"),
                 reset_count=reset_count,
                 cycle=cycle,
                 participant=participant,
@@ -2221,7 +2229,6 @@ class OpenAIMemorialContentGenerator:
             prompt=prompt,
             size=f"{MEMORIAL_IMAGE_SOURCE_WIDTH}x{MEMORIAL_IMAGE_SOURCE_HEIGHT}",
             quality="high",
-            input_fidelity="high",
             output_format="png",
             n=1,
         )
@@ -2464,6 +2471,12 @@ def _is_s3_not_found(error: ClientError) -> bool:
 
 def _timestamp(value: datetime) -> str:
     return _utc(value).isoformat()
+
+
+def _core_timestamp(value: datetime) -> str:
+    """Keep Core source values canonical without changing Memorial checkpoints."""
+
+    return _utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _datetime(value: object, label: str) -> datetime:
