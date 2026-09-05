@@ -1,66 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { RecordDetailResponse } from "./api/types";
+import { recordDetail } from "./test/recordsTestUtils";
 import { VoteGraph } from "./components/VoteGraph";
 
-const participant = (slot: "participant-a" | "participant-b" | "participant-c", name: string) => ({
-  slot,
-  displayName: name,
-  avatar: {
-    kind: "placeholder" as const,
-    alt: `${name}のアバター`,
-    fallbackVariant: "cyan" as const,
-  },
-});
-
-const record: RecordDetailResponse = {
-  schemaVersion: 2,
-  recordId: "r".repeat(43),
-  completedAt: "2026-08-15T06:00:00Z",
-  question: "question",
-  requester: {
-    displayName: "requester",
-    avatar: { kind: "placeholder", alt: "依頼者", fallbackVariant: "cyan" },
-  },
-  participants: [
-    participant("participant-a", "アロナ"),
-    participant("participant-b", "プラナ"),
-    participant("participant-c", "安倍晋三AI"),
-  ],
-  initialOpinions: [
-    { participant: "participant-a", summary: "a", proposal: "a" },
-    { participant: "participant-b", summary: "b", proposal: "b" },
-    { participant: "participant-c", summary: "c", proposal: "c" },
-  ],
-  finalProposals: [
-    { participant: "participant-a", title: "a", proposal: "a" },
-    { participant: "participant-b", title: "b", proposal: "b" },
-    { participant: "participant-c", title: "c", proposal: "c" },
-  ],
-  votes: [
-    { voter: "participant-a", candidate: "participant-b", reason: "a" },
-    { voter: "participant-b", candidate: "participant-a", reason: "b" },
-    { voter: "participant-c", candidate: "participant-a", reason: "c" },
-  ],
-  result: {
-    winner: "participant-a",
-    voteCounts: [
-      { participant: "participant-a", count: 2 },
-      { participant: "participant-b", count: 1 },
-      { participant: "participant-c", count: 0 },
-    ],
-    tieBreakApplied: false,
-  },
-  finalDecision: {
-    winner: "participant-a",
-    victoryMessage: "victory",
-    decision: "decision",
-    actions: ["action"],
-    caveats: ["caveat"],
-  },
-  affection: null,
-};
+const record = recordDetail();
 
 afterEach(() => {
   cleanup();

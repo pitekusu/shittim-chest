@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import {
+  RECORD_ID,
+  listResponse,
+  placeholder,
+  recordDetail,
+  response,
+} from "../test/recordsTestUtils";
+
 import affectionRankingsResponseValidator from "../generated/affection-rankings-response-validator.mjs";
 import { getAffectionRankings, mergeAffectionRankingPages } from "./affectionRankings";
 import { getCosts } from "./costs";
@@ -17,88 +25,6 @@ import { getRecords } from "./recordList";
 import { getRankings } from "./rankings";
 import { getSession } from "./session";
 import type { AffectionRankingsResponse } from "./types";
-
-const RECORD_ID = "r".repeat(43);
-
-function placeholder(displayName: string, fallbackVariant: "cyan" | "pink" | "lavender") {
-  return {
-    kind: "placeholder",
-    url: null,
-    alt: `${displayName}のアバター`,
-    fallbackVariant,
-  };
-}
-
-function recordDetail() {
-  const participants = [
-    ["participant-a", "アロナ", "cyan"],
-    ["participant-b", "プラナ", "pink"],
-    ["participant-c", "安倍晋三AI", "lavender"],
-  ].map(([slot, displayName, fallbackVariant]) => ({
-    slot,
-    displayName,
-    avatar: placeholder(displayName!, fallbackVariant as "cyan" | "pink" | "lavender"),
-  }));
-  return {
-    schemaVersion: 2,
-    recordId: RECORD_ID,
-    completedAt: "2026-08-15T06:00:00Z",
-    question: "休日の過ごし方を決める",
-    requester: { displayName: "依頼者", avatar: placeholder("依頼者", "cyan") },
-    participants,
-    initialOpinions: participants.map(({ slot }) => ({
-      participant: slot,
-      summary: "要約",
-      proposal: "初回意見",
-    })),
-    finalProposals: participants.map(({ slot }) => ({
-      participant: slot,
-      title: "最終案",
-      proposal: "完成した提案",
-    })),
-    votes: [
-      { voter: "participant-a", candidate: "participant-b", reason: "理由A" },
-      { voter: "participant-b", candidate: "participant-a", reason: "理由B" },
-      { voter: "participant-c", candidate: "participant-a", reason: "理由C" },
-    ],
-    result: {
-      winner: "participant-a",
-      voteCounts: [
-        { participant: "participant-a", count: 2 },
-        { participant: "participant-b", count: 1 },
-        { participant: "participant-c", count: 0 },
-      ],
-      tieBreakApplied: false,
-    },
-    finalDecision: {
-      winner: "participant-a",
-      victoryMessage: "勝利しました",
-      decision: "最終決定",
-      actions: ["実行する"],
-      caveats: ["注意する"],
-    },
-    affection: null,
-  };
-}
-
-function listResponse() {
-  const detail = recordDetail();
-  return {
-    schemaVersion: 1,
-    items: [
-      {
-        schemaVersion: 1,
-        recordId: detail.recordId,
-        completedAt: detail.completedAt,
-        questionPreview: detail.question,
-        requester: detail.requester,
-        participants: detail.participants,
-        result: detail.result,
-      },
-    ],
-    nextCursor: null,
-  };
-}
 
 function rankingsResponse() {
   return {
@@ -223,13 +149,6 @@ function adminPromptsResponse() {
   } as const;
 }
 
-function response(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -283,8 +202,11 @@ describe("Records API endpoint validation", () => {
   });
 
   it("applies record invariants after record-detail schema validation", async () => {
-    const conflictingWinner = recordDetail();
-    conflictingWinner.finalDecision.winner = "participant-b";
+    const detail = recordDetail();
+    const conflictingWinner = {
+      ...detail,
+      finalDecision: { ...detail.finalDecision, winner: "participant-b" },
+    };
     vi.stubGlobal(
       "fetch",
       vi.fn(() => Promise.resolve(response(conflictingWinner))),
@@ -294,6 +216,23 @@ describe("Records API endpoint validation", () => {
       status: 200,
       code: "INVALID_API_RESPONSE",
     });
+  });
+
+  it("rejects three participant entries when a slot is duplicated and another is missing", async () => {
+    const detail = recordDetail();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          response({
+            ...detail,
+            participants: [detail.participants[0], detail.participants[1], detail.participants[0]],
+          }),
+        ),
+      ),
+    );
+
+    await expect(getRecord(RECORD_ID)).rejects.toMatchObject({ code: "INVALID_API_RESPONSE" });
   });
 
   it("rejects unknown fields in an otherwise valid endpoint response", async () => {

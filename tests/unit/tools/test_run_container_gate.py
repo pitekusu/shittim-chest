@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from copy import deepcopy
+from subprocess import CompletedProcess
 from typing import cast
 
 import pytest
+from tools import run_container_gate
 from tools.run_container_gate import (
     NON_TERMINAL_PHASES,
     ContainerGateError,
@@ -48,6 +52,42 @@ def test_native_arm64_image_configuration_is_accepted() -> None:
 
 def test_fault_gate_covers_every_non_terminal_domain_phase() -> None:
     assert tuple(phase.value for phase in NORMAL_PHASE_FLOW[:-1]) == NON_TERMINAL_PHASES
+
+
+@pytest.mark.parametrize("recovery_drills", [False, True])
+def test_cli_runs_security_checks_and_only_explicit_recovery_drills(
+    monkeypatch: pytest.MonkeyPatch, recovery_drills: bool
+) -> None:
+    arguments = [
+        "gate",
+        "--production-image",
+        "local:production",
+        "--expected-architecture",
+        "arm64",
+    ]
+    if recovery_drills:
+        arguments.extend(["--fault-image", "local:fault"])
+    monkeypatch.setattr(sys, "argv", arguments)
+    monkeypatch.setattr(
+        run_container_gate,
+        "_docker",
+        lambda *args: CompletedProcess(args, 0, stdout=json.dumps(_inspect())),
+    )
+    performed: list[str] = []
+    monkeypatch.setattr(
+        run_container_gate, "_validate_runtime_security", lambda image: performed.append("security")
+    )
+    monkeypatch.setattr(
+        run_container_gate, "_test_phase_sigterm", lambda image, root: performed.append("sigterm")
+    )
+    monkeypatch.setattr(
+        run_container_gate,
+        "_test_forced_boundaries",
+        lambda image, root: performed.append("recovery"),
+    )
+
+    assert run_container_gate.main() == 0
+    assert performed == (["security", "sigterm", "recovery"] if recovery_drills else ["security"])
 
 
 @pytest.mark.parametrize(

@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: production-1.0
 created: 2026-07-16
-updated: 2026-09-04
+updated: 2026-09-05
 ---
 
 # GitHub・CI-CD詳細設計
@@ -33,6 +33,10 @@ updated: 2026-09-04
 | grype | raw scan、VEX、fixable／residual risk gate |
 | docs-public-safety | mirror、links、public surface、license boundary |
 
+root lockfileのnpm audit、TypeScript、全infra Vitest（Records 3 stackを含む）は、同じtested SHAの
+CI `cdk` jobへ集約する。Records CIの`records-infra`はRecords専用synthだけを追加し、共通検証を
+再実行しない。`cdk`と`records-gate`の必須check、およびRelease境界の検証は維持する。
+
 CodeQL default setupはPython、JavaScript／TypeScript、Actionsを解析する。branch rulesetのcheck名を
 workflow名と一致させ、rerunでflaky failureを隠さない。
 
@@ -51,7 +55,8 @@ CodeQL、Grype、dependency reviewなど他のgateは継続する。
 - risk acceptanceが必要なfindingだけ、production image kind、承認済みbuild contextごとの
   実測config digest、finding key、期限へ束縛する。同kindの独立したCI／Release buildは
   複数digestを一acceptanceに有限数登録できるが、未登録digestは拒否する。
-- `fault-test` imageはproductionのbaselineやrisk acceptance対象外とする。
+- 通常PR／main pushではproduction imageの基本検証を行い、`fault-test` imageのbuildと強制停止・復旧訓練は
+  runtimeを検証する手動CIだけで実行する。`fault-test`はproductionのbaselineやrisk acceptance対象外とする。
 - manifest digestからconfig digestを推測せず、別exporterや過去runの値を流用しない。
 
 ## 4. Production Release

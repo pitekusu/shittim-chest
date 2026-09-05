@@ -174,16 +174,9 @@ jobs:
           cache: npm
       - name: Install locked CDK dependencies
         run: npm ci --ignore-scripts
-      - name: Audit and test the Records infrastructure
-        run: |
-          python3 tools/run_npm_audit.py -- npm run audit:infra
-          npm run build
-          npx vitest run \
-            infra/test/records-stateful-stack.test.ts \
-            infra/test/records-application-stack.test.ts \
-            infra/test/records-edge-stack.test.ts \
-            --testTimeout=15000
-          npm run synth:records
+      # The required CI cdk job owns the shared audit, type-check, and all infra tests.
+      - name: Synthesize the Records infrastructure
+        run: npm run synth:records
 
   records-gate:
     name: records-gate

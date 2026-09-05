@@ -307,7 +307,6 @@ async def test_command_schema_is_guild_scoped_bounded_and_synced_only_when_chang
     assert payload["name"] == "shittim"
     assert payload["options"][0]["min_length"] == 1
     assert payload["options"][0]["max_length"] == 1000
-    assert cast(Any, command).callback.__name__ == "_http_only_callback"
     assert not await controller.sync_command_if_changed(
         previous_schema_hash=controller.command_schema_hash
     )

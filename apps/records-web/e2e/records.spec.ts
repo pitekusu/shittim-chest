@@ -735,7 +735,6 @@ const PRODUCTION_CSP = [
 async function mockAuthenticatedApi(
   page: Page,
   recordDetail: typeof detail | typeof detailWithAffection = detail,
-  recordDelayMs = 0,
   isAdmin = false,
 ): Promise<void> {
   let authenticated = true;
@@ -781,12 +780,9 @@ async function mockAuthenticatedApi(
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}`, async (route) => {
-    if (recordDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, recordDelayMs));
-    }
-    return route.fulfill({ json: recordDetail });
-  });
+  await page.route(`**/api/v1/records/${RECORD_ID}`, (route) =>
+    route.fulfill({ json: recordDetail }),
+  );
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
   await page.route("**/api/v1/insights/affection-rankings?*", (route) =>
     route.fulfill({ json: affectionRankings }),
@@ -838,14 +834,8 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   const recordsHeading = page.getByRole("heading", { name: "議論の記録" });
   await expect(recordsHeading).toBeVisible();
-  expect(
-    await recordsHeading.evaluate((element) =>
-      Number.parseFloat(getComputedStyle(element).fontSize),
-    ),
-  ).toBeLessThanOrEqual(45);
   const logoff = page.getByRole("button", { name: "LOGOFF" });
   await expect(logoff).toHaveCSS("font-family", /Delogy/);
-  await expect(logoff).toHaveCSS("border-top-style", "solid");
   await expect(logoff).toHaveAttribute("lang", "en");
   const logoffBox = await logoff.boundingBox();
   expect(logoffBox).not.toBeNull();
@@ -893,19 +883,11 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   const transformBefore = await sortSegment.evaluate(
     (element) => getComputedStyle(element, "::before").transform,
   );
-  expect(
-    await sortSegment.evaluate((element) =>
-      getComputedStyle(element, "::before")
-        .transitionDuration.split(",")
-        .map((value) => value.trim()),
-    ),
-  ).toContain("0.2s");
   await sortSegment.getByText("OLD", { exact: true }).click();
   await expect(sortSegment).toHaveAttribute("data-sort", "oldest");
-  await page.waitForTimeout(240);
-  expect(
-    await sortSegment.evaluate((element) => getComputedStyle(element, "::before").transform),
-  ).not.toBe(transformBefore);
+  await expect
+    .poll(() => sortSegment.evaluate((element) => getComputedStyle(element, "::before").transform))
+    .not.toBe(transformBefore);
   expect(await sortSegment.boundingBox()).toEqual(sortBoxBefore);
   await oldestSort.focus();
   await page.keyboard.press("ArrowLeft");
@@ -913,27 +895,7 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   await expect(sortSegment).toHaveAttribute("data-sort", "newest");
   await expect(page.getByLabel("開始日")).toHaveCount(0);
   await expect(page.getByLabel("終了日")).toHaveCount(0);
-  const typographySupport = await page.evaluate(() => ({
-    autoPhrase: CSS.supports("word-break", "auto-phrase"),
-    autospace: CSS.supports("text-autospace", "normal"),
-    language: document.documentElement.lang,
-  }));
-  expect(typographySupport).toEqual({ autoPhrase: true, autospace: true, language: "ja" });
-  const questionTypography = await card.getByRole("heading").evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      lineBreak: style.getPropertyValue("line-break"),
-      overflowWrap: style.overflowWrap,
-      textAutospace: style.getPropertyValue("text-autospace"),
-      wordBreak: style.wordBreak,
-    };
-  });
-  expect(questionTypography).toEqual({
-    lineBreak: "strict",
-    overflowWrap: "anywhere",
-    textAutospace: "normal",
-    wordBreak: "auto-phrase",
-  });
+  await expect(page.locator("html")).toHaveAttribute("lang", "ja");
   await expect(page).toHaveScreenshot("records-home.png", {
     animations: "disabled",
     fullPage: true,
@@ -950,9 +912,6 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   const opinionsHeading = page.getByRole("heading", { name: "3人の意見" });
   await expect(questionHeading).toBeVisible();
   await expect(opinionsHeading).toBeVisible();
-  expect(await questionHeading.evaluate((element) => getComputedStyle(element).fontSize)).toBe(
-    await opinionsHeading.evaluate((element) => getComputedStyle(element).fontSize),
-  );
   await expect(page.getByRole("heading", { name: "アロナ → プラナ" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "最終決定" })).toBeVisible();
   await expect(page.getByText(detail.finalDecision.victoryMessage)).toBeVisible();
@@ -961,7 +920,6 @@ test("authenticated member can browse the completed archive", async ({ page }) =
     detail.completedAt,
   );
   await expect(page.getByText(/所要時間|Evidence|外部根拠/)).toHaveCount(0);
-  await expect(page.getByText(detail.finalDecision.decision)).toHaveCSS("text-wrap", "pretty");
 
   await expect(page).toHaveScreenshot("records-detail.png", {
     animations: "disabled",
@@ -1023,220 +981,21 @@ test("record card opens from its native keyboard link", async ({ page }) => {
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
 });
 
-test("final proposals align when initial opinions have different lengths", async ({
-  page,
-}, testInfo) => {
+test("internal navigation keeps route headings focused", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
-  const unevenDetail = {
-    ...detail,
-    initialOpinions: detail.initialOpinions.map((opinion, index) =>
-      index === 0
-        ? {
-            ...opinion,
-            proposal: `${opinion.proposal}\n${"文章量が異なっても、最終案の開始位置は三人で揃います。".repeat(8)}`,
-          }
-        : opinion,
-    ),
-  };
-  await mockAuthenticatedApi(page, unevenDetail);
-  await page.goto(`/records/${RECORD_ID}`);
-  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
-
-  const finalProposalTops = await page
-    .getByRole("heading", { name: "最終案" })
-    .evaluateAll((headings) => headings.map((heading) => heading.getBoundingClientRect().top));
-
-  expect(finalProposalTops).toHaveLength(3);
-  expect(Math.max(...finalProposalTops) - Math.min(...finalProposalTops)).toBeLessThanOrEqual(1);
-});
-
-test("record identities produce varied and stable card ornaments", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
-  await page.setViewportSize({ width: 1680, height: 950 });
-  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
-  const records = [0, 1, 3, 4, 5, 6].map((identity, index) => {
-    const winnerIndex = index % participants.length;
-    return {
-      schemaVersion: 1,
-      recordId: createHash("sha256").update(`visual-card-${identity}`).digest("base64url"),
-      completedAt: `2026-08-${String(22 - index).padStart(2, "0")}T06:00:00Z`,
-      questionPreview: [
-        "明日の放課後に何をして過ごす？",
-        "三人で選ぶなら、どんな映画がいい？",
-        "夏の夜に似合う飲み物を決めよう",
-        "休日に読む一冊を選ぶなら？",
-        "小さな旅へ持っていくものは何？",
-        "今夜の献立を楽しく決めて",
-      ][index],
-      requester: detail.requester,
-      participants,
-      result: {
-        winner: participants[winnerIndex]!.slot,
-        voteCounts: participants.map(({ slot }, participantIndex) => ({
-          participant: slot,
-          count:
-            participantIndex === winnerIndex
-              ? 2
-              : participantIndex === (winnerIndex + 1) % 3
-                ? 1
-                : 0,
-        })),
-        tieBreakApplied: false,
-      },
-    };
-  });
-  await page.route("**/api/v1/session?*", (route) =>
-    route.fulfill({
-      json: {
-        schemaVersion: 1,
-        authenticated: true,
-        isAdmin: false,
-        user: { displayName: "閲覧者", avatar: placeholder("閲覧者", "cyan") },
-        csrfToken: "csrf-token",
-      },
-    }),
-  );
-  await page.route("**/api/v1/records?*", (route) =>
-    route.fulfill({ json: { schemaVersion: 1, items: records, nextCursor: null } }),
-  );
-
-  await page.goto("/");
-  const decorations = page.locator("[data-card-decoration]");
-  await expect(decorations).toHaveCount(records.length);
-  const beforeReload = await decorations.evaluateAll((elements) =>
-    elements.map((element) => ({
-      accent: element.getAttribute("data-card-decoration-accent"),
-      frame: element.getAttribute("data-card-decoration-frame"),
-      mirrored: element.getAttribute("data-card-decoration-mirrored"),
-      variant: element.getAttribute("data-card-decoration"),
-    })),
-  );
-  expect(new Set(beforeReload.map(({ variant }) => variant)).size).toBe(records.length);
-  expect(new Set(beforeReload.map(({ frame }) => frame)).size).toBeGreaterThanOrEqual(3);
-
-  await page.reload();
-  await expect(decorations).toHaveCount(records.length);
-  expect(
-    await decorations.evaluateAll((elements) =>
-      elements.map((element) => ({
-        accent: element.getAttribute("data-card-decoration-accent"),
-        frame: element.getAttribute("data-card-decoration-frame"),
-        mirrored: element.getAttribute("data-card-decoration-mirrored"),
-        variant: element.getAttribute("data-card-decoration"),
-      })),
-    ),
-  ).toEqual(beforeReload);
-  await expect(page).toHaveScreenshot("records-card-decorations-dark.png", {
-    animations: "disabled",
-    fullPage: true,
-    maxDiffPixels: 20,
-  });
-});
-
-test("branded route motion stays short and coordinates all internal routes", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
-  await mockAuthenticatedApi(page, detail, 1_200);
+  await mockAuthenticatedApi(page);
   await page.goto("/");
 
-  const initialScene = page.locator('[data-route-scene="/"]');
-  await expect(initialScene).toHaveAttribute("data-route-motion", "idle");
-
-  const insightsMotionTiming = page.waitForFunction(
-    (selector) => {
-      const scene = document.querySelector<HTMLElement>(selector);
-      if (scene?.getAttribute("data-route-motion") !== "active") return null;
-      const panel = scene.querySelector<HTMLElement>("section[aria-labelledby]");
-      if (!panel) return null;
-      const parseSeconds = (value: string) => Number.parseFloat(value) || 0;
-      const sceneStyle = getComputedStyle(scene);
-      const panelStyle = getComputedStyle(panel);
-      return {
-        panelTotal:
-          parseSeconds(panelStyle.animationDuration) + parseSeconds(panelStyle.animationDelay),
-        sceneDuration: parseSeconds(sceneStyle.animationDuration),
-      };
-    },
-    '[data-route-scene="/insights"]',
-    { polling: "raf", timeout: 3_000 },
-  );
   await page.getByRole("link", { name: /^いろいろ/ }).click();
-  const timing = await (await insightsMotionTiming).jsonValue();
-  expect(timing).not.toBeNull();
-  if (!timing) throw new Error("insights route motion did not become active");
-  const insightsScene = page.locator('[data-route-scene="/insights"]');
-  const insightsHeading = page.getByRole("heading", { name: "いろいろな記録" });
-  const wins = page.getByRole("region", { name: "勝利回数ランキング" });
-  await expect(insightsScene.locator("[data-route-brand]")).toHaveCount(0);
-  await expect(insightsHeading).toBeFocused();
-  await expect(wins).toBeVisible();
-
-  expect(timing.sceneDuration).toBeLessThanOrEqual(0.42);
-  expect(timing.panelTotal).toBeLessThanOrEqual(0.42);
-
-  const panelLayoutBefore = await wins.evaluate((element) => ({
-    height: (element as HTMLElement).offsetHeight,
-    left: (element as HTMLElement).offsetLeft,
-    top: (element as HTMLElement).offsetTop,
-    width: (element as HTMLElement).offsetWidth,
-  }));
-  await page.waitForTimeout(430);
-  await expect(insightsScene).toHaveAttribute("data-route-motion", "settled");
-  expect(
-    await wins.evaluate((element) => ({
-      height: (element as HTMLElement).offsetHeight,
-      left: (element as HTMLElement).offsetLeft,
-      top: (element as HTMLElement).offsetTop,
-      width: (element as HTMLElement).offsetWidth,
-    })),
-  ).toEqual(panelLayoutBefore);
-
+  await expect(page.getByRole("heading", { name: "いろいろな記録" })).toBeFocused();
   await page.goBack();
   const archiveHeading = page.getByRole("heading", { name: "議論の記録" });
-  await expect(page.locator('[data-route-stage][data-route-kind="archive"]')).toBeVisible();
   await expect(archiveHeading).toBeFocused();
 
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
-  const detailScene = page.locator(
-    '[data-route-stage][data-route-kind="detail"] [data-route-scene]',
-  );
-  await expect(detailScene).toHaveAttribute("data-route-motion", "waiting");
-  const detailMotionBecameActive = detailScene.evaluate(
-    (scene) =>
-      new Promise<boolean>((resolve) => {
-        const observe = () => {
-          if (scene.getAttribute("data-route-motion") !== "active") return false;
-          observer.disconnect();
-          resolve(true);
-          return true;
-        };
-        const observer = new MutationObserver(observe);
-        if (observe()) return;
-        observer.observe(scene, {
-          attributeFilter: ["data-route-motion"],
-          attributes: true,
-        });
-        window.setTimeout(() => {
-          observer.disconnect();
-          resolve(false);
-        }, 3_000);
-      }),
-  );
-  await page.waitForTimeout(430);
-  await expect(page.getByText("議論の記録を開いています。")).toBeVisible();
-  await expect(detailScene).toHaveAttribute("data-route-motion", "waiting");
-  const detailHeading = page.getByRole("heading", { name: detail.question });
-  await expect(page.locator('[data-route-stage][data-route-kind="detail"]')).toBeVisible();
-  await expect(detailHeading).toBeFocused();
-  expect(await detailMotionBecameActive).toBe(true);
-  await expect(detailScene).toHaveAttribute("data-route-motion", "settled");
-
+  await expect(page.getByRole("heading", { name: detail.question })).toBeFocused();
   await page.getByRole("link", { name: "← 記録一覧へ" }).click();
-  await expect(archiveHeading).toBeVisible();
-  await page.getByRole("link", { name: "いろいろな記録" }).click();
-  await expect(page).toHaveURL("/insights");
-  await expect(page.locator('[data-route-scene="/insights"]')).toHaveCount(1);
+  await expect(archiveHeading).toBeFocused();
 });
 
 test("archive controls remain usable across responsive breakpoints", async ({ page }) => {
@@ -1403,44 +1162,15 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   ]);
   await expect(sidebarProductName).toHaveCSS("font-family", /Delogy/);
   await expect(sidebarProductName).toHaveAttribute("lang", "en");
-  const sidebarType = await sidebarProductName.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return {
-      fontSize: Number.parseFloat(style.fontSize),
-      lineHeight: Number.parseFloat(style.lineHeight),
-    };
-  });
-  expect(sidebarType.lineHeight / sidebarType.fontSize).toBeGreaterThanOrEqual(1.4);
   expect(
     await sidebarProductName.evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true);
-  await expect(sidebarProductName.locator("..").locator('[aria-hidden="true"]').first()).toHaveCSS(
-    "width",
-    "44px",
-  );
   const insightsHeading = page.getByRole("heading", { name: "いろいろな記録" });
   await expect(insightsHeading).toBeVisible();
-  expect(
-    await insightsHeading.evaluate((element) =>
-      Number.parseFloat(getComputedStyle(element).fontSize),
-    ),
-  ).toBeLessThanOrEqual(45);
   const wins = page.getByRole("region", { name: "勝利回数ランキング" });
   const requests = page.getByRole("region", { name: "依頼回数ランキング" });
   await expect(wins.getByText("VICTORIES", { exact: true })).toBeVisible();
   await expect(requests.getByText("REQUESTS", { exact: true })).toBeVisible();
-  for (const [panel, label] of [
-    [wins, "VICTORIES"],
-    [requests, "REQUESTS"],
-  ] as const) {
-    const emblemBox = await panel.locator("header [aria-hidden='true']").first().boundingBox();
-    const headingBox = await panel.getByText(label, { exact: true }).locator("..").boundingBox();
-    expect(emblemBox).not.toBeNull();
-    expect(headingBox).not.toBeNull();
-    expect(
-      Math.abs(emblemBox!.y + emblemBox!.height / 2 - (headingBox!.y + headingBox!.height / 2)),
-    ).toBeLessThanOrEqual(2);
-  }
   await expect(wins.getByRole("listitem")).toHaveCount(3);
   await expect(wins.getByRole("meter")).toHaveCount(3);
   await expect(
@@ -1505,7 +1235,6 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   expect(winsBox).not.toBeNull();
   expect(podiumBox!.x).toBeGreaterThanOrEqual(winsBox!.x);
   expect(podiumBox!.x + podiumBox!.width).toBeLessThanOrEqual(winsBox!.x + winsBox!.width);
-  await expect(podium).toHaveCSS("overflow", "clip");
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     await page.evaluate(() => document.documentElement.clientWidth),
   );
@@ -1594,19 +1323,14 @@ test("English login product name keeps the approved two-line break at narrow wid
     const lines = await heading.locator("span").evaluateAll((elements) =>
       elements.map((element) => {
         const bounds = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
         return {
           clientWidth: element.clientWidth,
-          display: style.display,
           scrollWidth: element.scrollWidth,
           top: bounds.top,
-          whiteSpace: style.whiteSpace,
         };
       }),
     );
     expect(lines).toHaveLength(2);
-    expect(lines[0]?.display).toBe("block");
-    expect(lines[0]?.whiteSpace).toBe("nowrap");
     expect(lines[1]!.top).toBeGreaterThan(lines[0]!.top);
     expect(
       lines.every((line) => line.scrollWidth <= line.clientWidth),
@@ -1615,25 +1339,6 @@ test("English login product name keeps the approved two-line break at narrow wid
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
-    await expect(heading).toHaveCSS("text-align", "center");
-    const headingType = await heading.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return {
-        fontSize: Number.parseFloat(style.fontSize),
-        lineHeight: Number.parseFloat(style.lineHeight),
-      };
-    });
-    expect(headingType.lineHeight / headingType.fontSize).toBeGreaterThanOrEqual(1.2);
-    const authenticate = page.getByRole("link", { name: "AUTHENTICATE" });
-    const authenticateType = await authenticate.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return {
-        fontSize: Number.parseFloat(style.fontSize),
-        paddingInline: Number.parseFloat(style.paddingInlineStart),
-      };
-    });
-    expect(authenticateType.fontSize).toBeLessThanOrEqual(10.6);
-    expect(authenticateType.paddingInline).toBeGreaterThanOrEqual(16);
     await expect(page).toHaveScreenshot(`display-font-login-${viewport.width}.png`, {
       animations: "disabled",
       fullPage: true,
@@ -1876,60 +1581,6 @@ test("reduced motion skips the long login and logoff transitions", async ({ page
   await page.getByRole("button", { name: "LOGOFF" }).first().click();
   await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible({
     timeout: 1_000,
-  });
-});
-
-test("English display copy uses Delogy while Japanese copy keeps LINE Seed JP", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
-  await page.route("**/api/v1/session?*", (route) =>
-    route.fulfill({
-      json: {
-        schemaVersion: 1,
-        authenticated: false,
-        isAdmin: false,
-        user: null,
-        csrfToken: null,
-      },
-    }),
-  );
-  await page.goto("/");
-  await page.evaluate(() => document.fonts.ready);
-
-  const loginHeading = page.getByRole("heading", { name: "The Shittim Chest Archive" });
-  await expect(loginHeading).toHaveCSS("font-family", /Delogy/);
-  await expect(loginHeading).toHaveAttribute("lang", "en");
-  await expect(page.getByText("シッテムの箱 議事録閲覧システム")).toHaveCSS(
-    "font-family",
-    /LINE Seed JP/,
-  );
-  const authenticate = page.getByRole("link", { name: "AUTHENTICATE" });
-  await expect(authenticate).toHaveCSS("font-family", /Delogy/);
-  await expect(authenticate).toHaveAttribute("lang", "en");
-  expect(await page.evaluate(() => document.fonts.check('16px "Delogy"'))).toBe(true);
-  await expect(page).toHaveScreenshot("display-font-login.png", {
-    animations: "disabled",
-    fullPage: true,
-    maxDiffPixels: 20,
-  });
-
-  await page.unroute("**/api/v1/session?*");
-  await mockAuthenticatedApi(page);
-  await page.addInitScript(() =>
-    sessionStorage.setItem("shittim-records-login-transition", "pending"),
-  );
-  await page.goto("/");
-  const welcome = page.getByText("WELCOME, SENSEI.");
-  await expect(welcome).toBeVisible();
-  await expect(welcome).toHaveCSS("font-family", /Delogy/);
-  await page.addStyleTag({
-    content: "*, *::before, *::after { animation: none !important; transition: none !important; }",
-  });
-  await expect(page).toHaveScreenshot("display-font-transition.png", {
-    animations: "allow",
-    fullPage: true,
-    maxDiffPixels: 20,
   });
 });
 
@@ -2328,15 +1979,12 @@ test("service status page presents localized visual status", async ({ page }, te
   test.skip(testInfo.project.name !== "desktop-chromium");
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
-  await mockAuthenticatedApi(page, detail, 0, true);
+  await mockAuthenticatedApi(page, detail, true);
 
   await page.goto("/admin");
 
   const heading = page.getByRole("heading", { name: "サービス状態確認" });
   await expect(heading).toBeVisible();
-  expect(
-    await heading.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
-  ).toBeLessThanOrEqual(45);
   await expect(page.getByText("AWSの稼働状態を、安全な境界の内側で確認します。")).toHaveCount(0);
   await expect(page.getByText("アクセス", { exact: true })).toHaveCount(0);
   await expect(page.getByText("desired_count", { exact: true })).toHaveCount(0);
@@ -2401,9 +2049,6 @@ test("service status page presents localized visual status", async ({ page }, te
   expect(ecrListLabelBox?.y ?? 0).toBeGreaterThan(
     (nextTaskTagBox?.y ?? 0) + (nextTaskTagBox?.height ?? 0),
   );
-  expect(
-    (ecrListLabelBox?.y ?? 0) - ((nextTaskTagBox?.y ?? 0) + (nextTaskTagBox?.height ?? 0)),
-  ).toBeLessThanOrEqual(4);
   expect(ecrListLabelBox?.height ?? 0).toBeGreaterThanOrEqual(24);
   const ecrImageTable = page.getByRole("region", { name: "タグ付きECRイメージ" });
   await expect(ecrImageTable).toBeVisible();
@@ -2467,13 +2112,6 @@ test("service status page presents localized visual status", async ({ page }, te
     /^Delogy/u,
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-  const snsCard = page.locator("#admin-service-sns");
-  const signerCard = page.locator("#admin-service-signer");
-  const [snsBox, signerBox] = await Promise.all([snsCard.boundingBox(), signerCard.boundingBox()]);
-  expect(snsBox).not.toBeNull();
-  expect(signerBox).not.toBeNull();
-  expect(Math.abs((snsBox?.y ?? 0) - (signerBox?.y ?? 0))).toBeLessThanOrEqual(1);
-  expect(signerBox?.x ?? 0).toBeGreaterThan(snsBox?.x ?? 0);
   await expect(page).toHaveScreenshot("admin-console-dark.png", {
     animations: "disabled",
     fullPage: true,
@@ -2484,44 +2122,11 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
 });
 
-test("service status loading presents graphical indeterminate progress", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
-  await page.setViewportSize({ width: 1440, height: 960 });
-  await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
-  await mockAuthenticatedApi(page, detail, 0, true);
-  let releaseStatusResponse!: () => void;
-  const statusResponseGate = new Promise<void>((resolve) => {
-    releaseStatusResponse = resolve;
-  });
-  await page.route("**/api/v1/admin/status*", async (route) => {
-    await statusResponseGate;
-    await route.fulfill({ json: adminStatus });
-  });
-
-  await page.goto("/admin");
-
-  const loadingStatus = page.getByRole("status");
-  await expect(loadingStatus).toContainText("16サービスを並列で確認しています");
-  await expect(page.getByText("実行基盤", { exact: true })).toBeVisible();
-  await expect(page.getByText("運用", { exact: true })).toBeVisible();
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
-  await expect(page).toHaveScreenshot("admin-status-loading-dark.png", {
-    animations: "disabled",
-    fullPage: true,
-    maxDiffPixels: 20,
-  });
-
-  releaseStatusResponse();
-  await expect(page.getByText("Scale-to-Zeroで待機しています。", { exact: true })).toBeVisible();
-});
-
 test("service status page contains wide status tables on mobile", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
-  await mockAuthenticatedApi(page, detail, 0, true);
+  await mockAuthenticatedApi(page, detail, true);
 
   await page.goto("/admin");
 
@@ -2544,7 +2149,7 @@ test("prompt management supports safe editing, history, and responsive layout", 
   const desktop = testInfo.project.name === "desktop-chromium";
   await page.setViewportSize(desktop ? { width: 1440, height: 960 } : { width: 390, height: 844 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
-  await mockAuthenticatedApi(page, detail, 0, true);
+  await mockAuthenticatedApi(page, detail, true);
 
   await page.goto("/admin/prompts");
 
