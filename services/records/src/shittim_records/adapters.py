@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from botocore.exceptions import ClientError
@@ -28,6 +29,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
 from shittim_chest.application import DebateSnapshot
 
 from shittim_records.archive import ArchiveProjection, RecordsPresentationConfig
+from shittim_records.record_link_notifications import pending_record_link_notification
 
 MAX_DYNAMODB_ITEM_BYTES = 400 * 1024
 MAX_TRANSACTION_BYTES = 4 * 1024 * 1024
@@ -185,11 +187,23 @@ class SourceDebateRepository:
 class ArchiveRepository:
     """Write immutable projections using one bounded DynamoDB transaction."""
 
-    def __init__(self, client: DynamoDBClient, table_name: str) -> None:
+    def __init__(
+        self,
+        client: DynamoDBClient,
+        table_name: str,
+        *,
+        notification_table_name: str | None = None,
+    ) -> None:
         self._client = client
         self._table_name = table_name
+        self._notification_table_name = notification_table_name
 
-    def put_projection(self, projection: ArchiveProjection) -> bool:
+    def put_projection(
+        self,
+        projection: ArchiveProjection,
+        *,
+        notification_created_at: datetime | None = None,
+    ) -> bool:
         marker_key = {
             "PK": f"RECORD#{projection.record_id}",
             "SK": f"PROJECTION#V{projection.schema_version}",
@@ -199,7 +213,24 @@ class ArchiveRepository:
             return self._classify_existing(marker, projection.source_fingerprint)
 
         marshaled_items = tuple(marshal_item(item) for item in projection.items)
-        _validate_transaction(marshaled_items)
+        notification_item: dict[str, AttributeValueTypeDef] | None = None
+        if notification_created_at is not None:
+            if self._notification_table_name is None:
+                raise ValueError("record-link notification table is not configured")
+            notification_item = marshal_item(
+                cast(
+                    DynamoItem,
+                    pending_record_link_notification(
+                        record_id=projection.record_id,
+                        source_fingerprint=projection.source_fingerprint,
+                        created_at=notification_created_at,
+                    ),
+                )
+            )
+        transaction_items = (
+            marshaled_items if notification_item is None else (*marshaled_items, notification_item)
+        )
+        _validate_transaction(transaction_items)
         actions: list[TransactWriteItemTypeDef] = [
             {
                 "Put": {
@@ -210,6 +241,18 @@ class ArchiveRepository:
             }
             for item in marshaled_items
         ]
+        if notification_item is not None:
+            actions.append(
+                {
+                    "Put": {
+                        "TableName": cast(str, self._notification_table_name),
+                        "Item": notification_item,
+                        "ConditionExpression": (
+                            "attribute_not_exists(PK) AND attribute_not_exists(SK)"
+                        ),
+                    }
+                }
+            )
         try:
             self._client.transact_write_items(
                 TransactItems=actions,

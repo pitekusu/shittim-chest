@@ -37,6 +37,8 @@ const MEMORIAL_API_FUNCTION_NAME = "shittim-chest-production-records-memorial-ap
 const MEMORIAL_WORKER_FUNCTION_NAME = "shittim-chest-production-records-memorial-worker";
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
+const MODERATOR_TOKEN_PARAMETER_NAME =
+  "/shittim-chest/production/discord/moderator/token";
 
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
@@ -256,11 +258,16 @@ export class RecordsApplicationStack extends Stack {
       presentationParameter,
       allowScan: false,
       allowAffectionProjection: true,
+      recordLinkNotifications: {
+        publicHostname: recordsPublicHostname.valueAsString,
+        runtimeConfigParameterName: `/shittim-chest/production/runtime/${legacyRuntimeConfigVersion.valueAsString}`,
+        moderatorTokenParameterName: MODERATOR_TOKEN_PARAMETER_NAME,
+      },
     });
     this.projectorFunction.addEventSource(
       new eventSources.DynamoEventSource(sourceTable, {
         startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-        batchSize: 10,
+        batchSize: 1,
         bisectBatchOnError: true,
         maxRecordAge: Duration.hours(1),
         onFailure: new eventSources.SqsDlq(projectorDlq),
@@ -1751,6 +1758,11 @@ export class RecordsApplicationStack extends Stack {
     readonly presentationParameter: ssm.IStringParameter;
     readonly allowScan: boolean;
     readonly allowAffectionProjection: boolean;
+    readonly recordLinkNotifications?: {
+      readonly publicHostname: string;
+      readonly runtimeConfigParameterName: string;
+      readonly moderatorTokenParameterName: string;
+    };
   }): lambda.Function {
     const logGroup = new logs.LogGroup(this, `${options.id}Logs`, {
       logGroupName: `/aws/lambda/${options.functionName}`,
@@ -1819,6 +1831,52 @@ export class RecordsApplicationStack extends Stack {
         }),
       );
     }
+    if (options.recordLinkNotifications !== undefined) {
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+          resources: [options.statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["RECORD_LINK_NOTIFICATION"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+      );
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem"],
+          resources: [options.statisticsTable.tableArn],
+          conditions: {
+            StringEquals: {
+              "dynamodb:EnclosingOperation": "TransactWriteItems",
+            },
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["RECORD_LINK_NOTIFICATION"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+      );
+      role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter"],
+          resources: [
+            this.formatArn({
+              service: "ssm",
+              resource: "parameter",
+              resourceName: options.recordLinkNotifications.runtimeConfigParameterName.slice(1),
+            }),
+            this.formatArn({
+              service: "ssm",
+              resource: "parameter",
+              resourceName: options.recordLinkNotifications.moderatorTokenParameterName.slice(1),
+            }),
+          ],
+        }),
+      );
+    }
     role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetParameters"],
@@ -1845,6 +1903,15 @@ export class RecordsApplicationStack extends Stack {
         STATISTICS_TABLE_NAME: options.statisticsTable.tableName,
         IDENTITY_HMAC_PARAMETER_NAME: options.identityParameter.parameterName,
         PRESENTATION_PARAMETER_NAME: options.presentationParameter.parameterName,
+        ...(options.recordLinkNotifications === undefined
+          ? {}
+          : {
+              RECORDS_PUBLIC_HOSTNAME: options.recordLinkNotifications.publicHostname,
+              SHITTIM_RUNTIME_CONFIG_PARAMETER:
+                options.recordLinkNotifications.runtimeConfigParameterName,
+              SHITTIM_MODERATOR_TOKEN_PARAMETER:
+                options.recordLinkNotifications.moderatorTokenParameterName,
+            }),
       },
       loggingFormat: lambda.LoggingFormat.JSON,
     });

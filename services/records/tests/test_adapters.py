@@ -211,6 +211,33 @@ def test_archive_repository_creates_all_items_in_one_transaction() -> None:
     assert str(client.transactions[0]["ClientRequestToken"]).startswith("records-")
 
 
+def test_archive_repository_creates_pending_link_receipt_in_same_transaction() -> None:
+    client = FakeDynamoDb()
+    repository = ArchiveRepository(
+        cast(Any, client),
+        "archive",
+        notification_table_name="statistics",
+    )
+    value = cast(Any, projection())
+
+    assert repository.put_projection(value, notification_created_at=NOW) is True
+
+    actions = cast(list[dict[str, Any]], client.transactions[0]["TransactItems"])
+    assert len(actions) == 13
+    receipt = actions[-1]["Put"]
+    assert receipt["TableName"] == "statistics"
+    assert unmarshal_item(receipt["Item"]) == {
+        "PK": "RECORD_LINK_NOTIFICATION",
+        "SK": value.record_id,
+        "record_type": "record_link_notification",
+        "schema_version": 1,
+        "source_fingerprint": value.source_fingerprint,
+        "state": "pending",
+        "attempted": False,
+        "created_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+    }
+
+
 def test_archive_repository_treats_same_marker_as_idempotent_noop() -> None:
     value = cast(Any, projection())
     client = FakeDynamoDb()
