@@ -47,7 +47,7 @@ jobs:
           test -n "${DRIFT_ROLE_ARN}"
           test -n "${RECORDS_DRIFT_ROLE_ARN}"
       - name: Acquire read-only AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ vars.AWS_RELEASE_DRIFT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -89,7 +89,7 @@ jobs:
           detect ShittimChest-Prod-Operations "${AWS_REGION}"
           detect ShittimChest-Prod-CostGovernance "${COST_REGION}"
       - name: Acquire read-only Records AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ vars.AWS_RECORDS_DRIFT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

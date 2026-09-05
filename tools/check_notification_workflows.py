@@ -210,7 +210,7 @@ def _validate_deploy_guard(directory: Path) -> None:
         "EXPECTED_REF: refs/heads/main",
         '--actor "${GITHUB_TRIGGERING_ACTOR}"',
         "persist-credentials: false",
-        "aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c",
+        "aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c",
         "vars.AWS_DEPLOY_GUARD_ROLE_ARN",
         "vars.DYNAMODB_TABLE_NAME",
         "BREAK_GLASS_REASON: ${{ inputs.break_glass_reason }}",

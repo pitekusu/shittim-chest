@@ -1079,6 +1079,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
 
   await page.goto("/insights");
   await expect(page.getByRole("heading", { name: "いろいろな記録" })).toBeVisible();
+  await page.mouse.move(0, 0);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await expect(page).toHaveScreenshot("records-dark-insights.png", {
     animations: "disabled",
