@@ -18,7 +18,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-import httpx
+import httpx2
 from botocore.exceptions import BotoCoreError, ClientError
 from openai import (
     APIConnectionError,
@@ -2153,7 +2153,7 @@ class OpenAIMemorialContentGenerator:
             self._client = OpenAI(
                 api_key=self._configuration.load_api_key(),
                 max_retries=0,
-                timeout=httpx.Timeout(
+                timeout=httpx2.Timeout(
                     MEMORIAL_OPENAI_TIMEOUT_SECONDS,
                     connect=5.0,
                     write=30.0,

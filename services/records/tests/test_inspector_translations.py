@@ -8,10 +8,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import boto3
+import httpx2
 import pytest
 from botocore import UNSIGNED
 from botocore.config import Config
 from botocore.stub import Stubber
+from openai import OpenAI
 from shittim_chest.adapters.dynamodb.codec import marshal_item
 
 import shittim_records.inspector_translation_adapters as adapters
@@ -219,6 +221,67 @@ def test_aws_source_keeps_only_tagged_active_critical_or_high_descriptions() -> 
         {"comparison": "EQUALS", "value": "HIGH"},
     ]
     assert inspector_pages.calls[0]["PaginationConfig"] == {"PageSize": 100}
+
+
+def test_openai_translator_uses_real_sdk_transport_and_bounded_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = inspector_description(vulnerability_id="CVE-2026-12345", description=DESCRIPTION)
+    calls: list[dict[str, Any]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        calls.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json={
+                "id": "resp_translation_test",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "summaries": [
+                                            {"key": source.key, "summary_ja": SUMMARY_JA}
+                                        ],
+                                    }
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+    with httpx2.Client(transport=httpx2.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(
+            adapters,
+            "OpenAI",
+            lambda **kwargs: OpenAI(http_client=http_client, **kwargs),
+        )
+        translator = OpenAIInspectorSummaryTranslator(
+            cast(Any, SimpleNamespace(load_api_key=lambda: "test-key")),
+        )
+
+        assert translator.translate((source,), translated_at=NOW) == (summary_for(source),)
+        client = translator._client
+        assert isinstance(client, OpenAI)
+        assert client.max_retries == 1
+        assert isinstance(client.timeout, httpx2.Timeout)
+        assert client.timeout.as_dict() == {
+            "connect": 5.0,
+            "read": 45.0,
+            "write": 15.0,
+            "pool": 5.0,
+        }
+
+    assert len(calls) == 1
+    assert calls[0]["store"] is False
+    assert calls[0]["text"]["format"]["strict"] is True
 
 
 def test_openai_translator_uses_luna_structured_stateless_output() -> None:

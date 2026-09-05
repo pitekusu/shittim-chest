@@ -12,8 +12,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx2
 import pytest
 from botocore.exceptions import ClientError
+from openai import OpenAI
 from PIL import Image
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION, DynamoItem
@@ -1013,27 +1015,53 @@ def test_openai_generation_is_stateless_split_and_uses_two_high_fidelity_images(
     assert NARRATIVE not in caplog.text
 
 
+@pytest.mark.parametrize("operation", ("narrative", "image"))
 def test_openai_client_disables_sdk_retries_and_bounds_each_paid_call(
     monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     import shittim_records.memorial_adapters as adapters
 
-    captured: dict[str, Any] = {}
-    sentinel = object()
+    requests: list[httpx2.Request] = []
 
-    def openai(**kwargs: Any) -> object:
-        captured.update(kwargs)
-        return sentinel
+    def rate_limit(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(429, json={"error": {"message": "rate limited"}})
 
-    monkeypatch.setattr(adapters, "OpenAI", openai)
     generator = OpenAIMemorialContentGenerator(
         cast(Any, TrustedConfiguration()),
         participant_references=cast(Any, ParticipantReferences()),
     )
 
-    assert generator._openai_client() is sentinel
-    assert captured["max_retries"] == 0
-    assert captured["timeout"].read == 120.0
+    with httpx2.Client(transport=httpx2.MockTransport(rate_limit)) as http_client:
+        monkeypatch.setattr(
+            adapters,
+            "OpenAI",
+            lambda **kwargs: OpenAI(http_client=http_client, **kwargs),
+        )
+        client = generator._openai_client()
+        assert client.max_retries == 0
+        assert client.timeout.as_dict() == {
+            "connect": 5.0,
+            "read": 120.0,
+            "write": 30.0,
+            "pool": 5.0,
+        }
+        inputs: dict[str, Any] = {
+            "participant": "participant-a",
+            "requester_display_name": "質問者",
+            "questions": ("非公開の質問",),
+            "achieved_on": date(2026, 9, 3),
+        }
+        with pytest.raises(MemorialFailure, match="MEMORIAL_PROVIDER_RATE_LIMITED"):
+            if operation == "image":
+                generator.generate_image(**inputs, source_image=_png((64, 64)), narrative=NARRATIVE)
+            else:
+                generator.generate_narrative(**inputs)
+
+    assert len(requests) == 1
+    expected_path = "/v1/images/edits" if operation == "image" else "/v1/responses"
+    assert requests[0].url.path == expected_path
 
 
 @pytest.mark.parametrize(
