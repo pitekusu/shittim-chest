@@ -28,8 +28,8 @@ UV_REFERENCE_PATTERN: Final = re.compile(
     r"^ghcr\.io/astral-sh/uv:(?P<version>\d+\.\d+\.\d+)@"
     r"(?P<digest>sha256:[0-9a-f]{64})$"
 )
-UV_MIN_VERSION: Final = (0, 11, 8)
-UV_MAX_VERSION_EXCLUSIVE: Final = (0, 12, 0)
+UV_MIN_VERSION: Final = (0, 12, 7)
+UV_MAX_VERSION_EXCLUSIVE: Final = (0, 13, 0)
 DHI_REFERENCE_PATTERN: Final = re.compile(
     r"^dhi\.io/python:(?P<tag>3\.14\.7-debian13(?P<dev>-dev)?)"
     r"@(?P<digest>sha256:[0-9a-f]{64})$"

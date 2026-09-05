@@ -347,7 +347,7 @@ def build_report(pins: Sequence[ToolPin], fetch_tag: Callable[[ToolPin], str]) -
     rows += [
         "",
         "workflow内の固定値は実ファイルから取得しています。更新時もSHA・checksum・署名検証を維持します。",
-        "uv 0.12など系列変更は別途互換性を確認し、無条件にlatestへ追従しません。",
+        "uvなどの系列変更は別途互換性を確認し、無条件にlatestへ追従しません。",
     ]
     return "\n".join(rows) + "\n", status
 
