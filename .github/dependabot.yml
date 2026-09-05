@@ -57,6 +57,10 @@ updates:
     # uv-build follows uv's versioning policy, where minor releases can be
     # breaking. Keep the build backend on the validated 0.12 line.
     ignore:
+      # SDK 3 requires a coordinated httpx2 migration in Core and Records.
+      - dependency-name: "openai"
+        versions:
+          - ">=3,<4"
       - dependency-name: "uv-build"
         versions:
           - ">=0.13"
@@ -84,6 +88,10 @@ updates:
           - "minor"
           - "patch"
     ignore:
+      # Keep this boundary aligned with the Core SDK migration hold.
+      - dependency-name: "openai"
+        versions:
+          - ">=3,<4"
       - dependency-name: "uv-build"
         versions:
           - ">=0.13"
