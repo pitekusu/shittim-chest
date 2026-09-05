@@ -44,6 +44,29 @@ afterEach(() => {
 });
 
 describe("App shell", () => {
+  it("shows the loading status until session lookup fails, then offers a retry", async () => {
+    let rejectSession!: (reason: Error) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            rejectSession = reject;
+          }),
+      ),
+    );
+
+    render(<App />);
+
+    expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("記録庫を開いています");
+    await act(async () => rejectSession(new Error("offline")));
+
+    expect(await screen.findByText("記録庫へ接続できません")).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "もう一度試す" })).toBeVisible();
+  });
+
   it("shows Memorial and both SYSTEM ACCESS links and opens service status for a member", async () => {
     window.history.replaceState(null, "", "/admin");
     const requests = mockApi();

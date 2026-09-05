@@ -122,10 +122,117 @@
   color: var(--records-ink-900);
 }
 
-.loadingScreen p,
+.loadingMessage,
 .brandTransition p {
   font-weight: 800;
   letter-spacing: 0.18em;
+}
+
+.loadingScreen {
+  min-height: 100svh;
+  padding: 24px;
+  gap: 32px;
+  text-align: center;
+}
+
+.loadingEmblem {
+  position: relative;
+  display: grid;
+  width: 164px;
+  height: 164px;
+  place-items: center;
+}
+
+.loadingEmblem::before,
+.loadingEmblem::after {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 50%;
+  content: "";
+}
+
+.loadingEmblem::before {
+  border: 2px solid transparent;
+  border-top-color: var(--records-cyan-ink);
+  border-right-color: var(--records-cyan-500);
+  animation: rotate 1.8s linear infinite;
+}
+
+.loadingEmblem::after {
+  inset: -8px;
+  animation: loadingPulse 2.4s ease-out infinite;
+}
+
+.loadingStatus {
+  display: grid;
+  width: min(100%, 280px);
+  justify-items: center;
+  gap: 12px;
+}
+
+.loadingLabel {
+  color: var(--records-cyan-ink);
+  font-family: var(--records-font-display);
+  font-size: 0.75rem;
+  letter-spacing: 0.16em;
+}
+
+.loadingMessage {
+  margin: 0;
+  font-size: clamp(0.85rem, 3.6vw, 1rem);
+  line-height: 1.8;
+}
+
+.loadingTrack {
+  width: 100%;
+  height: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--records-line);
+}
+
+.loadingTrack span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--records-cyan-ink));
+  animation: loadingSweep 1.6s ease-in-out infinite;
+}
+
+@keyframes loadingPulse {
+  from {
+    opacity: 0.7;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+}
+
+@keyframes loadingSweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(350%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loadingEmblem::before,
+  .loadingEmblem::after,
+  .loadingTrack span {
+    animation: none;
+  }
+
+  .loadingTrack span {
+    width: 100%;
+    background: var(--records-cyan-ink);
+  }
 }
 
 .brandTransition p {
