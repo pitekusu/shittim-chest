@@ -285,6 +285,67 @@ function ConfirmationDialog({
   );
 }
 
+function MemoryArtwork({
+  memory,
+  onRetryMemory,
+}: {
+  readonly memory: MemorialMemoryResponse;
+  readonly onRetryMemory: () => Promise<boolean>;
+}): React.JSX.Element {
+  const [imageFailed, setImageFailed] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [imageAttempt, setImageAttempt] = useState(0);
+
+  const retryImage = async () => {
+    setRetrying(true);
+    try {
+      if (await onRetryMemory()) {
+        setImageAttempt((attempt) => attempt + 1);
+        setImageFailed(false);
+      }
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <figure>
+      {imageFailed ? (
+        <div className={styles.memoryImageError} role="alert" aria-busy={retrying}>
+          <p>
+            画像を読み込めませんでした。通信状態や画像URLの有効期限を確認するため、再取得してください。
+          </p>
+          <button
+            className={commonStyles.secondaryButton}
+            type="button"
+            disabled={retrying}
+            onClick={() => void retryImage()}
+          >
+            {retrying ? "画像を再取得しています" : "画像を再取得"}
+          </button>
+          <small>完成した画像だけを読み直します。再生成は行いません。</small>
+        </div>
+      ) : (
+        <>
+          <img
+            key={imageAttempt}
+            src={memory.image.url}
+            width={memory.image.width}
+            height={memory.image.height}
+            alt={memory.image.alt}
+            referrerPolicy="no-referrer"
+            onError={() => setImageFailed(true)}
+          />
+          <figcaption>
+            <span lang="en">THE SHITTIM CHEST</span>
+            <time dateTime={memory.unlockedAt}>{formatCompletedDateTime(memory.unlockedAt)}</time>
+          </figcaption>
+        </>
+      )}
+    </figure>
+  );
+}
+
 function MemoryGallery({
   state,
   selectedCycle,
@@ -298,7 +359,7 @@ function MemoryGallery({
   readonly onSelect: (cycle: number) => void;
   readonly memory: MemorialMemoryResponse | undefined;
   readonly memoryError: unknown;
-  readonly onRetryMemory: () => void;
+  readonly onRetryMemory: () => Promise<boolean>;
 }): React.JSX.Element | null {
   if (state.memories.length === 0) return null;
   const effectiveSelectedCycle =
@@ -354,7 +415,11 @@ function MemoryGallery({
         <div {...tabPanelProps}>
           <div className={styles.memoryLoading} role="alert">
             <p>{apiMessage(memoryError)}</p>
-            <button className={commonStyles.secondaryButton} type="button" onClick={onRetryMemory}>
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              onClick={() => void onRetryMemory()}
+            >
               もう一度読み込む
             </button>
           </div>
@@ -362,21 +427,11 @@ function MemoryGallery({
       ) : memory ? (
         <div {...tabPanelProps}>
           <article className={styles.memoryDetail}>
-            <figure>
-              <img
-                src={memory.image.url}
-                width={memory.image.width}
-                height={memory.image.height}
-                alt={memory.image.alt}
-                referrerPolicy="no-referrer"
-              />
-              <figcaption>
-                <span lang="en">THE SHITTIM CHEST</span>
-                <time dateTime={memory.unlockedAt}>
-                  {formatCompletedDateTime(memory.unlockedAt)}
-                </time>
-              </figcaption>
-            </figure>
+            <MemoryArtwork
+              key={`${memory.cycle}:${memory.image.url}`}
+              memory={memory}
+              onRetryMemory={onRetryMemory}
+            />
             <div className={styles.memoryNarrative}>
               <p className={commonStyles.eyebrow} lang="en">
                 OUR STORY
@@ -419,9 +474,13 @@ export default function MemorialPage({
   const observedCycleRef = useRef<number | null>(null);
   const observedUploadCapableRef = useRef<boolean | null>(null);
   const generationEpochRef = useRef(0);
+  const queuedGenerationRef = useRef<{
+    readonly cycle: number;
+    readonly idempotencyKey: string;
+  } | null>(null);
   const recoveryGenerationRef = useRef<{
     readonly cycle: number;
-    readonly state: "unlocked" | "failed";
+    readonly state: "unlocked" | "failed" | "queued";
     readonly idempotencyKey: string;
   } | null>(null);
   const recoveryResetRef = useRef<{
@@ -452,6 +511,7 @@ export default function MemorialPage({
       recoveryResetRef.current = null;
     }
     if (state === undefined) return;
+    if (queuedGenerationRef.current?.cycle !== state.cycle) queuedGenerationRef.current = null;
     const observedCycle = observedCycleRef.current;
     if (observedCycle === null) {
       observedCycleRef.current = state.cycle;
@@ -550,6 +610,10 @@ export default function MemorialPage({
       }
       if (!cycleIsCurrent()) return null;
       setLocalProgress("queueing");
+      queuedGenerationRef.current = {
+        cycle: current.cycle,
+        idempotencyKey: current.generateIdempotencyKey,
+      };
       const next = await queueMemorialGeneration(
         current.cycle,
         GENERATE_CONFIRMATION,
@@ -591,12 +655,29 @@ export default function MemorialPage({
   });
 
   const retryGeneration = useMutation({
-    mutationFn: ({ cycle, state }: { cycle: number; state: "unlocked" | "failed" }) => {
+    mutationFn: async ({
+      cycle,
+      state,
+    }: {
+      cycle: number;
+      state: "unlocked" | "failed" | "queued";
+    }) => {
+      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
+      if (cached?.cycle !== cycle || cached.state !== state) return null;
       let recovery = recoveryGenerationRef.current;
       if (recovery === null || recovery.cycle !== cycle || recovery.state !== state) {
-        recovery = { cycle, state, idempotencyKey: idempotencyKey() };
+        const queued = queuedGenerationRef.current;
+        recovery = {
+          cycle,
+          state,
+          idempotencyKey:
+            state === "queued" && queued?.cycle === cycle
+              ? queued.idempotencyKey
+              : idempotencyKey(),
+        };
         recoveryGenerationRef.current = recovery;
       }
+      queuedGenerationRef.current = { cycle, idempotencyKey: recovery.idempotencyKey };
       return queueMemorialGeneration(
         cycle,
         GENERATE_CONFIRMATION,
@@ -605,6 +686,7 @@ export default function MemorialPage({
       );
     },
     onSuccess: async (next, request) => {
+      if (next === null) return;
       await cancelStateRefresh();
       const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
       if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
@@ -666,12 +748,8 @@ export default function MemorialPage({
   const participant = state?.unlockedParticipant
     ? PARTICIPANT_PRESENTATION[state.unlockedParticipant]
     : null;
-  const busy =
-    generation.isPending ||
-    retryGeneration.isPending ||
-    reset.isPending ||
-    state?.state === "queued" ||
-    state?.state === "generating";
+  const actionPending = generation.isPending || retryGeneration.isPending || reset.isPending;
+  const busy = actionPending || state?.state === "queued" || state?.state === "generating";
   const canSelectFile = state?.state === "unlocked" || state?.state === "failed";
   const selectedFileLabel = useMemo(() => {
     if (selectedFile === null) return "画像をドロップ、またはファイルを選択";
@@ -790,6 +868,21 @@ export default function MemorialPage({
           </section>
 
           <MemorialProgress state={state.state} localProgress={localProgress} />
+
+          {state.state === "queued" && (
+            <section className={styles.creationPanel} aria-label="生成受付の再送">
+              <p>受付後も生成が始まらない場合は、同じ生成依頼を再送できます。</p>
+              <button
+                className={commonStyles.secondaryButton}
+                type="button"
+                disabled={actionPending}
+                onClick={() => retryGeneration.mutate({ cycle: state.cycle, state: "queued" })}
+              >
+                生成受付を再送
+              </button>
+              <p>確認済みの依頼を再送するだけで、別の作品は生成しません。</p>
+            </section>
+          )}
 
           {(state.state === "unlocked" || state.state === "failed") && (
             <section className={styles.creationPanel} aria-labelledby="memorial-create-title">
@@ -937,7 +1030,7 @@ export default function MemorialPage({
         onSelect={setSelectedCycle}
         memory={memoryQuery.data}
         memoryError={memoryQuery.error}
-        onRetryMemory={() => void memoryQuery.refetch()}
+        onRetryMemory={async () => (await memoryQuery.refetch()).isSuccess}
       />
 
       {state.state !== "locked" && state.state !== "queued" && state.state !== "generating" && (
