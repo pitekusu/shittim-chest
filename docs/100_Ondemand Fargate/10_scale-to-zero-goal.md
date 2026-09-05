@@ -1,50 +1,47 @@
 ---
-title: Scale-to-Zero Goal
-aliases:
-  - シッテムの箱 Scale-to-Zero 完了記録
-  - Discord HTTP Interaction / Fargate Scale-to-Zero
-tags: [shittim-chest, aws, discord, ecs, fargate, dynamodb, scale-to-zero]
+title: Scale-to-Zero導入の到達点
+aliases: [シッテムの箱 Scale-to-Zero 完了記録, Discord HTTP Interaction / Fargate Scale-to-Zero]
+tags: [shittim-chest, history, scale-to-zero]
 status: completed
 created: 2026-07-28
-updated: 2026-08-14
+updated: 2026-09-05
 ---
 
-# Scale-to-Zero Goal 完了記録
+# Scale-to-Zero導入の到達点
 
-## 1. Outcome
+[文書索引へ戻る](../00_シッテムの箱_ドキュメント索引.md)
 
-Discord Gateway常駐のFargate Spot serviceを廃止し、署名付きHTTP ingressと耐久FIFOを入口にして、
-ARM64 On-Demand Fargateを通常0、必要時1、最大1 taskで動かす構成をproductionへ導入した。
+> 完了した導入の記録である。現在の構成値、障害対応、配信手順の正本ではない。
 
-## 2. Enduring invariants
+## 何を変えたか
 
-- Discordはtask 0でもAPI Gateway／Ingress LambdaへInteractionを送れる。
-- Ingressはraw-body署名検証後、DynamoDBへdurable acceptanceして短く応答する。
-- Reconcilerはdurable work、Runtime state、lease、deployment lockからdesired 0／1を決める。
-- accepted workはFargate process停止後も新ownerがcheckpointから再開できる。
-- queueは最大20、startup warningは3分、terminal deadlineは15分。
-- 全討論、Outbox、Status、leaseがclearになってから30分idleで停止する。
-- normal taskはOn-Demand Fargate、ARM64、512 CPU／1,024 MiB、public IP、最大1 task。
-- task 0とBot offlineはSTOPPED時の正常状態である。30分のIDLE待機中はtaskと4 Botが稼働する。
+Discord Gatewayで常時受付するFargate Spot構成から、署名付きHTTP受付と永続的な待ち行列を入口にし、
+必要な間だけARM64 On-Demand Fargateを起動する構成へ移行した。
 
-## 3. Safety boundaries
+| 変更前 | 導入後の目的 |
+|---|---|
+| 受付のために討論プロセスが常駐 | 討論用タスクが0でも質問を保存して応答する |
+| 実行中プロセスに処理が依存 | 保存した状態と結果から新しい所有者が再開する |
+| 待機中にも常時実行費用が発生 | 処理終了後の待機を経て0タスクに戻す |
 
-- user question、Interaction token、signature、raw bodyをlogへ出さない。
-- runtime generationとfencing tokenが一致しないwriteを拒否する。
-- deployment lock中はproducer writeとscale mutationを止める。
-- shutdownはnew admissionを閉じ、checkpoint、lease、client closeをboundedに実行する。
-- manual ECS desired count変更を通常運用に使わない。
+## 導入時に固定した境界
 
-## 4. Current authorities
+- 署名を未加工本文へ検証し、質問をDynamoDBへ保存してから受付成功を返す。
+- 実行は通常0・必要時1・最大1タスク。導入時の構成はARM64、512 CPU、1,024 MiB、パブリックIP付きだった。
+- 待ち件数・起動期限、処理権、所有者の世代、デプロイ用ロックを使って競合を制御する。
+- 討論・投稿・状態更新・処理権が残る間は停止せず、終了後の待機時間を経て停止する。
+- 未確認の送信結果を単純に再送せず、保存点と投稿履歴を照合する。
+- 質問、署名、トークン、本文を運用ログへ保存しない。
 
-current requirementと実装は次を正とする。
+## 現行設計への引き継ぎ
 
-- overall requirement: [[01_要求仕様書・基本設計書]]
-- Python lifecycle: [[10_アプリケーション・Python詳細設計]]
-- DynamoDB／fencing: [[13_DynamoDB・データ整合性詳細設計]]
-- ECS／CDK: [[14_AWS・CDK詳細設計]]
-- operations: [[17_運用保守・監視・障害対応設計]]
-- test: [[18_試験・品質保証設計]]
+| 関心事 | 現在の正本 |
+|---|---|
+| 利用体験・対象範囲 | [01 要求仕様](../01_要求仕様書・基本設計書.md) |
+| 起動・終了・再開 | [10 アプリケーション](../10_アプリケーション・Python詳細設計.md) |
+| 排他制御・永続化 | [13 DynamoDB](../13_DynamoDB・データ整合性詳細設計.md) |
+| タスクとAWS構成 | [14 AWS・CDK](../14_AWS・CDK詳細設計.md) |
+| 障害対応と確認 | [17 運用](../17_運用保守・監視・障害対応設計.md)、[18 試験](../18_試験・品質保証設計.md) |
 
-本書へ新しいfeatureや作業手順を追記しない。過去のsubagent指示、commit分割、旧Fargate Spot案は
-Git historyを参照する。
+導入の確認範囲は[完了確認](20_scale-to-zero-completion-checklist.md)、当時の変更順序は
+[導入順序](30_scale-to-zero-commit-plan.md)を参照する。本書へ新しい機能を追記しない。

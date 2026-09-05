@@ -1,58 +1,51 @@
 ---
-title: Scale-to-Zero Completion Checklist
-aliases:
-  - Scale-to-Zero 完了判定
-  - Scale-to-Zero Acceptance Checklist
-tags: [shittim-chest, checklist, acceptance, scale-to-zero]
+title: Scale-to-Zero導入時の完了確認
+aliases: [Scale-to-Zero 完了判定, Scale-to-Zero Acceptance Checklist]
+tags: [shittim-chest, history, acceptance, scale-to-zero]
 status: completed
 created: 2026-07-28
-updated: 2026-08-28
+updated: 2026-09-05
 canonical_for: historical-completion
-related:
-  - "[[10_scale-to-zero-goal]]"
-  - "[[30_scale-to-zero-commit-plan]]"
 ---
 
-# Scale-to-Zero Completion Checklist
+# Scale-to-Zero導入時の完了確認
 
-## 1. Software and infrastructure
+[文書索引へ戻る](../00_シッテムの箱_ドキュメント索引.md) · [導入の到達点](10_scale-to-zero-goal.md)
 
-- [x] HTTP Interactionのfreshness／raw-body署名検証
-- [x] DynamoDB durable FIFO、deduplication、queue上限
-- [x] Runtime state、generation fence、lease、activity counter
-- [x] desired countを0／1へ限定するRuntime Reconciler
-- [x] ARM64 On-Demand Fargate、通常0、最大1 task
-- [x] 4 Bot READY後のrecovery／ingress drain
-- [x] graceful SIGTERM、checkpoint、bounded close
-- [x] public Statusとthread panelのterminal convergence
-- [x] deployment lockとRelease中のproducer fence
-- [x] CloudWatch alarm／dashboard／abnormal stop notification
+> チェックは導入時の確認記録である。現在の本番状態を監視した結果ではない。
+> 最新の配信と残る確認は[20 実装・検証の現状](../20_実装・試験・検証記録.md)を参照する。
 
-## 2. Verification
+## 実装と構成
 
-- [x] domain／application unit and property tests
-- [x] Discord／AWS SDK contract tests
-- [x] DynamoDB Local transaction／crash／migration tests
-- [x] container health／signal process tests
-- [x] CDK assertion、cdk-nag、strict synth
-- [x] required CI、CodeQL、supply-chain gates
-- [x] signed HTTP受付のproduction acceptance
-- [x] task 0→1、通常討論、1→0のproduction acceptance
-- [x] duplicate request、continuous request、Status convergence
+- [x] HTTP受付の時刻・未加工本文の署名検証と短い初回応答
+- [x] 永続的な待ち行列、重複排除、件数上限
+- [x] 実行状態、世代による排他、処理権、稼働件数の管理
+- [x] 0/1タスクへ収束させる調整処理とARM64 On-Demand構成
+- [x] 4 Botの準備完了後の処理再開と受付済み作業の取り出し
+- [x] SIGTERMへの対応、保存点の確定、時間上限付きの終了
+- [x] 通常チャンネルとスレッドの終了表示の一致
+- [x] 配信中のロックと書き込み抑止
+- [x] 監視、警告、異常終了通知
 
-## 3. Safe terminal state
+## 検証
 
-- [x] 5 stack stable
-- [x] ECS desired／running／pending 0／0／0
-- [x] Runtime STOPPED、durable activity clear
-- [x] deployment lock open
-- [x] active／unexecuted release Change Set 0
+- [x] 規則・状態遷移の単体試験と境界値検証
+- [x] Discord・AWS接続の契約試験
+- [x] DynamoDB Localでのトランザクション・中断・移行試験
+- [x] コンテナのヘルスチェックと終了シグナル試験
+- [x] CDK、構成検査、必須CI、CodeQL、供給網の検証
+- [x] 本番での署名付き受付、0→1→0、通常討論
+- [x] 重複・連続した質問と状態表示の収束
 
-## 4. Separate operator drills
+## 導入を終えた時点の安全状態
 
-次はScale-to-Zero implementationの完了条件ではなく、productionへ影響する独立drillである。
+| 確認対象 | 当時の完了条件 |
+|---|---|
+| Coreの5スタック | 安定状態 |
+| ECSの希望・稼働・起動待ち | すべて0 |
+| 討論用実行環境 | 停止済み、残存処理なし |
+| デプロイ用ロック | 解除済み |
+| 未実行の配信変更計画 | 0件 |
 
-- [ ] Bot token rotation
-- [ ] DynamoDB PITR restore to a separate table
-
-current stateは[[20_実装・試験・検証記録]]を参照し、このhistorical checklistへ新featureを追加しない。
+トークンのローテーションと別テーブルへの時点復旧は、導入完了とは別の運用訓練として分離した。
+現在の実施状況は本書で重複管理しない。

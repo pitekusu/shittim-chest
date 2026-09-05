@@ -32,6 +32,9 @@ EXPECTED_FILES = (
     "22_Discord受付・状態収束是正計画.md",
     "23_Discord討論過程表示実装計画.md",
     "24_シッテムの箱 議事録設計.md",
+    "25_サービス状態確認・プロンプト管理設計.md",
+    "26_親愛度・ランキング設計.md",
+    "27_メモリアルロビー設計.md",
 )
 MIRRORED_DIRECTORIES = {
     "100_Ondemand Fargate": (

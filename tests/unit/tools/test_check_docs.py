@@ -117,6 +117,47 @@ def test_unclosed_fence_is_rejected(tmp_path: Path) -> None:
         validate_docs_directory(docs)
 
 
+def test_markdown_links_work_across_nested_and_space_named_notes(tmp_path: Path) -> None:
+    docs = _docs_directory(tmp_path)
+    target = docs / EXPECTED_FILES[0]
+    name = "24_シッテムの箱 議事録設計.md"
+    target.write_text(_note(body=f"[設計]({name.replace(' ', '%20')}#test)\n"), encoding="utf-8")
+    directory_name, filenames = next(iter(MIRRORED_DIRECTORIES.items()))
+    (docs / directory_name / filenames[0]).write_text(
+        _note(body=f"[索引](../{EXPECTED_FILES[0]})\n"), encoding="utf-8"
+    )
+
+    assert validate_docs_directory(docs) == len(EXPECTED_DOCUMENT_PATHS)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    (
+        ("[不明](missing.md)", "missing Markdown link target"),
+        (f"[不明]({EXPECTED_FILES[0]}#missing)", "missing Markdown link heading"),
+        ("[外部](../../private.md)", "leaves document root"),
+    ),
+)
+def test_broken_local_markdown_links_are_rejected(tmp_path: Path, body: str, message: str) -> None:
+    docs = _docs_directory(tmp_path)
+    (docs / EXPECTED_FILES[0]).write_text(_note(body=body + "\n"), encoding="utf-8")
+
+    with pytest.raises(DocumentationError, match=message):
+        validate_docs_directory(docs)
+
+
+def test_markdown_examples_and_external_links_are_not_fetched(tmp_path: Path) -> None:
+    docs = _docs_directory(tmp_path)
+    (docs / EXPECTED_FILES[0]).write_text(
+        _note(
+            body="`[例](missing.md)`\n```text\n[例](missing.md)\n```\n[資料](https://example.com)\n"
+        ),
+        encoding="utf-8",
+    )
+
+    assert validate_docs_directory(docs) == len(EXPECTED_DOCUMENT_PATHS)
+
+
 def test_wiki_link_inside_code_is_ignored(tmp_path: Path) -> None:
     docs = _docs_directory(tmp_path)
     target = docs / EXPECTED_FILES[0]

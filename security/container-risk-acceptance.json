@@ -7,17 +7,17 @@
       "package": "zlib1g",
       "image_config_digests": {
         "production": [
-          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b",
           "sha256:538e142deedb5fbfc0e4e4238c4ecb8739a0be8f7ed677e81ad5593f9df5832c",
           "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15",
-          "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec"
+          "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec",
+          "sha256:578f3f556409240a5dea6e6de1ccdfdb510a8c384c41ce3d459dcbcfa1c18f27"
         ]
       },
       "status": "under_investigation",
       "justification": "The pinned Debian 13.6 DHI runtime has no vendor fix or verified VEX for this finding.",
       "impact": "A successful non-blocking gzwrite exploit could corrupt the isolated task process heap and affect its integrity or availability.",
       "exploitability": "No application call to gzwrite, gzprintf, or gzvprintf was found; the task has zero ingress and runs non-root with a read-only root filesystem.",
-      "evidence": "The 2026-09-04 Grype report identified the package as not-fixed, and the verified DHI VEX did not suppress the finding.",
+      "evidence": "PR #327 CI run 33958209916 on 2026-09-05 matches Core release run 33954661227 in software package inventory, verified DHI VEX, and residual High/Critical findings. The package remains not-fixed and is not suppressed by VEX. The oldest released digest was replaced within the four-digest limit; the current production digest is retained.",
       "approved_on": "2026-09-04",
       "expires_on": "2026-10-04",
       "reevaluation_conditions": "Reevaluate when DHI publishes a new runtime digest, Debian publishes a fixed zlib package, verified VEX changes, or task exposure changes.",
@@ -28,17 +28,17 @@
       "package": "zlib1g-dev",
       "image_config_digests": {
         "production": [
-          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b",
           "sha256:538e142deedb5fbfc0e4e4238c4ecb8739a0be8f7ed677e81ad5593f9df5832c",
           "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15",
-          "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec"
+          "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec",
+          "sha256:578f3f556409240a5dea6e6de1ccdfdb510a8c384c41ce3d459dcbcfa1c18f27"
         ]
       },
       "status": "under_investigation",
       "justification": "The pinned Debian 13.6 DHI runtime has no vendor fix or verified VEX for this finding.",
       "impact": "A successful non-blocking gzwrite exploit could corrupt the isolated task process heap and affect its integrity or availability.",
       "exploitability": "No application call to gzwrite, gzprintf, or gzvprintf was found; the task has zero ingress and runs non-root with a read-only root filesystem.",
-      "evidence": "The 2026-09-04 Grype report identified the package as not-fixed, and the verified DHI VEX did not suppress the finding.",
+      "evidence": "PR #327 CI run 33958209916 on 2026-09-05 matches Core release run 33954661227 in software package inventory, verified DHI VEX, and residual High/Critical findings. The package remains not-fixed and is not suppressed by VEX. The oldest released digest was replaced within the four-digest limit; the current production digest is retained.",
       "approved_on": "2026-09-04",
       "expires_on": "2026-10-04",
       "reevaluation_conditions": "Reevaluate when DHI publishes a new runtime digest, Debian publishes a fixed zlib package, verified VEX changes, or task exposure changes.",

@@ -2,163 +2,286 @@
 aliases:
   - The Shittim Chest DynamoDB詳細設計
 tags: [project, shittim-chest, dynamodb, data, detailed-design]
-status: production-1.0
+status: current
 created: 2026-07-16
-updated: 2026-09-03
+updated: 2026-09-05
 ---
 
 # DynamoDB・データ整合性詳細設計
 
-## 1. Table policy
+[文書索引へ戻る](00_シッテムの箱_ドキュメント索引.md)
 
-- single table、on-demand、string PK／SK、deletion protection、`RETAIN`、PITR 35日とする。
-- debate本文とDiscord thread mappingへTTLを設定しない。PITR期間と保存期間は別概念である。
-- TTLは期限切れ補助recordだけに使い、lease解放やsecurity判断へ依存しない。
-- itemは400 KB以下とする。大規模なdebate／Outbox transactionは100 action／4 MBをpreflightし、
-  ingress等はbounded fieldとaction数で上限内に収める。
+## この文書の範囲
 
-## 2. Schema version
+データの所有場所、スキーマ互換性、同時更新、送信・生成の再試行で守る条件を定義する。
+AWS資源の構成は[AWS・CDK設計](14_AWS・CDK詳細設計.md)、APIと画面は
+[議事録設計](24_シッテムの箱%20議事録設計.md)を参照する。
 
-current shared schemaは**v9**、読み込み可能なprevious schemaは**v8**である。readerは構造を
-検証後にv8をv9へmemory上でup-convertする。v7以前、future version、unknown field／enumは
-fail closedとする。record固有schemaは次のとおりである。
+## 1. データの所有場所と保存方針
 
-固定Runtime control 11件はRelease境界でも全件が同じshared schemaであることを要求する。
-current v9またはprevious v8の完全なmanifestだけをread-only preflightで受理し、混在、欠落、
-marker hash不一致はfail closedとする。v8からのReleaseでは、10件のcontrol更新、v9のclosed
-deployment lock、immutable acquire auditを1 transactionで書き、v8/openまたはv9/closed以外の
-途中状態を公開しない。
+「単一テーブル設計」はCoreの討論データの設計であり、アプリ全体が1テーブルという意味ではない。
+Recordsは閲覧用の投影データとセッションを分離する。
 
-| Record | Current contract |
+| 所有テーブル | 主な内容 | 変更する側 |
+|---|---|---|
+| Coreの討論テーブル | 質問、試行、発言、投票、Outbox、実行制御、親愛度の正本 | Core。親愛度リセットのみRecordsとの契約で更新 |
+| Recordsの議事録テーブル（Archive） | 議論記録と質問者別の検索索引 | 閲覧用データへの投影・取込処理 |
+| Recordsの統計テーブル（Statistics） | ランキング・集計、プロンプト監査、翻訳キャッシュ、メモリアルの生成状態 | 各担当Records機能 |
+| Recordsのセッションテーブル（Session） | セッションと認証に必要な記録 | 認証API |
+
+テーブルは文字列のPK／SK、オンデマンド課金、削除保護、`RETAIN`、35日間のPITRを基本とする。
+議論本文とスレッド対応にはTTLを設定しない。**PITRの復元可能期間と、データの保存期間は別**である。
+TTLは期限付き補助記録に使い、期限切れの判定やリース解放を物理削除の遅延へ依存させない。
+
+保存前に項目サイズを400KB以下へ収める。大きな討論・Outboxトランザクションは
+100操作／4MB以内かを事前検査し、受付などはフィールド上限と操作数で範囲を制限する。
+
+## 2. スキーマ互換性と配信時の移行
+
+### 現行スキーマ
+
+| 記録 | 現行と読み込み互換性 |
 |---|---|
-| Debate／Attempt／Output／Vote／Affection | shared schema v9 |
-| Runtime control | manifest schema v2 |
-| Outbox | record schema v2、v1 history read互換 |
-| Status publication | record schema v3 |
-| Generation checkpoint／Phase delivery | v9 record family |
+| Core共有スキーマ | 現行v9、前版v8を構造検証後にメモリ上で変換 |
+| 討論実行の制御一覧 | 構成一覧（`manifest`）のスキーマv2 |
+| 通常討論Outbox | レコードv2 |
+| 元チャンネルへの親愛度Outbox | 投稿先を持つレコードv3。読込はv1〜v3に対応 |
+| 公開状態の送信記録 | レコードv3 |
+| 生成再開点・段階送信計画 | 共有v9系列の記録 |
 
-旧migrationの作業履歴はGit historyを正とし、本書へ累積しない。
+共有v7以前、未知の将来版、未知のフィールド・列挙値は、黙って読み替えず処理を止める。
+レコード固有の版と共有スキーマの版は区別する。
+Recordsの議事録テーブルの互換読込は[議事録設計](24_シッテムの箱%20議事録設計.md)を参照する。
 
-## 3. Partition families
+### 討論実行の制御記録の移行
 
-| Family | Purpose |
+配信前検査では、固定の制御記録11件が**すべて現行v9、またはすべて前版v8**であることを確認する。
+混在、欠落、管理マーカーのハッシュ不一致は受理しない。
+
+```mermaid
+flowchart TD
+    Previous[前版v8・ロック開] --> Check[11件を読み取り検証]
+    Check --> Atomic[同一トランザクションで移行]
+    Atomic --> Current[現行v9・ロック閉]
+    Current --> Deploy[候補の討論実行環境を配信]
+    Deploy --> Open[確認後にロック解放]
+    Current --> Rollback[適用前かつ取得時状態と一致<br/>する場合だけ復元]
+    Rollback --> Previous
+```
+
+移行トランザクションは、制御記録10件、現行版の閉じた配信ロック、変更不可の取得監査を同時に保存する。
+途中の混在状態を公開しない。取得直後の11件から本文を含まないSHA-256を作り、監査へ記録する。
+
+候補の討論実行環境が有効にならず前版へ戻す場合は、直前の11件が取得時のハッシュと一致し、
+各記録の条件式も満たす場合だけ、前版の制御記録と開いたロックへ同時に戻す。
+状態不一致や候補の適用状況が不明な場合は、復元もロック解放も行わず、運用者の判断へ委ねる。
+過去の移行手順を現行要件へ累積せず、旧経緯はGit履歴を参照する。
+配信時の自動復元は、議論の永続データやDiscordのメッセージを削除する操作ではない。
+
+## 3. 記録の種類
+
+| 記録系列 | 所有する内容 |
 |---|---|
-| Debate／Attempt | question、phase、retry relation、terminal result |
-| Output／Vote | participant generation、anonymous ballot、winner input |
-| GenerationCheckpoint | `PLANNED / IN_FLIGHT / COMPLETED / FAILED` |
-| PhaseDeliveryPlan | `STAGED / TERMINATING / DELIVERED / ABANDONED` |
-| Outbox | Discord operation、sequence、nonce、claim、delivery state |
-| Ingress | durable FIFO、Interaction deduplication、startup deadline |
-| Runtime state／activity | generation、fence、lease、pending／claimed count |
-| Status publication | channel Statusのdesired／observed state |
-| Deployment guard／lock | Release前提、owner、TTL、stack fence |
-| `ADMIN#PROMPT` | current revision、content-free revision audit、hashed idempotency state |
-| `AFFECTION#REQUESTER#<opaque requester key> / PROFILE` | 3人の0〜1,000点、CAS version、reset回数、cycle、解放状態 |
-| `DEBATE#<Debate ID> / AFFECTION` | 評価状態、変更前、質問評価、実増減、変更後、今回のメモリアル解放 |
-| `MEMORIAL#REQUESTER#<opaque requester key> / CYCLE#<cycle>` | owner別のupload予約、生成checkpoint、画像参照、思い出文、reset metadata |
+| 討論・試行（`Debate`／`Attempt`） | 質問、現在段階、再試行との関係、終了結果 |
+| 出力・投票（`Output`／`Vote`） | 討論者の生成結果、匿名票、勝者集計への入力 |
+| 品質観測（`EscalationAssessment`） | 投票から計算した品質の信号、規則の版、判定時刻。本番での追加生成は行わない |
+| 生成再開点（`GenerationCheckpoint`） | `PLANNED / IN_FLIGHT / COMPLETED / FAILED` |
+| 段階送信計画（`PhaseDeliveryPlan`） | `STAGED / TERMINATING / DELIVERED / ABANDONED` |
+| 送信待ち記録（Outbox） | Discord操作、送信順、`nonce`、取得者、配送状態 |
+| 受付 | 先入れ先出しの永続キュー、操作要求の重複排除、起動期限 |
+| 実行状態・稼働情報 | 実行世代、排他番号、リース、未処理・処理中件数 |
+| 公開状態の送信記録 | 表示すべき状態と表示済み状態 |
+| 配信の検査・ロック | 配信前提、所有者、期限、スタックの排他 |
+| `ADMIN#PROMPT` | 現行版、本文を含まない版監査、ハッシュ化した冪等キー |
+| `AFFECTION#REQUESTER#<opaque requester key> / PROFILE` | 3人の点数、比較更新用の版、リセット回数、周期、解放情報 |
+| `DEBATE#<Debate ID> / AFFECTION` | 評価状態、変更前、質問評価、実増減、変更後、今回の解放 |
+| `MEMORIAL#REQUESTER#<opaque requester key> / CYCLE#<cycle>` | アップロード予約、生成再開点、画像参照、思い出文、リセット情報 |
 
-exact PK／SK、attribute名、codecは`adapters/dynamodb`とcontract testを正とする。
+前半の実行・親愛度記録はCoreの討論テーブル、`ADMIN#PROMPT`と`MEMORIAL#REQUESTER#...`はRecordsの統計テーブルが所有する。
+正確な属性名と変換処理は各リポジトリ実装を正とする。
 
-## 4. Transaction invariants
+## 4. 討論を同時に確定する範囲
 
-- state更新はexpected schema、phase、Attempt ID、lease owner、fencing tokenをConditionCheckする。
-- output保存とgeneration checkpoint completionを同一transactionにする。
-- 全participant output保存後にPhaseDeliveryPlanとOutboxを1 transactionでstageする。
-- 全必須Outboxが`SENT`のときだけplan deliveryと次phaseを同一transactionで確定する。
-- vote 3件確定前に公開Outboxをstageしない。
-- winner結果、terminal Outbox、activity counterを矛盾なく確定する。
-- deployment lockがclosedならRuntime producer writeを条件式で拒否する。
-- v7 controlを移行したReleaseでは、lock取得直後の11件をcanonical化したcontent-free SHA-256を
-  immutable acquire auditへ保存する。candidate Runtimeが有効にならなかった場合は、rollback直前の
-  11件がこの取得時fingerprintと一致し、各recordのexact conditionも満たす場合だけ、open lockとともに
-  1 transactionでv7へ戻す。不一致またはcandidateの適用状態が曖昧な場合はrollbackもlock解放も行わず、
-  fail closedのままoperator判断へ委ねる。
-- transaction cancellation reasonはrequest action順で分類し、本文をlogへ出さない。
-- prompt publish／rollbackはpending audit、idempotency、`CURRENT`をtransactionで整合させる。SSMの
-  active pointer切替後にaudit完了が失敗した場合は、次回読込でmanifestとpointerを検証して回復する。
-- 親愛度は3人のprofile更新、討論評価、`scoring_affection`から次phaseへの遷移を同一transactionで
-  反映する。評価は3件すべてが成功した場合だけ全員へ適用し、同じ討論の再試行では二重加算しない。
-  profile CAS競合は同じ評価値で再計算し、OpenAIを再実行しない。
-- v8のraw-ID profileは本人の次回成功評価時だけopaque keyのv9 profileへPutし、旧profileを同一transactionで
-  Deleteする。その成功評価では移行前から1,000点の人格も解放候補へ含める。評価不能時は旧rowを
-  read／condition-checkするだけで移行しない。新規v9 profileへraw IDを保存しない。
-- 未解放cycleで1人以上が新たに1,000点へ達した場合、またはv8移行時に既存1,000点がある場合は、
-  選出した1人の解放metadataをprofileと討論評価へ
-  同じtransactionで保存する。通常到達かv8遡及解放かをcontent-freeなbooleanで保持し、通常v9の
-  到達条件を緩めない。既に解放済みのcycleでは後続到達を無視する。
-- メモリアル生成はStatisticsのowner partitionへcycle checkpointとhashed idempotency stateを保存する。
-  upload予約、queue投入、resetの全POSTはrequestの`expectedCycle`とsource profileのcurrent cycleを
-  transaction conditionで一致させ、stale requestを409でfenceする。DynamoDB expressionでは`cycle`を
-  `#cycle`でaliasし、LocalとAWSで同じtransaction contractを使う。
-- queue投入済みの`queued`は不変のresult asset keyを保持したままSQSへ再送でき、APIとSQSの間の
-  crashでjobを失わない。worker claim、生成完了／失敗はowner、cycle、stateを条件付き更新し、
-  claimごとにcheckpointのgeneration attemptをCAS incrementする。paid generationは3回を上限とし、Standard SQSの
-  物理receive countを正本にしない。各claimにはrandomなcontent-free tokenを付け、生成checkpoint、完了、失敗、
-  queue復帰をattemptとtokenの両方でfenceする。条件付き更新の応答喪失を回復するidempotent fallbackも、
-  terminal／queued stateに残るtokenが一致する場合だけ成功扱いする。そのclaimでproviderをまだ開始していないdeadline preflight失敗だけは
-  `queued`へ戻し、incrementを1だけ原子的に払い戻す。再claim後の旧tokenでは更新できず、二重払い戻しを許さない。
-  uploadとpartial checkpointは維持する。counterはfailed後のupload予約更新とqueue再投入でも引き継ぐ。
-  SQS再配送で画像や文章を二重生成・上書きしない。上限後は
-  paid callを禁止し、検証済み最終画像と文章が残る場合だけ同じcycle／result asset keyの
-  completion-only回復を許可する。最終画像がない文章だけのpartial checkpointはterminal化時に除去する。
-  生成物を公開できるのは画像参照と文章が
-  揃った`ready`だけであり、partial outputはowner APIへ返さない。
-- resetはsource v9の`AFFECTION#REQUESTER#... / PROFILE`とStatisticsのcycle状態を同一transactionで
-  fenceする。解放済みcycleはcheckpointがない`unlocked`、回復可能なpartial outputがない終端の`failed`、
-  または`ready`で
-  resetでき、`queued`または`generating`は409で拒否する。初回の`locked`は未解放のためresetできず、
-  文章と検証済み最終画像を持つ`failed`はcompletion-only回復が必要なためreset／上書きを409で拒否する。
-  reset完了後の次cycleが`locked`の場合は同じidempotency keyによる完了済みresetの再試行だけを
-  受理する。次cycleが再解放済みなら過去cycleのreset再送は409とする。3スコアを500へ戻し、
-  reset回数とmemorial cycleを各1増やし、解放metadataを除去する。
-  source profileだけ、またはcheckpointだけが進む状態や二重加算を許可しない。
+| 更新 | 同じトランザクションに含めるもの |
+|---|---|
+| 出力保存 | 検証済み出力＋生成再開点の完了 |
+| 段階の送信準備 | 全出力の確認＋送信計画＋Outbox |
+| 次段階への遷移 | 全必須Outboxの`SENT`確認＋計画完了＋次段階 |
+| 投票公開 | 3票の確定確認＋公開Outbox |
+| 終了 | 勝者結果、終了時Outbox、稼働件数が矛盾しない状態 |
+| 親愛度評価 | 3人分のプロフィール＋討論別評価＋次段階 |
 
-## 5. Lease and fencing
+更新条件には共有スキーマ、現在段階、試行ID、リース所有者、世代番号を含める。
+配信ロックが閉じている間は、討論実行環境からの新規書き込みを拒否する。
+トランザクション取消理由は操作順に分類し、データ本文やSDKのエラー本文をログへ出さない。
 
-- leaseはownerとgeneration／fencing tokenを持ち、期限内のownerだけがrenew／writeする。
-- GSIはdiscoveryに使えるが、排他判断はbase tableのstrong readとtransaction conditionを使う。
-- process停止時にleaseをbest-effort解放するが、正しさは期限とfenceに依存する。
-- stale owner、別attempt、別generation、closed deployment lockからのwriteを拒否する。
+### リースと世代番号
 
-## 6. Ordered Outbox
+- 期限内の所有者だけがリースを延長し、状態を書き換える。
+- 古い所有者、別試行、別世代、閉じた配信ロックからの書き込みを条件式で拒否する。
+- GSIは候補探索に使えるが、排他判断はベーステーブルの強整合読み取りと条件式で行う。
+- プロセス終了時には可能な範囲でリースを解放する。ただし正しさは期限と世代確認で保つ。
 
-Outbox v2は`PENDING / CLAIMED / SENT / ABANDONED`を持つ。同attempt内で小さい
-`delivery_sequence`がすべてterminalになるまで次をclaimできない。claim timeout後は再取得可能だが、
-Discord history reconciliationで既送信を検出する。
+## 5. 親愛度・解放情報の整合性
 
-Discordが受理したmessage IDの`SENT`確定は、同じmessage ID、claim、確定時刻から同一の
-idempotency tokenを導出する。完全な`TransactionConflict`またはSDK呼出結果不明だけを短時間で
-bounded retryし、条件不一致やidentity conflictは再試行しない。DynamoDB SDK例外はadapter境界で
-`RepositoryUnavailable`へ変換し、provider messageをapplication／logへ漏らさない。
+3人の評価がすべて成功した場合だけ、`scoring_affection`からの遷移とともに反映する。
+各点数は0〜1,000に丸め、実増減と適用後点数を保存する。
+同じ討論を再試行しても再評価・二重加算しない。プロフィールの比較更新が競合した場合は、
+同じ質問評価を最新点数に再適用し、OpenAIを再実行しない。
 
-nonretryable error、最大3 delivery attempt、stageから15分のdeadlineで新claimを止め、残件を
-`ABANDONED`へ収束する。必須displayのabandonはattemptをFAILEDにし、欠落したままCOMPLETEDへ
-進めない。
+### 旧プロフィールの識別子移行
 
-## 7. Query and pagination
+v8の非公開Discord IDをキーとするプロフィールは、本人の**次の成功評価時だけ**、
+HMACから導出した不透明キーのv9記録へ移す。新記録の追加と旧記録の削除を同時に行い、
+新規v9プロフィールには変換前のDiscord IDを保存しない。
 
-- base tableの整合性判断は`ConsistentRead=true`を用いる。
-- Query／Scanは`LastEvaluatedKey`が消えるまで処理し、上限到達を完全結果とみなさない。
-- GSIのeventual consistencyをlockやwinner判断へ使わない。
-- メモリアルの直近質問はArchive GSI3を降順で最大10件だけ読む。生成可否、owner認可、cycleの正しさは
-  GSI結果へ依存せず、source profileとStatistics checkpointの条件付きbase-table操作で決める。
-- repositoryはnative Python valueをapplicationへ返し、SDK AttributeValueを漏らさない。
+評価不能時は旧記録を読み取り・条件確認するだけで、移行も解放判定も行わない。
+成功移行時に限り、移行前から1,000点だった人格もメモリアル解放候補にできる。
 
-## 8. Privacy and telemetry
+### 解放の確定
 
-DynamoDBにはrecoveryに必要なquestion／outputを保存するが、CloudWatch logへ本文を複製しない。
-token、signature、Interaction token、persona本文、OpenAI keyをitemへ入れない。operation count、phase、
-stable error codeだけをmetricに用い、Debate ID等をdimensionにしない。
+未解放の周期で新たに1,000点へ到達した場合、選出した1人の解放情報をプロフィールと討論別評価へ
+同時保存する。通常到達か移行時の遡及解放かを、本文を含まない真偽値で区別する。
+すでに解放済みの周期では、別の人格が到達しても追加解放しない。
 
-prompt auditにはrevision、時刻、操作、base／source revision、aggregate／request checksum、
-pending／completed状態だけを保存する。prompt本文、差分、idempotency keyそのものは保存しない。
+点数・選出の業務ルールは[親愛度・ランキング設計](26_親愛度・ランキング設計.md)を参照する。
 
-## 9. 公式資料確認記録
+## 6. Outboxの順序と送信済み確定
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> CLAIMED: 順序・リースを確認して取得
+    CLAIMED --> SENT: 投稿成功または履歴一致
+    CLAIMED --> PENDING: 再取得可能な失敗
+    PENDING --> ABANDONED: 試行上限・期限
+    CLAIMED --> ABANDONED: 回復不能な失敗
+    SENT --> [*]
+    ABANDONED --> [*]
+```
+
+同じ試行では、小さい`delivery_sequence`がすべて終了するまで次を取得しない。
+取得期限切れ後は再取得できるが、Discordの履歴照合で既送信を確認する。
+
+Discordが受理したメッセージIDの保存では、同じID、取得情報、確定時刻から冪等トークンを導出する。
+完全な`TransactionConflict`またはSDK結果不明だけを短時間で再試行し、条件不一致や識別子の競合は繰り返さない。
+SDK例外は接続層で`RepositoryUnavailable`へ変換する。
+
+最大3回の配送試行、準備から15分の期限、または再試行不能な失敗で新規取得を止め、残件を`ABANDONED`にする。
+必須表示の断念は試行の失敗とし、完了扱いしない。送信・履歴照合の詳細は
+[Discord設計](11_Discord詳細設計.md)を参照する。
+
+## 7. プロンプトの監査とSSMの切替
+
+本文はSSMへ保存し、DynamoDBには版、作成時刻、操作、元の版、内容・要求のチェックサム、
+処理中／完了状態だけを保存する。本文、差分、冪等キーそのものは保存しない。
+
+公開・復元操作では、処理中監査、冪等記録、`CURRENT`をトランザクションで整合させる。
+SSMの有効ポインターを最後に切り替え、その後の監査完了が失敗した場合は、
+次回アクセスでポインターと構成一覧（`manifest`）を照合して完了させる。
+SSMとDynamoDBを1つのトランザクションとみなさず、再開できる手順として設計する。
+版の保持と削除は[管理機能設計](25_サービス状態確認・プロンプト管理設計.md)を参照する。
+
+## 8. メモリアル生成とリセット
+
+### 所有者・周期・冪等性
+
+本人専用APIは、セッションから導いた不透明な質問者キーだけを保存処理へ渡す。
+リクエストから他人を指定させない。アップロード予約、生成投入、リセットの全POSTは
+`expectedCycle`を必須とし、正本プロフィールの現在周期との一致を条件付き更新で確認する。
+古い画面から次の周期を操作する要求は409で拒否する。
+
+生成状態とハッシュ化した冪等記録は統計テーブルの本人別パーティションへ保存する。
+DynamoDB式では予約語との衝突を避けるため`cycle`を`#cycle`で参照する。
+
+### キューと永続再開点
+
+```mermaid
+flowchart LR
+    Unlocked[解放済み・アップロード予約] --> Queued[queued]
+    Queued --> Generating[generating]
+    Generating --> Narrative[文章を保存]
+    Narrative --> Image[最終画像を保存]
+    Image --> Ready[ready]
+    Generating --> Retry[一時障害・再配送]
+    Retry --> Queued
+    Generating --> Failed[回復不能 failed]
+```
+
+APIの状態更新とSQS送信は別操作である。`queued`の同じ仕事は固定の成果物キーを維持して再送でき、
+APIが状態更新後・送信前に止まっても失わない。SQSの本文は不透明な質問者キーと周期だけを持つ。
+
+ワーカーは状態、周期、所有者を確認し、生成試行番号をCASで増やす。
+取得ごとのランダムな識別トークンと試行番号で、文章・画像の保存、完了、失敗、キュー復帰を保護する。
+条件付き更新の応答を失っても、記録に残るトークンが同じ場合だけ成功済みとみなす。
+
+### 課金呼出と回復の境界
+
+| 状況 | 処理 |
+|---|---|
+| 通常の生成 | 永続の生成試行番号で、課金を伴う生成試行を最大3回に制限 |
+| 同じ仕事の再配送 | 保存済み文章・画像と同じ成果物キーを再利用 |
+| その取得で課金呼出を始める前に時間不足 | 同じ試行・トークンの条件で`queued`へ戻し、試行番号を1だけ払い戻す |
+| その取得で課金呼出を開始済み | 試行を払い戻さない |
+| 試行上限後に文章と検証済み最終画像が残る | 新規課金なしの完了処理だけを許可 |
+| 試行上限後に最終画像がない | 文章だけの部分成果を除去し、リセット可能な`failed`へ収束 |
+| 画像と文章が両方保存済み | `ready`を確定して初めて本人APIへ公開 |
+
+SQSの`ApproximateReceiveCount`は物理配送回数であり、課金可否の正本にしない。
+DLQへの移送は最大4回の受信を基準とするが、3回目の取得がタイムアウト等で中断した後の4回目は、
+成果の完了処理か、新規課金なしの失敗確定だけを行う。
+
+通信先での厳密な1回実行を仮定しない。保存済み成果を再利用して不要な再生成を避け、
+保存前に結果を失ったケースも永続試行上限で制限する。
+各API呼出の120秒と終了処理用15秒を含む予算判定は[OpenAI設計](12_OpenAI・プロンプト詳細設計.md)に従う。
+
+成功時または再試行不能な終了失敗時にアップロード原本を削除する。
+一時障害では原本・部分成果を保持して再配送へ委ねる。
+生成中の部分成果を本人APIへ返さない。
+
+### リセット
+
+リセットはCoreのv9親愛度プロフィールと統計テーブルの該当周期を**同じトランザクション**で更新する。
+
+| 現在の状態 | リセット |
+|---|---|
+| 初回の`locked` | 未解放のため不可 |
+| 解放済みで再開点のない`unlocked` | 可 |
+| `queued`／`generating` | 409で拒否 |
+| 文章または最終画像が残る`failed` | 回復を優先し、409で拒否。両方揃っていれば完了処理だけを行う |
+| 部分成果がない終了済み`failed` | 可 |
+| `ready` | 可。過去の生成物は保持 |
+
+3人の点数を500へ戻し、リセット回数と周期をそれぞれ1増やし、解放情報を除去する。
+一方のテーブルだけが進む状態や二重加算を許さない。
+次周期がまだ`locked`なら同じ冪等キーの完了済みリセットを再応答できるが、
+次周期が再解放済みになった後の旧要求は409にする。
+
+## 9. 読み取り・検索とプライバシー
+
+- 整合性判断にはベーステーブルの`ConsistentRead=true`を使う。
+- 全件処理が必要なQuery／Scanは`LastEvaluatedKey`がなくなるまで続け、打切りを全件完了とみなさない。
+- メモリアルの材料は議事録テーブルの索引`GSI3`を降順で**最大10質問**だけ取得する。索引の遅延を生成可否や本人認可に使わない。
+- 内部へはPythonの値を返し、SDKの`AttributeValue`を持ち込まない。
+- 再開に必要な質問・出力は保存するが、ログへ複製しない。トークン、署名、人格本文、OpenAIキーを項目に保存しない。
+- 指標の次元に討論ID等を使用せず、操作数、段階、安定したエラー分類を使う。
+
+## 10. 変更時の参照先
+
+| 変更するもの | 実装の入口 |
+|---|---|
+| Coreの形式・互換読込 | [serializer.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/adapters/dynamodb/serializer.py) |
+| 配信ロックとスキーマ移行 | [deployment_guard.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/adapters/dynamodb/deployment_guard.py) |
+| Outboxの条件付き保存 | [outbox.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/adapters/dynamodb/outbox.py) |
+| メモリアルの保存・再試行 | [memorial_adapters.py](https://github.com/pitekusu/shittim-chest/blob/main/services/records/src/shittim_records/memorial_adapters.py) |
+| テーブルの保護設定 | [RecordsStateful](https://github.com/pitekusu/shittim-chest/blob/main/infra/lib/records-stateful-stack.ts) |
+
+## 公式資料確認記録
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
-| 2026-08-14 | DynamoDB core | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html | single-table item ownership |
-| 2026-08-14 | Transactions | https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html | fencingとatomic phase update |
-| 2026-08-14 | Query pagination | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html | complete pagination |
-| 2026-08-14 | PITR | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Point-in-time-recovery.html | 35日restore boundary |
-| 2026-08-14 | Item size | https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/CapacityUnitCalculations.html | 400 KB validation |
+| 2026-08-14 | DynamoDBの基本 | [構成要素](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.CoreComponents.html) | 単一テーブル内の所有関係 |
+| 2026-08-14 | トランザクション | [TransactWriteItems](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html) | 排他と段階更新の原子性 |
+| 2026-08-14 | ページング | [Queryのページ処理](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Query.Pagination.html) | 必要な全件を取得 |
+| 2026-08-14 | PITR | [継続的バックアップ](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Point-in-time-recovery.html) | 35日間の復元可能期間 |
+| 2026-08-14 | 項目サイズ | [容量計算](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/CapacityUnitCalculations.html) | 400KBの保存前検証 |
