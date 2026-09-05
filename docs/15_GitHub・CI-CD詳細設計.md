@@ -20,6 +20,10 @@ updated: 2026-09-05
 - 依存更新は脆弱性・互換性・CI結果から採否を決める。Nodeの型定義は実行環境のmajorに揃え、
   WebのVite+／core alias／Vitest overrideは一組で移行する。対応を見送る更新は理由を記録し、
   現行構成と両立しない自動更新をDependabot設定で抑制する。
+- Core／Recordsのuvとbuild backendは検証済みの0.12系列とし、Dependabotが使用する0.12.7も許可する。
+  系列変更時は両projectの`required-version`／`uv_build`、workflow、Docker stage／container policy、
+  Dependabotのignore境界、固定ツール監視の系列を同じPRで揃える。lock／build／SBOMの互換性を確認し、
+  main反映後は両projectのDependabot更新jobが成功することを確認する。
 
 ### 固定ツールの更新検知
 

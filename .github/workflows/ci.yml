@@ -16,8 +16,8 @@ concurrency:
 
 env:
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
-  PYTHON_VERSION: "3.14.6"
-  UV_VERSION: "0.11.33"
+  PYTHON_VERSION: "3.14.7"
+  UV_VERSION: "0.12.10"
 
 jobs:
   changes:

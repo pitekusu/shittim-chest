@@ -8,7 +8,8 @@
       "image_config_digests": {
         "production": [
           "sha256:4b7017c329230a6d10801f2b569ec78279a6752897091bc873d531aae291fb1b",
-          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b"
+          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b",
+          "sha256:538e142deedb5fbfc0e4e4238c4ecb8739a0be8f7ed677e81ad5593f9df5832c"
         ]
       },
       "status": "under_investigation",
@@ -27,7 +28,8 @@
       "image_config_digests": {
         "production": [
           "sha256:4b7017c329230a6d10801f2b569ec78279a6752897091bc873d531aae291fb1b",
-          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b"
+          "sha256:fa46f20ef4b72cabd26f5df943c3b078e85a401d86526b062a9cfda959e86d9b",
+          "sha256:538e142deedb5fbfc0e4e4238c4ecb8739a0be8f7ed677e81ad5593f9df5832c"
         ]
       },
       "status": "under_investigation",
