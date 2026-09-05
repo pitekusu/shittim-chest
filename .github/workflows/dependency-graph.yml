@@ -14,7 +14,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.14.6"
-  UV_VERSION: "0.11.29"
+  UV_VERSION: "0.11.33"
 
 jobs:
   verify-managed-sbom:

@@ -8,6 +8,9 @@ registries:
     password: "${{secrets.DHI_TOKEN}}"
 
 updates:
+  # Actions updates cover uses: references, not with: version/driver-opts,
+  # workflow env pins, or downloaded CLI archives. Release Tool Versions
+  # monitors those fixed tools and keeps one actionable GitHub issue.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

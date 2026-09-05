@@ -18,9 +18,9 @@ RECORDS_CI_WORKFLOW = "records-ci.yml"
 RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
-PINNED_BUILDX_VERSION = "v0.35.0"
-PINNED_BUILDKIT_DIGEST = "sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
-PINNED_BUILDKIT_IMAGE = f"moby/buildkit:v0.31.2@{PINNED_BUILDKIT_DIGEST}"
+PINNED_BUILDX_VERSION = "v0.37.0"
+PINNED_BUILDKIT_DIGEST = "sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3"
+PINNED_BUILDKIT_IMAGE = f"moby/buildkit:v0.33.0@{PINNED_BUILDKIT_DIGEST}"
 RELEASE_REQUIRED_MAIN_CHECKS = frozenset(
     {
         "quality",
@@ -370,7 +370,7 @@ def _validate_release(directory: Path) -> None:
         "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-24.04-arm",
-        'node-version: "24.18.0"',
+        'node-version: "24.20.0"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
@@ -1283,7 +1283,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     required_records_web = (
         "uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
         "corepack enable pnpm",
-        'test "$(pnpm --version)" = "11.21.0"',
+        'test "$(pnpm --version)" = "11.25.0"',
         "pnpm install --frozen-lockfile",
         "pnpm exec vp check",
         "pnpm exec vp test",
@@ -1344,7 +1344,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "          (\n"
         "            cd apps/records-web\n"
         "            corepack enable pnpm\n"
-        '            test "$(pnpm --version)" = "11.21.0"\n'
+        '            test "$(pnpm --version)" = "11.25.0"\n'
         "            pnpm install --frozen-lockfile\n"
         "          )"
     )

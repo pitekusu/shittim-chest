@@ -21,6 +21,23 @@ updated: 2026-09-05
   WebのVite+／core alias／Vitest overrideは一組で移行する。対応を見送る更新は理由を記録し、
   現行構成と両立しない自動更新をDependabot設定で抑制する。
 
+### 固定ツールの更新検知
+
+- DependabotのGitHub Actions更新は`uses:`参照を扱う。`with.version`のBuildx、
+  `driver-opts`のBuildKit、workflow環境変数、直接downloadするCLIの固定値は別途監視する。
+- `.github/tool-versions.json`の`tools`はarchive／checksum／署名identityの正本、`sources`は
+  実際のworkflow／package manager設定からversionを読み取る参照mapとする。versionをmapへ複製しない。
+  通常CIではnetworkを使わず、固定値の形式と複数workflowの一致を確認する。
+- `Release Tool Versions`が毎週水曜13:29 JSTとmainの手動実行で公式releaseを確認する。
+  Python、Node、uv、pnpmは明示した対応系列のstable tagを比較し、系列変更を自動採用しない。
+  AWS Signer installerはmutableな`latest` URLの配布物・署名・公開鍵をdownloadし、固定checksumとの
+  相違だけを検知する。取得物の実行、install、署名鍵の自動差替えは行わない。
+- 結果をActions summaryとbot所有の単一open Issueへ集約する。候補が不変ならIssueを再投稿せず、
+  全項目が確認済み・最新の場合だけ閉じる。個別の取得失敗は他項目の結果を維持して未確認と表示する。
+  CLI終了値は最新`0`、更新候補あり`1`、取得／設定不正`2`。失敗を最新扱いにせず、既存のworkflow通知も維持する。
+- 監視jobはmain限定、`contents: read`と`issues: write`だけを使用する。自動merge、version／digestの
+  書換え、AWS操作、release dispatchは行わない。候補は通常PRで署名・互換性・必須CIを確認して採用する。
+
 ## 2. Continuous Integration
 
 `ci.yml`はPR、main push、manual dispatchで次の8 jobを実行する。

@@ -772,10 +772,10 @@ def test_runtime_required_gates_require_the_classifier_job_to_succeed(directory:
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
-        ("ci.yml", "version: v0.35.0", "version: latest"),
+        ("ci.yml", "version: v0.37.0", "version: latest"),
         (
             RELEASE_WORKFLOW,
-            "image=moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec",
+            "image=moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3",
             "image=moby/buildkit:buildx-stable-1",
         ),
     ],
@@ -888,7 +888,7 @@ def test_repeated_action_version_requires_one_commit_pin(directory: Path) -> Non
 def test_release_requires_the_locked_node_version(directory: Path) -> None:
     _replace(
         directory / RELEASE_WORKFLOW,
-        '          node-version: "24.18.0"',
+        '          node-version: "24.20.0"',
         "          node-version-file: .node-version",
         1,
     )
