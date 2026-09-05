@@ -135,6 +135,7 @@ S3_SDK_CONFIG = SDK_CONFIG.merge(
 def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
     """Handle one DynamoDB Streams batch using partial batch failures."""
 
+    HTTPX_LOGGER.setLevel(logging.WARNING)
     failures: list[dict[str, str]] = []
     created = 0
     skipped = 0
