@@ -11,6 +11,7 @@ from typing import Any
 
 import boto3
 import pytest
+import regex
 from botocore.stub import Stubber
 from PIL import Image
 
@@ -142,6 +143,57 @@ def test_renderer_handles_long_japanese_combined_emoji_and_bad_avatar() -> None:
     assert len(image) < 4 * 1024 * 1024
     assert renderer.width(renderer.ellipsize(value.requester_name * 10, 26, 595), 26) <= 595
     assert len(renderer.wrap(value.question, 34, 1000, 4)) <= 4
+
+
+def test_small_kana_punctuation_and_descenders_keep_their_vertical_positions() -> None:
+    renderer = PreviewRenderer(assets=ROOT / "apps/records-web/src/assets/fonts")
+    canvas = Image.new("RGB", (490, 100))
+    bounds = {}
+    for index, character in enumerate("あっー、。Ag"):
+        renderer.line(canvas, character, index * 70, 0, 48, "white")
+        box = canvas.crop((index * 70, 0, (index + 1) * 70, 100)).getbbox()
+        assert box is not None
+        bounds[character] = box
+    assert bounds["っ"][1] > bounds["あ"][1] + 8
+    assert bounds["ー"][1] > bounds["あ"][1] + 8
+    assert bounds["、"][1] > bounds["っ"][1] + 8
+    assert bounds["。"][1] > bounds["っ"][1] + 8
+    assert bounds["g"][1] > bounds["A"][1]
+    assert bounds["g"][3] > bounds["A"][3]
+
+
+def test_japanese_wrap_keeps_phrases_and_ellipsis_inside_the_panel() -> None:
+    renderer = PreviewRenderer(assets=ROOT / "apps/records-web/src/assets/fonts")
+    text = "ちょっと休憩。コーヒーとクッキーで、ゆっくり過ごそう!"
+    lines = renderer.wrap(text, 48, 1000, 4)
+    assert "".join(lines) == text
+    assert any("ゆっくり" in line for line in lines)
+    assert all(renderer.width(line, 48) <= 1000 for line in lines)
+    long = renderer.wrap("カタカナ" * 100, 34, 1000, 4)
+    assert len(long) == 4 and long[-1].endswith("…")
+    assert all(renderer.width(line, 34) <= 1000 for line in long)
+    assert renderer.wrap("(" * 100, 34, 1000, 4) == ["…"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "あっちへ行こう、コーヒーを飲もう。",
+        "今日は「ゆっくり休もう」。明日も楽しもう。",
+        "星空の旅人👨‍👩‍👧‍👦と日本🇯🇵でカフェに行こう。",
+    ],
+)
+def test_japanese_wrap_obeys_kinsoku_without_splitting_graphemes(text: str) -> None:
+    renderer = PreviewRenderer(assets=ROOT / "apps/records-web/src/assets/fonts")
+    lines = renderer.wrap(text, 32, 240, 20)
+    assert "".join(lines) == text
+    assert [part for line in lines for part in regex.findall(r"\X", line)] == regex.findall(
+        r"\X", text
+    )
+    for line in lines:
+        assert renderer.width(line, 32) <= 240
+        assert line[0] not in "、。）」っー"  # noqa: RUF001 - Japanese kinsoku characters
+        assert line[-1] not in "（「("  # noqa: RUF001 - Japanese kinsoku characters
 
 
 def test_aws_reads_project_only_public_attributes_and_missing_cache_without_list_permission() -> (

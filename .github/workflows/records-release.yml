@@ -130,6 +130,8 @@ jobs:
             --source "${stage}" --output "${RUNNER_TEMP}/records-lambda.zip" \
             --asset "apps/records-web/src/assets/fonts/Delogy-Regular.ttf=shittim_records/assets/Delogy-Regular.ttf" \
             --asset "apps/records-web/src/assets/fonts/LINESeedJP-ExtraBold.woff2=shittim_records/assets/LINESeedJP-ExtraBold.woff2" \
+            --asset "apps/records-web/src/assets/fonts/LINESeedJP-Bold.woff2=shittim_records/assets/LINESeedJP-Bold.woff2" \
+            --asset "apps/records-web/src/assets/fonts/LINESeedJP-Regular.woff2=shittim_records/assets/LINESeedJP-Regular.woff2" \
             --asset "apps/records-web/THIRD_PARTY_NOTICES.md=shittim_records/assets/THIRD_PARTY_NOTICES.md" \
             --asset "apps/records-web/third_party/line-seed/OFL.txt=shittim_records/assets/LINESeedJP-OFL.txt" \
             --asset "services/records/third_party/noto-emoji/NotoColorEmoji.ttf=shittim_records/assets/NotoColorEmoji.ttf" \

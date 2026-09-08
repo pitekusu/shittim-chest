@@ -13,7 +13,7 @@ import regex
 
 RECORD_ID = r"[A-Za-z0-9_-]{43}"
 IMAGE_VERSION = r"[a-f0-9]{32}"
-TEMPLATE_VERSION = "record-preview-v1"
+TEMPLATE_VERSION = "record-preview-v2"
 
 
 def preview_text(text: str, limit: int) -> str:
