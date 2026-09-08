@@ -251,6 +251,7 @@ class DynamoRecordsReader:
             key = item.get("SK")
             name = item.get("display_name")
             avatar = item.get("avatar_asset_key")
+            updated_at = item.get("updated_at")
             legacy_expires_at = item.get("expiresAt")
             if (
                 item.get("schema_version") != 1
@@ -260,6 +261,7 @@ class DynamoRecordsReader:
                 or not isinstance(name, str)
                 or not name.strip()
                 or (avatar is not None and not isinstance(avatar, str))
+                or (updated_at is not None and not isinstance(updated_at, str))
                 or (
                     legacy_expires_at is not None
                     and (
@@ -273,6 +275,7 @@ class DynamoRecordsReader:
             profiles[key] = RequesterProfile(
                 display_name=name,
                 avatar_asset_key=avatar,
+                updated_at=updated_at,
             )
         return profiles
 

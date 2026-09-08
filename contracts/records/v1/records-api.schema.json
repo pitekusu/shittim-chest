@@ -2619,6 +2619,19 @@
           "title": "Initialopinions",
           "type": "array"
         },
+        "ogImageUrl": {
+          "anyOf": [
+            {
+              "pattern": "^https://[a-z0-9.-]+/og/records/[A-Za-z0-9_-]{43}/[a-f0-9]{32}\\.png$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ogimageurl"
+        },
         "participants": {
           "allOf": [
             {

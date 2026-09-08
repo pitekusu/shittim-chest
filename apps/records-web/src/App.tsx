@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import { RecordsApiError } from "./api/http";
@@ -18,6 +18,7 @@ import { Layout } from "./components/Layout";
 import { RouteChunkBoundary, RouteLoadingFallback } from "./components/RouteChunkBoundary";
 import { SESSION_QUERY_KEY } from "./hooks/useAuthenticationRecovery";
 import { LOGIN_TRANSITION_KEY } from "./lib/authTransition";
+import { setPageMetadata } from "./lib/pageMetadata";
 import { BrandedRouteStage } from "./RouteMotion";
 import { LoginPage } from "./routes/LoginPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
@@ -135,6 +136,9 @@ function ApplicationRoutes({
 }): React.JSX.Element {
   const session = useQuery({ queryKey: SESSION_QUERY_KEY, queryFn: getSession });
   const location = useLocation();
+  useEffect(() => {
+    if (!/^\/records\/[A-Za-z0-9_-]{43}$/.test(location.pathname)) setPageMetadata();
+  }, [location.pathname]);
   const navigate = useNavigate();
   const client = useQueryClient();
   const [showLogoutTransition, setShowLogoutTransition] = useState(false);

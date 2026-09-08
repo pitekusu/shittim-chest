@@ -37,6 +37,7 @@ from shittim_records.costs import (
     StoredDailyRate,
     build_cost_view,
 )
+from shittim_records.ogp import RecordPreview
 
 CURSOR_TTL = timedelta(hours=1)
 RECORD_ID_LENGTH = 43
@@ -86,6 +87,7 @@ class ArchivePage:
 class RequesterProfile:
     display_name: str
     avatar_asset_key: str | None
+    updated_at: str | None = None
 
 
 class RecordsReader(Protocol):
@@ -292,9 +294,12 @@ class CursorCodec:
 class RecordsReadService:
     """Map immutable Archive v1 items to the public Records API."""
 
-    def __init__(self, *, reader: RecordsReader, cursor_codec: CursorCodec) -> None:
+    def __init__(
+        self, *, reader: RecordsReader, cursor_codec: CursorCodec, public_origin: str | None = None
+    ) -> None:
         self._reader = reader
         self._cursor_codec = cursor_codec
+        self._public_origin = public_origin
 
     def list_records(self, *, query: ListQuery, now: datetime) -> RecordListResponse:
         query = validate_list_query(query)
@@ -379,6 +384,21 @@ class RecordsReadService:
             "completedAt": _required_text(meta, "completed_at"),
             "question": _required_text(meta, "question"),
             "requester": requester,
+            "ogImageUrl": self._public_origin
+            + RecordPreview(
+                record_id=record_id,
+                question=_required_text(meta, "question"),
+                requester_name=requester["displayName"],
+                completed_at=datetime.fromisoformat(_required_text(meta, "completed_at")),
+                avatar_key=profiles[requester_key].avatar_asset_key
+                if requester_key in profiles
+                else None,
+                profile_version=profiles[requester_key].updated_at
+                if requester_key in profiles
+                else None,
+            ).image_path
+            if self._public_origin
+            else None,
             "participants": self._participants(meta),
             "initialOpinions": tuple(
                 {

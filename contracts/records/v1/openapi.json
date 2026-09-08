@@ -2620,6 +2620,19 @@
             "title": "Initialopinions",
             "type": "array"
           },
+          "ogImageUrl": {
+            "anyOf": [
+              {
+                "pattern": "^https://[a-z0-9.-]+/og/records/[A-Za-z0-9_-]{43}/[a-f0-9]{32}\\.png$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ogimageurl"
+          },
           "participants": {
             "allOf": [
               {
@@ -5421,6 +5434,162 @@
           }
         },
         "security": []
+      }
+    },
+    "/og/records/{recordId}/{version}.png": {
+      "get": {
+        "description": "議題・依頼者名・アイコン・完了日のみ公開。本文APIは認証必須。",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recordId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "バージョン付き画像は長期キャッシュ、HTMLは短時間キャッシュ。"
+          },
+          "302": {
+            "description": "共通画像またはSPAへのフォールバック。no-store。"
+          },
+          "404": {
+            "description": "存在しない議論。"
+          },
+          "503": {
+            "description": "一時的に利用不可。no-store。"
+          }
+        },
+        "security": [],
+        "summary": "公開プレビュー画像"
+      },
+      "head": {
+        "description": "議題・依頼者名・アイコン・完了日のみ公開。本文APIは認証必須。",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recordId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "バージョン付き画像は長期キャッシュ、HTMLは短時間キャッシュ。"
+          },
+          "302": {
+            "description": "共通画像またはSPAへのフォールバック。no-store。"
+          },
+          "404": {
+            "description": "存在しない議論。"
+          },
+          "503": {
+            "description": "一時的に利用不可。no-store。"
+          }
+        },
+        "security": [],
+        "summary": "公開プレビュー画像"
+      }
+    },
+    "/records/{recordId}": {
+      "get": {
+        "description": "議題・依頼者名・アイコン・完了日のみ公開。本文APIは認証必須。",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recordId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "バージョン付き画像は長期キャッシュ、HTMLは短時間キャッシュ。"
+          },
+          "302": {
+            "description": "共通画像またはSPAへのフォールバック。no-store。"
+          },
+          "404": {
+            "description": "存在しない議論。"
+          },
+          "503": {
+            "description": "一時的に利用不可。no-store。"
+          }
+        },
+        "security": [],
+        "summary": "議論詳細の公開OGP付きSPA"
+      },
+      "head": {
+        "description": "議題・依頼者名・アイコン・完了日のみ公開。本文APIは認証必須。",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recordId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "バージョン付き画像は長期キャッシュ、HTMLは短時間キャッシュ。"
+          },
+          "302": {
+            "description": "共通画像またはSPAへのフォールバック。no-store。"
+          },
+          "404": {
+            "description": "存在しない議論。"
+          },
+          "503": {
+            "description": "一時的に利用不可。no-store。"
+          }
+        },
+        "security": [],
+        "summary": "議論詳細の公開OGP付きSPA"
       }
     }
   },

@@ -37,6 +37,7 @@ const MEMORIAL_API_FUNCTION_NAME = "shittim-chest-production-records-memorial-ap
 const MEMORIAL_WORKER_FUNCTION_NAME = "shittim-chest-production-records-memorial-worker";
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
+const OGP_FUNCTION_NAME = "shittim-chest-production-records-ogp";
 const MODERATOR_TOKEN_PARAMETER_NAME =
   "/shittim-chest/production/discord/moderator/token";
 
@@ -52,6 +53,7 @@ export class RecordsApplicationStack extends Stack {
   public readonly memorialWorkerFunction: lambda.Function;
   public readonly rankingFunction: lambda.Function;
   public readonly readFunction: lambda.Function;
+  public readonly ogpFunction: lambda.Function;
 
   public constructor(
     scope: Construct,
@@ -629,6 +631,67 @@ export class RecordsApplicationStack extends Stack {
         ],
       },
     );
+    const webBucket = s3.Bucket.fromBucketName(
+      this, "PreviewWebBucket", `shittim-chest-production-records-web-${this.account}`,
+    );
+    this.ogpFunction = this.httpFunctionWithRole({
+      id: "OgpFunction", functionName: OGP_FUNCTION_NAME,
+      handler: "shittim_records.ogp_handler.handler", code,
+      timeout: Duration.seconds(15), reservedConcurrentExecutions: 4,
+      environment: {
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+        SESSION_TABLE_NAME: sessionTable.tableName,
+        MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+        WEB_BUCKET_NAME: webBucket.bucketName,
+        RECORDS_PUBLIC_HOSTNAME: recordsPublicHostname.valueAsString,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": [
+              "PK", "SK", "schema_version", "record_type", "record_id", "question",
+              "requester_key", "requester_display_name", "completed_at",
+            ] },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["PROFILE#REQUESTER"],
+              "dynamodb:Attributes": ["PK", "SK", "schema_version", "record_type", "display_name", "avatar_asset_key", "expiresAt", "updated_at"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject"], resources: [
+            `${webBucket.bucketArn}/index.html`, `${mediaBucket.bucketArn}/requesters/*`,
+            `${mediaBucket.bucketArn}/ogp/records/*`,
+          ],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:PutObject"], resources: [`${mediaBucket.bucketArn}/ogp/records/*`],
+        }),
+      ],
+    });
+    this.ogpFunction.role!.node.addMetadata(
+      Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+      Object.fromEntries(["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
+        ["requesters", "ogp/records"].map((prefix) => [
+          `AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
+          "Public preview reads use only requester avatars and versioned OGP; writes are limited to ogp/records. No memorial, session or secret access.",
+        ]),
+      )),
+    );
+    this.projectorFunction.addEnvironment("OGP_FUNCTION_NAME", `${OGP_FUNCTION_NAME}:live`);
+    this.projectorFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["lambda:InvokeFunction"],
+      resources: [this.formatArn({ service: "lambda", resource: "function", resourceName: `${OGP_FUNCTION_NAME}:live` })],
+    }));
     this.readFunction = this.httpFunctionWithRole({
       id: "ReadFunction",
       functionName: READ_FUNCTION_NAME,
@@ -637,6 +700,7 @@ export class RecordsApplicationStack extends Stack {
       timeout: Duration.seconds(10),
       reservedConcurrentExecutions: 4,
       environment: {
+        RECORDS_PUBLIC_HOSTNAME: recordsPublicHostname.valueAsString,
         ARCHIVE_TABLE_NAME: archiveTable.tableName,
         STATISTICS_TABLE_NAME: statisticsTable.tableName,
         SESSION_TABLE_NAME: sessionTable.tableName,
@@ -1106,6 +1170,7 @@ export class RecordsApplicationStack extends Stack {
       records_memorial_api: MEMORIAL_API_FUNCTION_NAME,
       records_memorial_worker: MEMORIAL_WORKER_FUNCTION_NAME,
       records_read: READ_FUNCTION_NAME,
+      records_ogp: OGP_FUNCTION_NAME,
       records_admin_config: ADMIN_CONFIG_FUNCTION_NAME,
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
@@ -1501,6 +1566,12 @@ export class RecordsApplicationStack extends Stack {
       );
     }
 
+    const ogpVersion = new lambda.Version(this, "OgpVersion", {
+      lambda: this.ogpFunction, codeSha256: bundleCodeSha256.valueAsString,
+    });
+    const ogpAlias = new lambda.Alias(this, "OgpLiveAlias", {
+      aliasName: "live", version: ogpVersion,
+    });
     const authVersion = new lambda.Version(this, "AuthVersion", {
       lambda: this.authFunction,
       codeSha256: bundleCodeSha256.valueAsString,
@@ -1563,6 +1634,12 @@ export class RecordsApplicationStack extends Stack {
       reason:
         "OAuth bootstrap routes are public by design; protected routes validate the server-side hashed Session record inside the two isolated Lambda handlers.",
     });
+    const ogpIntegration = new integrations.HttpLambdaIntegration("OgpIntegration", ogpAlias, {
+      payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0,
+    });
+    for (const path of ["/records/{recordId}", "/og/records/{recordId}/{version}"]) {
+      api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.HEAD], integration: ogpIntegration });
+    }
     const authIntegration = new integrations.HttpLambdaIntegration(
       "AuthIntegration",
       authAlias,

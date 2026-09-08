@@ -371,6 +371,13 @@ class RecordDetailResponse(PublicModel):
     final_decision: FinalDecisionView
     affection: AffectionView | None
     voting: VotingSummary | None = None
+    og_image_url: (
+        Annotated[
+            str,
+            Field(pattern=r"^https://[a-z0-9.-]+/og/records/[A-Za-z0-9_-]{43}/[a-f0-9]{32}\.png$"),
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def require_consistent_participants_and_winner(self) -> RecordDetailResponse:

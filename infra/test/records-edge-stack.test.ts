@@ -54,6 +54,8 @@ describe("RecordsEdgeStack", () => {
       DistributionConfig: Match.objectLike({
         Aliases: [{ Ref: "RecordsPublicHostname" }],
         CacheBehaviors: Match.arrayWith([
+          Match.objectLike({ PathPattern: "/records/*", AllowedMethods: ["GET", "HEAD"], FunctionAssociations: Match.absent() }),
+          Match.objectLike({ PathPattern: "/og/*", AllowedMethods: ["GET", "HEAD"], FunctionAssociations: Match.absent() }),
           Match.objectLike({
             PathPattern: "/api/*",
             AllowedMethods: ["GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE"],

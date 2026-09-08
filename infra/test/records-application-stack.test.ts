@@ -14,6 +14,7 @@ const recordsFunctionNames = [
   "cost",
   "inspector-translation",
   "read",
+  "ogp",
   "admin-config",
   "admin-status",
   "memorial-api",
@@ -83,7 +84,7 @@ describe("RecordsApplicationStack", () => {
     const { stack, template } = fixture;
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 11);
+    template.resourceCountIs("AWS::Lambda::Function", 12);
     for (const functionName of recordsFunctionNames) {
       template.hasResourceProperties("AWS::Lambda::Function", {
         Architectures: ["arm64"],
@@ -126,7 +127,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = fixture;
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 12);
+    template.resourceCountIs("AWS::Logs::LogGroup", 13);
     for (const functionName of recordsFunctionNames) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
         ([, resource]) =>
@@ -148,13 +149,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes five isolated aliases behind exactly twenty-one HTTP API routes", () => {
+  test("publishes six isolated aliases behind twenty-five HTTP API routes", () => {
     const { template } = fixture;
 
-    template.resourceCountIs("AWS::Lambda::Version", 5);
-    template.resourceCountIs("AWS::Lambda::Alias", 5);
+    template.resourceCountIs("AWS::Lambda::Version", 6);
+    template.resourceCountIs("AWS::Lambda::Alias", 6);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 21);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 25);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -1104,6 +1105,30 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::DynamoDB::Table", 0);
     expect(template.toJSON().Parameters).toHaveProperty("SourceDebateTableName");
     expect(template.toJSON().Parameters).toHaveProperty("SourceDebateTableStreamArn");
+  });
+
+  test("isolates public preview data and private notification invocation", () => {
+    const { template } = fixture;
+    const policies = Object.entries(template.findResources("AWS::IAM::Policy"));
+    const preview = policies.find(([id]) => id.startsWith("OgpFunctionRole"))![1].Properties.PolicyDocument.Statement as PolicyStatement[];
+    const actions = preview.flatMap(actionsOf);
+    expect(actions).toContain("dynamodb:GetItem");
+    expect(actions).not.toContain("dynamodb:Query");
+    expect(actions.some((action) => action.startsWith("ssm:"))).toBe(false);
+    const text = JSON.stringify(preview);
+    expect(text).toContain("PROFILE#REQUESTER");
+    expect(text).toContain("dynamodb:Attributes");
+    expect(text).not.toContain("SESSION#");
+    expect(text).not.toContain("memorial");
+    const writes = preview.filter((statement) => actionsOf(statement).includes("s3:PutObject"));
+    expect(writes).toHaveLength(1);
+    expect(JSON.stringify(writes)).toContain("ogp/records/*");
+    const projector = policies.find(([id]) => id.startsWith("ProjectorFunctionRole"))![1];
+    expect(JSON.stringify(projector)).toContain("records-ogp:live");
+    expect(JSON.stringify(projector)).not.toContain("ogp/records/*");
+    for (const route of ["GET /records/{recordId}", "HEAD /records/{recordId}", "GET /og/records/{recordId}/{version}", "HEAD /og/records/{recordId}/{version}"]) {
+      template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: route });
+    }
   });
 
   test("has no unacknowledged AWS Solutions findings", () => {

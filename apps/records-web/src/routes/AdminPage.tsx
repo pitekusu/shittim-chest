@@ -162,6 +162,7 @@ const LAMBDA_RESOURCES = [
   { key: "records_backfill", label: "過去記録取込" },
   { key: "records_auth", label: "認証API" },
   { key: "records_read", label: "閲覧API" },
+  { key: "records_ogp", label: "議論プレビュー画像" },
   { key: "records_ranking", label: "ランキング・親愛度集計" },
   { key: "records_cost", label: "費用集計" },
   { key: "records_inspector_translation", label: "脆弱性概要翻訳" },

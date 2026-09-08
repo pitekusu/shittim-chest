@@ -131,7 +131,9 @@ jobs:
             --asset "apps/records-web/src/assets/fonts/Delogy-Regular.ttf=shittim_records/assets/Delogy-Regular.ttf" \
             --asset "apps/records-web/src/assets/fonts/LINESeedJP-ExtraBold.woff2=shittim_records/assets/LINESeedJP-ExtraBold.woff2" \
             --asset "apps/records-web/THIRD_PARTY_NOTICES.md=shittim_records/assets/THIRD_PARTY_NOTICES.md" \
-            --asset "apps/records-web/third_party/line-seed/OFL.txt=shittim_records/assets/LINESeedJP-OFL.txt"
+            --asset "apps/records-web/third_party/line-seed/OFL.txt=shittim_records/assets/LINESeedJP-OFL.txt" \
+            --asset "services/records/third_party/noto-emoji/NotoColorEmoji.ttf=shittim_records/assets/NotoColorEmoji.ttf" \
+            --asset "services/records/third_party/noto-emoji/OFL.txt=shittim_records/assets/NotoColorEmoji-OFL.txt"
           bundle_hash=$(sha256sum "${RUNNER_TEMP}/records-lambda.zip" | cut -d' ' -f1)
           bundle_code_sha256=$(openssl dgst -sha256 -binary \
             "${RUNNER_TEMP}/records-lambda.zip" | base64 -w0)
@@ -846,6 +848,26 @@ jobs:
           test "${records_status}" = 401
           jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
             "${RUNNER_TEMP}/records-list.json" >/dev/null
+          preview_record_id="0000000000000000000000000000000000000000000"
+          preview_status=$(curl --silent --show-error --max-time 20 \
+            --dump-header "${RUNNER_TEMP}/records-preview.headers" \
+            --output "${RUNNER_TEMP}/records-preview.html" --write-out '%{http_code}' \
+            "${endpoint}/records/${preview_record_id}")
+          test "${preview_status}" = 404
+          grep --quiet '<div id="root"></div>' "${RUNNER_TEMP}/records-preview.html"
+          grep --ignore-case --quiet '^x-robots-tag: noindex' \
+            "${RUNNER_TEMP}/records-preview.headers"
+          preview_image_status=$(curl --silent --show-error --head --max-time 20 \
+            --dump-header "${RUNNER_TEMP}/records-preview-image.headers" \
+            --output /dev/null --write-out '%{http_code}' \
+            "${endpoint}/og/records/${preview_record_id}/00000000000000000000000000000000.png")
+          test "${preview_image_status}" = 302
+          grep --ignore-case --quiet '^cache-control: no-store' \
+            "${RUNNER_TEMP}/records-preview-image.headers"
+          record_detail_status=$(curl --silent --show-error --max-time 20 \
+            --output /dev/null --write-out '%{http_code}' \
+            "${endpoint}/api/v1/records/${preview_record_id}")
+          test "${record_detail_status}" = 401
           admin_status=$(curl --silent --show-error \
             --dump-header "${RUNNER_TEMP}/records-admin-status.headers" \
             --output "${RUNNER_TEMP}/records-admin-status.json" \

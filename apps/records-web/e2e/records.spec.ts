@@ -734,7 +734,7 @@ const PRODUCTION_CSP = [
 
 async function mockAuthenticatedApi(
   page: Page,
-  recordDetail: typeof detail | typeof detailWithAffection = detail,
+  recordDetail: (typeof detail | typeof detailWithAffection) & { ogImageUrl?: string } = detail,
   isAdmin = false,
 ): Promise<void> {
   let authenticated = true;
@@ -942,6 +942,26 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("individual OGP follows detail navigation and returns to common preview", async ({
+  page,
+}, testInfo) => {
+  const ogImageUrl = `https://shittim.pitekusu.dev/og/records/${RECORD_ID}/${"a".repeat(32)}.png`;
+  await mockAuthenticatedApi(page, { ...detail, ogImageUrl });
+  await page.goto("/");
+  await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
+  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", ogImageUrl);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", ogImageUrl);
+  await page.screenshot({ path: testInfo.outputPath("ogp-detail.png"), fullPage: true });
+  await page.getByRole("link", { name: "記録一覧へ" }).click();
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    /\/assets\/shittim-chest-archive-og-/,
+  );
 });
 
 test("record detail identifies the requester and uses affection hearts", async ({ page }) => {

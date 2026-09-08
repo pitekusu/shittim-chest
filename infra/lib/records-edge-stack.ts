@@ -167,6 +167,22 @@ export class RecordsEdgeStack extends Stack {
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       },
       additionalBehaviors: {
+        ...Object.fromEntries(["/records/*", "/og/*"].map((path) => [path, {
+          origin: new origins.HttpOrigin(apiOriginDomain.valueAsString, {
+            protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+          }),
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: new cloudfront.CachePolicy(this, path === "/og/*" ? "PreviewImageCache" : "PreviewHtmlCache", {
+            minTtl: Duration.seconds(0), defaultTtl: Duration.seconds(0),
+            maxTtl: Duration.days(365),
+            cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+            queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+            headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+          }),
+          compress: true,
+          responseHeadersPolicy: responseHeaders,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        }])),
         "/api/*": {
           origin: new origins.HttpOrigin(apiOriginDomain.valueAsString, {
             protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
