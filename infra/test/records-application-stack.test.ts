@@ -982,7 +982,7 @@ describe("RecordsApplicationStack", () => {
           },
           {
             Pattern:
-              '{"eventName":["INSERT","MODIFY"],"dynamodb":{"NewImage":{"record_type":{"S":["affection_profile"]},"schema_version":{"N":["8","9"]}}}}',
+              '{"eventName":["INSERT","MODIFY"],"dynamodb":{"NewImage":{"record_type":{"S":["affection_profile"]},"schema_version":{"N":["8","9","10"]}}}}',
           },
           {
             Pattern:
