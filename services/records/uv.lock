@@ -234,6 +234,15 @@ wheels = [
 ]
 
 [[package]]
+name = "budoux"
+version = "0.9.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/99/87012ebd2aecf1506c52a219abe1d3a1328e84fd0c418cf98c7ba8802c94/budoux-0.9.1.tar.gz", hash = "sha256:fc2243099c7ee42627858f06a4c6dabbd3f63b566ae3283be3869a93500b1efd", size = 111445, upload-time = "2026-08-28T05:06:23.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/72/0f/fcb8f66a66d1f97a76650a3e451d509acfcc52bfcd6c47446c93ff09b956/budoux-0.9.1-py3-none-any.whl", hash = "sha256:760fc96304bcd2eff1f2bec03406990974cdd5dc8e709b4eda5f3720f9ab0b1e", size = 105705, upload-time = "2026-08-28T05:06:21.468Z" },
+]
+
+[[package]]
 name = "cachecontrol"
 version = "0.14.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1250,6 +1259,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "budoux" },
     { name = "httpx" },
     { name = "httpx2" },
     { name = "openai" },
@@ -1271,6 +1281,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.66,<2" },
+    { name = "budoux", specifier = ">=0.9.1,<0.10" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "httpx2", specifier = ">=2.12.0,<3" },
     { name = "openai", specifier = ">=3.8.0,<4" },

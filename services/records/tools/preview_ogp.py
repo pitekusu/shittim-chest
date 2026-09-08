@@ -21,7 +21,7 @@ def main() -> None:
         emoji_path=root / "services/records/third_party/noto-emoji/NotoColorEmoji.ttf",
     )
     examples = [
-        ("normal", "秋の休日、友人と過ごすならどんな一日にしよう?", "空色の旅人"),
+        ("normal", "ちょっと休憩。コーヒーとクッキーで、ゆっくり過ごそう!", "空色の旅人"),
         (
             "long",
             "架空の相談です。" + "秋の週末にみんなで楽しく過ごせる場所や遊びを考えてください。" * 8,
