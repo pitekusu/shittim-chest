@@ -70,6 +70,7 @@ ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
         "records_memorial_api": "shittim-chest-production-records-memorial-api",
         "records_memorial_worker": "shittim-chest-production-records-memorial-worker",
         "records_read": "shittim-chest-production-records-read",
+        "records_ogp": "shittim-chest-production-records-ogp",
         "records_admin_config": "shittim-chest-production-records-admin-config",
         "records_admin_status": "shittim-chest-production-records-admin-status",
     }

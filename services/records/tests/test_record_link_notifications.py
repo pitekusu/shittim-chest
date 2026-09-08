@@ -193,6 +193,32 @@ def test_first_attempt_posts_to_parent_chat_after_marking_attempted() -> None:
     assert SNAPSHOT.thread_id != gateway.create_calls[0]["channel_id"]
 
 
+@pytest.mark.parametrize("fails", [False, True])
+def test_preview_preparation_precedes_post_and_failure_still_delivers_once(fails: bool) -> None:
+    store, gateway = FakeStore(receipt()), FakeGateway()
+    calls: list[str] = []
+
+    class Preparer:
+        async def prepare(self, record_id: str) -> None:
+            assert gateway.create_calls == []
+            assert store.attempted == 0
+            calls.append(record_id)
+            if fails:
+                raise TimeoutError("optional preparation timeout")
+
+    value = RecordLinkNotificationService(
+        store=store,
+        gateway_factory=FakeGatewayFactory(gateway),
+        public_hostname="shittim.pitekusu.dev",
+        preview_preparer=Preparer(),
+    )
+    publish(value)
+    publish(value)
+    assert calls == [PROJECTION.record_id]
+    assert len(gateway.create_calls) == 1
+    assert store.sent == 1
+
+
 def test_retry_recovers_existing_message_without_duplicate_post() -> None:
     store = FakeStore(receipt(attempted=True))
     gateway = FakeGateway(existing=True)

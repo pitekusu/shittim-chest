@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { RecordsApiError } from "../api/http";
@@ -9,6 +10,7 @@ import { ErrorPanel } from "../components/ErrorPanel";
 import { VoteGraph } from "../components/VoteGraph";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import { formatCompletedDateTime } from "../lib/dateTime";
+import { setPageMetadata } from "../lib/pageMetadata";
 import { routeMotionDelay } from "../lib/routePresentation";
 import commonStyles from "../styles/common.module.css";
 import detailStyles from "../styles/detail.module.css";
@@ -95,6 +97,10 @@ export function RecordDocument({
 }: {
   readonly record: RecordDetailResponse;
 }): React.JSX.Element {
+  useEffect(() => {
+    setPageMetadata(record);
+    return () => setPageMetadata();
+  }, [record]);
   const participant = (slot: ParticipantSlot) =>
     record.participants.find((item) => item.slot === slot)!;
   const count = (slot: ParticipantSlot) =>

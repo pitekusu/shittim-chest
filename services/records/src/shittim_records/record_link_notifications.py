@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -76,6 +77,10 @@ class RecordLinkGatewayFactory(Protocol):
     async def create(self, snapshot: DebateSnapshot) -> DiscordStatusGateway: ...
 
 
+class RecordPreviewPreparer(Protocol):
+    async def prepare(self, record_id: str) -> None: ...
+
+
 class RecordLinkNotificationService:
     """Converge one post-projection link message in the original chat channel."""
 
@@ -85,12 +90,14 @@ class RecordLinkNotificationService:
         store: RecordLinkNotificationStore,
         gateway_factory: RecordLinkGatewayFactory,
         public_hostname: str,
+        preview_preparer: RecordPreviewPreparer | None = None,
     ) -> None:
         if _PUBLIC_HOSTNAME.fullmatch(public_hostname) is None:
             raise ValueError("Records public hostname is invalid")
         self._store = store
         self._gateway_factory = gateway_factory
         self._public_hostname = public_hostname
+        self._preview_preparer = preview_preparer
 
     def publish(
         self,
@@ -146,6 +153,12 @@ class RecordLinkNotificationService:
                 checkpoint=None,
             )
         if message is None:
+            if self._preview_preparer is not None:
+                try:
+                    await asyncio.wait_for(self._preview_preparer.prepare(record_id), timeout=5)
+                except Exception:
+                    # Optional preview failure must not affect Archive or link delivery.
+                    logging.getLogger(__name__).warning("preview_preparation_unavailable")
             self._store.mark_attempted(
                 record_id=record_id,
                 source_fingerprint=source_fingerprint,

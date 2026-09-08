@@ -88,6 +88,7 @@ from shittim_records.memorial_adapters import (
     SqsMemorialJobQueue,
 )
 from shittim_records.memorial_http import MemorialHttpController
+from shittim_records.ogp_adapters import LambdaPreviewPreparer
 from shittim_records.projector import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
     OPAQUE_AFFECTION_SCHEMA_VERSIONS,
@@ -546,7 +547,11 @@ def _read_controller() -> ReadHttpController:
         _READ_CONTROLLER = ReadHttpController(
             store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
             session_key=session_key,
-            records=RecordsReadService(reader=reader, cursor_codec=CursorCodec(session_key)),
+            records=RecordsReadService(
+                reader=reader,
+                cursor_codec=CursorCodec(session_key),
+                public_origin="https://" + _environment("RECORDS_PUBLIC_HOSTNAME"),
+            ),
         )
     return _READ_CONTROLLER
 
@@ -822,6 +827,7 @@ def _build_projector(
                 moderator_token_parameter_name=_environment("SHITTIM_MODERATOR_TOKEN_PARAMETER"),
             ),
             public_hostname=_environment("RECORDS_PUBLIC_HOSTNAME"),
+            preview_preparer=LambdaPreviewPreparer(_environment("OGP_FUNCTION_NAME")),
         )
         if enable_record_link_notifications
         else None

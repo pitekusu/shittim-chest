@@ -11,6 +11,27 @@ afterEach(() => {
 });
 
 describe("RecordDetail", () => {
+  it("sets individual OGP for SPA detail and restores common metadata on leaving", () => {
+    const detail = {
+      ...recordDetail(),
+      ogImageUrl: `https://shittim.pitekusu.dev/og/records/${RECORD_ID}/${"a".repeat(32)}.png`,
+    };
+    const view = renderRoute(<RecordDocument record={detail} />);
+    expect(document.head.querySelector('meta[property="og:image"]')).toHaveAttribute(
+      "content",
+      detail.ogImageUrl,
+    );
+    expect(document.head.querySelectorAll('meta[property="og:image"]')).toHaveLength(1);
+    expect(document.head.querySelector('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      `https://shittim.pitekusu.dev/records/${RECORD_ID}`,
+    );
+    view.unmount();
+    expect(
+      document.head.querySelector('meta[property="og:image"]')?.getAttribute("content"),
+    ).toContain("/assets/shittim-chest-archive-og-");
+    expect(document.head.querySelector('meta[name="robots"]')).toBeNull();
+  });
   it("shows both composite assessments without the legacy tie explanation", () => {
     const original = recordDetail();
     const detail = {

@@ -213,6 +213,7 @@ export interface CostsResponse {
 }
 
 export interface RecordDetailResponse {
+  readonly ogImageUrl?: string | null;
   readonly schemaVersion: 2;
   readonly recordId: string;
   readonly completedAt: string;

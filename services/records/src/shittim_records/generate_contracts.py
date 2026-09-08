@@ -132,6 +132,43 @@ def _memorial_write_headers() -> list[dict[str, Any]]:
     ]
 
 
+def _preview_path(*, image: bool) -> dict[str, Any]:
+    parameters = [
+        _parameter(
+            "recordId", "path", {"type": "string", "pattern": r"^[A-Za-z0-9_-]{43}$"}, required=True
+        )
+    ]
+    if image:
+        parameters.append(
+            _parameter(
+                "version", "path", {"type": "string", "pattern": r"^[a-f0-9]{32}$"}, required=True
+            )
+        )
+    content_type = "image/png" if image else "text/html"
+    return {
+        method: {
+            "summary": "公開プレビュー画像" if image else "議論詳細の公開OGP付きSPA",
+            "description": "議題・依頼者名・アイコン・完了日のみ公開。本文APIは認証必須。",
+            "security": [],
+            "parameters": parameters,
+            "responses": {
+                "200": {
+                    "description": "バージョン付き画像は長期キャッシュ、HTMLは短時間キャッシュ。",
+                    **(
+                        {"content": {content_type: {"schema": {"type": "string"}}}}
+                        if method == "get"
+                        else {}
+                    ),
+                },
+                "302": {"description": "共通画像またはSPAへのフォールバック。no-store。"},
+                "404": {"description": "存在しない議論。"},
+                "503": {"description": "一時的に利用不可。no-store。"},
+            },
+        }
+        for method in ("get", "head")
+    }
+
+
 def build_openapi() -> dict[str, Any]:
     error_responses = {
         code: _response("ErrorResponse", description)
@@ -152,6 +189,8 @@ def build_openapi() -> dict[str, Any]:
             "version": str(RECORDS_API_SCHEMA_VERSION),
         },
         "paths": {
+            "/records/{recordId}": _preview_path(image=False),
+            "/og/records/{recordId}/{version}.png": _preview_path(image=True),
             "/api/v1/auth/discord/start": {
                 "get": {
                     "operationId": "beginDiscordOAuth",

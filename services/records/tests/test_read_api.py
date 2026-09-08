@@ -789,6 +789,32 @@ def test_detail_reconstructs_exact_twelve_items_without_internal_fields() -> Non
         assert forbidden not in serialized
 
 
+def test_detail_og_image_matches_public_preview_version() -> None:
+    from datetime import datetime
+
+    from shittim_records.ogp import RecordPreview
+
+    reader = FakeReader()
+    records = RecordsReadService(
+        reader=reader,
+        cursor_codec=CursorCodec(SESSION_KEY),
+        public_origin="https://shittim.pitekusu.dev",
+    )
+    result = records.get_record(record_id=reader.record_id, now=NOW)
+    profile = next(
+        iter(reader.load_profiles(requester_keys=(str(reader.meta["requester_key"]),)).values())
+    )
+    expected = RecordPreview(
+        reader.record_id,
+        str(reader.meta["question"]),
+        profile.display_name,
+        datetime.fromisoformat(str(reader.meta["completed_at"])),
+        profile.avatar_asset_key,
+        profile.updated_at,
+    )
+    assert result.og_image_url == "https://shittim.pitekusu.dev" + expected.image_path
+
+
 def test_detail_ignores_legacy_archived_participant_avatar_key() -> None:
     records, reader = service()
     participants = cast(dict[str, dict[str, Any]], reader.meta["participants"])
