@@ -168,6 +168,18 @@ class FakeOutboxRecovery:
 
 
 class FakeOpenAI:
+    async def find_overlap_targets(self, **kwargs) -> tuple[ParticipantSlot, ...]:
+        return ()
+
+    async def explore_alternatives(self, **kwargs) -> tuple[Candidate, ...]:
+        return ()
+
+    async def select_alternative(self, **kwargs) -> CandidatePlan:
+        return kwargs["plan"]
+
+    async def revise_initial_opinion(self, **kwargs) -> InitialOpinion:
+        return next(x for x in kwargs["opinions"] if x.participant is kwargs["plan"].participant)
+
     def __init__(self) -> None:
         self.initial_calls: list[ParticipantSlot] = []
         self.proposal_calls: list[ParticipantSlot] = []

@@ -2877,6 +2877,8 @@ class DynamoDbDebateRepository:
                 "terminal_delivery_deadline_at",
                 "terminal_delivery_plan_status",
                 "terminal_delivery_abandon_reason",
+                "candidate_coordination",
+                "opinion_reconsideration",
             )
         ):
             name = f"#expected_pointer{index}"

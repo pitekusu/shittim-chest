@@ -60,6 +60,7 @@ from shittim_chest.application.ports import (
     RepositoryConflict,
     RepositoryTransactionConflict,
 )
+from shittim_chest.application.reconsideration import run_reconsideration
 from shittim_chest.application.scale_to_zero import IngressClaimFence, IngressKind
 from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
@@ -233,7 +234,7 @@ class DebateApplication:
             channel_id=request.channel_id,
             created_at=now,
             attempt_created_at=now,
-            deliberation_version=1,
+            deliberation_version=2,
             voting_rules_version=COMPOSITE_VOTING_VERSION,
             origin_ingress_interaction_id=(
                 None if ingress_claim is None else ingress_claim.interaction_id
@@ -606,6 +607,12 @@ class DebateApplication:
                 at=now,
             ),
             terminal_delivery=None,
+            candidate_coordination=failed.candidate_coordination.for_retry()
+            if failed.candidate_coordination
+            else None,
+            opinion_reconsideration=failed.opinion_reconsideration.for_retry()
+            if failed.opinion_reconsideration
+            else None,
         )
         persisted = await self._repository.create_retry(
             expected_failed=failed,
@@ -803,7 +810,7 @@ class DebateApplication:
                 self._evidence.prepare_evidence(question=snapshot.question)
             )
         at = self._clock.now()
-        if snapshot.deliberation_version == 1:
+        if snapshot.deliberation_version >= 1:
             await self._replace_snapshot(
                 expected=snapshot,
                 updated=replace(
@@ -947,7 +954,46 @@ class DebateApplication:
             if phase is DebatePhase.FORMING_PREFERENCES
             else DebatePhase.COLLECTING_INITIAL_OPINIONS
         )
+        if phase is DebatePhase.SELECTING_CANDIDATES and snapshot.deliberation_version == 2:
+            refined = await self._run_reconsideration(snapshot, coordination=True)
+            if refined is None:
+                return
+            snapshot = refined
         await self._advance(snapshot, target)
+
+    async def _run_reconsideration(
+        self,
+        snapshot: DebateSnapshot,
+        *,
+        coordination: bool,
+    ) -> DebateSnapshot | None:
+        def validate(current: DebateSnapshot) -> None:
+            self._require_owned_active_lease(current, at=self._clock.now())
+            self._remaining_generation_seconds(current)
+            if current.state.phase.is_terminal:
+                raise RepositoryConflict("reconsideration attempt is terminal")
+            if current.terminal_delivery is not None:
+                raise RepositoryConflict("reconsideration delivery is already staged")
+
+        try:
+            return await run_reconsideration(
+                snapshot,
+                coordination=coordination,
+                repository=self._repository,
+                openai=self._openai,
+                clock=self._clock,
+                within=self._within_phase,
+                validate=validate,
+            )
+        except GenerationProviderError as error:
+            code = error.code
+        except _PhaseDeadlineExceeded:
+            code = "generation_deadline_exceeded"
+        except TimeoutError:
+            code = "session_deadline_exceeded"
+        current = await self._require_snapshot(snapshot.state.debate_id)
+        await self._stage_terminal_delivery(current, target=DebatePhase.FAILED, error_code=code)
+        return None
 
     async def _generate_and_persist_deliberation(
         self,
@@ -1142,6 +1188,11 @@ class DebateApplication:
             for participant in PARTICIPANTS
         ):
             raise RepositoryConflict("initial opinions are not durably generated")
+        if snapshot.deliberation_version == 2:
+            refined = await self._run_reconsideration(snapshot, coordination=False)
+            if refined is None:
+                return
+            snapshot = refined
         staged = await self._stage_initial_opinion_delivery(snapshot)
         if staged.terminal_delivery is None:  # pragma: no cover - repository contract
             raise RepositoryConflict("initial opinion delivery plan was not persisted")

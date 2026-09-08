@@ -9,6 +9,7 @@ from enum import StrEnum, unique
 from shittim_chest.domain import (
     AffectionAssessment,
     AttemptId,
+    Candidate,
     CandidatePlan,
     DebateId,
     DebatePhase,
@@ -710,6 +711,46 @@ class TerminalDeliveryPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class ReconsiderationProgress:
+    """One bounded v2 pass; each model result and next cursor are saved together."""
+
+    step: str = "classify"
+    targets: tuple[ParticipantSlot, ...] = ()
+    cursor: int = 0
+    alternatives: tuple[Candidate, ...] = field(default=(), repr=False)
+    checkpoint: GenerationCheckpoint | None = None
+
+    def __post_init__(self) -> None:
+        if self.step not in {"classify", "explore", "select", "rewrite", "complete"}:
+            raise ValueError("unknown reconsideration step")
+        if (
+            not isinstance(self.targets, tuple)
+            or any(not isinstance(x, ParticipantSlot) for x in self.targets)
+            or len(set(self.targets)) != len(self.targets)
+        ):
+            raise ValueError("invalid reconsideration targets")
+        if type(self.cursor) is not int or not 0 <= self.cursor <= len(self.targets):
+            raise ValueError("invalid reconsideration cursor")
+        if (
+            not isinstance(self.alternatives, tuple)
+            or len(self.alternatives) > 2
+            or any(not isinstance(x, Candidate) for x in self.alternatives)
+        ):
+            raise ValueError("invalid reconsideration alternatives")
+        if self.step == "classify" and (self.targets or self.cursor):
+            raise ValueError("unclassified reconsideration has targets")
+        if self.step in {"explore", "select", "rewrite"} and self.cursor == len(self.targets):
+            raise ValueError("reconsideration target is absent")
+        if self.step == "complete" and (self.cursor != len(self.targets) or self.checkpoint):
+            raise ValueError("completed reconsideration has pending work")
+        if bool(self.alternatives) != (self.step == "select"):
+            raise ValueError("exploration results belong only to selection")
+
+    def for_retry(self) -> ReconsiderationProgress:
+        return replace(self, checkpoint=None)
+
+
+@dataclass(frozen=True, slots=True)
 class DebateSnapshot:
     """Application aggregate transferred through the repository Protocol."""
 
@@ -749,6 +790,8 @@ class DebateSnapshot:
     deliberation_version: int = 0
     preference_frames: tuple[PreferenceFrame, ...] = field(default=(), repr=False)
     candidate_plans: tuple[CandidatePlan, ...] = field(default=(), repr=False)
+    candidate_coordination: ReconsiderationProgress | None = field(default=None, repr=False)
+    opinion_reconsideration: ReconsiderationProgress | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.voting_rules_version not in ("legacy-v1", COMPOSITE_VOTING_VERSION):
@@ -1041,8 +1084,30 @@ class DebateSnapshot:
         )
 
     def _validate_deliberation(self) -> None:
-        if type(self.deliberation_version) is not int or self.deliberation_version not in {0, 1}:
+        if type(self.deliberation_version) is not int or self.deliberation_version not in {0, 1, 2}:
             raise ValueError("unknown deliberation version")
+        for progress, phase in (
+            (self.candidate_coordination, DebatePhase.SELECTING_CANDIDATES),
+            (self.opinion_reconsideration, DebatePhase.COLLECTING_INITIAL_OPINIONS),
+        ):
+            if progress is None:
+                continue
+            if self.deliberation_version != 2 or len(self.candidate_plans) != 3:
+                raise ValueError("reconsideration requires v2 candidate plans")
+            if phase is DebatePhase.COLLECTING_INITIAL_OPINIONS and len(self.initial_opinions) != 3:
+                raise ValueError("reconsideration requires all provisional opinions")
+            if phase is DebatePhase.SELECTING_CANDIDATES and len(progress.targets) > 2:
+                raise ValueError("coordination preserves an anchor")
+            if progress.checkpoint is not None and (
+                progress.checkpoint.phase is not phase
+                or progress.checkpoint.status
+                not in {GenerationStatus.PLANNED, GenerationStatus.IN_FLIGHT}
+                or (
+                    progress.step != "classify"
+                    and progress.checkpoint.participant is not progress.targets[progress.cursor]
+                )
+            ):
+                raise ValueError("reconsideration generation claim is invalid")
         phases = {DebatePhase.FORMING_PREFERENCES, DebatePhase.SELECTING_CANDIDATES}
         if self.deliberation_version == 0:
             if (

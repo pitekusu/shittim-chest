@@ -40,6 +40,7 @@ from shittim_chest.application.scale_to_zero import (
 )
 from shittim_chest.domain import (
     AttemptId,
+    Candidate,
     CandidatePlan,
     DebateId,
     EvidenceBundle,
@@ -689,6 +690,47 @@ class CandidateOrderer(Protocol):
 
 class OpenAIService(Protocol):
     """Return validated domain models rather than SDK response objects."""
+
+    async def find_overlap_targets(
+        self,
+        *,
+        question: str,
+        positions: tuple[InitialOpinion, ...],
+        rotation: int,
+        coordination: bool,
+    ) -> tuple[ParticipantSlot, ...]: ...
+
+    async def explore_alternatives(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        peers: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+    ) -> tuple[Candidate, ...]: ...
+
+    async def select_alternative(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        peers: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+        alternatives: tuple[Candidate, ...],
+    ) -> CandidatePlan: ...
+
+    async def revise_initial_opinion(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        opinions: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+        affection_score: int,
+    ) -> InitialOpinion: ...
 
     async def score_affection(
         self,

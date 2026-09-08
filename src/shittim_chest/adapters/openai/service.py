@@ -22,6 +22,7 @@ from openai.types.responses import Response
 from openai.types.shared_params.reasoning import Reasoning
 from pydantic import BaseModel, ValidationError
 
+from shittim_chest.adapters.openai import reconsideration
 from shittim_chest.adapters.openai.composite_ballot import score_composite_ballot
 from shittim_chest.adapters.openai.config import (
     OpenAIAdapterConfig,
@@ -131,6 +132,64 @@ class OpenAIResponsesService:
     config: OpenAIAdapterConfig = field(default_factory=OpenAIAdapterConfig)
     recorder: OpenAIUsageRecorder = field(default_factory=NullOpenAIUsageRecorder)
     system_prompt: str | None = field(default=None, repr=False)
+
+    async def find_overlap_targets(
+        self,
+        *,
+        question: str,
+        positions: tuple[InitialOpinion, ...],
+        rotation: int,
+        coordination: bool,
+    ) -> tuple[ParticipantSlot, ...]:
+        return await reconsideration.classify(self, question, positions, rotation, coordination)
+
+    async def explore_alternatives(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        peers: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+    ) -> tuple[Candidate, ...]:
+        _validate_frame_owner(frame, plan.participant, plan)
+        return await reconsideration.explore(self, question, frame, plan, peers, evidence)
+
+    async def select_alternative(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        peers: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+        alternatives: tuple[Candidate, ...],
+    ) -> CandidatePlan:
+        _validate_frame_owner(frame, plan.participant, plan)
+        return await reconsideration.select(
+            self, question, frame, plan, peers, evidence, alternatives
+        )
+
+    async def revise_initial_opinion(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        opinions: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+        affection_score: int,
+    ) -> InitialOpinion:
+        _validate_frame_owner(frame, plan.participant, plan)
+        return await reconsideration.revise_opinion(
+            self,
+            question,
+            frame,
+            plan,
+            {x.participant: x for x in opinions},
+            evidence,
+            affection_score,
+        )
 
     async def score_affection(
         self,

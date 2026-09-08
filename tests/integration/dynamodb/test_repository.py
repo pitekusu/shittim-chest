@@ -52,6 +52,7 @@ from shittim_chest.application import (
     prepare_terminal_outbox_operations,
     prepare_vote_outbox_operations,
 )
+from shittim_chest.application.models import ReconsiderationProgress
 from shittim_chest.application.ports import (
     RepositoryBusy,
     RepositoryCancellationCode,
@@ -3108,6 +3109,59 @@ async def test_private_output_and_checkpoint_are_atomic_and_fenced(
             ),
         )
     assert await repository.get(accepted.state.debate_id) == persisted
+
+
+@pytest.mark.asyncio
+async def test_reconsideration_cursor_and_choice_reject_same_timestamp_stale_write(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(new_snapshot(), deliberation_version=2),
+        operation_id="v2-cas",
+        lease_owner="worker-1",
+    )
+    at = NOW + timedelta(seconds=1)
+    slots = tuple(ParticipantSlot)
+    prepared = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=replace(accepted.state, phase=DebatePhase.SELECTING_CANDIDATES, updated_at=at),
+            preference_frames=tuple(PreferenceFrame(x, ("priority",), (), "cost") for x in slots),
+            candidate_plans=tuple(
+                CandidatePlan(x, (Candidate("original", "fit", "cost"),)) for x in slots
+            ),
+            candidate_coordination=ReconsiderationProgress(
+                step="select", targets=(slots[1],), alternatives=(Candidate("new", "fit", "cost"),)
+            ),
+        ),
+    )
+    completed = await repository.replace(
+        expected=prepared,
+        updated=replace(
+            prepared,
+            candidate_plans=tuple(
+                CandidatePlan(
+                    x, (Candidate("new" if x is slots[1] else "original", "fit", "cost"),)
+                )
+                for x in slots
+            ),
+            candidate_coordination=ReconsiderationProgress(
+                step="complete", targets=(slots[1],), cursor=1
+            ),
+        ),
+    )
+    assert await repository.get(accepted.state.debate_id) == completed
+    with pytest.raises(RepositoryConflict):
+        await repository.replace(
+            expected=prepared,
+            updated=replace(
+                prepared, state=replace(prepared.state, updated_at=at + timedelta(microseconds=1))
+            ),
+        )
+    assert await repository.get(accepted.state.debate_id) == completed
 
 
 @pytest.mark.asyncio

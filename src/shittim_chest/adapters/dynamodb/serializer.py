@@ -34,6 +34,7 @@ from shittim_chest.application.models import (
     LeaseGrant,
     PhaseDeliveryPlan,
     PhaseDeliveryStatus,
+    ReconsiderationProgress,
     TerminalDeliveryPlan,
 )
 from shittim_chest.application.scale_to_zero import (
@@ -175,6 +176,10 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
     if snapshot.deliberation_version:
         attempt_meta["deliberation_version"] = snapshot.deliberation_version
     attempt_meta["voting_rules_version"] = snapshot.voting_rules_version
+    for name in ("candidate_coordination", "opinion_reconsideration"):
+        progress = getattr(snapshot, name)
+        if progress is not None:
+            attempt_meta[name] = _serialize_reconsideration(progress)
     _put_optional(
         attempt_meta,
         "origin_ingress_interaction_id",
@@ -631,6 +636,12 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         escalation_assessment=escalation_assessment,
         affection_assessment=affection_assessment,
         generation_checkpoints=generation_checkpoints,
+        candidate_coordination=_deserialize_reconsideration(
+            attempt_meta.get("candidate_coordination")
+        ),
+        opinion_reconsideration=_deserialize_reconsideration(
+            attempt_meta.get("opinion_reconsideration")
+        ),
         deliberation_version=(
             _integer(attempt_meta, "deliberation_version")
             if "deliberation_version" in attempt_meta
@@ -647,6 +658,59 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         error_code=_optional_text(attempt_meta, "error_code"),
         terminal_delivery=terminal_delivery,
     )
+
+
+def _serialize_reconsideration(progress: ReconsiderationProgress) -> DynamoItem:
+    return {
+        "step": progress.step,
+        "targets": [x.value for x in progress.targets],
+        "cursor": progress.cursor,
+        "alternatives": [
+            {"proposal": x.proposal, "fit": x.fit, "tradeoff": x.tradeoff}
+            for x in progress.alternatives
+        ],
+        "checkpoint": _serialize_generation_checkpoint(progress.checkpoint)
+        if progress.checkpoint
+        else None,
+    }
+
+
+def _deserialize_reconsideration(value: DynamoValue) -> ReconsiderationProgress | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "step",
+        "targets",
+        "cursor",
+        "alternatives",
+        "checkpoint",
+    }:
+        raise PersistenceFormatError("invalid reconsideration progress")
+    raw_alternatives = value["alternatives"]
+    if not isinstance(raw_alternatives, list):
+        raise PersistenceFormatError("invalid reconsideration alternatives")
+    alternatives = []
+    for raw in raw_alternatives:
+        if not isinstance(raw, dict) or set(raw) != {"proposal", "fit", "tradeoff"}:
+            raise PersistenceFormatError("invalid reconsideration alternative")
+        alternatives.append(
+            Candidate(_text(raw, "proposal"), _text(raw, "fit"), _text(raw, "tradeoff"))
+        )
+    checkpoint = value["checkpoint"]
+    try:
+        return ReconsiderationProgress(
+            step=_text(value, "step"),
+            targets=tuple(ParticipantSlot(x) for x in _string_tuple(value, "targets")),
+            cursor=_integer(value, "cursor"),
+            alternatives=tuple(alternatives),
+            checkpoint=_deserialize_generation_checkpoints(
+                {"generation_checkpoints": [checkpoint]}
+            )[0]
+            if checkpoint is not None
+            else None,
+        )
+    except (TypeError, ValueError) as error:
+        raise PersistenceFormatError("invalid reconsideration progress") from error
 
 
 def _serialize_deliberation(
