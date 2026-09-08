@@ -20,8 +20,7 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import (
-    CURRENT_SCHEMA_VERSION,
-    PREVIOUS_SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
     DynamoItem,
     DynamoValue,
     deserialize_snapshot,
@@ -105,7 +104,7 @@ class SourceDebateRepository:
         if any(
             isinstance(item.get("schema_version"), bool)
             or not isinstance(item.get("schema_version"), int)
-            or item.get("schema_version") not in {PREVIOUS_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION}
+            or item.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS
             for item in items
         ):
             raise ValueError("source debate partition schema is inconsistent")

@@ -86,6 +86,8 @@ type DynamoItem = dict[str, DynamoValue]
 CURRENT_SCHEMA_VERSION = 10
 PREVIOUS_SCHEMA_VERSION = 9
 SUPPORTED_SCHEMA_VERSIONS = frozenset({8, 9, 10})
+LEGACY_AFFECTION_SCHEMA_VERSION = 8
+OPAQUE_AFFECTION_SCHEMA_VERSIONS = frozenset({9, 10})
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
@@ -2047,7 +2049,7 @@ def deserialize_affection_profile(
         or any(isinstance(value, bool) or not isinstance(value, int) for value in raw_scores)
     ):
         raise PersistenceFormatError("affection profile scores are invalid")
-    if source_version == PREVIOUS_SCHEMA_VERSION:
+    if source_version == LEGACY_AFFECTION_SCHEMA_VERSION:
         if requester_key is None:
             raise PersistenceFormatError(
                 "legacy affection profile requires an opaque requester key"
@@ -2079,7 +2081,7 @@ def deserialize_affection_profile(
         memorial_cycle=memorial_cycle,
         memorial_unlock=memorial_unlock,
     )
-    if source_version == CURRENT_SCHEMA_VERSION and _text(item, "PK") != (
+    if source_version in OPAQUE_AFFECTION_SCHEMA_VERSIONS and _text(item, "PK") != (
         f"AFFECTION#REQUESTER#{profile.requester_key}"
     ):
         raise PersistenceFormatError("affection profile partition does not match requester")

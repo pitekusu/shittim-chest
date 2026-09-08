@@ -499,7 +499,10 @@ def test_previous_schema_is_upconverted_and_unknown_schema_fails_closed() -> Non
         migrate_item({**current[0], "schema_version": 99})
 
 
-def test_affection_assessment_and_private_profile_round_trip_without_reason_text() -> None:
+@pytest.mark.parametrize("profile_schema", [9, 10])
+def test_affection_assessment_and_private_profile_round_trip_without_reason_text(
+    profile_schema: int,
+) -> None:
     source = snapshot()
     profile = AffectionProfile.initial(
         requester_key=REQUESTER_KEY,
@@ -526,7 +529,10 @@ def test_affection_assessment_and_private_profile_round_trip_without_reason_text
     assert profile_item["requester_key"] == REQUESTER_KEY
     assert "requester_id" not in profile_item
     assert profile_item["scores"] == [535, 457, 600]
+    profile_item["schema_version"] = profile_schema
     assert deserialize_affection_profile(profile_item) == updated_profile
+    with pytest.raises(PersistenceFormatError, match="partition"):
+        deserialize_affection_profile({**profile_item, "PK": "AFFECTION#REQUESTER#wrong"})
 
 
 def test_v8_affection_profile_requires_an_opaque_key_and_defaults_memorial_state() -> None:
@@ -534,7 +540,7 @@ def test_v8_affection_profile_requires_an_opaque_key_and_defaults_memorial_state
         "PK": "AFFECTION#REQUESTER#private-requester",
         "SK": "PROFILE",
         "record_type": "affection_profile",
-        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "schema_version": 8,
         "requester_id": "private-requester",
         "requester_username": "requester",
         "requester_display_name": "Requester",

@@ -129,7 +129,8 @@ def service(reader: FakeReader | None = None) -> tuple[RecordsReadService, FakeR
     return RecordsReadService(reader=actual, cursor_codec=CursorCodec(SESSION_KEY)), actual
 
 
-def test_composite_archive_projects_and_reads_both_assessments() -> None:
+@pytest.mark.parametrize("corruption", [None, "lower-score", "reason"])
+def test_composite_archive_projects_and_reads_both_assessments(corruption: str | None) -> None:
     from shittim_chest.domain import PARTICIPANTS
     from shittim_chest.domain.composite_voting import (
         CandidateAssessment,
@@ -170,6 +171,17 @@ def test_composite_archive_projects_and_reads_both_assessments() -> None:
     records, reader = service()
     reader.items = projection.items
     reader.record_id = projection.record_id
+    if corruption is not None:
+        vote = next(item for item in reader.items if item["SK"] == "VOTE#participant-a")
+        if corruption == "reason":
+            vote["reason"] = "mismatched reason"
+        else:
+            assessments = cast(list[dict[str, Any]], vote["assessments"])
+            selected = next(item for item in assessments if item["candidate"] == vote["candidate"])
+            selected["entertainment"] = 0
+        with pytest.raises(ReadFailure, match="ARCHIVE_UNAVAILABLE"):
+            records.get_record(record_id=reader.record_id, now=NOW)
+        return
     response = records.get_record(record_id=reader.record_id, now=NOW)
     parsed = RecordDetailResponse.model_validate(response)
     assert parsed.voting is not None

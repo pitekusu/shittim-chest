@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from mypy_boto3_ssm.client import SSMClient
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.adapters.dynamodb.serializer import CURRENT_SCHEMA_VERSION, DynamoItem
+from shittim_chest.adapters.dynamodb.serializer import OPAQUE_AFFECTION_SCHEMA_VERSIONS, DynamoItem
 from shittim_chest.config.models import PersonaConfigPayload
 
 from shittim_records.admin import AdminFailure, PromptRevisionIncomplete
@@ -136,6 +136,7 @@ Return plain Japanese prose only, without Markdown, headings, lists, URLs, or me
 
 @dataclass(frozen=True, slots=True)
 class _SourceProfile:
+    schema_version: int
     requester_key: str
     display_name: str
     scores: tuple[int, int, int]
@@ -535,7 +536,7 @@ class DynamoMemorialRepository:
                     ),
                     "ExpressionAttributeValues": marshal_item(
                         {
-                            ":schema": CURRENT_SCHEMA_VERSION,
+                            ":schema": profile.schema_version,
                             ":profile_type": "affection_profile",
                             ":requester": requester_key,
                             ":version": profile.version,
@@ -694,7 +695,7 @@ class DynamoMemorialRepository:
                             ),
                             "ExpressionAttributeValues": marshal_item(
                                 {
-                                    ":schema": CURRENT_SCHEMA_VERSION,
+                                    ":schema": profile.schema_version,
                                     ":profile_type": "affection_profile",
                                     ":requester": requester_key,
                                     ":version": profile.version,
@@ -886,7 +887,7 @@ class DynamoMemorialRepository:
                                     ":next_cycle": next_cycle,
                                     ":next_version": profile.version + 1,
                                     ":now": updated_at,
-                                    ":schema": CURRENT_SCHEMA_VERSION,
+                                    ":schema": profile.schema_version,
                                     ":profile_type": "affection_profile",
                                     ":requester": requester_key,
                                     ":version": profile.version,
@@ -1382,7 +1383,7 @@ class DynamoMemorialRepository:
                 item.get("PK") != f"AFFECTION#REQUESTER#{requester_key}"
                 or item.get("SK") != "PROFILE"
                 or item.get("record_type") != "affection_profile"
-                or item.get("schema_version") != CURRENT_SCHEMA_VERSION
+                or item.get("schema_version") not in OPAQUE_AFFECTION_SCHEMA_VERSIONS
                 or item.get("requester_key") != requester_key
             ):
                 raise ValueError("profile identity")
@@ -1423,6 +1424,7 @@ class DynamoMemorialRepository:
             else:
                 raise ValueError("partial unlock")
             return _SourceProfile(
+                schema_version=_integer(item.get("schema_version"), "profile schema", minimum=1),
                 requester_key=requester_key,
                 display_name=_text(
                     item.get("unlock_display_name", item.get("requester_display_name")),

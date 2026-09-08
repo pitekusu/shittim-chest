@@ -616,12 +616,15 @@ def test_terminal_failure_clears_only_unrecoverable_partial_output(
 
 
 @pytest.mark.parametrize("profile_updated_at", (NOW, NOW + timedelta(seconds=1)))
+@pytest.mark.parametrize("profile_schema", [9, 10])
 def test_reset_transaction_fences_generation_and_atomically_resets_profile(
     monkeypatch: pytest.MonkeyPatch,
     profile_updated_at: datetime,
+    profile_schema: int,
 ) -> None:
     ready = _checkpoint(state="ready", narrative=NARRATIVE, image_asset_key=RESULT_KEY)
     profile = _profile(updated_at=profile_updated_at)
+    profile["schema_version"] = profile_schema
     client = DynamoRecorder(profile=profile, checkpoint=ready)
     repository = _repository(client)
     post_reset = MemorialSnapshot(
@@ -647,6 +650,7 @@ def test_reset_transaction_fences_generation_and_atomically_resets_profile(
     actions = client.transactions[0]["TransactItems"]
     source_update = actions[0]["Update"]
     values = unmarshal_item(source_update["ExpressionAttributeValues"])
+    assert values[":schema"] == profile_schema
     assert values[":scores"] == [500, 500, 500]
     assert values[":next_cycle"] == 2
     assert values[":reset_count"] == 1

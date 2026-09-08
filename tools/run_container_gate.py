@@ -27,6 +27,8 @@ NON_TERMINAL_PHASES: Final = (
     "accepted",
     "scoring_affection",
     "preparing_evidence",
+    "forming_preferences",
+    "selecting_candidates",
     "collecting_initial_opinions",
     "discussing",
     "collecting_final_proposals",

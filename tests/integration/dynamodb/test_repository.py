@@ -27,7 +27,8 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.repository import derive_affection_requester_key
 from shittim_chest.adapters.dynamodb.serializer import (
-    PREVIOUS_SCHEMA_VERSION,
+    CURRENT_SCHEMA_VERSION,
+    LEGACY_AFFECTION_SCHEMA_VERSION,
     DynamoItem,
     serialize_outbox,
     serialize_snapshot,
@@ -2292,6 +2293,11 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
     )
     assert raw_profile["scores"] == [510, 480, 600]
     assert raw_profile["version"] == 1
+    # Exercise a real v9 profile written before this release, including concurrent CAS.
+    dynamodb_client.put_item(
+        TableName=dynamodb_table,
+        Item=marshal_item({**raw_profile, "schema_version": 9}),
+    )
 
     second = await repository.create(
         new_snapshot(offset=10),
@@ -2338,6 +2344,7 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
     )
     assert raw_profile["scores"] == [560, 490, 550]
     assert raw_profile["version"] == 3
+    assert raw_profile["schema_version"] == CURRENT_SCHEMA_VERSION
 
 
 @pytest.mark.asyncio
@@ -2383,7 +2390,7 @@ async def test_successful_affection_atomically_migrates_the_v8_raw_profile(
     legacy_item: DynamoItem = {
         **legacy_key,
         "record_type": "affection_profile",
-        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "schema_version": LEGACY_AFFECTION_SCHEMA_VERSION,
         "requester_id": requester_id,
         "requester_username": "legacy",
         "requester_display_name": "Legacy",
@@ -2465,7 +2472,7 @@ async def test_new_affection_profile_retries_when_a_v8_profile_appears_after_the
     legacy_item: DynamoItem = {
         **legacy_key,
         "record_type": "affection_profile",
-        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "schema_version": LEGACY_AFFECTION_SCHEMA_VERSION,
         "requester_id": requester_id,
         "requester_username": "legacy",
         "requester_display_name": "Legacy",
@@ -2519,7 +2526,7 @@ async def test_unavailable_affection_does_not_migrate_the_v8_raw_profile(
     legacy_item: DynamoItem = {
         **legacy_key,
         "record_type": "affection_profile",
-        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "schema_version": LEGACY_AFFECTION_SCHEMA_VERSION,
         "requester_id": requester_id,
         "requester_username": "legacy",
         "requester_display_name": "Legacy",

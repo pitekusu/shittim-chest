@@ -120,7 +120,7 @@ def test_runtime_wake_result_round_trip_is_keyed_by_interaction_id() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("schema_version", CURRENT_SCHEMA_VERSION - 2, "unsupported schema"),
+        ("schema_version", CURRENT_SCHEMA_VERSION + 1, "unsupported schema"),
         ("record_schema_version", 2, "auxiliary record schema"),
         ("PK", "CONTROL#OTHER", "invalid key"),
         ("state", "unknown", "invalid runtime state"),

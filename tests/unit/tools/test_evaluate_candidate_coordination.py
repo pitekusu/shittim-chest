@@ -33,11 +33,8 @@ async def test_ineligible_request_never_asks_for_alternatives(kind):
         for slot in PARTICIPANTS
     )
     parse = AsyncMock(
-        return_value=group_schema((1, 1, 1))(
-            request_kind=kind,
-            p0_c0=0,
-            p1_c0=0,
-            p2_c0=0,
+        return_value=group_schema((1, 1, 1)).model_validate(
+            {"request_kind": kind, "p0_c0": 0, "p1_c0": 0, "p2_c0": 0}
         )
     )
     result, metadata = await coordinate(
@@ -46,6 +43,7 @@ async def test_ineligible_request_never_asks_for_alternatives(kind):
     assert result is plans
     assert metadata["changed_participants"] == []
     assert parse.await_count == 1
+    assert parse.await_args is not None
     assert "private fit" not in parse.await_args.kwargs["input_text"]
 
 

@@ -206,7 +206,11 @@ def test_projector_handler_routes_affection_profile_without_logging_private_iden
     assert service.partition_count == 1
 
 
-def test_projector_handler_routes_v9_opaque_affection_profile(monkeypatch: Any) -> None:
+@pytest.mark.parametrize("profile_schema", [9, 10])
+def test_projector_handler_routes_v9_opaque_affection_profile(
+    monkeypatch: Any,
+    profile_schema: int,
+) -> None:
     class FakeAffectionProjector:
         def project_partition(self, partition_key: str) -> ProjectionResult:
             assert partition_key == f"AFFECTION#REQUESTER#{'a' * 43}"
@@ -215,7 +219,7 @@ def test_projector_handler_routes_v9_opaque_affection_profile(monkeypatch: Any) 
     event = cast(dict[str, Any], affection_stream_event())
     image = event["Records"][0]["dynamodb"]["NewImage"]
     image["PK"] = {"S": f"AFFECTION#REQUESTER#{'a' * 43}"}
-    image["schema_version"] = {"N": "9"}
+    image["schema_version"] = {"N": str(profile_schema)}
     monkeypatch.setattr(
         lambda_handlers,
         "_AFFECTION_PROJECTOR",

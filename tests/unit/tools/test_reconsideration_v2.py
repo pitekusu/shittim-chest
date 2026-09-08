@@ -89,7 +89,8 @@ async def test_sequential_rethink_and_unchanged_conclusion_rewrite(monkeypatch, 
         assert meta["reconsideration_changed"] == []
         assert meta["rewritten"] == list(PARTICIPANTS)
         assert seen[3][0]["summary"] == "personal-participant-a"
-        assert outputs["initial"][0]["summary"] == "personal-participant-a"
+        initial = cast(list[dict[str, object]], outputs["initial"])
+        assert initial[0]["summary"] == "personal-participant-a"
         final_call = service.generate_final_proposal.await_args_list[0]
         assert final_call.kwargs["initial_opinions"][0].summary == "personal-participant-a"
 

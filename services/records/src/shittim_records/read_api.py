@@ -1379,6 +1379,17 @@ def _composite_assessments(item: DynamoItem) -> list[dict[str, Any]]:
                 "assessments": item.get("assessments"),
             }
         )
-    except ValueError:
+        selected = next(
+            assessment
+            for assessment in ballot.assessments
+            if assessment.candidate == item.get("candidate")
+        )
+        # The private debate key used for tied draws is intentionally not archived.
+        # Preserve valid tied choices; reject a lower score or mismatched public reason.
+        if selected.total != max(assessment.total for assessment in ballot.assessments):
+            raise ValueError("composite choice does not match scores")
+        if selected.reason != item.get("reason"):
+            raise ValueError("composite choice does not match reason")
+    except ValueError, StopIteration:
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
     return [asdict(assessment) for assessment in ballot.assessments]

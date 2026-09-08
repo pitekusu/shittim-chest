@@ -89,11 +89,10 @@ def test_source_repository_reads_all_pages_with_strong_consistency() -> None:
     assert client.queries[1]["ExclusiveStartKey"] == cursor
 
 
-def test_source_repository_accepts_previous_source_schema() -> None:
+@pytest.mark.parametrize("source_schema", [8, 9, 10])
+def test_source_repository_accepts_previous_source_schema(source_schema: int) -> None:
     source = completed_snapshot()
-    items = tuple(
-        {**item, "schema_version": PREVIOUS_SCHEMA_VERSION} for item in serialize_snapshot(source)
-    )
+    items = tuple({**item, "schema_version": source_schema} for item in serialize_snapshot(source))
     client = FakeSourceDynamoDb([{"Items": [marshal_item(item) for item in items]}])
 
     restored = SourceDebateRepository(cast(Any, client), "source").load_partition(
@@ -107,7 +106,7 @@ def test_source_repository_accepts_previous_source_schema() -> None:
     loaded = SourceDebateRepository(
         cast(Any, projection_client), "source"
     ).load_partition_for_projection(str(items[0]["PK"]))
-    assert loaded.schema_version == PREVIOUS_SCHEMA_VERSION
+    assert loaded.schema_version == source_schema
     assert loaded.snapshot.state.schema_version == CURRENT_SCHEMA_VERSION
 
 
@@ -135,7 +134,7 @@ def test_source_repository_accepts_mixed_partition_with_current_completion_metad
     assert loaded.snapshot.final_decision == source.final_decision
 
 
-@pytest.mark.parametrize("invalid_schema", (True, 7, 10))
+@pytest.mark.parametrize("invalid_schema", (True, 7, CURRENT_SCHEMA_VERSION + 1))
 def test_source_repository_rejects_invalid_item_schema(invalid_schema: object) -> None:
     items = list(serialize_snapshot(completed_snapshot()))
     items[2] = cast(DynamoItem, {**items[2], "schema_version": invalid_schema})

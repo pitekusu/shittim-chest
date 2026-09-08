@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from typing import cast
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
-from shittim_chest.adapters.dynamodb.serializer import DynamoItem, DynamoValue
+from shittim_chest.adapters.dynamodb.serializer import (
+    LEGACY_AFFECTION_SCHEMA_VERSION,
+    OPAQUE_AFFECTION_SCHEMA_VERSIONS,
+    DynamoItem,
+    DynamoValue,
+)
 from shittim_chest.application import DebateSnapshot
 
 from shittim_records.adapters import (
@@ -27,8 +32,6 @@ from shittim_records.archive import (
 from shittim_records.record_link_notifications import RecordLinkNotificationService
 
 PARTICIPANT_SLOTS = ("participant-a", "participant-b", "participant-c")
-LEGACY_AFFECTION_SCHEMA_VERSION = 8
-OPAQUE_AFFECTION_SCHEMA_VERSION = 9
 OPAQUE_KEY_LENGTH = 43
 
 
@@ -153,7 +156,7 @@ def project_affection_profile(
     updated_at_text = source.get("updated_at")
     if (
         source_schema_version
-        not in {LEGACY_AFFECTION_SCHEMA_VERSION, OPAQUE_AFFECTION_SCHEMA_VERSION}
+        not in {LEGACY_AFFECTION_SCHEMA_VERSION, *OPAQUE_AFFECTION_SCHEMA_VERSIONS}
         or source.get("SK") != "PROFILE"
         or source.get("record_type") != "affection_profile"
         or not isinstance(pk, str)

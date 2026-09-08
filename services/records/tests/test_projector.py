@@ -408,13 +408,16 @@ def test_affection_projector_rejects_missing_unrecoverable_profile(
     assert partition_key not in str(error.value)
 
 
-def test_v9_affection_profile_uses_opaque_identity_and_projects_memorial_metadata() -> None:
+@pytest.mark.parametrize("profile_schema", [9, 10])
+def test_v9_affection_profile_uses_opaque_identity_and_projects_memorial_metadata(
+    profile_schema: int,
+) -> None:
     requester_key = "a" * 43
     source = {
         "PK": f"AFFECTION#REQUESTER#{requester_key}",
         "SK": "PROFILE",
         "record_type": "affection_profile",
-        "schema_version": 9,
+        "schema_version": profile_schema,
         "requester_key": requester_key,
         "requester_username": "private-name",
         "requester_display_name": "Requester",

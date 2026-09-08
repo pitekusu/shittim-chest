@@ -106,6 +106,7 @@ async def test_judgment_reverses_same_outputs_and_does_not_certify_quality(
     assert generate.await_count == (1 if released else 2)
     assert old_generate.await_count == int(released)
     if released:
+        assert old_generate.await_args is not None
         assert old_generate.await_args.args[2] is legacy
     variant = "released" if released else "direct"
     assert result["preference_agrees"] is True
