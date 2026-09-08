@@ -11,6 +11,32 @@ afterEach(() => {
 });
 
 describe("RecordDetail", () => {
+  it("shows both composite assessments without the legacy tie explanation", () => {
+    const original = recordDetail();
+    const detail = {
+      ...original,
+      voting: { rulesVersion: "entertainment-v1" as const, decidedBy: "composite_score" as const },
+      votes: original.votes.map((vote) => ({
+        ...vote,
+        assessments: original.participants
+          .filter((item) => item.slot !== vote.voter)
+          .map((item) => ({
+            candidate: item.slot,
+            entertainment: 5,
+            character: 4,
+            originality: 3,
+            responsiveness: 2,
+            interaction: 1,
+            reason: "具体的な個性がある",
+          })),
+      })),
+    };
+    renderRoute(<RecordDocument record={detail} />);
+    expect(screen.getAllByText("採点の内訳を見る")).toHaveLength(3);
+    expect(screen.getAllByText(/67\s*\/\s*100点/)).toHaveLength(6);
+    expect(screen.getByText(/5項目/)).toBeVisible();
+  });
+
   it("renders named votes and only the saved final result", async () => {
     mockApi();
 

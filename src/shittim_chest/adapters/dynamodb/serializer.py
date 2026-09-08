@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
+from shittim_chest.adapters.dynamodb.composite_ballot import (
+    decode_composite_ballot,
+    encode_composite_ballot,
+)
 from shittim_chest.application.deployment_guard import (
     DEPLOYMENT_LOCK_RECORD_SCHEMA_VERSION,
     BreakGlassReason,
@@ -52,6 +56,8 @@ from shittim_chest.domain import (
     AffectionAssessmentStatus,
     AffectionProfile,
     AttemptId,
+    Candidate,
+    CandidatePlan,
     DebateId,
     DebatePhase,
     DebateState,
@@ -65,17 +71,20 @@ from shittim_chest.domain import (
     MemorialUnlock,
     ParticipantAffection,
     ParticipantSlot,
+    PreferenceFrame,
     RecoveryState,
     SearchRequirement,
     Vote,
 )
+from shittim_chest.domain.composite_voting import ResolvedVote, resolve_composite_ballot
 
 type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 9
-PREVIOUS_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 10
+PREVIOUS_SCHEMA_VERSION = 9
+SUPPORTED_SCHEMA_VERSIONS = frozenset({8, 9, 10})
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
@@ -103,7 +112,7 @@ def migrate_item(item: Mapping[str, DynamoValue]) -> DynamoItem:
 
     migrated = dict(item)
     version = _integer(migrated, "schema_version")
-    if version == PREVIOUS_SCHEMA_VERSION:
+    if version in SUPPORTED_SCHEMA_VERSIONS - {CURRENT_SCHEMA_VERSION}:
         # v8 predates memorial unlock metadata and opaque source-profile keys.
         # Missing optional assessment fields retain their compatibility meaning.
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION
@@ -163,6 +172,9 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         "recovery_state": snapshot.state.recovery_state.value,
     }
     _put_optional(attempt_meta, "retry_of", _identifier(snapshot.state.retry_of))
+    if snapshot.deliberation_version:
+        attempt_meta["deliberation_version"] = snapshot.deliberation_version
+    attempt_meta["voting_rules_version"] = snapshot.voting_rules_version
     _put_optional(
         attempt_meta,
         "origin_ingress_interaction_id",
@@ -290,6 +302,10 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         attempt_meta["gsi2sk"] = f"{_timestamp(snapshot.state.updated_at)}#{debate_id}#{attempt_id}"
 
     items = [debate_meta, attempt_meta]
+    items.extend(
+        _serialize_deliberation(common, attempt_id, value)
+        for value in (*snapshot.preference_frames, *snapshot.candidate_plans)
+    )
     if snapshot.affection_assessment is not None:
         items.append(
             _serialize_affection_assessment(
@@ -421,14 +437,7 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         for item in _many(items, "final_proposal", attempt_id=attempt_id)
     )
     votes = _by_voter(
-        Vote(
-            ParticipantSlot(_text(item, "voter")),
-            ParticipantSlot(_text(item, "candidate")),
-            _integer(item, "accuracy_score"),
-            _integer(item, "usefulness_score"),
-            _integer(item, "safety_score"),
-            _text(item, "reason"),
-        )
+        _deserialize_vote(item, debate_key=str(state.debate_id))
         for item in _many(items, "vote", attempt_id=attempt_id)
     )
     decision_item = _optional_one(items, "decision", attempt_id=attempt_id)
@@ -617,13 +626,105 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
         initial_opinions=cast(tuple[InitialOpinion, ...], opinions),
         final_proposals=cast(tuple[FinalProposal, ...], proposals),
         votes=votes,
+        voting_rules_version=_optional_text(attempt_meta, "voting_rules_version") or "legacy-v1",
         final_decision=decision,
         escalation_assessment=escalation_assessment,
         affection_assessment=affection_assessment,
         generation_checkpoints=generation_checkpoints,
+        deliberation_version=(
+            _integer(attempt_meta, "deliberation_version")
+            if "deliberation_version" in attempt_meta
+            else 0
+        ),
+        preference_frames=tuple(
+            _deserialize_preference(item)
+            for item in _many(items, "preference_frame", attempt_id=attempt_id)
+        ),
+        candidate_plans=tuple(
+            _deserialize_candidate_plan(item)
+            for item in _many(items, "candidate_plan", attempt_id=attempt_id)
+        ),
         error_code=_optional_text(attempt_meta, "error_code"),
         terminal_delivery=terminal_delivery,
     )
+
+
+def _serialize_deliberation(
+    common: DynamoItem,
+    attempt_id: str,
+    value: PreferenceFrame | CandidatePlan,
+) -> DynamoItem:
+    kind = "preference_frame" if isinstance(value, PreferenceFrame) else "candidate_plan"
+    item: DynamoItem = {
+        **common,
+        "SK": f"ATTEMPT#{attempt_id}#{kind.upper()}#{value.participant.value}",
+        "attempt_id": attempt_id,
+        "record_type": kind,
+        "record_schema_version": 1,
+        "participant": value.participant.value,
+    }
+    if isinstance(value, PreferenceFrame):
+        item.update(
+            priorities=list(value.priorities),
+            avoidances=list(value.avoidances),
+            compromise_condition=value.compromise_condition,
+        )
+    else:
+        item["candidates"] = [
+            {"proposal": candidate.proposal, "fit": candidate.fit, "tradeoff": candidate.tradeoff}
+            for candidate in value.candidates
+        ]
+    return item
+
+
+def _validate_deliberation_record(item: DynamoItem, fields: set[str]) -> ParticipantSlot:
+    common = {
+        "PK",
+        "SK",
+        "schema_version",
+        "debate_id",
+        "created_at",
+        "updated_at",
+        "record_type",
+        "record_schema_version",
+        "attempt_id",
+        "participant",
+    }
+    if set(item) != common | fields or _integer(item, "record_schema_version") != 1:
+        raise PersistenceFormatError("unknown deliberation record format")
+    participant = ParticipantSlot(_text(item, "participant"))
+    kind = _text(item, "record_type").upper()
+    expected_sk = f"ATTEMPT#{_text(item, 'attempt_id')}#{kind}#{participant.value}"
+    if _text(item, "SK") != expected_sk:
+        raise PersistenceFormatError("deliberation key does not match its identity")
+    return participant
+
+
+def _deserialize_preference(item: DynamoItem) -> PreferenceFrame:
+    participant = _validate_deliberation_record(
+        item, {"priorities", "avoidances", "compromise_condition"}
+    )
+    return PreferenceFrame(
+        participant,
+        _string_tuple(item, "priorities"),
+        _string_tuple(item, "avoidances"),
+        _text(item, "compromise_condition"),
+    )
+
+
+def _deserialize_candidate_plan(item: DynamoItem) -> CandidatePlan:
+    participant = _validate_deliberation_record(item, {"candidates"})
+    values = item["candidates"]
+    if not isinstance(values, list):
+        raise PersistenceFormatError("candidate list is invalid")
+    candidates: list[Candidate] = []
+    for value in values:
+        if not isinstance(value, dict) or set(value) != {"proposal", "fit", "tradeoff"}:
+            raise PersistenceFormatError("candidate summary is invalid")
+        candidates.append(
+            Candidate(_text(value, "proposal"), _text(value, "fit"), _text(value, "tradeoff"))
+        )
+    return CandidatePlan(participant, tuple(candidates))
 
 
 _GENERATION_REQUIRED_FIELDS = frozenset(
@@ -1703,7 +1804,17 @@ def _serialize_proposal(common: DynamoItem, attempt_id: str, value: FinalProposa
     }
 
 
-def _serialize_vote(common: DynamoItem, attempt_id: str, value: Vote) -> DynamoItem:
+def _serialize_vote(common: DynamoItem, attempt_id: str, value: Vote | ResolvedVote) -> DynamoItem:
+    if isinstance(value, ResolvedVote):
+        return {
+            **common,
+            "SK": f"ATTEMPT#{attempt_id}#VOTE#{value.voter.value}",
+            "record_type": "vote",
+            "attempt_id": attempt_id,
+            "voter": value.voter.value,
+            "candidate": value.candidate.value,
+            "composite_ballot": cast(DynamoValue, encode_composite_ballot(value.ballot)),
+        }
     return {
         **common,
         "SK": f"ATTEMPT#{attempt_id}#VOTE#{value.voter.value}",
@@ -2079,12 +2190,36 @@ def _by_participant(values: Iterable[InitialOpinion | FinalProposal]) -> tuple[o
     return tuple(by_slot[slot] for slot in PARTICIPANTS if slot in by_slot)
 
 
-def _by_voter(values: Iterable[Vote]) -> tuple[Vote, ...]:
+def _by_voter(values: Iterable[Vote | ResolvedVote]) -> tuple[Vote | ResolvedVote, ...]:
     entries = tuple(values)
     by_slot = {value.voter: value for value in entries}
     if len(by_slot) != len(entries):
         raise PersistenceFormatError("duplicate vote artifact")
     return tuple(by_slot[slot] for slot in PARTICIPANTS if slot in by_slot)
+
+
+def _deserialize_vote(item: DynamoItem, *, debate_key: str) -> Vote | ResolvedVote:
+    if "composite_ballot" in item:
+        raw = item["composite_ballot"]
+        if not isinstance(raw, dict):
+            raise PersistenceFormatError("invalid composite ballot")
+        ballot = decode_composite_ballot(raw)
+        vote = resolve_composite_ballot(ballot, debate_key=debate_key)
+        if vote.voter.value != _text(item, "voter") or vote.candidate.value != _text(
+            item, "candidate"
+        ):
+            raise PersistenceFormatError("stored composite vote does not match scoring")
+        if any(key in item for key in ("accuracy_score", "usefulness_score", "safety_score")):
+            raise PersistenceFormatError("mixed ballot schemas")
+        return vote
+    return Vote(
+        ParticipantSlot(_text(item, "voter")),
+        ParticipantSlot(_text(item, "candidate")),
+        _integer(item, "accuracy_score"),
+        _integer(item, "usefulness_score"),
+        _integer(item, "safety_score"),
+        _text(item, "reason"),
+    )
 
 
 def _identifier(value: AttemptId | DebateId | None) -> str | None:

@@ -12,11 +12,9 @@ from datetime import UTC, datetime
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from shittim_chest.adapters.dynamodb.composite_ballot import encode_composite_ballot
 from shittim_chest.adapters.dynamodb.serializer import (
-    CURRENT_SCHEMA_VERSION as SOURCE_SCHEMA_VERSION,
-)
-from shittim_chest.adapters.dynamodb.serializer import (
-    PREVIOUS_SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS,
     DynamoItem,
     DynamoValue,
 )
@@ -28,8 +26,10 @@ from shittim_chest.domain import (
     ParticipantSlot,
     select_winner,
 )
+from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION, ResolvedVote
+from shittim_chest.domain.debate_content import Vote
 
-ARCHIVE_SCHEMA_VERSION = 2
+ARCHIVE_SCHEMA_VERSION = 3
 ARCHIVE_V1_SOURCE_SCHEMA_VERSION = 7
 
 
@@ -94,10 +94,10 @@ def project_completed_debate(
         raise ProjectionRejected("projection timestamp must be timezone-aware")
     projected_at = projected_at.astimezone(UTC)
 
-    if snapshot.state.schema_version not in {PREVIOUS_SCHEMA_VERSION, SOURCE_SCHEMA_VERSION}:
+    if snapshot.state.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ProjectionRejected("source aggregate schema is not compatible")
     persisted_schema_version = source_schema_version or snapshot.state.schema_version
-    if persisted_schema_version not in {PREVIOUS_SCHEMA_VERSION, SOURCE_SCHEMA_VERSION}:
+    if persisted_schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ProjectionRejected("persisted source aggregate schema is not compatible")
     if snapshot.state.phase is not DebatePhase.COMPLETED:
         raise ProjectionRejected("only completed debates may be projected")
@@ -120,7 +120,7 @@ def project_completed_debate(
     if set(votes) != set(PARTICIPANTS):
         raise ProjectionRejected("ballot is incomplete or duplicated")
 
-    voting_result = select_winner(snapshot.votes)
+    voting_result = select_winner(snapshot.votes, debate_key=str(snapshot.state.debate_id))
     if voting_result.winner is not snapshot.final_decision.winner:
         raise ProjectionRejected("stored winner does not match the Python winner rule")
 
@@ -134,11 +134,15 @@ def project_completed_debate(
     highest_votes = max(vote_counts.values())
     tie_break_applied = sum(count == highest_votes for count in vote_counts.values()) > 1
     archive_schema_version = (
-        ARCHIVE_SCHEMA_VERSION if snapshot.affection_assessment is not None else 1
+        ARCHIVE_SCHEMA_VERSION
+        if snapshot.voting_rules_version == COMPOSITE_VOTING_VERSION
+        else 2
+        if snapshot.affection_assessment is not None
+        else 1
     )
     canonical_source_schema_version = (
         persisted_schema_version
-        if archive_schema_version == ARCHIVE_SCHEMA_VERSION
+        if archive_schema_version >= 2
         else ARCHIVE_V1_SOURCE_SCHEMA_VERSION
     )
 
@@ -212,17 +216,7 @@ def project_completed_debate(
             }
             for slot in PARTICIPANTS
         ],
-        "votes": [
-            {
-                "voter": slot.value,
-                "candidate": votes[slot].candidate.value,
-                "accuracy_score": votes[slot].accuracy_score,
-                "usefulness_score": votes[slot].usefulness_score,
-                "safety_score": votes[slot].safety_score,
-                "reason": votes[slot].reason,
-            }
-            for slot in PARTICIPANTS
-        ],
+        "votes": [_vote_payload(votes[slot]) for slot in PARTICIPANTS],
         "final_decision": {
             "winner": snapshot.final_decision.winner.value,
             "victory_message": snapshot.final_decision.victory_message,
@@ -262,6 +256,9 @@ def project_completed_debate(
     }
     if affection is not None:
         meta_item["affection"] = affection
+    if snapshot.voting_rules_version == COMPOSITE_VOTING_VERSION:
+        meta_item["voting_rules_version"] = voting_result.rules_version
+        meta_item["voting_decided_by"] = voting_result.decided_by
     items: list[DynamoItem] = [meta_item]
     items.extend(
         {
@@ -290,12 +287,7 @@ def project_completed_debate(
             **common,
             "SK": f"VOTE#{slot.value}",
             "record_type": "vote",
-            "voter": slot.value,
-            "candidate": votes[slot].candidate.value,
-            "accuracy_score": votes[slot].accuracy_score,
-            "usefulness_score": votes[slot].usefulness_score,
-            "safety_score": votes[slot].safety_score,
-            "reason": votes[slot].reason,
+            **_vote_payload(votes[slot]),
         }
         for slot in PARTICIPANTS
     )
@@ -363,3 +355,23 @@ def _canonical_json(value: object) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
+
+
+def _vote_payload(vote: Vote | ResolvedVote) -> DynamoItem:
+    common: DynamoItem = {
+        "voter": vote.voter.value,
+        "candidate": vote.candidate.value,
+        "reason": vote.reason,
+    }
+    if isinstance(vote, ResolvedVote):
+        return {
+            **common,
+            "rules_version": vote.ballot.rules_version,
+            "assessments": cast(DynamoValue, encode_composite_ballot(vote.ballot)["assessments"]),
+        }
+    return {
+        **common,
+        "accuracy_score": vote.accuracy_score,
+        "usefulness_score": vote.usefulness_score,
+        "safety_score": vote.safety_score,
+    }

@@ -249,17 +249,37 @@ FinalProposalCollection = Annotated[
 ]
 
 
+class VoteAssessmentView(PublicModel):
+    candidate: ParticipantSlot
+    entertainment: int = Field(ge=0, le=5)
+    character: int = Field(ge=0, le=5)
+    originality: int = Field(ge=0, le=5)
+    responsiveness: int = Field(ge=0, le=5)
+    interaction: int = Field(ge=0, le=5)
+    reason: Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")]
+
+
+class VotingSummary(PublicModel):
+    rules_version: Literal["entertainment-v1"]
+    decided_by: Literal["majority", "composite_score", "tie_lottery"]
+
+
 class VoteView(PublicModel):
     model_config = ConfigDict(json_schema_extra=_no_self_vote_json_schema())
 
     voter: ParticipantSlot
     candidate: ParticipantSlot
     reason: Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")]
+    assessments: tuple[VoteAssessmentView, VoteAssessmentView] | None = None
 
     @model_validator(mode="after")
     def reject_self_vote(self) -> VoteView:
         if self.voter == self.candidate:
             raise ValueError("a participant cannot vote for itself")
+        if self.assessments is not None and {
+            item.candidate for item in self.assessments
+        } != _ALL_PARTICIPANT_SLOTS - {self.voter}:
+            raise ValueError("assessment coverage must match the two other participants")
         return self
 
 
@@ -340,6 +360,7 @@ class RecordDetailResponse(PublicModel):
     result: RecordResultSummary
     final_decision: FinalDecisionView
     affection: AffectionView | None
+    voting: VotingSummary | None = None
 
     @model_validator(mode="after")
     def require_consistent_participants_and_winner(self) -> RecordDetailResponse:
@@ -353,6 +374,8 @@ class RecordDetailResponse(PublicModel):
             "final_proposals",
         )
         _require_complete_slots(tuple(item.voter for item in self.votes), "votes")
+        if any((vote.assessments is not None) != (self.voting is not None) for vote in self.votes):
+            raise ValueError("voting version and assessments must agree")
         ballot_counts = {slot: 0 for slot in _ALL_PARTICIPANT_SLOTS}
         for vote in self.votes:
             ballot_counts[vote.candidate] += 1

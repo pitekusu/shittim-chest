@@ -30,6 +30,8 @@ EXPECTED_NON_TERMINAL_PHASES = frozenset(
         DebatePhase.ACCEPTED,
         DebatePhase.SCORING_AFFECTION,
         DebatePhase.PREPARING_EVIDENCE,
+        DebatePhase.FORMING_PREFERENCES,
+        DebatePhase.SELECTING_CANDIDATES,
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
         DebatePhase.DISCUSSING,
         DebatePhase.COLLECTING_FINAL_PROPOSALS,
@@ -45,6 +47,13 @@ EXPECTED_PHASE_TRANSITIONS = frozenset(
         (DebatePhase.ACCEPTED, DebatePhase.SCORING_AFFECTION),
         (DebatePhase.SCORING_AFFECTION, DebatePhase.PREPARING_EVIDENCE),
         (DebatePhase.PREPARING_EVIDENCE, DebatePhase.COLLECTING_INITIAL_OPINIONS),
+        (DebatePhase.PREPARING_EVIDENCE, DebatePhase.FORMING_PREFERENCES),
+        (DebatePhase.FORMING_PREFERENCES, DebatePhase.SELECTING_CANDIDATES),
+        (DebatePhase.SELECTING_CANDIDATES, DebatePhase.COLLECTING_INITIAL_OPINIONS),
+        (DebatePhase.FORMING_PREFERENCES, DebatePhase.CANCELLED),
+        (DebatePhase.FORMING_PREFERENCES, DebatePhase.FAILED),
+        (DebatePhase.SELECTING_CANDIDATES, DebatePhase.CANCELLED),
+        (DebatePhase.SELECTING_CANDIDATES, DebatePhase.FAILED),
         (DebatePhase.COLLECTING_INITIAL_OPINIONS, DebatePhase.DISCUSSING),
         (DebatePhase.DISCUSSING, DebatePhase.COLLECTING_FINAL_PROPOSALS),
         (DebatePhase.COLLECTING_FINAL_PROPOSALS, DebatePhase.SELECTING_WINNER),
@@ -98,6 +107,8 @@ def test_persisted_enum_values_are_explicit_and_stable() -> None:
         "accepted",
         "scoring_affection",
         "preparing_evidence",
+        "forming_preferences",
+        "selecting_candidates",
         "collecting_initial_opinions",
         "discussing",
         "collecting_final_proposals",
@@ -110,8 +121,8 @@ def test_persisted_enum_values_are_explicit_and_stable() -> None:
     assert tuple(state.value for state in RecoveryState) == ("none", "checkpointed")
 
 
-def test_phase_transition_matrix_contains_exactly_the_24_designed_edges() -> None:
-    assert len(EXPECTED_PHASE_TRANSITIONS) == 24
+def test_phase_transition_matrix_includes_deliberation_and_legacy_edges() -> None:
+    assert len(EXPECTED_PHASE_TRANSITIONS) == 31
     assert ALLOWED_PHASE_TRANSITIONS == EXPECTED_PHASE_TRANSITIONS
 
     for current in DebatePhase:

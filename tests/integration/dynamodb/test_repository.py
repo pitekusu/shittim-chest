@@ -64,6 +64,8 @@ from shittim_chest.application.ports import (
 )
 from shittim_chest.domain import (
     AttemptId,
+    Candidate,
+    CandidatePlan,
     DebateId,
     DebatePhase,
     DebateState,
@@ -71,6 +73,7 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    PreferenceFrame,
     Vote,
 )
 
@@ -3044,6 +3047,67 @@ async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
     )
     counter_item = unmarshal_item(counter_response["Item"])
     assert counter_item["count"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selecting", [False, True])
+async def test_private_output_and_checkpoint_are_atomic_and_fenced(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+    selecting: bool,
+) -> None:
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(new_snapshot(), deliberation_version=1),
+        operation_id="private-generation",
+        lease_owner="worker-1",
+    )
+    phase = DebatePhase.SELECTING_CANDIDATES if selecting else DebatePhase.FORMING_PREFERENCES
+    at = NOW + timedelta(seconds=1)
+    frames = tuple(
+        PreferenceFrame(slot, ("priority",), (), "condition") for slot in ParticipantSlot
+    )
+    lease = accepted.lease
+    assert lease is not None
+    generating = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=replace(accepted.state, phase=phase, updated_at=at),
+            preference_frames=frames if selecting else (),
+            generation_checkpoints=tuple(
+                GenerationCheckpoint.planned(phase=phase, participant=slot, at=at).claim(
+                    lease=lease, at=at
+                )
+                for slot in ParticipantSlot
+            ),
+        ),
+    )
+    slot = ParticipantSlot.PARTICIPANT_A
+    checkpoint = generating.checkpoint_for(phase=phase, participant=slot)
+    assert checkpoint is not None
+    completed = generating.generation_checkpoints_with(checkpoint.complete(lease=lease, at=at))
+    if selecting:
+        updated = replace(
+            generating,
+            candidate_plans=(CandidatePlan(slot, (Candidate("choice", "fit", "tradeoff"),)),),
+            generation_checkpoints=completed,
+        )
+    else:
+        updated = replace(
+            generating, preference_frames=(frames[0],), generation_checkpoints=completed
+        )
+    persisted = await repository.replace(expected=generating, updated=updated)
+    assert await repository.get(accepted.state.debate_id) == persisted
+    with pytest.raises(RepositoryConflict):
+        await repository.replace(
+            expected=generating,
+            updated=replace(
+                generating,
+                state=replace(generating.state, updated_at=at + timedelta(microseconds=1)),
+            ),
+        )
+    assert await repository.get(accepted.state.debate_id) == persisted
 
 
 @pytest.mark.asyncio

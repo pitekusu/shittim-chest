@@ -2768,6 +2768,17 @@
           ],
           "title": "Votes",
           "type": "array"
+        },
+        "voting": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VotingSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -3089,6 +3100,68 @@
       "title": "SessionUser",
       "type": "object"
     },
+    "VoteAssessmentView": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Candidate",
+          "type": "string"
+        },
+        "character": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Character",
+          "type": "integer"
+        },
+        "entertainment": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Entertainment",
+          "type": "integer"
+        },
+        "interaction": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Interaction",
+          "type": "integer"
+        },
+        "originality": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Originality",
+          "type": "integer"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Reason",
+          "type": "string"
+        },
+        "responsiveness": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Responsiveness",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "candidate",
+        "entertainment",
+        "character",
+        "originality",
+        "responsiveness",
+        "interaction",
+        "reason"
+      ],
+      "title": "VoteAssessmentView",
+      "type": "object"
+    },
     "VoteCount": {
       "additionalProperties": false,
       "properties": {
@@ -3183,6 +3256,28 @@
         }
       ],
       "properties": {
+        "assessments": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/VoteAssessmentView"
+                },
+                {
+                  "$ref": "#/$defs/VoteAssessmentView"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assessments"
+        },
         "candidate": {
           "enum": [
             "participant-a",
@@ -3215,6 +3310,31 @@
         "reason"
       ],
       "title": "VoteView",
+      "type": "object"
+    },
+    "VotingSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "decidedBy": {
+          "enum": [
+            "majority",
+            "composite_score",
+            "tie_lottery"
+          ],
+          "title": "Decidedby",
+          "type": "string"
+        },
+        "rulesVersion": {
+          "const": "entertainment-v1",
+          "title": "Rulesversion",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rulesVersion",
+        "decidedBy"
+      ],
+      "title": "VotingSummary",
       "type": "object"
     }
   },

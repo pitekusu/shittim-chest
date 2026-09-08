@@ -150,6 +150,43 @@ def snapshot() -> DebateSnapshot:
     )
 
 
+def test_composite_votes_roundtrip_and_reject_tampered_choice() -> None:
+    from shittim_chest.domain.composite_voting import (
+        CandidateAssessment,
+        CompositeBallot,
+        select_composite_winner,
+    )
+
+    source = snapshot()
+    result = select_composite_winner(
+        tuple(
+            CompositeBallot(
+                voter,
+                tuple(
+                    CandidateAssessment(slot, 3, 4, 5, 4, 3, "fixture")
+                    for slot in PARTICIPANTS
+                    if slot != voter
+                ),
+            )
+            for voter in PARTICIPANTS
+        ),
+        debate_key=str(source.state.debate_id),
+    )
+    source = replace(
+        source,
+        voting_rules_version=result.rules_version,
+        votes=result.votes,
+        final_decision=None,
+        escalation_assessment=None,
+    )
+    items = serialize_snapshot(source)
+    assert deserialize_snapshot(items) == source
+    item = next(item for item in items if item["record_type"] == "vote")
+    item["candidate"] = item["voter"]
+    with pytest.raises(PersistenceFormatError):
+        deserialize_snapshot(items)
+
+
 def test_snapshot_round_trip_preserves_current_attempt_and_vertical_items() -> None:
     source = snapshot()
 

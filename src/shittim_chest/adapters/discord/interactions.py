@@ -557,10 +557,14 @@ def _starter_content(question: str) -> str:
 
 
 def _panel_content(snapshot: DebateSnapshot) -> str:
+    progress = {
+        DebatePhase.FORMING_PREFERENCES: "それぞれの考えを整理中",
+        DebatePhase.SELECTING_CANDIDATES: "提案を選択中",
+    }.get(snapshot.state.phase, snapshot.state.phase.value)
     return "\n".join(
         (
             "**操作パネル**",
-            f"状態: `{snapshot.state.phase.value}`",
+            f"状態: `{progress}`",
             f"試行: `{snapshot.state.attempt_id}`",
         )
     )

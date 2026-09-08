@@ -175,7 +175,7 @@ async def _votes(
     evidence: EvidenceBundle,
     proposals: tuple[FinalProposal, ...],
 ) -> tuple[Vote, ...]:
-    tasks: dict[ParticipantSlot, asyncio.Task[Vote]] = {}
+    tasks = {}
     async with asyncio.TaskGroup() as group:
         for voter in PARTICIPANTS:
             candidates = tuple(item for item in proposals if item.participant is not voter)
@@ -187,7 +187,10 @@ async def _votes(
                     candidates=candidates,
                 )
             )
-    return tuple(tasks[slot].result() for slot in PARTICIPANTS)
+    votes = tuple(tasks[slot].result() for slot in PARTICIPANTS)
+    if not all(isinstance(vote, Vote) for vote in votes):
+        raise ValueError("legacy evaluation requires legacy votes")
+    return tuple(vote for vote in votes if isinstance(vote, Vote))
 
 
 async def evaluate(

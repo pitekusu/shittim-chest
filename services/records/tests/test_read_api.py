@@ -129,6 +129,55 @@ def service(reader: FakeReader | None = None) -> tuple[RecordsReadService, FakeR
     return RecordsReadService(reader=actual, cursor_codec=CursorCodec(SESSION_KEY)), actual
 
 
+def test_composite_archive_projects_and_reads_both_assessments() -> None:
+    from shittim_chest.domain import PARTICIPANTS
+    from shittim_chest.domain.composite_voting import (
+        CandidateAssessment,
+        CompositeBallot,
+        select_composite_winner,
+    )
+
+    from shittim_records.contracts import RecordDetailResponse
+
+    source = completed_snapshot()
+    result = select_composite_winner(
+        tuple(
+            CompositeBallot(
+                voter,
+                tuple(
+                    CandidateAssessment(slot, 3, 4, 5, 4, 3, "fixture")
+                    for slot in PARTICIPANTS
+                    if slot != voter
+                ),
+            )
+            for voter in PARTICIPANTS
+        ),
+        debate_key=str(source.state.debate_id),
+    )
+    assert source.final_decision is not None
+    source = replace(
+        source,
+        voting_rules_version=result.rules_version,
+        votes=result.votes,
+        final_decision=replace(source.final_decision, winner=result.winner),
+    )
+    projection = project_completed_debate(
+        source,
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    records, reader = service()
+    reader.items = projection.items
+    reader.record_id = projection.record_id
+    response = records.get_record(record_id=reader.record_id, now=NOW)
+    parsed = RecordDetailResponse.model_validate(response)
+    assert parsed.voting is not None
+    assert parsed.voting.rules_version == result.rules_version
+    assert all(vote.assessments is not None and len(vote.assessments) == 2 for vote in parsed.votes)
+    assert source.requester_id not in repr(response)
+
+
 def ranking_items() -> tuple[dict[str, Any], ...]:
     common = {
         "SK": "CURRENT",

@@ -37,6 +37,7 @@ from shittim_chest.domain.debate_state import (
     InvalidStateTransition,
     RecoveryState,
 )
+from shittim_chest.domain.deliberation import Candidate, CandidatePlan, PreferenceFrame
 from shittim_chest.domain.escalation import (
     ESCALATION_RULES_VERSION,
     EscalationAssessment,
@@ -56,6 +57,8 @@ __all__ = (
     "AffectionAssessmentStatus",
     "AffectionProfile",
     "AttemptId",
+    "Candidate",
+    "CandidatePlan",
     "DebateId",
     "DebatePhase",
     "DebateState",
@@ -74,6 +77,7 @@ __all__ = (
     "MemorialUnlock",
     "ParticipantAffection",
     "ParticipantSlot",
+    "PreferenceFrame",
     "RecoveryState",
     "SearchRequirement",
     "Vote",

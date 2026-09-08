@@ -228,7 +228,7 @@ def test_build_rankings_rejects_duplicate_or_malformed_archive_metadata() -> Non
         build_rankings((first, dict(first)), generated_at=NOW)
 
     malformed = dict(first)
-    malformed["schema_version"] = 3
+    malformed["schema_version"] = 999
     with pytest.raises(RankingDataInvalid, match="identity"):
         build_rankings((malformed,), generated_at=NOW)
 

@@ -65,6 +65,7 @@ from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
     PARTICIPANTS,
     AttemptId,
+    CandidatePlan,
     DebateId,
     DebatePhase,
     DebateState,
@@ -73,16 +74,18 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    PreferenceFrame,
     RecoveryState,
     assess_escalation,
     select_winner,
 )
+from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION
 
 _T = TypeVar("_T")
 
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRIES = 3
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRY_SECONDS = 1.0
-DEFAULT_SESSION_TIMEOUT_SECONDS = 420.0
+DEFAULT_SESSION_TIMEOUT_SECONDS = 600.0
 DEFAULT_PHASE_TIMEOUT_SECONDS = 120.0
 _LOGGER = logging.getLogger("shittim_chest")
 
@@ -230,6 +233,8 @@ class DebateApplication:
             channel_id=request.channel_id,
             created_at=now,
             attempt_created_at=now,
+            deliberation_version=1,
+            voting_rules_version=COMPOSITE_VOTING_VERSION,
             origin_ingress_interaction_id=(
                 None if ingress_claim is None else ingress_claim.interaction_id
             ),
@@ -416,8 +421,17 @@ class DebateApplication:
             if not recovered_legacy_outbox:
                 await self._outbox_recovery.drain(expected=snapshot)
                 recovered_legacy_outbox = True
-            async with asyncio.timeout(self._session_timeout_seconds):
+            async with asyncio.timeout(self._remaining_generation_seconds(snapshot)):
                 await self._run_phases(debate_id)
+
+    def _remaining_generation_seconds(self, snapshot: DebateSnapshot) -> float:
+        remaining = (
+            self._session_timeout_seconds
+            - (self._clock.now() - snapshot.attempt_created_at).total_seconds()
+        )
+        if remaining <= 0:
+            raise TimeoutError("attempt generation deadline exceeded")
+        return remaining
 
     async def _renew_lease_until_stopped(self, debate_id: DebateId) -> None:
         while True:
@@ -724,12 +738,15 @@ class DebateApplication:
                 )
 
             phase = snapshot.state.phase
+            self._remaining_generation_seconds(snapshot)
             if phase is DebatePhase.ACCEPTED:
                 await self._advance(snapshot, DebatePhase.SCORING_AFFECTION)
             elif phase is DebatePhase.SCORING_AFFECTION:
                 await self._score_affection(snapshot)
             elif phase is DebatePhase.PREPARING_EVIDENCE:
                 await self._prepare_evidence(snapshot)
+            elif phase in {DebatePhase.FORMING_PREFERENCES, DebatePhase.SELECTING_CANDIDATES}:
+                await self._collect_deliberation(snapshot)
             elif phase is DebatePhase.COLLECTING_INITIAL_OPINIONS:
                 await self._collect_initial_opinions(snapshot)
             elif phase is DebatePhase.DISCUSSING:
@@ -786,6 +803,16 @@ class DebateApplication:
                 self._evidence.prepare_evidence(question=snapshot.question)
             )
         at = self._clock.now()
+        if snapshot.deliberation_version == 1:
+            await self._replace_snapshot(
+                expected=snapshot,
+                updated=replace(
+                    snapshot,
+                    evidence=evidence,
+                    state=snapshot.state.transition_to(DebatePhase.FORMING_PREFERENCES, at=at),
+                ),
+            )
+            return
         checkpoints = snapshot.generation_checkpoints
         if not snapshot.initial_opinions:
             checkpoints = tuple(
@@ -816,6 +843,188 @@ class DebateApplication:
                 generation_checkpoints=checkpoints,
             ),
         )
+
+    async def _collect_deliberation(self, snapshot: DebateSnapshot) -> None:
+        """Checkpoint the two private stages using the existing fenced output protocol."""
+        phase = snapshot.state.phase
+        outputs = (
+            snapshot.preference_frames
+            if phase is DebatePhase.FORMING_PREFERENCES
+            else snapshot.candidate_plans
+        )
+        checkpoints = {
+            item.participant: item
+            for item in snapshot.generation_checkpoints
+            if item.phase is phase
+        }
+        at = self._clock.now()
+        if not checkpoints:
+            completed = {item.participant for item in outputs}
+            checkpoints = {
+                participant: (
+                    GenerationCheckpoint.reused
+                    if participant in completed
+                    else GenerationCheckpoint.planned
+                )(
+                    phase=phase,
+                    participant=participant,
+                    at=at,
+                )
+                for participant in PARTICIPANTS
+            }
+            snapshot = await self._repository.replace(
+                expected=snapshot,
+                updated=replace(
+                    snapshot,
+                    state=replace(snapshot.state, updated_at=at),
+                    generation_checkpoints=(
+                        *snapshot.generation_checkpoints,
+                        *checkpoints.values(),
+                    ),
+                ),
+            )
+        if set(checkpoints) != set(PARTICIPANTS):
+            raise RepositoryConflict("deliberation checkpoint set is incomplete")
+        missing = tuple(
+            slot
+            for slot in PARTICIPANTS
+            if checkpoints[slot].status is not GenerationStatus.COMPLETED
+        )
+        if missing:
+            lease = snapshot.lease
+            if lease is None:
+                raise RepositoryConflict("deliberation requires a fenced lease")
+            claimed = snapshot.generation_checkpoints
+            for participant in missing:
+                checkpoint = checkpoints[participant]
+                if (
+                    checkpoint.status is GenerationStatus.IN_FLIGHT
+                    and checkpoint.logical_attempt == 2
+                ):
+                    failed = checkpoint.exhaust_after_recovery(
+                        lease=lease, at=at, error_code="generation_attempts_exhausted"
+                    )
+                    await self._stage_terminal_delivery(
+                        snapshot,
+                        target=DebatePhase.FAILED,
+                        error_code="generation_attempts_exhausted",
+                        generation_checkpoint=failed,
+                        at=at,
+                    )
+                    return
+                claimed = _generation_checkpoints_with(
+                    claimed, checkpoint.claim(lease=lease, at=at)
+                )
+            snapshot = await self._repository.replace(
+                expected=snapshot,
+                updated=replace(
+                    snapshot,
+                    state=replace(snapshot.state, updated_at=at),
+                    generation_checkpoints=claimed,
+                ),
+            )
+            write_lock = asyncio.Lock()
+            async with asyncio.TaskGroup() as group:
+                tasks = [
+                    group.create_task(
+                        self._generate_and_persist_deliberation(
+                            snapshot,
+                            participant,
+                            write_lock,
+                        )
+                    )
+                    for participant in missing
+                ]
+            error_code = next((task.result() for task in tasks if task.result() is not None), None)
+            snapshot = await self._require_snapshot(snapshot.state.debate_id)
+            if error_code is not None:
+                await self._stage_terminal_delivery(
+                    snapshot, target=DebatePhase.FAILED, error_code=error_code
+                )
+                return
+        target = (
+            DebatePhase.SELECTING_CANDIDATES
+            if phase is DebatePhase.FORMING_PREFERENCES
+            else DebatePhase.COLLECTING_INITIAL_OPINIONS
+        )
+        await self._advance(snapshot, target)
+
+    async def _generate_and_persist_deliberation(
+        self,
+        snapshot: DebateSnapshot,
+        participant: ParticipantSlot,
+        write_lock: asyncio.Lock,
+    ) -> str | None:
+        phase = snapshot.state.phase
+        output: PreferenceFrame | CandidatePlan
+        try:
+            if phase is DebatePhase.FORMING_PREFERENCES:
+                output = await self._within_phase(
+                    self._openai.form_preferences(
+                        participant=participant,
+                        question=snapshot.question,
+                    )
+                )
+            else:
+                frame = snapshot.preference_for(participant)
+                if frame is None:
+                    raise RepositoryConflict("candidate selection lost its preference frame")
+                output = await self._within_phase(
+                    self._openai.select_candidates(
+                        participant=participant,
+                        question=snapshot.question,
+                        evidence=self._require_evidence(snapshot),
+                        preference_frame=frame,
+                    )
+                )
+        except GenerationProviderError as error:
+            return error.code
+        except _PhaseDeadlineExceeded:
+            return "generation_deadline_exceeded"
+        if output.participant is not participant:
+            return "openai_participant_mismatch"
+        async with write_lock:
+            current = await self._require_snapshot(snapshot.state.debate_id)
+            try:
+                self._remaining_generation_seconds(current)
+            except TimeoutError:
+                return "session_deadline_exceeded"
+            checkpoint = current.checkpoint_for(phase=phase, participant=participant)
+            if checkpoint is None or checkpoint != snapshot.checkpoint_for(
+                phase=phase, participant=participant
+            ):
+                raise RepositoryConflict("deliberation result lost its exact generation claim")
+            lease = current.lease
+            if lease is None:
+                raise RepositoryConflict("deliberation result lost its lease")
+            at = self._clock.now()
+            completed = current.generation_checkpoints_with(checkpoint.complete(lease=lease, at=at))
+            if isinstance(output, PreferenceFrame):
+                updated = replace(
+                    current,
+                    preference_frames=tuple(
+                        sorted(
+                            (*current.preference_frames, output),
+                            key=lambda item: PARTICIPANTS.index(item.participant),
+                        )
+                    ),
+                    generation_checkpoints=completed,
+                    state=replace(current.state, updated_at=at),
+                )
+            else:
+                updated = replace(
+                    current,
+                    candidate_plans=tuple(
+                        sorted(
+                            (*current.candidate_plans, output),
+                            key=lambda item: PARTICIPANTS.index(item.participant),
+                        )
+                    ),
+                    generation_checkpoints=completed,
+                    state=replace(current.state, updated_at=at),
+                )
+            await self._repository.replace(expected=current, updated=updated)
+        return None
 
     async def _collect_initial_opinions(self, snapshot: DebateSnapshot) -> None:
         evidence = self._require_evidence(snapshot)
@@ -1200,7 +1409,7 @@ class DebateApplication:
                 return
             snapshot = await self._require_snapshot(snapshot.state.debate_id)
 
-        voting_result = select_winner(snapshot.votes)
+        voting_result = select_winner(snapshot.votes, debate_key=str(snapshot.state.debate_id))
         current_checkpoints = self._vote_checkpoints(snapshot)
         if current_checkpoints and any(
             current_checkpoints[participant].status is not GenerationStatus.COMPLETED
@@ -1228,7 +1437,7 @@ class DebateApplication:
 
     async def _generate_decision(self, snapshot: DebateSnapshot) -> None:
         evidence = self._require_evidence(snapshot)
-        voting_result = select_winner(snapshot.votes)
+        voting_result = select_winner(snapshot.votes, debate_key=str(snapshot.state.debate_id))
         decision = snapshot.final_decision
         decision_checkpoints = tuple(
             checkpoint
@@ -1337,6 +1546,7 @@ class DebateApplication:
                     proposals=snapshot.final_proposals,
                     voting_result=voting_result,
                     affection_score=_affection_score(snapshot, voting_result.winner),
+                    preference_frame=snapshot.preference_for(voting_result.winner),
                 )
             )
         except asyncio.CancelledError:
@@ -1360,6 +1570,7 @@ class DebateApplication:
             snapshot,
             claimed_checkpoint,
         )
+        self._remaining_generation_seconds(current)
         settled_at = self._clock.now()
         lease = current.lease
         if lease is None:  # pragma: no cover - refresh validates the lease
@@ -1379,7 +1590,7 @@ class DebateApplication:
         *,
         error_code: str,
     ) -> None:
-        voting_result = select_winner(snapshot.votes)
+        voting_result = select_winner(snapshot.votes, debate_key=str(snapshot.state.debate_id))
         checkpoint = snapshot.checkpoint_for(
             phase=DebatePhase.GENERATING_DECISION,
             participant=voting_result.winner,
@@ -1484,6 +1695,8 @@ class DebateApplication:
                     question=snapshot.question,
                     evidence=evidence,
                     affection_score=_affection_score(snapshot, participant),
+                    preference_frame=snapshot.preference_for(participant),
+                    candidate_plan=snapshot.candidates_for(participant),
                 )
             )
         except GenerationProviderError as error:
@@ -1495,6 +1708,10 @@ class DebateApplication:
 
         async with write_lock:
             current = await self._require_snapshot(snapshot.state.debate_id)
+            try:
+                self._remaining_generation_seconds(current)
+            except TimeoutError:
+                return "session_deadline_exceeded"
             checkpoint = current.checkpoint_for(
                 phase=DebatePhase.COLLECTING_INITIAL_OPINIONS,
                 participant=participant,
@@ -1630,6 +1847,8 @@ class DebateApplication:
                     evidence=evidence,
                     initial_opinions=snapshot.initial_opinions,
                     affection_score=_affection_score(snapshot, participant),
+                    preference_frame=snapshot.preference_for(participant),
+                    candidate_plan=snapshot.candidates_for(participant),
                 )
             )
         except GenerationProviderError as error:
@@ -1641,6 +1860,10 @@ class DebateApplication:
 
         async with write_lock:
             current = await self._require_snapshot(snapshot.state.debate_id)
+            try:
+                self._remaining_generation_seconds(current)
+            except TimeoutError:
+                return "session_deadline_exceeded"
             checkpoint = current.checkpoint_for(
                 phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
                 participant=participant,
@@ -1817,6 +2040,10 @@ class DebateApplication:
                     question=snapshot.question,
                     evidence=evidence,
                     candidates=candidates,
+                    preference_frame=snapshot.preference_for(participant),
+                    voting_rules_version=snapshot.voting_rules_version,
+                    debate_key=str(snapshot.state.debate_id),
+                    initial_opinions=snapshot.initial_opinions,
                 )
             )
         except GenerationProviderError as error:
@@ -1828,6 +2055,10 @@ class DebateApplication:
 
         async with write_lock:
             current = await self._require_snapshot(snapshot.state.debate_id)
+            try:
+                self._remaining_generation_seconds(current)
+            except TimeoutError:
+                return "session_deadline_exceeded"
             checkpoint = current.checkpoint_for(
                 phase=DebatePhase.SELECTING_WINNER,
                 participant=participant,
@@ -2499,7 +2730,11 @@ def _retry_generation_checkpoints(
     """Rebuild only the failed phase while reusing its already durable outputs."""
 
     completed_participants: tuple[ParticipantSlot, ...]
-    if phase is DebatePhase.COLLECTING_INITIAL_OPINIONS:
+    if phase is DebatePhase.FORMING_PREFERENCES:
+        completed_participants = tuple(item.participant for item in failed.preference_frames)
+    elif phase is DebatePhase.SELECTING_CANDIDATES:
+        completed_participants = tuple(item.participant for item in failed.candidate_plans)
+    elif phase is DebatePhase.COLLECTING_INITIAL_OPINIONS:
         completed_participants = tuple(opinion.participant for opinion in failed.initial_opinions)
     elif phase is DebatePhase.COLLECTING_FINAL_PROPOSALS:
         completed_participants = tuple(proposal.participant for proposal in failed.final_proposals)

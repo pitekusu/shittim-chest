@@ -18,6 +18,22 @@ class StrictOutput(BaseModel):
 ShortListItem = Annotated[str, Field(min_length=1, max_length=500)]
 
 
+class PreferenceFrameOutputV1(StrictOutput):
+    priorities: tuple[ShortListItem, ...] = Field(min_length=1, max_length=3)
+    avoidances: tuple[ShortListItem, ...] = Field(max_length=3)
+    compromise_condition: ShortListItem
+
+
+class CandidateOutputV1(StrictOutput):
+    proposal: ShortListItem
+    fit: ShortListItem
+    tradeoff: ShortListItem
+
+
+class CandidatePlanOutputV1(StrictOutput):
+    candidates: tuple[CandidateOutputV1, ...] = Field(min_length=1, max_length=3)
+
+
 class OpinionOutputV1(StrictOutput):
     """Initial opinion fields persisted by the current domain schema."""
 

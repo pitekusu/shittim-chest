@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
 
 from shittim_chest.domain import (
     AffectionAssessment,
     AttemptId,
+    CandidatePlan,
     DebateId,
     DebatePhase,
     DebateState,
@@ -18,8 +19,10 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    PreferenceFrame,
     Vote,
 )
+from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION, ResolvedVote
 
 
 def _require_identifier(value: str, *, label: str) -> None:
@@ -735,15 +738,27 @@ class DebateSnapshot:
     evidence: EvidenceBundle | None = None
     initial_opinions: tuple[InitialOpinion, ...] = ()
     final_proposals: tuple[FinalProposal, ...] = ()
-    votes: tuple[Vote, ...] = ()
+    votes: tuple[Vote | ResolvedVote, ...] = ()
+    voting_rules_version: str = "legacy-v1"
     final_decision: FinalDecision | None = None
     escalation_assessment: EscalationAssessment | None = None
     affection_assessment: AffectionAssessment | None = None
     generation_checkpoints: tuple[GenerationCheckpoint, ...] = ()
     error_code: str | None = None
     terminal_delivery: TerminalDeliveryPlan | PhaseDeliveryPlan | None = None
+    deliberation_version: int = 0
+    preference_frames: tuple[PreferenceFrame, ...] = field(default=(), repr=False)
+    candidate_plans: tuple[CandidatePlan, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
+        if self.voting_rules_version not in ("legacy-v1", COMPOSITE_VOTING_VERSION):
+            raise ValueError("unknown voting rules version")
+        if any(
+            isinstance(vote, ResolvedVote)
+            != (self.voting_rules_version == COMPOSITE_VOTING_VERSION)
+            for vote in self.votes
+        ):
+            raise ValueError("vote rules do not match the debate")
         if not 1 <= len(self.question) <= 1000 or not self.question.strip():
             raise ValueError("snapshot question must contain between 1 and 1000 characters")
         _require_identifier(self.requester_id, label="snapshot requester ID")
@@ -839,6 +854,7 @@ class DebateSnapshot:
                     raise ValueError(
                         "affection memorial unlock display name must match the snapshot requester"
                     )
+        self._validate_deliberation()
         checkpoint_keys = tuple(
             (checkpoint.phase, checkpoint.participant) for checkpoint in self.generation_checkpoints
         )
@@ -1022,6 +1038,67 @@ class DebateSnapshot:
                 if checkpoint.phase is phase and checkpoint.participant is participant
             ),
             None,
+        )
+
+    def _validate_deliberation(self) -> None:
+        if type(self.deliberation_version) is not int or self.deliberation_version not in {0, 1}:
+            raise ValueError("unknown deliberation version")
+        phases = {DebatePhase.FORMING_PREFERENCES, DebatePhase.SELECTING_CANDIDATES}
+        if self.deliberation_version == 0:
+            if (
+                self.preference_frames
+                or self.candidate_plans
+                or self.state.phase in phases
+                or self.state.failed_from_phase in phases
+                or any(checkpoint.phase in phases for checkpoint in self.generation_checkpoints)
+            ):
+                raise ValueError("legacy attempt cannot contain deliberation artifacts")
+            return
+        for phase, outputs in (
+            (DebatePhase.FORMING_PREFERENCES, self.preference_frames),
+            (DebatePhase.SELECTING_CANDIDATES, self.candidate_plans),
+        ):
+            participants = {output.participant for output in outputs}
+            if len(participants) != len(outputs):
+                raise ValueError("deliberation output participant is duplicated")
+            checkpoints = {
+                checkpoint.participant: checkpoint
+                for checkpoint in self.generation_checkpoints
+                if checkpoint.phase is phase
+            }
+            if checkpoints and participants != {
+                participant
+                for participant, checkpoint in checkpoints.items()
+                if checkpoint.status is GenerationStatus.COMPLETED
+            }:
+                raise ValueError("deliberation output must match completed checkpoints")
+        if self.candidate_plans and len(self.preference_frames) != 3:
+            raise ValueError("candidate selection requires all preference frames")
+        phase = self.state.failed_from_phase or self.state.phase
+        if phase is DebatePhase.SELECTING_CANDIDATES and len(self.preference_frames) != 3:
+            raise ValueError("candidate phase requires all preference frames")
+        if (
+            self.initial_opinions
+            or phase
+            in {
+                DebatePhase.COLLECTING_INITIAL_OPINIONS,
+                DebatePhase.DISCUSSING,
+                DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                DebatePhase.SELECTING_WINNER,
+                DebatePhase.GENERATING_DECISION,
+                DebatePhase.COMPLETED,
+            }
+        ) and len(self.candidate_plans) != 3:
+            raise ValueError("public generation requires all candidate plans")
+
+    def preference_for(self, participant: ParticipantSlot) -> PreferenceFrame | None:
+        return next(
+            (item for item in self.preference_frames if item.participant is participant), None
+        )
+
+    def candidates_for(self, participant: ParticipantSlot) -> CandidatePlan | None:
+        return next(
+            (item for item in self.candidate_plans if item.participant is participant), None
         )
 
     def with_generation_checkpoint(

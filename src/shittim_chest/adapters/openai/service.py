@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import monotonic
 from typing import TypeVar
 
@@ -18,10 +18,11 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from openai.types.responses.parsed_response import ParsedResponse
+from openai.types.responses import Response
 from openai.types.shared_params.reasoning import Reasoning
 from pydantic import BaseModel, ValidationError
 
+from shittim_chest.adapters.openai.composite_ballot import score_composite_ballot
 from shittim_chest.adapters.openai.config import (
     OpenAIAdapterConfig,
     ParticipantProfiles,
@@ -47,35 +48,59 @@ from shittim_chest.adapters.openai.prompts import (
     affection_response_instructions,
     affection_scoring_input,
     affection_scoring_instructions,
+    candidates_input,
     decision_input,
+    deliberation_instructions,
     final_proposal_input,
     final_proposal_instructions,
     initial_opinion_input,
     participant_instructions,
+    preferences_input,
     private_participant_instructions,
     vote_input,
     winner_decision_instructions,
 )
 from shittim_chest.adapters.openai.schemas import (
     AffectionScoreOutputV1,
+    CandidatePlanOutputV1,
     DecisionOutputV1,
     FinalProposalOutputV1,
     OpinionOutputV1,
+    PreferenceFrameOutputV1,
     VoteOutputV1,
 )
 from shittim_chest.application.generation_policy import ReasoningMode
 from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
+    Candidate,
+    CandidatePlan,
     EvidenceBundle,
     FinalDecision,
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    PreferenceFrame,
     Vote,
     VotingResult,
 )
+from shittim_chest.domain.composite_voting import (
+    COMPOSITE_VOTING_VERSION,
+    ResolvedVote,
+    resolve_composite_ballot,
+)
 
 _OutputT = TypeVar("_OutputT", bound=BaseModel)
+
+
+def _validate_frame_owner(
+    frame: PreferenceFrame | None,
+    participant: ParticipantSlot,
+    candidate_plan: CandidatePlan | None = None,
+) -> None:
+    if frame is not None and frame.participant is not participant:
+        raise ValueError("preference frame belongs to another participant")
+    if candidate_plan is not None and candidate_plan.participant is not participant:
+        raise ValueError("candidate plan belongs to another participant")
 
 
 def create_openai_client(
@@ -126,6 +151,53 @@ class OpenAIResponsesService:
         )
         return output.score
 
+    async def form_preferences(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+    ) -> PreferenceFrame:
+        output = await self._parse_preparation(
+            operation="preferences",
+            schema=PreferenceFrameOutputV1,
+            instructions=deliberation_instructions(
+                self.profiles.for_participant(participant).system_prompt,
+                selecting=False,
+                system_prompt=self.system_prompt,
+            ),
+            input_text=preferences_input(question),
+            settings=self.config.policy.preferences,
+        )
+        return PreferenceFrame(
+            participant, output.priorities, output.avoidances, output.compromise_condition
+        )
+
+    async def select_candidates(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+        evidence: EvidenceBundle,
+        preference_frame: PreferenceFrame | None = None,
+    ) -> CandidatePlan:
+        _validate_frame_owner(preference_frame, participant)
+        output = await self._parse_preparation(
+            operation="candidates",
+            schema=CandidatePlanOutputV1,
+            instructions=deliberation_instructions(
+                self.profiles.for_participant(participant).system_prompt,
+                selecting=True,
+                system_prompt=self.system_prompt,
+                use_frame=preference_frame is not None,
+            ),
+            input_text=candidates_input(question, evidence, preference_frame),
+            settings=self.config.policy.candidates,
+        )
+        return CandidatePlan(
+            participant,
+            tuple(Candidate(item.proposal, item.fit, item.tradeoff) for item in output.candidates),
+        )
+
     async def generate_initial_opinion(
         self,
         *,
@@ -133,7 +205,10 @@ class OpenAIResponsesService:
         question: str,
         evidence: EvidenceBundle,
         affection_score: int = DEFAULT_AFFECTION_SCORE,
+        preference_frame: PreferenceFrame | None = None,
+        candidate_plan: CandidatePlan | None = None,
     ) -> InitialOpinion:
+        _validate_frame_owner(preference_frame, participant, candidate_plan)
         output = await self._parse(
             operation="initial_opinion",
             schema=OpinionOutputV1,
@@ -145,7 +220,7 @@ class OpenAIResponsesService:
                 )
                 + affection_response_instructions(affection_score)
             ),
-            input_text=initial_opinion_input(question, evidence),
+            input_text=initial_opinion_input(question, evidence, preference_frame, candidate_plan),
             settings=self.config.initial_opinion,
         )
         return InitialOpinion(participant, output.summary, output.proposal)
@@ -158,7 +233,10 @@ class OpenAIResponsesService:
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
         affection_score: int = DEFAULT_AFFECTION_SCORE,
+        preference_frame: PreferenceFrame | None = None,
+        candidate_plan: CandidatePlan | None = None,
     ) -> FinalProposal:
+        _validate_frame_owner(preference_frame, participant, candidate_plan)
         output = await self._parse(
             operation="final_proposal",
             schema=FinalProposalOutputV1,
@@ -170,7 +248,14 @@ class OpenAIResponsesService:
                 )
                 + affection_response_instructions(affection_score)
             ),
-            input_text=final_proposal_input(question, evidence, initial_opinions),
+            input_text=final_proposal_input(
+                question,
+                evidence,
+                initial_opinions,
+                preference_frame,
+                candidate_plan,
+                participant=participant,
+            ),
             settings=self.config.final_proposal,
         )
         return FinalProposal(participant, output.title, output.proposal)
@@ -182,7 +267,26 @@ class OpenAIResponsesService:
         question: str,
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
-    ) -> Vote:
+        preference_frame: PreferenceFrame | None = None,
+        voting_rules_version: str = "legacy-v1",
+        debate_key: str | None = None,
+        initial_opinions: tuple[InitialOpinion, ...] = (),
+    ) -> Vote | ResolvedVote:
+        _validate_frame_owner(preference_frame, voter)
+        if voting_rules_version == COMPOSITE_VOTING_VERSION:
+            if not debate_key:
+                raise ValueError("composite voting requires a stable debate key")
+            ballot = await score_composite_ballot(
+                self,
+                voter=voter,
+                question=question,
+                evidence=evidence,
+                candidates=candidates,
+                initial_opinions=initial_opinions,
+            )
+            return resolve_composite_ballot(ballot, debate_key=debate_key)
+        if voting_rules_version != "legacy-v1":
+            raise ValueError("unknown voting rules")
         output = await self._parse(
             operation="vote",
             schema=VoteOutputV1,
@@ -190,7 +294,7 @@ class OpenAIResponsesService:
                 self.profiles.for_participant(voter).system_prompt,
                 system_prompt=self.system_prompt,
             ),
-            input_text=vote_input(question, evidence, candidates),
+            input_text=vote_input(question, evidence, candidates, preference_frame),
             settings=self.config.vote,
         )
         return Vote(
@@ -210,7 +314,9 @@ class OpenAIResponsesService:
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
         affection_score: int = DEFAULT_AFFECTION_SCORE,
+        preference_frame: PreferenceFrame | None = None,
     ) -> FinalDecision:
+        _validate_frame_owner(preference_frame, voting_result.winner)
         output = await self._parse(
             operation="decision",
             schema=DecisionOutputV1,
@@ -222,7 +328,9 @@ class OpenAIResponsesService:
                 )
                 + affection_response_instructions(affection_score)
             ),
-            input_text=decision_input(question, evidence, proposals, voting_result),
+            input_text=decision_input(
+                question, evidence, proposals, voting_result, preference_frame
+            ),
             settings=self.config.decision,
         )
         return FinalDecision(
@@ -231,6 +339,43 @@ class OpenAIResponsesService:
             output.actions,
             output.caveats,
             output.victory_message,
+        )
+
+    async def _parse_preparation(
+        self,
+        *,
+        operation: str,
+        schema: type[_OutputT],
+        instructions: str,
+        input_text: str,
+        settings: PhaseSettings,
+    ) -> _OutputT:
+        """Retry only a confirmed token limit, once, inside the caller's deadline.
+
+        Partial output is discarded. Other participants' calls and saved checkpoints
+        are untouched; refusals, filters and unknown incomplete reasons propagate.
+        Each request keeps the existing content-free success/failure telemetry.
+        """
+        try:
+            return await self._parse(
+                operation=operation,
+                schema=schema,
+                instructions=instructions,
+                input_text=input_text,
+                settings=settings,
+            )
+        except OpenAIIncompleteResponse as error:
+            if (
+                error.diagnostic_context != "response_status"
+                or error.diagnostic_kind != "max_output_tokens"
+            ):
+                raise
+        return await self._parse(
+            operation=operation,
+            schema=schema,
+            instructions=instructions,
+            input_text=input_text,
+            settings=replace(settings, max_output_tokens=settings.max_output_tokens * 2),
         )
 
     async def _parse(
@@ -243,17 +388,24 @@ class OpenAIResponsesService:
         settings: PhaseSettings,
     ) -> _OutputT:
         started = monotonic()
-        response: ParsedResponse[_OutputT] | None = None
+        response: Response | None = None
         try:
             async with self.limiter.slot():
                 reasoning: Reasoning = {"effort": settings.reasoning_effort.value}
                 if self.config.policy.reasoning_mode is ReasoningMode.PRO:
                     reasoning["mode"] = "pro"
-                response = await self.client.responses.parse(
+                response = await self.client.responses.create(
                     model=self.config.model,
                     instructions=instructions,
                     input=input_text,
-                    text_format=schema,
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": schema.__name__,
+                            "strict": True,
+                            "schema": schema.model_json_schema(),
+                        }
+                    },
                     max_output_tokens=settings.max_output_tokens,
                     reasoning=reasoning,
                     store=False,
@@ -262,7 +414,7 @@ class OpenAIResponsesService:
                     parallel_tool_calls=False,
                     truncation="disabled",
                 )
-            parsed = _extract_parsed(response)
+            parsed = _extract_parsed(response, schema)
         except asyncio.CancelledError:
             raise
         except OpenAIAdapterError as error:
@@ -323,10 +475,10 @@ class OpenAIResponsesService:
         self._record_usage(operation, response, started)
         return parsed
 
-    def _record_usage[OutputT: BaseModel](
+    def _record_usage(
         self,
         operation: str,
-        response: ParsedResponse[OutputT],
+        response: Response,
         started: float,
     ) -> None:
         usage = response.usage
@@ -349,13 +501,13 @@ class OpenAIResponsesService:
             )
         )
 
-    def _record_failure[OutputT: BaseModel](
+    def _record_failure(
         self,
         operation: str,
         error: OpenAIAdapterError,
         started: float,
         *,
-        response: ParsedResponse[OutputT] | None,
+        response: Response | None,
         settings: PhaseSettings,
     ) -> None:
         usage = response.usage if response is not None else None
@@ -383,7 +535,8 @@ class OpenAIResponsesService:
         )
 
 
-def _extract_parsed[OutputT: BaseModel](response: ParsedResponse[OutputT]) -> OutputT:
+def _extract_parsed[OutputT: BaseModel](response: Response, schema: type[OutputT]) -> OutputT:
+    # Check the envelope before parsing potentially truncated structured text.
     if response.status != "completed":
         reason = response.status
         if response.status == "incomplete":
@@ -408,13 +561,13 @@ def _extract_parsed[OutputT: BaseModel](response: ParsedResponse[OutputT]) -> Ou
         for content in output.content:
             if content.type == "refusal":
                 raise OpenAIRefusal()
-    parsed = response.output_parsed
-    if parsed is None:
+    text = response.output_text
+    if not text:
         raise OpenAIInvalidOutput(
             diagnostic_context="structured_output",
             diagnostic_kind="missing",
         )
-    return parsed
+    return schema.model_validate_json(text)
 
 
 def _validation_error(

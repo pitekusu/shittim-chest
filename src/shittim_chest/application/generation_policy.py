@@ -49,6 +49,8 @@ class GenerationPolicy:
     final_proposal: PhaseBudget
     vote: PhaseBudget
     decision: PhaseBudget
+    preferences: PhaseBudget = PhaseBudget(ReasoningEffort.MEDIUM, 2_000)
+    candidates: PhaseBudget = PhaseBudget(ReasoningEffort.HIGH, 4_000)
 
     def __post_init__(self) -> None:
         if not self.model.strip():

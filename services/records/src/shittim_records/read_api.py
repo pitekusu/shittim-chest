@@ -6,11 +6,12 @@ import base64
 import hashlib
 import hmac
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, cast
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
+from shittim_chest.adapters.dynamodb.composite_ballot import decode_composite_ballot
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 
 from shittim_records.contracts import (
@@ -348,7 +349,7 @@ class RecordsReadService:
             by_key[sk] = item
         meta = by_key.get("META")
         archive_version = meta.get("schema_version") if isinstance(meta, dict) else None
-        if archive_version not in {1, 2}:
+        if archive_version not in {1, 2, 3}:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         expected = {
             "META",
@@ -400,6 +401,9 @@ class RecordsReadService:
                     "voter": slot,
                     "candidate": _required_text(by_key[f"VOTE#{slot}"], "candidate"),
                     "reason": _required_text(by_key[f"VOTE#{slot}"], "reason"),
+                    "assessments": _composite_assessments(by_key[f"VOTE#{slot}"])
+                    if archive_version == 3
+                    else None,
                 }
                 for slot in PARTICIPANT_SLOTS
             ),
@@ -411,7 +415,15 @@ class RecordsReadService:
                 "actions": _required_text_list(by_key["DECISION"], "actions"),
                 "caveats": _required_text_list(by_key["DECISION"], "caveats"),
             },
-            "affection": self._affection(meta) if archive_version == 2 else None,
+            "affection": self._affection(meta)
+            if archive_version == 2 or (archive_version == 3 and "affection" in meta)
+            else None,
+            "voting": {
+                "rulesVersion": _required_text(meta, "voting_rules_version"),
+                "decidedBy": _required_text(meta, "voting_decided_by"),
+            }
+            if archive_version == 3
+            else None,
         }
         try:
             result = RecordDetailResponse.model_validate(payload)
@@ -867,7 +879,7 @@ def _validate_cursor_key(value: Any, *, index_name: str) -> DynamoItem:
 def _validate_meta_item(item: DynamoItem) -> None:
     record_id = item.get("record_id")
     if (
-        item.get("schema_version") not in {1, 2}
+        item.get("schema_version") not in {1, 2, 3}
         or item.get("record_type") != "archive_meta"
         or not isinstance(record_id, str)
         or not _is_record_id(record_id)
@@ -915,7 +927,7 @@ def _validate_list_projection(
 
 def _validate_archive_items(items: dict[str, DynamoItem], *, record_id: str) -> None:
     meta_version = items["META"].get("schema_version")
-    if meta_version not in {1, 2}:
+    if meta_version not in {1, 2, 3}:
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
     expected_types = {
         "META": "archive_meta",
@@ -1356,3 +1368,17 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ReadFailure("REQUEST_INVALID", 400)
     return value.astimezone(UTC)
+
+
+def _composite_assessments(item: DynamoItem) -> list[dict[str, Any]]:
+    try:
+        ballot = decode_composite_ballot(
+            {
+                "rules_version": item.get("rules_version"),
+                "voter": item.get("voter"),
+                "assessments": item.get("assessments"),
+            }
+        )
+    except ValueError:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
+    return [asdict(assessment) for assessment in ballot.assessments]

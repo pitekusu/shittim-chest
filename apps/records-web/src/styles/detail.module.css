@@ -150,6 +150,44 @@
   font-size: 0.9rem;
 }
 
+.voteCard > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.assessments {
+  margin-top: 14px;
+  font-size: 0.86rem;
+}
+
+.assessments summary {
+  cursor: pointer;
+  color: var(--records-ink-600);
+}
+
+.assessments section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--records-line);
+}
+
+.assessments h4 {
+  margin: 0;
+}
+
+.assessments dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.assessments dd {
+  margin: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .voteCard p {
   margin-bottom: 0;
   color: var(--records-ink-600);

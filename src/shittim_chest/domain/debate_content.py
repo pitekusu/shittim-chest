@@ -6,7 +6,10 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from shittim_chest.domain.composite_voting import CandidateTotal, ResolvedVote
 
 
 @unique
@@ -186,7 +189,10 @@ class VotingResult:
     """Deterministic winner and the validated complete ballot."""
 
     winner: ParticipantSlot
-    votes: tuple[Vote, ...]
+    votes: tuple[Vote | ResolvedVote, ...]
+    rules_version: str = "legacy-v1"
+    decided_by: str = "legacy"
+    totals: tuple[CandidateTotal, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,10 +214,29 @@ class FinalDecision:
                 raise ValueError("victory message must be at most 500 characters")
 
 
-def select_winner(votes: Iterable[Vote]) -> VotingResult:
+def select_winner(
+    votes: Iterable[Vote | ResolvedVote], *, debate_key: str | None = None
+) -> VotingResult:
     """Validate a complete ballot and select its winner deterministically."""
 
     ballot = tuple(votes)
+    from shittim_chest.domain.composite_voting import ResolvedVote, select_composite_winner
+
+    if any(isinstance(vote, ResolvedVote) for vote in ballot):
+        if not all(isinstance(vote, ResolvedVote) for vote in ballot) or debate_key is None:
+            raise InvalidVote(
+                "mixed_voting_rules", "composite votes require matching rules and key"
+            )
+        composite = tuple(vote for vote in ballot if isinstance(vote, ResolvedVote))
+        result = select_composite_winner(
+            tuple(vote.ballot for vote in composite), debate_key=debate_key
+        )
+        choices = {vote.voter: vote.candidate for vote in result.votes}
+        if any(choices[vote.voter] is not vote.candidate for vote in composite):
+            raise InvalidVote("invalid_choice", "stored vote does not match Python scoring")
+        return VotingResult(
+            result.winner, result.votes, result.rules_version, result.decided_by, result.totals
+        )
     if len(ballot) != len(PARTICIPANTS):
         raise InvalidVote("incomplete_ballot", "exactly one vote per participant is required")
 
@@ -229,7 +254,8 @@ def select_winner(votes: Iterable[Vote]) -> VotingResult:
     if len(leaders) == 1:
         return VotingResult(winner=leaders[0], votes=ballot)
 
-    winner = min(leaders, key=lambda participant: _tie_break_key(participant, ballot))
+    legacy = tuple(vote for vote in ballot if isinstance(vote, Vote))
+    winner = min(leaders, key=lambda participant: _tie_break_key(participant, legacy))
     return VotingResult(winner=winner, votes=ballot)
 
 
