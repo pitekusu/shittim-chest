@@ -258,6 +258,16 @@ class VoteAssessmentView(PublicModel):
     interaction: int = Field(ge=0, le=5)
     reason: Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")]
 
+    @property
+    def total_score(self) -> int:
+        return (
+            self.entertainment * 5
+            + self.character * 5
+            + self.originality * 4
+            + self.responsiveness * 4
+            + self.interaction * 2
+        )
+
 
 class VotingSummary(PublicModel):
     rules_version: Literal["entertainment-v1"]
@@ -384,6 +394,23 @@ class RecordDetailResponse(PublicModel):
             raise ValueError("vote_counts must match the complete ballot")
         if self.result.winner != self.final_decision.winner:
             raise ValueError("result and final_decision must identify the same winner")
+        if self.voting is not None:
+            leaders = {
+                slot
+                for slot, count in ballot_counts.items()
+                if count == max(ballot_counts.values())
+            }
+            decided_by = "majority"
+            if len(leaders) > 1:
+                scores = {slot: 0 for slot in _ALL_PARTICIPANT_SLOTS}
+                for vote in self.votes:
+                    for assessment in vote.assessments or ():
+                        scores[assessment.candidate] += assessment.total_score
+                highest = max(scores[slot] for slot in leaders)
+                leaders = {slot for slot in leaders if scores[slot] == highest}
+                decided_by = "composite_score" if len(leaders) == 1 else "tie_lottery"
+            if self.result.winner not in leaders or self.voting.decided_by != decided_by:
+                raise ValueError("composite winner and decision method must match assessments")
         return self
 
 
