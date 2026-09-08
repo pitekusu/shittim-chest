@@ -586,7 +586,7 @@ def prepare_terminal_outbox_operations(
             raise ValueError(
                 "completed delivery requires each participant display name exactly once"
             )
-        voting_result = select_winner(snapshot.votes)
+        voting_result = select_winner(snapshot.votes, debate_key=str(snapshot.state.debate_id))
         if decision.winner is not voting_result.winner:
             raise ValueError("completed delivery winner conflicts with the durable ballot")
         result_content = _completed_result_content(
@@ -970,7 +970,7 @@ def _completed_result_content(
 ) -> str:
     """Render the moderator-owned ballot result before the winner speaks."""
 
-    voting_result = select_winner(snapshot.votes)
+    voting_result = select_winner(snapshot.votes, debate_key=str(snapshot.state.debate_id))
     vote_counts = {
         participant: sum(vote.candidate is participant for vote in voting_result.votes)
         for participant in PARTICIPANTS

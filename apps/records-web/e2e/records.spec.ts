@@ -828,6 +828,45 @@ async function mockAuthenticatedApi(
   });
 }
 
+test("composite voting exposes both scores accessibly", async ({ page }, testInfo) => {
+  const record = {
+    ...detail,
+    voting: { rulesVersion: "entertainment-v1", decidedBy: "composite_score" },
+    votes: detail.votes.map((vote) => ({
+      ...vote,
+      assessments: participants
+        .filter((item) => item.slot !== vote.voter)
+        .map((item) => ({
+          candidate: item.slot,
+          entertainment: 5,
+          character: 4,
+          originality: 3,
+          responsiveness: 2,
+          interaction: 1,
+          reason: "個性が明確で、具体的な提案になっています。",
+        })),
+    })),
+  };
+  await mockAuthenticatedApi(page, record);
+  if (testInfo.project.name.includes("mobile"))
+    await page.setViewportSize({ width: 320, height: 740 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`/records/${RECORD_ID}`);
+  const summaries = page.getByText("採点の内訳を見る");
+  await expect(summaries).toHaveCount(3);
+  for (const summary of await summaries.all()) {
+    await summary.focus();
+    await page.keyboard.press("Enter");
+  }
+  await expect(page.getByRole("heading", { name: /67 \/ 100点/ })).toHaveCount(6);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.locator("#votes-title").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("composite-voting.png"), fullPage: true });
+});
+
 test("authenticated member can browse the completed archive", async ({ page }) => {
   await mockAuthenticatedApi(page);
   await page.goto("/");

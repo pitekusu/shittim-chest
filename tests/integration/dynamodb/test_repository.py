@@ -27,7 +27,8 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.repository import derive_affection_requester_key
 from shittim_chest.adapters.dynamodb.serializer import (
-    PREVIOUS_SCHEMA_VERSION,
+    CURRENT_SCHEMA_VERSION,
+    LEGACY_AFFECTION_SCHEMA_VERSION,
     DynamoItem,
     serialize_outbox,
     serialize_snapshot,
@@ -52,6 +53,7 @@ from shittim_chest.application import (
     prepare_terminal_outbox_operations,
     prepare_vote_outbox_operations,
 )
+from shittim_chest.application.models import ReconsiderationProgress
 from shittim_chest.application.ports import (
     RepositoryBusy,
     RepositoryCancellationCode,
@@ -64,6 +66,8 @@ from shittim_chest.application.ports import (
 )
 from shittim_chest.domain import (
     AttemptId,
+    Candidate,
+    CandidatePlan,
     DebateId,
     DebatePhase,
     DebateState,
@@ -71,6 +75,7 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    PreferenceFrame,
     Vote,
 )
 
@@ -2288,6 +2293,11 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
     )
     assert raw_profile["scores"] == [510, 480, 600]
     assert raw_profile["version"] == 1
+    # Exercise a real v9 profile written before this release, including concurrent CAS.
+    dynamodb_client.put_item(
+        TableName=dynamodb_table,
+        Item=marshal_item({**raw_profile, "schema_version": 9}),
+    )
 
     second = await repository.create(
         new_snapshot(offset=10),
@@ -2334,6 +2344,7 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
     )
     assert raw_profile["scores"] == [560, 490, 550]
     assert raw_profile["version"] == 3
+    assert raw_profile["schema_version"] == CURRENT_SCHEMA_VERSION
 
 
 @pytest.mark.asyncio
@@ -2379,7 +2390,7 @@ async def test_successful_affection_atomically_migrates_the_v8_raw_profile(
     legacy_item: DynamoItem = {
         **legacy_key,
         "record_type": "affection_profile",
-        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "schema_version": LEGACY_AFFECTION_SCHEMA_VERSION,
         "requester_id": requester_id,
         "requester_username": "legacy",
         "requester_display_name": "Legacy",
@@ -2461,7 +2472,7 @@ async def test_new_affection_profile_retries_when_a_v8_profile_appears_after_the
     legacy_item: DynamoItem = {
         **legacy_key,
         "record_type": "affection_profile",
-        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "schema_version": LEGACY_AFFECTION_SCHEMA_VERSION,
         "requester_id": requester_id,
         "requester_username": "legacy",
         "requester_display_name": "Legacy",
@@ -2515,7 +2526,7 @@ async def test_unavailable_affection_does_not_migrate_the_v8_raw_profile(
     legacy_item: DynamoItem = {
         **legacy_key,
         "record_type": "affection_profile",
-        "schema_version": PREVIOUS_SCHEMA_VERSION,
+        "schema_version": LEGACY_AFFECTION_SCHEMA_VERSION,
         "requester_id": requester_id,
         "requester_username": "legacy",
         "requester_display_name": "Legacy",
@@ -3044,6 +3055,120 @@ async def test_terminal_delivery_requires_sent_outbox_before_atomic_release(
     )
     counter_item = unmarshal_item(counter_response["Item"])
     assert counter_item["count"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selecting", [False, True])
+async def test_private_output_and_checkpoint_are_atomic_and_fenced(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+    selecting: bool,
+) -> None:
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(new_snapshot(), deliberation_version=1),
+        operation_id="private-generation",
+        lease_owner="worker-1",
+    )
+    phase = DebatePhase.SELECTING_CANDIDATES if selecting else DebatePhase.FORMING_PREFERENCES
+    at = NOW + timedelta(seconds=1)
+    frames = tuple(
+        PreferenceFrame(slot, ("priority",), (), "condition") for slot in ParticipantSlot
+    )
+    lease = accepted.lease
+    assert lease is not None
+    generating = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=replace(accepted.state, phase=phase, updated_at=at),
+            preference_frames=frames if selecting else (),
+            generation_checkpoints=tuple(
+                GenerationCheckpoint.planned(phase=phase, participant=slot, at=at).claim(
+                    lease=lease, at=at
+                )
+                for slot in ParticipantSlot
+            ),
+        ),
+    )
+    slot = ParticipantSlot.PARTICIPANT_A
+    checkpoint = generating.checkpoint_for(phase=phase, participant=slot)
+    assert checkpoint is not None
+    completed = generating.generation_checkpoints_with(checkpoint.complete(lease=lease, at=at))
+    if selecting:
+        updated = replace(
+            generating,
+            candidate_plans=(CandidatePlan(slot, (Candidate("choice", "fit", "tradeoff"),)),),
+            generation_checkpoints=completed,
+        )
+    else:
+        updated = replace(
+            generating, preference_frames=(frames[0],), generation_checkpoints=completed
+        )
+    persisted = await repository.replace(expected=generating, updated=updated)
+    assert await repository.get(accepted.state.debate_id) == persisted
+    with pytest.raises(RepositoryConflict):
+        await repository.replace(
+            expected=generating,
+            updated=replace(
+                generating,
+                state=replace(generating.state, updated_at=at + timedelta(microseconds=1)),
+            ),
+        )
+    assert await repository.get(accepted.state.debate_id) == persisted
+
+
+@pytest.mark.asyncio
+async def test_reconsideration_cursor_and_choice_reject_same_timestamp_stale_write(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+) -> None:
+    repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
+    accepted = await repository.create(
+        replace(new_snapshot(), deliberation_version=2),
+        operation_id="v2-cas",
+        lease_owner="worker-1",
+    )
+    at = NOW + timedelta(seconds=1)
+    slots = tuple(ParticipantSlot)
+    prepared = await repository.replace(
+        expected=accepted,
+        updated=replace(
+            accepted,
+            state=replace(accepted.state, phase=DebatePhase.SELECTING_CANDIDATES, updated_at=at),
+            preference_frames=tuple(PreferenceFrame(x, ("priority",), (), "cost") for x in slots),
+            candidate_plans=tuple(
+                CandidatePlan(x, (Candidate("original", "fit", "cost"),)) for x in slots
+            ),
+            candidate_coordination=ReconsiderationProgress(
+                step="select", targets=(slots[1],), alternatives=(Candidate("new", "fit", "cost"),)
+            ),
+        ),
+    )
+    completed = await repository.replace(
+        expected=prepared,
+        updated=replace(
+            prepared,
+            candidate_plans=tuple(
+                CandidatePlan(
+                    x, (Candidate("new" if x is slots[1] else "original", "fit", "cost"),)
+                )
+                for x in slots
+            ),
+            candidate_coordination=ReconsiderationProgress(
+                step="complete", targets=(slots[1],), cursor=1
+            ),
+        ),
+    )
+    assert await repository.get(accepted.state.debate_id) == completed
+    with pytest.raises(RepositoryConflict):
+        await repository.replace(
+            expected=prepared,
+            updated=replace(
+                prepared, state=replace(prepared.state, updated_at=at + timedelta(microseconds=1))
+            ),
+        )
+    assert await repository.get(accepted.state.debate_id) == completed
 
 
 @pytest.mark.asyncio

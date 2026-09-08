@@ -233,7 +233,22 @@ export interface RecordDetailResponse {
     readonly voter: ParticipantSlot;
     readonly candidate: ParticipantSlot;
     readonly reason: string;
+    readonly assessments?:
+      | readonly {
+          readonly candidate: ParticipantSlot;
+          readonly entertainment: number;
+          readonly character: number;
+          readonly originality: number;
+          readonly responsiveness: number;
+          readonly interaction: number;
+          readonly reason: string;
+        }[]
+      | null;
   }[];
+  readonly voting?: {
+    readonly rulesVersion: "entertainment-v1";
+    readonly decidedBy: "majority" | "composite_score" | "tie_lottery";
+  } | null;
   readonly result: ResultSummary;
   readonly finalDecision: {
     readonly winner: ParticipantSlot;

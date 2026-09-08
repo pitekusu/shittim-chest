@@ -40,15 +40,19 @@ from shittim_chest.application.scale_to_zero import (
 )
 from shittim_chest.domain import (
     AttemptId,
+    Candidate,
+    CandidatePlan,
     DebateId,
     EvidenceBundle,
     FinalDecision,
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    PreferenceFrame,
     Vote,
     VotingResult,
 )
+from shittim_chest.domain.composite_voting import ResolvedVote
 
 
 class RepositoryConflict(Exception):
@@ -687,12 +691,69 @@ class CandidateOrderer(Protocol):
 class OpenAIService(Protocol):
     """Return validated domain models rather than SDK response objects."""
 
+    async def find_overlap_targets(
+        self,
+        *,
+        question: str,
+        positions: tuple[InitialOpinion, ...],
+        rotation: int,
+        coordination: bool,
+    ) -> tuple[ParticipantSlot, ...]: ...
+
+    async def explore_alternatives(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        peers: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+    ) -> tuple[Candidate, ...]: ...
+
+    async def select_alternative(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        peers: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+        alternatives: tuple[Candidate, ...],
+    ) -> CandidatePlan: ...
+
+    async def revise_initial_opinion(
+        self,
+        *,
+        question: str,
+        frame: PreferenceFrame,
+        plan: CandidatePlan,
+        opinions: tuple[InitialOpinion, ...],
+        evidence: EvidenceBundle,
+        affection_score: int,
+    ) -> InitialOpinion: ...
+
     async def score_affection(
         self,
         *,
         participant: ParticipantSlot,
         question: str,
     ) -> int: ...
+
+    async def form_preferences(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+    ) -> PreferenceFrame: ...
+
+    async def select_candidates(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+        evidence: EvidenceBundle,
+        preference_frame: PreferenceFrame,
+    ) -> CandidatePlan: ...
 
     async def generate_initial_opinion(
         self,
@@ -701,6 +762,8 @@ class OpenAIService(Protocol):
         question: str,
         evidence: EvidenceBundle,
         affection_score: int,
+        preference_frame: PreferenceFrame | None = None,
+        candidate_plan: CandidatePlan | None = None,
     ) -> InitialOpinion: ...
 
     async def generate_final_proposal(
@@ -711,6 +774,8 @@ class OpenAIService(Protocol):
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
         affection_score: int,
+        preference_frame: PreferenceFrame | None = None,
+        candidate_plan: CandidatePlan | None = None,
     ) -> FinalProposal: ...
 
     async def cast_vote(
@@ -720,7 +785,11 @@ class OpenAIService(Protocol):
         question: str,
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
-    ) -> Vote: ...
+        preference_frame: PreferenceFrame | None = None,
+        voting_rules_version: str = "legacy-v1",
+        debate_key: str | None = None,
+        initial_opinions: tuple[InitialOpinion, ...] = (),
+    ) -> Vote | ResolvedVote: ...
 
     async def generate_decision(
         self,
@@ -730,6 +799,7 @@ class OpenAIService(Protocol):
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
         affection_score: int,
+        preference_frame: PreferenceFrame | None = None,
     ) -> FinalDecision: ...
 
 

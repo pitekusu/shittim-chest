@@ -653,6 +653,7 @@ describe("MemorialPage", () => {
   });
 
   it("does not continue an upload after the same cycle becomes ready", async () => {
+    getMemoryMock.mockResolvedValue(memory(1));
     const pendingUpload = deferred<void>();
     prepareUploadMock.mockResolvedValue(uploadTicket());
     uploadSourceMock.mockReturnValue(pendingUpload.promise);

@@ -288,7 +288,7 @@ export class RecordsApplicationStack extends Stack {
             dynamodb: {
               NewImage: {
                 record_type: { S: lambda.FilterRule.isEqual("affection_profile") },
-                schema_version: { N: lambda.FilterRule.or("8", "9") },
+                schema_version: { N: lambda.FilterRule.or("8", "9", "10") },
               },
             },
           }),

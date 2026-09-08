@@ -18,6 +18,8 @@ class DebatePhase(StrEnum):
     ACCEPTED = "accepted"
     SCORING_AFFECTION = "scoring_affection"
     PREPARING_EVIDENCE = "preparing_evidence"
+    FORMING_PREFERENCES = "forming_preferences"
+    SELECTING_CANDIDATES = "selecting_candidates"
     COLLECTING_INITIAL_OPINIONS = "collecting_initial_opinions"
     DISCUSSING = "discussing"
     COLLECTING_FINAL_PROPOSALS = "collecting_final_proposals"
@@ -46,6 +48,8 @@ NORMAL_PHASE_FLOW: Final[tuple[DebatePhase, ...]] = (
     DebatePhase.ACCEPTED,
     DebatePhase.SCORING_AFFECTION,
     DebatePhase.PREPARING_EVIDENCE,
+    DebatePhase.FORMING_PREFERENCES,
+    DebatePhase.SELECTING_CANDIDATES,
     DebatePhase.COLLECTING_INITIAL_OPINIONS,
     DebatePhase.DISCUSSING,
     DebatePhase.COLLECTING_FINAL_PROPOSALS,
@@ -62,6 +66,7 @@ NORMAL_PHASE_TRANSITIONS: Final[frozenset[tuple[DebatePhase, DebatePhase]]] = fr
 )
 ALLOWED_PHASE_TRANSITIONS: Final[frozenset[tuple[DebatePhase, DebatePhase]]] = frozenset(
     NORMAL_PHASE_TRANSITIONS
+    | {(DebatePhase.PREPARING_EVIDENCE, DebatePhase.COLLECTING_INITIAL_OPINIONS)}
     | {(phase, DebatePhase.CANCELLED) for phase in NON_TERMINAL_PHASES}
     | {(phase, DebatePhase.FAILED) for phase in NON_TERMINAL_PHASES}
 )
@@ -156,7 +161,7 @@ class DebateState:
     updated_at: datetime
     retry_of: AttemptId | None = None
     failed_from_phase: DebatePhase | None = None
-    schema_version: int = 9
+    schema_version: int = 10
 
     def __post_init__(self) -> None:
         _validate_utc_timestamp(self.updated_at)

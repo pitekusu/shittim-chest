@@ -30,7 +30,7 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
-    PREVIOUS_SCHEMA_VERSION,
+    LEGACY_AFFECTION_SCHEMA_VERSION,
     DynamoItem,
     DynamoValue,
     PersistenceFormatError,
@@ -2877,6 +2877,8 @@ class DynamoDbDebateRepository:
                 "terminal_delivery_deadline_at",
                 "terminal_delivery_plan_status",
                 "terminal_delivery_abandon_reason",
+                "candidate_coordination",
+                "opinion_reconsideration",
             )
         ):
             name = f"#expected_pointer{index}"
@@ -3040,12 +3042,13 @@ class DynamoDbDebateRepository:
                     "TableName": self._table_name,
                     "Item": marshal_item(serialize_affection_profile(profile)),
                     "ConditionExpression": (
-                        "record_type=:type AND schema_version=:schema "
+                        "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
                         "AND version=:version AND requester_key=:requester"
                     ),
                     "ExpressionAttributeValues": marshal_item(
                         {
                             ":type": "affection_profile",
+                            ":opaque_schema": 9,
                             ":schema": CURRENT_SCHEMA_VERSION,
                             ":version": expected_version,
                             ":requester": profile.requester_key,
@@ -3071,12 +3074,13 @@ class DynamoDbDebateRepository:
                         }
                     ),
                     "ConditionExpression": (
-                        "record_type=:type AND schema_version=:schema "
+                        "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
                         "AND version=:version AND requester_key=:requester"
                     ),
                     "ExpressionAttributeValues": marshal_item(
                         {
                             ":type": "affection_profile",
+                            ":opaque_schema": 9,
                             ":schema": CURRENT_SCHEMA_VERSION,
                             ":version": profile.version,
                             ":requester": profile.requester_key,
@@ -3110,7 +3114,7 @@ class DynamoDbDebateRepository:
                     "ExpressionAttributeValues": marshal_item(
                         {
                             ":type": "affection_profile",
-                            ":schema": PREVIOUS_SCHEMA_VERSION,
+                            ":schema": LEGACY_AFFECTION_SCHEMA_VERSION,
                             ":version": profile.version,
                             ":requester": requester_id,
                         }
@@ -3143,7 +3147,7 @@ class DynamoDbDebateRepository:
                     "ExpressionAttributeValues": marshal_item(
                         {
                             ":type": "affection_profile",
-                            ":schema": PREVIOUS_SCHEMA_VERSION,
+                            ":schema": LEGACY_AFFECTION_SCHEMA_VERSION,
                             ":version": profile.version,
                             ":requester": requester_id,
                         }

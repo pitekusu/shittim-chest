@@ -153,7 +153,7 @@ def test_default_timeout_budgets_include_affection_scoring_headroom() -> None:
     assert (
         signature.parameters["session_timeout_seconds"].default
         == DEFAULT_SESSION_TIMEOUT_SECONDS
-        == 420.0
+        == 600.0
     )
 
 
@@ -441,7 +441,13 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
     completed = repository.current[accepted.debate_id]
     assert completed.state.phase is DebatePhase.COMPLETED
     assert completed.final_decision is not None
-    assert completed.final_decision.winner is ParticipantSlot.PARTICIPANT_B
+    from shittim_chest.domain import select_winner
+
+    assert completed.voting_rules_version == "entertainment-v1"
+    assert (
+        completed.final_decision.winner
+        is select_winner(completed.votes, debate_key=str(accepted.debate_id)).winner
+    )
     assert completed.final_decision.victory_message == "persona victory message"
     assert completed.escalation_assessment is not None
     assert completed.escalation_assessment.split_vote is True
@@ -486,6 +492,8 @@ async def test_accept_and_run_complete_debate_with_shared_evidence_and_ordering(
         DebatePhase.ACCEPTED,
         DebatePhase.SCORING_AFFECTION,
         DebatePhase.PREPARING_EVIDENCE,
+        DebatePhase.FORMING_PREFERENCES,
+        DebatePhase.SELECTING_CANDIDATES,
         DebatePhase.COLLECTING_INITIAL_OPINIONS,
         DebatePhase.DISCUSSING,
         DebatePhase.COLLECTING_FINAL_PROPOSALS,
@@ -632,7 +640,11 @@ async def test_generated_phases_are_persisted_then_delivered_by_each_participant
             for output in outputs:
                 checkpoint = snapshot.checkpoint_for(
                     phase=phase,
-                    participant=output.voter if isinstance(output, Vote) else output.participant,
+                    participant=(
+                        output.participant
+                        if isinstance(output, (InitialOpinion, FinalProposal))
+                        else output.voter
+                    ),
                 )
                 assert checkpoint is not None
                 assert checkpoint.status is GenerationStatus.COMPLETED

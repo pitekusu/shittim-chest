@@ -24,6 +24,8 @@ from shittim_chest.application.scale_to_zero import IngressClaimFence
 from shittim_chest.domain import (
     AffectionProfile,
     AttemptId,
+    Candidate,
+    CandidatePlan,
     DebateId,
     DebatePhase,
     EvidenceBundle,
@@ -31,9 +33,17 @@ from shittim_chest.domain import (
     FinalProposal,
     InitialOpinion,
     ParticipantSlot,
+    PreferenceFrame,
     Vote,
     VotingResult,
     assess_affection,
+)
+from shittim_chest.domain.composite_voting import (
+    COMPOSITE_VOTING_VERSION,
+    CandidateAssessment,
+    CompositeBallot,
+    ResolvedVote,
+    resolve_composite_ballot,
 )
 
 
@@ -158,6 +168,18 @@ class FakeOutboxRecovery:
 
 
 class FakeOpenAI:
+    async def find_overlap_targets(self, **kwargs) -> tuple[ParticipantSlot, ...]:
+        return ()
+
+    async def explore_alternatives(self, **kwargs) -> tuple[Candidate, ...]:
+        return ()
+
+    async def select_alternative(self, **kwargs) -> CandidatePlan:
+        return kwargs["plan"]
+
+    async def revise_initial_opinion(self, **kwargs) -> InitialOpinion:
+        return next(x for x in kwargs["opinions"] if x.participant is kwargs["plan"].participant)
+
     def __init__(self) -> None:
         self.initial_calls: list[ParticipantSlot] = []
         self.proposal_calls: list[ParticipantSlot] = []
@@ -179,6 +201,31 @@ class FakeOpenAI:
         self.fail_initial_for: ParticipantSlot | None = None
         self.block_initial = False
         self.cancelled_initial: set[ParticipantSlot] = set()
+        self.preference_calls: list[ParticipantSlot] = []
+        self.candidate_calls: list[ParticipantSlot] = []
+        self.preference_errors: dict[ParticipantSlot, BaseException] = {}
+        self.candidate_errors: dict[ParticipantSlot, BaseException] = {}
+
+    async def form_preferences(
+        self, *, participant: ParticipantSlot, question: str
+    ) -> PreferenceFrame:
+        self.preference_calls.append(participant)
+        if error := self.preference_errors.get(participant):
+            raise error
+        return PreferenceFrame(participant, ("priority",), (), "compromise")
+
+    async def select_candidates(
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+        evidence: EvidenceBundle,
+        preference_frame: PreferenceFrame,
+    ) -> CandidatePlan:
+        self.candidate_calls.append(participant)
+        if error := self.candidate_errors.get(participant):
+            raise error
+        return CandidatePlan(participant, (Candidate("proposal", "fit", "tradeoff"),))
 
     async def score_affection(
         self,
@@ -200,6 +247,8 @@ class FakeOpenAI:
         question: str,
         evidence: EvidenceBundle,
         affection_score: int,
+        preference_frame: PreferenceFrame | None = None,
+        candidate_plan: CandidatePlan | None = None,
     ) -> InitialOpinion:
         del question
         self.response_affection_scores.append((participant, affection_score))
@@ -230,6 +279,8 @@ class FakeOpenAI:
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
         affection_score: int,
+        preference_frame: PreferenceFrame | None = None,
+        candidate_plan: CandidatePlan | None = None,
     ) -> FinalProposal:
         del question, initial_opinions
         self.response_affection_scores.append((participant, affection_score))
@@ -251,7 +302,11 @@ class FakeOpenAI:
         question: str,
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
-    ) -> Vote:
+        preference_frame: PreferenceFrame | None = None,
+        voting_rules_version: str = "legacy-v1",
+        debate_key: str | None = None,
+        initial_opinions: tuple[InitialOpinion, ...] = (),
+    ) -> Vote | ResolvedVote:
         del question
         self.evidence_calls.append(evidence)
         candidate_slots = tuple(candidate.participant for candidate in candidates)
@@ -264,6 +319,25 @@ class FakeOpenAI:
             ParticipantSlot.PARTICIPANT_B: ParticipantSlot.PARTICIPANT_A,
             ParticipantSlot.PARTICIPANT_C: ParticipantSlot.PARTICIPANT_B,
         }[voter]
+        if voting_rules_version == COMPOSITE_VOTING_VERSION:
+            assert debate_key is not None
+            if voter in self.vote_voter_override:
+                return Vote(self.vote_voter_override[voter], choice, 3, 3, 3, "reason")
+            ballot = CompositeBallot(
+                voter,
+                tuple(
+                    CandidateAssessment(slot, score, score, score, score, score, "reason")
+                    for slot in candidate_slots
+                    for score in (
+                        5
+                        if slot == choice == ParticipantSlot.PARTICIPANT_B
+                        else 4
+                        if slot == choice
+                        else 3,
+                    )
+                ),
+            )
+            return resolve_composite_ballot(ballot, debate_key=debate_key)
         return Vote(self.vote_voter_override.get(voter, voter), choice, 3, 3, 3, "reason")
 
     async def generate_decision(
@@ -274,6 +348,7 @@ class FakeOpenAI:
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
         affection_score: int,
+        preference_frame: PreferenceFrame | None = None,
     ) -> FinalDecision:
         del question, proposals
         self.response_affection_scores.append((voting_result.winner, affection_score))

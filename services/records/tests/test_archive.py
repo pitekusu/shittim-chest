@@ -13,11 +13,14 @@ from shittim_chest.domain import (
     AffectionAssessment,
     AffectionAssessmentStatus,
     AttemptId,
+    Candidate,
+    CandidatePlan,
     DebateId,
     DebatePhase,
     FinalDecision,
     ParticipantAffection,
     ParticipantSlot,
+    PreferenceFrame,
 )
 from tests.factories import NOW, completed_snapshot, presentation
 
@@ -28,6 +31,29 @@ from shittim_records.archive import (
 )
 
 HMAC_KEY = b"records-test-key-that-is-longer-than-32-bytes"
+
+
+def test_private_deliberation_does_not_change_archive_or_public_fingerprint() -> None:
+    source = completed_snapshot()
+    prepared = replace(
+        source,
+        deliberation_version=1,
+        preference_frames=tuple(
+            PreferenceFrame(slot, ("private-priority",), (), "private-condition")
+            for slot in ParticipantSlot
+        ),
+        candidate_plans=tuple(
+            CandidatePlan(slot, (Candidate("private-choice", "private-fit", "private-tradeoff"),))
+            for slot in ParticipantSlot
+        ),
+    )
+    baseline = project_completed_debate(
+        source, identity_hmac_key=HMAC_KEY, presentation=presentation(), projected_at=NOW
+    )
+    actual = project_completed_debate(
+        prepared, identity_hmac_key=HMAC_KEY, presentation=presentation(), projected_at=NOW
+    )
+    assert actual == baseline
 
 
 def test_requester_key_matches_the_core_shared_hmac_vector() -> None:
@@ -203,7 +229,7 @@ def test_v8_affection_replay_preserves_pre_pr1_fingerprint_and_marker_schema() -
             source.state,
             debate_id=DebateId.parse("019d2c1f-0000-7000-8000-a00000000011"),
             attempt_id=AttemptId.parse("019d2c1f-0000-7000-8000-a00000000012"),
-            schema_version=PREVIOUS_SCHEMA_VERSION,
+            schema_version=8,
         ),
         affection_assessment=assessment,
     )
@@ -213,7 +239,7 @@ def test_v8_affection_replay_preserves_pre_pr1_fingerprint_and_marker_schema() -
         identity_hmac_key=HMAC_KEY,
         presentation=presentation(),
         projected_at=NOW,
-        source_schema_version=PREVIOUS_SCHEMA_VERSION,
+        source_schema_version=8,
     )
 
     assert replay.source_fingerprint == (

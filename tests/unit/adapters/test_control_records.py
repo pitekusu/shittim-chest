@@ -131,10 +131,10 @@ def test_manifest_is_typed_deterministic_and_contains_eleven_records() -> None:
     assert len(CONTROL_RECORD_MANIFEST.activity_records) == 9
     assert len(CONTROL_RECORD_MANIFEST_HASH) == 64
     assert CONTROL_RECORD_MANIFEST_HASH == (
-        "11a0f2b1febc8eeeb9f50b49449fe31a5f456b2eb8b94ad899202586bf4bd0f5"
+        "3ea589f70030e4645b249897d2da1f9ed2abd7d24b99a798e6c230c02bb8f37a"
     )
     assert CONTROL_RECORD_PREVIOUS_MANIFEST_HASH == (
-        "09d78b5d095cf11c964673dc44d070db3ff30f859e1b7e3b187b2b8deba4e121"
+        "11a0f2b1febc8eeeb9f50b49449fe31a5f456b2eb8b94ad899202586bf4bd0f5"
     )
     assert control_records._manifest_hash() == CONTROL_RECORD_MANIFEST_HASH
     assert CONTROL_RECORD_MANIFEST.initial_runtime_item == {

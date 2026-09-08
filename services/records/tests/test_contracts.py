@@ -426,6 +426,64 @@ def test_record_detail_requires_every_participant_slot_once(
         RecordDetailResponse.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    ("tied_scores", "winner", "decided_by", "valid"),
+    [
+        (False, "participant-c", "composite_score", True),
+        (False, "participant-a", "composite_score", False),
+        (False, "participant-c", "tie_lottery", False),
+        (True, "participant-a", "tie_lottery", True),
+        (True, "participant-c", "tie_lottery", True),
+        (True, "participant-a", "composite_score", False),
+    ],
+)
+def test_composite_tie_winner_and_method_follow_public_scores(
+    tied_scores: bool,
+    winner: str,
+    decided_by: str,
+    valid: bool,
+) -> None:
+    payload = _record_detail_payload()
+    slots = ("participant-a", "participant-b", "participant-c")
+    votes = []
+    for index, voter in enumerate(slots):
+        chosen = slots[(index + 1) % 3]
+        assessments = []
+        for candidate in slots:
+            if candidate == voter:
+                continue
+            score = 4 if tied_scores or candidate == chosen else 3
+            if not tied_scores and voter == "participant-b" and candidate == chosen:
+                score = 5
+            assessments.append(
+                {
+                    "candidate": candidate,
+                    "entertainment": score,
+                    "character": score,
+                    "originality": score,
+                    "responsiveness": score,
+                    "interaction": score,
+                    "reason": "感想",
+                }
+            )
+        votes.append(
+            {"voter": voter, "candidate": chosen, "reason": "感想", "assessments": assessments}
+        )
+    payload["votes"] = votes
+    payload["result"] = {
+        "winner": winner,
+        "tieBreakApplied": True,
+        "voteCounts": [{"participant": slot, "count": 1} for slot in slots],
+    }
+    cast(dict[str, object], payload["finalDecision"])["winner"] = winner
+    payload["voting"] = {"rulesVersion": "entertainment-v1", "decidedBy": decided_by}
+    if valid:
+        assert RecordDetailResponse.model_validate(payload).result.winner == winner
+    else:
+        with pytest.raises(ValidationError, match="composite winner"):
+            RecordDetailResponse.model_validate(payload)
+
+
 def test_record_detail_requires_one_canonical_winner() -> None:
     payload = _record_detail_payload()
     assert RecordDetailResponse.model_validate(payload).result.winner == "participant-a"

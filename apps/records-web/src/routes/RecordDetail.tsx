@@ -265,11 +265,64 @@ export function RecordDocument({
                   {participant(vote.voter).displayName} → {participant(vote.candidate).displayName}
                 </h3>
                 <p className={JAPANESE_PROSE_CLASS}>{vote.reason}</p>
+                {vote.assessments && (
+                  <details className={detailStyles.assessments}>
+                    <summary>採点の内訳を見る</summary>
+                    {vote.assessments.map((assessment) => (
+                      <section
+                        key={assessment.candidate}
+                        aria-label={`${participant(vote.voter).displayName}による${participant(assessment.candidate).displayName}の採点`}
+                      >
+                        <h4>
+                          {participant(assessment.candidate).displayName}：
+                          {assessment.entertainment * 5 +
+                            assessment.character * 5 +
+                            assessment.originality * 4 +
+                            assessment.responsiveness * 4 +
+                            assessment.interaction * 2}{" "}
+                          / 100点
+                        </h4>
+                        <dl>
+                          <div>
+                            <dt>面白さ・魅力</dt>
+                            <dd>{assessment.entertainment} / 5</dd>
+                          </div>
+                          <div>
+                            <dt>キャラクター性</dt>
+                            <dd>{assessment.character} / 5</dd>
+                          </div>
+                          <div>
+                            <dt>独創性</dt>
+                            <dd>{assessment.originality} / 5</dd>
+                          </div>
+                          <div>
+                            <dt>質問への応答</dt>
+                            <dd>{assessment.responsiveness} / 5</dd>
+                          </div>
+                          <div>
+                            <dt>議論への貢献</dt>
+                            <dd>{assessment.interaction} / 5</dd>
+                          </div>
+                        </dl>
+                        <p className={JAPANESE_PROSE_CLASS}>{assessment.reason}</p>
+                      </section>
+                    ))}
+                  </details>
+                )}
               </div>
             </article>
           ))}
         </div>
-        {record.result.tieBreakApplied && (
+        {record.voting && (
+          <p className={JAPANESE_PROSE_CLASS}>
+            {record.voting.decidedBy === "majority"
+              ? "3人の多数決で決定しました。"
+              : record.voting.decidedBy === "composite_score"
+                ? "同票のため、5項目の総合評価で決定しました。"
+                : "得票数・総合評価が同じため、抽選で決定しました。"}
+          </p>
+        )}
+        {!record.voting && record.result.tieBreakApplied && (
           <p className={`${detailStyles.tieNotice} ${JAPANESE_PROSE_CLASS}`}>
             同票のため、シッテムの箱の既定ルールで勝者を決定しました。
           </p>

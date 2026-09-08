@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
+from shittim_chest.domain.composite_voting import ResolvedVote
 from shittim_chest.domain.debate_content import Vote, VotingResult
 from shittim_chest.domain.debate_state import DebatePhase
 
@@ -65,7 +66,9 @@ def assess_escalation(
     scores = tuple(score for vote in winner_votes for score in _scores(vote))
     vote_counts = Counter(vote.candidate for vote in voting_result.votes)
     return EscalationAssessment(
-        rules_version=ESCALATION_RULES_VERSION,
+        rules_version=ESCALATION_RULES_VERSION
+        if voting_result.rules_version == "legacy-v1"
+        else "escalation-entertainment-v1",
         split_vote=len(vote_counts) == 3 and set(vote_counts.values()) == {1},
         winning_axis_low=any(score <= 2 for score in scores),
         winning_average_low=sum(scores) < 3 * len(scores),
@@ -73,5 +76,9 @@ def assess_escalation(
     )
 
 
-def _scores(vote: Vote) -> tuple[int, int, int]:
+def _scores(vote: Vote | ResolvedVote) -> tuple[int, ...]:
+    if isinstance(vote, ResolvedVote):
+        return next(
+            item.axes for item in vote.ballot.assessments if item.candidate is vote.candidate
+        )
     return vote.accuracy_score, vote.usefulness_score, vote.safety_score

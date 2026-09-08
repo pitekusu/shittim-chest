@@ -90,7 +90,7 @@ from shittim_records.memorial_adapters import (
 from shittim_records.memorial_http import MemorialHttpController
 from shittim_records.projector import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
-    OPAQUE_AFFECTION_SCHEMA_VERSION,
+    OPAQUE_AFFECTION_SCHEMA_VERSIONS,
     AffectionProjectorService,
     BackfillService,
     ProjectorService,
@@ -895,7 +895,7 @@ def _projection_target(record: Mapping[str, Any]) -> tuple[str, str]:
         or current_schema.get("N")
         not in {
             str(LEGACY_AFFECTION_SCHEMA_VERSION),
-            str(OPAQUE_AFFECTION_SCHEMA_VERSION),
+            *(str(version) for version in OPAQUE_AFFECTION_SCHEMA_VERSIONS),
         }
         or not isinstance(sk, Mapping)
         or sk.get("S") != "PROFILE"

@@ -249,17 +249,47 @@ FinalProposalCollection = Annotated[
 ]
 
 
+class VoteAssessmentView(PublicModel):
+    candidate: ParticipantSlot
+    entertainment: int = Field(ge=0, le=5)
+    character: int = Field(ge=0, le=5)
+    originality: int = Field(ge=0, le=5)
+    responsiveness: int = Field(ge=0, le=5)
+    interaction: int = Field(ge=0, le=5)
+    reason: Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")]
+
+    @property
+    def total_score(self) -> int:
+        return (
+            self.entertainment * 5
+            + self.character * 5
+            + self.originality * 4
+            + self.responsiveness * 4
+            + self.interaction * 2
+        )
+
+
+class VotingSummary(PublicModel):
+    rules_version: Literal["entertainment-v1"]
+    decided_by: Literal["majority", "composite_score", "tie_lottery"]
+
+
 class VoteView(PublicModel):
     model_config = ConfigDict(json_schema_extra=_no_self_vote_json_schema())
 
     voter: ParticipantSlot
     candidate: ParticipantSlot
     reason: Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")]
+    assessments: tuple[VoteAssessmentView, VoteAssessmentView] | None = None
 
     @model_validator(mode="after")
     def reject_self_vote(self) -> VoteView:
         if self.voter == self.candidate:
             raise ValueError("a participant cannot vote for itself")
+        if self.assessments is not None and {
+            item.candidate for item in self.assessments
+        } != _ALL_PARTICIPANT_SLOTS - {self.voter}:
+            raise ValueError("assessment coverage must match the two other participants")
         return self
 
 
@@ -340,6 +370,7 @@ class RecordDetailResponse(PublicModel):
     result: RecordResultSummary
     final_decision: FinalDecisionView
     affection: AffectionView | None
+    voting: VotingSummary | None = None
 
     @model_validator(mode="after")
     def require_consistent_participants_and_winner(self) -> RecordDetailResponse:
@@ -353,6 +384,8 @@ class RecordDetailResponse(PublicModel):
             "final_proposals",
         )
         _require_complete_slots(tuple(item.voter for item in self.votes), "votes")
+        if any((vote.assessments is not None) != (self.voting is not None) for vote in self.votes):
+            raise ValueError("voting version and assessments must agree")
         ballot_counts = {slot: 0 for slot in _ALL_PARTICIPANT_SLOTS}
         for vote in self.votes:
             ballot_counts[vote.candidate] += 1
@@ -361,6 +394,23 @@ class RecordDetailResponse(PublicModel):
             raise ValueError("vote_counts must match the complete ballot")
         if self.result.winner != self.final_decision.winner:
             raise ValueError("result and final_decision must identify the same winner")
+        if self.voting is not None:
+            leaders = {
+                slot
+                for slot, count in ballot_counts.items()
+                if count == max(ballot_counts.values())
+            }
+            decided_by = "majority"
+            if len(leaders) > 1:
+                scores = {slot: 0 for slot in _ALL_PARTICIPANT_SLOTS}
+                for vote in self.votes:
+                    for assessment in vote.assessments or ():
+                        scores[assessment.candidate] += assessment.total_score
+                highest = max(scores[slot] for slot in leaders)
+                leaders = {slot for slot in leaders if scores[slot] == highest}
+                decided_by = "composite_score" if len(leaders) == 1 else "tie_lottery"
+            if self.result.winner not in leaders or self.voting.decided_by != decided_by:
+                raise ValueError("composite winner and decision method must match assessments")
         return self
 
 

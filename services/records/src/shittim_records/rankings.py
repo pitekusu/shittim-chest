@@ -388,7 +388,7 @@ def _parse_archive_row(item: DynamoItem) -> _ArchiveRankingRow:
     record_id = _required_text(item, "record_id")
     completed_text = _required_text(item, "completed_at")
     if (
-        item.get("schema_version") not in {1, 2}
+        item.get("schema_version") not in {1, 2, 3}
         or item.get("record_type") != "archive_meta"
         or item.get("PK") != f"RECORD#{record_id}"
         or item.get("SK") != "META"

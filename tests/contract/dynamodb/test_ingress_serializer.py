@@ -299,7 +299,7 @@ def test_prepared_status_publication_round_trip_separates_desired_and_delivered(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("schema_version", CURRENT_SCHEMA_VERSION - 2, "unsupported schema"),
+        ("schema_version", CURRENT_SCHEMA_VERSION + 1, "unsupported schema"),
         ("record_schema_version", 2, "auxiliary record schema"),
         ("PK", "CONTROL#OTHER", "partition key"),
         ("gsi2pk", "OTHER", "recoverable debate index"),
