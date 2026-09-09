@@ -241,11 +241,24 @@ def status_publication_marker(canonical_interaction_id: str) -> str:
 
 
 def has_exact_status_publication_marker(content: str, operation_marker: str) -> bool:
-    """Match only the dedicated final marker line, never user-controlled prose."""
+    """Match a dedicated marker line or the fixed Records link notification."""
 
     if not operation_marker or "\n" in operation_marker or "\r" in operation_marker:
         return False
-    return content.rsplit("\n", maxsplit=1)[-1] == f"識別子: {operation_marker}"
+    if content.rsplit("\n", maxsplit=1)[-1] == f"識別子: {operation_marker}":
+        return True
+    if re.fullmatch(r"[A-Za-z0-9_-]{43}", operation_marker) is None:
+        return False
+    return (
+        re.fullmatch(
+            r"議論結果はこちらからも確認できます。\n"
+            r"\[Webで議論結果を見る\]\(https://[a-z0-9.-]+/records/"
+            + re.escape(operation_marker)
+            + r"\)",
+            content,
+        )
+        is not None
+    )
 
 
 class PublicStatusPublisher:

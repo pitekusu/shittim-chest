@@ -427,6 +427,19 @@ def test_operation_marker_matches_only_the_dedicated_final_line() -> None:
     )
 
 
+def test_record_link_marker_requires_fixed_notification_and_exact_record_id() -> None:
+    marker = "a" * 43
+    content = (
+        "議論結果はこちらからも確認できます。\n"
+        f"[Webで議論結果を見る](https://example.com/records/{marker})"
+    )
+    assert has_exact_status_publication_marker(content, marker)
+    assert not has_exact_status_publication_marker(content, "b" * 43)
+    assert not has_exact_status_publication_marker(f"質問: {content}", marker)
+    assert not has_exact_status_publication_marker(content.replace(")", "extra)"), marker)
+    assert not has_exact_status_publication_marker(content + "\n補足", marker)
+
+
 @pytest.mark.asyncio
 async def test_fresh_publication_creates_once_and_persists_message_id() -> None:
     repository = FakeStatusRepository(work())

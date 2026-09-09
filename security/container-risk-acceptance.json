@@ -8,16 +8,16 @@
       "image_config_digests": {
         "production": [
           "sha256:39cda6a267941ab76170b7dd8406364e8c68f8e13c8d22320e17b0c594c2e8a1",
-          "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15",
           "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec",
-          "sha256:578f3f556409240a5dea6e6de1ccdfdb510a8c384c41ce3d459dcbcfa1c18f27"
+          "sha256:578f3f556409240a5dea6e6de1ccdfdb510a8c384c41ce3d459dcbcfa1c18f27",
+          "sha256:554d7a236b5c4efa8d9f0efe4cb0e1d389202a2a6e0a37c53aecc034c043e3da"
         ]
       },
       "status": "under_investigation",
       "justification": "The pinned Debian 13.6 DHI runtime has no vendor fix or verified VEX for this finding.",
       "impact": "A successful non-blocking gzwrite exploit could corrupt the isolated task process heap and affect its integrity or availability.",
       "exploitability": "No application call to gzwrite, gzprintf, or gzvprintf was found; the task has zero ingress and runs non-root with a read-only root filesystem.",
-      "evidence": "PR #338 CI run 34218267163 on 2026-09-08 has the same software package names and versions as Core release 33954661227. Its verified DHI VEX and Grype reports leave only the same zlib1g and zlib1g-dev CVE-2026-85091 findings, version 1:1.3.dfsg+really1.3.1-1+dhi2, not-fixed; fixable High/Critical is zero. Application code still has no gzwrite/gzprintf/gzvprintf calls and runtime exposure is unchanged. The oldest digest is replaced within the four-digest limit; the current production digest and original expiry are retained.",
+      "evidence": "PR #343 CI run 34362161480 on 2026-09-09 has the same 155 software package names, versions and identifiers as Core release 34223844702. Verified DHI VEX statements are unchanged apart from timestamps and document identity. Grype leaves only the same zlib1g and zlib1g-dev CVE-2026-85091 findings, version 1:1.3.dfsg+really1.3.1-1+dhi2, not-fixed; fixable High/Critical is zero. No application gzwrite/gzprintf/gzvprintf calls or runtime exposure changes were introduced. Replace the oldest non-current digest within the four-digest limit, retaining the deployed production digest and original expiry.",
       "approved_on": "2026-09-04",
       "expires_on": "2026-10-04",
       "reevaluation_conditions": "Reevaluate when DHI publishes a new runtime digest, Debian publishes a fixed zlib package, verified VEX changes, or task exposure changes.",
@@ -29,16 +29,16 @@
       "image_config_digests": {
         "production": [
           "sha256:39cda6a267941ab76170b7dd8406364e8c68f8e13c8d22320e17b0c594c2e8a1",
-          "sha256:73a688c1ee5ebcebfa5aaf2a6cdbe71d8e4367d4fcc7de710ad51fd61c7a8a15",
           "sha256:68aefa1eadaa812865ded4d570bca7ecc6dc0d38c157a49fe968d6c0ef6497ec",
-          "sha256:578f3f556409240a5dea6e6de1ccdfdb510a8c384c41ce3d459dcbcfa1c18f27"
+          "sha256:578f3f556409240a5dea6e6de1ccdfdb510a8c384c41ce3d459dcbcfa1c18f27",
+          "sha256:554d7a236b5c4efa8d9f0efe4cb0e1d389202a2a6e0a37c53aecc034c043e3da"
         ]
       },
       "status": "under_investigation",
       "justification": "The pinned Debian 13.6 DHI runtime has no vendor fix or verified VEX for this finding.",
       "impact": "A successful non-blocking gzwrite exploit could corrupt the isolated task process heap and affect its integrity or availability.",
       "exploitability": "No application call to gzwrite, gzprintf, or gzvprintf was found; the task has zero ingress and runs non-root with a read-only root filesystem.",
-      "evidence": "PR #338 CI run 34218267163 on 2026-09-08 has the same software package names and versions as Core release 33954661227. Its verified DHI VEX and Grype reports leave only the same zlib1g and zlib1g-dev CVE-2026-85091 findings, version 1:1.3.dfsg+really1.3.1-1+dhi2, not-fixed; fixable High/Critical is zero. Application code still has no gzwrite/gzprintf/gzvprintf calls and runtime exposure is unchanged. The oldest digest is replaced within the four-digest limit; the current production digest and original expiry are retained.",
+      "evidence": "PR #343 CI run 34362161480 on 2026-09-09 has the same 155 software package names, versions and identifiers as Core release 34223844702. Verified DHI VEX statements are unchanged apart from timestamps and document identity. Grype leaves only the same zlib1g and zlib1g-dev CVE-2026-85091 findings, version 1:1.3.dfsg+really1.3.1-1+dhi2, not-fixed; fixable High/Critical is zero. No application gzwrite/gzprintf/gzvprintf calls or runtime exposure changes were introduced. Replace the oldest non-current digest within the four-digest limit, retaining the deployed production digest and original expiry.",
       "approved_on": "2026-09-04",
       "expires_on": "2026-10-04",
       "reevaluation_conditions": "Reevaluate when DHI publishes a new runtime digest, Debian publishes a fixed zlib package, verified VEX changes, or task exposure changes.",

@@ -75,8 +75,11 @@ class FakeStore:
 
 
 class FakeGateway:
-    def __init__(self, *, existing: bool = False, fail_create: bool = False) -> None:
+    def __init__(
+        self, *, existing: bool = False, fail_create: bool = False, legacy: bool = False
+    ) -> None:
         self.existing = existing
+        self.legacy = legacy
         self.fail_create = fail_create
         self.find_calls: list[dict[str, object]] = []
         self.create_calls: list[dict[str, object]] = []
@@ -89,6 +92,8 @@ class FakeGateway:
         if not self.existing:
             return None
         message = replace(self._message(kwargs), nonce=None)
+        if self.legacy:
+            message = replace(message, content=f"{message.content}\n識別子: {PROJECTION.record_id}")
         if not has_exact_status_publication_marker(
             message.content, str(kwargs["operation_marker"])
         ):
@@ -142,8 +147,7 @@ PROJECTION = project_completed_debate(
 )
 EXPECTED_CONTENT = (
     "議論結果はこちらからも確認できます。\n"
-    f"[Webで議論結果を見る](https://shittim.pitekusu.dev/records/{PROJECTION.record_id})\n"
-    f"識別子: {PROJECTION.record_id}"
+    f"[Webで議論結果を見る](https://shittim.pitekusu.dev/records/{PROJECTION.record_id})"
 )
 
 
@@ -219,9 +223,10 @@ def test_preview_preparation_precedes_post_and_failure_still_delivers_once(fails
     assert store.sent == 1
 
 
-def test_retry_recovers_existing_message_without_duplicate_post() -> None:
+@pytest.mark.parametrize("legacy", [False, True])
+def test_retry_recovers_existing_message_without_duplicate_post(legacy: bool) -> None:
     store = FakeStore(receipt(attempted=True))
-    gateway = FakeGateway(existing=True)
+    gateway = FakeGateway(existing=True, legacy=legacy)
 
     publish(service(store, gateway))
 
