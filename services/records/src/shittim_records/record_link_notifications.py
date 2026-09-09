@@ -152,6 +152,9 @@ class RecordLinkNotificationService:
                 after_message_id=snapshot.starter_message_id,
                 checkpoint=None,
             )
+            # Recover pre-change posts without editing or reposting them.
+            if message is not None and message.content == f"{content}\n識別子: {record_id}":
+                content = message.content
         if message is None:
             if self._preview_preparer is not None:
                 try:
@@ -213,9 +216,7 @@ def record_link_message(public_hostname: str, record_id: str) -> str:
         raise ValueError("Records public hostname is invalid")
     _require_record_id(record_id)
     url = f"https://{public_hostname}/records/{record_id}"
-    return (
-        f"議論結果はこちらからも確認できます。\n[Webで議論結果を見る]({url})\n識別子: {record_id}"
-    )
+    return f"議論結果はこちらからも確認できます。\n[Webで議論結果を見る]({url})"
 
 
 def _notification_nonce(record_id: str) -> str:
