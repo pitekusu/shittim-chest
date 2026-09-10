@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 import pytest
@@ -209,6 +210,7 @@ def test_preview_preparation_precedes_post_and_failure_still_delivers_once(fails
             calls.append(record_id)
             if fails:
                 raise TimeoutError("optional preparation timeout")
+            await asyncio.sleep(0)
 
     value = RecordLinkNotificationService(
         store=store,
@@ -220,6 +222,38 @@ def test_preview_preparation_precedes_post_and_failure_still_delivers_once(fails
     publish(value)
     assert calls == [PROJECTION.record_id]
     assert len(gateway.create_calls) == 1
+    assert store.sent == 1
+    assert set(gateway.create_calls[0]) == {"channel_id", "content", "nonce"}
+
+
+def test_preview_deadline_cancels_preparation_but_still_posts_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shittim_records import record_link_notifications
+
+    monkeypatch.setattr(record_link_notifications, "PREVIEW_PREPARATION_TIMEOUT_SECONDS", 0.01)
+    store, gateway = FakeStore(receipt()), FakeGateway()
+    cancelled: list[bool] = []
+
+    class Preparer:
+        async def prepare(self, record_id: str) -> None:
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.append(True)
+            raise AssertionError("unreachable")
+
+    value = RecordLinkNotificationService(
+        store=store,
+        gateway_factory=FakeGatewayFactory(gateway),
+        public_hostname="shittim.pitekusu.dev",
+        preview_preparer=Preparer(),
+    )
+    publish(value)
+    publish(value)
+    assert cancelled == [True]
+    assert len(gateway.create_calls) == 1
+    assert set(gateway.create_calls[0]) == {"channel_id", "content", "nonce"}
     assert store.sent == 1
 
 

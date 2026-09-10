@@ -13,6 +13,7 @@ import regex
 
 RECORD_ID = r"[A-Za-z0-9_-]{43}"
 IMAGE_VERSION = r"[a-f0-9]{32}"
+PREVIEW_PREPARATION_TIMEOUT_SECONDS = 20
 TEMPLATE_VERSION = "record-preview-v2"
 
 

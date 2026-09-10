@@ -18,6 +18,8 @@ from shittim_chest.application.status_publication import (
     DiscordStatusMessage,
 )
 
+from shittim_records.ogp import PREVIEW_PREPARATION_TIMEOUT_SECONDS
+
 RECORD_LINK_NOTIFICATION_PK = "RECORD_LINK_NOTIFICATION"
 RECORD_LINK_NOTIFICATION_SCHEMA_VERSION = 1
 
@@ -158,7 +160,10 @@ class RecordLinkNotificationService:
         if message is None:
             if self._preview_preparer is not None:
                 try:
-                    await asyncio.wait_for(self._preview_preparer.prepare(record_id), timeout=5)
+                    await asyncio.wait_for(
+                        self._preview_preparer.prepare(record_id),
+                        timeout=PREVIEW_PREPARATION_TIMEOUT_SECONDS,
+                    )
                 except Exception:
                     # Optional preview failure must not affect Archive or link delivery.
                     logging.getLogger(__name__).warning("preview_preparation_unavailable")
