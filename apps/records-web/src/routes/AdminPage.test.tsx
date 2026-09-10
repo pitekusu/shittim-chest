@@ -64,6 +64,91 @@ afterEach(() => {
 });
 
 describe("AdminPage", () => {
+  it("switches metric periods independently without fetching another snapshot", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        response({
+          ...statusResponse,
+          sections: [
+            {
+              service: "lambda",
+              state: "healthy",
+              summary: "Lambda確認済み",
+              metrics: [
+                { name: "records_auth_hour_invocations", value: 3 },
+                { name: "records_auth_day_invocations", value: 123 },
+                { name: "records_auth_day_errors", value: 2 },
+                { name: "records_auth_day_duration", value: "45.000" },
+              ],
+            },
+            {
+              service: "apigateway",
+              state: "healthy",
+              summary: "API確認済み",
+              metrics: [
+                { name: "records_hour_requests", value: 7 },
+                { name: "records_day_requests", value: 456 },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderAdmin(false);
+    const hourLambda = await screen.findByRole("table", { name: "直近1時間のLambda指標" });
+    const lambda = within(hourLambda.closest("article")!);
+    const api = within(
+      screen.getByRole("table", { name: "直近1時間のAPI指標" }).closest("article")!,
+    );
+    expect(within(hourLambda).getByRole("row", { name: /^認証API/ })).toHaveTextContent("3");
+    fireEvent.click(lambda.getByRole("button", { name: "直近24時間" }));
+    expect(lambda.getByRole("button", { name: "直近24時間" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const dayRow = lambda.getByRole("row", { name: /^認証API/ });
+    expect(dayRow).toHaveTextContent("123");
+    expect(dayRow).toHaveTextContent("45 ms");
+    expect(within(dayRow).getByText("2")).toHaveAttribute("data-alert", "true");
+    expect(api.getByRole("table", { name: "直近1時間のAPI指標" })).toBeVisible();
+    fireEvent.click(api.getByRole("button", { name: "直近24時間" }));
+    expect(api.getByRole("table", { name: "直近24時間のAPI指標" })).toHaveTextContent("456");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows storage capacity without hiding zero or inventing missing capacity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          response({
+            ...statusResponse,
+            sections: [
+              {
+                service: "s3",
+                state: "healthy",
+                summary: "S3確認済み",
+                metrics: [
+                  { name: "web_size_bytes", value: 0 },
+                  { name: "media_size_bytes", value: 1048576 },
+                  { name: "release_size_bytes", value: null },
+                ],
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    renderAdmin();
+    expect(await screen.findByText("1 MiB", { exact: true })).toBeVisible();
+    expect(screen.getByText("0 B", { exact: true })).toBeVisible();
+    const disclosure = screen.getByText("保護設定・自動削除を確認").closest("details")!;
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("保護設定・自動削除を確認"));
+    expect(disclosure).toHaveAttribute("open");
+  });
+
   it("loads service status for a non-admin member", async () => {
     const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(response(statusResponse)));
     vi.stubGlobal("fetch", fetchMock);

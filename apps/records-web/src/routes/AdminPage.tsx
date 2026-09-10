@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { getAdminStatus, refreshAdminStatus } from "../api/admin";
 import { RecordsApiError } from "../api/http";
@@ -274,7 +275,7 @@ function formatMetricValue(name: string, value: AdminStatusMetric["value"]): str
   if (name.endsWith("_percent") && /^\d+(?:\.\d+)?$/.test(value)) return `${value}%`;
   if (name.endsWith("_rate") && /^\d+(?:\.\d+)?$/.test(value)) return `${value}%`;
   if ((name.endsWith("_duration") || name.endsWith("_latency")) && /^\d+(?:\.\d+)?$/.test(value)) {
-    return `${value} ms`;
+    return `${Number(value).toLocaleString("ja-JP", { maximumFractionDigits: 3 })} ms`;
   }
   const translated: Readonly<Record<string, string>> = {
     ACTIVE: "稼働中",
@@ -1185,6 +1186,39 @@ function InspectorMetrics({
 }
 /* oxlint-enable jsx-a11y/no-noninteractive-tabindex */
 
+function StorageOverview({
+  resources,
+  metrics,
+  daily = false,
+}: {
+  readonly resources: readonly { readonly key: string; readonly label: string }[];
+  readonly metrics: ReadonlyMap<string, AdminStatusMetric>;
+  readonly daily?: boolean;
+}): React.JSX.Element {
+  return (
+    <>
+      <dl className={adminStyles.storageOverview}>
+        {resources.map((resource) => (
+          <div key={resource.key}>
+            <dt>{resource.label}</dt>
+            <dd>{metricValue(metrics, `${resource.key}_size_bytes`)}</dd>
+            {daily && (
+              <dd className={adminStyles.metricNote}>
+                集計日時 {metricValue(metrics, `${resource.key}_size_updated_at`)}
+              </dd>
+            )}
+          </div>
+        ))}
+      </dl>
+      <p className={adminStyles.metricNote}>
+        {daily
+          ? "日次集計の概算容量です。過去バージョンや未完了アップロード等も含み、直後の変更は反映されません。"
+          : "テーブル容量・項目数は約6時間ごとに更新される概算値です。"}
+      </p>
+    </>
+  );
+}
+
 function S3Metrics({
   metrics: source,
 }: {
@@ -1192,38 +1226,45 @@ function S3Metrics({
 }): React.JSX.Element {
   const metrics = metricLookup(source);
   return (
-    // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus.
-    <section className={adminStyles.tableScroller} aria-label="S3保護設定" tabIndex={0}>
-      <table className={adminStyles.resourceTable}>
-        <thead>
-          <tr>
-            <th scope="col">保存先</th>
-            <th scope="col">バージョン管理</th>
-            <th scope="col">暗号化</th>
-            <th scope="col">公開アクセス遮断</th>
-            <th scope="col">原本自動削除</th>
-          </tr>
-        </thead>
-        <tbody>
-          {S3_RESOURCES.map((resource) => (
-            <tr key={resource.key}>
-              <th scope="row">{resource.label}</th>
-              <td>{metricValue(metrics, `${resource.key}_versioning`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_encrypted`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_public_access_blocked`)}</td>
-              <td>
-                {resource.key === "memorial_upload"
-                  ? metricDays(metrics, "memorial_upload_expiration_days")
-                  : "対象外"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+    <>
+      <StorageOverview resources={S3_RESOURCES} metrics={metrics} daily />
+      <details className={adminStyles.serviceDisclosure}>
+        <summary>保護設定・自動削除を確認</summary>
+        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus. */}
+        <section className={adminStyles.tableScroller} aria-label="S3保護設定" tabIndex={0}>
+          <table className={adminStyles.resourceTable}>
+            <thead>
+              <tr>
+                <th scope="col">保存先</th>
+                <th scope="col">バージョン管理</th>
+                <th scope="col">暗号化</th>
+                <th scope="col">公開アクセス遮断</th>
+                <th scope="col">原本自動削除</th>
+              </tr>
+            </thead>
+            <tbody>
+              {S3_RESOURCES.map((resource) => (
+                <tr key={resource.key}>
+                  <th scope="row">{resource.label}</th>
+                  <td>{metricValue(metrics, `${resource.key}_versioning`)}</td>
+                  <td>{metricValue(metrics, `${resource.key}_encrypted`)}</td>
+                  <td>{metricValue(metrics, `${resource.key}_public_access_blocked`)}</td>
+                  <td>
+                    {resource.key === "memorial_upload"
+                      ? metricDays(metrics, "memorial_upload_expiration_days")
+                      : "対象外"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </details>
+    </>
   );
 }
 
+/* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Horizontally scrollable data tables need keyboard focus. */
 function DynamoDbMetrics({
   metrics: source,
   translationMetrics,
@@ -1238,38 +1279,46 @@ function DynamoDbMetrics({
   const profileCount = metrics.get("affection_profile_count")?.value;
   return (
     <>
-      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus. */}
-      <section className={adminStyles.tableScroller} aria-label="DynamoDBテーブル状態" tabIndex={0}>
-        <table className={`${adminStyles.resourceTable} ${adminStyles.wideTable}`}>
-          <thead>
-            <tr>
-              <th scope="col">テーブル</th>
-              <th scope="col">状態</th>
-              <th scope="col">時点復旧</th>
-              <th scope="col">削除保護</th>
-              <th scope="col">有効期限</th>
-              <th scope="col">項目数</th>
-              <th scope="col">スロットル（読／書）</th>
-            </tr>
-          </thead>
-          <tbody>
-            {DYNAMODB_RESOURCES.map((resource) => (
-              <tr key={resource.key}>
-                <th scope="row">{resource.label}</th>
-                <td>{metricValue(metrics, `${resource.key}_status`)}</td>
-                <td>{metricValue(metrics, `${resource.key}_pitr`)}</td>
-                <td>{metricValue(metrics, `${resource.key}_deletion_protection`)}</td>
-                <td>{metricValue(metrics, `${resource.key}_ttl`)}</td>
-                <td>{metricValue(metrics, `${resource.key}_item_count`)}</td>
-                <td>
-                  {metricValue(metrics, `${resource.key}_read_throttles`)}／
-                  {metricValue(metrics, `${resource.key}_write_throttles`)}
-                </td>
+      <StorageOverview resources={DYNAMODB_RESOURCES} metrics={metrics} />
+      <details className={adminStyles.serviceDisclosure}>
+        <summary>テーブル状態・保護設定を確認</summary>
+        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus. */}
+        <section
+          className={adminStyles.tableScroller}
+          aria-label="DynamoDBテーブル状態"
+          tabIndex={0}
+        >
+          <table className={`${adminStyles.resourceTable} ${adminStyles.wideTable}`}>
+            <thead>
+              <tr>
+                <th scope="col">テーブル</th>
+                <th scope="col">状態</th>
+                <th scope="col">時点復旧</th>
+                <th scope="col">削除保護</th>
+                <th scope="col">有効期限</th>
+                <th scope="col">項目数</th>
+                <th scope="col">スロットル（読／書）</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {DYNAMODB_RESOURCES.map((resource) => (
+                <tr key={resource.key}>
+                  <th scope="row">{resource.label}</th>
+                  <td>{metricValue(metrics, `${resource.key}_status`)}</td>
+                  <td>{metricValue(metrics, `${resource.key}_pitr`)}</td>
+                  <td>{metricValue(metrics, `${resource.key}_deletion_protection`)}</td>
+                  <td>{metricValue(metrics, `${resource.key}_ttl`)}</td>
+                  <td>{metricValue(metrics, `${resource.key}_item_count`)}</td>
+                  <td>
+                    {metricValue(metrics, `${resource.key}_read_throttles`)}／
+                    {metricValue(metrics, `${resource.key}_write_throttles`)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </details>
       <section
         className={adminStyles.translationCacheStatus}
         aria-labelledby="translation-cache-status-title"
@@ -1372,42 +1421,136 @@ function DynamoDbMetrics({
   );
 }
 
+/* oxlint-enable jsx-a11y/no-noninteractive-tabindex */
+type MetricPeriod = "hour" | "day";
+
+function MetricPeriodSelector({
+  period,
+  onChange,
+}: {
+  readonly period: MetricPeriod;
+  readonly onChange: (period: MetricPeriod) => void;
+}): React.JSX.Element {
+  return (
+    <fieldset className={adminStyles.periodSelector}>
+      <legend>集計期間</legend>
+      <button type="button" aria-pressed={period === "hour"} onClick={() => onChange("hour")}>
+        直近1時間
+      </button>
+      <button type="button" aria-pressed={period === "day"} onClick={() => onChange("day")}>
+        直近24時間
+      </button>
+    </fieldset>
+  );
+}
+
+function RequestSummary({
+  resources,
+  metrics,
+  period,
+  counts,
+}: {
+  readonly resources: readonly { readonly key: string }[];
+  readonly metrics: ReadonlyMap<string, AdminStatusMetric>;
+  readonly period: MetricPeriod;
+  readonly counts: readonly {
+    readonly key: string;
+    readonly label: string;
+    readonly alert?: boolean;
+  }[];
+}): React.JSX.Element {
+  return (
+    <dl className={adminStyles.requestSummary}>
+      {counts.map((count) => {
+        const values = resources.map(
+          (resource) => metrics.get(`${resource.key}_${period}_${count.key}`)?.value,
+        );
+        const total = values.every((value) => typeof value === "number")
+          ? values.reduce<number>((sum, value) => sum + Number(value), 0)
+          : null;
+        return (
+          <div
+            key={count.key}
+            data-alert={(count.alert && total !== null && total > 0) || undefined}
+          >
+            <dt>{count.label}</dt>
+            <dd>{total === null ? "未取得" : total.toLocaleString("ja-JP")}</dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
 function LambdaMetrics({
   metrics: source,
 }: {
   readonly metrics: readonly AdminStatusMetric[];
 }): React.JSX.Element {
   const metrics = metricLookup(source);
+  const [period, setPeriod] = useState<MetricPeriod>("hour");
   return (
-    // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus.
-    <section className={adminStyles.tableScroller} aria-label="Lambda関数状態" tabIndex={0}>
-      <table className={`${adminStyles.resourceTable} ${adminStyles.lambdaTable}`}>
-        <thead>
-          <tr>
-            <th scope="col">処理</th>
-            <th scope="col">状態</th>
-            <th scope="col">更新</th>
-            <th scope="col">呼出</th>
-            <th scope="col">エラー</th>
-            <th scope="col">抑制</th>
-            <th scope="col">p95処理時間</th>
-          </tr>
-        </thead>
-        <tbody>
-          {LAMBDA_RESOURCES.map((resource) => (
-            <tr key={resource.key}>
-              <th scope="row">{resource.label}</th>
-              <td>{metricValue(metrics, `${resource.key}_state`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_update`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_invocations`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_errors`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_throttles`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_duration`)}</td>
+    <>
+      <MetricPeriodSelector period={period} onChange={setPeriod} />
+      <RequestSummary
+        resources={LAMBDA_RESOURCES}
+        metrics={metrics}
+        period={period}
+        counts={[
+          { key: "invocations", label: "呼出合計" },
+          { key: "errors", label: "エラー", alert: true },
+          { key: "throttles", label: "抑制", alert: true },
+        ]}
+      />
+      {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- A horizontally scrollable data table needs keyboard focus. */}
+      <section className={adminStyles.tableScroller} aria-label="Lambda関数状態" tabIndex={0}>
+        <table className={`${adminStyles.resourceTable} ${adminStyles.periodTable}`}>
+          <caption>{period === "hour" ? "直近1時間" : "直近24時間"}のLambda指標</caption>
+          <thead>
+            <tr>
+              <th scope="col">処理</th>
+              <th scope="col">呼出</th>
+              <th scope="col">エラー</th>
+              <th scope="col">抑制</th>
+              <th scope="col">p95最大</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {LAMBDA_RESOURCES.map((resource) => (
+              <tr key={resource.key}>
+                <th scope="row">
+                  {resource.label}
+                  <small className={adminStyles.resourceSubtext}>
+                    {metricValue(metrics, `${resource.key}_state`)} · 更新{" "}
+                    {metricValue(metrics, `${resource.key}_update`)}
+                  </small>
+                </th>
+                <td>{metricValue(metrics, `${resource.key}_${period}_invocations`)}</td>
+                <td
+                  data-alert={
+                    Number(metrics.get(`${resource.key}_${period}_errors`)?.value) > 0 || undefined
+                  }
+                >
+                  {metricValue(metrics, `${resource.key}_${period}_errors`)}
+                </td>
+                <td
+                  data-alert={
+                    Number(metrics.get(`${resource.key}_${period}_throttles`)?.value) > 0 ||
+                    undefined
+                  }
+                >
+                  {metricValue(metrics, `${resource.key}_${period}_throttles`)}
+                </td>
+                <td>{metricValue(metrics, `${resource.key}_${period}_duration`)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+      <p className={adminStyles.metricNote}>
+        状態は取得時点、件数は選択期間の合計です。p95最大は時間ごとのp95処理時間の最大値で、期間全体のp95ではありません。未実行時の時間は未取得です。
+      </p>
+    </>
   );
 }
 
@@ -1418,37 +1561,69 @@ function ApiGatewayMetrics({
   readonly metrics: readonly AdminStatusMetric[];
 }): React.JSX.Element {
   const metrics = metricLookup(source);
+  const [period, setPeriod] = useState<MetricPeriod>("hour");
   return (
-    <section className={adminStyles.tableScroller} aria-label="API Gateway状態" tabIndex={0}>
-      <table className={`${adminStyles.resourceTable} ${adminStyles.wideTable}`}>
-        <thead>
-          <tr>
-            <th scope="col">API</th>
-            <th scope="col">方式</th>
-            <th scope="col">自動反映</th>
-            <th scope="col">1時間の呼出</th>
-            <th scope="col">4xx</th>
-            <th scope="col">5xx</th>
-            <th scope="col">p95応答</th>
-            <th scope="col">p95連携</th>
-          </tr>
-        </thead>
-        <tbody>
-          {API_RESOURCES.map((resource) => (
-            <tr key={resource.key}>
-              <th scope="row">{resource.label}</th>
-              <td>{metricValue(metrics, `${resource.key}_protocol`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_auto_deploy`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_requests`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_4xx`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_5xx`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_latency`)}</td>
-              <td>{metricValue(metrics, `${resource.key}_hour_integration_latency`)}</td>
+    <>
+      <MetricPeriodSelector period={period} onChange={setPeriod} />
+      <RequestSummary
+        resources={API_RESOURCES}
+        metrics={metrics}
+        period={period}
+        counts={[
+          { key: "requests", label: "リクエスト合計" },
+          { key: "4xx", label: "4xx", alert: true },
+          { key: "5xx", label: "5xx", alert: true },
+        ]}
+      />
+      <section className={adminStyles.tableScroller} aria-label="API Gateway状態" tabIndex={0}>
+        <table className={`${adminStyles.resourceTable} ${adminStyles.periodTable}`}>
+          <caption>{period === "hour" ? "直近1時間" : "直近24時間"}のAPI指標</caption>
+          <thead>
+            <tr>
+              <th scope="col">API</th>
+              <th scope="col">呼出</th>
+              <th scope="col">4xx</th>
+              <th scope="col">5xx</th>
+              <th scope="col">p95応答最大</th>
+              <th scope="col">p95連携最大</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {API_RESOURCES.map((resource) => (
+              <tr key={resource.key}>
+                <th scope="row">
+                  {resource.label}
+                  <small className={adminStyles.resourceSubtext}>
+                    {metricValue(metrics, `${resource.key}_protocol`)} · 自動反映{" "}
+                    {metricValue(metrics, `${resource.key}_auto_deploy`)}
+                  </small>
+                </th>
+                <td>{metricValue(metrics, `${resource.key}_${period}_requests`)}</td>
+                <td
+                  data-alert={
+                    Number(metrics.get(`${resource.key}_${period}_4xx`)?.value) > 0 || undefined
+                  }
+                >
+                  {metricValue(metrics, `${resource.key}_${period}_4xx`)}
+                </td>
+                <td
+                  data-alert={
+                    Number(metrics.get(`${resource.key}_${period}_5xx`)?.value) > 0 || undefined
+                  }
+                >
+                  {metricValue(metrics, `${resource.key}_${period}_5xx`)}
+                </td>
+                <td>{metricValue(metrics, `${resource.key}_${period}_latency`)}</td>
+                <td>{metricValue(metrics, `${resource.key}_${period}_integration_latency`)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+      <p className={adminStyles.metricNote}>
+        件数は選択期間の合計、p95最大は時間ごとのp95の最大値です。4xxは認証・入力エラー等、5xxはサーバー側エラーです。
+      </p>
+    </>
   );
 }
 

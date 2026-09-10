@@ -304,7 +304,7 @@ class AwsAdminStatusSource:
             ("ecs", lambda: self._ecs_section(now)),
             ("ecr", self._ecr_section),
             ("inspector", self._inspector_section),
-            ("s3", self._s3_section),
+            ("s3", lambda: self._s3_section(now)),
             ("dynamodb", lambda: self._dynamodb_section(now)),
             ("lambda", lambda: self._lambda_section(now)),
             ("cloudfront", lambda: self._cloudfront_section(now)),
@@ -1034,9 +1034,10 @@ class AwsAdminStatusSource:
             details=AdminInspectorDetails(kind="inspector", images=tuple(image_results)),
         )
 
-    def _s3_section(self) -> AdminStatusSection:
+    def _s3_section(self, now: datetime) -> AdminStatusSection:
         metrics: list[AdminStatusMetric] = []
         warning = False
+        sizes = self._s3_storage_sizes(now)
         for label in _BUCKET_LABELS:
             name = self._config.buckets[label]
             versioning = self._s3.get_bucket_versioning(Bucket=name).get("Status")
@@ -1075,6 +1076,8 @@ class AwsAdminStatusSource:
                     _metric(f"{label}_versioning", versioning or "Disabled"),
                     _metric(f"{label}_encrypted", encrypted),
                     _metric(f"{label}_public_access_blocked", public_blocked),
+                    _metric(f"{label}_size_bytes", sizes[label][0]),
+                    _metric(f"{label}_size_updated_at", _timestamp(sizes[label][1])),
                 )
             )
             if label == "memorial_upload":
@@ -1101,9 +1104,83 @@ class AwsAdminStatusSource:
         return AdminStatusSection(
             service="s3",
             state="warning" if warning else "healthy",
-            summary="Bucket保護設定を確認しました。",
+            summary="Bucket保護設定と日次の容量を確認しました。"
+            if all(size is not None for size, _ in sizes.values())
+            else "Bucket保護設定を確認しました。一部の容量は未取得です。",
             metrics=tuple(metrics),
         )
+
+    def _s3_storage_sizes(self, now: datetime) -> dict[str, tuple[int | None, datetime | None]]:
+        # Sum storage types in CloudWatch, never enumerate bucket objects or versions.
+        sizes: dict[str, tuple[int | None, datetime | None]] = {
+            label: (None, None) for label in _BUCKET_LABELS
+        }
+        queries: list[dict[str, object]] = []
+        identities: dict[str, str] = {}
+        for index, label in enumerate(_BUCKET_LABELS):
+            bucket = self._config.buckets[label]
+            if re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket) is None:
+                return sizes
+            identifier = f"s{index}"
+            identities[identifier] = label
+            queries.append(
+                {
+                    "Id": identifier,
+                    "Expression": (
+                        "SUM(SEARCH('{AWS/S3,BucketName,StorageType} "
+                        f'MetricName="BucketSizeBytes" BucketName="{bucket}"'
+                        "', 'Average', 86400))"
+                    ),
+                    "ReturnData": True,
+                }
+            )
+        try:
+            response = self._cloudwatch.get_metric_data(
+                MetricDataQueries=queries,
+                StartTime=now - timedelta(days=3),
+                EndTime=now,
+                ScanBy="TimestampDescending",
+            )
+        except Exception:
+            # Capacity is supplementary; do not lose the bucket protection results.
+            return sizes
+        results = response.get("MetricDataResults")
+        if not isinstance(results, list) or response.get("NextToken") or response.get("Messages"):
+            return sizes
+        seen: set[str] = set()
+        for result in results:
+            if not isinstance(result, Mapping):
+                continue
+            identifier = result.get("Id")
+            if not isinstance(identifier, str) or identifier not in identities:
+                continue
+            if identifier in seen:
+                return {label: (None, None) for label in _BUCKET_LABELS}
+            seen.add(identifier)
+            values, timestamps = result.get("Values"), result.get("Timestamps")
+            if (
+                result.get("StatusCode") != "Complete"
+                or result.get("Messages")
+                or not isinstance(values, list)
+                or not isinstance(timestamps, list)
+                or len(values) != len(timestamps)
+            ):
+                continue
+            points = [
+                (timestamp, value)
+                for timestamp, value in zip(timestamps, values, strict=True)
+                if isinstance(timestamp, datetime)
+                and timestamp.tzinfo is not None
+                and now - timedelta(days=3) <= timestamp <= now
+                and not isinstance(value, bool)
+                and isinstance(value, (int, float))
+                and math.isfinite(value)
+                and value >= 0
+            ]
+            if points and len(points) == len(values):
+                timestamp, value = max(points)
+                sizes[identities[identifier]] = (math.ceil(value), timestamp)
+        return sizes
 
     def _dynamodb_section(self, now: datetime) -> AdminStatusSection:
         metrics: list[AdminStatusMetric] = []
@@ -1147,6 +1224,7 @@ class AwsAdminStatusSource:
                     _metric(f"{label}_deletion_protection", protected),
                     _metric(f"{label}_ttl", ttl_status or "DISABLED"),
                     _metric(f"{label}_item_count", _optional_integer(table.get("ItemCount"))),
+                    _metric(f"{label}_size_bytes", _optional_integer(table.get("TableSizeBytes"))),
                     _metric(f"{label}_read_throttles", throttles[(label, "read")]),
                     _metric(f"{label}_write_throttles", throttles[(label, "write")]),
                 )
@@ -1264,9 +1342,14 @@ class AwsAdminStatusSource:
                 )
             )
         provider_metrics, provider_metrics_complete = self._lambda_metrics(now)
+        day_metrics, day_complete = self._lambda_metrics(now, hours=24)
+        provider_metrics = (*provider_metrics, *day_metrics)
+        provider_metrics_complete = provider_metrics_complete and day_complete
         metrics.extend(provider_metrics)
         provider_warning = any(
-            metric.name.endswith(("_hour_errors", "_hour_throttles"))
+            metric.name.endswith(
+                ("_hour_errors", "_hour_throttles", "_day_errors", "_day_throttles")
+            )
             and isinstance(metric.value, int)
             and not isinstance(metric.value, bool)
             and metric.value > 0
@@ -1281,7 +1364,7 @@ class AwsAdminStatusSource:
             else "healthy",
             summary="一部の指標を取得できませんでした。"
             if not provider_metrics_complete
-            else "Lambda状態と直近1時間の指標を確認しました。",
+            else "Lambda状態と直近1時間・24時間の指標を確認しました。",
             metrics=tuple(metrics),
         )
 
@@ -1291,7 +1374,9 @@ class AwsAdminStatusSource:
         )
         return _optional_integer(value)
 
-    def _lambda_metrics(self, now: datetime) -> tuple[tuple[AdminStatusMetric, ...], bool]:
+    def _lambda_metrics(
+        self, now: datetime, *, hours: int = 1
+    ) -> tuple[tuple[AdminStatusMetric, ...], bool]:
         queries: list[dict[str, object]] = []
         identities: dict[str, tuple[str, str]] = {}
         counter = 0
@@ -1324,7 +1409,7 @@ class AwsAdminStatusSource:
             return (), False
         response = self._cloudwatch.get_metric_data(
             MetricDataQueries=queries,
-            StartTime=now - timedelta(hours=1),
+            StartTime=now - timedelta(hours=hours),
             EndTime=now,
             ScanBy="TimestampDescending",
         )
@@ -1356,16 +1441,18 @@ class AwsAdminStatusSource:
             if not samples:
                 values[identity] = None if identity[1] == "duration" else 0
                 continue
-            value = samples[0]
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or value < 0
-                or (identity[1] != "duration" and not float(value).is_integer())
+            if any(
+                isinstance(sample, bool)
+                or not isinstance(sample, (int, float))
+                or not math.isfinite(sample)
+                or sample < 0
+                or (identity[1] != "duration" and not float(sample).is_integer())
+                for sample in samples
             ):
                 provider_complete = False
                 continue
+            # Counts add across periods; percentiles must not be added or averaged.
+            value = max(samples) if identity[1] == "duration" else sum(samples)
             value = int(value) if identity[1] != "duration" else f"{value:.3f}"
             values[identity] = value
         for label in sorted(self._config.functions):
@@ -1379,7 +1466,9 @@ class AwsAdminStatusSource:
             if isinstance(invocations, int) and isinstance(errors, int) and errors > invocations:
                 provider_complete = False
         result_metrics = tuple(
-            _metric(f"{label}_hour_{metric}", values.get((label, metric)))
+            _metric(
+                f"{label}_{'hour' if hours == 1 else 'day'}_{metric}", values.get((label, metric))
+            )
             for label in sorted(self._config.functions)
             for metric in ("invocations", "errors", "throttles", "duration")
         )
@@ -1719,6 +1808,26 @@ class AwsAdminStatusSource:
                 )
             )
 
+        complete = True
+        for hours in (1, 24):
+            period_metrics, period_complete, period_warning = self._apigateway_metrics(
+                api_ids, now, hours=hours
+            )
+            metrics.extend(period_metrics)
+            complete = complete and period_complete
+            warning = warning or period_warning
+        return AdminStatusSection(
+            service="apigateway",
+            state="unknown" if not complete else "warning" if warning else "healthy",
+            summary="HTTP APIと直近1時間・24時間の応答を確認しました。"
+            if complete
+            else "一部のAPI指標を取得できませんでした。",
+            metrics=tuple(metrics),
+        )
+
+    def _apigateway_metrics(
+        self, api_ids: Mapping[str, str], now: datetime, *, hours: int
+    ) -> tuple[tuple[AdminStatusMetric, ...], bool, bool]:
         queries: list[dict[str, object]] = []
         identities: dict[str, tuple[str, str]] = {}
         counter = 0
@@ -1748,18 +1857,23 @@ class AwsAdminStatusSource:
                         "ReturnData": True,
                     }
                 )
-        samples, complete = self._metric_data_samples(queries=queries, now=now, hours=1)
+        samples, complete = self._metric_data_samples(queries=queries, now=now, hours=hours)
         values: dict[tuple[str, str], int | str | None] = {}
         for identifier, identity in identities.items():
-            metric_samples = samples.get(identifier, ())
+            metric_samples = samples.get(identifier)
+            if metric_samples is None:
+                values[identity] = None
+                continue
             if identity[1] in {"requests", "4xx", "5xx"}:
-                total = sum(metric_samples)
+                total = sum(metric_samples, 0.0)
                 if not total.is_integer():
                     complete = False
                     continue
                 values[identity] = int(total)
             else:
                 values[identity] = None if not metric_samples else f"{max(metric_samples):.3f}"
+        warning = False
+        metrics: list[AdminStatusMetric] = []
         for label in api_ids:
             requests = values.get((label, "requests"))
             errors_4xx = values.get((label, "4xx"))
@@ -1780,19 +1894,12 @@ class AwsAdminStatusSource:
                 complete = False
             warning = warning or (isinstance(errors_5xx, int) and errors_5xx > 0)
             metrics.extend(
-                _metric(f"{label}_hour_{name}", values.get((label, name)))
+                _metric(
+                    f"{label}_{'hour' if hours == 1 else 'day'}_{name}", values.get((label, name))
+                )
                 for name in ("requests", "4xx", "5xx", "latency", "integration_latency")
             )
-        return AdminStatusSection(
-            service="apigateway",
-            state="unknown" if not complete else "warning" if warning else "healthy",
-            summary=(
-                "一部のAPI指標を取得できませんでした。"
-                if not complete
-                else "HTTP APIと直近1時間の応答を確認しました。"
-            ),
-            metrics=tuple(metrics),
-        )
+        return tuple(metrics), complete, warning
 
     def _eventbridge_section(self, now: datetime) -> AdminStatusSection:
         rules_by_description: dict[str, Mapping[str, object]] = {}
