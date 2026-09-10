@@ -67,7 +67,7 @@ MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS: dict[ParticipantSlot, str] = {
     "participant-c": "participants/participant-c/memorial-reference.webp",
 }
 
-MEMORIAL_IMAGE_MODEL = "gpt-image-2"
+MEMORIAL_IMAGE_MODEL = "gpt-image-2.5-sunburst"
 MEMORIAL_TEXT_MODEL = "gpt-5.6-luna"
 MEMORIAL_IMAGE_SOURCE_WIDTH = 1920
 MEMORIAL_IMAGE_SOURCE_HEIGHT = 1088
