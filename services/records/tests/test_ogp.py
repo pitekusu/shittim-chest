@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import replace
 from datetime import datetime
@@ -16,7 +17,12 @@ from botocore.stub import Stubber
 from PIL import Image
 
 from shittim_records.ogp import RecordPreview, preview_text
-from shittim_records.ogp_adapters import META_ATTRIBUTES, PROFILE_ATTRIBUTES, AwsPreviewStore
+from shittim_records.ogp_adapters import (
+    META_ATTRIBUTES,
+    PROFILE_ATTRIBUTES,
+    AwsPreviewStore,
+    LambdaPreviewPreparer,
+)
 from shittim_records.ogp_http import PreviewService
 from shittim_records.ogp_render import PreviewRenderer
 
@@ -92,6 +98,51 @@ def test_public_html_escapes_preview_preserves_spa_assets_and_png_is_cached() ->
     assert service.handle({"recordId": PREVIEW.record_id}) == {"prepared": True}
     assert renderer.calls == 1
     assert service.handle(request(f"/records/{PREVIEW.record_id}", "HEAD"))["body"] == ""
+
+
+@pytest.mark.parametrize("denied", [False, True])
+def test_preparer_waits_for_generation_and_reports_access_denial_without_provider_details(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, denied: bool
+) -> None:
+    client = boto3.client(
+        "lambda",
+        region_name="ap-northeast-1",
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",  # noqa: S106 - offline Stubber credentials.
+    )
+
+    def create_client(*args: object, **kwargs: Any) -> Any:
+        assert kwargs["config"].read_timeout == 19
+        return client
+
+    monkeypatch.setattr("shittim_records.ogp_adapters.boto3.client", create_client)
+    body = BytesIO(b'{"prepared": true}')
+    with Stubber(client) as stub:
+        expected = {
+            "FunctionName": "preview:live",
+            "InvocationType": "RequestResponse",
+            "Payload": ('{"recordId": "' + PREVIEW.record_id + '"}').encode(),
+        }
+        if denied:
+            stub.add_client_error(
+                "invoke",
+                service_error_code="AccessDeniedException",
+                service_message="private-provider-detail",
+                http_status_code=403,
+                expected_params=expected,
+            )
+        else:
+            stub.add_response("invoke", {"StatusCode": 200, "Payload": body}, expected)
+        preparer = LambdaPreviewPreparer("preview:live")
+        if denied:
+            with pytest.raises(ValueError, match="preview preparation unavailable") as caught:
+                asyncio.run(preparer.prepare(PREVIEW.record_id))
+            assert "preview_preparation_access_denied" in caplog.text
+            assert "private-provider-detail" not in caplog.text + str(caught.value)
+        else:
+            assert asyncio.run(preparer.prepare(PREVIEW.record_id)) is None
+            assert body.closed
+        stub.assert_no_pending_responses()
 
 
 def test_failure_falls_back_without_long_caching_or_internal_http_route() -> None:

@@ -1124,7 +1124,18 @@ describe("RecordsApplicationStack", () => {
     expect(writes).toHaveLength(1);
     expect(JSON.stringify(writes)).toContain("ogp/records/*");
     const projector = policies.find(([id]) => id.startsWith("ProjectorFunctionRole"))![1];
-    expect(JSON.stringify(projector)).toContain("records-ogp:live");
+    const invocations = (projector.Properties.PolicyDocument.Statement as PolicyStatement[])
+      .filter((statement) => actionsOf(statement).includes("lambda:InvokeFunction"));
+    expect(invocations).toEqual([{
+      Effect: "Allow",
+      Action: "lambda:InvokeFunction",
+      Resource: {
+        "Fn::Join": ["", [
+          "arn:", { Ref: "AWS::Partition" },
+          ":lambda:ap-northeast-1:000000000000:function:shittim-chest-production-records-ogp:live",
+        ]],
+      },
+    }]);
     expect(JSON.stringify(projector)).not.toContain("ogp/records/*");
     for (const route of ["GET /records/{recordId}", "HEAD /records/{recordId}", "GET /og/records/{recordId}/{version}", "HEAD /og/records/{recordId}/{version}"]) {
       template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: route });

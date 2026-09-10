@@ -690,7 +690,7 @@ export class RecordsApplicationStack extends Stack {
     this.projectorFunction.addEnvironment("OGP_FUNCTION_NAME", `${OGP_FUNCTION_NAME}:live`);
     this.projectorFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ["lambda:InvokeFunction"],
-      resources: [this.formatArn({ service: "lambda", resource: "function", resourceName: `${OGP_FUNCTION_NAME}:live` })],
+      resources: [this.formatArn({ service: "lambda", resource: "function", resourceName: `${OGP_FUNCTION_NAME}:live`, arnFormat: ArnFormat.COLON_RESOURCE_NAME })],
     }));
     this.readFunction = this.httpFunctionWithRole({
       id: "ReadFunction",

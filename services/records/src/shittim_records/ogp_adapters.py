@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from concurrent.futures import Future
 from datetime import datetime
@@ -14,7 +15,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from shittim_records.ogp import RECORD_ID, RecordPreview
+from shittim_records.ogp import PREVIEW_PREPARATION_TIMEOUT_SECONDS, RECORD_ID, RecordPreview
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
@@ -164,7 +165,7 @@ class AwsPreviewStore:
 
 
 class LambdaPreviewPreparer:
-    """At most five seconds of caller waiting, without asyncio executor shutdown waits."""
+    """Bound preparation waiting without asyncio executor shutdown waits."""
 
     def __init__(self, function_name: str) -> None:
         self.function_name = function_name
@@ -172,7 +173,7 @@ class LambdaPreviewPreparer:
             "lambda",
             config=Config(
                 connect_timeout=1,
-                read_timeout=4,
+                read_timeout=PREVIEW_PREPARATION_TIMEOUT_SECONDS - 1,
                 retries={"total_max_attempts": 1},
             ),
         )
@@ -194,11 +195,19 @@ class LambdaPreviewPreparer:
                 if response.get("FunctionError") or prepared != {"prepared": True}:
                     raise ValueError("preview preparation unavailable")
                 result.set_result(None)
-            except Exception:
+            except Exception as error:
+                if isinstance(error, ClientError) and error.response["Error"]["Code"] in {
+                    "AccessDeniedException",
+                    "AccessDenied",
+                }:
+                    # The provider's error message can contain resource details; omit it.
+                    logging.getLogger(__name__).warning("preview_preparation_access_denied")
                 result.set_exception(ValueError("preview preparation unavailable"))
 
         Thread(target=invoke, daemon=True).start()
-        await asyncio.wait_for(asyncio.wrap_future(result), timeout=5)
+        await asyncio.wait_for(
+            asyncio.wrap_future(result), timeout=PREVIEW_PREPARATION_TIMEOUT_SECONDS
+        )
 
 
 def _text(item: dict[str, Any], key: str) -> str:
