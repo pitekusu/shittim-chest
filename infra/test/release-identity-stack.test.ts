@@ -38,6 +38,32 @@ function synthesize(): {
 }
 
 describe("ReleaseIdentityStack", () => {
+  test("limits bundle deletion to versioned ZIPs for each production deploy role", () => {
+    const { template } = synthesize();
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const deletionPolicies = policies.filter((policy) =>
+      JSON.stringify(policy).includes("s3:DeleteObjectVersion"),
+    );
+    expect(deletionPolicies).toHaveLength(2);
+    for (const policy of deletionPolicies) {
+      const roles = JSON.stringify(policy.Properties.Roles);
+      expect(roles).toMatch(/RecordsDeployRole|ReleaseDeployRole/);
+      const statement = policy.Properties.PolicyDocument.Statement.find(
+        (entry: { Action: string | string[] }) =>
+          [entry.Action].flat().includes("s3:DeleteObjectVersion"),
+      );
+      expect([statement.Action].flat()).toEqual(["s3:DeleteObjectVersion"]);
+      const resource = JSON.stringify(statement.Resource);
+      expect(resource).toContain("cdk-hnb659fds-assets-");
+      expect(resource).toContain("ap-northeast-1/");
+      expect(resource).toContain("?".repeat(64));
+      expect(resource).toContain(roles.includes("RecordsDeployRole")
+        ? `${"?".repeat(64)}.zip` : "/shittim-chest-lambda-arm64.zip");
+      expect(resource).not.toContain(".json");
+      expect(JSON.stringify(policy)).not.toContain("s3:BypassGovernanceRetention");
+    }
+  });
+
   test("reuses the account GitHub provider for responsibility-separated release roles", () => {
     const { template } = synthesize();
 
@@ -296,7 +322,7 @@ describe("ReleaseIdentityStack", () => {
     expect(deploy).not.toContain("cloudformation:CreateChangeSet");
     expect(deploy).not.toContain("ecr:PutImage");
     expect(deploy).not.toContain("sts:AssumeRole");
-    expect(deploy).not.toContain("cloudformation:GetTemplate");
+    expect(deploy).toContain("cloudformation:GetTemplate");
     expect(stackDriftStatement?.Action).toEqual([
       "cloudformation:DescribeStacks",
       "cloudformation:DetectStackDrift",

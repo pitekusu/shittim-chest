@@ -978,3 +978,12 @@ jobs:
               exit 1
             fi
           done
+      - name: Retain three Records deployment bundles
+        if: success()
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          plan=$(uv run --project services/records --frozen python tools/prune_release_bundles.py --family records --account-id "${account}")
+          echo "${plan}"
+          digest=$(jq --exit-status --raw-output .plan_sha256 <<< "${plan}")
+          uv run --project services/records --frozen python tools/prune_release_bundles.py --family records --account-id "${account}" \
+            --apply --expected-plan-sha256 "${digest}"

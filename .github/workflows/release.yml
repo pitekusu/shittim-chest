@@ -1552,6 +1552,15 @@ jobs:
             > "${RUNNER_TEMP}/release/control-schema-release.next.json"
           mv "${RUNNER_TEMP}/release/control-schema-release.next.json" \
             "${RUNNER_TEMP}/release/control-schema-release.json"
+      - name: Retain three Core deployment bundles
+        if: success()
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          plan=$(uv run --frozen python -m tools.prune_release_bundles --family core --account-id "${account}")
+          echo "${plan}"
+          digest=$(jq --exit-status --raw-output .plan_sha256 <<< "${plan}")
+          uv run --frozen python -m tools.prune_release_bundles --family core --account-id "${account}" \
+            --apply --expected-plan-sha256 "${digest}"
       - name: Retain deployment lock evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

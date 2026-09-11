@@ -184,6 +184,8 @@ export class ReleaseIdentityStack extends Stack {
     this.grantRecordsDeployPermissions();
     this.grantRecordsBackfillPermissions();
     this.grantRecordsDriftPermissions();
+    this.grantBundleRetentionPermissions(this.deployRole, "core");
+    this.grantBundleRetentionPermissions(this.recordsDeployRole, "records");
 
     new CfnOutput(this, "PlanRoleArn", { value: this.planRole.roleArn });
     new CfnOutput(this, "DeployRoleArn", { value: this.deployRole.roleArn });
@@ -713,6 +715,33 @@ export class ReleaseIdentityStack extends Stack {
       "AwsSolutions-IAM5[Resource::*]",
       ...this.stackWildcardAcknowledgments(DRIFT_STACK_NAMES),
     ]);
+  }
+
+  private grantBundleRetentionPermissions(role: iam.Role, family: "core" | "records"): void {
+    const bucketArn = `arn:aws:s3:::cdk-hnb659fds-assets-${Aws.ACCOUNT_ID}-${TOKYO_REGION}`;
+    const hash = "?".repeat(64);
+    const key = family === "core"
+      ? `lambda/shittim-chest/${hash}/shittim-chest-lambda-arm64.zip`
+      : `${hash}.zip`;
+    const stacks = ["ShittimChest-Prod-Runtime", "ShittimChest-Prod-RecordsApplication"];
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["s3:GetBucketVersioning", "s3:ListBucketVersions"],
+      resources: [bucketArn],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["s3:DeleteObjectVersion"],
+      resources: [`${bucketArn}/${key}`],
+    }));
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ["cloudformation:DescribeStacks", "cloudformation:GetTemplate", "cloudformation:ListChangeSets"],
+      conditions: { StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID } },
+      resources: this.stackArns(stacks),
+    }));
+    this.acknowledgeRoleWildcards(role, this.stackWildcardAcknowledgments(stacks));
+    role.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, {
+      [`AwsSolutions-IAM5[Resource::arn:aws:s3:::cdk-hnb659fds-assets-<AWS::AccountId>-${TOKYO_REGION}/${key}]`]:
+        "Only explicit versions of this release family's content-addressed ZIPs may be removed after deployment; JSON templates and other buckets are excluded.",
+    });
   }
 
   private stackArns(names: readonly string[]): string[] {
