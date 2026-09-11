@@ -216,6 +216,7 @@ const adminFunctionKeys = [
   "records_backfill",
   "records_auth",
   "records_read",
+  "records_ogp",
   "records_ranking",
   "records_cost",
   "records_inspector_translation",
@@ -379,18 +380,22 @@ const adminStatus = {
     {
       service: "s3",
       state: "healthy",
-      summary: "Bucket保護設定を確認しました。",
+      summary: "Bucket保護設定と日次の容量を確認しました。",
       metrics: [
         ...["web", "media", "release"].flatMap((key) => [
           { name: `${key}_versioning`, value: "Enabled" },
           { name: `${key}_encrypted`, value: true },
           { name: `${key}_public_access_blocked`, value: true },
+          { name: `${key}_size_bytes`, value: key === "release" ? 1_800_000_000 : 23_400_000 },
+          { name: `${key}_size_updated_at`, value: "2026-08-26T00:00:00Z" },
         ]),
         { name: "memorial_upload_versioning", value: "Disabled" },
         { name: "memorial_upload_encrypted", value: true },
         { name: "memorial_upload_public_access_blocked", value: true },
         { name: "memorial_upload_expiration_days", value: 1 },
         { name: "memorial_upload_abort_days", value: 1 },
+        { name: "memorial_upload_size_bytes", value: 0 },
+        { name: "memorial_upload_size_updated_at", value: "2026-08-26T00:00:00Z" },
       ],
     },
     {
@@ -404,6 +409,7 @@ const adminStatus = {
           { name: `${key}_deletion_protection`, value: true },
           { name: `${key}_ttl`, value: key === "session" ? "ENABLED" : "DISABLED" },
           { name: `${key}_item_count`, value: [2231, 684, 12, 7][index] },
+          { name: `${key}_size_bytes`, value: [12_500_000, 86_000_000, 720_000, 2048][index] },
           { name: `${key}_read_throttles`, value: 0 },
           { name: `${key}_write_throttles`, value: 0 },
         ]),
@@ -420,8 +426,8 @@ const adminStatus = {
     },
     {
       service: "lambda",
-      state: "healthy",
-      summary: "Lambda状態と直近1時間の指標を確認しました。",
+      state: "warning",
+      summary: "Lambda状態と直近1時間・24時間の指標を確認しました。",
       metrics: adminFunctionKeys.flatMap((key, index) => [
         { name: `${key}_state`, value: "Active" },
         { name: `${key}_update`, value: "Successful" },
@@ -429,6 +435,10 @@ const adminStatus = {
         { name: `${key}_hour_errors`, value: 0 },
         { name: `${key}_hour_throttles`, value: 0 },
         { name: `${key}_hour_duration`, value: index % 3 === 0 ? "42.180" : null },
+        { name: `${key}_day_invocations`, value: 60 + index * 12 },
+        { name: `${key}_day_errors`, value: key === "records_admin_status" ? 2 : 0 },
+        { name: `${key}_day_throttles`, value: key === "records_admin_status" ? 1 : 0 },
+        { name: `${key}_day_duration`, value: "122.400" },
       ]),
     },
     {
@@ -482,6 +492,11 @@ const adminStatus = {
         { name: `${key}_hour_4xx`, value: 0 },
         { name: `${key}_hour_5xx`, value: 0 },
         { name: `${key}_hour_latency`, value: index === 0 ? "44.500" : "86.125" },
+        { name: `${key}_day_requests`, value: 360 + index * 480 },
+        { name: `${key}_day_4xx`, value: index === 0 ? 0 : 12 },
+        { name: `${key}_day_5xx`, value: 0 },
+        { name: `${key}_day_latency`, value: "146.125" },
+        { name: `${key}_day_integration_latency`, value: "110.250" },
         {
           name: `${key}_hour_integration_latency`,
           value: index === 0 ? "31.250" : "62.500",
@@ -2275,7 +2290,9 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(page.getByText("libexample", { exact: true })).toBeVisible();
   await expect(page.getByText("1.2.3-4", { exact: true })).toBeVisible();
   await expect(page.getByText("重大・高の脆弱性は検出されていません。")).toBeVisible();
+  await page.getByText("保護設定・自動削除を確認", { exact: true }).click();
   await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
+  await page.getByText("テーブル状態・保護設定を確認", { exact: true }).click();
   await expect(page.getByRole("region", { name: "DynamoDBテーブル状態" })).toBeVisible();
   const translationCache = page.getByRole("region", { name: "脆弱性概要翻訳キャッシュ" });
   await expect(translationCache).toBeVisible();
@@ -2289,8 +2306,8 @@ test("service status page presents localized visual status", async ({ page }, te
   const dynamodbCard = page.locator("#admin-service-dynamodb");
   await expect(dynamodbCard.getByRole("region", { name: "親愛度データ" })).toBeVisible();
   await expect(dynamodbCard).toContainText("プロフィール7 人");
-  await expect(page.getByRole("rowheader", { name: "記録・親愛度投影" })).toBeVisible();
-  await expect(page.getByRole("rowheader", { name: "ランキング・親愛度集計" })).toHaveCount(2);
+  await expect(page.getByRole("rowheader", { name: /^記録・親愛度投影/ })).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: /^ランキング・親愛度集計/ })).toHaveCount(2);
   await expect(page.getByText("非同期処理・失敗イベント", { exact: true })).toBeVisible();
   await expect(page.getByText("メモリアル生成待ち", { exact: true })).toBeVisible();
   await expect(page.getByText("生成DLQ・未処理", { exact: true })).toBeVisible();
@@ -2308,11 +2325,30 @@ test("service status page presents localized visual status", async ({ page }, te
     /^Delogy/u,
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect(await dynamodbCard.evaluate((element) => element.scrollLeft)).toBe(0);
+  await page.getByText("保護設定・自動削除を確認", { exact: true }).click();
+  await page.getByText("テーブル状態・保護設定を確認", { exact: true }).click();
+  await page
+    .locator("#admin-service-lambda")
+    .getByRole("button", { name: "直近24時間", exact: true })
+    .click();
+  await expect(page.getByRole("table", { name: "直近24時間のLambda指標" })).toBeVisible();
+  await page
+    .locator("#admin-service-apigateway")
+    .getByRole("button", { name: "直近24時間", exact: true })
+    .click();
+  await expect(page.getByRole("table", { name: "直近24時間のAPI指標" })).toBeVisible();
   await expect(page).toHaveScreenshot("admin-console-dark.png", {
     animations: "disabled",
     fullPage: true,
     maxDiffPixels: 20,
   });
+  for (const service of ["s3", "dynamodb", "lambda", "apigateway"]) {
+    await page.locator(`#admin-service-${service}`).screenshot({
+      path: testInfo.outputPath(`${service}-desktop.png`),
+      animations: "disabled",
+    });
+  }
   await sectionNavigation.getByRole("link", { name: "DynamoDB" }).click();
   await expect(page).toHaveURL(/#admin-service-dynamodb$/u);
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
@@ -2320,7 +2356,7 @@ test("service status page presents localized visual status", async ({ page }, te
 
 test("service status page contains wide status tables on mobile", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 320, height: 844 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
   await mockAuthenticatedApi(page, detail, true);
 
@@ -2329,14 +2365,40 @@ test("service status page contains wide status tables on mobile", async ({ page 
   await expect(page.getByRole("heading", { name: "サービス状態確認" })).toBeVisible();
   await expect(page.getByRole("region", { name: "タグ付きECRイメージ" })).toBeVisible();
   await expect(page.getByText("CVE-2026-12345", { exact: true })).toBeVisible();
+  await page.getByText("保護設定・自動削除を確認", { exact: true }).click();
   await expect(page.getByRole("region", { name: "S3保護設定" })).toBeVisible();
   await expect(page.getByRole("region", { name: "親愛度データ" })).toBeVisible();
+  await page.getByText("保護設定・自動削除を確認", { exact: true }).click();
+  for (const service of ["lambda", "apigateway"]) {
+    const periodButton = page
+      .locator(`#admin-service-${service}`)
+      .getByRole("button", { name: "直近24時間", exact: true });
+    await periodButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(periodButton).toHaveAttribute("aria-pressed", "true");
+  }
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
   }));
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect(await page.locator("#admin-service-s3").evaluate((element) => element.scrollLeft)).toBe(0);
+  await page.locator("#admin-service-lambda").screenshot({
+    path: testInfo.outputPath("lambda-mobile-dark.png"),
+    animations: "disabled",
+  });
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+  // Check the changed card content; existing header badges are outside this change.
+  const lightCards = new AxeBuilder({ page }).exclude("header");
+  for (const service of ["s3", "dynamodb", "lambda", "apigateway"]) {
+    lightCards.include(`#admin-service-${service}`);
+  }
+  expect((await lightCards.analyze()).violations).toEqual([]);
+  await page.locator("#admin-service-s3").screenshot({
+    path: testInfo.outputPath("s3-mobile-light.png"),
+    animations: "disabled",
+  });
 });
 
 test("prompt management supports safe editing, history, and responsive layout", async ({

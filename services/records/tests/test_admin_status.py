@@ -194,6 +194,7 @@ class DynamoTables(HealthyAffectionCheckpoints):
             "TableStatus": "ACTIVE",
             "DeletionProtectionEnabled": True,
             "ItemCount": 4,
+            "TableSizeBytes": 2048,
         }
         if TableName == configuration().tables["debate"]:
             table["StreamSpecification"] = {
@@ -675,6 +676,7 @@ def test_dynamodb_includes_stream_and_one_hour_throttles() -> None:
     assert values["affection_profile_count"] == 7
     assert values["affection_seed_complete"] is True
     for label in ("debate", "archive", "statistics", "session"):
+        assert values[f"{label}_size_bytes"] == 2048
         assert values[f"{label}_read_throttles"] == 1
         assert values[f"{label}_write_throttles"] == 1
         assert configuration().tables[label] not in section.model_dump_json()
@@ -1187,8 +1189,8 @@ def test_s3_accepts_non_versioned_one_day_memorial_upload_lifecycle() -> None:
                 ]
             }
 
-    healthy = source(s3=S3())._s3_section()
-    warning = source(s3=S3(expiration_days=2))._s3_section()
+    healthy = source(s3=S3())._s3_section(NOW)
+    warning = source(s3=S3(expiration_days=2))._s3_section(NOW)
 
     assert healthy.state == "healthy"
     assert metrics(healthy)["memorial_upload_versioning"] == "Disabled"
@@ -1227,6 +1229,66 @@ def test_lambda_section_treats_complete_empty_idle_metrics_as_zero() -> None:
     assert values["auth_hour_errors"] == 0
     assert values["auth_hour_throttles"] == 0
     assert values["auth_hour_duration"] is None
+    assert values["auth_day_invocations"] == 0
+    assert values["auth_day_duration"] is None
+
+
+def test_lambda_day_totals_all_samples_and_keeps_maximum_hourly_percentile() -> None:
+    class DailyCloudWatch(CloudWatch):
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            hours = (kwargs["EndTime"] - kwargs["StartTime"]).total_seconds() / 3600
+            self.samples = {
+                "Invocations": [2.0, 7.0] if hours == 24 else [2.0],
+                "Errors": [1.0] if hours == 24 else [],
+                "Duration": [12.5, 25.0] if hours == 24 else [12.5],
+            }
+            return super().get_metric_data(**kwargs)
+
+    section = source(lambda_client=Lambda(), cloudwatch=DailyCloudWatch())._lambda_section(NOW)
+    values = metrics(section)
+    assert section.state == "warning"
+    assert values["auth_hour_invocations"] == 2
+    assert values["auth_day_invocations"] == 9
+    assert values["auth_day_errors"] == 1
+    assert values["auth_day_duration"] == "25.000"
+
+
+@pytest.mark.parametrize("failure", [None, "partial", "missing", "stale", "api_error"])
+def test_s3_capacity_uses_latest_daily_total_or_unknown(failure: str | None) -> None:
+    class StorageCloudWatch:
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            if failure == "api_error":
+                raise RuntimeError("unavailable")
+            assert kwargs["StartTime"] == NOW - timedelta(days=3)
+            queries = kwargs["MetricDataQueries"]
+            assert len(queries) == 4
+            for label, query in zip(
+                ("web", "media", "release", "memorial_upload"), queries, strict=True
+            ):
+                assert f'BucketName="{configuration().buckets[label]}"' in query["Expression"]
+                assert 'MetricName="BucketSizeBytes"' in query["Expression"]
+                assert query["Expression"].startswith("SUM(SEARCH(")
+            return {
+                "MetricDataResults": [
+                    {
+                        "Id": query["Id"],
+                        "StatusCode": "PartialData" if failure == "partial" else "Complete",
+                        "Values": [] if failure == "missing" else [100.0, 0.0],
+                        "Timestamps": []
+                        if failure == "missing"
+                        else [
+                            NOW - timedelta(days=2),
+                            NOW - timedelta(days=1 if failure != "stale" else 4),
+                        ],
+                    }
+                    for query in queries
+                ]
+            }
+
+    sizes = source(cloudwatch=StorageCloudWatch())._s3_storage_sizes(NOW)
+    for size, updated_at in sizes.values():
+        assert size == (0 if failure is None else None)
+        assert updated_at == (NOW - timedelta(days=1) if failure is None else None)
 
 
 def test_lambda_section_requires_duration_when_invocations_exist() -> None:
@@ -1496,9 +1558,40 @@ def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
 
     assert section.state == "healthy"
     assert values["discord_hour_requests"] == 10
+    assert values["discord_day_requests"] == 10
     assert values["records_hour_5xx"] == 0
     assert "discord-id" not in section.model_dump_json()
     assert "records-id" not in section.model_dump_json()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_api_day_aggregation_does_not_turn_missing_results_into_zero(missing: bool) -> None:
+    class ApiMetrics:
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["EndTime"] - kwargs["StartTime"] == timedelta(hours=24)
+            return {
+                "MetricDataResults": [
+                    {
+                        "Id": query["Id"],
+                        "StatusCode": "Complete",
+                        "Values": [2.0, 3.0]
+                        if query["MetricStat"]["Metric"]["MetricName"] == "Count"
+                        else [1.0]
+                        if query["MetricStat"]["Metric"]["MetricName"] == "5XXError"
+                        else [0.0],
+                    }
+                    for query in kwargs["MetricDataQueries"]
+                    if not missing or query["MetricStat"]["Metric"]["MetricName"] != "Count"
+                ]
+            }
+
+    result, complete, warning = source(cloudwatch=ApiMetrics())._apigateway_metrics(
+        {"records": "test-api"}, NOW, hours=24
+    )
+    values = {metric.name: metric.value for metric in result}
+    assert values["records_day_requests"] == (None if missing else 5)
+    assert complete is not missing
+    assert warning is True
 
 
 def test_stack_resource_lookup_does_not_reuse_replaced_physical_ids() -> None:

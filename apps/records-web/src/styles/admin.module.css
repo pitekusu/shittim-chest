@@ -249,7 +249,7 @@
   align-items: center;
   gap: 18px;
   padding: 20px;
-  overflow: hidden;
+  overflow: clip;
   border: 1px solid var(--records-line-strong);
   border-radius: 22px;
   background:
@@ -850,6 +850,130 @@
   border-collapse: collapse;
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
+}
+
+.storageOverview,
+.requestSummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr));
+  gap: 10px;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.storageOverview > div,
+.requestSummary > div {
+  border: 1px solid var(--records-line);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--records-control-background-soft);
+}
+
+.storageOverview dt,
+.requestSummary dt {
+  font-size: 0.75rem;
+  color: var(--records-ink-600);
+}
+
+.storageOverview dd,
+.requestSummary dd {
+  margin: 6px 0 0;
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+
+.metricNote,
+.storageOverview dd.metricNote {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.65;
+  color: var(--records-ink-600);
+}
+
+.serviceDisclosure {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--records-line);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.serviceDisclosure > summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.serviceDisclosure[open] > summary {
+  margin-bottom: 12px;
+}
+
+.periodSelector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.periodSelector legend {
+  margin-bottom: 8px;
+  font-size: 0.72rem;
+  color: var(--records-ink-600);
+}
+
+.periodSelector button {
+  min-height: 40px;
+  padding: 8px 18px;
+  border: 1px solid var(--records-line);
+  border-radius: 999px;
+  color: var(--records-ink-900);
+  background: var(--records-control-background-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.periodSelector button[aria-pressed="true"] {
+  border-color: var(--records-cyan-ink);
+  box-shadow: inset 0 0 0 1px var(--records-cyan-ink);
+  font-weight: 800;
+}
+
+.periodSelector button:focus-visible,
+.serviceDisclosure > summary:focus-visible {
+  outline: 2px solid var(--records-cyan-ink);
+  outline-offset: 4px;
+}
+
+.periodTable {
+  min-width: 560px;
+}
+
+.periodTable caption {
+  text-align: left;
+  padding: 0 0 10px;
+  color: var(--records-ink-600);
+}
+
+.periodTable tbody th {
+  min-width: 145px;
+}
+
+.resourceSubtext {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.65rem;
+  font-weight: 400;
+  color: var(--records-ink-600);
+}
+
+.requestSummary [data-alert="true"],
+.periodTable [data-alert="true"] {
+  color: var(--records-pink-ink);
+  font-weight: 800;
 }
 
 .wideTable,
