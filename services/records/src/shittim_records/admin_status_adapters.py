@@ -1111,13 +1111,24 @@ class AwsAdminStatusSource:
         )
 
     def _s3_storage_sizes(self, now: datetime) -> dict[str, tuple[int | None, datetime | None]]:
+        # RecordsEdge owns the Web bucket in us-east-1; all other buckets are in Tokyo.
+        return {
+            **self._s3_region_storage_sizes(now, ("web",), self._cloudwatch_global),
+            **self._s3_region_storage_sizes(
+                now, ("media", "release", "memorial_upload"), self._cloudwatch
+            ),
+        }
+
+    def _s3_region_storage_sizes(
+        self, now: datetime, labels: tuple[str, ...], cloudwatch: Any
+    ) -> dict[str, tuple[int | None, datetime | None]]:
         # Sum storage types in CloudWatch, never enumerate bucket objects or versions.
         sizes: dict[str, tuple[int | None, datetime | None]] = {
-            label: (None, None) for label in _BUCKET_LABELS
+            label: (None, None) for label in labels
         }
         queries: list[dict[str, object]] = []
         identities: dict[str, str] = {}
-        for index, label in enumerate(_BUCKET_LABELS):
+        for index, label in enumerate(labels):
             bucket = self._config.buckets[label]
             if re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket) is None:
                 return sizes
@@ -1135,7 +1146,7 @@ class AwsAdminStatusSource:
                 }
             )
         try:
-            response = self._cloudwatch.get_metric_data(
+            response = cloudwatch.get_metric_data(
                 MetricDataQueries=queries,
                 StartTime=now - timedelta(days=3),
                 EndTime=now,
@@ -1155,7 +1166,7 @@ class AwsAdminStatusSource:
             if not isinstance(identifier, str) or identifier not in identities:
                 continue
             if identifier in seen:
-                return {label: (None, None) for label in _BUCKET_LABELS}
+                return {label: (None, None) for label in labels}
             seen.add(identifier)
             values, timestamps = result.get("Values"), result.get("Timestamps")
             if (

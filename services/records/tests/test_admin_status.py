@@ -1261,10 +1261,9 @@ def test_s3_capacity_uses_latest_daily_total_or_unknown(failure: str | None) -> 
                 raise RuntimeError("unavailable")
             assert kwargs["StartTime"] == NOW - timedelta(days=3)
             queries = kwargs["MetricDataQueries"]
-            assert len(queries) == 4
-            for label, query in zip(
-                ("web", "media", "release", "memorial_upload"), queries, strict=True
-            ):
+            assert len(queries) in {1, 3}
+            labels = ("web",) if len(queries) == 1 else ("media", "release", "memorial_upload")
+            for label, query in zip(labels, queries, strict=True):
                 assert f'BucketName="{configuration().buckets[label]}"' in query["Expression"]
                 assert 'MetricName="BucketSizeBytes"' in query["Expression"]
                 assert query["Expression"].startswith("SUM(SEARCH(")
@@ -1289,6 +1288,36 @@ def test_s3_capacity_uses_latest_daily_total_or_unknown(failure: str | None) -> 
     for size, updated_at in sizes.values():
         assert size == (0 if failure is None else None)
         assert updated_at == (NOW - timedelta(days=1) if failure is None else None)
+
+
+def test_s3_capacity_routes_web_to_global_cloudwatch() -> None:
+    class RegionCloudWatch:
+        def __init__(self, labels: tuple[str, ...], size: int) -> None:
+            self.labels = labels
+            self.size = size
+
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            queries = kwargs["MetricDataQueries"]
+            for label, query in zip(self.labels, queries, strict=True):
+                assert f'BucketName="{configuration().buckets[label]}"' in query["Expression"]
+            return {
+                "MetricDataResults": [
+                    {
+                        "Id": query["Id"],
+                        "StatusCode": "Complete",
+                        "Values": [self.size],
+                        "Timestamps": [NOW - timedelta(days=1)],
+                    }
+                    for query in queries
+                ]
+            }
+
+    sizes = source(
+        cloudwatch_global=RegionCloudWatch(("web",), 123),
+        cloudwatch=RegionCloudWatch(("media", "release", "memorial_upload"), 456),
+    )._s3_storage_sizes(NOW)
+    assert sizes["web"][0] == 123
+    assert all(sizes[label][0] == 456 for label in ("media", "release", "memorial_upload"))
 
 
 def test_lambda_section_requires_duration_when_invocations_exist() -> None:
