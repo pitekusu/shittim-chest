@@ -732,6 +732,12 @@ export class ReleaseIdentityStack extends Stack {
       actions: ["s3:DeleteObjectVersion"],
       resources: [`${bucketArn}/${key}`],
     }));
+    if (family === "records") {
+      role.addToPolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObjectVersion"],
+        resources: [`${bucketArn}/${key}`],
+      }));
+    }
     role.addToPolicy(new iam.PolicyStatement({
       actions: ["cloudformation:DescribeStacks", "cloudformation:GetTemplate", "cloudformation:ListChangeSets"],
       conditions: { StringEquals: { "aws:ResourceAccount": Aws.ACCOUNT_ID } },

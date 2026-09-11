@@ -133,6 +133,8 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
 同じキーの再アップロードは世代に数えず、使わない旧オブジェクトバージョンも削除する。
 世代の順序はZIPの最新登録日時とするため、配信前に作られたZIPも直近の候補に含まれる。
 本番CloudFormationが参照するキー・バージョンは常に保護し、Core補助LambdaのZIPはRecordsの世代数に含めない。
+Recordsは配布ZIP内の`shittim_records/__init__.py`の存在で識別し、参照が外れた古いCore補助ZIPも除外する。
+ZIPはVersionIdを固定してメモリ内で読み、ファイルを展開・実行・ログ出力しない。128 MiB超過や破損時は整理を停止する。
 JSONテンプレート、Web配信アセット、ECRイメージ、利用者データはこの整理の対象外である。
 
 `tools/prune_release_bundles.py`を、各リリースの配信・検証が成功した後に実行する。
@@ -143,6 +145,7 @@ dry-runの計画ハッシュを再照合してから、正確なキーとVersion
 
 事前にReleaseIdentityへ、配信ロールごとの対象ZIPに限定した`DeleteObjectVersion`、
 バケットのバージョン一覧・設定読取、両スタックの参照確認権限を反映する。
+Records配信ロールには、分類のため同じZIP範囲だけの`GetObjectVersion`も許可する。
 バケット削除、保持ロック回避、テンプレート削除の権限は追加しない。
 
 ```mermaid

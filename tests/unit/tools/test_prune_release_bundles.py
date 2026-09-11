@@ -2,10 +2,14 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from unittest.mock import Mock
+from zipfile import ZipFile
 
 import pytest
 from tools import prune_release_bundles as cleanup
+
+RECORDS_KEYS = {f"{index:064x}.zip" for index in range(1, 6)}
 
 
 def version(number: int, family: str = "records", *, latest: bool = True) -> cleanup.Version:
@@ -35,7 +39,7 @@ def sample() -> tuple[list[cleanup.Version], dict[str, set[tuple[str, str | None
 @pytest.mark.parametrize("family", ["core", "records"])
 def test_keeps_current_and_two_newest_distinct_keys_and_foreign_assets(family: str) -> None:
     versions, references = sample()
-    deleted = cleanup.plan_deletions(versions, references, family)
+    deleted = cleanup.plan_deletions(versions, references, family, RECORDS_KEYS)
     assert {item.key for item in deleted} == {version(1, family).key, version(3, family).key}
 
 
@@ -44,7 +48,7 @@ def test_pinned_version_survives_and_versions_do_not_count_as_generations() -> N
     old = replace(version(2), latest=False)
     versions.remove(version(2))
     versions.extend([old, replace(version(2), version_id="new-current"), version(4, latest=False)])
-    deleted = cleanup.plan_deletions(versions, references, "records")
+    deleted = cleanup.plan_deletions(versions, references, "records", RECORDS_KEYS)
     assert old not in deleted
     assert version(4, latest=False) in deleted
     assert version(5) not in deleted
@@ -57,10 +61,10 @@ def test_fewer_than_three_keeps_all_and_missing_live_asset_stops() -> None:
         for item in versions
         if item.key in {key for refs in references.values() for key, _ in refs}
     ]
-    assert cleanup.plan_deletions(versions, references, "records") == []
+    assert cleanup.plan_deletions(versions, references, "records", RECORDS_KEYS) == []
     versions.remove(version(2))
     with pytest.raises(cleanup.CleanupError, match="deployed_asset_missing"):
-        cleanup.plan_deletions(versions, references, "records")
+        cleanup.plan_deletions(versions, references, "records", RECORDS_KEYS)
 
 
 def test_cloudformation_resolves_exact_versions_and_rejects_pending_change_sets() -> None:
@@ -130,6 +134,7 @@ def clients(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock, list[cleanup.V
     s3.get_bucket_versioning.return_value = {"Status": "Enabled"}
     monkeypatch.setattr(cleanup, "deployed_references", Mock(return_value=references))
     monkeypatch.setattr(cleanup, "inventory", lambda *_: list(versions))
+    monkeypatch.setattr(cleanup, "records_bundle_keys", lambda *_: RECORDS_KEYS)
 
     def delete(**kwargs: object) -> dict[str, object]:
         payload = kwargs["Delete"]
@@ -165,6 +170,42 @@ def test_dry_run_and_changed_plan_never_delete(
     with pytest.raises(cleanup.CleanupError, match="cleanup_plan_changed"):
         run_prune(clients, apply=True, digest="different-plan")
     clients[0].delete_objects.assert_not_called()
+
+
+def test_superseded_auxiliary_zip_cannot_consume_a_records_generation() -> None:
+    versions, references = sample()
+    superseded_auxiliary = version(98)
+    versions.append(superseded_auxiliary)
+    s3 = Mock()
+    objects: dict[str, bytes] = {}
+    for item in versions:
+        if not cleanup.ZIP_PATTERNS["records"].fullmatch(item.key):
+            continue
+        with BytesIO() as buffer:
+            with ZipFile(buffer, "w") as archive:
+                archive.writestr(
+                    "shittim_records/__init__.py" if item.key in RECORDS_KEYS else "index.js", ""
+                )
+            objects[item.key] = buffer.getvalue()
+    versions = [
+        replace(item, size=len(objects[item.key])) if item.key in objects else item
+        for item in versions
+    ]
+    s3.get_object.side_effect = lambda **kwargs: {"Body": BytesIO(objects[kwargs["Key"]])}
+    identified = cleanup.records_bundle_keys(s3, "bucket", "account", versions)
+    assert identified == RECORDS_KEYS
+    deleted = cleanup.plan_deletions(versions, references, "records", identified)
+    assert {item.key for item in deleted} == {version(1).key, version(3).key}
+    assert all(call.kwargs["VersionId"] for call in s3.get_object.call_args_list)
+
+
+def test_invalid_zip_stops_classification_and_closes_stream() -> None:
+    s3 = Mock()
+    body = BytesIO(b"not-a-zip")
+    s3.get_object.return_value = {"Body": body}
+    with pytest.raises(cleanup.CleanupError, match="invalid_bundle_zip"):
+        cleanup.records_bundle_keys(s3, "bucket", "account", [replace(version(1), size=9)])
+    assert body.closed
 
 
 def test_apply_deletes_explicit_versions_in_separate_phases_and_verifies(

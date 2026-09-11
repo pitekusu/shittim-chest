@@ -15,7 +15,9 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
 from typing import Any
+from zipfile import BadZipFile, ZipFile
 
 import boto3
 from botocore.config import Config
@@ -23,6 +25,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 REGION = "ap-northeast-1"
 KEEP_GENERATIONS = 3
+MAX_BUNDLE_BYTES = 128 * 1024 * 1024
 STACKS = {
     "core": "ShittimChest-Prod-Runtime",
     "records": "ShittimChest-Prod-RecordsApplication",
@@ -133,10 +136,37 @@ def inventory(s3: Any, bucket: str, account: str) -> list[Version]:
     return versions
 
 
+def records_bundle_keys(s3: Any, bucket: str, account: str, versions: list[Version]) -> set[str]:
+    """Identify Records ZIPs, including historical keys, without extracting any files."""
+    keys: set[str] = set()
+    for version in versions:
+        if not version.latest or not ZIP_PATTERNS["records"].fullmatch(version.key):
+            continue
+        if not 0 < version.size <= MAX_BUNDLE_BYTES:
+            raise CleanupError("bundle_size_out_of_bounds")
+        with s3.get_object(
+            Bucket=bucket,
+            Key=version.key,
+            VersionId=version.version_id,
+            ExpectedBucketOwner=account,
+        )["Body"] as body:
+            payload = body.read(MAX_BUNDLE_BYTES + 1)
+        if len(payload) != version.size:
+            raise CleanupError("bundle_size_mismatch")
+        try:
+            with ZipFile(BytesIO(payload)) as archive:
+                if "shittim_records/__init__.py" in archive.namelist():
+                    keys.add(version.key)
+        except BadZipFile as error:
+            raise CleanupError("invalid_bundle_zip") from error
+    return keys
+
+
 def plan_deletions(
     versions: list[Version],
     references: dict[str, set[tuple[str, str | None]]],
     family: str,
+    records_keys: set[str],
 ) -> list[Version]:
     by_key: dict[str, list[Version]] = defaultdict(list)
     for version in versions:
@@ -151,6 +181,8 @@ def plan_deletions(
     # A Core auxiliary Lambda uses a root ZIP. It is not a Records generation.
     other_keys = {key for other, refs in references.items() if other != family for key, _ in refs}
     keys = {key for key in by_key if ZIP_PATTERNS[family].fullmatch(key) and key not in other_keys}
+    if family == "records":
+        keys &= records_keys
     current_keys = {key for key, _ in references[family] if key in keys}
     if not current_keys or len(current_keys) > KEEP_GENERATIONS:
         raise CleanupError("unexpected_current_generation_count")
@@ -205,7 +237,10 @@ def prune(
         raise CleanupError("bucket_versioning_not_enabled")
     references = deployed_references(cloudformation, bucket)
     versions = inventory(s3, bucket, account)
-    deletions = plan_deletions(versions, references, family)
+    records_keys = (
+        records_bundle_keys(s3, bucket, account, versions) if family == "records" else set()
+    )
+    deletions = plan_deletions(versions, references, family, records_keys)
     digest = plan_digest(versions, references, family)
     result: dict[str, object] = {
         "state": "planned",
@@ -245,7 +280,7 @@ def prune(
         (item.key, item.version_id) for item in deletions
     }:
         raise CleanupError("deletion_verification_failed")
-    if plan_deletions(remaining, deployed_references(cloudformation, bucket), family):
+    if plan_deletions(remaining, deployed_references(cloudformation, bucket), family, records_keys):
         raise CleanupError("retention_verification_failed")
     return result | {"state": "deleted_and_verified"}
 
