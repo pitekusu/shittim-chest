@@ -1123,6 +1123,9 @@ class AwsAdminStatusSource:
         self, now: datetime, labels: tuple[str, ...], cloudwatch: Any
     ) -> dict[str, tuple[int | None, datetime | None]]:
         # Sum storage types in CloudWatch, never enumerate bucket objects or versions.
+        # CloudWatch rounds StartTime down to a whole minute for this time range.
+        # Use the same boundary for the request and validation of returned samples.
+        start_time = (now - timedelta(days=3)).replace(second=0, microsecond=0)
         sizes: dict[str, tuple[int | None, datetime | None]] = {
             label: (None, None) for label in labels
         }
@@ -1148,7 +1151,7 @@ class AwsAdminStatusSource:
         try:
             response = cloudwatch.get_metric_data(
                 MetricDataQueries=queries,
-                StartTime=now - timedelta(days=3),
+                StartTime=start_time,
                 EndTime=now,
                 ScanBy="TimestampDescending",
             )
@@ -1182,7 +1185,7 @@ class AwsAdminStatusSource:
                 for timestamp, value in zip(timestamps, values, strict=True)
                 if isinstance(timestamp, datetime)
                 and timestamp.tzinfo is not None
-                and now - timedelta(days=3) <= timestamp <= now
+                and start_time <= timestamp <= now
                 and not isinstance(value, bool)
                 and isinstance(value, (int, float))
                 and math.isfinite(value)
