@@ -1290,6 +1290,30 @@ def test_s3_capacity_uses_latest_daily_total_or_unknown(failure: str | None) -> 
         assert updated_at == (NOW - timedelta(days=1) if failure is None else None)
 
 
+@pytest.mark.parametrize("seconds", [0, 42])
+def test_s3_capacity_accepts_cloudwatch_rounded_start_time(seconds: int) -> None:
+    now = NOW.replace(second=seconds, microsecond=123456)
+    rounded_start = (now - timedelta(days=3)).replace(second=0, microsecond=0)
+    latest = NOW - timedelta(days=1)
+
+    class RoundedStorageCloudWatch:
+        def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "MetricDataResults": [
+                    {
+                        "Id": query["Id"],
+                        "StatusCode": "Complete",
+                        "Values": [123.0, 100.0],
+                        "Timestamps": [latest, rounded_start],
+                    }
+                    for query in kwargs["MetricDataQueries"]
+                ]
+            }
+
+    sizes = source(cloudwatch=RoundedStorageCloudWatch())._s3_storage_sizes(now)
+    assert all(value == (123, latest) for value in sizes.values())
+
+
 def test_s3_capacity_routes_web_to_global_cloudwatch() -> None:
     class RegionCloudWatch:
         def __init__(self, labels: tuple[str, ...], size: int) -> None:
