@@ -22,6 +22,8 @@ from shittim_chest.domain.affection import AffectionProfile, MemorialUnlock
 from shittim_chest.domain.debate_content import ParticipantSlot
 from shittim_chest.domain.identifiers import DebateId
 from tests.factories import NOW, completed_snapshot, presentation
+from tests.test_momotalk import ROOM_ID, START, WEEK
+from tests.test_momotalk import snapshot as momotalk_snapshot
 
 from shittim_records.adapters import ArchiveRepository
 from shittim_records.admin import AdminFailure, PromptRevisionSummary
@@ -38,10 +40,98 @@ from shittim_records.inspector_translations import (
 )
 from shittim_records.memorial import MemorialFailure
 from shittim_records.memorial_adapters import DynamoMemorialRepository
+from shittim_records.momotalk_adapters import DynamoMomotalkStore, MomotalkInputSource
 from shittim_records.projector import project_affection_profile
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
+
+
+def test_momotalk_checkpoints_claim_cas_and_pagination(dynamodb_client, table_names):
+    store = DynamoMomotalkStore(dynamodb_client, table_names[2])
+    value = momotalk_snapshot(questions=False)
+    store.create_week(value, "version-1")
+    store.mark_enqueued(WEEK.week_id)
+    for letter in ("a", "b", "c"):
+        store.create_room(WEEK, value.requesters[0].model_copy(update={"room_id": letter * 43}))
+    room = store.get_room(WEEK.week_id, ROOM_ID)
+    assert room is not None
+    claimed = store.claim(room, START)
+    assert claimed is not None
+    assert store.claim(room, START) is None
+    store.save(claimed)
+    # A stale worker cannot overwrite a more recent checkpoint.
+    with pytest.raises(dynamodb_client.exceptions.ConditionalCheckFailedException):
+        store.save(room)
+    first, cursor = store.page(f"MOMOTALK#WEEK#{WEEK.week_id}", cursor=None, limit=2)
+    second, _ = store.page(f"MOMOTALK#WEEK#{WEEK.week_id}", cursor=cursor, limit=2)
+    assert [item["SK"] for item in first + second] == [c * 43 for c in "abc"]
+    assert len(list(store.all_rooms(WEEK.week_id))) == 3
+
+
+def test_momotalk_collection_includes_inactive_requesters_and_only_week_questions(
+    dynamodb_client, table_names
+):
+    from types import SimpleNamespace
+
+    session_table, archive, statistics = table_names
+    for index, (requester, completed) in enumerate(
+        (
+            ("a", WEEK.period_start),
+            ("a", START - timedelta(seconds=1)),
+            ("a", START),
+            ("b", WEEK.period_start - timedelta(days=1)),
+        )
+    ):
+        record_id = str(index) * 43
+        dynamodb_client.put_item(
+            TableName=archive,
+            Item=marshal_item(
+                {
+                    "PK": f"RECORD#{record_id}",
+                    "SK": "META",
+                    "record_id": record_id,
+                    "requester_key": requester * 43,
+                    "requester_display_name": f"架空利用者{requester}",
+                    "completed_at": completed.isoformat(),
+                    "question": "架空の質問",
+                    "gsi1pk": "ARCHIVE#COMPLETED",
+                    "gsi1sk": f"{completed.isoformat()}#{record_id}",
+                }
+            ),
+        )
+    for requester in ("a", "c"):
+        dynamodb_client.put_item(
+            TableName=statistics,
+            Item=marshal_item(
+                {
+                    "PK": "AFFECTION#PROFILE",
+                    "SK": requester * 43,
+                    "display_name": f"架空利用者{requester}",
+                    "scores": {"participant-a": 850, "participant-b": 200, "participant-c": 500},
+                }
+            ),
+        )
+    reader = DynamoRecordsReader(
+        dynamodb_client,
+        cast(Any, None),
+        archive_table_name=archive,
+        statistics_table_name=statistics,
+        session_table_name=session_table,
+        media_bucket_name="unused",
+    )
+    source = MomotalkInputSource(
+        dynamodb_client,
+        archive,
+        statistics,
+        reader,
+        cast(Any, SimpleNamespace(load_participant_prompt=lambda _: "架空の人格")),
+    )
+    frozen = source.collect(WEEK)
+    assert [len(r.questions) for r in frozen.requesters] == [2, 0, 0]
+    assert frozen.requesters[0].scores["participant-a"] == 850
+    assert frozen.requesters[1].scores["participant-a"] == 500
+    assert frozen.requesters[2].display_name == "架空利用者c"
 
 
 @pytest.fixture

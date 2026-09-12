@@ -529,6 +529,9 @@ def _auth_controller() -> AuthHttpController:
 
 
 def _read_controller() -> ReadHttpController:
+    from shittim_records.momotalk_adapters import DynamoMomotalkStore, MomotalkAssets
+    from shittim_records.momotalk_read import MomotalkReadService
+
     global _READ_CONTROLLER
     if _READ_CONTROLLER is None:
         dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
@@ -551,6 +554,11 @@ def _read_controller() -> ReadHttpController:
                 reader=reader,
                 cursor_codec=CursorCodec(session_key),
                 public_origin="https://" + _environment("RECORDS_PUBLIC_HOSTNAME"),
+            ),
+            momotalk=MomotalkReadService(
+                DynamoMomotalkStore(dynamodb, _environment("STATISTICS_TABLE_NAME")),
+                MomotalkAssets(_regional_s3_client(), _environment("MEDIA_BUCKET_NAME")),
+                reader,
             ),
         )
     return _READ_CONTROLLER
@@ -620,6 +628,8 @@ def _admin_status_controller() -> AdminStatusHttpController:
             projector_dlq_url=_environment("PROJECTOR_DLQ_URL"),
             memorial_generation_queue_url=_environment("MEMORIAL_GENERATION_QUEUE_URL"),
             memorial_generation_dlq_url=_environment("MEMORIAL_GENERATION_DLQ_URL"),
+            momotalk_generation_queue_url=_environment("MOMOTALK_GENERATION_QUEUE_URL"),
+            momotalk_generation_dlq_url=_environment("MOMOTALK_GENERATION_DLQ_URL"),
             stacks=ADMIN_STATUS_STACK_NAMES,
             static_parameters=ADMIN_STATUS_PARAMETER_NAMES,
             runtime_scheduler_name=_environment("RUNTIME_SCHEDULER_NAME"),

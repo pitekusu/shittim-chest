@@ -24,6 +24,9 @@ const validators = [
   ["MemorialStateResponse", "memorial-state-response-validator.mjs"],
   ["MemorialUploadResponse", "memorial-upload-response-validator.mjs"],
   ["MemorialMemoryResponse", "memorial-memory-response-validator.mjs"],
+  ["MomotalkWeeksResponse", "momotalk-weeks-response-validator.mjs"],
+  ["MomotalkRoomsResponse", "momotalk-rooms-response-validator.mjs"],
+  ["MomotalkRoomResponse", "momotalk-room-response-validator.mjs"],
 ];
 const expectedOutputFilenames = new Set(
   validators.flatMap(([, filename]) => [filename, filename.replace(/\.mjs$/, ".d.mts")]),

@@ -10,6 +10,7 @@ const AUTHENTICATED_ROUTE_CHUNK_NAMES = [
   "RankingsPage",
   "AdminPage",
   "MemorialPage",
+  "MomotalkPage",
 ] as const;
 
 function observeAssetRequests(page: Page): Set<string> {
@@ -1733,7 +1734,8 @@ test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile naviga
     name: "モバイルナビゲーション",
   });
   await expect(mobileNavigation).toBeVisible();
-  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(7);
+  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(8);
+  await expect(mobileNavigation.getByRole("link", { name: "モモトーク" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "メモリアルロビー" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "サービス状態確認" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "プロンプト管理" })).toBeVisible();

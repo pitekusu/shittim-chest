@@ -2284,6 +2284,361 @@
       "title": "MemorialUploadResponse",
       "type": "object"
     },
+    "MomotalkImage": {
+      "additionalProperties": false,
+      "properties": {
+        "downloadUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downloadurl"
+        },
+        "mood": {
+          "enum": [
+            "happy",
+            "unhappy"
+          ],
+          "title": "Mood",
+          "type": "string"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "ready",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "thumbnailUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thumbnailurl"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "participant",
+        "mood",
+        "state"
+      ],
+      "title": "MomotalkImage",
+      "type": "object"
+    },
+    "MomotalkMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maximum": 15,
+          "minimum": 1,
+          "title": "Id",
+          "type": "integer"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "participant",
+        "text"
+      ],
+      "title": "MomotalkMessage",
+      "type": "object"
+    },
+    "MomotalkRoomResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "items": {
+            "$ref": "#/$defs/MomotalkImage"
+          },
+          "maxItems": 2,
+          "title": "Images",
+          "type": "array"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/MomotalkMessage"
+          },
+          "maxItems": 15,
+          "title": "Messages",
+          "type": "array"
+        },
+        "participants": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            }
+          ],
+          "title": "Participants",
+          "type": "array"
+        },
+        "room": {
+          "$ref": "#/$defs/MomotalkRoomSummary"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "week": {
+          "$ref": "#/$defs/MomotalkWeek"
+        }
+      },
+      "required": [
+        "week",
+        "room",
+        "participants",
+        "messages",
+        "images"
+      ],
+      "title": "MomotalkRoomResponse",
+      "type": "object"
+    },
+    "MomotalkRoomSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "questionCount": {
+          "minimum": 0,
+          "title": "Questioncount",
+          "type": "integer"
+        },
+        "requester": {
+          "$ref": "#/$defs/RequesterSummary"
+        },
+        "roomId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Roomid",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "preparing",
+            "ready",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "roomId",
+        "requester",
+        "questionCount",
+        "state"
+      ],
+      "title": "MomotalkRoomSummary",
+      "type": "object"
+    },
+    "MomotalkRoomsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextcursor"
+        },
+        "rooms": {
+          "items": {
+            "$ref": "#/$defs/MomotalkRoomSummary"
+          },
+          "title": "Rooms",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "week": {
+          "$ref": "#/$defs/MomotalkWeek"
+        }
+      },
+      "required": [
+        "week",
+        "rooms"
+      ],
+      "title": "MomotalkRoomsResponse",
+      "type": "object"
+    },
+    "MomotalkWeek": {
+      "additionalProperties": false,
+      "properties": {
+        "periodEnd": {
+          "format": "date-time",
+          "title": "Periodend",
+          "type": "string"
+        },
+        "periodStart": {
+          "format": "date-time",
+          "title": "Periodstart",
+          "type": "string"
+        },
+        "publishAt": {
+          "format": "date-time",
+          "title": "Publishat",
+          "type": "string"
+        },
+        "weekId": {
+          "format": "date",
+          "title": "Weekid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "weekId",
+        "periodStart",
+        "periodEnd",
+        "publishAt"
+      ],
+      "title": "MomotalkWeek",
+      "type": "object"
+    },
+    "MomotalkWeeksResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "weeks": {
+          "items": {
+            "$ref": "#/$defs/MomotalkWeek"
+          },
+          "title": "Weeks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "weeks"
+      ],
+      "title": "MomotalkWeeksResponse",
+      "type": "object"
+    },
     "ParticipantAffectionRanking": {
       "additionalProperties": false,
       "properties": {
@@ -3377,6 +3732,15 @@
     },
     {
       "$ref": "#/$defs/MemorialMemoryResponse"
+    },
+    {
+      "$ref": "#/$defs/MomotalkWeeksResponse"
+    },
+    {
+      "$ref": "#/$defs/MomotalkRoomsResponse"
+    },
+    {
+      "$ref": "#/$defs/MomotalkRoomResponse"
     },
     {
       "$ref": "#/$defs/SessionResponse"

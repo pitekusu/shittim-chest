@@ -362,9 +362,9 @@ class AuthService:
 
 
 def validate_return_to(value: str | None) -> str:
-    """Allow only the three SPA route shapes owned by Records."""
+    """Allow only explicitly owned SPA destinations, never external redirects."""
 
-    if value in (None, "", "/", "/insights", "/admin"):
+    if value in (None, "", "/", "/insights", "/admin", "/momotalk"):
         return value if value else "/"
     prefix = "/records/"
     if value.startswith(prefix) and _is_record_id(value.removeprefix(prefix)):

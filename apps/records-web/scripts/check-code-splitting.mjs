@@ -11,6 +11,7 @@ const expectedRouteChunks = [
   "RankingsPage",
   "AdminPage",
   "MemorialPage",
+  "MomotalkPage",
 ];
 const maximumEntryGzipBytes = 113_560;
 const voteGraphJavaScriptMarker = "vote-graph";

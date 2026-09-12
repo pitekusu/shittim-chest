@@ -22,6 +22,7 @@ export function LoginPage({ session }: { readonly session: SessionResponse }): R
   const returnTo =
     requestedPath === "/" ||
     requestedPath === "/insights" ||
+    requestedPath === "/momotalk" ||
     requestedPath === "/admin" ||
     requestedPath === "/memorial" ||
     /^\/records\/[A-Za-z0-9_-]{43}$/.test(requestedPath)

@@ -101,6 +101,12 @@ export function Layout({
             </NavLink>
             <NavLink
               className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/momotalk"
+            >
+              モモトーク
+            </NavLink>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
               to="/memorial"
             >
               メモリアルロビー
@@ -153,6 +159,15 @@ export function Layout({
           to="/insights"
         >
           いろいろ
+        </NavLink>
+        <NavLink
+          aria-label="モモトーク"
+          className={({ isActive }) =>
+            `${isActive ? styles.navActive : styles.navLink} ${styles.mobileMemorialLink}`
+          }
+          to="/momotalk"
+        >
+          モモトーク
         </NavLink>
         <NavLink
           aria-label="メモリアルロビー"

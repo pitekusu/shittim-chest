@@ -390,7 +390,7 @@
 @media (max-width: 767px) {
   .appShell {
     display: block;
-    padding-bottom: 70px;
+    padding-bottom: 128px;
   }
   .sidebar {
     display: none;
@@ -405,7 +405,7 @@
     bottom: 10px;
     left: 12px;
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 5px;
     padding: 7px;
     border: 1px solid var(--records-panel-border-soft);

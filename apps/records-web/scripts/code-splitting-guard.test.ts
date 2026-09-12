@@ -24,6 +24,11 @@ function canonicalChunks(): GuardChunk[] {
       "generated/memorial-upload-response-validator.mjs",
       "generated/memorial-memory-response-validator.mjs",
     ],
+    MomotalkPage: [
+      "generated/momotalk-weeks-response-validator.mjs",
+      "generated/momotalk-rooms-response-validator.mjs",
+      "generated/momotalk-room-response-validator.mjs",
+    ],
   };
   return [
     {
@@ -52,7 +57,7 @@ describe("code splitting module ownership", () => {
     expect(() => assertCodeSplittingModuleOwnership(canonicalChunks())).not.toThrow();
   });
 
-  test.each(["RecordsHome", "AdminPage", "MemorialPage"])(
+  test.each(["RecordsHome", "AdminPage", "MemorialPage", "MomotalkPage"])(
     "rejects a %s validator hoisted into the initial entry",
     (route) => {
       const chunks = canonicalChunks();

@@ -2285,6 +2285,361 @@
         "title": "MemorialUploadResponse",
         "type": "object"
       },
+      "MomotalkImage": {
+        "additionalProperties": false,
+        "properties": {
+          "downloadUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Downloadurl"
+          },
+          "mood": {
+            "enum": [
+              "happy",
+              "unhappy"
+            ],
+            "title": "Mood",
+            "type": "string"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thumbnailurl"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "required": [
+          "participant",
+          "mood",
+          "state"
+        ],
+        "title": "MomotalkImage",
+        "type": "object"
+      },
+      "MomotalkMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maximum": 15,
+            "minimum": 1,
+            "title": "Id",
+            "type": "integer"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "participant",
+          "text"
+        ],
+        "title": "MomotalkMessage",
+        "type": "object"
+      },
+      "MomotalkRoomResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/MomotalkImage"
+            },
+            "maxItems": 2,
+            "title": "Images",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MomotalkMessage"
+            },
+            "maxItems": 15,
+            "title": "Messages",
+            "type": "array"
+          },
+          "participants": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "slot": {
+                      "const": "participant-a"
+                    }
+                  },
+                  "required": [
+                    "slot"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "slot": {
+                      "const": "participant-b"
+                    }
+                  },
+                  "required": [
+                    "slot"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "slot": {
+                      "const": "participant-c"
+                    }
+                  },
+                  "required": [
+                    "slot"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              }
+            ],
+            "title": "Participants",
+            "type": "array"
+          },
+          "room": {
+            "$ref": "#/components/schemas/MomotalkRoomSummary"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "default": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "week": {
+            "$ref": "#/components/schemas/MomotalkWeek"
+          }
+        },
+        "required": [
+          "week",
+          "room",
+          "participants",
+          "messages",
+          "images"
+        ],
+        "title": "MomotalkRoomResponse",
+        "type": "object"
+      },
+      "MomotalkRoomSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "questionCount": {
+            "minimum": 0,
+            "title": "Questioncount",
+            "type": "integer"
+          },
+          "requester": {
+            "$ref": "#/components/schemas/RequesterSummary"
+          },
+          "roomId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Roomid",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "preparing",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "roomId",
+          "requester",
+          "questionCount",
+          "state"
+        ],
+        "title": "MomotalkRoomSummary",
+        "type": "object"
+      },
+      "MomotalkRoomsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nextcursor"
+          },
+          "rooms": {
+            "items": {
+              "$ref": "#/components/schemas/MomotalkRoomSummary"
+            },
+            "title": "Rooms",
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "default": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "week": {
+            "$ref": "#/components/schemas/MomotalkWeek"
+          }
+        },
+        "required": [
+          "week",
+          "rooms"
+        ],
+        "title": "MomotalkRoomsResponse",
+        "type": "object"
+      },
+      "MomotalkWeek": {
+        "additionalProperties": false,
+        "properties": {
+          "periodEnd": {
+            "format": "date-time",
+            "title": "Periodend",
+            "type": "string"
+          },
+          "periodStart": {
+            "format": "date-time",
+            "title": "Periodstart",
+            "type": "string"
+          },
+          "publishAt": {
+            "format": "date-time",
+            "title": "Publishat",
+            "type": "string"
+          },
+          "weekId": {
+            "format": "date",
+            "title": "Weekid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "weekId",
+          "periodStart",
+          "periodEnd",
+          "publishAt"
+        ],
+        "title": "MomotalkWeek",
+        "type": "object"
+      },
+      "MomotalkWeeksResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nextcursor"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "default": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "weeks": {
+            "items": {
+              "$ref": "#/components/schemas/MomotalkWeek"
+            },
+            "title": "Weeks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "weeks"
+        ],
+        "title": "MomotalkWeeksResponse",
+        "type": "object"
+      },
       "ParticipantAffectionRanking": {
         "additionalProperties": false,
         "properties": {
@@ -5027,6 +5382,341 @@
               }
             },
             "description": "One owner-bound presigned image upload"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/momotalk/weeks": {
+      "get": {
+        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+        "operationId": "listMomotalkWeeks",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MomotalkWeeksResponse"
+                }
+              }
+            },
+            "description": "モモトーク"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/momotalk/weeks/{weekId}/rooms": {
+      "get": {
+        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+        "operationId": "listMomotalkRooms",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "weekId",
+            "required": true,
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MomotalkRoomsResponse"
+                }
+              }
+            },
+            "description": "モモトーク"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}": {
+      "get": {
+        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+        "operationId": "getMomotalkRoom",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "weekId",
+            "required": true,
+            "schema": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "roomId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MomotalkRoomResponse"
+                }
+              }
+            },
+            "description": "モモトーク"
           },
           "400": {
             "content": {
