@@ -131,6 +131,11 @@ const SIMPLE_METRICS: Readonly<
     { name: "memorial_dlq_oldest_message_age_seconds", label: "生成DLQ・最古" },
     { name: "memorial_dlq_encrypted", label: "生成DLQ・暗号化" },
     { name: "memorial_dlq_retention_seconds", label: "生成DLQ・保存期間" },
+    { name: "momotalk_visible_messages", label: "モモトーク生成待ち" },
+    { name: "momotalk_inflight_messages", label: "モモトーク生成中" },
+    { name: "momotalk_oldest_message_age_seconds", label: "モモトーク最古" },
+    { name: "momotalk_dlq_visible_messages", label: "モモトークDLQ・未処理" },
+    { name: "momotalk_dlq_oldest_message_age_seconds", label: "モモトークDLQ・最古" },
   ],
   sns: [
     { name: "confirmed_subscriptions", label: "確認済み購読" },
@@ -169,6 +174,8 @@ const LAMBDA_RESOURCES = [
   { key: "records_inspector_translation", label: "脆弱性概要翻訳" },
   { key: "records_memorial_api", label: "メモリアルロビーAPI" },
   { key: "records_memorial_worker", label: "メモリアル生成" },
+  { key: "records_momotalk_collector", label: "モモトーク週次集計" },
+  { key: "records_momotalk_worker", label: "モモトーク生成" },
   { key: "records_admin_status", label: "管理状態API" },
   { key: "records_admin_config", label: "プロンプト管理API" },
 ] as const;
@@ -190,6 +197,7 @@ const EVENT_RESOURCES = [
   { key: "aws_fx", label: "AWS・為替集計", hasDeliveryMetrics: true },
   { key: "openai", label: "OpenAI集計", hasDeliveryMetrics: true },
   { key: "inspector_translation", label: "脆弱性概要翻訳", hasDeliveryMetrics: true },
+  { key: "momotalk_weekly", label: "モモトーク週次集計", hasDeliveryMetrics: true },
   { key: "abnormal_stop", label: "異常終了通知", hasDeliveryMetrics: true },
 ] as const;
 

@@ -19,6 +19,8 @@ export class RecordsStatefulStack extends Stack {
   public readonly projectorDlq: sqs.Queue;
   public readonly memorialGenerationDlq: sqs.Queue;
   public readonly memorialGenerationQueue: sqs.Queue;
+  public readonly momotalkGenerationQueue: sqs.Queue;
+  public readonly momotalkGenerationDlq: sqs.Queue;
 
   public constructor(scope: Construct, id: string, props: StackProps) {
     super(scope, id, props);
@@ -133,6 +135,26 @@ export class RecordsStatefulStack extends Stack {
       id: "AwsSolutions-SQS3",
       reason:
         "This queue is the terminal failure destination for the bounded DynamoDB Streams retry policy.",
+    });
+    this.momotalkGenerationDlq = new sqs.Queue(this, "MomotalkGenerationDlq", {
+      queueName: "shittim-chest-production-records-momotalk-generation-dlq",
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(14),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    this.momotalkGenerationQueue = new sqs.Queue(this, "MomotalkGenerationQueue", {
+      queueName: "shittim-chest-production-records-momotalk-generation",
+      deadLetterQueue: { maxReceiveCount: 4, queue: this.momotalkGenerationDlq },
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(1),
+      visibilityTimeout: Duration.minutes(30),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    Validations.of(this.momotalkGenerationDlq).acknowledge({
+      id: "AwsSolutions-SQS3",
+      reason: "Terminal failure destination for bounded weekly MomoTalk generation retries.",
     });
     Validations.of(this.memorialGenerationDlq).acknowledge({
       id: "AwsSolutions-SQS3",

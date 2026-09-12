@@ -19,6 +19,8 @@ const recordsFunctionNames = [
   "admin-status",
   "memorial-api",
   "memorial-worker",
+  "momotalk-collector",
+  "momotalk-worker",
 ].map((name) => `shittim-chest-production-records-${name}`);
 
 type PolicyStatement = {
@@ -66,6 +68,48 @@ describe("RecordsApplicationStack", () => {
     fixture = synthesize();
   });
 
+  test("isolates weekly MomoTalk generation and grants no affection or memorial access", () => {
+    const { template } = fixture;
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-momotalk-worker",
+      Timeout: 300, MemorySize: 1024, ReservedConcurrentExecutions: 1,
+    });
+    template.hasResourceProperties("AWS::Events::Rule", {
+      ScheduleExpression: "cron(0 9 ? * SUN *)",
+      Description: "Collect weekly MomoTalk inputs at 18:00 JST Sunday",
+    });
+    template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
+      BatchSize: 1, FunctionResponseTypes: ["ReportBatchItemFailures"],
+      EventSourceArn: Match.objectLike({ "Fn::Join": Match.arrayWith([Match.arrayWith([Match.stringLikeRegexp("momotalk-generation$")])]) }),
+    });
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const worker = policies.filter(policy => JSON.stringify(policy).includes("MomotalkWorkerFunctionRole"));
+    const statements = worker.flatMap(policy => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
+    const database = statements.filter(s => actionsOf(s).some(a => a.startsWith("dynamodb:")));
+    expect(database).toHaveLength(1);
+    expect(database[0]?.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#*"] },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+    const text = JSON.stringify(worker);
+    expect(text).toContain("/momotalk/inputs/*");
+    expect(text).toContain("/momotalk/images/*");
+    expect(text).not.toContain("/memorials/");
+    expect(text).not.toContain("AFFECTION#");
+    expect(text).not.toContain("discord");
+    const read = JSON.stringify(policies.filter(policy => JSON.stringify(policy).includes("ReadFunctionRole")));
+    expect(read).toContain("/momotalk/images/*");
+    expect(read).not.toContain("/momotalk/inputs/");
+    const collector = policies.filter(policy => JSON.stringify(policy).includes("MomotalkCollectorFunctionRole"));
+    const archive = collector.flatMap(policy => policy.Properties.PolicyDocument.Statement)
+      .find(statement => statement.Condition?.["ForAllValues:StringEquals"]?.["dynamodb:Attributes"]);
+    expect(archive.Condition["ForAllValues:StringEquals"]["dynamodb:Attributes"])
+      .toEqual(expect.arrayContaining(["PK", "SK", "gsi1pk", "gsi1sk"]));
+    for (const route of ["/api/v1/momotalk/weeks", "/api/v1/momotalk/weeks/{weekId}/rooms", "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}"]) {
+      template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: `GET ${route}` });
+    }
+  });
+
   test("synthesizes when the deployment account is unresolved", () => {
     const app = new App();
     const stack = new RecordsApplicationStack(app, "RecordsApplication", {
@@ -80,11 +124,11 @@ describe("RecordsApplicationStack", () => {
     expect(checks.validateScope(stack).success).toBe(true);
   });
 
-  test("creates eleven Python 3.14 ARM64 functions from one immutable S3 version", () => {
+  test("creates Records ARM64 functions from one immutable S3 version", () => {
     const { stack, template } = fixture;
 
     expect(stack.terminationProtection).toBe(true);
-    template.resourceCountIs("AWS::Lambda::Function", 12);
+    template.resourceCountIs("AWS::Lambda::Function", recordsFunctionNames.length);
     for (const functionName of recordsFunctionNames) {
       template.hasResourceProperties("AWS::Lambda::Function", {
         Architectures: ["arm64"],
@@ -94,7 +138,7 @@ describe("RecordsApplicationStack", () => {
           S3ObjectVersion: { Ref: "RecordsBundleObjectVersion" },
         },
         FunctionName: functionName,
-        MemorySize: functionName.endsWith("memorial-worker") ? 1024 : 512,
+        MemorySize: functionName.endsWith("-worker") ? 1024 : 512,
         Runtime: "python3.14",
       });
     }
@@ -127,7 +171,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = fixture;
     const logGroups = template.findResources("AWS::Logs::LogGroup");
 
-    template.resourceCountIs("AWS::Logs::LogGroup", 13);
+    template.resourceCountIs("AWS::Logs::LogGroup", recordsFunctionNames.length + 1);
     for (const functionName of recordsFunctionNames) {
       const [logGroupLogicalId] = Object.entries(logGroups).find(
         ([, resource]) =>
@@ -149,13 +193,13 @@ describe("RecordsApplicationStack", () => {
     }
   });
 
-  test("publishes six isolated aliases behind twenty-five HTTP API routes", () => {
+  test("publishes six isolated aliases behind the Records HTTP API routes", () => {
     const { template } = fixture;
 
     template.resourceCountIs("AWS::Lambda::Version", 6);
     template.resourceCountIs("AWS::Lambda::Alias", 6);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 25);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 28);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -215,7 +259,7 @@ describe("RecordsApplicationStack", () => {
         },
       },
     });
-    template.resourceCountIs("AWS::Events::Rule", 4);
+    template.resourceCountIs("AWS::Events::Rule", 5);
     template.hasResourceProperties("AWS::Events::Rule", {
       ScheduleExpression: "rate(15 minutes)",
       State: "ENABLED",
@@ -859,7 +903,7 @@ describe("RecordsApplicationStack", () => {
         "Fn::GetAtt": [logicalId, "Arn"],
       });
     }
-    expect(statusEventBridgeArns).toHaveLength(5);
+    expect(statusEventBridgeArns).toHaveLength(6);
     expect(JSON.stringify(statusEventBridgeArns)).not.toContain(
       "ShittimChest-Prod-RecordsApplication-*",
     );

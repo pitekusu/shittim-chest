@@ -888,6 +888,59 @@ class ErrorResponse(PublicModel):
     error: ErrorBody
 
 
+class MomotalkWeek(PublicModel):
+    week_id: date
+    period_start: AwareDatetime
+    period_end: AwareDatetime
+    publish_at: AwareDatetime
+
+
+class MomotalkWeeksResponse(PublicModel):
+    schema_version: Literal[1] = 1
+    weeks: list[MomotalkWeek]
+    next_cursor: str | None = None
+
+
+class MomotalkRoomSummary(PublicModel):
+    room_id: RecordId
+    requester: RequesterSummary
+    question_count: int = Field(ge=0)
+    state: Literal["preparing", "ready", "failed"]
+
+
+class MomotalkRoomsResponse(PublicModel):
+    schema_version: Literal[1] = 1
+    week: MomotalkWeek
+    rooms: list[MomotalkRoomSummary]
+    next_cursor: str | None = None
+
+
+class MomotalkMessage(PublicModel):
+    id: int = Field(ge=1, le=15)
+    participant: ParticipantSlot
+    # Grapheme validation is performed by the generation boundary, not JSON Schema's
+    # code-point maxLength (which would incorrectly reject combined emoji).
+    text: NonEmptyText
+
+
+class MomotalkImage(PublicModel):
+    participant: ParticipantSlot
+    mood: Literal["happy", "unhappy"]
+    state: Literal["pending", "ready", "failed"]
+    url: str | None = None
+    thumbnail_url: str | None = None
+    download_url: str | None = None
+
+
+class MomotalkRoomResponse(PublicModel):
+    schema_version: Literal[1] = 1
+    week: MomotalkWeek
+    room: MomotalkRoomSummary
+    participants: ParticipantCollection
+    messages: list[MomotalkMessage] = Field(max_length=15)
+    images: list[MomotalkImage] = Field(max_length=2)
+
+
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordListResponse,
     RecordDetailResponse,
@@ -897,6 +950,9 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     MemorialStateResponse,
     MemorialUploadResponse,
     MemorialMemoryResponse,
+    MomotalkWeeksResponse,
+    MomotalkRoomsResponse,
+    MomotalkRoomResponse,
     SessionResponse,
     AdminPromptsResponse,
     AdminPromptApplyResponse,

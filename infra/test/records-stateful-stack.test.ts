@@ -26,6 +26,19 @@ function synthesize(): {
 }
 
 describe("RecordsStatefulStack", () => {
+  test("adds isolated encrypted weekly generation queues without changing the tables", () => {
+    const { template } = synthesize();
+    template.resourceCountIs("AWS::DynamoDB::Table", 3);
+    template.hasResourceProperties("AWS::SQS::Queue", {
+      QueueName: "shittim-chest-production-records-momotalk-generation",
+      SqsManagedSseEnabled: true, MessageRetentionPeriod: 86400, VisibilityTimeout: 1800,
+      RedrivePolicy: { deadLetterTargetArn: Match.anyValue(), maxReceiveCount: 4 },
+    });
+    template.hasResourceProperties("AWS::SQS::Queue", {
+      QueueName: "shittim-chest-production-records-momotalk-generation-dlq",
+      SqsManagedSseEnabled: true, MessageRetentionPeriod: 1209600,
+    });
+  });
   test("retains every table while expiring only ephemeral session records", () => {
     const { stack, template } = synthesize();
 

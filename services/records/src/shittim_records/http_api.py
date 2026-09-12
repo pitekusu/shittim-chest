@@ -171,10 +171,12 @@ class ReadHttpController:
         store: AuthStore,
         session_key: bytes,
         records: RecordsReadService,
+        momotalk: Any | None = None,
     ) -> None:
         self._store = store
         self._session_key = session_key
         self._records = records
+        self._momotalk = momotalk
 
     def handle(self, event: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
         request = parse_request(event)
@@ -187,7 +189,9 @@ class ReadHttpController:
             )
             if session is None or session.expires_at <= int(now.astimezone(UTC).timestamp()):
                 return error_response(401, "AUTHENTICATION_REQUIRED", request.request_id)
-            if request.route_key == "GET /api/v1/records":
+            if request.route_key.startswith("GET /api/v1/momotalk/"):
+                result = self._momotalk_read(request, now)
+            elif request.route_key == "GET /api/v1/records":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"cursor", "limit", "sort", "winner"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
@@ -240,6 +244,39 @@ class ReadHttpController:
             return error_response(status, code, request.request_id)
         except ReadFailure as error:
             return error_response(error.status, error.code, request.request_id)
+
+    def _momotalk_read(self, request: Request, now: datetime) -> Any:
+        from shittim_records.momotalk import MomotalkFailure
+
+        if self._momotalk is None:
+            raise ReadFailure("MOMOTALK_UNAVAILABLE", 503)
+        query = _query(request.raw_query)
+        if not set(query).issubset({"limit", "cursor"}):
+            raise ReadFailure("REQUEST_INVALID", 400)
+        limit = _affection_limit(_optional_single(query, "limit"))
+        cursor = _optional_single(query, "cursor")
+        try:
+            if request.route_key == "GET /api/v1/momotalk/weeks":
+                return self._momotalk.list_weeks(limit=limit, cursor=cursor, now=now)
+            week_id = request.path_parameters.get("weekId", "")
+            if request.route_key == "GET /api/v1/momotalk/weeks/{weekId}/rooms":
+                return self._momotalk.list_rooms(
+                    week_id=week_id, limit=limit, cursor=cursor, now=now
+                )
+            if request.route_key == "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}":
+                if request.raw_query:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                return self._momotalk.get_room(
+                    week_id=week_id, room_id=request.path_parameters.get("roomId", ""), now=now
+                )
+            raise ReadFailure("ROUTE_NOT_FOUND", 404)
+        except MomotalkFailure as error:
+            raise ReadFailure(error.code, error.status) from error
+        except ReadFailure:
+            raise
+        except Exception:
+            # Storage and validation exceptions can contain generated/private text.
+            raise ReadFailure("MOMOTALK_UNAVAILABLE", 503) from None
 
 
 def parse_request(event: Mapping[str, Any]) -> Request:

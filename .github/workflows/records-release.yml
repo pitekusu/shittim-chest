@@ -900,6 +900,16 @@ jobs:
             "${RUNNER_TEMP}/records-memorial.json" >/dev/null
           grep --ignore-case --quiet '^cache-control: private, no-store' \
             "${RUNNER_TEMP}/records-memorial.headers"
+          momotalk_status=$(curl --silent --show-error --max-time 20 \
+            --dump-header "${RUNNER_TEMP}/records-momotalk.headers" \
+            --output "${RUNNER_TEMP}/records-momotalk.json" \
+            --write-out '%{http_code}' \
+            "${endpoint}/api/v1/momotalk/weeks")
+          test "${momotalk_status}" = 401
+          jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
+            "${RUNNER_TEMP}/records-momotalk.json" >/dev/null
+          grep --ignore-case --quiet '^cache-control: private, no-store' \
+            "${RUNNER_TEMP}/records-momotalk.headers"
       - name: Restore the previous Records entry point after a post-publish failure
         if: failure()
         continue-on-error: true

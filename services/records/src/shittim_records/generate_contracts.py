@@ -169,6 +169,55 @@ def _preview_path(*, image: bool) -> dict[str, Any]:
     }
 
 
+def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
+    result = {}
+    for path, operation, schema, path_names in (
+        ("/api/v1/momotalk/weeks", "listMomotalkWeeks", "MomotalkWeeksResponse", ()),
+        (
+            "/api/v1/momotalk/weeks/{weekId}/rooms",
+            "listMomotalkRooms",
+            "MomotalkRoomsResponse",
+            ("weekId",),
+        ),
+        (
+            "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+            "getMomotalkRoom",
+            "MomotalkRoomResponse",
+            ("weekId", "roomId"),
+        ),
+    ):
+        parameters = [
+            _parameter(
+                name,
+                "path",
+                {
+                    "type": "string",
+                    "pattern": r"^\d{4}-\d{2}-\d{2}$"
+                    if name == "weekId"
+                    else r"^[A-Za-z0-9_-]{43}$",
+                },
+                required=True,
+            )
+            for name in path_names
+        ]
+        if "roomId" not in path_names:
+            parameters.extend(
+                [
+                    _parameter("limit", "query", {"type": "integer", "minimum": 1, "maximum": 50}),
+                    _parameter("cursor", "query", {"type": "string", "maxLength": 100}),
+                ]
+            )
+        result[path] = {
+            "get": {
+                "operationId": operation,
+                "parameters": parameters,
+                "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+                "responses": {"200": _response(schema, "モモトーク"), **error_responses},
+            }
+        }
+    return result
+
+
 def build_openapi() -> dict[str, Any]:
     error_responses = {
         code: _response("ErrorResponse", description)
@@ -189,6 +238,7 @@ def build_openapi() -> dict[str, Any]:
             "version": str(RECORDS_API_SCHEMA_VERSION),
         },
         "paths": {
+            **_momotalk_paths(error_responses),
             "/records/{recordId}": _preview_path(image=False),
             "/og/records/{recordId}/{version}.png": _preview_path(image=True),
             "/api/v1/auth/discord/start": {

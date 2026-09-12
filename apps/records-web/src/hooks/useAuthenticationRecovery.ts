@@ -25,6 +25,7 @@ export function useAuthenticationRecovery(error: unknown): void {
           query.queryKey[0] === "rankings" ||
           query.queryKey[0] === "affection-rankings" ||
           query.queryKey[0] === "memorial" ||
+          query.queryKey[0] === "momotalk" ||
           query.queryKey[0] === "admin",
       });
     });

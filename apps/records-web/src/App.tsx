@@ -30,6 +30,7 @@ const RecordDetail = lazy(() => import("./routes/RecordDetail"));
 const RankingsPage = lazy(() => import("./routes/RankingsPage"));
 const AdminPage = lazy(() => import("./routes/AdminPage"));
 const MemorialPage = lazy(() => import("./routes/MemorialPage"));
+const MomotalkPage = lazy(() => import("./routes/MomotalkPage"));
 
 function LoadingScreen(): React.JSX.Element {
   return (
@@ -97,6 +98,7 @@ function AuthenticatedRoutes({
               <Route path="/" element={<RecordsHome />} />
               <Route path="/records/:recordId" element={<RecordDetail />} />
               <Route path="/insights" element={<RankingsPage />} />
+              <Route path="/momotalk" element={<MomotalkPage />} />
               <Route
                 path="/memorial"
                 element={<MemorialPage csrfToken={session.csrfToken} requester={session.user} />}

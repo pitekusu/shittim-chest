@@ -9,6 +9,14 @@ export interface GuardChunk {
 }
 
 const ROUTES = {
+  MomotalkPage: {
+    facade: "/src/routes/MomotalkPage.tsx",
+    ownedModules: [
+      "/src/generated/momotalk-weeks-response-validator.mjs",
+      "/src/generated/momotalk-rooms-response-validator.mjs",
+      "/src/generated/momotalk-room-response-validator.mjs",
+    ],
+  },
   RecordsHome: {
     facade: "/src/routes/RecordsHome.tsx",
     ownedModules: ["/src/generated/record-list-response-validator.mjs"],

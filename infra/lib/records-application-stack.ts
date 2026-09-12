@@ -29,6 +29,8 @@ export interface RecordsApplicationStackProps extends StackProps {}
 const BACKFILL_FUNCTION_NAME = "shittim-chest-production-records-backfill";
 const ADMIN_CONFIG_FUNCTION_NAME = "shittim-chest-production-records-admin-config";
 const ADMIN_STATUS_FUNCTION_NAME = "shittim-chest-production-records-admin-status";
+const MOMOTALK_COLLECTOR_FUNCTION_NAME = "shittim-chest-production-records-momotalk-collector";
+const MOMOTALK_WORKER_FUNCTION_NAME = "shittim-chest-production-records-momotalk-worker";
 const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
 const COST_FUNCTION_NAME = "shittim-chest-production-records-cost";
 const INSPECTOR_TRANSLATION_FUNCTION_NAME =
@@ -167,6 +169,12 @@ export class RecordsApplicationStack extends Stack {
       "RecordsBundleBucket",
       bundleBucketName.valueAsString,
     );
+    const momotalkQueue = sqs.Queue.fromQueueArn(this, "MomotalkGenerationQueue", this.formatArn({
+      service: "sqs", resource: "shittim-chest-production-records-momotalk-generation",
+    }));
+    const momotalkDlq = sqs.Queue.fromQueueArn(this, "MomotalkGenerationDlq", this.formatArn({
+      service: "sqs", resource: "shittim-chest-production-records-momotalk-generation-dlq",
+    }));
     const code = lambda.Code.fromBucket(
       bundleBucket,
       bundleObjectKey.valueAsString,
@@ -709,6 +717,14 @@ export class RecordsApplicationStack extends Stack {
       },
       policyStatements: [
         new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:Query"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:BatchGetItem"],
           resources: [sessionTable.tableArn],
         }),
@@ -755,6 +771,7 @@ export class RecordsApplicationStack extends Stack {
           resources: [
             `${mediaBucket.bucketArn}/participants/*`,
             `${mediaBucket.bucketArn}/requesters/*`,
+            `${mediaBucket.bucketArn}/momotalk/images/*`,
           ],
         }),
       ],
@@ -763,10 +780,10 @@ export class RecordsApplicationStack extends Stack {
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
       Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
-          ["participants", "requesters"].map((prefix) => [
+          ["participants", "requesters", "momotalk/images"].map((prefix) => [
             `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
               `shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
-            "Authenticated avatar reads are restricted to the two approved private media prefixes.",
+            "Authenticated reads are restricted to avatar and published MomoTalk image prefixes, never generation inputs.",
           ]),
         ),
       ),
@@ -1114,6 +1131,126 @@ export class RecordsApplicationStack extends Stack {
       ),
     );
 
+    const momotalkEnvironment = {
+      ARCHIVE_TABLE_NAME: archiveTable.tableName,
+      STATISTICS_TABLE_NAME: statisticsTable.tableName,
+      SESSION_TABLE_NAME: sessionTable.tableName,
+      MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+      MOMOTALK_QUEUE_URL: momotalkQueue.queueUrl,
+      MOMOTALK_OPENAI_API_KEY_PARAMETER_NAME: memorialApiKeyParameter.parameterName,
+      LEGACY_PERSONA_PARTICIPANT_A_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-a`,
+      LEGACY_PERSONA_PARTICIPANT_B_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-b`,
+      LEGACY_PERSONA_PARTICIPANT_C_PARAMETER_NAME: `/shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/participant-c`,
+    };
+    const momotalkStatePolicies = () => [
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"],
+        resources: [statisticsTable.tableArn],
+        conditions: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#*"] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        },
+      }),
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion"],
+        resources: [`${mediaBucket.bucketArn}/momotalk/inputs/*`],
+      }),
+      new iam.PolicyStatement({ actions: ["sqs:SendMessage"], resources: [momotalkQueue.queueArn] }),
+    ];
+    const momotalkCollector = this.httpFunctionWithRole({
+      id: "MomotalkCollectorFunction", functionName: MOMOTALK_COLLECTOR_FUNCTION_NAME,
+      handler: "shittim_records.momotalk_handlers.collect_handler", code,
+      timeout: Duration.minutes(2), reservedConcurrentExecutions: 1,
+      environment: momotalkEnvironment,
+      policyStatements: [
+        ...momotalkStatePolicies(),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"], resources: [`${archiveTable.tableArn}/index/gsi1`],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["ARCHIVE#COMPLETED"],
+              "dynamodb:Attributes": ["PK", "SK", "gsi1pk", "gsi1sk", "record_id", "requester_key", "requester_display_name", "completed_at", "question", "affection"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"], resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["AFFECTION#PROFILE"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:BatchGetItem"], resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["PROFILE#REQUESTER"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:PutObject"], resources: [`${mediaBucket.bucketArn}/momotalk/inputs/*`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter", "ssm:GetParameters"],
+          resources: [runtimePromptActiveArn, runtimePromptRevisionArn,
+            ...["participant-a", "participant-b", "participant-c"].map((participant) => this.formatArn({
+              service: "ssm", resource: "parameter",
+              resourceName: `shittim-chest/production/personas/${legacyRuntimeConfigVersion.valueAsString}/${participant}`,
+            })),
+          ],
+        }),
+      ],
+    });
+    const momotalkWorker = this.httpFunctionWithRole({
+      id: "MomotalkWorkerFunction", functionName: MOMOTALK_WORKER_FUNCTION_NAME,
+      handler: "shittim_records.momotalk_handlers.worker_handler", code,
+      timeout: Duration.minutes(5), memorySize: 1024, reservedConcurrentExecutions: 1,
+      environment: momotalkEnvironment,
+      policyStatements: [
+        ...momotalkStatePolicies(),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"], resources: [memorialApiKeyParameter.parameterArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject", "s3:PutObject"], resources: [`${mediaBucket.bucketArn}/momotalk/images/*`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"], resources: [mediaBucket.bucketArn],
+          conditions: { StringLike: { "s3:prefix": ["momotalk/images/*"] } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject"], resources: [
+            `${mediaBucket.bucketArn}/participants/participant-a/memorial-reference.png`,
+            `${mediaBucket.bucketArn}/participants/participant-b/memorial-reference.webp`,
+            `${mediaBucket.bucketArn}/participants/participant-c/memorial-reference.webp`,
+          ],
+        }),
+      ],
+    });
+    momotalkWorker.addEventSource(new eventSources.SqsEventSource(momotalkQueue, {
+      batchSize: 1, reportBatchItemFailures: true,
+    }));
+    const momotalkWeeklyRule = new events.Rule(this, "MomotalkWeeklyRule", {
+      description: "Collect weekly MomoTalk inputs at 18:00 JST Sunday",
+      schedule: events.Schedule.cron({ minute: "0", hour: "9", weekDay: "SUN" }),
+      targets: [new eventTargets.LambdaFunction(momotalkCollector, {
+        retryAttempts: 2, maxEventAge: Duration.hours(6),
+      })],
+    });
+    for (const fn of [momotalkCollector, momotalkWorker]) {
+      fn.role!.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, Object.fromEntries(
+        ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
+          ...["inputs", "images"].map((prefix) => [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-media-${nagAccount}/momotalk/${prefix}/*]`,
+            "Only weekly MomoTalk inputs and images; no access to private memorials or other media.",
+          ]),
+          [`AwsSolutions-IAM5[Resource::${partition}:ssm:${this.region}:${nagAccount}:parameter/shittim-chest/production/runtime-prompts/r??????????????????????????/*]`,
+            "Read-only validated immutable runtime persona revisions for the weekly snapshot."],
+        ]),
+      ));
+    }
+
     const webBucketArn = this.formatArn({
       service: "s3",
       region: "",
@@ -1157,6 +1294,8 @@ export class RecordsApplicationStack extends Stack {
       account: "shittim-chest-production-account",
     } as const;
     const statusFunctionNames = {
+      records_momotalk_collector: MOMOTALK_COLLECTOR_FUNCTION_NAME,
+      records_momotalk_worker: MOMOTALK_WORKER_FUNCTION_NAME,
       image_admission: "shittim-chest-production-image-admission",
       discord_status: "shittim-chest-production-discord-status-publisher",
       runtime_reconciler: "shittim-chest-production-runtime-reconciler",
@@ -1177,6 +1316,8 @@ export class RecordsApplicationStack extends Stack {
     const memorialStatusFunctionNames = [
       MEMORIAL_API_FUNCTION_NAME,
       MEMORIAL_WORKER_FUNCTION_NAME,
+      MOMOTALK_COLLECTOR_FUNCTION_NAME,
+      MOMOTALK_WORKER_FUNCTION_NAME,
     ] as const;
     const memorialStatusFunctionArns = memorialStatusFunctionNames.map((functionName) =>
       this.formatArn({
@@ -1232,6 +1373,8 @@ export class RecordsApplicationStack extends Stack {
         PROJECTOR_DLQ_URL: projectorDlq.queueUrl,
         MEMORIAL_GENERATION_QUEUE_URL: memorialGenerationQueue.queueUrl,
         MEMORIAL_GENERATION_DLQ_URL: memorialGenerationDlq.queueUrl,
+        MOMOTALK_GENERATION_QUEUE_URL: momotalkQueue.queueUrl,
+        MOMOTALK_GENERATION_DLQ_URL: momotalkDlq.queueUrl,
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
         ECS_CONTAINER_NAME: "application",
@@ -1498,6 +1641,7 @@ export class RecordsApplicationStack extends Stack {
               awsFxCostSchedule.ruleArn,
               openAiCostSchedule.ruleArn,
               inspectorTranslationSchedule.ruleArn,
+              momotalkWeeklyRule.ruleArn,
               this.formatArn({
                 service: "events",
                 resource: "rule",
@@ -1521,7 +1665,7 @@ export class RecordsApplicationStack extends Stack {
           }),
           new iam.PolicyStatement({
             actions: ["sqs:GetQueueAttributes"],
-            resources: [memorialGenerationQueue.queueArn, memorialGenerationDlq.queueArn],
+            resources: [memorialGenerationQueue.queueArn, memorialGenerationDlq.queueArn, momotalkQueue.queueArn, momotalkDlq.queueArn],
           }),
         ],
       }),
@@ -1712,6 +1856,13 @@ export class RecordsApplicationStack extends Stack {
         methods: [apigatewayv2.HttpMethod.GET],
         integration: adminConfigIntegration,
       });
+    }
+    for (const path of [
+      "/api/v1/momotalk/weeks",
+      "/api/v1/momotalk/weeks/{weekId}/rooms",
+      "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+    ]) {
+      api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.GET], integration: readIntegration });
     }
     for (const path of [
       "/api/v1/admin/prompts/apply",
