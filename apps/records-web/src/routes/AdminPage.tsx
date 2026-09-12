@@ -176,6 +176,7 @@ const LAMBDA_RESOURCES = [
   { key: "records_memorial_worker", label: "メモリアル生成" },
   { key: "records_momotalk_collector", label: "モモトーク週次集計" },
   { key: "records_momotalk_worker", label: "モモトーク生成" },
+  { key: "records_momotalk_announcement", label: "モモトーク公開通知" },
   { key: "records_admin_status", label: "管理状態API" },
   { key: "records_admin_config", label: "プロンプト管理API" },
 ] as const;
@@ -198,6 +199,7 @@ const EVENT_RESOURCES = [
   { key: "openai", label: "OpenAI集計", hasDeliveryMetrics: true },
   { key: "inspector_translation", label: "脆弱性概要翻訳", hasDeliveryMetrics: true },
   { key: "momotalk_weekly", label: "モモトーク週次集計", hasDeliveryMetrics: true },
+  { key: "momotalk_announcement", label: "モモトーク公開通知", hasDeliveryMetrics: true },
   { key: "abnormal_stop", label: "異常終了通知", hasDeliveryMetrics: true },
 ] as const;
 

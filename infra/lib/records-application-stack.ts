@@ -31,6 +31,7 @@ const ADMIN_CONFIG_FUNCTION_NAME = "shittim-chest-production-records-admin-confi
 const ADMIN_STATUS_FUNCTION_NAME = "shittim-chest-production-records-admin-status";
 const MOMOTALK_COLLECTOR_FUNCTION_NAME = "shittim-chest-production-records-momotalk-collector";
 const MOMOTALK_WORKER_FUNCTION_NAME = "shittim-chest-production-records-momotalk-worker";
+const MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME = "shittim-chest-production-records-momotalk-announcement";
 const AUTH_FUNCTION_NAME = "shittim-chest-production-records-auth";
 const COST_FUNCTION_NAME = "shittim-chest-production-records-cost";
 const INSPECTOR_TRANSLATION_FUNCTION_NAME =
@@ -1147,7 +1148,7 @@ export class RecordsApplicationStack extends Stack {
         actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"],
         resources: [statisticsTable.tableArn],
         conditions: {
-          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#*"] },
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#WEEKS", "MOMOTALK#WEEK#*"] },
           Null: { "dynamodb:LeadingKeys": "false" },
         },
       }),
@@ -1202,11 +1203,65 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    const momotalkAnnouncement = this.httpFunctionWithRole({
+      id: "MomotalkAnnouncementFunction", functionName: MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME,
+      handler: "shittim_records.momotalk_announcements.handler", code,
+      timeout: Duration.minutes(3), reservedConcurrentExecutions: 1,
+      environment: {
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        RECORDS_PUBLIC_HOSTNAME: "shittim.pitekusu.dev",
+        SHITTIM_RUNTIME_CONFIG_PARAMETER: `/shittim-chest/production/runtime/${legacyRuntimeConfigVersion.valueAsString}`,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["MOMOTALK#WEEKS", "MOMOTALK#ANNOUNCEMENTS"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"], resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#WEEK#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem", "dynamodb:UpdateItem"], resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["MOMOTALK#ANNOUNCEMENTS"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter"], resources: [
+            MODERATOR_TOKEN_PARAMETER_NAME,
+            `/shittim-chest/production/runtime/${legacyRuntimeConfigVersion.valueAsString}`,
+          ].map((name) => this.formatArn({
+            service: "ssm", resource: "parameter", resourceName: name.slice(1),
+          })),
+        }),
+      ],
+    });
+    momotalkAnnouncement.configureAsyncInvoke({
+      retryAttempts: 2, maxEventAge: Duration.hours(6),
+    });
+    const momotalkAnnouncementRule = new events.Rule(this, "MomotalkAnnouncementRule", {
+      description: "Announce readable MomoTalk at 20:00 JST Sunday",
+      schedule: events.Schedule.cron({ minute: "0", hour: "11", weekDay: "SUN" }),
+      targets: [new eventTargets.LambdaFunction(momotalkAnnouncement, {
+        retryAttempts: 2, maxEventAge: Duration.hours(6),
+      })],
+    });
     const momotalkWorker = this.httpFunctionWithRole({
       id: "MomotalkWorkerFunction", functionName: MOMOTALK_WORKER_FUNCTION_NAME,
       handler: "shittim_records.momotalk_handlers.worker_handler", code,
       timeout: Duration.minutes(5), memorySize: 1024, reservedConcurrentExecutions: 1,
-      environment: momotalkEnvironment,
+      environment: {
+        ...momotalkEnvironment,
+        MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME: momotalkAnnouncement.functionName,
+      },
       policyStatements: [
         ...momotalkStatePolicies(),
         new iam.PolicyStatement({
@@ -1228,6 +1283,9 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    momotalkWorker.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["lambda:InvokeFunction"], resources: [momotalkAnnouncement.functionArn],
+    }));
     momotalkWorker.addEventSource(new eventSources.SqsEventSource(momotalkQueue, {
       batchSize: 1, reportBatchItemFailures: true,
     }));
@@ -1296,6 +1354,7 @@ export class RecordsApplicationStack extends Stack {
     const statusFunctionNames = {
       records_momotalk_collector: MOMOTALK_COLLECTOR_FUNCTION_NAME,
       records_momotalk_worker: MOMOTALK_WORKER_FUNCTION_NAME,
+      records_momotalk_announcement: MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME,
       image_admission: "shittim-chest-production-image-admission",
       discord_status: "shittim-chest-production-discord-status-publisher",
       runtime_reconciler: "shittim-chest-production-runtime-reconciler",
@@ -1318,6 +1377,7 @@ export class RecordsApplicationStack extends Stack {
       MEMORIAL_WORKER_FUNCTION_NAME,
       MOMOTALK_COLLECTOR_FUNCTION_NAME,
       MOMOTALK_WORKER_FUNCTION_NAME,
+      MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME,
     ] as const;
     const memorialStatusFunctionArns = memorialStatusFunctionNames.map((functionName) =>
       this.formatArn({
@@ -1642,6 +1702,7 @@ export class RecordsApplicationStack extends Stack {
               openAiCostSchedule.ruleArn,
               inspectorTranslationSchedule.ruleArn,
               momotalkWeeklyRule.ruleArn,
+              momotalkAnnouncementRule.ruleArn,
               this.formatArn({
                 service: "events",
                 resource: "rule",

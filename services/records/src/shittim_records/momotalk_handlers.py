@@ -1,5 +1,6 @@
 """Composition roots for the weekly scheduler and private SQS consumer."""
 
+import json
 import logging
 import os
 from collections.abc import Mapping
@@ -11,6 +12,7 @@ import boto3
 from botocore.config import Config
 from pydantic import Field
 
+from shittim_records.contracts import MomotalkWeek
 from shittim_records.memorial_adapters import (
     MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
     MemorialConfigurationRepository,
@@ -127,7 +129,39 @@ def worker_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]
                 generator.close()
             if not succeeded:
                 failures.append({"itemIdentifier": record["messageId"]})
+                continue
+            # Publication does not wait for images. A retry uses saved checkpoints;
+            # notification dispatch must never undo a completed conversation.
+            try:
+                announce_if_readable(store, job, now=datetime.now(UTC))
+            except Exception as error:
+                LOGGER.error(
+                    "momotalk_announcement_dispatch_failed category=%s", type(error).__name__
+                )
+                failures.append({"itemIdentifier": record["messageId"]})
         except Exception as error:
             LOGGER.error("momotalk_generation_failed category=%s", type(error).__name__)
             failures.append({"itemIdentifier": record["messageId"]})
     return {"batchItemFailures": failures}
+
+
+def announce_if_readable(store: DynamoMomotalkStore, job: Job, *, now: datetime) -> None:
+    week_id = validate_week_id(job.week_id)
+    stored_week = store.get_week(week_id)
+    if stored_week is None:
+        return
+    week = MomotalkWeek.model_validate(stored_week["week"])
+    if now < week.publish_at:
+        return
+    room = store.get_room(week_id, job.room_id)
+    if room is None or room.state != "ready":
+        return
+    response = boto3.client("lambda", config=SDK_CONFIG).invoke(
+        FunctionName=os.environ["MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME"],
+        InvocationType="Event",
+        Payload=json.dumps({"source": "shittim.momotalk", "weekId": job.week_id}).encode(),
+    )
+    if payload := response.get("Payload"):
+        payload.close()
+    if response.get("StatusCode") != 202:
+        raise RuntimeError("MOMOTALK_ANNOUNCEMENT_NOT_ACCEPTED")

@@ -223,6 +223,9 @@ const adminFunctionKeys = [
   "records_inspector_translation",
   "records_memorial_api",
   "records_memorial_worker",
+  "records_momotalk_collector",
+  "records_momotalk_worker",
+  "records_momotalk_announcement",
   "records_admin_status",
   "records_admin_config",
 ] as const;
@@ -523,6 +526,12 @@ const adminStatus = {
             { name: `${key}_day_failures`, value: 0 },
           ],
         ),
+        ...["momotalk_weekly", "momotalk_announcement"].flatMap((key, index) => [
+          { name: `${key}_state`, value: "ENABLED" },
+          { name: `${key}_expression`, value: `cron(0 ${index === 0 ? 9 : 11} ? * SUN *)` },
+          { name: `${key}_day_invocations`, value: 0 },
+          { name: `${key}_day_failures`, value: 0 },
+        ]),
       ],
     },
     {
