@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 from shittim_chest.adapters.discord.announcements import AnnouncementError, AnnouncementTarget
+from shittim_chest.adapters.dynamodb.codec import marshal_item
 from shittim_chest.application.discord import (
     DiscordBotSlot,
     DiscordIdentityConfig,
@@ -19,6 +20,30 @@ from tests.test_momotalk import ROOM_ID, WEEK
 
 from shittim_records import momotalk_announcements as notice
 from shittim_records import momotalk_handlers as handlers
+from shittim_records.momotalk import PARTICIPANTS, ConversationPlan, Room, SavedMessage, Turn
+from shittim_records.momotalk_adapters import DynamoMomotalkStore
+
+
+def ready_room() -> Room:
+    plan = ConversationPlan(
+        summary="架空の雑談",
+        images=[],
+        turns=[
+            Turn(participant=PARTICIPANTS[index], topic="架空の話題")
+            for index in (0, 1, 0, 2, 1, 2, 0, 2, 1)
+        ],
+    )
+    return Room(
+        week_id=WEEK.week_id,
+        room_id=ROOM_ID,
+        display_name="テスト利用者",
+        question_count=0,
+        state="ready",
+        plan=plan,
+        messages=[
+            SavedMessage(participant=turn.participant, text="架空の発言") for turn in plan.turns
+        ],
+    )
 
 
 class Receipts:
@@ -140,6 +165,45 @@ def test_no_early_or_unreadable_announcement(api, runtime, ready, offset):
     assert calls == []
     resolve.assert_not_called()
     assert not store.receipts
+
+
+@pytest.mark.parametrize("corruption", ["flag_only", "incomplete", "key", "version"])
+def test_invalid_ready_checkpoint_never_announces(api, runtime, corruption):
+    client, _state, calls, resolve = api
+    database = Mock()
+    database.get_item.side_effect = [
+        {},
+        {"Item": marshal_item({"week": WEEK.model_dump(mode="json")})},
+    ]
+    item = DynamoMomotalkStore(database, "statistics")._item(ready_room())
+    if corruption == "flag_only":
+        item["payload"] = {"state": "ready"}
+    elif corruption == "incomplete":
+        item["payload"]["messages"] = []
+    elif corruption == "key":
+        item["SK"] = "b" * 43
+    else:
+        item["version"] += 1
+    database.get_paginator.return_value.paginate.return_value = [{"Items": [marshal_item(item)]}]
+    with pytest.raises(AnnouncementError, match="momotalk_publication_invalid"):
+        publish(notice.DynamoMomotalkAnnouncements(database, "statistics"), client, runtime)
+    assert calls == []
+    resolve.assert_not_called()
+    database.put_item.assert_not_called()
+    database.update_item.assert_not_called()
+
+
+def test_readable_finds_valid_conversation_on_later_page():
+    database = Mock()
+    database.get_item.return_value = {"Item": marshal_item({"week": WEEK.model_dump(mode="json")})}
+    item = DynamoMomotalkStore(database, "statistics")._item(ready_room())
+    database.get_paginator.return_value.paginate.return_value = [
+        {"Items": []},
+        {"Items": [marshal_item(item)]},
+    ]
+    assert notice.DynamoMomotalkAnnouncements(database, "statistics").readable(
+        WEEK.week_id, WEEK.publish_at
+    )
 
 
 @pytest.mark.parametrize("visible_in_history", [True, False])

@@ -24,6 +24,7 @@ from shittim_chest.domain.identifiers import DebateId
 from tests.factories import NOW, completed_snapshot, presentation
 from tests.test_momotalk import ROOM_ID, START, WEEK
 from tests.test_momotalk import snapshot as momotalk_snapshot
+from tests.test_momotalk_announcements import ready_room
 
 from shittim_records.adapters import ArchiveRepository
 from shittim_records.admin import AdminFailure, PromptRevisionSummary
@@ -53,13 +54,13 @@ def test_momotalk_publication_and_exclusive_announcement_receipt(dynamodb_client
     notices = DynamoMomotalkAnnouncements(dynamodb_client, table)
     week_id = WEEK.week_id
     assert not notices.readable(week_id, WEEK.publish_at)
-    DynamoMomotalkStore(dynamodb_client, table).create_week(momotalk_snapshot(), "version-1")
+    store = DynamoMomotalkStore(dynamodb_client, table)
+    store.create_week(momotalk_snapshot(), "version-1")
     assert not notices.readable(week_id, WEEK.publish_at)
-    key = {"PK": f"MOMOTALK#WEEK#{week_id}", "SK": ROOM_ID}
     for state in ("preparing", "failed", "ready"):
         dynamodb_client.put_item(
             TableName=table,
-            Item=marshal_item({**key, "record_type": "momotalk_room", "payload": {"state": state}}),
+            Item=marshal_item(store._item(ready_room().model_copy(update={"state": state}))),
         )
         assert not notices.readable(week_id, WEEK.publish_at - timedelta(seconds=1))
         assert notices.readable(week_id, WEEK.publish_at) == (state == "ready")

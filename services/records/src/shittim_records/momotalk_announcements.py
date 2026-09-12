@@ -27,8 +27,8 @@ from shittim_chest.config.models import parse_discord_runtime_config
 from shittim_chest.config.status_publisher import MODERATOR_TOKEN_PARAMETER
 
 from shittim_records.contracts import MomotalkWeek
-from shittim_records.momotalk import TOKYO, validate_week_id, week_for_schedule
-from shittim_records.momotalk_adapters import WEEKS_PK
+from shittim_records.momotalk import TOKYO, MomotalkFailure, validate_week_id, week_for_schedule
+from shittim_records.momotalk_adapters import WEEKS_PK, DynamoMomotalkStore
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -50,7 +50,7 @@ class Receipt:
 
 
 class DynamoMomotalkAnnouncements:
-    """Read publication metadata and persist content-free exclusive send attempts."""
+    """Validate readable rooms and persist content-free exclusive send attempts."""
 
     def __init__(self, client: DynamoDBClient, table_name: str) -> None:
         self.client = client
@@ -72,7 +72,8 @@ class DynamoMomotalkAnnouncements:
         week = MomotalkWeek.model_validate(unmarshal_item(result["Item"])["week"])
         if week != expected:
             raise AnnouncementError("momotalk_publication_invalid")
-        # Only the saved ready flag is needed; never load names or chat text here.
+        # Use the read API's checkpoint validation, not just the saved ready flag.
+        # Room contents stay in memory and are never included in the notice or logs.
         for page in self.client.get_paginator("query").paginate(
             TableName=self.table_name,
             KeyConditionExpression="PK = :pk",
@@ -81,10 +82,15 @@ class DynamoMomotalkAnnouncements:
             ExpressionAttributeValues=marshal_item(
                 {":pk": f"MOMOTALK#WEEK#{week_id}", ":type": "momotalk_room", ":ready": "ready"}
             ),
-            ProjectionExpression="payload.#state",
             ConsistentRead=True,
         ):
-            if page.get("Items"):
+            for item in page.get("Items", []):
+                try:
+                    room = DynamoMomotalkStore.decode_room(unmarshal_item(item))
+                except KeyError, ValueError, MomotalkFailure:
+                    raise AnnouncementError("momotalk_publication_invalid") from None
+                if room.week_id != week_id or room.state != "ready":
+                    raise AnnouncementError("momotalk_publication_invalid")
                 return True
         return False
 
