@@ -21,6 +21,7 @@ const recordsFunctionNames = [
   "memorial-worker",
   "momotalk-collector",
   "momotalk-worker",
+  "momotalk-announcement",
 ].map((name) => `shittim-chest-production-records-${name}`);
 
 type PolicyStatement = {
@@ -88,7 +89,7 @@ describe("RecordsApplicationStack", () => {
     const database = statements.filter(s => actionsOf(s).some(a => a.startsWith("dynamodb:")));
     expect(database).toHaveLength(1);
     expect(database[0]?.Condition).toEqual({
-      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#*"] },
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOMOTALK#WEEKS", "MOMOTALK#WEEK#*"] },
       Null: { "dynamodb:LeadingKeys": "false" },
     });
     const text = JSON.stringify(worker);
@@ -108,6 +109,40 @@ describe("RecordsApplicationStack", () => {
     for (const route of ["/api/v1/momotalk/weeks", "/api/v1/momotalk/weeks/{weekId}/rooms", "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}"]) {
       template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: `GET ${route}` });
     }
+  });
+
+  test("announces published MomoTalk at 20 JST with isolated Discord and receipt permissions", () => {
+    const { template } = fixture;
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-momotalk-announcement",
+      Handler: "shittim_records.momotalk_announcements.handler",
+      Timeout: 180, MemorySize: 512, ReservedConcurrentExecutions: 1,
+    });
+    template.hasResourceProperties("AWS::Events::Rule", {
+      ScheduleExpression: "cron(0 11 ? * SUN *)",
+      Description: "Announce readable MomoTalk at 20:00 JST Sunday",
+    });
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const notifier = policies.filter(policy => JSON.stringify(policy).includes("MomotalkAnnouncementFunctionRole"));
+    const statements = notifier.flatMap(policy => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
+    const writes = statements.filter(statement => actionsOf(statement).includes("dynamodb:PutItem"));
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.Condition).toEqual({
+      "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["MOMOTALK#ANNOUNCEMENTS"] },
+      Null: { "dynamodb:LeadingKeys": "false" },
+    });
+    const text = JSON.stringify(notifier);
+    expect(text).toContain("production/discord/moderator/token");
+    expect(text).toContain("production/runtime/");
+    for (const forbidden of ["s3:", "AFFECTION#", "PROFILE#", "runtime-prompts", "production/personas", "openai"]) {
+      expect(text).not.toContain(forbidden);
+    }
+    const worker = policies.filter(policy => JSON.stringify(policy).includes("MomotalkWorkerFunctionRole"));
+    const invocations = worker.flatMap(policy => policy.Properties.PolicyDocument.Statement)
+      .filter((statement: PolicyStatement) => actionsOf(statement).includes("lambda:InvokeFunction"));
+    expect(invocations).toHaveLength(1);
+    expect(JSON.stringify(invocations[0].Resource)).toContain("MomotalkAnnouncementFunction");
+    expect(JSON.stringify(invocations[0].Resource)).not.toContain("*");
   });
 
   test("synthesizes when the deployment account is unresolved", () => {
@@ -259,7 +294,7 @@ describe("RecordsApplicationStack", () => {
         },
       },
     });
-    template.resourceCountIs("AWS::Events::Rule", 5);
+    template.resourceCountIs("AWS::Events::Rule", 6);
     template.hasResourceProperties("AWS::Events::Rule", {
       ScheduleExpression: "rate(15 minutes)",
       State: "ENABLED",
@@ -273,7 +308,7 @@ describe("RecordsApplicationStack", () => {
         },
       ],
     });
-    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 3);
+    template.resourceCountIs("AWS::Lambda::EventInvokeConfig", 4);
     template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
       FunctionName: {
         Ref: Match.stringLikeRegexp("^RankingFunction"),
@@ -903,7 +938,7 @@ describe("RecordsApplicationStack", () => {
         "Fn::GetAtt": [logicalId, "Arn"],
       });
     }
-    expect(statusEventBridgeArns).toHaveLength(6);
+    expect(statusEventBridgeArns).toHaveLength(7);
     expect(JSON.stringify(statusEventBridgeArns)).not.toContain(
       "ShittimChest-Prod-RecordsApplication-*",
     );

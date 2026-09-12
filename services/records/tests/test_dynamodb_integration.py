@@ -41,10 +41,54 @@ from shittim_records.inspector_translations import (
 from shittim_records.memorial import MemorialFailure
 from shittim_records.memorial_adapters import DynamoMemorialRepository
 from shittim_records.momotalk_adapters import DynamoMomotalkStore, MomotalkInputSource
+from shittim_records.momotalk_announcements import RECEIPTS_PK, DynamoMomotalkAnnouncements
 from shittim_records.projector import project_affection_profile
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
+
+
+def test_momotalk_publication_and_exclusive_announcement_receipt(dynamodb_client, table_names):
+    table = table_names[2]
+    notices = DynamoMomotalkAnnouncements(dynamodb_client, table)
+    week_id = WEEK.week_id
+    assert not notices.readable(week_id, WEEK.publish_at)
+    DynamoMomotalkStore(dynamodb_client, table).create_week(momotalk_snapshot(), "version-1")
+    assert not notices.readable(week_id, WEEK.publish_at)
+    key = {"PK": f"MOMOTALK#WEEK#{week_id}", "SK": ROOM_ID}
+    for state in ("preparing", "failed", "ready"):
+        dynamodb_client.put_item(
+            TableName=table,
+            Item=marshal_item({**key, "record_type": "momotalk_room", "payload": {"state": state}}),
+        )
+        assert not notices.readable(week_id, WEEK.publish_at - timedelta(seconds=1))
+        assert notices.readable(week_id, WEEK.publish_at) == (state == "ready")
+    assert notices.load(week_id) is None
+    assert notices.reserve(week_id, "a" * 64, WEEK.publish_at)
+    assert not notices.reserve(week_id, "b" * 64, WEEK.publish_at)
+    receipt = notices.load(week_id)
+    assert receipt is not None and receipt.state == "attempted"
+    with pytest.raises(dynamodb_client.exceptions.ConditionalCheckFailedException):
+        notices.mark_sent(week_id, "b" * 64, WEEK.publish_at)
+    notices.mark_sent(week_id, "a" * 64, WEEK.publish_at)
+    receipt = notices.load(week_id)
+    assert receipt is not None and receipt.state == "sent"
+    saved = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=table,
+            Key=marshal_item({"PK": RECEIPTS_PK, "SK": str(week_id)}),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert set(saved) == {
+        "PK",
+        "SK",
+        "schema_version",
+        "fingerprint",
+        "state",
+        "attempted_at",
+        "verified_at",
+    }
 
 
 def test_momotalk_checkpoints_claim_cas_and_pagination(dynamodb_client, table_names):

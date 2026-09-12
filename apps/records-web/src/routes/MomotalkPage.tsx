@@ -443,10 +443,7 @@ export default function MomotalkPage() {
                 </output>
               </>
             ) : (
-              <>
-                <h2>3人だけの、ここだけの話。</h2>
-                <p>質問者を選んで、今週の会話をのぞいてみましょう。</p>
-              </>
+              <h2>質問者を選択してください。</h2>
             )}
           </section>
         )}

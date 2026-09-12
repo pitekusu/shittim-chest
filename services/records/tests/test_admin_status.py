@@ -1691,6 +1691,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
         "translation-rule": descriptions["inspector_translation"],
         "stop-rule": descriptions["abnormal_stop"],
         "momotalk-rule": descriptions["momotalk_weekly"],
+        "momotalk-announcement-rule": descriptions["momotalk_announcement"],
     }
 
     class Events:
@@ -1734,7 +1735,14 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
         cloudwatch=EventMetrics(),
     )
     cast(Any, status_source)._stack_resources = lambda stack, _type: (
-        ("ranking-rule", "aws-rule", "openai-rule", "translation-rule", "momotalk-rule")
+        (
+            "ranking-rule",
+            "aws-rule",
+            "openai-rule",
+            "translation-rule",
+            "momotalk-rule",
+            "momotalk-announcement-rule",
+        )
         if stack == "records_application"
         else ("stop-rule",)
     )

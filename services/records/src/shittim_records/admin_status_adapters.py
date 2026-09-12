@@ -71,6 +71,7 @@ ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
         "records_memorial_worker": "shittim-chest-production-records-memorial-worker",
         "records_momotalk_collector": "shittim-chest-production-records-momotalk-collector",
         "records_momotalk_worker": "shittim-chest-production-records-momotalk-worker",
+        "records_momotalk_announcement": "shittim-chest-production-records-momotalk-announcement",
         "records_read": "shittim-chest-production-records-read",
         "records_ogp": "shittim-chest-production-records-ogp",
         "records_admin_config": "shittim-chest-production-records-admin-config",
@@ -129,6 +130,7 @@ _EVENT_RULE_DESCRIPTIONS = {
     "inspector_translation": "Translate unseen active Inspector descriptions hourly at minute 7",
     "abnormal_stop": "Notify only abnormal singleton runtime task stops",
     "momotalk_weekly": "Collect weekly MomoTalk inputs at 18:00 JST Sunday",
+    "momotalk_announcement": "Announce readable MomoTalk at 20:00 JST Sunday",
 }
 _STABLE_STACK_STATUSES = frozenset({"CREATE_COMPLETE", "IMPORT_COMPLETE", "UPDATE_COMPLETE"})
 _CRITICAL_STACK_STATUS_PARTS = ("FAILED", "ROLLBACK_IN_PROGRESS", "DELETE_")
