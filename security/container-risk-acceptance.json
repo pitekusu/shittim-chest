@@ -1,5 +1,78 @@
 {
   "schema_version": 6,
   "maximum_validity_days": 90,
-  "acceptances": []
+  "acceptances": [
+    {
+      "vulnerability_id": "CVE-2026-5450",
+      "package": "libc6",
+      "image_config_digests": {
+        "production": [
+          "sha256:8e20ee4f1a462fb0705213ffb08fb464d0b36f9f0ec0ea9c92c575e382a382b3"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "Debian marks the installed libc6 2.41-12+deb13u4 as fixed; the published Grype database still reports the previous unfixed classification.",
+      "impact": "On vulnerable glibc builds, scanf with a crafted %mc width can overflow a heap buffer. This acceptance covers the stale scanner finding on the measured patched image, not vulnerable package versions.",
+      "exploitability": "The ARM64 runtime SBOM contains the exact Debian fixed package version. Container isolation is not the justification for this exception; the applied vendor fix is.",
+      "evidence": "PR #357 CI run 34703055639 records libc6 2.41-12+deb13u4 and the scoped production config digest. https://security-tracker.debian.org/tracker/CVE-2026-5450 lists that trixie version as fixed. Grype DB built 2026-09-12T06:27:25Z retains the unfixed finding; fixable High/Critical findings are zero. The user approved this four-finding, exact-image, seven-day exception on 2026-09-12 UTC.",
+      "approved_on": "2026-09-12",
+      "expires_on": "2026-09-19",
+      "reevaluation_conditions": "Remove when the updated Grype database or verified vendor VEX resolves this finding. Reevaluate if the Debian advisory, package version, image config digest, or vendor VEX changes; no automatic renewal or scope expansion.",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-5928",
+      "package": "libc6",
+      "image_config_digests": {
+        "production": [
+          "sha256:8e20ee4f1a462fb0705213ffb08fb464d0b36f9f0ec0ea9c92c575e382a382b3"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "Debian marks the installed libc6 2.41-12+deb13u4 as fixed; the published Grype database still reports the previous unfixed classification.",
+      "impact": "On vulnerable glibc builds, wide-character pushback can read before an allocated buffer and disclose heap data or crash. This acceptance covers the stale scanner finding on the measured patched image, not vulnerable package versions.",
+      "exploitability": "The ARM64 runtime SBOM contains the exact Debian fixed package version. Container isolation is not the justification for this exception; the applied vendor fix is.",
+      "evidence": "PR #357 CI run 34703055639 records libc6 2.41-12+deb13u4 and the scoped production config digest. https://security-tracker.debian.org/tracker/CVE-2026-5928 lists that trixie version as fixed. Grype DB built 2026-09-12T06:27:25Z retains the unfixed finding; fixable High/Critical findings are zero. The user approved this four-finding, exact-image, seven-day exception on 2026-09-12 UTC.",
+      "approved_on": "2026-09-12",
+      "expires_on": "2026-09-19",
+      "reevaluation_conditions": "Remove when the updated Grype database or verified vendor VEX resolves this finding. Reevaluate if the Debian advisory, package version, image config digest, or vendor VEX changes; no automatic renewal or scope expansion.",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-11822",
+      "package": "libsqlite3-0",
+      "image_config_digests": {
+        "production": [
+          "sha256:8e20ee4f1a462fb0705213ffb08fb464d0b36f9f0ec0ea9c92c575e382a382b3"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "Debian marks the installed libsqlite3-0 3.46.1-7+deb13u2 as fixed; the published Grype database still reports the previous unfixed classification.",
+      "impact": "On vulnerable SQLite builds, malicious FTS5 database pages can corrupt memory, crash the process, or execute code. This acceptance covers the stale scanner finding on the measured patched image, not vulnerable package versions.",
+      "exploitability": "The ARM64 runtime SBOM contains the exact Debian fixed package version. Container isolation is not the justification for this exception; the applied vendor fix is.",
+      "evidence": "PR #357 CI run 34703055639 records libsqlite3-0 3.46.1-7+deb13u2 and the scoped production config digest. https://security-tracker.debian.org/tracker/CVE-2026-11822 lists that trixie version as fixed. Grype DB built 2026-09-12T06:27:25Z retains the unfixed finding; fixable High/Critical findings are zero. The user approved this four-finding, exact-image, seven-day exception on 2026-09-12 UTC.",
+      "approved_on": "2026-09-12",
+      "expires_on": "2026-09-19",
+      "reevaluation_conditions": "Remove when the updated Grype database or verified vendor VEX resolves this finding. Reevaluate if the Debian advisory, package version, image config digest, or vendor VEX changes; no automatic renewal or scope expansion.",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-11824",
+      "package": "libsqlite3-0",
+      "image_config_digests": {
+        "production": [
+          "sha256:8e20ee4f1a462fb0705213ffb08fb464d0b36f9f0ec0ea9c92c575e382a382b3"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "Debian marks the installed libsqlite3-0 3.46.1-7+deb13u2 as fixed; the published Grype database still reports the previous unfixed classification.",
+      "impact": "On vulnerable SQLite builds, malformed FTS5 continuation metadata can underflow a length and cause a heap buffer overflow. This acceptance covers the stale scanner finding on the measured patched image, not vulnerable package versions.",
+      "exploitability": "The ARM64 runtime SBOM contains the exact Debian fixed package version. Container isolation is not the justification for this exception; the applied vendor fix is.",
+      "evidence": "PR #357 CI run 34703055639 records libsqlite3-0 3.46.1-7+deb13u2 and the scoped production config digest. https://security-tracker.debian.org/tracker/CVE-2026-11824 lists that trixie version as fixed. Grype DB built 2026-09-12T06:27:25Z retains the unfixed finding; fixable High/Critical findings are zero. The user approved this four-finding, exact-image, seven-day exception on 2026-09-12 UTC.",
+      "approved_on": "2026-09-12",
+      "expires_on": "2026-09-19",
+      "reevaluation_conditions": "Remove when the updated Grype database or verified vendor VEX resolves this finding. Reevaluate if the Debian advisory, package version, image config digest, or vendor VEX changes; no automatic renewal or scope expansion.",
+      "owner": "pitekusu"
+    }
+  ]
 }
