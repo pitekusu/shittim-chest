@@ -35,14 +35,15 @@ def test_time_context_uses_tokyo_period_and_season(
     assert context.local_datetime.endswith("+09:00")
 
 
-def test_content_collapses_whitespace_and_appends_the_citation() -> None:
+def test_content_preserves_paragraphs_and_appends_the_citation() -> None:
     content = prepare_farewell_content(
-        "短い挨拶です。\r\n URLや **Markdown** も本文では拒否しません。",
+        "  短い挨拶です。\r\n 続きです。\r\n \t\r\n"
+        " URLや  **Markdown** も本文では拒否しません。 \n",
         "https://example.test/source",
     )
 
     assert content == (
-        "短い挨拶です。 URLや **Markdown** も本文では拒否しません。"
+        "短い挨拶です。\n続きです。\n\nURLや **Markdown** も本文では拒否しません。"
         "\n参考リンク: https://example.test/source"
     )
 
