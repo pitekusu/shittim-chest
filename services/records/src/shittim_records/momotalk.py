@@ -84,6 +84,8 @@ class WeeklyInput(StoredModel):
 class Turn(StoredModel):
     participant: ParticipantSlot
     topic: str = Field(min_length=1, max_length=300, repr=False)
+    # Older checkpoints contain only topic text and remain resumable.
+    record_id: OpaqueId | None = None
 
 
 class ImageChoice(StoredModel):
