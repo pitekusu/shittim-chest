@@ -216,7 +216,8 @@ async def test_request_uses_message_only_schema_and_first_citation() -> None:
     assert set(FarewellOutputV2.model_fields) == {"message"}
     assert request["include"] == ["web_search_call.action.sources"]
     assert request["reasoning"] == {"effort": "medium"}
-    assert "180 to 300 characters" in request["instructions"]
+    assert "270 to 450 Japanese characters" in request["instructions"]
+    assert "2 to 4 short paragraphs separated by blank lines" in request["instructions"]
     assert "must include one concrete mention of today's Tokyo weather" in request["instructions"]
     assert "one news item" in request["instructions"]
     assert "from today that this persona would naturally like" in request["instructions"]

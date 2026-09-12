@@ -55,7 +55,8 @@ def farewell_time_context(now: datetime) -> FarewellTimeContext:
 def prepare_farewell_content(message: str, citation_url: str) -> str:
     """Render one available greeting plus its first provider citation."""
 
-    normalized = " ".join(message.split())
+    # Keep the model's paragraphs; normalize line endings and in-line whitespace only.
+    normalized = "\n".join(" ".join(line.split()) for line in message.splitlines()).strip()
     if not normalized:
         raise ValueError("farewell content must not be empty")
     reference = f"\n参考リンク: {citation_url}"
