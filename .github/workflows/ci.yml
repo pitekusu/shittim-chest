@@ -532,8 +532,9 @@ jobs:
           restore-keys: |
             grype-db-${{ runner.os }}-
       - name: Update the Grype vulnerability database
-        if: steps.grype-database-cache.outputs.cache-hit != 'true'
         run: |
+          # The cache can predate today's database publication. Check for updates
+          # even on a cache hit; db update reuses an already-current database.
           "${RUNNER_TEMP}/grype" db update
       - name: Generate complete unfiltered Grype JSON reports
         env:
