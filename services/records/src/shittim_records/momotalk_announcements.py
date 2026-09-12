@@ -74,14 +74,11 @@ class DynamoMomotalkAnnouncements:
             raise AnnouncementError("momotalk_publication_invalid")
         # Use the read API's checkpoint validation, not just the saved ready flag.
         # Room contents stay in memory and are never included in the notice or logs.
+        has_ready_room = False
         for page in self.client.get_paginator("query").paginate(
             TableName=self.table_name,
             KeyConditionExpression="PK = :pk",
-            FilterExpression="record_type = :type AND payload.#state = :ready",
-            ExpressionAttributeNames={"#state": "state"},
-            ExpressionAttributeValues=marshal_item(
-                {":pk": f"MOMOTALK#WEEK#{week_id}", ":type": "momotalk_room", ":ready": "ready"}
-            ),
+            ExpressionAttributeValues=marshal_item({":pk": f"MOMOTALK#WEEK#{week_id}"}),
             ConsistentRead=True,
         ):
             for item in page.get("Items", []):
@@ -89,10 +86,11 @@ class DynamoMomotalkAnnouncements:
                     room = DynamoMomotalkStore.decode_room(unmarshal_item(item))
                 except KeyError, ValueError, MomotalkFailure:
                     raise AnnouncementError("momotalk_publication_invalid") from None
-                if room.week_id != week_id or room.state != "ready":
+                if room.week_id != week_id:
                     raise AnnouncementError("momotalk_publication_invalid")
-                return True
-        return False
+                if room.state == "ready":
+                    has_ready_room = True
+        return has_ready_room
 
     def load(self, week_id: date) -> Receipt | None:
         result = self.client.get_item(

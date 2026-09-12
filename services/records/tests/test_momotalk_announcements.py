@@ -167,24 +167,34 @@ def test_no_early_or_unreadable_announcement(api, runtime, ready, offset):
     assert not store.receipts
 
 
-@pytest.mark.parametrize("corruption", ["flag_only", "incomplete", "key", "version"])
-def test_invalid_ready_checkpoint_never_announces(api, runtime, corruption):
+@pytest.mark.parametrize("corruption", ["flag_only", "incomplete", "key", "version", "preparing"])
+def test_invalid_checkpoint_after_ready_room_never_announces(api, runtime, corruption):
     client, _state, calls, resolve = api
     database = Mock()
     database.get_item.side_effect = [
         {},
         {"Item": marshal_item({"week": WEEK.model_dump(mode="json")})},
     ]
-    item = DynamoMomotalkStore(database, "statistics")._item(ready_room())
+    store = DynamoMomotalkStore(database, "statistics")
+    valid_item = store._item(ready_room())
+    item = store._item(ready_room().model_copy(update={"room_id": "b" * 43}))
     if corruption == "flag_only":
         item["payload"] = {"state": "ready"}
     elif corruption == "incomplete":
         item["payload"]["messages"] = []
     elif corruption == "key":
-        item["SK"] = "b" * 43
-    else:
+        item["SK"] = "c" * 43
+    elif corruption == "version":
         item["version"] += 1
-    database.get_paginator.return_value.paginate.return_value = [{"Items": [marshal_item(item)]}]
+    else:
+        item["payload"] = {"state": "preparing"}
+    # A valid first room must not hide a broken row, even on a later query page.
+    items = [marshal_item(valid_item), marshal_item(item)]
+    database.get_paginator.return_value.paginate.return_value = (
+        [{"Items": items[:1]}, {"Items": items[1:]}]
+        if corruption in ("key", "version")
+        else [{"Items": items}]
+    )
     with pytest.raises(AnnouncementError, match="momotalk_publication_invalid"):
         publish(notice.DynamoMomotalkAnnouncements(database, "statistics"), client, runtime)
     assert calls == []
@@ -196,10 +206,14 @@ def test_invalid_ready_checkpoint_never_announces(api, runtime, corruption):
 def test_readable_finds_valid_conversation_on_later_page():
     database = Mock()
     database.get_item.return_value = {"Item": marshal_item({"week": WEEK.model_dump(mode="json")})}
-    item = DynamoMomotalkStore(database, "statistics")._item(ready_room())
+    store = DynamoMomotalkStore(database, "statistics")
+    item = store._item(ready_room())
+    preparing = store._item(
+        ready_room().model_copy(update={"room_id": "b" * 43, "state": "preparing"})
+    )
     database.get_paginator.return_value.paginate.return_value = [
         {"Items": []},
-        {"Items": [marshal_item(item)]},
+        {"Items": [marshal_item(preparing), marshal_item(item)]},
     ]
     assert notice.DynamoMomotalkAnnouncements(database, "statistics").readable(
         WEEK.week_id, WEEK.publish_at
