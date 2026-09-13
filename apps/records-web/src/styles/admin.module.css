@@ -861,6 +861,49 @@
   font-variant-numeric: tabular-nums;
 }
 
+.queueTable {
+  min-width: 510px;
+}
+
+.queueTable caption {
+  padding: 12px;
+  text-align: left;
+}
+
+.queueTable th:first-child {
+  width: 38%;
+}
+
+.resourceTable.queueTable td,
+.queueTable thead th:not(:first-child) {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.queueKind,
+.queueAlert {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.65rem;
+}
+
+.queueKind {
+  color: var(--records-ink-600);
+  font-weight: 400;
+}
+
+.queueTable tr[data-alert="true"] {
+  background: color-mix(in srgb, var(--records-pink-ink) 9%, transparent);
+  box-shadow: inset 3px 0 var(--records-pink-ink);
+}
+
+.queueAlert,
+.queueTable [data-alert="true"] td,
+.queueTable td[data-alert="true"] {
+  color: var(--records-pink-ink);
+  font-weight: 800;
+}
+
 .storageOverview > div,
 .requestSummary > div {
   border: 1px solid var(--records-line);
@@ -2436,6 +2479,63 @@
 }
 
 @media (max-width: 767px) {
+  .queueTable,
+  .queueTable caption,
+  .queueTable tbody {
+    display: block;
+    min-width: 0;
+  }
+
+  .queueTable thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .queueTable tr {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 10px;
+    gap: 8px 4px;
+    border-bottom: 1px solid var(--records-line);
+  }
+
+  .queueTable tr:last-child {
+    border-bottom: 0;
+  }
+
+  .queueSettingsTable tr {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .resourceTable.queueTable th,
+  .resourceTable.queueTable td {
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .queueTable th:first-child {
+    grid-column: 1 / -1;
+    width: auto;
+  }
+
+  .resourceTable.queueTable td {
+    text-align: left;
+  }
+
+  .queueTable td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    color: var(--records-ink-600);
+    font-size: 0.6rem;
+    font-weight: 400;
+  }
+
   .sectionNavigation {
     top: 8px;
   }

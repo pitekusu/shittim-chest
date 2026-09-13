@@ -112,31 +112,6 @@ const SIMPLE_METRICS: Readonly<
     { name: "hour_4xx_rate", label: "4xx率" },
     { name: "hour_5xx_rate", label: "5xx率" },
   ],
-  sqs: [
-    { name: "visible_messages", label: "投影DLQ・未処理" },
-    { name: "inflight_messages", label: "投影DLQ・処理中" },
-    { name: "delayed_messages", label: "投影DLQ・遅延" },
-    { name: "oldest_message_age_seconds", label: "投影DLQ・最古" },
-    { name: "encrypted", label: "投影DLQ・暗号化" },
-    { name: "retention_seconds", label: "投影DLQ・保存期間" },
-    { name: "memorial_queued_messages", label: "メモリアル生成待ち" },
-    { name: "memorial_inflight_messages", label: "メモリアル生成中" },
-    { name: "memorial_delayed_messages", label: "メモリアル遅延" },
-    { name: "memorial_oldest_message_age_seconds", label: "メモリアル最古" },
-    { name: "memorial_encrypted", label: "メモリアル暗号化" },
-    { name: "memorial_retention_seconds", label: "メモリアル保存期間" },
-    { name: "memorial_dlq_visible_messages", label: "生成DLQ・未処理" },
-    { name: "memorial_dlq_inflight_messages", label: "生成DLQ・処理中" },
-    { name: "memorial_dlq_delayed_messages", label: "生成DLQ・遅延" },
-    { name: "memorial_dlq_oldest_message_age_seconds", label: "生成DLQ・最古" },
-    { name: "memorial_dlq_encrypted", label: "生成DLQ・暗号化" },
-    { name: "memorial_dlq_retention_seconds", label: "生成DLQ・保存期間" },
-    { name: "momotalk_visible_messages", label: "モモトーク生成待ち" },
-    { name: "momotalk_inflight_messages", label: "モモトーク生成中" },
-    { name: "momotalk_oldest_message_age_seconds", label: "モモトーク最古" },
-    { name: "momotalk_dlq_visible_messages", label: "モモトークDLQ・未処理" },
-    { name: "momotalk_dlq_oldest_message_age_seconds", label: "モモトークDLQ・最古" },
-  ],
   sns: [
     { name: "confirmed_subscriptions", label: "確認済み購読" },
     { name: "pending_subscriptions", label: "確認待ち購読" },
@@ -150,6 +125,24 @@ const S3_RESOURCES = [
   { key: "media", label: "画像" },
   { key: "release", label: "リリース成果物" },
   { key: "memorial_upload", label: "メモリアル原本" },
+] as const;
+
+const SQS_QUEUES = [
+  { prefix: "memorial_", label: "メモリアル", dlq: false, waiting: "memorial_queued_messages" },
+  { prefix: "momotalk_", label: "モモトーク", dlq: false, waiting: "momotalk_visible_messages" },
+  { prefix: "", label: "記録・親愛度投影", dlq: true, waiting: "visible_messages" },
+  {
+    prefix: "memorial_dlq_",
+    label: "メモリアル",
+    dlq: true,
+    waiting: "memorial_dlq_visible_messages",
+  },
+  {
+    prefix: "momotalk_dlq_",
+    label: "モモトーク",
+    dlq: true,
+    waiting: "momotalk_dlq_visible_messages",
+  },
 ] as const;
 
 const DYNAMODB_RESOURCES = [
@@ -714,6 +707,102 @@ function SimpleMetricGrid({
     </dl>
   );
 }
+
+/* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Horizontally scrollable data tables need keyboard focus. */
+function SqsMetrics({ metrics: source }: { readonly metrics: readonly AdminStatusMetric[] }) {
+  const metrics = metricLookup(source);
+  return (
+    <>
+      <section className={adminStyles.tableScroller} aria-label="SQSキュー一覧" tabIndex={0}>
+        <table className={`${adminStyles.resourceTable} ${adminStyles.queueTable}`}>
+          <caption className={adminStyles.metricNote}>キュー別のメッセージ数</caption>
+          <thead>
+            <tr>
+              <th scope="col">キュー</th>
+              <th scope="col">待機</th>
+              <th scope="col">処理中</th>
+              <th scope="col">遅延</th>
+              <th scope="col">最古</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SQS_QUEUES.map((queue) => {
+              const names = [
+                queue.waiting,
+                `${queue.prefix}inflight_messages`,
+                `${queue.prefix}delayed_messages`,
+              ];
+              const hasFailedMessages =
+                queue.dlq && names.some((name) => Number(metrics.get(name)?.value ?? 0) > 0);
+              return (
+                <tr key={queue.prefix} data-alert={hasFailedMessages}>
+                  <th scope="row">
+                    {queue.label}
+                    <span className={adminStyles.queueKind}>
+                      {queue.dlq ? "失敗キュー / DLQ" : "生成キュー"}
+                    </span>
+                    {hasFailedMessages && (
+                      <span className={adminStyles.queueAlert}>! 失敗メッセージあり</span>
+                    )}
+                  </th>
+                  {names.map((name, index) => (
+                    <td key={name} data-label={["待機", "処理中", "遅延"][index]}>
+                      {metricValue(metrics, name)}
+                    </td>
+                  ))}
+                  <td data-label="最古">
+                    {metricValue(metrics, `${queue.prefix}oldest_message_age_seconds`)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
+      <p className={adminStyles.metricNote}>
+        待機は処理開始前、遅延は指定時間まで待機中の件数です。DLQの残件は確認が必要です。最古はメッセージの経過時間です。
+      </p>
+      <details className={adminStyles.serviceDisclosure}>
+        <summary>暗号化・保存期間を確認</summary>
+        <section className={adminStyles.tableScroller} aria-label="SQS保護設定" tabIndex={0}>
+          <table
+            className={`${adminStyles.resourceTable} ${adminStyles.queueTable} ${adminStyles.queueSettingsTable}`}
+          >
+            <thead>
+              <tr>
+                <th scope="col">キュー</th>
+                <th scope="col">暗号化</th>
+                <th scope="col">保存期間</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SQS_QUEUES.map((queue) => (
+                <tr key={queue.prefix}>
+                  <th scope="row">
+                    {queue.label}
+                    <span className={adminStyles.queueKind}>
+                      {queue.dlq ? "失敗キュー / DLQ" : "生成キュー"}
+                    </span>
+                  </th>
+                  <td
+                    data-label="暗号化"
+                    data-alert={metrics.get(`${queue.prefix}encrypted`)?.value === false}
+                  >
+                    {metricValue(metrics, `${queue.prefix}encrypted`)}
+                  </td>
+                  <td data-label="保存期間">
+                    {metricValue(metrics, `${queue.prefix}retention_seconds`)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </details>
+    </>
+  );
+}
+/* oxlint-enable jsx-a11y/no-noninteractive-tabindex */
 
 function signerValidity(metrics: ReadonlyMap<string, AdminStatusMetric>): string {
   const rawValue = metrics.get("validity_value")?.value;
@@ -1876,6 +1965,7 @@ function ServiceMetrics({
     return <DynamoDbMetrics metrics={section.metrics} translationMetrics={translationMetrics} />;
   }
   if (section.service === "lambda") return <LambdaMetrics metrics={section.metrics} />;
+  if (section.service === "sqs") return <SqsMetrics metrics={section.metrics} />;
   if (section.service === "apigateway") return <ApiGatewayMetrics metrics={section.metrics} />;
   if (section.service === "eventbridge") return <EventBridgeMetrics metrics={section.metrics} />;
   if (section.service === "cloudformation") {
@@ -1907,6 +1997,7 @@ function ServiceCard({
     section.service === "s3" ||
     section.service === "dynamodb" ||
     section.service === "lambda" ||
+    section.service === "sqs" ||
     section.service === "apigateway" ||
     section.service === "eventbridge" ||
     section.service === "cloudformation" ||

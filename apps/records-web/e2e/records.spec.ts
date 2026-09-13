@@ -462,8 +462,8 @@ const adminStatus = {
     },
     {
       service: "sqs",
-      state: "healthy",
-      summary: "投影DLQとメモリアル生成キューの状態は正常です。",
+      state: "warning",
+      summary: "非同期処理の滞留、DLQ、または保護設定を確認してください。",
       metrics: [
         { name: "visible_messages", value: 0 },
         { name: "inflight_messages", value: 0 },
@@ -483,6 +483,20 @@ const adminStatus = {
         { name: "memorial_dlq_oldest_message_age_seconds", value: "0.000" },
         { name: "memorial_dlq_encrypted", value: true },
         { name: "memorial_dlq_retention_seconds", value: 1_209_600 },
+        ...["momotalk", "momotalk_dlq"].flatMap((prefix) => [
+          { name: `${prefix}_visible_messages`, value: prefix.endsWith("dlq") ? 2 : 0 },
+          { name: `${prefix}_inflight_messages`, value: 0 },
+          { name: `${prefix}_delayed_messages`, value: 0 },
+          {
+            name: `${prefix}_oldest_message_age_seconds`,
+            value: prefix.endsWith("dlq") ? "900.000" : "0.000",
+          },
+          { name: `${prefix}_encrypted`, value: true },
+          {
+            name: `${prefix}_retention_seconds`,
+            value: prefix.endsWith("dlq") ? 1_209_600 : 86_400,
+          },
+        ]),
       ],
     },
     {
@@ -2317,11 +2331,25 @@ test("service status page presents localized visual status", async ({ page }, te
   const dynamodbCard = page.locator("#admin-service-dynamodb");
   await expect(dynamodbCard.getByRole("region", { name: "親愛度データ" })).toBeVisible();
   await expect(dynamodbCard).toContainText("プロフィール7 人");
-  await expect(page.getByRole("rowheader", { name: /^記録・親愛度投影/ })).toBeVisible();
+  await expect(
+    page.locator("#admin-service-lambda").getByRole("rowheader", { name: /^記録・親愛度投影/ }),
+  ).toBeVisible();
   await expect(page.getByRole("rowheader", { name: /^ランキング・親愛度集計/ })).toHaveCount(2);
   await expect(page.getByText("非同期処理・失敗イベント", { exact: true })).toBeVisible();
-  await expect(page.getByText("メモリアル生成待ち", { exact: true })).toBeVisible();
-  await expect(page.getByText("生成DLQ・未処理", { exact: true })).toBeVisible();
+  const queues = page.getByRole("region", { name: "SQSキュー一覧" });
+  await expect(queues.getByRole("row")).toHaveCount(6);
+  await expect(
+    queues.getByRole("rowheader", { name: "モモトーク 生成キュー", exact: true }),
+  ).toBeVisible();
+  await expect(
+    queues.getByRole("rowheader", { name: "メモリアル 失敗キュー / DLQ", exact: true }),
+  ).toBeVisible();
+  const queueSettings = page.getByText("暗号化・保存期間を確認", { exact: true });
+  await queueSettings.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("region", { name: "SQS保護設定" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("region", { name: "SQS保護設定" })).toBeHidden();
   await expect(page.getByRole("region", { name: "CloudFormation Stack状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "予算状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "外部集計状態" })).toBeVisible();
@@ -2354,7 +2382,7 @@ test("service status page presents localized visual status", async ({ page }, te
     fullPage: true,
     maxDiffPixels: 20,
   });
-  for (const service of ["s3", "dynamodb", "lambda", "apigateway"]) {
+  for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs"]) {
     await page.locator(`#admin-service-${service}`).screenshot({
       path: testInfo.outputPath(`${service}-desktop.png`),
       animations: "disabled",
@@ -2395,6 +2423,21 @@ test("service status page contains wide status tables on mobile", async ({ page 
   expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   expect(await page.locator("#admin-service-s3").evaluate((element) => element.scrollLeft)).toBe(0);
+  const queues = page.getByRole("region", { name: "SQSキュー一覧" });
+  expect(
+    await queues.evaluate((element) => element.scrollWidth - element.clientWidth),
+  ).toBeLessThanOrEqual(1);
+  // Isolate the card from the existing sticky navigation in component screenshots.
+  await page.getByRole("navigation", { name: "管理画面内ナビゲーション" }).evaluate((element) => {
+    element.style.position = "static";
+  });
+  await page.getByRole("navigation", { name: "モバイルナビゲーション" }).evaluate((element) => {
+    element.style.visibility = "hidden";
+  });
+  await page.locator("#admin-service-sqs").screenshot({
+    path: testInfo.outputPath("sqs-mobile-dark.png"),
+    animations: "disabled",
+  });
   await page.locator("#admin-service-lambda").screenshot({
     path: testInfo.outputPath("lambda-mobile-dark.png"),
     animations: "disabled",
@@ -2402,10 +2445,14 @@ test("service status page contains wide status tables on mobile", async ({ page 
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
   // Check the changed card content; existing header badges are outside this change.
   const lightCards = new AxeBuilder({ page }).exclude("header");
-  for (const service of ["s3", "dynamodb", "lambda", "apigateway"]) {
+  for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs"]) {
     lightCards.include(`#admin-service-${service}`);
   }
   expect((await lightCards.analyze()).violations).toEqual([]);
+  await page.locator("#admin-service-sqs").screenshot({
+    path: testInfo.outputPath("sqs-mobile-light.png"),
+    animations: "disabled",
+  });
   await page.locator("#admin-service-s3").screenshot({
     path: testInfo.outputPath("s3-mobile-light.png"),
     animations: "disabled",
