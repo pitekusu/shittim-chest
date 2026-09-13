@@ -64,6 +64,65 @@ afterEach(() => {
 });
 
 describe("AdminPage", () => {
+  it("compares queues, flags DLQ backlog and keeps missing metrics distinct from zero", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        response({
+          ...statusResponse,
+          sections: [
+            {
+              service: "sqs",
+              state: "warning",
+              summary: "DLQを確認してください。",
+              metrics: [
+                { name: "memorial_queued_messages", value: 3 },
+                { name: "memorial_inflight_messages", value: 1 },
+                { name: "memorial_delayed_messages", value: 0 },
+                { name: "memorial_oldest_message_age_seconds", value: "45.000" },
+                { name: "visible_messages", value: 0 },
+                { name: "inflight_messages", value: 0 },
+                { name: "delayed_messages", value: 1 },
+                { name: "momotalk_dlq_visible_messages", value: 2 },
+                { name: "momotalk_dlq_oldest_message_age_seconds", value: null },
+                { name: "momotalk_dlq_encrypted", value: false },
+                { name: "momotalk_dlq_retention_seconds", value: 1209600 },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderAdmin(false);
+    const queues = within(await screen.findByRole("region", { name: "SQSキュー一覧" }));
+    expect(queues.getAllByRole("row")).toHaveLength(6);
+    const generation = queues.getByRole("row", { name: /^メモリアル\s*生成キュー/ });
+    expect(generation).toHaveAttribute("data-alert", "false");
+    expect(
+      within(generation)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["3", "1", "0", "45秒"]);
+    expect(queues.getByRole("row", { name: /^記録・親愛度投影/ })).toHaveAttribute(
+      "data-alert",
+      "true",
+    );
+    const failure = queues.getByRole("row", { name: /^モモトーク\s*失敗キュー/ });
+    expect(failure).toHaveAttribute("data-alert", "true");
+    expect(
+      within(failure)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["2", "未取得", "未取得", "未取得"]);
+    expect(screen.getByRole("region", { name: "SQS保護設定" })).not.toBeVisible();
+    fireEvent.click(screen.getByText("暗号化・保存期間を確認"));
+    const settings = within(screen.getByRole("region", { name: "SQS保護設定" }));
+    const setting = settings.getByRole("row", { name: /^モモトーク\s*失敗キュー/ });
+    expect(setting).toHaveTextContent("無効14日");
+    expect(within(setting).getByText("無効")).toHaveAttribute("data-alert", "true");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("switches metric periods independently without fetching another snapshot", async () => {
     const fetchMock = vi.fn<typeof fetch>(() =>
       Promise.resolve(
