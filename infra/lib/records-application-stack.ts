@@ -1257,7 +1257,7 @@ export class RecordsApplicationStack extends Stack {
     const momotalkWorker = this.httpFunctionWithRole({
       id: "MomotalkWorkerFunction", functionName: MOMOTALK_WORKER_FUNCTION_NAME,
       handler: "shittim_records.momotalk_handlers.worker_handler", code,
-      timeout: Duration.minutes(5), memorySize: 1024, reservedConcurrentExecutions: 1,
+      timeout: Duration.minutes(5), memorySize: 1024, reservedConcurrentExecutions: 2,
       environment: {
         ...momotalkEnvironment,
         MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME: momotalkAnnouncement.functionName,
@@ -1287,7 +1287,8 @@ export class RecordsApplicationStack extends Stack {
       actions: ["lambda:InvokeFunction"], resources: [momotalkAnnouncement.functionArn],
     }));
     momotalkWorker.addEventSource(new eventSources.SqsEventSource(momotalkQueue, {
-      batchSize: 1, reportBatchItemFailures: true,
+      // SQS maximum concurrency starts at 2; match the worker reservation to avoid throttling.
+      batchSize: 1, reportBatchItemFailures: true, maxConcurrency: 2,
     }));
     const momotalkWeeklyRule = new events.Rule(this, "MomotalkWeeklyRule", {
       description: "Collect weekly MomoTalk inputs at 18:00 JST Sunday",

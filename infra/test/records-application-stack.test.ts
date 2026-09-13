@@ -73,7 +73,7 @@ describe("RecordsApplicationStack", () => {
     const { template } = fixture;
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-momotalk-worker",
-      Timeout: 300, MemorySize: 1024, ReservedConcurrentExecutions: 1,
+      Timeout: 300, MemorySize: 1024, ReservedConcurrentExecutions: 2,
     });
     template.hasResourceProperties("AWS::Events::Rule", {
       ScheduleExpression: "cron(0 9 ? * SUN *)",
@@ -81,6 +81,7 @@ describe("RecordsApplicationStack", () => {
     });
     template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
       BatchSize: 1, FunctionResponseTypes: ["ReportBatchItemFailures"],
+      ScalingConfig: { MaximumConcurrency: 2 },
       EventSourceArn: Match.objectLike({ "Fn::Join": Match.arrayWith([Match.arrayWith([Match.stringLikeRegexp("momotalk-generation$")])]) }),
     });
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
