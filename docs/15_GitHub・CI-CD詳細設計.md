@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-05
+updated: 2026-09-15
 ---
 
 # GitHub・CI-CD詳細設計
@@ -107,6 +107,9 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 | Buildx/BuildKit/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
 
 互換性のない自動更新は理由を記録してDependabot側で保留する。
+別PRで更新済みのDependabot PRを手動で閉じると、同じバージョンの後続ダイジェスト更新も既存PR扱いになることがある。
+その場合、ブランチが削除済みなら元PRのBotコミットを確認してそのブランチだけ先に復元し、その後、元PRを再オープンしてDependabotに再評価させる。
+古い差分は直接マージせず、再評価後の差分を確認する。再作成が必要な場合は`@dependabot recreate`を使う。
 Dockerのuv更新PRでも、CI・配信の`UV_VERSION`を同時に揃える。
 依存更新でイメージが変わる場合は、新しいSBOM・VEX・検査結果を確認して既存の期限付きリスク承認へ紐付ける。
 承認対象や期限の拡大、型検査の無効化で更新PRを通さない。
