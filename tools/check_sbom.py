@@ -100,7 +100,9 @@ def _project_purl(component: dict[str, object]) -> str:
     return _package_purl(name, version, "metadata.component")
 
 
-def validate_cyclonedx_text(text: str) -> CycloneDxInventory:
+def validate_cyclonedx_text(
+    text: str, *, local_project_purls: frozenset[str] = frozenset()
+) -> CycloneDxInventory:
     """Validate strict CycloneDX 1.5 JSON plus the uv export inventory contract."""
 
     document = _parse_json(text, "CycloneDX document")
@@ -129,7 +131,15 @@ def validate_cyclonedx_text(text: str) -> CycloneDxInventory:
             raise SbomError(f"duplicate bom-ref: {component_ref}")
         refs.add(component_ref)
 
-        purl = _text(component.get("purl"), f"components[{index}].purl")
+        raw_purl = component.get("purl")
+        # uv omits purls for directory dependencies. Recognize only project roots
+        # explicitly included in this comparison; lock/path validation follows.
+        if raw_purl is None:
+            local_purl = _project_purl(component)
+            if local_purl not in local_project_purls:
+                raise SbomError(f"component without purl is not an included project: {local_purl}")
+            raw_purl = local_purl
+        purl = _text(raw_purl, f"components[{index}].purl")
         if not purl.startswith(PYPI_PURL_PREFIX) or "@" not in purl:
             raise SbomError(f"resolved component must use a versioned PyPI purl: {purl}")
         if purl in package_purls:
@@ -167,6 +177,9 @@ def validate_project_inventory(
     inventory: CycloneDxInventory,
     lock_document: dict[str, object],
     project_document: dict[str, object],
+    *,
+    local_projects: dict[Path, str] | None = None,
+    lock_directory: Path = Path("."),
 ) -> None:
     """Require the source SBOM to describe this project and every locked registry package."""
 
@@ -195,9 +208,14 @@ def validate_project_inventory(
                 raise SbomError("uv.lock must contain exactly one editable project root")
             root_package_seen = True
             continue
-        if source.get("registry") != "https://pypi.org/simple":
-            raise SbomError(f"unsupported non-PyPI lock source for {name}=={version}: {source}")
         purl = _package_purl(name, version, f"uv.lock package[{index}]")
+        directory = source.get("directory")
+        is_known_local = (
+            isinstance(directory, str)
+            and (local_projects or {}).get((lock_directory / directory).resolve()) == purl
+        )
+        if source.get("registry") != "https://pypi.org/simple" and not is_known_local:
+            raise SbomError(f"unsupported non-PyPI lock source for {name}=={version}: {source}")
         if purl in locked_purls:
             raise SbomError(f"duplicate locked package purl: {purl}")
         locked_purls.add(purl)
@@ -254,12 +272,14 @@ def github_spdx_python_purls(document: dict[str, object]) -> frozenset[str]:
 def compare_inventories(
     cyclonedx_inventory: CycloneDxInventory,
     github_python_purls: frozenset[str],
+    additional_inventories: tuple[CycloneDxInventory, ...] = (),
 ) -> None:
     """Require GitHub's managed Python inventory to match the tested uv inventory."""
 
-    expected = set(cyclonedx_inventory.package_purls)
+    inventories = (cyclonedx_inventory, *additional_inventories)
+    expected = set().union(*(inventory.package_purls for inventory in inventories))
     missing = expected - github_python_purls
-    allowed = expected | {cyclonedx_inventory.project_purl}
+    allowed = expected | {inventory.project_purl for inventory in inventories}
     unexpected = github_python_purls - allowed
     if missing or unexpected:
         details: list[str] = []
@@ -282,19 +302,56 @@ def _parser() -> argparse.ArgumentParser:
     compare.add_argument("github_spdx", type=Path)
     compare.add_argument("--lock", type=Path, default=Path("uv.lock"))
     compare.add_argument("--project", type=Path, default=Path("pyproject.toml"))
+    compare.add_argument(
+        "--additional-source",
+        nargs=3,
+        action="append",
+        type=Path,
+        default=[],
+        metavar=("CYCLONEDX", "LOCK", "PROJECT"),
+        help="include another locked Python project in the repository-wide comparison",
+    )
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
     try:
-        cyclonedx = validate_cyclonedx_text(_read_text(args.cyclonedx))
+        sources = [(args.cyclonedx, args.lock, args.project)]
+        if args.command == "compare-github":
+            sources.extend(args.additional_source)
         try:
-            lock_document = _object(tomllib.loads(_read_text(args.lock)), "uv.lock")
-            project_document = _object(tomllib.loads(_read_text(args.project)), "pyproject.toml")
+            project_documents = tuple(
+                _object(tomllib.loads(_read_text(source[2])), "pyproject.toml")
+                for source in sources
+            )
         except tomllib.TOMLDecodeError as error:
             raise SbomError(f"invalid project TOML: {error}") from error
-        validate_project_inventory(cyclonedx, lock_document, project_document)
+        local_projects = {
+            project.parent.resolve(): _project_purl(_object(document.get("project"), "project"))
+            for (_, _, project), document in zip(sources, project_documents, strict=True)
+        }
+        inventories = tuple(
+            validate_cyclonedx_text(
+                _read_text(source[0]), local_project_purls=frozenset(local_projects.values())
+            )
+            for source in sources
+        )
+        for (_, lock, _), inventory, project_document in zip(
+            sources, inventories, project_documents, strict=True
+        ):
+            try:
+                lock_document = _object(tomllib.loads(_read_text(lock)), "uv.lock")
+            except tomllib.TOMLDecodeError as error:
+                raise SbomError(f"invalid project TOML: {error}") from error
+            validate_project_inventory(
+                inventory,
+                lock_document,
+                project_document,
+                local_projects=local_projects,
+                lock_directory=lock.parent,
+            )
+        cyclonedx = inventories[0]
         if args.command == "validate":
             print(
                 "CycloneDX 1.5 source SBOM is valid: "
@@ -304,7 +361,7 @@ def main() -> int:
 
         github_document = _parse_json(_read_text(args.github_spdx), "GitHub SPDX document")
         github_purls = github_spdx_python_purls(github_document)
-        compare_inventories(cyclonedx, github_purls)
+        compare_inventories(cyclonedx, github_purls, inventories[1:])
         print(
             "GitHub SPDX inventory matches CycloneDX: "
             f"{len(github_purls)} Python packages including the project"

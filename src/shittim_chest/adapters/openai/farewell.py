@@ -59,6 +59,7 @@ class _FarewellEvidence:
     citation_urls: tuple[str, ...]
     source_count: int
     known_feed_count: int
+    source_urls: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -119,14 +120,17 @@ class OpenAIFarewellGenerator:
                         last_evidence = _inspect_evidence(response)
                         parsed = _extract_parsed(response)
                         _require_completed_web_search(response)
-                        if not last_evidence.citation_urls:
+                        # Structured output may omit citation annotations even after search.
+                        # Only provider-returned sources may replace them, never model text.
+                        reference_urls = last_evidence.citation_urls or last_evidence.source_urls
+                        if not reference_urls:
                             raise OpenAIInvalidOutput(
                                 diagnostic_context="farewell_citation",
                                 diagnostic_kind="missing",
                             )
                         content = prepare_farewell_content(
                             parsed.message,
-                            last_evidence.citation_urls[0],
+                            reference_urls[0],
                         )
                     except asyncio.CancelledError:
                         raise
@@ -329,6 +333,7 @@ def _inspect_evidence(
     response: ParsedResponse[FarewellOutputV2],
 ) -> _FarewellEvidence:
     citations: list[str] = []
+    source_urls: list[str] = []
     source_count = 0
     known_feed_count = 0
     for output in response.output:
@@ -337,6 +342,11 @@ def _inspect_evidence(
             if isinstance(sources, list):
                 source_count += len(sources)
                 known_feed_count += sum(_is_known_weather_feed(source) for source in sources)
+                for source in sources:
+                    if getattr(source, "type", None) == "url":
+                        url = _valid_citation_url(getattr(source, "url", None))
+                        if url is not None and url not in source_urls:
+                            source_urls.append(url)
             continue
         if not isinstance(output, ResponseOutputMessage):
             continue
@@ -349,7 +359,7 @@ def _inspect_evidence(
                 url = _valid_citation_url(annotation.url)
                 if url is not None:
                     citations.append(url)
-    return _FarewellEvidence(tuple(citations), source_count, known_feed_count)
+    return _FarewellEvidence(tuple(citations), source_count, known_feed_count, tuple(source_urls))
 
 
 def _require_completed_web_search(response: ParsedResponse[FarewellOutputV2]) -> None:

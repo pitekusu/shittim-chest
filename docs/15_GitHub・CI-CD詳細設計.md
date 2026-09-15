@@ -287,10 +287,16 @@ ReleaseIdentity更新、失敗したワークフローの再実行、手動Cloud
 | ワークフロー | 頻度 | 役割 |
 |---|---|---|
 | Infrastructure Drift | 毎週火曜 | Core 5/Records 3スタックの構成差分を検出。自動修復なし |
-| Dependency Graph | 毎週火曜 | GitHub管理の依存一覧とソースSBOMを比較 |
+| Dependency Graph | 毎週火曜 | GitHub管理のPython依存一覧とCore・Records双方のソースSBOMを比較 |
 | Release Tool Versions | 毎週水曜 | 固定ツールの更新候補を通知 |
 | Discord Security Digest | 毎日 | セキュリティ情報を補助通知 |
 | Discord通知 | 対象イベント発生時 | PR/対象ワークフローの状態を補助通知 |
+
+Dependency Graphでは、両Pythonプロジェクトの全依存グループをfrozenでCycloneDX 1.5へ出力し、
+各lockfileとの一致を検証したうえで、和集合をGitHubのSPDX内のPython依存と比較する。
+RecordsからCoreへのローカル参照は、比較に含めたプロジェクトのパス・名前・版が一致する場合だけ認める。
+不足・余分な依存は失敗とし、反映待ちは最大5回・60秒間隔とする。API取得にも時間制限を設け、
+比較失敗時も取得済みのCore・Records・GitHubのSBOMを保持する。mainが進んだ場合は比較を破棄する。
 
 正確な時刻・対象・権限は[ワークフロー定義](https://github.com/pitekusu/shittim-chest/tree/main/.github/workflows)、
 通知の挙動は[通知運用設計](21_GitHub・Discord通知運用設計.md)を正とする。
