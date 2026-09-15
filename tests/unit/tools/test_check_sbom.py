@@ -2,10 +2,12 @@
 
 import json
 from copy import deepcopy
+from pathlib import Path
 from typing import cast
 
 import pytest
 from tools.check_sbom import (
+    CycloneDxInventory,
     SbomError,
     compare_inventories,
     github_spdx_python_purls,
@@ -105,6 +107,21 @@ def test_valid_cyclonedx_inventory_is_accepted() -> None:
     assert inventory.project_purl == _versioned("pkg:pypi/shittim-chest", "1.0.0")
 
 
+@pytest.mark.parametrize("declared", [True, False])
+def test_component_without_purl_requires_an_explicit_local_project(declared: bool) -> None:
+    document = _cyclonedx_document()
+    components = cast(list[dict[str, object]], document["components"])
+    local_purl = cast(str, components[0].pop("purl"))
+    if declared:
+        inventory = validate_cyclonedx_text(
+            json.dumps(document), local_project_purls=frozenset({local_purl})
+        )
+        assert inventory.package_purls == {local_purl}
+    else:
+        with pytest.raises(SbomError, match="not an included project"):
+            validate_cyclonedx_text(json.dumps(document))
+
+
 def test_cyclonedx_inventory_matches_project_and_lock() -> None:
     inventory = validate_cyclonedx_text(json.dumps(_cyclonedx_document()))
     lock, project = _project_documents()
@@ -180,6 +197,64 @@ def test_github_spdx_match_is_accepted() -> None:
     )
 
     compare_inventories(inventory, github_purls)
+
+
+@pytest.mark.parametrize("difference", [None, "missing-core", "missing-records", "unexpected"])
+def test_repository_comparison_requires_both_project_inventories(difference: str | None) -> None:
+    core = validate_cyclonedx_text(json.dumps(_cyclonedx_document()))
+    records_only = _versioned("pkg:pypi/pillow", "12.3.0")
+    records = CycloneDxInventory(
+        package_purls=frozenset({records_only, core.project_purl}),
+        project_purl=_versioned("pkg:pypi/shittim-records", "0.1.0"),
+        component_count=2,
+    )
+    github = set(core.package_purls | records.package_purls | {records.project_purl})
+    if difference == "missing-core":
+        github.difference_update(core.package_purls)
+    elif difference == "missing-records":
+        github.remove(records_only)
+    elif difference == "unexpected":
+        github.add(_versioned("pkg:pypi/unexpected", "1.0.0"))
+
+    if difference is None:
+        compare_inventories(core, frozenset(github), (records,))
+    else:
+        with pytest.raises(SbomError, match="inventories differ"):
+            compare_inventories(core, frozenset(github), (records,))
+
+
+@pytest.mark.parametrize("declared", [True, False])
+def test_local_dependency_must_match_an_included_project(tmp_path: Path, declared: bool) -> None:
+    inventory = validate_cyclonedx_text(json.dumps(_cyclonedx_document()))
+    local_purl = _versioned("pkg:pypi/local-project", "1.0.0")
+    inventory = CycloneDxInventory(
+        package_purls=inventory.package_purls | {local_purl},
+        project_purl=inventory.project_purl,
+        component_count=2,
+    )
+    lock, project = _project_documents()
+    packages = cast(list[dict[str, object]], lock["package"])
+    packages.append(
+        {"name": "local-project", "version": "1.0.0", "source": {"directory": "../local"}}
+    )
+    local_projects = {tmp_path / "local": local_purl} if declared else {}
+    if declared:
+        validate_project_inventory(
+            inventory,
+            lock,
+            project,
+            local_projects=local_projects,
+            lock_directory=tmp_path / "app",
+        )
+    else:
+        with pytest.raises(SbomError, match="unsupported non-PyPI lock source"):
+            validate_project_inventory(
+                inventory,
+                lock,
+                project,
+                local_projects=local_projects,
+                lock_directory=tmp_path / "app",
+            )
 
 
 @pytest.mark.parametrize(

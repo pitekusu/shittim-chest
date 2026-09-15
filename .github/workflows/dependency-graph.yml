@@ -21,7 +21,7 @@ jobs:
     name: verify-managed-sbom
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,18 +39,22 @@ jobs:
         run: |
           uv export --quiet --frozen --all-groups --format cyclonedx1.5 \
             --output-file "${RUNNER_TEMP}/source-sbom.cdx.json"
+          uv export --quiet --frozen --all-groups --project services/records \
+            --format cyclonedx1.5 --output-file "${RUNNER_TEMP}/records-sbom.cdx.json"
       - name: Wait for and compare the GitHub-managed SPDX SBOM
+        timeout-minutes: 12
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          main_sha=$(timeout 15s gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
           if [ "${main_sha}" != "${GITHUB_SHA}" ]; then
             printf 'main advanced from %s to %s; rerun against the new main\n' \
               "${GITHUB_SHA}" "${main_sha}"
             exit 1
           fi
-          for attempt in {1..10}; do
-            gh api --method GET \
+          for attempt in {1..5}; do
+            printf 'Comparing Core and Records Python inventories (attempt %s/5)\n' "${attempt}"
+            timeout 60s gh api --method GET \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2026-03-10" \
               "repos/${GITHUB_REPOSITORY}/dependency-graph/sbom" \
@@ -58,10 +62,12 @@ jobs:
             comparison=1
             if uv run --frozen python tools/check_sbom.py compare-github \
               "${RUNNER_TEMP}/source-sbom.cdx.json" \
-              "${RUNNER_TEMP}/github-sbom.spdx.json"; then
+              "${RUNNER_TEMP}/github-sbom.spdx.json" \
+              --additional-source "${RUNNER_TEMP}/records-sbom.cdx.json" \
+              services/records/uv.lock services/records/pyproject.toml; then
               comparison=0
             fi
-            main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+            main_sha=$(timeout 15s gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
             if [ "${main_sha}" != "${GITHUB_SHA}" ]; then
               printf 'main advanced from %s to %s; discard this comparison and rerun\n' \
                 "${GITHUB_SHA}" "${main_sha}"
@@ -70,18 +76,20 @@ jobs:
             if [ "${comparison}" -eq 0 ]; then
               exit 0
             fi
-            if [ "${attempt}" -eq 10 ]; then
+            if [ "${attempt}" -eq 5 ]; then
               printf 'managed Dependency Graph did not converge after %s attempts\n' "${attempt}" >&2
               exit 1
             fi
-            sleep 30
+            sleep 60
           done
       - name: Retain both SBOM representations
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dependency-graph-sbom-${{ github.sha }}
           path: |
             ${{ runner.temp }}/source-sbom.cdx.json
+            ${{ runner.temp }}/records-sbom.cdx.json
             ${{ runner.temp }}/github-sbom.spdx.json
           if-no-files-found: error
           retention-days: 30

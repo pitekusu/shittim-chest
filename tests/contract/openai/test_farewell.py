@@ -268,11 +268,25 @@ async def test_unknown_source_and_extra_shape_are_ignored_when_citation_is_valid
 
 
 @pytest.mark.asyncio
-async def test_zero_citations_retries_once_then_records_safe_failure_metadata() -> None:
-    service, parse, observer = service_for(response(citations=()))
+async def test_source_url_fallback_keeps_greeting_without_a_second_request() -> None:
+    service, parse, observer = service_for(
+        response(citations=(), source_urls=(NEWS_URL,), weather_realtime_feed="oai-weather")
+    )
+
+    assert await generate(service) == f"{MESSAGE}\n参考リンク: {NEWS_URL}"
+    assert parse.await_count == 1
+    assert observer.failures == []
+    assert observer.usages[0].url_citation_count == 0
+    assert observer.usages[0].evidence_source_count == 1
+    assert observer.usages[0].realtime_feed_count == 1
+
+
+@pytest.mark.asyncio
+async def test_no_reference_urls_retries_once_then_records_safe_failure_metadata() -> None:
+    service, parse, observer = service_for(response(citations=(), source_urls=()))
     parse.side_effect = [
-        response(citations=(), response_id="resp_first"),
-        response(citations=(), response_id="resp_second"),
+        response(citations=(), source_urls=(), response_id="resp_first"),
+        response(citations=(), source_urls=(), response_id="resp_second"),
     ]
 
     with pytest.raises(OpenAIInvalidOutput):
@@ -436,13 +450,33 @@ async def test_unknown_output_union_member_does_not_block_valid_citation() -> No
 @pytest.mark.asyncio
 async def test_invalid_citation_is_ignored_and_causes_one_bounded_retry() -> None:
     credentialed_url = "https://user:pass" + "@" + "example.test/private"
-    service, parse, observer = service_for(response(citations=(credentialed_url,)))
+    service, parse, observer = service_for(
+        response(citations=(credentialed_url,), source_urls=(credentialed_url, "javascript:bad"))
+    )
 
     with pytest.raises(OpenAIInvalidOutput):
         await generate(service)
 
     assert parse.await_count == 2
     assert observer.failures[0].url_citation_count == 0
+
+
+@pytest.mark.asyncio
+async def test_weather_feed_and_model_written_url_are_not_reference_urls() -> None:
+    service, parse, observer = service_for(
+        response(
+            citations=(),
+            source_urls=(),
+            weather_realtime_feed="oai-weather",
+            message=f"{MESSAGE} {NEWS_URL}",
+        )
+    )
+
+    with pytest.raises(OpenAIInvalidOutput):
+        await generate(service)
+
+    assert parse.await_count == 2
+    assert observer.failures[0].realtime_feed_count == 1
 
 
 @pytest.mark.asyncio
