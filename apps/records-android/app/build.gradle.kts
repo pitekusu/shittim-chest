@@ -5,7 +5,7 @@ plugins {
 
 android {
   namespace = "dev.pitekusu.shittim.records"
-  compileSdk = 37
+  compileSdk { version = release(37) { minorApiLevel = 1 } }
   buildToolsVersion = "36.0.0"
 
   defaultConfig {
