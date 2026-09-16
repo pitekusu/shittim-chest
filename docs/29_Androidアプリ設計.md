@@ -54,15 +54,17 @@ Material 3 Expressiveを操作部品とモーションの基盤に採用し、�
 | 要素 | 明るい表示 | 暗い表示・共通ルール |
 |---|---|---|
 | 背景 | 氷色 `#F5FBFF` と淡い水色 `#DFF8FB` | 深い紺 `#071724` と青緑 `#123B49` |
-| 本文 | 濃紺 `#17324D`、補助文字 `#587087` | 白青 `#EAF8FF`、補助文字 `#A8C5D4` |
-| 操作の強調 | コントラストを確保したシアン `#207E99` | 明るいシアン `#80E5F0`。端末壁紙のDynamic Colorへ置換しない |
-| パネル | 薄い輪郭、透け感を抑えた読みやすい面 | 一部を斜めに切った角。角丸ボタンと役割を分ける |
+| 本文 | 濃紺 `#17324D`、補助文字 `#526A80` | 白青 `#EAF8FF`、補助文字 `#A8C5D4` |
+| 操作の強調 | コントラストを確保したシアン `#1B7189` | 明るいシアン `#80E5F0`。端末壁紙のDynamic Colorへ置換しない |
+| パネル | surface系の役割で読みやすい面を作る | 関連情報はExpressive Listへまとめ、各行を独立したカードで囲わない |
 | 装飾 | 薄いグリッド、円弧、菱形 | 本文の背後は控えめにし、常時点滅・常時回転・重いblurは使わない |
 | 人格色 | アロナはシアン、プラナはピンク、安倍晋三AIはラベンダー | 色だけで識別させず、名前・アイコンを併記する |
 | 日本語・数値 | LINE Seed JP Regular／Bold | Materialの通常・強調書体を含め、共通テーマから設定する |
 | 英字ブランド | 既存のDelogy | ブランドなど短い装飾見出しだけ。本文や操作説明に使わない |
 
 具体的な値は`ui/ShittimTheme.kt`をAndroid側の正とし、Webの色の役割を踏襲する。
+surface・inverse・fixedの各roleも明示し、未指定の既定紫が新しい部品へ混ざらないようにする。
+明るい側のprimaryと補助文字は、濃いsurface上でも通常文字のコントラスト比4.5以上になるよう調整する。
 背景とシンボルは`ui/ShittimBackdrop.kt`へ分離する。部品を使う前から大量の共通クラス・モジュールは作らない。
 LINE Seed JPは既存WebのWOFF2をTTFへ展開して同梱し、字形の加工・サブセット化はしない。
 Delogyは既存TTFをそのまま使用する。出典・OFLはAPKの`assets/licenses/`へ含める。
@@ -78,8 +80,31 @@ Delogyは既存TTFをそのまま使用する。出典・OFLはAPKの`assets/lic
 | 読み込み | 円弧・リング等の動きと状態文言 | 実処理中だけ。取得できない進捗率を表示しない |
 | モーション低減 | Androidのアニメーション無効・時間倍率に従う | 状態・結果・操作可能性は動きなしでも伝わること |
 
-今回の準備画面はExpressiveの押下形状変化とライト／ダーク切替を確認する入口とする。
-表示切替は画面内だけの一時状態で、設定保存・ログイン・通信は行わない。準備中という理由で無期限のローディングを流さない。
+今回の準備画面はButtonGroupによる自動／ライト／ダークの排他的選択を入口とする。
+自動は端末設定に追従し、ライト／ダークを選んだ場合は端末設定の変更で選択を取り消さない。
+チェック表示・標準の選択状態semanticsを使用し、幅が不足すれば標準overflow menuからも操作できるようにする。
+表示切替は画面内の一時状態で、回転・resize時はSavedInstanceStateから復元する。設定ファイル・認証・通信・記録保存は追加しない。
+準備中という理由で無期限のローディングや無効なログインボタンは置かない。
+
+840dp以上かつ文字倍率1.5未満では、ブランド・説明と表示操作・対応範囲を左右に分ける。
+それ以外はスクロールできる1列にし、文字2倍でも本文・操作を切り捨てない。レイアウトを切り替えても選択状態は保持する。
+
+### 1.5系の部品を使う場所
+
+[Material Design 3 UI/UXスキル](https://github.com/skydashnet/material-design-3-ui-skill/tree/a7d28f28251b64740b74dd0046971f23fbe74758)の
+component semantics・semantic token・adaptive layout・accessibilityの指針を適用する。
+透明な端末風の背景はブランド上の意図的な表現とし、操作自体はMaterialの標準動作を保つ。
+
+| 部品・機能 | 現在の実装または接続する段階 |
+|---|---|
+| `MaterialExpressiveTheme` | 全画面のテーマ。人格色とブランド書体をsemantic roleで設定 |
+| `ButtonGroup`／`toggleableItem` | 準備画面の排他的な表示選択。幅の押下反応・ToggleButtonの形状変化・overflowを標準実装へ委譲 |
+| Expressive List | 対応範囲を非操作の`SegmentedListItem`と`ListItemDefaults.segmentedShapes`で表示。後続の記録一覧には操作可能なListItemを用途に応じて使用 |
+| 強調Typography | 画面・節の見出しに`headlineLargeEmphasized`／`titleMediumEmphasized`。本文を一律に強調しない |
+| `MotionScheme.expressive()` | ButtonGroup等の標準部品が参照。独自のばね定数や待機用アニメーションを重ねない |
+| morphing Chip | C33の勝者絞り込み等で`FilterChip(shapes = FilterChipDefaults.shapes())`を使用する。C01には対象データがないためダミーのフィルターは作らない |
+
+選択は即時反映し、追加の保存ボタンを置かない。未実装機能は「準備中」と記載する情報行であり、クリック可能なナビゲーションではない。
 
 ### 画面実装へ組み込む順序
 
@@ -108,7 +133,7 @@ Material 3 `1.5.0-alpha28`をAndroid全画面の基盤とする。テーマだ�
 | UI・Foundation・Runtime・Animation・Tooling | BOMが指定する`1.13.0-alpha03` |
 | Compose Compiler | BOMの対象外。Kotlinと同じ版を維持する |
 
-`MaterialExpressiveTheme`、`MotionScheme.expressive()`、押下で形が変わるButtonを使用する。
+1.5系の公開APIを上記の用途へ接続し、非推奨の旧ListItemや旧ToggleButton overloadを使わない。
 後続の認証・一覧・詳細もこのテーマと部品へ統一する。画面の採用方針であり、認証・通信・保存の安全仕様は変更しない。
 
 Alpha BOMは安定版として保証される構成ではないため、API変更・描画・操作の回帰を更新時の確認対象とする。
@@ -120,7 +145,8 @@ Alpha BOMは安定版として保証される構成ではないため、API変�
 
 C01はWrapper経由のdebug APK生成とAndroid Lintを確認する。
 ライブラリ内部や装飾の座標を写した自動テストは追加しない。
-デザイン変更はエミュレーターで明暗切替、320dp・文字拡大、アニメーション無効時の操作を確認する。
+デザイン変更はエミュレーターで自動／明暗切替、320dp・文字2倍、840dp境界・広い幅、回転、アニメーション無効時を確認する。
+ButtonGroupのoverflow menu、keyboardからの選択、読み上げ時の状態、配色のコントラストを確認する。
 実機起動、認証、署名済み配布は後続段階で確認し、エミュレーターやビルド成功で代用しない。
 
 初回配布ではRecordsの既存認可を維持し、保存鍵のPQC処理にBouncy Castle、
