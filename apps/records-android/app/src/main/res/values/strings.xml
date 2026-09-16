@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">シッテムの箱</string>
+    <string name="brand_title">THE SHITTIM\nCHEST</string>
+    <string name="bootstrap_title">記録への扉を、準備中。</string>
+    <string name="preview_light">ライト表示に切り替え</string>
+    <string name="preview_dark">ダーク表示に切り替え</string>
     <string name="bootstrap_message">Android版を準備しています。ログインと議論の記録は、今後の実装で利用できるようになります。</string>
 </resources>

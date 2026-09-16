@@ -1,8 +1,7 @@
 # Records Android
 
 C01の最小Composeアプリと、先行するMaterial 3 Expressiveデザイン基盤。
-現在は準備画面のみで、認証・通信・記録保存は行わない。
-追加したExpressive共通テーマと背景は、次の画面差分で準備画面へ接続する。
+現在は準備画面と一時的な明暗表示切替のみで、認証・通信・記録保存は行わない。
 Circuit／Metro、CI、署名済み配布は後続コミットの対象とする。
 
 ## 開発環境
@@ -31,6 +30,7 @@ Previewやビルドの成功は、実機起動・Play配布の確認とは区別
 
 - `ui/ShittimTheme.kt`：独自配色、LINE Seed JP、Delogy、形状、Expressiveモーション。
 - `ui/ShittimBackdrop.kt`：画像素材やblurを使わないグリッド・円弧・菱形。
+- `BootstrapScreen.kt`：明暗・文字拡大のCompose Previewと、実際に表示を切り替える準備画面。
 - Material 3 `1.5.0-alpha28`を全面採用し、Compose本体も`compose-bom-alpha:2026.09.00`で揃える。
   UI・Foundation・Runtime・Animation・Toolingは`1.13.0-alpha03`を使用する。
   stable版との混在を前提にせず、更新時はBOMとMaterial 3を一組として依存解決・ビルド・表示を確認する。
