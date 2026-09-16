@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">シッテムの箱</string>
+    <string name="bootstrap_message">Android版を準備しています。ログインと議論の記録は、今後の実装で利用できるようになります。</string>
+</resources>

@@ -36,6 +36,7 @@ EXPECTED_FILES = (
     "26_親愛度・ランキング設計.md",
     "27_メモリアルロビー設計.md",
     "28_モモトーク設計.md",
+    "29_Androidアプリ設計.md",
 )
 MIRRORED_DIRECTORIES = {
     "100_Ondemand Fargate": (
