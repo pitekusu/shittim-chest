@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-16
+updated: 2026-09-17
 ---
 
 # Androidアプリ設計
@@ -21,6 +21,15 @@ updated: 2026-09-16
 | デザイン基盤の先行実装 | Expressiveテーマ、独自配色・書体・背景、準備画面 | C01を維持した追加差分。C02の機能実装とは分離 |
 | C02〜C04 | Circuit・Metro、Android CI、CodeQL接続 | 未実装 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
+
+### PRの分割単位
+
+実装計画のC01、C02…を、それぞれ独立したPRとして番号順に進める。複数のCを1本のPRへまとめない。
+各PRには対象Cの実装・関連試験・文書を含め、同じCの不具合修正もそのPRで扱う。
+C01には合意済みのExpressiveデザイン基盤の先行実装を含めるが、C02以降の機能は追加しない。
+プッシュ時はDraft PRを作成し、対象Cの確認が済んだらReady for reviewへ切り替える。
+必須CI・CodeQL・レビュー状態を確認し、マージを妨げる問題がなければ、許可された範囲でsquash mergeする。
+PR内はレビュー可能な目的別コミットに分けてよい。C番号は実装の区切りであり、Gitのコミット数と一致させる必要はない。
 
 ## 最小構成
 
