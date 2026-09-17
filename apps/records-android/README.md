@@ -1,8 +1,8 @@
 # Records Android
 
-C01の最小Composeアプリと、先行するMaterial 3 Expressiveデザイン基盤。
+C02までの最小Composeアプリ。C01のExpressive画面へCircuit／Metroを接続している。
 現在は準備画面と一時的な明暗表示切替のみで、認証・通信・記録保存は行わない。
-Circuit／Metro、CI、署名済み配布は後続コミットの対象とする。
+Android専用CI、認証、署名済み配布は後続コミットの対象とする。
 
 ## 開発環境
 
@@ -22,7 +22,14 @@ Circuit／Metro、CI、署名済み配布は後続コミットの対象とする
 
 APKは`app/build/outputs/apk/debug/app-debug.apk`に出力する。
 debug版のapplication IDは`dev.pitekusu.shittim.records.dev`であり、配布版と分離する。
-この段階では新しい自動テスト基盤を追加しない。
+C02の接続確認は、専用エミュレーターまたはテスト端末で次を実行する。
+
+```sh
+./gradlew :app:connectedDebugAndroidTest
+```
+
+実Activityを起動する2件に絞り、Metro→Circuit→UIの接続、表示切替のイベント往復、
+Activity再生成後の選択復元を確認する。装飾の座標やライブラリ内部を写す試験は追加しない。
 見た目の変更はエミュレーターで自動／明暗切替、320dp・文字2倍、840dp境界・広い幅、回転、アニメーション無効時を確認する。
 狭い幅のoverflow menuとkeyboard操作からも表示を選べることを確認する。
 Previewやビルドの成功は、実機起動・Play配布の確認とは区別する。
@@ -69,11 +76,19 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 - [通常表示](screenshots/bootstrap-default.png)
 - [320dp・文字2倍：文字を縮めず標準メニューから選択](screenshots/bootstrap-large-text-menu.png)
 
+## C02の責務
+
+- `MainActivity.kt`：Activity単位のMetro graphを生成し、CircuitContentで画面を表示。
+- `RecordsGraph.kt`：Circuitへ準備画面のPresenterとUIを登録。未使用の依存やscopeは追加しない。
+- `BootstrapPresenter.kt`：画面識別子・State・Eventと、一時的な表示選択の保持／復元。
+- `BootstrapUi.kt`：Stateを受けて描画し、選択操作をeventSinkへ返す。Previewは固定Stateだけで表示。
+- Circuit `0.39.0`、Metro `1.4.4`を固定。Kotlin `2.4.20`とMaterial 3 `1.5.0-alpha28`は維持。
+
 ## デザイン基盤
 
 - `ui/ShittimTheme.kt`：surface／inverse／fixed色を含む意味別の配色、LINE Seed JP、Delogy、形状、Expressiveモーション。
 - `ui/ShittimBackdrop.kt`：画像素材やblurを使わないグリッド・円弧・菱形。
-- `BootstrapScreen.kt`：幅・文字倍率に応じた1列／2列配置とExpressive List。未実装機能は押せるリンクに見せない。
+- `BootstrapUi.kt`：幅・文字倍率に応じた1列／2列配置とExpressive List。未実装機能は押せるリンクに見せない。
 - `BootstrapThemeSelector.kt`：ButtonGroupによる排他的な自動／明暗選択。均等幅を強制せず、文字が収まらない項目は標準overflow menuへ移す。押下時の幅・形状変化はMaterialのMotionSchemeを使用する。
 - morphing Chipは実際の記録フィルターを作る段階で使用する。準備画面にダミーのフィルターや未使用の共通部品は置かない。
 - Material 3 `1.5.0-alpha28`を全面採用し、Compose本体も`compose-bom-alpha:2026.09.00`で揃える。

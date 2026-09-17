@@ -17,12 +17,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-internal enum class ThemeChoice {
-  System,
-  Light,
-  Dark,
-}
-
 @Composable
 internal fun BootstrapThemeSelector(selected: ThemeChoice, onSelect: (ThemeChoice) -> Unit) {
   val labels =

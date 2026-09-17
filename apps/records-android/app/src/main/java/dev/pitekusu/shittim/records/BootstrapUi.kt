@@ -19,10 +19,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -41,9 +37,16 @@ import dev.pitekusu.shittim.records.ui.ShittimTheme
 @Preview(name = "Small / large text", widthDp = 320, heightDp = 640, fontScale = 2f)
 @Preview(name = "Expanded", widthDp = 1000, heightDp = 700)
 @Composable
-fun BootstrapScreen() {
-  // Restore across rotation/resizing, but do not persist an account or device preference.
-  var themeChoice by rememberSaveable { mutableStateOf(ThemeChoice.System) }
+private fun BootstrapPreview() {
+  BootstrapUi(BootstrapScreen.State(ThemeChoice.System) {})
+}
+
+@Composable
+internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modifier) {
+  val themeChoice = state.themeChoice
+  val onThemeChange: (ThemeChoice) -> Unit = {
+    state.eventSink(BootstrapScreen.Event.SelectTheme(it))
+  }
   val darkTheme =
     when (themeChoice) {
       ThemeChoice.System -> isSystemInDarkTheme()
@@ -51,7 +54,7 @@ fun BootstrapScreen() {
       ThemeChoice.Dark -> true
     }
   ShittimTheme(darkTheme) {
-    ShittimBackdrop {
+    ShittimBackdrop(modifier) {
       BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
         val layout = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)
         // Large text keeps a single readable column even in a wide window.
@@ -64,7 +67,7 @@ fun BootstrapScreen() {
             BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp))
             BootstrapControls(
               themeChoice,
-              { themeChoice = it },
+              onThemeChange,
               Modifier.weight(1f, fill = false).widthIn(max = 480.dp),
             )
           }
@@ -77,7 +80,7 @@ fun BootstrapScreen() {
             BootstrapHeader(Modifier.widthIn(max = 560.dp).fillMaxWidth())
             BootstrapControls(
               themeChoice,
-              { themeChoice = it },
+              onThemeChange,
               Modifier.widthIn(max = 560.dp).fillMaxWidth(),
             )
           }
