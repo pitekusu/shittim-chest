@@ -2,7 +2,6 @@ package dev.pitekusu.shittim.records
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.ButtonGroup
@@ -41,9 +40,11 @@ internal fun BootstrapThemeSelector(selected: ThemeChoice, onSelect: (ThemeChoic
     )
     ButtonGroup(
       overflowIndicator = { ButtonGroupDefaults.OverflowIndicator(it) },
-      modifier = Modifier.fillMaxWidth().selectableGroup(),
+      // Let the overflow indicator measure within the remaining width (not a forced minimum).
+      modifier = Modifier.selectableGroup(),
     ) {
       ThemeChoice.entries.forEachIndexed { index, choice ->
+        // Keep intrinsic widths so large labels overflow into the menu instead of being clipped.
         toggleableItem(
           checked = choice == selected,
           label = labels[index],
@@ -59,7 +60,6 @@ internal fun BootstrapThemeSelector(selected: ThemeChoice, onSelect: (ThemeChoic
                 )
               }
             } else null,
-          weight = 1f,
         )
       }
     }
