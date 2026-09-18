@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-17
+updated: 2026-09-18
 ---
 
 # Androidアプリ設計
@@ -13,13 +13,14 @@ updated: 2026-09-17
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC01の最小アプリと、先行するデザイン基盤である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
+現段階はC02までの最小アプリとデザイン基盤である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
-| C01 | Gradle Wrapper、Version Catalog、最小Compose画面 | 今回の実装範囲 |
+| C01 | Gradle Wrapper、Version Catalog、最小Compose画面 | 実装済み |
 | デザイン基盤の先行実装 | Expressiveテーマ、独自配色・書体・背景、準備画面 | C01を維持した追加差分。C02の機能実装とは分離 |
-| C02〜C04 | Circuit・Metro、Android CI、CodeQL接続 | 未実装 |
+| C02 | Circuit・Metroによる準備画面の状態管理・依存接続 | 実装済み |
+| C03〜C04 | Android CI、CodeQL接続 | 後続 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -31,6 +32,27 @@ C01には合意済みのExpressiveデザイン基盤の先行実装を含める�
 必須CI・CodeQL・レビュー状態を確認し、マージを妨げる問題がなければ、許可された範囲でsquash mergeする。
 PR内はレビュー可能な目的別コミットに分けてよい。C番号は実装の区切りであり、Gitのコミット数と一致させる必要はない。
 
+## C02：CircuitとMetroの接続
+
+画面は1つのまま、表示状態とUIの責務を分ける。通信・認証・DB・通知・架空の遷移先は追加しない。
+
+```mermaid
+flowchart LR
+    Activity[MainActivity] --> Graph[Metro RecordsGraph]
+    Graph --> Circuit[CircuitContent]
+    Circuit --> Presenter[BootstrapPresenter]
+    Presenter -->|State| UI[BootstrapUi]
+    UI -->|SelectTheme| Presenter
+```
+
+- Circuit 0.39.0とMetro 1.4.4をVersion Catalogで固定する。Kotlin／Compose Compiler 2.4.20とMaterial 3 1.5.0-alpha28は維持する。
+- `RecordsGraph`はActivityごとに1回生成し、実際に使うCircuitとPresenterだけを提供する。Application全体のscopeや空のRepositoryは設けない。
+- `BootstrapScreen`は固定の画面識別子、`State`は表示選択、`Event.SelectTheme`は操作入力を表す。まだback stackを作らず、画面識別子の永続化もしない。
+- `BootstrapPresenter`が`rememberSaveable`で表示選択を保持し、Activity再生成時に復元する。端末設定やアカウント設定には保存しない。
+- `BootstrapUi`はStateから描画し、操作をeventSinkへ返す。スクロールなどUI固有の状態はUI側に残す。
+- C01のMaterialExpressiveTheme、MotionScheme、排他的ButtonGroup、Expressive List、semantic color、余白と文字拡大時のoverflowを維持する。
+- UI Previewは固定Stateを渡して表示し、DIや外部サービスを必要としない。MetroのCircuit codegenやKSPはこの1画面には追加しない。
+
 ## 最小構成
 
 `apps/records-android/`を独立したGradleプロジェクトとし、C01では`:app`の1モジュールだけを置く。
@@ -39,7 +61,8 @@ Android Studioで開く場所、必要な環境、実行コマンドは同ディ
 ```mermaid
 flowchart LR
     Launcher[Androidランチャー] --> Activity[MainActivity]
-    Activity --> Compose[Composeの準備画面]
+    Activity --> Circuit[CircuitContent]
+    Circuit --> Compose[Composeの準備画面]
 ```
 
 - KotlinとJetpack Composeで静的な準備画面を表示する。通信・認証・永続保存は行わない。
@@ -152,7 +175,8 @@ Alpha BOMは安定版として保証される構成ではないため、API変�
 
 ## 確認と今後の境界
 
-C01はWrapper経由のdebug APK生成とAndroid Lintを確認する。
+C01／C02はWrapper経由のdebug APK生成とAndroid Lintを確認する。
+C02では実Activityを使う2件のinstrumentation testで、graph接続・テーマ選択のイベント往復・Activity再生成後の選択復元を確認する。
 ライブラリ内部や装飾の座標を写した自動テストは追加しない。
 デザイン変更はエミュレーターで自動／明暗切替、320dp・文字2倍、840dp境界・広い幅、回転、アニメーション無効時を確認する。
 ButtonGroupのoverflow menu、keyboardからの選択、読み上げ時の状態、配色のコントラストを確認する。
