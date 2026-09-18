@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-15
+updated: 2026-09-19
 ---
 
 # GitHub・CI-CD詳細設計
@@ -82,6 +82,31 @@ Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords
 `container-arm64`と`grype`も必須チェック名を維持し、分類上の対象外だけ重い処理を省く。
 CodeQLはPython、JavaScript/TypeScript、GitHub Actionsを解析する。
 ブランチ保護のチェック名は実際のジョブ名に合わせ、失敗を隠すための再実行はしない。
+
+### Android検証（C03）
+
+Androidは同じ`ci.yml`の`android-build`で検証し、独立した大規模matrixは作らない。
+
+| 検証 | 内容 |
+|---|---|
+| ツールチェーン | JDKはAndroidの`.java-version`、GradleはWrapper、SDK／Build Toolsはアプリの固定値と一致 |
+| ビルド・静的確認 | debug APK、テストAPK、Android Lint |
+| 画面の接続 | API 36 x86_64のエミュレーター1台で既存のinstrumentation test |
+| 結果 | `android-gate`で分類成功と実行結果を確認。必要なジョブの失敗・取消・skipは不合格 |
+| 成果物 | Lint・テストのレポートのみ7日保持。APK配布・署名・Play認証は行わない |
+
+PR、mainへのpush、手動実行でチェックを作成する。手動実行はAndroidとCore全検証を明示的に実行する。
+`apps/records-android/`、共通CI、変更範囲判定とその試験の変更でAndroidを検証する。
+Android配下と関連文書（15・19・29）だけの差分では、Coreの全pytest・wheel作成・CDKを省略する。
+`tests`・`package`・`cdk`の必須チェック名は集約ジョブで維持し、対象外と実行成功を区別する。
+混在差分・未知のパス・空差分は従来のCore検証を維持する。quality・security・公開文書検証も継続する。
+Recordsとコンテナの既存分類は変更しない。共通CI自体を変更する本PRでは、これらも検証対象になる。
+
+追加ActionはGradle setupとAndroid Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
+そのSHAだけを追加する。既存の許可設定は維持し、更新時は新SHAの許可も合わせて確認する。
+Gradle Wrapper検証を有効にし、キャッシュへの書き込みはmainのみ。秘密値・署名鍵・AWS権限は渡さない。
+マージ時の必須チェックへ`android-gate`を追加する運用は、このチェックの初回成功後に行う。
+KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
 
 ### npm監査サービスの障害
 

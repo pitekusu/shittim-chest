@@ -2,7 +2,7 @@
 
 C02までの最小Composeアプリ。C01のExpressive画面へCircuit／Metroを接続している。
 現在は準備画面と一時的な明暗表示切替のみで、認証・通信・記録保存は行わない。
-Android専用CI、認証、署名済み配布は後続コミットの対象とする。
+C03でAndroid専用CIを接続済み。認証、署名済み配布は後続コミットの対象とする。
 
 ## 開発環境
 
@@ -75,6 +75,14 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 
 - [通常表示](screenshots/bootstrap-default.png)
 - [320dp・文字2倍：文字を縮めず標準メニューから選択](screenshots/bootstrap-large-text-menu.png)
+
+## C03のCI
+
+- 共通CIの`android-build`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で既存2件を確認する。
+- JDKは`.java-version`、GradleはWrapperをローカルと共有する。CIにもアプリと同じSDK／Build Toolsを用意する。
+- Android配下と関連文書だけの差分ではCoreの全pytest・パッケージ・CDK検証を省略する。
+- `android-gate`は必要な処理の失敗・取消・skipを不合格にする。手動CIではAndroidも必ず検証する。
+- Lint・テストのレポートを7日保存する。APK配布・CodeQL対応待ちのC04は含めない。
 
 ## C02の責務
 

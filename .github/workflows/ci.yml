@@ -27,6 +27,8 @@ jobs:
     outputs:
       runtime_container: ${{ steps.classify.outputs.runtime_container }}
       records: ${{ steps.classify.outputs.records }}
+      core: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.classify.outputs.core }}
+      android: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.classify.outputs.android }}
     steps:
       - name: Check out the tested history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,7 +84,9 @@ jobs:
         run: uv run --frozen lint-imports
 
   tests:
-    name: tests
+    name: tests-build
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -212,7 +216,9 @@ jobs:
           retention-days: 30
 
   package:
-    name: package
+    name: package-build
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -252,7 +258,9 @@ jobs:
             'import importlib.metadata, os, pathlib, shittim_chest, sys; package = pathlib.Path(shittim_chest.__file__).resolve().parent; assert importlib.metadata.version("shittim-chest") == os.environ["EXPECTED_VERSION"]; assert package.is_relative_to(pathlib.Path(sys.prefix).resolve()); assert (package / "py.typed").is_file()'
 
   cdk:
-    name: cdk
+    name: cdk-build
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -271,6 +279,106 @@ jobs:
         run: python3 tools/run_npm_audit.py -- npm run audit:infra
       - name: Type-check, test, and synthesize CDK
         run: npm run check:infra
+
+  core-gates:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [changes, tests, package, cdk]
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [tests, package, cdk]
+    steps:
+      - name: Preserve required Core check names
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.core }}
+          JOB_RESULT: ${{ needs[matrix.check].result }}
+        run: |
+          test "${CHANGES_RESULT}" = success
+          if [ "${REQUIRED}" = true ]; then
+            test "${JOB_RESULT}" = success
+          elif [ "${REQUIRED}" = false ]; then
+            test "${JOB_RESULT}" = skipped
+            echo "Android-only change: Core full check is not applicable."
+          else
+            exit 1
+          fi
+
+  android-build:
+    name: android-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the same JDK as local development
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version-file: apps/records-android/.java-version
+      - name: Validate the Wrapper and set up Gradle caching
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Install the compile SDK and build tools
+        run: sdkmanager 'platforms;android-37.1' 'build-tools;36.0.0'
+      - name: Build debug APKs and run Android Lint
+        run: >-
+          apps/records-android/gradlew -p apps/records-android --no-daemon
+          :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+      - name: Allow the ephemeral runner to use KVM
+        run: sudo chown "$(id -u):$(id -g)" /dev/kvm
+      - name: Run the existing screen tests on one emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swangle -camera-back none -camera-front none
+          script: apps/records-android/gradlew -p apps/records-android --no-daemon :app:connectedDebugAndroidTest
+      - name: Retain Android reports, not an unsigned distribution
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-reports-${{ github.sha }}
+          path: |
+            apps/records-android/app/build/reports/lint-results-debug.*
+            apps/records-android/app/build/reports/androidTests/connected/debug/
+            apps/records-android/app/build/outputs/androidTest-results/connected/debug/*.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  android-gate:
+    name: android-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [changes, android-build]
+    steps:
+      - name: Preserve the Android result even when the build fails
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.android }}
+          JOB_RESULT: ${{ needs.android-build.result }}
+        run: |
+          test "${CHANGES_RESULT}" = success
+          if [ "${REQUIRED}" = true ]; then
+            test "${JOB_RESULT}" = success
+          elif [ "${REQUIRED}" = false ]; then
+            test "${JOB_RESULT}" = skipped
+            echo "Android inputs are unchanged."
+          else
+            exit 1
+          fi
 
   container-arm64-build:
     name: container-arm64-build
