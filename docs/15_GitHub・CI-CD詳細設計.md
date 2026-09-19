@@ -80,8 +80,31 @@ Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords
 `records-infra`では共通検証を繰り返さない。
 対象外PRでも`records-gate`は明示的な対象外の成功結果を返す。
 `container-arm64`と`grype`も必須チェック名を維持し、分類上の対象外だけ重い処理を省く。
-CodeQLはPython、JavaScript/TypeScript、GitHub Actionsを解析する。
+CodeQLの既存自動設定でPython、JavaScript/TypeScript、GitHub Actionsを解析する。
+Android追加後のJava/Kotlin解析は未完了であり、Kotlin 2.4.20へのCodeQL対応待ちとする。
+既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
 ブランチ保護のチェック名は実際のジョブ名に合わせ、失敗を隠すための再実行はしない。
+
+### CodeQL自動設定からの移行（対応待ち）
+
+2026年9月17日の確認では、自動設定で新しく追加されたKotlinが`none`モードで処理され、
+ソース抽出に失敗した。CodeQL 2.27.0によるmanual buildでもKotlin 2.4.20が未対応として拒否された。
+Kotlinのダウングレードは行わず、未反映の移行workflow案は取り下げる。
+対応版の公開後、次の順で再開する。default setupが有効な間は独自workflowからの
+解析結果uploadが拒否されるため、併用しない。
+
+1. `.github/workflows/codeql.yml`を追加し、移行PRの差分・workflow構文・Androidビルドと
+   Kotlin抽出を確認する。既存3言語の`Analyze (...)`名と`security-extended`は維持し、
+   Java/KotlinだけJDK・SDKを用意して`manual`モードでビルドする。
+2. 移行PRの検証からマージまでを継続できる時点で、GitHubのCode scanning設定を
+   「Switch to advanced」に変更する（APIではdefault setupを`not-configured`にする）。
+   ブランチ保護やCodeQLの必須条件は解除しない。
+3. 移行PRで4言語すべての解析・uploadを確認してからsquash mergeする。
+   mainの同一SHAでも4言語が成功し、旧自動workflowが重複実行されないことを確認する。
+
+切替中は他PRのマージ・リリースを行わない。検証が完了せず移行を中断する場合は、
+独自workflowとの併走を止めて元のdefault setupへ戻す。Android解析未完了は成功として扱わない。
+Core／Records Releaseの既存3言語のチェック名は変更しない。Androidの配布ゲートは配布実装時に追加する。
 
 ### Android検証（C03）
 
@@ -105,7 +128,7 @@ Recordsとコンテナの既存分類は変更しない。共通CI自体を変�
 追加ActionはGradle setupとAndroid Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
 そのSHAだけを追加する。既存の許可設定は維持し、更新時は新SHAの許可も合わせて確認する。
 Gradle Wrapper検証を有効にし、キャッシュへの書き込みはmainのみ。秘密値・署名鍵・AWS権限は渡さない。
-マージ時の必須チェックへ`android-gate`を追加する運用は、このチェックの初回成功後に行う。
+初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
 KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
 
 ### npm監査サービスの障害
@@ -352,4 +375,4 @@ RecordsからCoreへのローカル参照は、比較に含めたプロジェク
 | 2026-08-14 | GitHub Environments | [デプロイ環境](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments) | 本番承認の境界 |
 | 2026-08-14 | GitHub OIDC for AWS | [AWS向けOIDC](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) | 短期資格情報 |
 | 2026-08-14 | Artifact attestations | [成果物の証明](https://docs.github.com/en/actions/concepts/security/artifact-attestations) | 来歴・SBOMの証拠 |
-| 2026-08-14 | CodeQL | [コードスキャン](https://docs.github.com/en/code-security/concepts/code-scanning/codeql-code-scanning) | 3言語の解析 |
+| 2026-09-17 | CodeQL | [コンパイル言語の解析](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/manage-your-configuration/codeql-for-compiled-languages) | Kotlinはmanual buildでの対応確認後に接続 |
