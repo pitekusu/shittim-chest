@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-18
+updated: 2026-09-19
 ---
 
 # Androidアプリ設計
@@ -20,7 +20,8 @@ updated: 2026-09-18
 | C01 | Gradle Wrapper、Version Catalog、最小Compose画面 | 実装済み |
 | デザイン基盤の先行実装 | Expressiveテーマ、独自配色・書体・背景、準備画面 | C01を維持した追加差分。C02の機能実装とは分離 |
 | C02 | Circuit・Metroによる準備画面の状態管理・依存接続 | 実装済み |
-| C03〜C04 | Android CI、CodeQL接続 | 後続 |
+| C03 | Android CI | 実装済み |
+| C04 | CodeQL接続 | 後続 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -52,6 +53,17 @@ flowchart LR
 - `BootstrapUi`はStateから描画し、操作をeventSinkへ返す。スクロールなどUI固有の状態はUI側に残す。
 - C01のMaterialExpressiveTheme、MotionScheme、排他的ButtonGroup、Expressive List、semantic color、余白と文字拡大時のoverflowを維持する。
 - UI Previewは固定Stateを渡して表示し、DIや外部サービスを必要としない。MetroのCircuit codegenやKSPはこの1画面には追加しない。
+
+## C03：Android CI
+
+[CI設計](15_GitHub・CI-CD詳細設計.md)の`android-build`で、ローカルと同じJDK・Wrapper・SDKを使い、
+debug APK／テストAPK・LintとAPI 36の画面テストを実行する。画面・認証・配布機能は追加しない。
+
+- C02の既存2件をそのまま実行し、別の大量のテストや端末matrixは設けない。
+- Android専用差分では無関係なCore／Recordsの全試験を実行しない。共通CI・分類器の変更は両側を検証する。
+- `android-gate`は必要なビルドの失敗・取消・skipや分類失敗を成功扱いしない。
+- レポートのみを短期保存し、APK／署名済み配布は後続工程に残す。
+- Kotlin 2.4.20とMaterial 3 1.5.0-alpha28は維持する。CodeQL対応待ちのC04は分離する。
 
 ## 最小構成
 

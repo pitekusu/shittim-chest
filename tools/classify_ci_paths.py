@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Classify changed paths for isolated Runtime and Records CI work."""
+"""Classify changed paths for isolated Runtime, Records, and Android CI work."""
 
 from __future__ import annotations
 
@@ -70,6 +70,23 @@ RECORDS_FILES = frozenset(
     }
 )
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+ANDROID_PREFIX = "apps/records-android/"
+ANDROID_SHARED_FILES = frozenset(
+    {
+        ".github/workflows/ci.yml",
+        "tools/classify_ci_paths.py",
+        "tests/unit/tools/test_classify_ci_paths.py",
+    }
+)
+# Only this explicit standalone scope may omit the existing Core full checks.
+# Mixed changes, unknown paths, and an empty diff keep the previous behavior.
+ANDROID_DOCUMENTS = frozenset(
+    {
+        "docs/15_GitHub・CI-CD詳細設計.md",
+        "docs/19_実装計画・トレーサビリティ.md",
+        "docs/29_Androidアプリ設計.md",
+    }
+)
 
 
 def _normalized(path: str) -> str:
@@ -89,7 +106,18 @@ def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
         for path in normalized
     )
     records = any(path in RECORDS_FILES or path.startswith(RECORDS_PREFIXES) for path in normalized)
-    return {"runtime_container": runtime, "records": records}
+    android = any(
+        path.startswith(ANDROID_PREFIX) or path in ANDROID_SHARED_FILES for path in normalized
+    )
+    android_only = any(path.startswith(ANDROID_PREFIX) for path in normalized) and all(
+        path.startswith(ANDROID_PREFIX) or path in ANDROID_DOCUMENTS for path in normalized
+    )
+    return {
+        "runtime_container": runtime,
+        "records": records,
+        "android": android,
+        "core": not android_only,
+    }
 
 
 def changed_paths(base: str, head: str) -> tuple[str, ...]:

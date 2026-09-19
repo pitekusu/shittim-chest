@@ -51,14 +51,54 @@ def test_records_changes_require_records_ci(path: str) -> None:
 def test_records_css_does_not_rebuild_the_fargate_images() -> None:
     classification = classify_paths(("apps/records-web/src/styles/home.module.css",))
 
-    assert classification == {"runtime_container": False, "records": True}
+    assert classification == {
+        "runtime_container": False,
+        "records": True,
+        "android": False,
+        "core": True,
+    }
 
 
 def test_unrelated_documentation_does_not_run_either_specialized_gate() -> None:
     assert classify_paths(("docs/11_Discord詳細設計.md",)) == {
         "runtime_container": False,
         "records": False,
+        "android": False,
+        "core": True,
     }
+
+
+def test_android_with_its_docs_runs_only_android_specialized_checks() -> None:
+    assert classify_paths(
+        ("apps/records-android/gradle/libs.versions.toml", *classifier.ANDROID_DOCUMENTS)
+    ) == {"runtime_container": False, "records": False, "android": True, "core": False}
+
+
+@pytest.mark.parametrize(
+    "additional_path",
+    (
+        "src/main.py",
+        "infra/main.ts",
+        "services/records/main.py",
+        "unknown.txt",
+        ".github/workflows/ci.yml",
+    ),
+)
+def test_mixed_android_changes_keep_core_checks(additional_path: str) -> None:
+    result = classify_paths(("apps/records-android/app/build.gradle.kts", additional_path))
+    assert result["android"] is True
+    assert result["core"] is True
+
+
+@pytest.mark.parametrize("path", sorted(classifier.ANDROID_SHARED_FILES))
+def test_changes_to_android_ci_wiring_exercise_the_build(path: str) -> None:
+    result = classify_paths((path,))
+    assert result["android"] is True
+    assert result["core"] is True
+
+
+def test_empty_diff_does_not_disable_core_checks() -> None:
+    assert classify_paths(())["core"] is True
 
 
 def test_repository_escape_is_rejected() -> None:

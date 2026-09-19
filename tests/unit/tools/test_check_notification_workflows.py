@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -17,6 +21,7 @@ from tools.check_notification_workflows import (
     WORKFLOW_DIRECTORY,
     WORKFLOW_RUN_NOTIFICATION,
     WorkflowPolicyError,
+    _workflow_job_block,
     validate_notification_workflows,
 )
 
@@ -49,6 +54,39 @@ def _replace(path: Path, old: str, new: str, count: int = -1) -> None:
 
 def test_repository_target_workflow_is_accepted(directory: Path) -> None:
     assert validate_notification_workflows(directory) == 1
+
+
+@pytest.mark.parametrize("job", ("core-gates", "android-gate"))
+@pytest.mark.parametrize(
+    ("changes", "required", "result", "accepted"),
+    (
+        ("success", "true", "success", True),
+        ("success", "false", "skipped", True),
+        ("failure", "false", "skipped", False),
+        ("cancelled", "true", "success", False),
+        ("success", "true", "failure", False),
+        ("success", "true", "cancelled", False),
+        ("success", "true", "skipped", False),
+        ("success", "false", "failure", False),
+        ("success", "", "skipped", False),
+    ),
+)
+def test_conditional_ci_gates_fail_closed(
+    job: str, changes: str, required: str, result: str, accepted: bool
+) -> None:
+    text = (WORKFLOW_DIRECTORY / "ci.yml").read_text(encoding="utf-8")
+    block = _workflow_job_block(text, job)
+    assert "if: always()" in block
+    script = textwrap.dedent(block.split("run: |\n", 1)[1])
+    bash = shutil.which("bash")
+    assert bash is not None
+    completed = subprocess.run(  # noqa: S603 - execute only the checked-in gate with fixture states
+        [bash, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+        env={**os.environ, "CHANGES_RESULT": changes, "REQUIRED": required, "JOB_RESULT": result},
+        capture_output=True,
+        check=False,
+    )
+    assert (completed.returncode == 0) is accepted
 
 
 @pytest.mark.parametrize(
@@ -758,11 +796,11 @@ def test_records_backfill_requires_the_bounded_run_time_budget(
 
 
 def test_runtime_required_gates_require_the_classifier_job_to_succeed(directory: Path) -> None:
+    gate = _workflow_job_block((directory / "ci.yml").read_text(), "container-arm64")
     _replace(
         directory / "ci.yml",
-        "CHANGES_RESULT: ${{ needs.changes.result }}",
-        "CHANGES_RESULT: ignored",
-        1,
+        gate,
+        gate.replace("CHANGES_RESULT: ${{ needs.changes.result }}", "CHANGES_RESULT: ignored"),
     )
 
     with pytest.raises(WorkflowPolicyError, match="preserve one required result"):
