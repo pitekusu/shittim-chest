@@ -62,7 +62,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -95,7 +95,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -131,7 +131,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -227,7 +227,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -418,7 +418,7 @@ jobs:
           printf '%s' "${DHI_TOKEN}" | docker login docker.io \
             --username "${DHI_USERNAME}" --password-stdin
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           version: v0.37.0
           driver-opts: |
@@ -460,7 +460,7 @@ jobs:
             \( -type d -name __pycache__ -o -type f -name '*.py[cod]' \) -print -quit)"
       - name: Build and load the production image
         id: build-production
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
           SOURCE_DATE_EPOCH: "0"
         with:
@@ -492,7 +492,7 @@ jobs:
             > "${RUNNER_TEMP}/image-size-bytes.txt"
       - name: Build and load the CI-only fault image
         if: github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
           SOURCE_DATE_EPOCH: "0"
         with:
@@ -723,13 +723,13 @@ jobs:
           retention-days: 30
       - name: Upload the source SBOM SARIF to code scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-source.sarif
           category: grype-source-sbom
       - name: Upload the image SBOM SARIF to code scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
           category: grype-image-sbom
@@ -825,7 +825,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
