@@ -3,6 +3,7 @@
 C02までの最小Composeアプリ。C01のExpressive画面へCircuit／Metroを接続している。
 現在は準備画面と一時的な明暗表示切替のみで、認証・通信・記録保存は行わない。
 C03でAndroid専用CIを接続済み。認証、署名済み配布は後続コミットの対象とする。
+CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
 
@@ -13,6 +14,29 @@ C03でAndroid専用CIを接続済み。認証、署名済み配布は後続コ�
 - `JAVA_HOME`にJDK、`ANDROID_HOME`にSDKのディレクトリを指定する。
   Android Studioが作る`local.properties`でもSDKを指定できるが、Gitへ追加しない。
 - Gradleは同梱Wrapperを使う。プラグイン・ライブラリは`gradle/libs.versions.toml`を正とする。
+
+### Kotlin Compiler Native Image（単体CLI）
+
+Kotlin 2.4.20の公式Native Image版を、単体ソースのコンパイルに利用する。
+AGP／Gradleのコンパイラーは自動では切り替わらず、APK生成は既存方式のままとする。
+通常のKotlin/JVMバイトコードを生成するもので、Kotlin/Nativeへの移行ではない。
+
+[公式配布物](https://github.com/JetBrains/kotlin/releases/tag/v2.4.20)のうち、
+Linux x86_64では`kotlin-native-image-linux-x86_64-2.4.20.tar.gz`を使用する。
+SHA-256は`a249c9270ab8fed93f9d54756677b3fa3da652b80791227036231b5869d5d73f`。
+照合後にツール用の永続ディレクトリへ展開し、そのルートを`KOTLIN_NATIVE_IMAGE_HOME`へ指定する。
+`JAVA_HOME`は引き続き`.java-version`に合わせる。通常の`kotlinc`やGradle設定は上書きしない。
+
+```sh
+"$KOTLIN_NATIVE_IMAGE_HOME/bin/kotlinc-native-image.sh" -version
+"$KOTLIN_NATIVE_IMAGE_HOME/bin/kotlinc-native-image.sh" Sample.kt -jvm-target 17 -d out
+"$JAVA_HOME/bin/java" -cp "out:$KOTLIN_NATIVE_IMAGE_HOME/lib/kotlin-stdlib.jar" SampleKt
+```
+
+Linux版で単体Kotlinのコンパイル・実行と、Compose Compiler 2.4.20＋Compose Runtimeを渡す
+最小Composableの変換を確認した。APK全体のNative Imageビルド成功を意味しない。
+`-include-runtime`ではリソース参照エラーが発生したため、class出力と明示classpathを使用する。
+配布物はExperimentalであり、上流の`Unsafe::invokeCleaner`警告も残っている。
 
 ## 確認
 
@@ -30,6 +54,7 @@ C02の接続確認は、専用エミュレーターまたはテスト端末で�
 
 実Activityを起動する2件に絞り、Metro→Circuit→UIの接続、表示切替のイベント往復、
 Activity再生成後の選択復元を確認する。装飾の座標やライブラリ内部を写す試験は追加しない。
+CodeQL 2.27.0でのKotlin解析は未完了。通常ビルドの成功と混同しない。
 見た目の変更はエミュレーターで自動／明暗切替、320dp・文字2倍、840dp境界・広い幅、回転、アニメーション無効時を確認する。
 狭い幅のoverflow menuとkeyboard操作からも表示を選べることを確認する。
 Previewやビルドの成功は、実機起動・Play配布の確認とは区別する。
