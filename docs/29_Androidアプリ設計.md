@@ -13,7 +13,7 @@ updated: 2026-09-19
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC02までの最小アプリとデザイン基盤である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
+現段階はC03までの最小アプリ・デザイン基盤・Android CIである。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -21,7 +21,7 @@ updated: 2026-09-19
 | デザイン基盤の先行実装 | Expressiveテーマ、独自配色・書体・背景、準備画面 | C01を維持した追加差分。C02の機能実装とは分離 |
 | C02 | Circuit・Metroによる準備画面の状態管理・依存接続 | 実装済み |
 | C03 | Android CI | 実装済み |
-| C04 | CodeQL接続 | 後続 |
+| C04 | CodeQL接続 | Kotlin 2.4.20へのCodeQL対応待ち。GitHub切替は未実施 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -29,9 +29,47 @@ updated: 2026-09-19
 実装計画のC01、C02…を、それぞれ独立したPRとして番号順に進める。複数のCを1本のPRへまとめない。
 各PRには対象Cの実装・関連試験・文書を含め、同じCの不具合修正もそのPRで扱う。
 C01には合意済みのExpressiveデザイン基盤の先行実装を含めるが、C02以降の機能は追加しない。
-プッシュ時はDraft PRを作成し、対象Cの確認が済んだらReady for reviewへ切り替える。
+PRの公開状態はその工程の依頼に従う。C02・C03は確認後に通常PRとして公開した。
 必須CI・CodeQL・レビュー状態を確認し、マージを妨げる問題がなければ、許可された範囲でsquash mergeする。
 PR内はレビュー可能な目的別コミットに分けてよい。C番号は実装の区切りであり、Gitのコミット数と一致させる必要はない。
+C04はCodeQLの対応後に独立したPRで再開し、C02・C03の機能は混ぜない。
+
+### CodeQLのビルドと切替
+
+2026年9月17日の実行確認では、CodeQL 2.27.0がKotlin 2.4.20を未対応として拒否した。
+Kotlin／Compose Compilerは2.4.20を維持し、CodeQLの対応版を待つ。
+未反映のworkflow案は取り下げ、既存のGitHub自動設定・必須条件は変更しない。
+Androidの解析未完了を成功として扱わず、対応版で抽出成功を確認してからGitHub側を切り替える。
+
+再開時は`.github/workflows/codeql.yml`を追加し、Kotlinを`manual`モードで解析する。
+TemurinはAndroidの`.java-version`から読み、SDK Platform 37.1とBuild Tools 36.0.0を用意する。
+CodeQL初期化後にWrapperから`assembleDebug`を実行し、キャッシュや差分コンパイルによる抽出漏れを防ぐ。
+エミュレーター、署名鍵、認証情報は使用しない。通常のAndroid CI（C03）とは役割を分ける。
+
+Python・JavaScript/TypeScript・GitHub Actionsも同じworkflowへ移し、既存のチェック名と
+`security-extended`を維持する。PR、mainへのpush、週次定期実行、手動実行を対象にする。
+GitHubのdefault setupとadvanced setupは併用せず、切替手順は
+[GitHub・CI-CD詳細設計](15_GitHub・CI-CD詳細設計.md)に従う。
+
+### Kotlin Compiler Native Image
+
+Kotlin 2.4.20のNative Image版を単体CLIとして利用する。
+GraalVMで事前コンパイルされたKotlin/JVMコンパイラーであり、
+アプリをKotlin/Nativeへ移行するものではない。Material 3やJVM targetも変更しない。
+
+2026年9月17日にLinux x86_64の公式配布物をSHA-256照合して導入し、
+単体Kotlinのコンパイル・実行とCompose Compilerによる最小Composableの変換を確認した。
+`-include-runtime`は配布物内のリソース参照で失敗したため、通常のclass出力と
+標準ライブラリを指定する実行方法を使う。上流の非推奨API警告は抑制しない。
+
+Kotlin Gradle Plugin 2.4.20ではNative Image選択の正式な設定は確認できていない。
+CLIの導入だけでAGPの
+`:app:compileDebugKotlin`が置き換わるわけではなく、APKビルドは従来の方式を維持する。
+Gradle連携を独自実装せず、正式な連携経路を確認できた時点で改めて採用する。
+CodeQL互換性も別の条件であり、Native Imageを解析回避には使わない。
+
+配布仕様は[Kotlin 2.4.20のNative Image](https://kotlinlang.org/docs/whatsnew2420.html#native-image)、
+利用方法はリポジトリの`apps/records-android/README.md`を参照する。
 
 ## C02：CircuitとMetroの接続
 
