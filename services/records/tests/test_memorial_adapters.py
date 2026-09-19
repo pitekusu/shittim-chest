@@ -617,14 +617,18 @@ def test_terminal_failure_clears_only_unrecoverable_partial_output(
 
 @pytest.mark.parametrize("profile_updated_at", (NOW, NOW + timedelta(seconds=1)))
 @pytest.mark.parametrize("profile_schema", [9, 10])
+@pytest.mark.parametrize("participant", ("participant-a", "participant-b", "participant-c"))
 def test_reset_transaction_fences_generation_and_atomically_resets_profile(
     monkeypatch: pytest.MonkeyPatch,
     profile_updated_at: datetime,
     profile_schema: int,
+    participant: str,
 ) -> None:
     ready = _checkpoint(state="ready", narrative=NARRATIVE, image_asset_key=RESULT_KEY)
     profile = _profile(updated_at=profile_updated_at)
     profile["schema_version"] = profile_schema
+    profile["unlocked_participant"] = participant
+    ready["unlocked_participant"] = participant
     client = DynamoRecorder(profile=profile, checkpoint=ready)
     repository = _repository(client)
     post_reset = MemorialSnapshot(
@@ -660,6 +664,7 @@ def test_reset_transaction_fences_generation_and_atomically_resets_profile(
     assert "#state <> :generating" in generation_fence
     receipt = unmarshal_item(actions[2]["Put"]["Item"])
     assert receipt["record_type"] == "memorial_reset"
+    assert receipt["participant"] == participant
     assert receipt["idempotency_hash"] == IDEMPOTENCY_HASH
     _apply_update(profile, source_update)
     reloaded = deserialize_affection_profile(profile, requester_key=REQUESTER_KEY)

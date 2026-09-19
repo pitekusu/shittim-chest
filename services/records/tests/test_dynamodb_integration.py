@@ -806,6 +806,7 @@ def test_memorial_transactions_queue_idempotency_and_atomic_reset(
         )["Item"]
     )
     assert reset_receipt["record_type"] == "memorial_reset"
+    assert reset_receipt["participant"] == "participant-a"
     assert reset_receipt["reset_to_cycle"] == 2
     assert reset_receipt["idempotency_hash"] == reset_hash
 
@@ -819,6 +820,16 @@ def test_memorial_transactions_queue_idempotency_and_atomic_reset(
     assert replayed_reset.state == "locked"
     assert replayed_reset.cycle == 2
     assert replayed_reset.reset_count == 1
+
+    dynamodb_client.put_item(TableName=statistics_table, Item=marshal_item(projected))
+    ranking_source = DynamoRankingSource(dynamodb_client, table_names[1], statistics_table)
+    history = ranking_source.list_memorial_history(requester_key)
+    assert all("narrative" not in item and "image_asset_key" not in item for item in history)
+    rankings = RankingService(
+        source=ranking_source,
+        store=DynamoRankingSnapshotStore(dynamodb_client, statistics_table),
+    ).refresh(now=unlocked_at + timedelta(minutes=6))
+    assert [ranking.entries[0].reset_count for ranking in rankings.affection] == [1, 0, 0]
 
 
 def test_memorial_repeated_failed_recovery_preserves_image_and_attempts_with_same_key(

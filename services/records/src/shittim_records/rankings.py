@@ -76,6 +76,8 @@ class RankingSource(Protocol):
 
     def list_affection_profiles(self) -> tuple[DynamoItem, ...]: ...
 
+    def list_memorial_history(self, requester_key: str) -> tuple[DynamoItem, ...]: ...
+
     def seed_default_affection_profiles(
         self,
         seeds: tuple[AffectionProfileSeed, ...],
@@ -104,9 +106,15 @@ class RankingService:
         if seeds:
             self._source.seed_default_affection_profiles(seeds, updated_at=generated_at)
         profiles = self._source.list_affection_profiles()
+        memorial_histories = {
+            profile.requester_key: self._source.list_memorial_history(profile.requester_key)
+            for item in profiles
+            if (profile := _parse_affection_profile(item)).reset_count > 0
+        }
         snapshot = build_rankings(
             items,
             affection_profiles=profiles,
+            memorial_histories=memorial_histories,
             generated_at=generated_at,
         )
         self._store.save_rankings(snapshot)
@@ -127,6 +135,7 @@ def build_rankings(
     items: tuple[DynamoItem, ...],
     *,
     affection_profiles: tuple[DynamoItem, ...] = (),
+    memorial_histories: dict[str, tuple[DynamoItem, ...]] | None = None,
     generated_at: datetime,
 ) -> RankingSnapshot:
     """Validate all source rows before constructing an all-or-nothing snapshot."""
@@ -188,6 +197,7 @@ def build_rankings(
     affection = _build_affection_rankings(
         affection_profiles,
         rows=rows,
+        memorial_histories=memorial_histories or {},
     )
     return RankingSnapshot(
         generated_at=generated_at.astimezone(UTC),
@@ -231,6 +241,7 @@ def _build_affection_rankings(
     profile_items: tuple[DynamoItem, ...],
     *,
     rows: tuple[_ArchiveRankingRow, ...],
+    memorial_histories: dict[str, tuple[DynamoItem, ...]],
 ) -> tuple[
     ParticipantAffectionRanking,
     ParticipantAffectionRanking,
@@ -239,6 +250,12 @@ def _build_affection_rankings(
     profiles = tuple(_parse_affection_profile(item) for item in profile_items)
     if len({profile.requester_key for profile in profiles}) != len(profiles):
         raise RankingDataInvalid("affection profiles contain duplicate requesters")
+    reset_counts = {
+        profile.requester_key: _memorial_reset_counts(
+            profile, memorial_histories.get(profile.requester_key, ())
+        )
+        for profile in profiles
+    }
     participant_names: dict[ParticipantSlot, str] = {
         "participant-a": "アロナ",
         "participant-b": "プラナ",
@@ -268,13 +285,77 @@ def _build_affection_rankings(
                         display_name=profile.display_name,
                         score=profile.scores[slot],
                         rank=rank,
-                        reset_count=profile.reset_count,
+                        reset_count=reset_counts[profile.requester_key][slot],
                     )
                     for profile, rank in zip(ordered, ranks, strict=True)
                 ),
             )
         )
     return (rankings[0], rankings[1], rankings[2])
+
+
+def _memorial_reset_counts(
+    profile: _AffectionProfileRow, history: tuple[DynamoItem, ...]
+) -> dict[ParticipantSlot, int]:
+    """Attribute completed resets to the selected participant, including legacy cycles."""
+
+    receipts: dict[int, ParticipantSlot | None] = {}
+    checkpoints: dict[int, ParticipantSlot | None] = {}
+    common_fields = {"PK", "SK", "schema_version", "record_type", "requester_key", "cycle"}
+    for item in history:
+        cycle = item.get("cycle")
+        is_reset = item.get("record_type") == "memorial_reset"
+        participant_field = "participant" if is_reset else "unlocked_participant"
+        participant = item.get(participant_field)
+        expected_fields = common_fields | (
+            {"reset_to_cycle", *({"participant"} if "participant" in item else set())}
+            if is_reset
+            else {"unlocked_participant"}
+        )
+        if (
+            set(item) != expected_fields
+            or item.get("PK") != f"MEMORIAL#REQUESTER#{profile.requester_key}"
+            or item.get("requester_key") != profile.requester_key
+            or isinstance(item.get("schema_version"), bool)
+            or item.get("schema_version") != 1
+            or item.get("record_type") not in ("memorial_reset", "memorial_cycle")
+            or isinstance(cycle, bool)
+            or not isinstance(cycle, int)
+            or not 1 <= cycle <= 999_999_999
+            or item.get("SK") != f"{'RESET' if is_reset else 'CYCLE'}#{cycle:08d}"
+            or (
+                participant_field in item
+                and (not isinstance(participant, str) or participant not in PARTICIPANT_SLOTS)
+            )
+            or (
+                is_reset
+                and (
+                    isinstance(item.get("reset_to_cycle"), bool)
+                    or not isinstance(item.get("reset_to_cycle"), int)
+                    or item.get("reset_to_cycle") != cycle + 1
+                )
+            )
+        ):
+            raise RankingDataInvalid("memorial ranking history is invalid")
+        # A newer reset may already be durable while its profile projection is still pending.
+        if cycle > profile.reset_count:
+            continue
+        target = receipts if is_reset else checkpoints
+        if cycle in target:
+            raise RankingDataInvalid("memorial ranking history contains duplicate cycles")
+        target[cycle] = cast(ParticipantSlot | None, participant)
+    if len(receipts) != profile.reset_count:
+        raise RankingDataInvalid("memorial reset history is incomplete")
+    counts: dict[ParticipantSlot, int] = dict.fromkeys(PARTICIPANT_SLOTS, 0)
+    for cycle, participant in receipts.items():
+        previous_participant = checkpoints.get(cycle)
+        if participant is not None and previous_participant not in (None, participant):
+            raise RankingDataInvalid("memorial reset participant conflicts with its cycle")
+        selected = participant or previous_participant
+        # Old resets without a generation checkpoint did not retain their participant.
+        if selected is not None:
+            counts[selected] += 1
+    return counts
 
 
 def _parse_affection_profile(item: DynamoItem) -> _AffectionProfileRow:

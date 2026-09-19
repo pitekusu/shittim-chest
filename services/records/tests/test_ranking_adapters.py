@@ -122,6 +122,42 @@ def test_source_queries_every_gsi1_page_in_ascending_order() -> None:
     ]
 
 
+def test_source_reads_every_memorial_metadata_page_without_private_contents() -> None:
+    requester_key = "a" * 43
+    items = [
+        {"PK": f"MEMORIAL#REQUESTER#{requester_key}", "SK": "CYCLE#00000001"},
+        {"PK": f"MEMORIAL#REQUESTER#{requester_key}", "SK": "RESET#00000001"},
+    ]
+    client = FakeDynamo([{"Items": [marshal_item(item)]} for item in items])
+
+    result = DynamoRankingSource(cast(Any, client), "archive", "statistics").list_memorial_history(
+        requester_key
+    )
+
+    assert result == tuple(items)
+    query = client.paginator.calls[0]
+    assert unmarshal_item(query["ExpressionAttributeValues"]) == {
+        ":pk": f"MEMORIAL#REQUESTER#{requester_key}"
+    }
+    assert query["ConsistentRead"] is True
+    assert query["Select"] == "SPECIFIC_ATTRIBUTES"
+    fields = {
+        query["ExpressionAttributeNames"].get(field, field)
+        for field in query["ProjectionExpression"].split(", ")
+    }
+    assert fields == {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "requester_key",
+        "cycle",
+        "reset_to_cycle",
+        "participant",
+        "unlocked_participant",
+    }
+
+
 def test_store_replaces_both_snapshots_in_one_transaction() -> None:
     client = FakeDynamo()
     snapshot = RankingSnapshot(
