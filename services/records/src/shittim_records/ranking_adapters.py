@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -55,6 +56,27 @@ class DynamoRankingSource:
         for page in pages:
             items.extend(unmarshal_item(item) for item in page.get("Items", []))
         return tuple(items)
+
+    def list_memorial_history(self, requester_key: str) -> tuple[DynamoItem, ...]:
+        """Read only reset attribution metadata, excluding private Memorial contents."""
+
+        if re.fullmatch(r"[A-Za-z0-9_-]{43}", requester_key) is None:
+            raise ValueError("memorial requester key is invalid")
+        if self._statistics_table is None:
+            raise RuntimeError("affection statistics table is unavailable")
+        pages = self._client.get_paginator("query").paginate(
+            TableName=self._statistics_table,
+            KeyConditionExpression="PK = :pk",
+            ExpressionAttributeValues=marshal_item({":pk": f"MEMORIAL#REQUESTER#{requester_key}"}),
+            ProjectionExpression=(
+                "PK, SK, schema_version, record_type, requester_key, "
+                "#cycle, reset_to_cycle, participant, unlocked_participant"
+            ),
+            ExpressionAttributeNames={"#cycle": "cycle"},
+            Select="SPECIFIC_ATTRIBUTES",
+            ConsistentRead=True,
+        )
+        return tuple(unmarshal_item(item) for page in pages for item in page.get("Items", []))
 
     def list_affection_profiles(self) -> tuple[DynamoItem, ...]:
         if self._statistics_table is None:

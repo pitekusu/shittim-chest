@@ -80,6 +80,112 @@ def affection_profile(
     }
 
 
+def memorial_reset(cycle: int, participant: str | None) -> DynamoItem:
+    return {
+        "PK": f"MEMORIAL#REQUESTER#{ALPHA_KEY}",
+        "SK": f"RESET#{cycle:08d}",
+        "schema_version": 1,
+        "record_type": "memorial_reset",
+        "requester_key": ALPHA_KEY,
+        "cycle": cycle,
+        "reset_to_cycle": cycle + 1,
+        **({"participant": participant} if participant is not None else {}),
+    }
+
+
+def memorial_checkpoint(cycle: int, participant: str) -> DynamoItem:
+    return {
+        "PK": f"MEMORIAL#REQUESTER#{ALPHA_KEY}",
+        "SK": f"CYCLE#{cycle:08d}",
+        "schema_version": 1,
+        "record_type": "memorial_cycle",
+        "requester_key": ALPHA_KEY,
+        "cycle": cycle,
+        "unlocked_participant": participant,
+    }
+
+
+@pytest.mark.parametrize("participant", tuple(PARTICIPANTS))
+def test_affection_crown_only_counts_the_reset_participant_without_generation(
+    participant: str,
+) -> None:
+    profile = affection_profile(ALPHA_KEY, "Alpha", (500, 500, 500)) | {
+        "schema_version": 2,
+        "reset_count": 1,
+        "memorial_cycle": 2,
+    }
+
+    snapshot = build_rankings(
+        (),
+        affection_profiles=(profile,),
+        memorial_histories={ALPHA_KEY: (memorial_reset(1, participant),)},
+        generated_at=NOW,
+    )
+
+    assert {
+        ranking.participant: ranking.entries[0].reset_count for ranking in snapshot.affection
+    } == {slot: int(slot == participant) for slot in PARTICIPANTS}
+
+
+def test_crowns_accumulate_per_participant_and_recover_legacy_reset_attribution() -> None:
+    profile = affection_profile(ALPHA_KEY, "Alpha", (500, 500, 500)) | {
+        "schema_version": 2,
+        "reset_count": 5,
+        "memorial_cycle": 6,
+    }
+    history = (
+        memorial_reset(1, "participant-a"),
+        memorial_reset(2, "participant-b"),
+        memorial_reset(3, "participant-a"),
+        memorial_reset(4, None),
+        memorial_checkpoint(4, "participant-c"),
+        memorial_reset(5, None),  # Legacy reset without any saved participant.
+        memorial_checkpoint(6, "participant-b"),  # Not reset in the projected profile yet.
+        memorial_reset(6, "participant-b"),
+    )
+
+    snapshot = build_rankings(
+        (),
+        affection_profiles=(profile,),
+        memorial_histories={ALPHA_KEY: history},
+        generated_at=NOW,
+    )
+
+    assert [ranking.entries[0].reset_count for ranking in snapshot.affection] == [2, 1, 1]
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        (),
+        (memorial_reset(1, "participant-a"),) * 2,
+        (memorial_reset(1, "participant-a"), memorial_checkpoint(1, "participant-b")),
+        (memorial_reset(1, "unknown"),),
+        (memorial_reset(1, "participant-a") | {"participant": None},),
+        (memorial_reset(1, "participant-a") | {"cycle": True},),
+        (memorial_reset(1, "participant-a") | {"reset_to_cycle": 3},),
+        (memorial_reset(1, "participant-a") | {"requester_key": BETA_KEY},),
+        (memorial_reset(1, "participant-a") | {"SK": "RESET#00000002"},),
+    ],
+)
+def test_crowns_reject_incomplete_or_inconsistent_reset_history(
+    history: tuple[DynamoItem, ...],
+) -> None:
+    profile = affection_profile(ALPHA_KEY, "Alpha", (500, 500, 500)) | {
+        "schema_version": 2,
+        "reset_count": 1,
+        "memorial_cycle": 2,
+    }
+
+    with pytest.raises(RankingDataInvalid):
+        build_rankings(
+            (),
+            affection_profiles=(profile,),
+            memorial_histories={ALPHA_KEY: history},
+            generated_at=NOW,
+        )
+
+
 def test_build_rankings_uses_competition_ranks_and_latest_requester_name() -> None:
     items = (
         archive_meta(1, winner="participant-a", requester_key="requester-a", requester_name="Old"),
@@ -139,7 +245,14 @@ def test_affection_rankings_include_every_profile_with_competition_ranks() -> No
         affection_profile(GAMMA_KEY, "Gamma", (500, 600, 900)),
     )
 
-    snapshot = build_rankings(archives, affection_profiles=profiles, generated_at=NOW)
+    snapshot = build_rankings(
+        archives,
+        affection_profiles=profiles,
+        memorial_histories={
+            ALPHA_KEY: (memorial_reset(1, "participant-a"), memorial_reset(2, "participant-a"))
+        },
+        generated_at=NOW,
+    )
 
     assert snapshot.affection_profile_count == 3
     by_participant = {ranking.participant: ranking for ranking in snapshot.affection}
@@ -153,6 +266,8 @@ def test_affection_rankings_include_every_profile_with_competition_ranks() -> No
         ALPHA_KEY,
     ]
     assert len(by_participant["participant-c"].entries) == 3
+    for slot in ("participant-b", "participant-c"):
+        assert all(entry.reset_count == 0 for entry in by_participant[slot].entries)
 
 
 def test_refresh_seeds_archived_requesters_at_500_without_replacing_real_profiles() -> None:

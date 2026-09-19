@@ -854,6 +854,7 @@ class DynamoMemorialRepository:
             "requester_key": requester_key,
             "cycle": expected_cycle,
             "reset_to_cycle": next_cycle,
+            "participant": cast(str, profile.participant),
             "idempotency_hash": idempotency_hash,
             "reset_at": _timestamp(now),
         }
@@ -1577,6 +1578,13 @@ class DynamoMemorialRepository:
             or item.get("record_type") != "memorial_reset"
             or item.get("requester_key") != requester_key
             or item.get("cycle") != cycle
+            or (
+                "participant" in item
+                and (
+                    not isinstance(item["participant"], str)
+                    or item["participant"] not in _PARTICIPANTS
+                )
+            )
         ):
             raise MemorialFailure("MEMORIAL_STATE_INVALID", 503)
         try:

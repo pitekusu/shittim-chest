@@ -431,6 +431,23 @@ export class RecordsApplicationStack extends Stack {
           },
         }),
         new iam.PolicyStatement({
+          actions: ["dynamodb:Query"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["MEMORIAL#REQUESTER#*"],
+            },
+            "ForAllValues:StringEquals": {
+              "dynamodb:Attributes": [
+                "PK", "SK", "schema_version", "record_type", "requester_key",
+                "cycle", "reset_to_cycle", "participant", "unlocked_participant",
+              ],
+            },
+            StringEquals: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
           actions: ["dynamodb:GetItem"],
           resources: [statisticsTable.tableArn],
           conditions: {

@@ -1220,6 +1220,38 @@ test("logoff shows the goodbye transition before returning to login", async ({ p
   await expect(transition).toHaveCount(0);
 });
 
+test("affection crowns count resets only for the selected participant", async ({ page }) => {
+  await mockAuthenticatedApi(page);
+  let selectedSlot = "participant-a";
+  await page.route("**/api/v1/insights/affection-rankings?*", (route) =>
+    route.fulfill({
+      json: {
+        ...affectionRankings,
+        rankings: affectionRankings.rankings.map((ranking) => ({
+          ...ranking,
+          entries: ranking.entries.map((entry) => ({
+            ...entry,
+            resetCount: ranking.participant === selectedSlot && entry.rank === 1 ? 2 : 0,
+          })),
+        })),
+      },
+    }),
+  );
+
+  for (const selected of participants) {
+    selectedSlot = selected.slot;
+    await page.goto("/insights");
+    const affection = page.getByRole("region", { name: "親愛度ランキング" });
+    for (const participant of participants) {
+      const ranking = affection.getByRole("region", { name: participant.displayName, exact: true });
+      await expect(ranking).toBeVisible();
+      await expect(
+        ranking.getByText("メモリアルロビーのリセット 2回", { exact: true }),
+      ).toHaveCount(participant.slot === selectedSlot ? 1 : 0);
+    }
+  }
+});
+
 test("authenticated member can review responsive rankings", async ({ page }) => {
   await mockAuthenticatedApi(page);
   await page.goto("/insights");

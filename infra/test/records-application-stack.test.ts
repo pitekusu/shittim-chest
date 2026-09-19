@@ -682,6 +682,21 @@ describe("RecordsApplicationStack", () => {
     expect(rankingText).not.toContain("dynamodb:Scan");
     expect(rankingText).not.toContain("dynamodb:UpdateItem");
     expect(rankingText).not.toContain("/records/openai/");
+    const memorialRanking = ranking?.Properties.PolicyDocument.Statement.find(
+      (statement: PolicyStatement) => JSON.stringify(statement).includes("MEMORIAL#REQUESTER#*"),
+    ) as PolicyStatement;
+    expect(actionsOf(memorialRanking)).toEqual(["dynamodb:Query"]);
+    expect(memorialRanking.Condition).toEqual({
+      "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MEMORIAL#REQUESTER#*"] },
+      "ForAllValues:StringEquals": {
+        "dynamodb:Attributes": [
+          "PK", "SK", "schema_version", "record_type", "requester_key",
+          "cycle", "reset_to_cycle", "participant", "unlocked_participant",
+        ],
+      },
+      StringEquals: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+      Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+    });
     expect(authText).not.toContain("/records/openai/");
     expect(costText).toContain("ce:GetCostAndUsage");
     expect(costText).toContain("ssm:GetParameters");
