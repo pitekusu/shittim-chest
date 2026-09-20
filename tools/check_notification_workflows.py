@@ -369,7 +369,7 @@ def _validate_release(directory: Path) -> None:
         "name: Production Release",
         "group: production-release",
         "cancel-in-progress: false",
-        "runs-on: ubuntu-24.04-arm",
+        "runs-on: ubuntu-26.04-arm",
         'node-version: "24.20.0"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
@@ -1478,7 +1478,7 @@ def _validate_records_workflows(directory: Path) -> None:
     release_markers = (
         "name: Records Release",
         "group: production-release",
-        "runs-on: ubuntu-24.04-arm",
+        "runs-on: ubuntu-26.04-arm",
         "source_stream_arn:",
         "records-gate",
         "gh api --paginate --slurp",

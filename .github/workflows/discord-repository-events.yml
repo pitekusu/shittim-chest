@@ -24,7 +24,7 @@ jobs:
       github.event_name == 'pull_request_target' &&
       vars.DISCORD_NOTIFICATIONS_ENABLED == 'true' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -44,7 +44,7 @@ jobs:
   push:
     name: push
     if: github.event_name == 'push' && vars.DISCORD_NOTIFICATIONS_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read

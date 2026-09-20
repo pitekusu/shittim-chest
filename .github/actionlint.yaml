@@ -1,0 +1,7 @@
+# actionlint 1.7.12 predates these standard GitHub-hosted runner labels.
+# This extends the linter's known labels; jobs still use GitHub-hosted runners.
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

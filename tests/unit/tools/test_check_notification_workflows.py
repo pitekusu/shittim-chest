@@ -1865,7 +1865,7 @@ def test_unapproved_target_workflow_is_rejected(directory: Path) -> None:
             "run: echo ${{ github.event.pull_request.title }}",
             "untrusted event",
         ),
-        ("runs-on: ubuntu-latest", "runs-on: self-hosted", "self-hosted"),
+        ("runs-on: ubuntu-26.04", "runs-on: self-hosted", "self-hosted"),
     ],
 )
 def test_forbidden_target_capability_is_rejected(
@@ -1971,7 +1971,7 @@ def test_deploy_guard_rejects_automatic_triggers(directory: Path, trigger: str) 
             "run: aws ecs update-service --cluster production",
             "AWS CLI operation",
         ),
-        ("runs-on: ubuntu-latest", "runs-on: self-hosted", "self-hosted"),
+        ("runs-on: ubuntu-26.04", "runs-on: self-hosted", "self-hosted"),
         (
             "    permissions:\n      contents: read",
             "    environment: production\n    permissions:\n      contents: read",

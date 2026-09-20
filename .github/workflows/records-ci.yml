@@ -22,7 +22,7 @@ env:
 jobs:
   records-changes:
     name: records-changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       records: ${{ steps.classify.outputs.records }}
@@ -51,7 +51,7 @@ jobs:
 
   records-python:
     name: records-python
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: records-changes
     if: needs.records-changes.outputs.records == 'true'
@@ -94,7 +94,7 @@ jobs:
 
   records-contract:
     name: records-contract
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: records-changes
     if: needs.records-changes.outputs.records == 'true'
@@ -121,7 +121,7 @@ jobs:
 
   records-web:
     name: records-web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: records-changes
     if: needs.records-changes.outputs.records == 'true'
@@ -158,7 +158,7 @@ jobs:
 
   records-infra:
     name: records-infra
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     needs: records-changes
     if: needs.records-changes.outputs.records == 'true'
@@ -180,7 +180,7 @@ jobs:
 
   records-gate:
     name: records-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     if: always()
     needs:

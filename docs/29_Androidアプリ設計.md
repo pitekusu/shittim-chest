@@ -43,16 +43,16 @@ C04はCodeQLの対応後に独立したPRで再開し、C02・C03の機能は混
 
 2026年9月17日の実行確認では、CodeQL 2.27.0がKotlin 2.4.20を未対応として拒否した。
 Kotlin／Compose Compilerは2.4.20を維持し、CodeQLの対応版を待つ。
-未反映のworkflow案は取り下げ、既存のGitHub自動設定・必須条件は変更しない。
-Androidの解析未完了を成功として扱わず、対応版で抽出成功を確認してからGitHub側を切り替える。
+Android解析の追加は保留し、既存3言語の解析・必須条件は維持する。
+Androidの解析未完了を成功として扱わず、対応版で抽出成功を確認してからGitHub側へ追加する。
 
-再開時は`.github/workflows/codeql.yml`を追加し、Kotlinを`manual`モードで解析する。
+再開時は既存の`.github/workflows/codeql.yml`へKotlinの`manual`モード解析を追加する。
 TemurinはAndroidの`.java-version`から読み、SDK Platform 37.1とBuild Tools 36.0.0を用意する。
 CodeQL初期化後にWrapperから`assembleDebug`を実行し、キャッシュや差分コンパイルによる抽出漏れを防ぐ。
 エミュレーター、署名鍵、認証情報は使用しない。通常のAndroid CI（C03）とは役割を分ける。
 
-Python・JavaScript/TypeScript・GitHub Actionsも同じworkflowへ移し、既存のチェック名と
-`security-extended`を維持する。PR、mainへのpush、週次定期実行、手動実行を対象にする。
+Python・JavaScript/TypeScript・GitHub ActionsはUbuntu 26.04への固定のため先に同workflowへ移す。
+既存のチェック名と`security-extended`を維持し、PR、mainへのpush、週次定期実行、手動実行を対象にする。
 GitHubのdefault setupとadvanced setupは併用せず、切替手順は
 [GitHub・CI-CD詳細設計](15_GitHub・CI-CD詳細設計.md)に従う。
 

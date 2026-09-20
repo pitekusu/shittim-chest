@@ -36,7 +36,7 @@ env:
 jobs:
   plan:
     name: plan
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     outputs:
       evidence_name: ${{ steps.evidence.outputs.artifact_name }}
@@ -1012,7 +1012,7 @@ jobs:
     name: deploy
     needs: plan
     if: ${{ needs.plan.result == 'success' && fromJSON(needs.plan.outputs.plan_attempt) == github.run_attempt }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
     environment: production
     permissions:
@@ -1578,7 +1578,7 @@ jobs:
     name: cleanup
     needs: [plan, deploy]
     if: ${{ always() }}
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
     permissions:
       actions: read
