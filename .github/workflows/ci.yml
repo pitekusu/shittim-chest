@@ -25,10 +25,13 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
+      core_tests: ${{ steps.classify.outputs.core_tests }}
+      core_package: ${{ steps.classify.outputs.core_package }}
+      infra: ${{ steps.classify.outputs.infra }}
       runtime_container: ${{ steps.classify.outputs.runtime_container }}
       records: ${{ steps.classify.outputs.records }}
-      core: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.classify.outputs.core }}
-      android: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.classify.outputs.android }}
+      core: ${{ steps.classify.outputs.core }}
+      android: ${{ steps.classify.outputs.android }}
     steps:
       - name: Check out the tested history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,6 +42,7 @@ jobs:
         id: classify
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FULL_CHECK: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           base_sha="${BASE_SHA}"
           if [ -z "${base_sha}" ] ||
@@ -47,10 +51,14 @@ jobs:
           then
             base_sha=$(git rev-parse "${GITHUB_SHA}^")
           fi
+          scope_args=()
+          if [ "${FULL_CHECK}" = true ]; then
+            scope_args+=(--all)
+          fi
           python3 tools/classify_ci_paths.py \
             --base "${base_sha}" \
             --head "${GITHUB_SHA}" \
-            --github-output "${GITHUB_OUTPUT}"
+            --github-output "${GITHUB_OUTPUT}" "${scope_args[@]}"
 
   quality:
     name: quality
@@ -91,7 +99,7 @@ jobs:
     timeout-minutes: 10
     env:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
-      CI_REQUIRED: ${{ needs.changes.outputs.core }}
+      CI_REQUIRED: ${{ needs.changes.outputs.core_tests }}
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -243,7 +251,7 @@ jobs:
     timeout-minutes: 10
     env:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
-      CI_REQUIRED: ${{ needs.changes.outputs.core }}
+      CI_REQUIRED: ${{ needs.changes.outputs.core_package }}
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -305,7 +313,7 @@ jobs:
     timeout-minutes: 10
     env:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
-      CI_REQUIRED: ${{ needs.changes.outputs.core }}
+      CI_REQUIRED: ${{ needs.changes.outputs.infra }}
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

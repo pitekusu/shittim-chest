@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -46,64 +48,92 @@ def test_runtime_image_or_validation_changes_require_container_gates(path: str) 
         "tests/unit/tools/test_build_records_web_artifact.py",
         "infra/lib/release-identity-stack.ts",
         "infra/test/release-identity-stack.test.ts",
-        "docs/24_シッテムの箱 議事録設計.md",
     ),
 )
 def test_records_changes_require_records_ci(path: str) -> None:
     assert classify_paths((path,))["records"] is True
 
 
-def test_records_css_does_not_rebuild_the_fargate_images() -> None:
-    classification = classify_paths(("apps/records-web/src/styles/home.module.css",))
-
-    assert classification == {
-        "runtime_container": False,
-        "records": True,
-        "android": False,
-        "core": True,
-    }
-
-
-def test_unrelated_documentation_does_not_run_either_specialized_gate() -> None:
-    assert classify_paths(("docs/11_Discord詳細設計.md",)) == {
-        "runtime_container": False,
-        "records": False,
-        "android": False,
-        "core": True,
-    }
-
-
-def test_android_with_its_docs_runs_only_android_specialized_checks() -> None:
-    assert classify_paths(
-        ("apps/records-android/gradle/libs.versions.toml", *classifier.ANDROID_DOCUMENTS)
-    ) == {"runtime_container": False, "records": False, "android": True, "core": False}
+@pytest.mark.parametrize(
+    ("paths", "expected"),
+    (
+        (("apps/records-web/src/styles/home.module.css",), {"records_web"}),
+        (
+            ("apps/records-web/index.html",),
+            {"records_python", "records_contract", "records_web"},
+        ),
+        (
+            ("services/records/src/shittim_records/rankings.py",),
+            {"records_python", "records_contract"},
+        ),
+        (("services/records/uv.lock",), {"records_python", "records_contract"}),
+        (
+            ("contracts/records/v1/openapi.json",),
+            {"records_python", "records_contract", "records_web"},
+        ),
+        (("infra/lib/records-application-stack.ts",), {"infra", "records_infra"}),
+        (("package-lock.json",), {"infra", "records_infra"}),
+        (("docs/11_Discord詳細設計.md",), set()),
+        (("docs/24_シッテムの箱 議事録設計.md",), set()),
+        (
+            ("apps/records-android/app/build.gradle.kts", "docs/29_Androidアプリ設計.md"),
+            {"android"},
+        ),
+        (
+            ("apps/records-android/app/build.gradle.kts", ".github/dependabot.yml"),
+            {"android", "core_tests"},
+        ),
+        (
+            ("apps/records-android/app/build.gradle.kts", "services/records/main.py"),
+            {"android", "records_python", "records_contract"},
+        ),
+        (("tests/unit/application/test_service.py",), {"core_tests"}),
+        (
+            ("apps/records-web/src/assets/fonts/font.woff2",),
+            {"records_python", "records_contract", "records_web"},
+        ),
+    ),
+)
+def test_scopes_follow_changed_inputs(paths: tuple[str, ...], expected: set[str]) -> None:
+    result = classify_paths(paths)
+    assert {name for name in classifier.SCOPES if result[name]} == expected
+    assert result["core"] is bool(expected & {"core_tests", "core_package", "infra"})
+    assert result["records"] is any(name.startswith("records_") for name in expected)
 
 
 @pytest.mark.parametrize(
-    "additional_path",
-    (
-        "src/main.py",
-        "infra/main.ts",
-        "services/records/main.py",
-        "unknown.txt",
-        ".github/workflows/ci.yml",
-    ),
+    "path",
+    ("src/shittim_chest/adapters/dynamodb/codec.py", "pyproject.toml", "uv.lock", "README.md"),
 )
-def test_mixed_android_changes_keep_core_checks(additional_path: str) -> None:
-    result = classify_paths(("apps/records-android/app/build.gradle.kts", additional_path))
-    assert result["android"] is True
-    assert result["core"] is True
-
-
-@pytest.mark.parametrize("path", sorted(classifier.ANDROID_SHARED_FILES))
-def test_changes_to_android_ci_wiring_exercise_the_build(path: str) -> None:
+def test_core_package_inputs_also_verify_the_records_consumer(path: str) -> None:
     result = classify_paths((path,))
-    assert result["android"] is True
-    assert result["core"] is True
+    for scope in (
+        "core_tests",
+        "core_package",
+        "runtime_container",
+        "records_python",
+        "records_contract",
+    ):
+        assert result[scope] is True
+    assert result["records_web"] is False
 
 
-def test_empty_diff_does_not_disable_core_checks() -> None:
-    assert classify_paths(())["core"] is True
+@pytest.mark.parametrize(
+    "paths", ((), ("unknown.txt",), (".github/workflows/ci.yml",), ("tools/check_ci_scope.py",))
+)
+def test_empty_unknown_and_pipeline_changes_require_all_scopes(paths: tuple[str, ...]) -> None:
+    assert all(classify_paths(paths).values())
+
+
+def test_mixed_change_uses_the_union_without_losing_shared_dependencies() -> None:
+    paths = (
+        "services/records/uv.lock",
+        "infra/lib/runtime-stack.ts",
+        "apps/records-android/app/build.gradle.kts",
+    )
+    combined = classify_paths(paths)
+    individual = [classify_paths((path,)) for path in paths]
+    assert all(combined[scope] == any(result[scope] for result in individual) for scope in combined)
 
 
 def test_repository_escape_is_rejected() -> None:
@@ -132,6 +162,40 @@ def test_changed_paths_uses_nul_delimiters_for_japanese_and_deleted_paths(
         "docs/24_シッテムの箱 議事録設計.md",
         "apps/records-web/removed.css",
     )
+
+
+def test_manual_full_verification_ignores_a_narrow_diff(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    monkeypatch.setattr(classifier, "changed_paths", lambda *_: ("docs/README.md",))
+    output = tmp_path / "output"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "classifier",
+            "--base",
+            "a" * 40,
+            "--head",
+            "b" * 40,
+            "--all",
+            "--github-output",
+            str(output),
+        ],
+    )
+    classifier.main()
+    assert all(json.loads(capsys.readouterr().out).values())
+    assert all(line.endswith("=true") for line in output.read_text().splitlines())
+
+
+def test_rename_between_scopes_requires_both_deleted_and_added_inputs() -> None:
+    # git diff --no-renames reports a rename as a deletion and an addition.
+    result = classify_paths(("services/records/old.py", "apps/records-web/new.ts"))
+    assert {name for name in classifier.SCOPES if result[name]} == {
+        "records_python",
+        "records_contract",
+        "records_web",
+    }
 
 
 def test_records_roots_are_not_reincluded_in_the_runtime_docker_context() -> None:

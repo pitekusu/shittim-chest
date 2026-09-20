@@ -1220,9 +1220,9 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         raise WorkflowPolicyError("Records CI triggers must not use path filters")
 
     scopes = {
-        "tests": ("core", ("verify-tests",)),
-        "package": ("core", ("build-package", "verify-package")),
-        "cdk": ("core", ("audit-infra", "verify-infra")),
+        "tests": ("core_tests", ("verify-tests",)),
+        "package": ("core_package", ("build-package", "verify-package")),
+        "cdk": ("infra", ("audit-infra", "verify-infra")),
         "android-gate": ("android", ("build-android", "verify-android", "reports-android")),
         "container-arm64": (
             "runtime_container",
@@ -1270,10 +1270,11 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         ):
             raise WorkflowPolicyError("CI Grype must require successful SBOM producers")
 
-    records_condition = "if: needs.records-changes.outputs.records == 'true'"
     for job in ("records-python", "records-contract", "records-web", "records-infra"):
         block = _workflow_job_block(records_text, job)
-        if block.count(records_condition) != 1:
+        scope = job.replace("-", "_")
+        condition = f"if: needs.records-changes.outputs.{scope} == 'true'"
+        if block.count(condition) != 1:
             raise WorkflowPolicyError(f"Records CI {job} must use the canonical path decision")
 
     records_python = _workflow_job_block(records_text, "records-python")
@@ -1319,19 +1320,14 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "- records-contract",
         "- records-web",
         "- records-infra",
-        "CHANGES_RESULT: ${{ needs.records-changes.result }}",
-        "REQUIRED: ${{ needs.records-changes.outputs.records }}",
-        "INFRA_RESULT: ${{ needs.records-infra.result }}",
-        'test "${CHANGES_RESULT}" = success',
-        'elif [ "${REQUIRED}" = false ]',
-        'test "${PYTHON_RESULT}" = success',
-        'test "${CONTRACT_RESULT}" = success',
-        'test "${WEB_RESULT}" = success',
-        'test "${INFRA_RESULT}" = success',
-        'test "${PYTHON_RESULT}" = skipped',
-        'test "${CONTRACT_RESULT}" = skipped',
-        'test "${WEB_RESULT}" = skipped',
-        'test "${INFRA_RESULT}" = skipped',
+        "CI_CHANGES_RESULT: ${{ needs.records-changes.result }}",
+        "CI_SCOPES: ${{ toJSON(needs.records-changes.outputs) }}",
+        "CI_DEPENDENCY_RESULTS: ${{ toJSON(needs) }}",
+        "python3 tools/check_ci_scope.py",
+        "--job records-python=records_python",
+        "--job records-contract=records_contract",
+        "--job records-web=records_web",
+        "--job records-infra=records_infra",
     )
     if any(marker not in records_gate for marker in required_records_gate):
         raise WorkflowPolicyError(

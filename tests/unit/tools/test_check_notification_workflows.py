@@ -164,7 +164,7 @@ def test_records_release_runs_web_gates_from_records_web_boundary(directory: Pat
 def test_records_ci_requires_the_canonical_classifier_decision(directory: Path) -> None:
     _replace(
         directory / RECORDS_CI_WORKFLOW,
-        "    if: needs.records-changes.outputs.records == 'true'\n",
+        "    if: needs.records-changes.outputs.records_python == 'true'\n",
         "    if: always()\n",
         1,
     )
@@ -176,8 +176,8 @@ def test_records_ci_requires_the_canonical_classifier_decision(directory: Path) 
 def test_records_ci_gate_requires_the_classifier_job_to_succeed(directory: Path) -> None:
     _replace(
         directory / RECORDS_CI_WORKFLOW,
-        "CHANGES_RESULT: ${{ needs.records-changes.result }}",
-        "CHANGES_RESULT: ignored",
+        "CI_CHANGES_RESULT: ${{ needs.records-changes.result }}",
+        "CI_CHANGES_RESULT: ignored",
         1,
     )
 

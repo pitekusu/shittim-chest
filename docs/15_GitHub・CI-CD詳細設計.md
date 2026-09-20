@@ -47,6 +47,24 @@ GitHubへ書き込む前に`gh auth status`と`gh api user --jq '.login'`で操�
 Recordsだけの変更でFargateイメージを変更しない場合は、Core配信を追加しない。
 Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords配信成功が必要である。
 
+検証フラグは依存関係に沿って分け、混在差分は必要範囲の和集合を使う。
+
+| 変更入力 | 個別に実行する検証 |
+|---|---|
+| Records Python・専用lock | Records Python・契約 |
+| Records公開契約 | Records Python・契約・Web |
+| Records Web | Web。Lambdaが同梱するフォント・ライセンス入力はPython・契約にも伝播 |
+| 共通インフラ・ルートnpm依存 | 共通CDK・Records synth |
+| Coreソース・共有Python依存・Docker入力 | Core試験・package・コンテナ・Records Python・契約 |
+| Coreの試験のみ | Core試験。コンテナ検証ツールはコンテナにも伝播 |
+| Android | Android |
+| docs・AGENTSのみ | 個別の重い検証は対象外。共通品質・公開情報・セキュリティ・CodeQLは継続 |
+| 未知・空差分・分類基盤・手動全検証 | 全対象 |
+
+既存の`core`・`records`・`runtime_container`・`android`出力名は維持し、
+`core_tests`・`core_package`・`infra`とRecordsの4領域を個別出力する。
+分類失敗や出力欠落は対象外にせず不合格とする。改名は旧名と新名の両方、削除は削除前のパスを分類する。
+
 ## 2. 継続的インテグレーション
 
 GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
@@ -134,10 +152,10 @@ Androidは同じ`ci.yml`の`android-gate`で検証し、独立した大規模mat
 
 PR、mainへのpush、手動実行でチェックを作成する。手動実行はAndroidとCore全検証を明示的に実行する。
 `apps/records-android/`、共通CI、変更範囲判定とその試験の変更でAndroidを検証する。
-Android配下と関連文書（15・19・29）だけの差分では、Coreの全pytest・wheel作成・CDKを省略する。
+Androidのみや文書を伴う差分では、Coreの全pytest・wheel作成・CDKを省略する。
 `tests`・`package`・`cdk`の必須チェック名は実処理のジョブで維持し、対象外と実行成功を区別する。
-混在差分・未知のパス・空差分は従来のCore検証を維持する。quality・security・公開文書検証も継続する。
-Recordsとコンテナの既存分類は変更しない。共通CI自体を変更する本PRでは、これらも検証対象になる。
+混在差分は各領域の和集合、未知のパス・空差分・共通の分類基盤変更は全検証を実行する。
+quality・security・公開文書検証・CodeQLは変更範囲によらず継続する。
 
 Gradle setup・dependency submission・Android Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
 そのSHAだけを追加する。既存の許可設定は維持し、更新時は新SHAの許可も合わせて確認する。
