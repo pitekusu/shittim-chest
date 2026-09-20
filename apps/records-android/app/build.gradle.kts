@@ -35,6 +35,14 @@ android {
 kotlin { jvmToolchain(21) }
 
 dependencies {
+  // Lint resolves its tool dependencies separately from the Gradle plugin classpath.
+  constraints {
+    add("androidLintTool", libs.build.commons.lang3)
+    add("androidLintTool", libs.build.httpclient)
+    add("androidLintTool", libs.build.bouncycastle.bcpkix)
+    add("androidLintTool", libs.build.bouncycastle.bcprov)
+    add("androidLintTool", libs.build.bouncycastle.bcutil)
+  }
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.compose.foundation)

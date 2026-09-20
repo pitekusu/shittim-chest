@@ -180,7 +180,7 @@ def test_vote_is_frozen_slotted_and_total_score_is_derived() -> None:
     assert vote.total_score == 9
     assert not hasattr(vote, "__dict__")
     with pytest.raises(FrozenInstanceError):
-        vote.reason = "changed"  # type: ignore[misc]
+        vote.__setattr__("reason", "changed")
 
 
 @pytest.mark.parametrize("field", ["source_url", "title", "retrieved_at", "content_hash"])

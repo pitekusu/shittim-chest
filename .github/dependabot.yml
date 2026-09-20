@@ -61,6 +61,10 @@ updates:
         applies-to: "version-updates"
         patterns:
           - "androidx.compose*"
+      records-android-bouncycastle:
+        applies-to: "version-updates"
+        patterns:
+          - "org.bouncycastle:*"
     open-pull-requests-limit: 5
 
   # Keep [tool.uv].required-version compatible with the updater's embedded uv.
