@@ -59,6 +59,10 @@ def test_records_changes_require_records_ci(path: str) -> None:
     (
         (("apps/records-web/src/styles/home.module.css",), {"records_web"}),
         (
+            ("apps/records-web/index.html",),
+            {"records_python", "records_contract", "records_web"},
+        ),
+        (
             ("services/records/src/shittim_records/rankings.py",),
             {"records_python", "records_contract"},
         ),

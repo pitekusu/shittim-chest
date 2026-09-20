@@ -95,6 +95,7 @@ SHARED_CONTAINER_FILES = frozenset(
     }
 )
 WEB_LAMBDA_ASSETS = (
+    "apps/records-web/index.html",
     "apps/records-web/src/assets/fonts/",
     "apps/records-web/third_party/line-seed/",
     "apps/records-web/THIRD_PARTY_NOTICES.md",
