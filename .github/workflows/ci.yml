@@ -439,6 +439,19 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu swangle -camera-back none -camera-front none
           script: echo 'Pristine AVD boot completed.'
+      - name: Wait for the pristine snapshot to finish saving
+        if: ${{ steps.scope.outputs.required == 'true' && github.ref == 'refs/heads/main' && steps.android-avd-cache.outputs.cache-hit != 'true' }}
+        run: |
+          # adb emu kill can return before the emulator finishes writing its snapshot.
+          for attempt in {1..60}; do
+            if ! pgrep -f '[e]mulator/.* -avd ci-api36( |$)' >/dev/null; then
+              test -s "${HOME}/.android/avd/ci-api36.avd/snapshots/default_boot/snapshot.pb"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "The pristine emulator did not finish saving its snapshot." >&2
+          exit 1
       - name: Save the main snapshot before any test changes device state
         if: ${{ steps.scope.outputs.required == 'true' && github.ref == 'refs/heads/main' && steps.android-avd-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
