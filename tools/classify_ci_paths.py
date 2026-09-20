@@ -29,6 +29,8 @@ RUNTIME_CONTEXT_FILES = frozenset(
 RUNTIME_CONTEXT_PREFIXES = ("src/",)
 RUNTIME_VALIDATION_FILES = frozenset(
     {
+        "tools/check_ci_scope.py",
+        "tests/unit/tools/test_check_ci_scope.py",
         "tools/containers/Dockerfile",
         "tools/container_images.py",
         ".github/tool-versions.json",
@@ -58,6 +60,8 @@ RECORDS_PREFIXES = (
 )
 RECORDS_FILES = frozenset(
     {
+        "tools/check_ci_scope.py",
+        "tests/unit/tools/test_check_ci_scope.py",
         "tools/containers/Dockerfile",
         "tools/container_images.py",
         "tools/run_dynamodb_local.py",
@@ -78,6 +82,8 @@ COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 ANDROID_PREFIX = "apps/records-android/"
 ANDROID_SHARED_FILES = frozenset(
     {
+        "tools/check_ci_scope.py",
+        "tests/unit/tools/test_check_ci_scope.py",
         ".github/workflows/ci.yml",
         "tools/classify_ci_paths.py",
         "tests/unit/tools/test_classify_ci_paths.py",

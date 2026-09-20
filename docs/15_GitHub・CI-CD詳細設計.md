@@ -83,7 +83,10 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 ルートのロックファイル監査、TypeScript、Recordsを含む全インフラのVitestは同じSHAの`cdk`へ集約する。
 `records-infra`では共通検証を繰り返さない。
 対象外PRでも`records-gate`は明示的な対象外の成功結果を返す。
-`container-arm64`と`grype`も必須チェック名を維持し、分類上の対象外だけ重い処理を省く。
+`tests`・`package`・`cdk`・`android-gate`・`container-arm64`・`grype`は、必須チェックと実処理を同じジョブで実行する。
+分類成功と明示的な対象フラグを先に検証し、対象外だけ重い処理を省く。終了時には必要な試験・成果物の
+step outcomeとconclusionを検査し、未実行・失敗・キャンセルやcontinue-on-errorによる失敗の隠蔽を通さない。
+対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は19ジョブとなる。
 CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
 GitHub Actionsを解析し、`ubuntu-26.04`と`security-extended`を使う。
 PR、mainへのpush、週次定期実行、手動実行を対象にする。
@@ -132,7 +135,7 @@ Androidは同じ`ci.yml`の`android-build`で検証し、独立した大規模ma
 PR、mainへのpush、手動実行でチェックを作成する。手動実行はAndroidとCore全検証を明示的に実行する。
 `apps/records-android/`、共通CI、変更範囲判定とその試験の変更でAndroidを検証する。
 Android配下と関連文書（15・19・29）だけの差分では、Coreの全pytest・wheel作成・CDKを省略する。
-`tests`・`package`・`cdk`の必須チェック名は集約ジョブで維持し、対象外と実行成功を区別する。
+`tests`・`package`・`cdk`の必須チェック名は実処理のジョブで維持し、対象外と実行成功を区別する。
 混在差分・未知のパス・空差分は従来のCore検証を維持する。quality・security・公開文書検証も継続する。
 Recordsとコンテナの既存分類は変更しない。共通CI自体を変更する本PRでは、これらも検証対象になる。
 
