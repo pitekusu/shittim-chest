@@ -8,9 +8,22 @@ circuit = "0.39.0"
 metro = "1.4.4"
 androidx-test-junit = "1.3.0"
 androidx-test-runner = "1.7.0"
+# Patched versions for AGP's transitive build dependencies.
+bouncycastle = "1.85"
+commons-lang3 = "3.18.0"
+httpclient = "4.5.14"
+jose4j = "0.9.6"
+jdom2 = "2.0.6.1"
 
 [libraries]
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+build-commons-lang3 = { module = "org.apache.commons:commons-lang3", version.ref = "commons-lang3" }
+build-httpclient = { module = "org.apache.httpcomponents:httpclient", version.ref = "httpclient" }
+build-jose4j = { module = "org.bitbucket.b_c:jose4j", version.ref = "jose4j" }
+build-bouncycastle-bcpkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
+build-bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+build-bouncycastle-bcutil = { module = "org.bouncycastle:bcutil-jdk18on", version.ref = "bouncycastle" }
+build-jdom2 = { module = "org.jdom:jdom2", version.ref = "jdom2" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
 # Adopt the preview Compose stack together, not only Material 3.
 androidx-compose-bom = { module = "androidx.compose:compose-bom-alpha", version.ref = "compose-bom" }

@@ -168,9 +168,14 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 | Buildx/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
 
 AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜9時（日本時間）に確認する。
-Kotlin関連とCompose関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
+Kotlin関連、Compose関連、Bouncy Castle関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
 通常は公開から3日待って更新候補にする。`androidx.activity:activity-compose`はDependabotが公開日時を取得できず
 全版を除外してしまうため、この待機だけを適用せず、週次確認と取り込み前の検証を行う。
+
+AGP由来の脆弱な間接依存は、ルートの`buildscript.classpath`と独立した`androidLintTool`に修正版の制約を設ける。
+バージョンはVersion Catalogへ宣言し、Dependabotが警告対象の更新箇所を読み取れるようにする。
+親プラグインの更新だけで修正版へ解決されるようになった場合は制約の撤去を検討し、
+依存グラフから旧版が消えることとAndroidのビルド・Lint・計装テストを確認する。
 
 Dependabotの対象はActions、Core/Recordsのuv、ルート/Webのnpm/pnpm、AndroidのGradle、
 実行用Dockerfile、試験・ビルド用イメージ定義。実行用Dockerは毎日、その他は毎週月曜9時（日本時間）に確認する。

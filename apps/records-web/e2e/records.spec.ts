@@ -2075,6 +2075,9 @@ test("queued Memorial can resend an existing request after reload", async ({ pag
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     page.viewportSize()!.width,
   );
+  // Click auto-scrolling must not move the sticky sidebar in the full-page snapshot.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
   await expect(page).toHaveScreenshot("records-memorial-queued-recovery.png", {
     animations: "disabled",
     fullPage: true,
