@@ -152,7 +152,7 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 
 ## 3. 依存と配信ツールの更新
 
-正確なバージョンは各ロックファイル、`pyproject.toml`、`package.json`、`.node-version`、ワークフローを正とする。
+正確なバージョンは各ロックファイル、`pyproject.toml`、`package.json`、`.node-version`、Gradle Wrapper、Version Catalog、ワークフローを正とする。
 設計書へパッチバージョンを重複記載しない。
 
 | 更新対象 | 一緒に確認・更新するもの |
@@ -163,7 +163,11 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 | OpenAI SDK | Core/Recordsの3系、HTTPX2のクライアント・タイムアウト・例外境界を合わせる。モデル/人格変更は分離 |
 | uv/ビルド基盤 | 両Pythonプロジェクトの対応系列、`required-version`、`uv_build`、ワークフロー、Docker、更新監視を合わせる |
 | Actions | `uses:`を完全なコミットSHAで固定し、Dependabotで追従 |
+| Android | Gradle Wrapperの配布版・SHA-256・生成ファイルを合わせる。Kotlin Gradle PluginとCompose Compiler、Compose BOMとMaterial 3はそれぞれ一組で確認 |
 | Buildx/BuildKit/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
+
+AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜9時（日本時間）に確認する。
+Kotlin関連とCompose関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
 
 互換性のない自動更新は理由を記録してDependabot側で保留する。
 別PRで更新済みのDependabot PRを手動で閉じると、同じバージョンの後続ダイジェスト更新も既存PR扱いになることがある。
