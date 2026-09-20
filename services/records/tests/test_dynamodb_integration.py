@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
@@ -22,6 +23,7 @@ from shittim_chest.domain.affection import AffectionProfile, MemorialUnlock
 from shittim_chest.domain.debate_content import ParticipantSlot
 from shittim_chest.domain.identifiers import DebateId
 from tests.factories import NOW, completed_snapshot, presentation
+from tests.test_mobile_auth_adapters import mobile_states
 from tests.test_momotalk import ROOM_ID, START, WEEK
 from tests.test_momotalk import snapshot as momotalk_snapshot
 from tests.test_momotalk_announcements import ready_room
@@ -41,12 +43,135 @@ from shittim_records.inspector_translations import (
 )
 from shittim_records.memorial import MemorialFailure
 from shittim_records.memorial_adapters import DynamoMemorialRepository
+from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
 from shittim_records.momotalk_adapters import DynamoMomotalkStore, MomotalkInputSource
 from shittim_records.momotalk_announcements import RECEIPTS_PK, DynamoMomotalkAnnouncements
 from shittim_records.projector import project_affection_profile
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
+
+
+def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, table_names):
+    table = table_names[0]
+    store = DynamoMobileAuthStore(dynamodb_client, table)
+    started, authorizing, authorized = mobile_states()
+    store.create(started, now_epoch=1000)
+    with pytest.raises(AuthFailure, match=r"^mobile_grant_invalid$"):
+        store.create(started, now_epoch=1000)
+    assert store.get(started.transaction_hash, now_epoch=1000) == started
+
+    def claim(index):
+        binding = authorizing.model_copy(update={"browser_nonce_hash": str(index + 1) * 64})
+        try:
+            store.advance(started, binding, now_epoch=1001)
+            return binding
+        except AuthFailure:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        winners = [value for value in pool.map(claim, range(2)) if value is not None]
+    assert len(winners) == 1
+    binding = winners[0]
+    assert store.get(started.transaction_hash, now_epoch=1001) == binding
+    with pytest.raises(AuthFailure):
+        store.advance(authorizing, authorized, now_epoch=1040)  # Wrong browser binding.
+    store.advance(binding, authorized, now_epoch=1040)
+    assert store.get(started.transaction_hash, now_epoch=1040) == authorized
+    with pytest.raises(AuthFailure):
+        store.advance(binding, authorized, now_epoch=1040)  # Cannot reissue a code.
+    wrong_code = authorized.model_copy(update={"code_hash": "f" * 64})
+    with pytest.raises(dynamodb_client.exceptions.TransactionCanceledException):
+        dynamodb_client.transact_write_items(
+            TransactItems=[store.consumption_write(wrong_code, now_epoch=1041)]
+        )
+    assert store.get(started.transaction_hash, now_epoch=1041) == authorized
+
+    # The other write stands in for C09 session issuance. A failed session write
+    # must leave the code available; C06 does not yet define mobile session storage.
+    session = {"PK": "TEST#MOBILE_SESSION", "SK": "META"}
+    dynamodb_client.put_item(TableName=table, Item=marshal_item(session))
+    transaction = [
+        store.consumption_write(authorized, now_epoch=1041),
+        {
+            "Put": {
+                "TableName": table,
+                "Item": marshal_item(session),
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }
+        },
+    ]
+    with pytest.raises(dynamodb_client.exceptions.TransactionCanceledException):
+        dynamodb_client.transact_write_items(TransactItems=transaction)
+    assert store.get(started.transaction_hash, now_epoch=1041) == authorized
+    dynamodb_client.delete_item(TableName=table, Key=marshal_item(session))
+
+    def consume(index):
+        # Competing exchanges generate different session tokens. Using the same
+        # session key would mask a broken grant CAS behind a session-key collision.
+        own_session = {**session, "PK": f"TEST#MOBILE_SESSION#{index}"}
+        try:
+            dynamodb_client.transact_write_items(
+                TransactItems=[
+                    transaction[0],
+                    {
+                        "Put": {
+                            "TableName": table,
+                            "Item": marshal_item(own_session),
+                            "ConditionExpression": "attribute_not_exists(PK)",
+                        }
+                    },
+                ]
+            )
+            return True
+        except dynamodb_client.exceptions.TransactionCanceledException:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sum(pool.map(consume, range(2))) == 1
+    with pytest.raises(AuthFailure, match=r"^mobile_grant_invalid$"):
+        store.get(started.transaction_hash, now_epoch=1042)
+    saved = unmarshal_item(
+        dynamodb_client.get_item(
+            TableName=table,
+            Key=marshal_item({"PK": "MOBILE#" + started.transaction_hash, "SK": "TRANSACTION"}),
+            ConsistentRead=True,
+        )["Item"]
+    )
+    assert saved["expiresAt"] == 1600
+    assert isinstance(saved["payload"], str)
+    assert '"status":"consumed"' in saved["payload"]
+    assert "code_hash" not in saved["payload"]
+    assert "requester_key" not in saved["payload"]
+    sessions = [
+        dynamodb_client.get_item(
+            TableName=table,
+            Key=marshal_item({**session, "PK": f"TEST#MOBILE_SESSION#{index}"}),
+            ConsistentRead=True,
+        )
+        for index in range(2)
+    ]
+    assert sum("Item" in result for result in sessions) == 1
+
+
+def test_mobile_grants_expire_without_waiting_for_ttl(dynamodb_client, table_names):
+    store = DynamoMobileAuthStore(dynamodb_client, table_names[0])
+    started, authorizing, authorized = mobile_states()
+    with pytest.raises(AuthFailure):
+        store.get(started.transaction_hash, now_epoch=1000)
+    store.create(started, now_epoch=1000)
+    assert store.get(started.transaction_hash, now_epoch=1599) == started
+    with pytest.raises(AuthFailure):
+        store.get(started.transaction_hash, now_epoch=1600)
+    with pytest.raises(AuthFailure):
+        store.advance(started, authorizing, now_epoch=1600)
+    store.advance(started, authorizing, now_epoch=1001)
+    store.advance(authorizing, authorized, now_epoch=1040)
+    assert store.get(started.transaction_hash, now_epoch=1099) == authorized
+    with pytest.raises(AuthFailure):
+        store.get(started.transaction_hash, now_epoch=1100)
+    with pytest.raises(AuthFailure):
+        store.consumption_write(authorized, now_epoch=1100)
 
 
 def test_momotalk_publication_and_exclusive_announcement_receipt(dynamodb_client, table_names):
