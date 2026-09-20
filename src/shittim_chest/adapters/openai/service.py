@@ -620,7 +620,14 @@ def _extract_parsed[OutputT: BaseModel](response: Response, schema: type[OutputT
         for content in output.content:
             if content.type == "refusal":
                 raise OpenAIRefusal()
-    text = response.output_text
+    # Match the SDK parser: intermediate and future phases are not structured results.
+    text = "".join(
+        content.text
+        for output in response.output
+        if output.type == "message" and output.phase in (None, "final_answer")
+        for content in output.content
+        if content.type == "output_text" and content.text is not None
+    )
     if not text:
         raise OpenAIInvalidOutput(
             diagnostic_context="structured_output",

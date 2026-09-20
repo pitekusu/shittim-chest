@@ -2247,7 +2247,7 @@ class OpenAIMemorialContentGenerator:
             image=[requester_file, participant_file],
             prompt=prompt,
             size=f"{MEMORIAL_IMAGE_SOURCE_WIDTH}x{MEMORIAL_IMAGE_SOURCE_HEIGHT}",
-            quality="high",
+            quality="xhigh",
             output_format="png",
             n=1,
         )

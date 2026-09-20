@@ -1206,7 +1206,7 @@ def test_openai_generation_is_stateless_split_and_uses_two_reference_images(
     image_call = client.image_calls[0]
     assert image_call["model"] == "gpt-image-2.5-sunburst"
     assert image_call["size"] == "1920x1088"
-    assert image_call["quality"] == "high"
+    assert image_call["quality"] == "xhigh"
     assert image_call["n"] == 1
     assert image_call["output_format"] == "png"
     assert "input_fidelity" not in image_call

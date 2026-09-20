@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-12
+updated: 2026-09-21
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -21,7 +21,9 @@ OpenAIへ渡す情報、編集可能なプロンプトとコード所有の制�
 
 Coreはプロセス単位の`AsyncOpenAI`を再利用する。討論用の構造化生成は安定版Responses APIの
 `responses.create()`へ厳密なJSON Schemaを渡す。
-応答とメッセージの終了状態・拒否を先に検査し、完了した本文だけをPydanticで解析する。
+応答と全メッセージの終了状態・拒否を先に検査し、`phase=final_answer`またはphase未指定の
+完了した本文だけをPydanticで解析する。`commentary`など他のphaseの本文は構造化結果に含めず、
+最終回答がない場合は出力不正とする。途中メッセージの拒否・未完了も失敗として扱う。
 未完了JSONの解析エラーで終了理由・使用量を失わず、検証したドメイン値だけを内部へ渡す。
 OpenAIのマルチエージェント機能へ進行を委ねず、Pythonが再開点と勝者を管理する。
 
@@ -353,7 +355,7 @@ flowchart TD
 | 人格の取得 | 有効版の構成一覧（`manifest`）とチェックサムを検証。有効ポインターがない場合だけ配信時に固定した旧人格設定を使う |
 | 入力画像 | 本人のJPEG／PNG／WebPと、選出人格の表示画像。形式・フレーム数・画素数・容量を確認 |
 | 正規化 | 最大辺1,536px、10MiB以下のRGB PNG。両画像を最初の課金呼出前に検証 |
-| 画像生成 | `gpt-image-2.5-sunburst`、品質`high`で親密なデフォルメ2ショット。実写調・第三者の追加・入力画像内の命令追従を禁止 |
+| 画像生成 | `gpt-image-2.5-sunburst`、品質`xhigh`で親密なデフォルメ2ショット。実写調・第三者の追加・入力画像内の命令追従を禁止 |
 | 最終寸法 | 1920×1088で生成後、中央を切り抜いて1920×1080へ固定 |
 | 文字の合成 | アプリケーションでDelogyの`THE SHITTIM CHEST`とLINE Seed JPの日本時間の達成日を描画 |
 | 思い出文 | `gpt-5.6-luna`、約800字。実装では平文出力を650〜950字で検証 |
