@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,6 @@ from tools.check_notification_workflows import (
     RECORDS_BACKFILL_WORKFLOW,
     RECORDS_CI_WORKFLOW,
     RECORDS_RELEASE_WORKFLOW,
-    RELEASE_REQUIRED_MAIN_CHECKS,
     RELEASE_WORKFLOW,
     WORKFLOW_DIRECTORY,
     WORKFLOW_RUN_NOTIFICATION,
@@ -39,6 +39,7 @@ def directory(tmp_path: Path) -> Path:
         RECORDS_BACKFILL_WORKFLOW,
     ):
         (directory / name).write_bytes((WORKFLOW_DIRECTORY / name).read_bytes())
+    shutil.copytree(WORKFLOW_DIRECTORY.parent / "actions", directory.parent / "actions")
     return directory
 
 
@@ -50,6 +51,21 @@ def _replace(path: Path, old: str, new: str, count: int = -1) -> None:
 
 def test_repository_target_workflow_is_accepted(directory: Path) -> None:
     assert validate_notification_workflows(directory) == 1
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
+        ("--update", "--github-output /dev/null"),
+        ("github.ref == 'refs/heads/main'", "true"),
+    ],
+)
+def test_grype_cache_cannot_bypass_freshness_or_write_from_prs(
+    directory: Path, before: str, after: str
+) -> None:
+    _replace(directory.parent / "actions/prepare-grype-db/action.yml", before, after)
+    with pytest.raises(WorkflowPolicyError, match="Grype cache"):
+        validate_notification_workflows(directory)
 
 
 @pytest.mark.parametrize(
@@ -225,13 +241,6 @@ def test_records_ci_rejects_the_non_allowlisted_vite_plus_action(directory: Path
 
 def test_records_release_requires_production_approval(directory: Path) -> None:
     _replace(directory / RECORDS_RELEASE_WORKFLOW, "    environment: production\n", "", 1)
-
-    with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
-        validate_notification_workflows(directory)
-
-
-def test_records_release_requires_complete_check_run_pagination(directory: Path) -> None:
-    _replace(directory / RECORDS_RELEASE_WORKFLOW, "gh api --paginate --slurp", "gh api", 1)
 
     with pytest.raises(WorkflowPolicyError, match="plan/deploy boundary"):
         validate_notification_workflows(directory)
@@ -900,34 +909,15 @@ def test_release_requires_the_locked_node_version(directory: Path) -> None:
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("check_name", sorted(RELEASE_REQUIRED_MAIN_CHECKS))
-def test_release_requires_every_main_check(
-    directory: Path,
-    check_name: str,
-) -> None:
-    path = directory / RELEASE_WORKFLOW
-    text = path.read_text(encoding="utf-8")
-    start = text.index("          for check in \\\n")
-    end = text.index("\n          do", start)
-    block = text[start:end]
-    token = f"'{check_name}'" if " " in check_name else check_name
-    changed = block.replace(token, "", 1)
-    assert changed != block
-    path.write_text(text[:start] + changed + text[end:], encoding="utf-8")
-
-    with pytest.raises(WorkflowPolicyError, match="exactly 8 CI checks and 3 CodeQL"):
-        validate_notification_workflows(directory)
-
-
-def test_release_rejects_an_extra_main_check(directory: Path) -> None:
+@pytest.mark.parametrize("workflow", [RELEASE_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
+def test_release_requires_the_shared_main_checks(directory: Path, workflow: str) -> None:
     _replace(
-        directory / RELEASE_WORKFLOW,
-        "quality tests security package cdk docs-public-safety",
-        "quality tests security package cdk unexpected docs-public-safety",
+        directory / workflow,
+        "python3 tools/check_release_ci.py",
+        "echo skipped",
         1,
     )
-
-    with pytest.raises(WorkflowPolicyError, match="exactly 8 CI checks and 3 CodeQL"):
+    with pytest.raises(WorkflowPolicyError, match="shared main check set"):
         validate_notification_workflows(directory)
 
 

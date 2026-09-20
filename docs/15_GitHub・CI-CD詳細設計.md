@@ -53,7 +53,7 @@ Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords
 |---|---|
 | Records Python・専用lock | Records Python・契約 |
 | Records公開契約 | Records Python・契約・Web |
-| Records Web | Web。Lambdaが同梱するフォント・ライセンス入力はPython・契約にも伝播 |
+| Records Web | Web。Pythonが参照するHTML・フォント・ライセンス入力はPython・契約にも伝播 |
 | 共通インフラ・ルートnpm依存 | 共通CDK・Records synth |
 | Coreソース・共有Python依存・Docker入力 | Core試験・package・コンテナ・Records Python・契約 |
 | Coreの試験のみ | Core試験。コンテナ検証ツールはコンテナにも伝播 |
@@ -293,7 +293,10 @@ PRの必須条件として固定された旧基準値や別実行との完全な
 同じベースイメージでもベンダーのVEX判定は更新される。以前の「影響なし」がなくなった場合は、
 過去のVEXや承認範囲の拡大で通さず、修正版のベースイメージと最新の検査結果を確認する。
 基盤更新を含む配信では、Recordsの変更に加えてCore Releaseで本番イメージも更新する。
-Grypeのデータベースは取得済みキャッシュがある場合も更新を確認する。
+CIとCore Releaseは共通のDB準備action／スクリプトを使い、Grype版・OS・UTC日付をキーに保存する。
+mainで保存したDBは同じツール版のx64／ARM64で再利用できる。キャッシュ対象はDBのみである。
+Grypeのデータベースは取得済みキャッシュがある場合も毎回`db update`で更新を確認し、失敗時は停止する。
+実スキャン・ARM64での再検証・署名済みVEXの取得は省略しない。ソースSBOMのschema検証方式も維持する。
 日付付きキャッシュだけで当日公開分の取得済み判定をせず、各実行で使ったデータベースは生スキャンの証拠に残す。
 
 検査データベースの反映遅れは、ベンダー公式の修正版と実イメージのSBOMが一致することを確認した場合に限り、
@@ -326,6 +329,11 @@ flowchart TD
 ```
 
 手動ワークフローは`main`の固定SHAを使う。CoreはRuntimeConfigのバージョンも入力する。
+Core／Records Releaseは共通スクリプトで、固定したmain SHAに対するCI・Records CI・CodeQLの
+最新run／attemptを確認する。対象はmainのpush・手動・定期実行であり、PRの同名チェックは採用しない。
+10個の必須チェック名とCodeQL既存3言語を全件照合し、未完了・失敗・キャンセル・欠落・重複を不合格とする。
+workflowとjobの一覧は全ページを取得する。既存の承認後の証拠照合と同一SHAのRecords→Core順序は維持する。
+
 開始前にOIDCのリポジトリ識別情報、必須mainチェック、CodeQL、非公開設定のメタデータ、
 スタック、残存変更セット、ロック、Runtimeの稼働状況を確認する。
 環境への配信承認は利用者が許可した範囲内で実施する。

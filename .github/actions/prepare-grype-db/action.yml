@@ -1,0 +1,29 @@
+name: Prepare a fresh Grype database
+description: Reuse a versioned main cache and always check for database updates.
+runs:
+  using: composite
+  steps:
+    - name: Identify the installed Grype database cache
+      id: key
+      shell: bash
+      env:
+        GRYPE_CHECK_FOR_APP_UPDATE: "false"
+      run: python3 tools/prepare_grype_db.py --binary "${RUNNER_TEMP}/grype" --github-output "${GITHUB_OUTPUT}"
+    - name: Restore a compatible database
+      id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/grype/db
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - name: Require a successful database update even after a cache hit
+      shell: bash
+      env:
+        GRYPE_CHECK_FOR_APP_UPDATE: "false"
+      run: python3 tools/prepare_grype_db.py --binary "${RUNNER_TEMP}/grype" --update
+    - name: Save the refreshed main database
+      if: ${{ github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/grype/db
+        key: ${{ steps.key.outputs.key }}

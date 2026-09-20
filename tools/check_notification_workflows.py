@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -19,21 +18,6 @@ RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.37.0"
-RELEASE_REQUIRED_MAIN_CHECKS = frozenset(
-    {
-        "quality",
-        "tests",
-        "security",
-        "package",
-        "cdk",
-        "docs-public-safety",
-        "container-arm64",
-        "grype",
-        "Analyze (python)",
-        "Analyze (javascript-typescript)",
-        "Analyze (actions)",
-    }
-)
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
 AWS_OR_DEPLOY_CAPABILITY = re.compile(
@@ -58,6 +42,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
 
     _validate_permission_syntax(directory)
     _validate_consistent_action_pins(directory)
+    _validate_grype_database_action(directory)
     _validate_pinned_container_builder(directory)
     target_files: list[Path] = []
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
@@ -250,28 +235,18 @@ def _validate_aws_capability_boundary(directory: Path) -> None:
 
 
 def _validate_release_main_checks(text: str) -> None:
-    blocks = re.findall(
-        r"^ {10}for check in \\\n(?P<checks>.*?)^ {10}do\s*$",
-        text,
-        flags=re.DOTALL | re.MULTILINE,
+    name = (
+        "Require immutable OIDC identity and successful main gates"
+        if "name: Production Release" in text
+        else "Require successful main Records and CodeQL gates"
     )
-    if len(blocks) != 1:
-        raise WorkflowPolicyError(
-            "Release main check set must contain exactly 8 CI checks and 3 CodeQL analyses"
-        )
-    try:
-        checks = tuple(shlex.split(blocks[0].replace("\\\n", " ")))
-    except ValueError as error:
-        raise WorkflowPolicyError(
-            "Release main check set must contain exactly 8 CI checks and 3 CodeQL analyses"
-        ) from error
+    block = _workflow_step_block(text, name)
     if (
-        len(checks) != len(RELEASE_REQUIRED_MAIN_CHECKS)
-        or frozenset(checks) != RELEASE_REQUIRED_MAIN_CHECKS
+        block.count("python3 tools/check_release_ci.py") != 1
+        or "        if:" in block
+        or "GH_TOKEN: ${{ github.token }}" not in block
     ):
-        raise WorkflowPolicyError(
-            "Release main check set must contain exactly 8 CI checks and 3 CodeQL analyses"
-        )
+        raise WorkflowPolicyError("Release must unconditionally verify the shared main check set")
 
 
 def _validate_release(directory: Path) -> None:
@@ -377,7 +352,7 @@ def _validate_release(directory: Path) -> None:
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
         "repository_owner_id",
-        "'Analyze (python)'",
+        "python3 tools/check_release_ci.py",
         "map({Status, TagKey, Type})",
         "signing-profiles/shittim_chest_ecr$",
         "tools/wait_release_image_evidence.sh",
@@ -1343,6 +1318,7 @@ def _validate_records_workflows(directory: Path) -> None:
     release = release_path.read_text(encoding="utf-8")
     backfill = backfill_path.read_text(encoding="utf-8")
     _require_full_action_pins(release, "Records Release")
+    _validate_release_main_checks(release)
     _require_full_action_pins(backfill, "Records Backfill")
     if _top_level_triggers(release) != ("workflow_dispatch",):
         raise WorkflowPolicyError("Records Release must use exactly workflow_dispatch")
@@ -1492,8 +1468,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "group: production-release",
         "runs-on: ubuntu-26.04-arm",
         "source_stream_arn:",
-        "records-gate",
-        "gh api --paginate --slurp",
+        "python3 tools/check_release_ci.py",
         "npm run synth:records",
         "tools/build_records_bundle.py",
         "--only-binary=:all:",
@@ -1728,8 +1703,27 @@ def _validate_drift(directory: Path) -> None:
     _require_full_action_pins(text, "Drift")
 
 
+def _validate_grype_database_action(directory: Path) -> None:
+    text = (directory.parent / "actions/prepare-grype-db/action.yml").read_text()
+    _require_full_action_pins(text, "Grype database")
+    update = text.split("    - name: Require a successful database update", 1)[-1]
+    update = update.split("    - name:", 1)[0]
+    if (
+        'run: python3 tools/prepare_grype_db.py --binary "${RUNNER_TEMP}/grype" --update'
+        not in update
+        or "if:" in update
+        or "continue-on-error:" in text
+        or "if: ${{ github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true' }}"
+        not in text
+    ):
+        raise WorkflowPolicyError("Grype cache must require freshness and only save from main")
+
+
 def _require_full_action_pins(text: str, label: str) -> None:
     for action in re.findall(r"(?m)^\s*uses:\s*([^\s#]+)", text):
+        # This one local action is bound to the workflow's immutable checkout SHA.
+        if action == "./.github/actions/prepare-grype-db":
+            continue
         _, separator, revision = action.rpartition("@")
         if not separator or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
             raise WorkflowPolicyError(f"{label} action is not pinned to a full commit SHA")

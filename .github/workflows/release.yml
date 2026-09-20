@@ -73,17 +73,7 @@ jobs:
             '.use_default == true and .use_immutable_subject == true and
              .sub_claim_prefix == "repo:pitekusu@12059348/shittim-chest@1302516701"' \
             <<< "${oidc}" >/dev/null
-          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
-            > "${RUNNER_TEMP}/check-runs.json"
-          for check in \
-            quality tests security package cdk docs-public-safety container-arm64 grype \
-            'Analyze (python)' 'Analyze (javascript-typescript)' 'Analyze (actions)'
-          do
-            jq --exit-status --arg check "${check}" \
-              '.check_runs | map(select(.name == $check)) | sort_by(.id) | last |
-               .conclusion == "success"' \
-              "${RUNNER_TEMP}/check-runs.json" >/dev/null
-          done
+          python3 tools/check_release_ci.py
           token_response=$(curl --fail --show-error --silent \
             --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
@@ -463,13 +453,14 @@ jobs:
         run: |
           registry="${ECR_REPOSITORY_URI%%/*}"
           bash tools/install_ecr_credential_helper.sh "${registry}"
+      - name: Prepare a fresh cached Grype database
+        uses: ./.github/actions/prepare-grype-db
       - name: Prepare pinned vulnerability data before image push
         env:
           DOCKER_SCOUT_HUB_USER: ${{ secrets.DHI_USERNAME }}
           DOCKER_SCOUT_HUB_PASSWORD: ${{ secrets.DHI_TOKEN }}
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
         run: |
-          "${RUNNER_TEMP}/grype" db update
           normal_base=$(uv run --frozen python tools/check_container_policy.py \
             --print-reference runtime)
           "${RUNNER_TEMP}/docker-scout" vex get --verify --skip-tlog \

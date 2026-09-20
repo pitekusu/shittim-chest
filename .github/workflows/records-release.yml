@@ -28,6 +28,7 @@ jobs:
     outputs:
       artifact_name: ${{ steps.evidence.outputs.artifact_name }}
     permissions:
+      actions: read
       attestations: write
       checks: read
       contents: read
@@ -50,21 +51,7 @@ jobs:
       - name: Require successful main Records and CodeQL gates
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate --slurp \
-            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
-            > "${RUNNER_TEMP}/checks.json"
-          for check in \
-            records-gate \
-            'Analyze (python)' \
-            'Analyze (javascript-typescript)' \
-            'Analyze (actions)'
-          do
-            jq --exit-status --arg check "${check}" \
-              '[.[].check_runs[]] | map(select(.name == $check)) | sort_by(.id) | last |
-               .conclusion == "success"' \
-              "${RUNNER_TEMP}/checks.json" >/dev/null
-          done
+        run: python3 tools/check_release_ci.py
       - name: Install pinned Python and uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
