@@ -450,7 +450,7 @@ jobs:
             fi
             sleep 1
           done
-          echo "The pristine emulator did not finish saving its snapshot." >&2
+          echo "The pristine emulator did not finish saving within ${attempt} seconds." >&2
           exit 1
       - name: Save the main snapshot before any test changes device state
         if: ${{ steps.scope.outputs.required == 'true' && github.ref == 'refs/heads/main' && steps.android-avd-cache.outputs.cache-hit != 'true' }}
