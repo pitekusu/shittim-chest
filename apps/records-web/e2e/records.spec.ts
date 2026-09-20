@@ -2249,6 +2249,9 @@ test("ready Memorial downloads the selected image and confirms reset", async ({
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     page.viewportSize()!.width,
   );
+  // Normalize click auto-scrolling and hover before capturing the full page.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
   await expect(page).toHaveScreenshot("records-memorial-ready-dark.png", {
     animations: "disabled",
     fullPage: true,
