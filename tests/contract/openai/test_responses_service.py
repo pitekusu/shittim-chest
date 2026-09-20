@@ -333,6 +333,89 @@ async def test_affection_scoring_uses_one_private_persona_and_code_owned_rubric(
     assert observer.usages[0].operation == "affection_score"
 
 
+@pytest.mark.parametrize("final_phase", [None, "final_answer"])
+@pytest.mark.parametrize("intermediate_phase", ["commentary", "future_phase"])
+@pytest.mark.asyncio
+async def test_structured_output_ignores_non_final_message_text(
+    final_phase: str | None,
+    intermediate_phase: str,
+) -> None:
+    body = response_with({"summary": "summary", "proposal": "proposal"})
+    body["output"][0]["phase"] = final_phase
+    intermediate = response_with({})["output"][0]
+    intermediate["id"] = "msg_intermediate"
+    intermediate["phase"] = intermediate_phase
+    intermediate["content"][0]["text"] = "Preparing an answer, not JSON."
+    body["output"].insert(0, intermediate)
+    service, _, observer, http_client = await service_for([body])
+    try:
+        opinion = await service.generate_initial_opinion(
+            participant=ParticipantSlot.PARTICIPANT_A,
+            question="question",
+            evidence=EvidenceBundle(),
+        )
+    finally:
+        await http_client.aclose()
+
+    assert opinion.summary == "summary"
+    assert opinion.proposal == "proposal"
+    assert len(observer.usages) == 1
+    assert observer.failures == []
+
+
+@pytest.mark.parametrize("phase", ["commentary", "future_phase"])
+@pytest.mark.asyncio
+async def test_non_final_json_does_not_substitute_for_a_missing_final_answer(phase: str) -> None:
+    body = response_with({"summary": "summary", "proposal": "proposal"})
+    body["output"][0]["phase"] = phase
+    service, _, observer, http_client = await service_for([body])
+    try:
+        with pytest.raises(OpenAIInvalidOutput):
+            await service.generate_initial_opinion(
+                participant=ParticipantSlot.PARTICIPANT_A,
+                question="question",
+                evidence=EvidenceBundle(),
+            )
+    finally:
+        await http_client.aclose()
+
+    assert observer.usages == []
+    assert observer.failures[0].diagnostic_context == "structured_output"
+    assert observer.failures[0].diagnostic_kind == "missing"
+
+
+@pytest.mark.parametrize("failure", ["refusal", "incomplete"])
+@pytest.mark.asyncio
+async def test_non_final_messages_still_enforce_refusal_and_completion(failure: str) -> None:
+    body = response_with({"summary": "summary", "proposal": "proposal"})
+    body["output"][0]["phase"] = "final_answer"
+    intermediate = response_with({})["output"][0]
+    intermediate["id"] = "msg_intermediate"
+    intermediate["phase"] = "commentary"
+    if failure == "refusal":
+        intermediate["content"] = [{"type": "refusal", "refusal": "private refusal"}]
+    else:
+        intermediate["status"] = "incomplete"
+    body["output"].insert(0, intermediate)
+    service, _, observer, http_client = await service_for([body])
+    expected_error = OpenAIRefusal if failure == "refusal" else OpenAIIncompleteResponse
+    try:
+        with pytest.raises(expected_error):
+            await service.generate_initial_opinion(
+                participant=ParticipantSlot.PARTICIPANT_A,
+                question="question",
+                evidence=EvidenceBundle(),
+            )
+    finally:
+        await http_client.aclose()
+
+    assert observer.usages == []
+    assert len(observer.failures) == 1
+    if failure == "incomplete":
+        assert observer.failures[0].diagnostic_context == "message_status"
+        assert observer.failures[0].diagnostic_kind == "incomplete"
+
+
 @pytest.mark.asyncio
 async def test_refusal_is_detected_without_recording_raw_provider_text() -> None:
     body = response_with({})
