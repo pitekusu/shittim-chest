@@ -25,6 +25,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
+      records_python: ${{ steps.classify.outputs.records_python }}
+      records_contract: ${{ steps.classify.outputs.records_contract }}
+      records_web: ${{ steps.classify.outputs.records_web }}
+      records_infra: ${{ steps.classify.outputs.records_infra }}
       records: ${{ steps.classify.outputs.records }}
     steps:
       - name: Check out the tested history
@@ -36,6 +40,7 @@ jobs:
         id: classify
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FULL_CHECK: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           base_sha="${BASE_SHA}"
           if [ -z "${base_sha}" ] ||
@@ -44,17 +49,21 @@ jobs:
           then
             base_sha=$(git rev-parse "${GITHUB_SHA}^")
           fi
+          scope_args=()
+          if [ "${FULL_CHECK}" = true ]; then
+            scope_args+=(--all)
+          fi
           python3 tools/classify_ci_paths.py \
             --base "${base_sha}" \
             --head "${GITHUB_SHA}" \
-            --github-output "${GITHUB_OUTPUT}"
+            --github-output "${GITHUB_OUTPUT}" "${scope_args[@]}"
 
   records-python:
     name: records-python
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: records-changes
-    if: needs.records-changes.outputs.records == 'true'
+    if: needs.records-changes.outputs.records_python == 'true'
     defaults:
       run:
         working-directory: services/records
@@ -97,7 +106,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: records-changes
-    if: needs.records-changes.outputs.records == 'true'
+    if: needs.records-changes.outputs.records_contract == 'true'
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,7 +133,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: records-changes
-    if: needs.records-changes.outputs.records == 'true'
+    if: needs.records-changes.outputs.records_web == 'true'
     defaults:
       run:
         working-directory: apps/records-web
@@ -161,7 +170,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     needs: records-changes
-    if: needs.records-changes.outputs.records == 'true'
+    if: needs.records-changes.outputs.records_infra == 'true'
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -190,28 +199,18 @@ jobs:
       - records-web
       - records-infra
     steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Preserve one required Records result
         env:
-          CHANGES_RESULT: ${{ needs.records-changes.result }}
-          REQUIRED: ${{ needs.records-changes.outputs.records }}
-          PYTHON_RESULT: ${{ needs.records-python.result }}
-          CONTRACT_RESULT: ${{ needs.records-contract.result }}
-          WEB_RESULT: ${{ needs.records-web.result }}
-          INFRA_RESULT: ${{ needs.records-infra.result }}
-        run: |
-          test "${CHANGES_RESULT}" = success
-          if [ "${REQUIRED}" = true ]; then
-            test "${PYTHON_RESULT}" = success
-            test "${CONTRACT_RESULT}" = success
-            test "${WEB_RESULT}" = success
-            test "${INFRA_RESULT}" = success
-          elif [ "${REQUIRED}" = false ]; then
-            test "${PYTHON_RESULT}" = skipped
-            test "${CONTRACT_RESULT}" = skipped
-            test "${WEB_RESULT}" = skipped
-            test "${INFRA_RESULT}" = skipped
-            echo "Records inputs are unchanged."
-          else
-            echo "Records path classification did not publish an explicit result." >&2
-            exit 1
-          fi
+          CI_CHANGES_RESULT: ${{ needs.records-changes.result }}
+          CI_SCOPES: ${{ toJSON(needs.records-changes.outputs) }}
+          CI_DEPENDENCY_RESULTS: ${{ toJSON(needs) }}
+        run: >-
+          python3 tools/check_ci_scope.py
+          --job records-python=records_python
+          --job records-contract=records_contract
+          --job records-web=records_web
+          --job records-infra=records_infra

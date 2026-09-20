@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from tools.check_ci_scope import check_dependencies, check_scope, check_steps, main
+from tools.check_ci_scope import check_dependencies, check_jobs, check_scope, check_steps, main
 
 
 @pytest.mark.parametrize("required", ["true", "false"])
@@ -77,3 +77,36 @@ def test_cli_verifies_github_results_and_reports_scope(
     assert main() == 0
     assert output.read_text() == f"required={str(required).lower()}\n"
     assert ("not applicable" in summary.read_text()) is not required
+
+
+def test_aggregate_gate_accepts_a_mixture_of_required_and_irrelevant_jobs() -> None:
+    check_jobs(
+        "success",
+        {"python": "true", "web": "false"},
+        {"python-job": {"result": "success"}, "web-job": {"result": "skipped"}},
+        ["python-job=python", "web-job=web"],
+    )
+
+
+@pytest.mark.parametrize("result", ["skipped", "failure", "cancelled", "timed_out", None])
+def test_aggregate_gate_requires_every_applicable_job(result: str | None) -> None:
+    with pytest.raises(ValueError, match="verification job"):
+        check_jobs(
+            "success", {"python": "true"}, {"python-job": {"result": result}}, ["python-job=python"]
+        )
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", ""])
+def test_aggregate_gate_rejects_failed_classification(result: str) -> None:
+    with pytest.raises(ValueError, match="classification did not succeed"):
+        check_jobs(
+            result,
+            {"python": "false"},
+            {"python-job": {"result": "skipped"}},
+            ["python-job=python"],
+        )
+
+
+def test_aggregate_gate_rejects_a_missing_scope() -> None:
+    with pytest.raises(ValueError, match="explicitly publish"):
+        check_jobs("success", {}, {}, ["python-job=python"])

@@ -41,12 +41,36 @@ def check_steps(required: bool, results: object, names: list[str]) -> None:
             raise ValueError(f"verification step must be {expected}: {name}")
 
 
+def check_jobs(changes_result: str, scopes: object, results: object, jobs: list[str]) -> None:
+    if not isinstance(scopes, dict) or not isinstance(results, dict):
+        raise ValueError("job scopes and results must be objects")
+    for mapping in jobs:
+        job, scope = mapping.split("=", 1)
+        required = check_scope(changes_result, scopes.get(scope, ""))
+        expected = "success" if required else "skipped"
+        result = results.get(job)
+        if not isinstance(result, dict) or result.get("result") != expected:
+            raise ValueError(f"verification job must be {expected}: {job}")
+        print(f"{job}: {'verified' if required else 'not applicable'}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--require-dependency", action="append", default=[])
     parser.add_argument("--require-step", action="append", default=[])
+    parser.add_argument(
+        "--job", action="append", default=[], help="job=scope for an aggregate gate"
+    )
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
+    if args.job:
+        check_jobs(
+            os.environ.get("CI_CHANGES_RESULT", ""),
+            json.loads(os.environ.get("CI_SCOPES", "{}")),
+            json.loads(os.environ.get("CI_DEPENDENCY_RESULTS", "{}")),
+            args.job,
+        )
+        return 0
     required = check_scope(
         os.environ.get("CI_CHANGES_RESULT", ""), os.environ.get("CI_REQUIRED", "")
     )

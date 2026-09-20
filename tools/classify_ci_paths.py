@@ -49,32 +49,10 @@ RUNTIME_VALIDATION_PREFIXES = (
     "tools/report_grype.py",
     "tools/run_container_gate.py",
 )
-RECORDS_PREFIXES = (
-    ".github/workflows/records-",
-    "apps/records-web/",
-    "contracts/records/",
-    "services/records/",
-    "infra/bin/shittim-records.ts",
-    "infra/lib/records-",
-    "infra/test/records-",
-)
 RECORDS_FILES = frozenset(
     {
-        "tools/check_ci_scope.py",
-        "tests/unit/tools/test_check_ci_scope.py",
-        "tools/containers/Dockerfile",
-        "tools/container_images.py",
-        "tools/run_dynamodb_local.py",
-        ".github/workflows/ci.yml",
-        "docs/00_シッテムの箱_ドキュメント索引.md",
-        "docs/24_シッテムの箱 議事録設計.md",
-        "docs/README.md",
-        "infra/lib/release-identity-stack.ts",
-        "infra/test/release-identity-stack.test.ts",
-        "tests/unit/tools/test_classify_ci_paths.py",
         "tests/unit/tools/test_build_records_web_artifact.py",
         "tools/build_records_web_artifact.py",
-        "tools/classify_ci_paths.py",
         "tools/sync_docs.py",
     }
 )
@@ -89,14 +67,37 @@ ANDROID_SHARED_FILES = frozenset(
         "tests/unit/tools/test_classify_ci_paths.py",
     }
 )
-# Only this explicit standalone scope may omit the existing Core full checks.
-# Mixed changes, unknown paths, and an empty diff keep the previous behavior.
-ANDROID_DOCUMENTS = frozenset(
+SCOPES = (
+    "core_tests",
+    "core_package",
+    "infra",
+    "runtime_container",
+    "android",
+    "records_python",
+    "records_contract",
+    "records_web",
+    "records_infra",
+)
+PIPELINE_FILES = ANDROID_SHARED_FILES | {
+    ".github/workflows/records-ci.yml",
+    ".github/tool-versions.json",
+    "tools/check_notification_workflows.py",
+    "tests/unit/tools/test_check_notification_workflows.py",
+}
+INFRA_FILES = frozenset({"package.json", "package-lock.json", "tsconfig.json", "cdk.json"})
+SHARED_CONTAINER_FILES = frozenset(
     {
-        "docs/15_GitHub・CI-CD詳細設計.md",
-        "docs/19_実装計画・トレーサビリティ.md",
-        "docs/29_Androidアプリ設計.md",
+        "tools/containers/Dockerfile",
+        "tools/container_images.py",
+        "tools/run_dynamodb_local.py",
+        "tests/unit/tools/test_container_images.py",
+        "tests/unit/tools/test_run_dynamodb_local.py",
     }
+)
+WEB_LAMBDA_ASSETS = (
+    "apps/records-web/src/assets/fonts/",
+    "apps/records-web/third_party/line-seed/",
+    "apps/records-web/THIRD_PARTY_NOTICES.md",
 )
 
 
@@ -107,28 +108,70 @@ def _normalized(path: str) -> str:
     return normalized.removeprefix("./")
 
 
+def _path_scopes(path: str) -> set[str]:
+    if path in PIPELINE_FILES or path.startswith(".github/actions/"):
+        return set(SCOPES)
+    if path.startswith("docs/") or path == "AGENTS.md":
+        return set()
+    if path.startswith(ANDROID_PREFIX):
+        return {"android"}
+    if path.startswith("services/records/"):
+        return {"records_python", "records_contract"}
+    if path.startswith("contracts/records/"):
+        return {"records_python", "records_contract", "records_web"}
+    if path.startswith(WEB_LAMBDA_ASSETS):
+        return {"records_python", "records_contract", "records_web"}
+    if path.startswith("apps/records-web/"):
+        return {"records_web"}
+    if path.startswith("infra/") or path in INFRA_FILES:
+        # records-infra owns only synthesis; the shared infra job owns all tests and audit.
+        return {"infra", "records_infra"}
+    if path in SHARED_CONTAINER_FILES:
+        return {"core_tests", "runtime_container", "records_python", "records_contract"}
+    if path in RUNTIME_CONTEXT_FILES or path.startswith(RUNTIME_CONTEXT_PREFIXES):
+        # Records bundles and imports Core as a local Python dependency.
+        return {
+            "core_tests",
+            "core_package",
+            "runtime_container",
+            "records_python",
+            "records_contract",
+        }
+    if path in RUNTIME_VALIDATION_FILES or path.startswith(RUNTIME_VALIDATION_PREFIXES):
+        return {"core_tests", "runtime_container"}
+    if path in RECORDS_FILES or path.startswith(".github/workflows/records-"):
+        return {
+            "core_tests",
+            "infra",
+            "records_python",
+            "records_contract",
+            "records_web",
+            "records_infra",
+        }
+    if path.startswith("tests/") or path == ".github/dependabot.yml":
+        return {"core_tests"}
+    if path in {
+        "tools/check_docs.py",
+        "tools/check_public_surface.py",
+        "tools/check_tool_versions.py",
+        ".github/actionlint.yaml",
+        ".github/pull_request_template.md",
+    } or path.startswith(".github/ISSUE_TEMPLATE/"):
+        return {"core_tests"}
+    # A new or unclassified input must never silently remove an existing verification.
+    return set(SCOPES)
+
+
 def classify_paths(paths: Iterable[str]) -> dict[str, bool]:
     normalized = tuple(_normalized(path) for path in paths if path.strip())
-    runtime = any(
-        path in RUNTIME_CONTEXT_FILES
-        or path in RUNTIME_VALIDATION_FILES
-        or path.startswith(RUNTIME_CONTEXT_PREFIXES)
-        or path.startswith(RUNTIME_VALIDATION_PREFIXES)
-        for path in normalized
+    scopes = (
+        set().union(*(_path_scopes(path) for path in normalized)) if normalized else set(SCOPES)
     )
-    records = any(path in RECORDS_FILES or path.startswith(RECORDS_PREFIXES) for path in normalized)
-    android = any(
-        path.startswith(ANDROID_PREFIX) or path in ANDROID_SHARED_FILES for path in normalized
-    )
-    android_only = any(path.startswith(ANDROID_PREFIX) for path in normalized) and all(
-        path.startswith(ANDROID_PREFIX) or path in ANDROID_DOCUMENTS for path in normalized
-    )
-    return {
-        "runtime_container": runtime,
-        "records": records,
-        "android": android,
-        "core": not android_only,
-    }
+    values = {scope: scope in scopes for scope in SCOPES}
+    # Preserve the aggregate output names used by release routing and existing callers.
+    values["core"] = any(values[name] for name in ("core_tests", "core_package", "infra"))
+    values["records"] = any(values[name] for name in SCOPES if name.startswith("records_"))
+    return values
 
 
 def changed_paths(base: str, head: str) -> tuple[str, ...]:
@@ -165,9 +208,12 @@ def main() -> None:
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--all", action="store_true", dest="full", help="verify every scope")
     args = parser.parse_args()
 
-    values = classify_paths(changed_paths(args.base, args.head))
+    values = (
+        classify_paths(()) if args.full else classify_paths(changed_paths(args.base, args.head))
+    )
     if args.github_output is not None:
         _write_github_output(args.github_output, values)
     print(json.dumps(values, sort_keys=True))
