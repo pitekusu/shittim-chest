@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # GitHub・CI-CD詳細設計
@@ -49,6 +49,10 @@ Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords
 
 ## 2. 継続的インテグレーション
 
+GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
+コンテナ検証とCore／Records配信のARM64ジョブは`ubuntu-26.04-arm`を使う。
+`ubuntu-latest`によるOSの自動切替は使わず、CPUアーキテクチャは維持する。
+
 ### Coreと共通検証
 
 `ci.yml`はPR、`main`へのプッシュ、手動実行に対応する。
@@ -80,30 +84,37 @@ Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords
 `records-infra`では共通検証を繰り返さない。
 対象外PRでも`records-gate`は明示的な対象外の成功結果を返す。
 `container-arm64`と`grype`も必須チェック名を維持し、分類上の対象外だけ重い処理を省く。
-CodeQLの既存自動設定でPython、JavaScript/TypeScript、GitHub Actionsを解析する。
+CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
+GitHub Actionsを解析し、`ubuntu-26.04`と`security-extended`を使う。
+PR、mainへのpush、週次定期実行、手動実行を対象にする。
 Android追加後のJava/Kotlin解析は未完了であり、Kotlin 2.4.20へのCodeQL対応待ちとする。
 既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
 ブランチ保護のチェック名は実際のジョブ名に合わせ、失敗を隠すための再実行はしない。
 
-### CodeQL自動設定からの移行（対応待ち）
+管理画面の縦長な全体スクリーンショットは撮影・比較に最大15秒を認め、
+サービス別撮影を含む該当テスト全体は60秒とする。画像差分の許容値と再試行回数は増やさない。
+
+### CodeQLの既存3言語の移行とAndroid追加
+
+既存3言語はUbuntu 26.04への固定のため、Android追加より先にadvanced setupへ移す。
+default setupのラベル指定はリポジトリに割り当て済みのrunnerを要求し、
+標準runnerの`ubuntu-26.04`指定を受け付けないためである。
+移行PRでworkflow構文と既存の`Analyze (...)`名、`security-extended`の維持を確認し、
+GitHubのdefault setupを`not-configured`に変更してから3言語の解析・uploadを確認する。
+default setupとadvanced setupは併用しない。必須チェックとブランチ保護は解除しない。
+移行を中断する場合は独自workflowとの併走を止め、既存3言語・extendedのdefault setupへ戻す。
 
 2026年9月17日の確認では、自動設定で新しく追加されたKotlinが`none`モードで処理され、
 ソース抽出に失敗した。CodeQL 2.27.0によるmanual buildでもKotlin 2.4.20が未対応として拒否された。
-Kotlinのダウングレードは行わず、未反映の移行workflow案は取り下げる。
-対応版の公開後、次の順で再開する。default setupが有効な間は独自workflowからの
-解析結果uploadが拒否されるため、併用しない。
+Kotlinのダウングレードは行わず、Android解析は対応版の公開後に別PRで追加する。
 
-1. `.github/workflows/codeql.yml`を追加し、移行PRの差分・workflow構文・Androidビルドと
-   Kotlin抽出を確認する。既存3言語の`Analyze (...)`名と`security-extended`は維持し、
-   Java/KotlinだけJDK・SDKを用意して`manual`モードでビルドする。
-2. 移行PRの検証からマージまでを継続できる時点で、GitHubのCode scanning設定を
-   「Switch to advanced」に変更する（APIではdefault setupを`not-configured`にする）。
-   ブランチ保護やCodeQLの必須条件は解除しない。
-3. 移行PRで4言語すべての解析・uploadを確認してからsquash mergeする。
-   mainの同一SHAでも4言語が成功し、旧自動workflowが重複実行されないことを確認する。
+1. 対応版のCodeQLでAndroidビルドとKotlin抽出の成功を確認する。
+2. 既存の`.github/workflows/codeql.yml`へJava/Kotlinを追加し、JDK・SDKを用意して
+   `manual`モードでビルドする。既存3言語の解析・チェック名・query suiteは維持する。
+3. PRで4言語すべての解析・uploadを確認してから、許可された範囲でsquash mergeする。
+   mainの同一SHAでも4言語の成功を確認する。
 
-切替中は他PRのマージ・リリースを行わない。検証が完了せず移行を中断する場合は、
-独自workflowとの併走を止めて元のdefault setupへ戻す。Android解析未完了は成功として扱わない。
+既存3言語の切替中は他PRのマージ・リリースを行わない。Android解析未完了は成功として扱わない。
 Core／Records Releaseの既存3言語のチェック名は変更しない。Androidの配布ゲートは配布実装時に追加する。
 
 ### Android検証（C03）

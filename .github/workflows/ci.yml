@@ -22,7 +22,7 @@ env:
 jobs:
   changes:
     name: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       runtime_container: ${{ steps.classify.outputs.runtime_container }}
@@ -54,7 +54,7 @@ jobs:
 
   quality:
     name: quality
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
@@ -87,7 +87,7 @@ jobs:
     name: tests-build
     needs: changes
     if: needs.changes.outputs.core == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
@@ -122,7 +122,7 @@ jobs:
 
   security:
     name: security
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Check out the complete tested history
@@ -219,7 +219,7 @@ jobs:
     name: package-build
     needs: changes
     if: needs.changes.outputs.core == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
@@ -261,7 +261,7 @@ jobs:
     name: cdk-build
     needs: changes
     if: needs.changes.outputs.core == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Check out the tested commit
@@ -282,7 +282,7 @@ jobs:
 
   core-gates:
     name: ${{ matrix.check }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     if: always()
     needs: [changes, tests, package, cdk]
@@ -309,7 +309,7 @@ jobs:
 
   android-build:
     name: android-build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     needs: changes
     if: needs.changes.outputs.android == 'true'
@@ -359,7 +359,7 @@ jobs:
 
   android-gate:
     name: android-gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     if: always()
     needs: [changes, android-build]
@@ -382,7 +382,7 @@ jobs:
 
   container-arm64-build:
     name: container-arm64-build
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 25
     needs: changes
     if: needs.changes.outputs.runtime_container == 'true'
@@ -590,7 +590,7 @@ jobs:
 
   grype-build:
     name: grype-build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     needs:
       - changes
@@ -764,7 +764,7 @@ jobs:
 
   container-arm64:
     name: container-arm64
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     if: always()
     needs:
@@ -790,7 +790,7 @@ jobs:
 
   grype:
     name: grype
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     if: always()
     needs:
@@ -816,7 +816,7 @@ jobs:
 
   docs-public-safety:
     name: docs-public-safety
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Check out the complete tested history

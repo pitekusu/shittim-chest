@@ -24,7 +24,7 @@ jobs:
   notify:
     name: notify
     if: vars.DISCORD_NOTIFICATIONS_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       actions: read

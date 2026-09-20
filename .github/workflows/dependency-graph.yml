@@ -20,7 +20,7 @@ jobs:
   verify-managed-sbom:
     name: verify-managed-sbom
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Check out main

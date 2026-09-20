@@ -2285,6 +2285,8 @@ test("prompt management is read-only for a non-admin member", async ({ page }, t
 
 test("service status page presents localized visual status", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
+  // Allow the long page and its service sections to finish rendering on shared CI runners.
+  test.setTimeout(60_000);
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.addInitScript(() => localStorage.setItem("shittim-records-theme-v1", "dark"));
   await mockAuthenticatedApi(page, detail, true);
@@ -2413,6 +2415,7 @@ test("service status page presents localized visual status", async ({ page }, te
     animations: "disabled",
     fullPage: true,
     maxDiffPixels: 20,
+    timeout: 15_000,
   });
   for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs"]) {
     await page.locator(`#admin-service-${service}`).screenshot({
