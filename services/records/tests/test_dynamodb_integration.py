@@ -106,9 +106,23 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
     assert store.get(started.transaction_hash, now_epoch=1041) == authorized
     dynamodb_client.delete_item(TableName=table, Key=marshal_item(session))
 
-    def consume(_):
+    def consume(index):
+        # Competing exchanges generate different session tokens. Using the same
+        # session key would mask a broken grant CAS behind a session-key collision.
+        own_session = {**session, "PK": f"TEST#MOBILE_SESSION#{index}"}
         try:
-            dynamodb_client.transact_write_items(TransactItems=transaction)
+            dynamodb_client.transact_write_items(
+                TransactItems=[
+                    transaction[0],
+                    {
+                        "Put": {
+                            "TableName": table,
+                            "Item": marshal_item(own_session),
+                            "ConditionExpression": "attribute_not_exists(PK)",
+                        }
+                    },
+                ]
+            )
             return True
         except dynamodb_client.exceptions.TransactionCanceledException:
             return False
@@ -129,7 +143,15 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
     assert '"status":"consumed"' in saved["payload"]
     assert "code_hash" not in saved["payload"]
     assert "requester_key" not in saved["payload"]
-    assert dynamodb_client.get_item(TableName=table, Key=marshal_item(session))["Item"]
+    sessions = [
+        dynamodb_client.get_item(
+            TableName=table,
+            Key=marshal_item({**session, "PK": f"TEST#MOBILE_SESSION#{index}"}),
+            ConsistentRead=True,
+        )
+        for index in range(2)
+    ]
+    assert sum("Item" in result for result in sessions) == 1
 
 
 def test_mobile_grants_expire_without_waiting_for_ttl(dynamodb_client, table_names):
