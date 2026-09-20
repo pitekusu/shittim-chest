@@ -33,6 +33,30 @@ updates:
           - "patch"
     open-pull-requests-limit: 5
 
+  # Gradle updates include the Wrapper, plugins, and version catalog.
+  - package-ecosystem: "gradle"
+    directory: "/apps/records-android"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    assignees:
+      - "pitekusu"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      records-android-kotlin:
+        applies-to: "version-updates"
+        patterns:
+          - "org.jetbrains.kotlin*"
+      records-android-compose:
+        applies-to: "version-updates"
+        patterns:
+          - "androidx.compose*"
+    open-pull-requests-limit: 5
+
   # Keep [tool.uv].required-version compatible with the updater's embedded uv.
   - package-ecosystem: "uv"
     directory: "/"

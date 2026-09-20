@@ -260,6 +260,7 @@ flowchart LR
 - AGPのbuilt-in Kotlinを使用し、旧来のKotlin Androidプラグインは重ねて適用しない。
 - Kotlin Gradle PluginとCompose CompilerはVersion Catalogの同じKotlin版へ固定する。
 - Gradle Wrapperは配布版とSHA-256を固定し、SDK・JDKはリポジトリへ含めない。
+- Gradle Wrapper・プラグイン・ライブラリはDependabotで毎週確認する。更新対象と採用時の検証は[CI/CD設計](15_GitHub・CI-CD詳細設計.md)に従う。
 - 実行用JDKはTemurinの`.java-version`指定版、生成するJVMバイトコードは17とする。
 - minSdkは26、targetSdkは37。Composeの要件に合わせ、compileSdkは37.1（`platforms;android-37.1`）とする。
 - debug版はapplication ID末尾に`.dev`を付け、将来の配布版との混同を防ぐ。
@@ -396,7 +397,7 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 - [AGP 9.4の互換性](https://developer.android.com/build/releases/agp-9-4-0-release-notes)
 - [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin)
 - [Kotlin Gradle Pluginの版の指定](https://developer.android.com/build/releases/agp-9-0-0-release-notes#runtime-dependency-on-kotlin-gradle-plugin)
-- [Gradle Wrapper](https://docs.gradle.org/9.6.0/userguide/gradle_wrapper.html)
+- [Gradle Wrapper](https://docs.gradle.org/9.7.1/userguide/gradle_wrapper.html)
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
 - [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
 - [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)
