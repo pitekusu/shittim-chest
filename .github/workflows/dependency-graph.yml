@@ -1,6 +1,12 @@
 name: Dependency Graph
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/records-android/**"
+      - ".github/workflows/dependency-graph.yml"
   schedule:
     - cron: "17 3 * * 2"
   workflow_dispatch:
@@ -17,6 +23,32 @@ env:
   UV_VERSION: "0.12.13"
 
 jobs:
+  submit-android-dependencies:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Android JDK
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version-file: apps/records-android/.java-version
+      - name: Install the compile SDK and build tools
+        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0"'
+      - name: Resolve and submit Android dependencies for Dependabot alerts
+        uses: gradle/actions/dependency-submission@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          build-root-directory: apps/records-android
+          dependency-graph: generate-and-submit
+          additional-arguments: --no-daemon
+          cache-read-only: true
+
   verify-managed-sbom:
     name: verify-managed-sbom
     if: github.ref == 'refs/heads/main'

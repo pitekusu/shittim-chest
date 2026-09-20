@@ -104,8 +104,9 @@ jobs:
         run: uv sync --frozen --all-groups
       - name: Start pinned DynamoDB Local
         run: |
+          image=$(python3 tools/container_images.py dynamodb-local)
           docker run --detach --rm --name dynamodb-local --publish 127.0.0.1:8000:8000 \
-            amazon/dynamodb-local@sha256:d89f8fcc6b1a39cb35976c248ed42a28c66ae00dc043099210f5571e42648ab4 \
+            "${image}" \
             -jar DynamoDBLocal.jar -inMemory -sharedDb
           for _ in {1..30}; do
             if curl --silent --output /dev/null http://127.0.0.1:8000; then
@@ -417,12 +418,17 @@ jobs:
             --username "${DHI_USERNAME}" --password-stdin
           printf '%s' "${DHI_TOKEN}" | docker login docker.io \
             --username "${DHI_USERNAME}" --password-stdin
+      - name: Read the shared BuildKit image pin
+        id: buildkit-image
+        run: |
+          image=$(python3 tools/container_images.py buildkit)
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           version: v0.37.0
           driver-opts: |
-            image=moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3
+            image=${{ steps.buildkit-image.outputs.image }}
       - name: Verify the pinned DHI ARM64 manifests
         run: |
           # Dockerfile is the sole exact digest pin; require the index to publish

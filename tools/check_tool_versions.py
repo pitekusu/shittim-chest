@@ -12,6 +12,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -24,6 +25,7 @@ MAX_RESPONSE_BYTES: Final = 1024 * 1024
 LOOKUP_ERRORS: Final = (OSError, RuntimeError, ValueError)
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 VERSION_PATTERN: Final = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+JDK_VERSION_PATTERN: Final = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?\+[0-9]+$")
 SHA256_PATTERN: Final = re.compile(r"^[0-9a-f]{64}$")
 COMMON_FIELDS: Final = frozenset(
     {"archive_name", "archive_sha256", "repository", "tag_prefix", "version"}
@@ -168,8 +170,9 @@ def load_source_pins(path: Path, repository_root: Path) -> tuple[ToolPin, ...]:
         repository = _require_string(source, "repository", name)
         prefix = source["tag_prefix"]
         channel = source.get("release_prefix", "")
-        if REPOSITORY_PATTERN.fullmatch(repository) is None or prefix not in ("", "v"):
+        if REPOSITORY_PATTERN.fullmatch(repository) is None or prefix not in ("", "v", "jdk-"):
             raise ValueError(f"invalid repository or tag prefix for {name}")
+        version_pattern = JDK_VERSION_PATTERN if prefix == "jdk-" else VERSION_PATTERN
         if not isinstance(channel, str) or (
             channel and re.fullmatch(r"v?\d+(?:\.\d+)?\.", channel) is None
         ):
@@ -188,7 +191,7 @@ def load_source_pins(path: Path, repository_root: Path) -> tuple[ToolPin, ...]:
                 if file.is_symlink() or not file.is_file():
                     raise ValueError(f"source must be a regular file for {name}")
                 found.extend(re.findall(pattern, file.read_text(encoding="utf-8")))
-            if not found or any(VERSION_PATTERN.fullmatch(v) is None for v in found):
+            if not found or any(version_pattern.fullmatch(v) is None for v in found):
                 raise ValueError(f"version missing or invalid for {name} in {glob}")
             versions.update(found)
         if len(versions) != 1:
@@ -280,7 +283,13 @@ def fetch_latest_release_tag(repository: str, token: str | None, release_prefix:
     if (
         value.get("prerelease") is not False
         or value.get("draft") is not False
-        or not VERSION_PATTERN.fullmatch(tag_name.removeprefix("v"))
+        or not (
+            VERSION_PATTERN.fullmatch(tag_name.removeprefix("v"))
+            or (
+                tag_name.startswith("jdk-")
+                and JDK_VERSION_PATTERN.fullmatch(tag_name.removeprefix("jdk-"))
+            )
+        )
     ):
         raise RuntimeError(f"latest release is not a stable version for {repository}")
     return tag_name
@@ -334,7 +343,8 @@ def build_report(pins: Sequence[ToolPin], fetch_tag: Callable[[ToolPin], str]) -
         url = f"https://github.com/{pin.repository}/releases"
         try:
             latest = fetch_tag(pin)
-            if not VERSION_PATTERN.fullmatch(latest.removeprefix("v")):
+            version_pattern = JDK_VERSION_PATTERN if pin.tag_prefix == "jdk-" else VERSION_PATTERN
+            if not version_pattern.fullmatch(latest.removeprefix(pin.tag_prefix)):
                 raise ValueError("invalid upstream version")
             candidate = "最新" if latest == pin.expected_tag else latest
             if candidate != "最新":
@@ -352,6 +362,77 @@ def build_report(pins: Sequence[ToolPin], fetch_tag: Callable[[ToolPin], str]) -
     return "\n".join(rows) + "\n", status
 
 
+def load_android_sdk_pins(repository_root: Path) -> dict[str, str]:
+    """Read the Android SDK choices from the build, without copying their versions."""
+
+    build = (repository_root / "apps/records-android/app/build.gradle.kts").read_text()
+    platform = re.search(
+        r"compileSdk \{ version = release\((\d+)\) \{ minorApiLevel = (\d+)", build
+    )
+    build_tools = re.search(r'buildToolsVersion = "([0-9.]+)"', build)
+    if platform is None or build_tools is None:
+        raise ValueError("Android SDK pins are missing")
+    if VERSION_PATTERN.fullmatch(build_tools[1]) is None:
+        raise ValueError("invalid Android Build Tools pin")
+    return {"platforms;android-": f"{platform[1]}.{platform[2]}", "build-tools;": build_tools[1]}
+
+
+def latest_android_sdk_versions(data: bytes) -> dict[str, str]:
+    """Select numeric stable SDK packages; omit canaries, previews, and obsolete entries."""
+
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise ValueError("Android SDK repository response is too large")
+    text = data.decode("utf-8")
+    if "\x00" in text or re.search(r"<!\s*(?:DOCTYPE|ENTITY)", text, re.IGNORECASE):
+        raise ValueError("Android SDK metadata must not contain DTDs or entities")
+    try:
+        root = ET.fromstring(text)  # noqa: S314 - bounded UTF-8; DTD/entity declarations rejected.
+    except ET.ParseError as error:
+        raise ValueError("invalid Android SDK repository XML") from error
+    versions: dict[str, list[str]] = {"platforms;android-": [], "build-tools;": []}
+    for package in root.findall("remotePackage"):
+        channel = package.find("channelRef")
+        if (
+            channel is None
+            or channel.get("ref") != "channel-0"
+            or package.get("obsolete") == "true"
+            or package.findtext("revision/preview", "0") != "0"
+        ):
+            continue
+        path = package.get("path", "")
+        for prefix in versions:
+            if not path.startswith(prefix):
+                continue
+            version = path.removeprefix(prefix)
+            pattern = r"\d+(?:\.\d+)?" if prefix == "platforms;android-" else VERSION_PATTERN
+            if re.fullmatch(pattern, version):
+                versions[prefix].append(version)
+    if any(not values for values in versions.values()):
+        raise ValueError("stable Android SDK packages are missing")
+    return {
+        prefix: max(values, key=lambda version: tuple(map(int, version.split("."))))
+        for prefix, values in versions.items()
+    }
+
+
+def check_android_sdk(repository_root: Path) -> tuple[str, int]:
+    pins = load_android_sdk_pins(repository_root)
+    with urllib.request.urlopen(
+        "https://dl.google.com/android/repository/repository2-3.xml", timeout=20
+    ) as response:
+        latest = latest_android_sdk_versions(response.read(MAX_RESPONSE_BYTES + 1))
+    rows = ["\n## Android SDK\n", "| 対象 | 現在 | 更新候補 |", "|---|---|---|"]
+    status = 0
+    for prefix, name in (("platforms;android-", "SDK Platform"), ("build-tools;", "Build Tools")):
+        candidate = "最新" if pins[prefix] == latest[prefix] else latest[prefix]
+        rows.append(f"| {name} | {pins[prefix]} | {candidate} |")
+        status = max(status, int(candidate != "最新"))
+    rows.append(
+        "\n[公式SDK一覧](https://dl.google.com/android/repository/repository2-3.xml)を確認。採用時はAGP・アプリの対応を検証します。\n"
+    )
+    return "\n".join(rows), status
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("validate", "latest"))
@@ -367,6 +448,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         root = args.config.resolve().parents[1]
         source_pins = load_source_pins(args.config, root)
         pins += source_pins
+        has_android = (root / "apps/records-android/app/build.gradle.kts").is_file()
+        if has_android:
+            load_android_sdk_pins(root)
         if args.mode == "validate":
             print(f"release tool pins are valid: {len(pins)} tools")
             return 0
@@ -375,6 +459,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             pins,
             lambda pin: fetch_latest_release_tag(pin.repository, token, pin.release_prefix),
         )
+        if has_android:
+            try:
+                sdk_report, sdk_status = check_android_sdk(root)
+                report += sdk_report
+                status = max(status, sdk_status)
+            except LOOKUP_ERRORS:
+                report += "\nAndroid SDK: 取得失敗(未確認)。既存の更新Issueを解決扱いにしません。\n"
+                status = 2
         if source_pins:
             try:
                 bundle_updates = check_signer_bundle(root)

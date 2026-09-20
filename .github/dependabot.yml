@@ -140,6 +140,21 @@ updates:
           - ">=0.13"
     open-pull-requests-limit: 5
 
+  # Test services and BuildKit share these image pins across local/CI/release use.
+  - package-ecosystem: "docker"
+    directory: "/tools/containers"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    assignees:
+      - "pitekusu"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    open-pull-requests-limit: 5
+
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -193,6 +208,15 @@ updates:
       prefix: "deps"
       include: "scope"
     groups:
+      # Vite+ needs its npm alias and pnpm overrides updated together. Keep
+      # these PRs separate; the tool-version check detects partial updates.
+      records-web-vite-plus:
+        applies-to: "version-updates"
+        patterns:
+          - "vite-plus"
+          - "vite"
+          - "@voidzero-dev/vite-plus-core"
+          - "vitest"
       records-web-minor-and-patch:
         applies-to: "version-updates"
         patterns:
