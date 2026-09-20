@@ -20,7 +20,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.14.7"
-  UV_VERSION: "0.12.13"
+  UV_VERSION: "0.12.17"
 
 jobs:
   submit-android-dependencies:
