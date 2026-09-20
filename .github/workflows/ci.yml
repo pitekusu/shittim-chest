@@ -797,25 +797,9 @@ jobs:
           tar --extract --gzip --file "${archive}" --directory "${RUNNER_TEMP}" grype
           test "$("${RUNNER_TEMP}/grype" version -o json | jq --raw-output .version)" = \
             "${grype_version}"
-      - name: Stamp the daily database cache key
+      - name: Prepare a fresh cached Grype database
         if: ${{ steps.scope.outputs.required == 'true' }}
-        id: database-date
-        run: echo "date=$(date --utc +%Y-%m-%d)" >> "${GITHUB_OUTPUT}"
-      - name: Cache the Grype vulnerability database for one day
-        if: ${{ steps.scope.outputs.required == 'true' }}
-        id: grype-database-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/grype/db
-          key: grype-db-${{ runner.os }}-${{ steps.database-date.outputs.date }}
-          restore-keys: |
-            grype-db-${{ runner.os }}-
-      - name: Update the Grype vulnerability database
-        if: ${{ steps.scope.outputs.required == 'true' }}
-        run: |
-          # The cache can predate today's database publication. Check for updates
-          # even on a cache hit; db update reuses an already-current database.
-          "${RUNNER_TEMP}/grype" db update
+        uses: ./.github/actions/prepare-grype-db
       - name: Generate complete unfiltered Grype JSON reports
         if: ${{ steps.scope.outputs.required == 'true' }}
         id: scan
