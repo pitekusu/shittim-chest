@@ -122,7 +122,7 @@ Core／Records Releaseの既存3言語のチェック名は変更しない。And
 
 ### Android検証（C03）
 
-Androidは同じ`ci.yml`の`android-build`で検証し、独立した大規模matrixは作らない。
+Androidは同じ`ci.yml`の`android-gate`で検証し、独立した大規模matrixは作らない。
 
 | 検証 | 内容 |
 |---|---|
