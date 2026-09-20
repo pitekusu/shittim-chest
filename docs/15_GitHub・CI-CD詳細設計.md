@@ -160,6 +160,14 @@ quality・security・公開文書検証・CodeQLは変更範囲によらず継�
 Gradle setup・dependency submission・Android Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
 そのSHAだけを追加する。既存の許可設定は維持し、更新時は新SHAの許可も合わせて確認する。
 Gradle Wrapper検証を有効にし、キャッシュへの書き込みはmainのみ。秘密値・署名鍵・AWS権限は渡さない。
+Android system imageとAVD snapshotもmainだけで保存し、PRは復元だけを行う。
+キャッシュはUbuntu版・runnerのCPU・API・ABI・emulator版で分離し、AVDはsystem imageの版も含める。
+mainのcache missではアプリを入れる前のAVDを起動して保存する。試験中はsnapshotを保存せず、
+cache hitでも全instrumentation testを実行する。cache missや互換性不一致では通常起動して同じ試験を実行する。
+
+Webはlockfile・package manager・Node・runnerに対応するpnpm storeをキャッシュする。
+Playwrightの2並列と全画面試験は維持し、変更分類でWeb対象外の実行だけを省く。
+Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既存の日次／週次頻度とセキュリティ更新方針は変えない。
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
 KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
 
@@ -188,7 +196,7 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 | BuildKit/DynamoDB Local | `tools/containers/Dockerfile`の名前付きstageを共通の固定値とし、Dependabotでtag・digestを更新。CI・配信・ローカル試験は検証済みの参照を読み取る |
 | Buildx/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
 
-AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜9時（日本時間）に確認する。
+AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜09:15（日本時間）に確認する。
 Kotlin関連、Compose関連、Bouncy Castle関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
 通常は公開から3日待って更新候補にする。`androidx.activity:activity-compose`はDependabotが公開日時を取得できず
 全版を除外してしまうため、この待機だけを適用せず、週次確認と取り込み前の検証を行う。
@@ -199,7 +207,9 @@ AGP由来の脆弱な間接依存は、ルートの`buildscript.classpath`と独
 依存グラフから旧版が消えることとAndroidのビルド・Lint・計装テストを確認する。
 
 Dependabotの対象はActions、Core/Recordsのuv、ルート/Webのnpm/pnpm、AndroidのGradle、
-実行用Dockerfile、試験・ビルド用イメージ定義。実行用Dockerは毎日、その他は毎週月曜9時（日本時間）に確認する。
+実行用Dockerfile、試験・ビルド用イメージ定義。実行用Dockerは毎日10:00、その他は毎週月曜に確認する。
+日本時間でActions 09:00、Gradle 09:15、Core uv 09:30、Records uv 09:45、
+試験・ビルド用Docker 10:15、ルートnpm 10:30、Web npm/pnpm 10:45の順に分散する。
 共通イメージ定義を変更した場合は、Runtimeのコンテナ検証とRecordsの永続化試験をどちらも実行する。
 
 Vite+の`npm:`エイリアスとpnpmの固定overrideは、Dependabotの通常更新だけでは揃わない。

@@ -150,8 +150,23 @@ jobs:
         run: |
           corepack enable pnpm
           test "$(pnpm --version)" = "11.25.0"
+      - name: Locate the pnpm content-addressed store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "${GITHUB_OUTPUT}"
+      - name: Restore the locked pnpm store
+        id: pnpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ env.NODE_VERSION }}-${{ hashFiles('apps/records-web/pnpm-lock.yaml', 'apps/records-web/package.json', 'apps/records-web/pnpm-workspace.yaml') }}
       - name: Install locked Records web dependencies
         run: pnpm install --frozen-lockfile
+      - name: Save the main pnpm store
+        if: ${{ github.ref == 'refs/heads/main' && steps.pnpm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
       - name: Check Records web formatting, lint, and types
         run: pnpm exec vp check
       - name: Test Records web
