@@ -39,7 +39,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "09:00"
+      time: "09:15"
       timezone: "Asia/Tokyo"
     cooldown:
       default-days: 3
@@ -73,7 +73,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "09:00"
+      time: "09:30"
       timezone: "Asia/Tokyo"
     assignees:
       - "pitekusu"
@@ -102,7 +102,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "09:00"
+      time: "09:45"
       timezone: "Asia/Tokyo"
     assignees:
       - "pitekusu"
@@ -127,7 +127,7 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-      time: "09:00"
+      time: "10:00"
       timezone: "Asia/Tokyo"
     registries:
       - "dhi"
@@ -150,7 +150,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "09:00"
+      time: "10:15"
       timezone: "Asia/Tokyo"
     assignees:
       - "pitekusu"
@@ -164,7 +164,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "09:00"
+      time: "10:30"
       timezone: "Asia/Tokyo"
     assignees:
       - "pitekusu"
@@ -204,7 +204,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      time: "09:00"
+      time: "10:45"
       timezone: "Asia/Tokyo"
     assignees:
       - "pitekusu"

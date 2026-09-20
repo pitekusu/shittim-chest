@@ -160,6 +160,14 @@ quality・security・公開文書検証・CodeQLは変更範囲によらず継�
 Gradle setup・dependency submission・Android Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
 そのSHAだけを追加する。既存の許可設定は維持し、更新時は新SHAの許可も合わせて確認する。
 Gradle Wrapper検証を有効にし、キャッシュへの書き込みはmainのみ。秘密値・署名鍵・AWS権限は渡さない。
+Android system imageとAVD snapshotもmainだけで保存し、PRは復元だけを行う。
+キャッシュはUbuntu版・runnerのCPU・API・ABI・emulator版で分離し、AVDはsystem imageの版も含める。
+mainのcache missではアプリを入れる前のAVDを起動して保存する。試験中はsnapshotを保存せず、
+cache hitでも全instrumentation testを実行する。cache missや互換性不一致では通常起動して同じ試験を実行する。
+
+Webはlockfile・package manager・Node・runnerに対応するpnpm storeをキャッシュする。
+Playwrightの2並列と全画面試験は維持し、変更分類でWeb対象外の実行だけを省く。
+Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既存の日次／週次頻度とセキュリティ更新方針は変えない。
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
 KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
 

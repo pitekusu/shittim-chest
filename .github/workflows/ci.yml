@@ -380,7 +380,43 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Install the compile SDK and build tools
         if: ${{ steps.scope.outputs.required == 'true' }}
-        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0"'
+        id: android-sdk
+        run: |
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-37.1" "build-tools;36.0.0" emulator
+          version=$(sed -n 's/^Pkg.Revision *= *//p' "${ANDROID_HOME}/emulator/source.properties")
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "emulator=${version}" >> "${GITHUB_OUTPUT}"
+          echo "home=${ANDROID_HOME}" >> "${GITHUB_OUTPUT}"
+      - name: Restore the Android system image
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        id: android-image-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.android-sdk.outputs.home }}/system-images/android-36/google_apis/x86_64
+          key: android-image-v1-ubuntu-26.04-${{ runner.arch }}-api36-google_apis-x86_64-emulator-${{ steps.android-sdk.outputs.emulator }}
+      - name: Install the system image and identify its revision
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        id: android-image
+        run: |
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "system-images;android-36;google_apis;x86_64"
+          revision=$(sha256sum "${ANDROID_HOME}/system-images/android-36/google_apis/x86_64/source.properties" | cut -d ' ' -f 1)
+          echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
+      - name: Save the main system image
+        if: ${{ steps.scope.outputs.required == 'true' && github.ref == 'refs/heads/main' && steps.android-image-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.android-sdk.outputs.home }}/system-images/android-36/google_apis/x86_64
+          key: ${{ steps.android-image-cache.outputs.cache-primary-key }}
+      - name: Restore the pristine Android snapshot
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        id: android-avd-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/ci-api36.avd
+            ~/.android/avd/ci-api36.ini
+          key: android-avd-v1-ubuntu-26.04-${{ runner.arch }}-api36-google_apis-x86_64-pixel_2-emulator-${{ steps.android-sdk.outputs.emulator }}-${{ steps.android-image.outputs.revision }}
       - name: Build debug APKs and run Android Lint
         if: ${{ steps.scope.outputs.required == 'true' }}
         id: build-android
@@ -390,6 +426,27 @@ jobs:
       - name: Allow the ephemeral runner to use KVM
         if: ${{ steps.scope.outputs.required == 'true' }}
         run: sudo chown "$(id -u):$(id -g)" /dev/kvm
+      - name: Boot a pristine snapshot before installing the application
+        if: ${{ steps.scope.outputs.required == 'true' && github.ref == 'refs/heads/main' && steps.android-avd-cache.outputs.cache-hit != 'true' }}
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          avd-name: ci-api36
+          force-avd-creation: false
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu swangle -camera-back none -camera-front none
+          script: echo 'Pristine AVD boot completed.'
+      - name: Save the main snapshot before any test changes device state
+        if: ${{ steps.scope.outputs.required == 'true' && github.ref == 'refs/heads/main' && steps.android-avd-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.android/avd/ci-api36.avd
+            ~/.android/avd/ci-api36.ini
+          key: ${{ steps.android-avd-cache.outputs.cache-primary-key }}
       - name: Run the existing screen tests on one emulator
         if: ${{ steps.scope.outputs.required == 'true' }}
         id: verify-android
@@ -399,8 +456,10 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_2
+          avd-name: ci-api36
+          force-avd-creation: false
           disable-animations: true
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swangle -camera-back none -camera-front none
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save -gpu swangle -camera-back none -camera-front none
           script: apps/records-android/gradlew -p apps/records-android --no-daemon :app:connectedDebugAndroidTest
       - name: Retain Android reports, not an unsigned distribution
         if: ${{ steps.scope.outputs.required == 'true' && (!cancelled()) }}
