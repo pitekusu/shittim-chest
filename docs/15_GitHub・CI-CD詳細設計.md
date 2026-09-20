@@ -168,6 +168,8 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 
 AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜9時（日本時間）に確認する。
 Kotlin関連とCompose関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
+通常は公開から3日待って更新候補にする。`androidx.activity:activity-compose`はDependabotが公開日時を取得できず
+全版を除外してしまうため、この待機だけを適用せず、週次確認と取り込み前の検証を行う。
 
 互換性のない自動更新は理由を記録してDependabot側で保留する。
 別PRで更新済みのDependabot PRを手動で閉じると、同じバージョンの後続ダイジェスト更新も既存PR扱いになることがある。

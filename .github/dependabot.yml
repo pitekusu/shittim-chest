@@ -41,6 +41,12 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    cooldown:
+      default-days: 3
+      # Dependabot cannot get activity-compose release dates from Google Maven;
+      # the cooldown otherwise filters every version out of update checks.
+      exclude:
+        - "androidx.activity:activity-compose"
     assignees:
       - "pitekusu"
     commit-message:
