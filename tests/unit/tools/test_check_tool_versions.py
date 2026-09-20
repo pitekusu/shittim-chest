@@ -98,6 +98,83 @@ def test_report_distinguishes_current_and_outdated_versions() -> None:
     assert "| old | v2.0.0 | v2.1.0 |" in report
 
 
+def test_temurin_hotfix_and_build_numbers_are_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".java-version").write_text("21.0.12.1+1\n")
+    config = tmp_path / "tools.json"
+    _write_config(
+        config,
+        {
+            "sources": {
+                "jdk": {
+                    "repository": "adoptium/temurin21-binaries",
+                    "tag_prefix": "jdk-",
+                    "files": {".java-version": r"^([0-9.]+\+[0-9]+)"},
+                }
+            }
+        },
+    )
+    pins = load_source_pins(config, tmp_path)
+    monkeypatch.setattr(
+        checker,
+        "_github_json",
+        lambda *_: {
+            "tag_name": "jdk-21.0.12.1+2",
+            "draft": False,
+            "prerelease": False,
+        },
+    )
+    checker.fetch_latest_release_tag.cache_clear()
+    tag = checker.fetch_latest_release_tag(pins[0].repository, None)
+    report, status = build_report(pins, lambda _: tag)
+    assert status == 1
+    assert "jdk-21.0.12.1+1 | jdk-21.0.12.1+2" in report
+    checker.fetch_latest_release_tag.cache_clear()
+
+
+def test_sdk_metadata_excludes_previews_and_compares_versions_numerically() -> None:
+    packages = [
+        ("platforms;android-37.2", "channel-0", "0", "false"),
+        ("platforms;android-37.10", "channel-0", "0", "false"),
+        ("platforms;android-38", "channel-1", "0", "false"),
+        ("platforms;android-39-beta1", "channel-0", "1", "false"),
+        ("build-tools;36.0.0", "channel-0", "0", "false"),
+        ("build-tools;37.0.0", "channel-0", "1", "false"),
+        ("build-tools;38.0.0", "channel-0", "0", "true"),
+    ]
+    xml = (
+        "<repository>"
+        + "".join(
+            f'<remotePackage path="{path}" obsolete="{obsolete}"><channelRef ref="{channel}"/>'
+            f"<revision><preview>{preview}</preview></revision></remotePackage>"
+            for path, channel, preview, obsolete in packages
+        )
+        + "</repository>"
+    )
+    assert checker.latest_android_sdk_versions(xml.encode()) == {
+        "platforms;android-": "37.10",
+        "build-tools;": "36.0.0",
+    }
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        b"invalid",
+        b"<repository/>",
+        b"x" * (checker.MAX_RESPONSE_BYTES + 1),
+        b'<!DOCTYPE repository [<!ENTITY x "expanded">]><repository>&x;</repository>',
+        '<!DOCTYPE repository [<!ENTITY x "expanded">]><repository>&x;</repository>'.encode(
+            "utf-16"
+        ),
+    ],
+)
+def test_sdk_metadata_failure_is_not_an_up_to_date_result(xml: bytes) -> None:
+    with pytest.raises(ValueError):
+        checker.latest_android_sdk_versions(xml)
+
+
 @pytest.mark.parametrize("other", ["0.37.0", "0.36.0", "latest"])
 def test_source_pins_read_both_workflows_and_reject_drift(tmp_path: Path, other: str) -> None:
     (tmp_path / "ci.yml").write_text("version: v0.37.0\n", encoding="utf-8")

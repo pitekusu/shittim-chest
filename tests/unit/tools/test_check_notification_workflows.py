@@ -813,7 +813,7 @@ def test_runtime_required_gates_require_the_classifier_job_to_succeed(directory:
         ("ci.yml", "version: v0.37.0", "version: latest"),
         (
             RELEASE_WORKFLOW,
-            "image=moby/buildkit:v0.33.0@sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3",
+            "image=${{ steps.buildkit-image.outputs.image }}",
             "image=moby/buildkit:buildx-stable-1",
         ),
     ],

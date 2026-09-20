@@ -19,8 +19,6 @@ RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.37.0"
-PINNED_BUILDKIT_DIGEST = "sha256:6c2fa84a6b61ccd72899dde4239f8d5717f05f9a8ca6f3cad185fb1a95a94de3"
-PINNED_BUILDKIT_IMAGE = f"moby/buildkit:v0.33.0@{PINNED_BUILDKIT_DIGEST}"
 RELEASE_REQUIRED_MAIN_CHECKS = frozenset(
     {
         "quality",
@@ -129,7 +127,7 @@ def _validate_pinned_container_builder(directory: Path) -> None:
     expected = (
         f"          version: {PINNED_BUILDX_VERSION}\n"
         "          driver-opts: |\n"
-        f"            image={PINNED_BUILDKIT_IMAGE}"
+        "            image=${{ steps.buildkit-image.outputs.image }}"
     )
     for workflow, step_name in (
         ("ci.yml", "Set up Docker Buildx"),
@@ -137,10 +135,14 @@ def _validate_pinned_container_builder(directory: Path) -> None:
     ):
         text = (directory / workflow).read_text(encoding="utf-8")
         block = _workflow_step_block(text, step_name)
+        image_pin = _workflow_step_block(text, "Read the shared BuildKit image pin")
         if (
             text.count("uses: docker/setup-buildx-action@") != 1
             or block.count("uses: docker/setup-buildx-action@") != 1
             or block.count(expected) != 1
+            or "id: buildkit-image" not in image_pin
+            or "image=$(python3 tools/container_images.py buildkit)" not in image_pin
+            or 'echo "image=${image}" >> "${GITHUB_OUTPUT}"' not in image_pin
         ):
             raise WorkflowPolicyError(
                 f"{workflow} must pin the approved Buildx client and BuildKit image digest"

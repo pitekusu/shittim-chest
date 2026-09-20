@@ -261,6 +261,7 @@ flowchart LR
 - Kotlin Gradle PluginとCompose CompilerはVersion Catalogの同じKotlin版へ固定する。
 - Gradle Wrapperは配布版とSHA-256を固定し、SDK・JDKはリポジトリへ含めない。
 - Gradle Wrapper・プラグイン・ライブラリはDependabotで毎週確認する。更新対象と採用時の検証は[CI/CD設計](15_GitHub・CI-CD詳細設計.md)に従う。
+- `main`の依存解決結果をGitHub Dependency Graphへ送信し、Dependabotの脆弱性検知にも使用する。JDK・SDKの更新候補は固定ツールの週次監視で確認する。
 - 実行用JDKはTemurinの`.java-version`指定版、生成するJVMバイトコードは17とする。
 - minSdkは26、targetSdkは37。Composeの要件に合わせ、compileSdkは37.1（`platforms;android-37.1`）とする。
 - debug版はapplication ID末尾に`.dev`を付け、将来の配布版との混同を防ぐ。

@@ -136,7 +136,7 @@ Android配下と関連文書（15・19・29）だけの差分では、Coreの全
 混在差分・未知のパス・空差分は従来のCore検証を維持する。quality・security・公開文書検証も継続する。
 Recordsとコンテナの既存分類は変更しない。共通CI自体を変更する本PRでは、これらも検証対象になる。
 
-追加ActionはGradle setupとAndroid Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
+Gradle setup・dependency submission・Android Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
 そのSHAだけを追加する。既存の許可設定は維持し、更新時は新SHAの許可も合わせて確認する。
 Gradle Wrapper検証を有効にし、キャッシュへの書き込みはmainのみ。秘密値・署名鍵・AWS権限は渡さない。
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
@@ -164,12 +164,23 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 | uv/ビルド基盤 | 両Pythonプロジェクトの対応系列、`required-version`、`uv_build`、ワークフロー、Docker、更新監視を合わせる |
 | Actions | `uses:`を完全なコミットSHAで固定し、Dependabotで追従 |
 | Android | Gradle Wrapperの配布版・SHA-256・生成ファイルを合わせる。Kotlin Gradle PluginとCompose Compiler、Compose BOMとMaterial 3はそれぞれ一組で確認 |
-| Buildx/BuildKit/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
+| BuildKit/DynamoDB Local | `tools/containers/Dockerfile`の名前付きstageを共通の固定値とし、Dependabotでtag・digestを更新。CI・配信・ローカル試験は検証済みの参照を読み取る |
+| Buildx/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
 
 AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜9時（日本時間）に確認する。
 Kotlin関連とCompose関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
 通常は公開から3日待って更新候補にする。`androidx.activity:activity-compose`はDependabotが公開日時を取得できず
 全版を除外してしまうため、この待機だけを適用せず、週次確認と取り込み前の検証を行う。
+
+Dependabotの対象はActions、Core/Recordsのuv、ルート/Webのnpm/pnpm、AndroidのGradle、
+実行用Dockerfile、試験・ビルド用イメージ定義。実行用Dockerは毎日、その他は毎週月曜9時（日本時間）に確認する。
+共通イメージ定義を変更した場合は、Runtimeのコンテナ検証とRecordsの永続化試験をどちらも実行する。
+
+Vite+の`npm:`エイリアスとpnpmの固定overrideは、Dependabotの通常更新だけでは揃わない。
+Vite+関連は専用グループへ分け、CLI・coreエイリアス・Vitest overrideの不一致を通常CIで拒否する。
+coreエイリアス、Vitest、fast-uriの固定overrideは専用監視でも確認し、対応系列と組み合わせを検証して更新する。
+JDK、Android SDK、Actionsの入力で選ぶ実行ツールもDependabotの直接更新対象外として専用監視で補う。
+runner同梱のCLIやAndroid EmulatorはGitHub runner image／SDK配布元による更新を使用する。
 
 互換性のない自動更新は理由を記録してDependabot側で保留する。
 別PRで更新済みのDependabot PRを手動で閉じると、同じバージョンの後続ダイジェスト更新も既存PR扱いになることがある。
@@ -189,6 +200,8 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
   `sources`はワークフロー/パッケージ管理設定の参照先であり、同じバージョンを複製しない。
 - 通常CIはネットワークを使わず、固定値の形式と複数箇所の整合を検査する。
 - 定期監視は公式リリースの安定版を、明示したPython/Node/uv/pnpm系列の中で比較する。系列変更を自動採用しない。
+  Temurinは採用JDK系列の公式リリース、Android SDK PlatformとBuild ToolsはGoogleの正式配布一覧を確認する。
+  Vite+のcoreエイリアスと固定overrideも実ファイルから読み、互換性のため保留中の更新を通知から漏らさない。
 - AWS Signerのインストーラーは`latest`配布物・署名・公開鍵のチェックサム差分だけを検出する。
   取得したツールの実行・インストール・署名鍵の自動交換はしない。
 - 結果は実行サマリーと通知Botが管理する単一Issueへ集約する。変化がなければ再投稿しない。
@@ -355,7 +368,7 @@ ReleaseIdentity更新、失敗したワークフローの再実行、手動Cloud
 | ワークフロー | 頻度 | 役割 |
 |---|---|---|
 | Infrastructure Drift | 毎週火曜 | Core 5/Records 3スタックの構成差分を検出。自動修復なし |
-| Dependency Graph | 毎週火曜 | GitHub管理のPython依存一覧とCore・Records双方のソースSBOMを比較 |
+| Dependency Graph | 毎週火曜・Android変更時 | Core・RecordsのPython依存一覧を照合し、Androidの解決済み依存をGitHubへ送信 |
 | Release Tool Versions | 毎週水曜 | 固定ツールの更新候補を通知 |
 | Discord Security Digest | 毎日 | セキュリティ情報を補助通知 |
 | Discord通知 | 対象イベント発生時 | PR/対象ワークフローの状態を補助通知 |
@@ -365,6 +378,10 @@ Dependency Graphでは、両Pythonプロジェクトの全依存グループをf
 RecordsからCoreへのローカル参照は、比較に含めたプロジェクトのパス・名前・版が一致する場合だけ認める。
 不足・余分な依存は失敗とし、反映待ちは最大5回・60秒間隔とする。API取得にも時間制限を設け、
 比較失敗時も取得済みのCore・Records・GitHubのSBOMを保持する。mainが進んだ場合は比較を破棄する。
+
+Androidは`gradle/actions/dependency-submission`で依存解決結果を送信し、Dependabot alertsとsecurity updatesの対象にする。
+送信は`main`限定の専用jobに`contents: write`を与え、PRのコードへ書込権限を渡さない。
+Gradleの直接依存は更新PRの対象になるが、推移的依存だけの警告では親依存や制約の更新が必要になる場合がある。
 
 正確な時刻・対象・権限は[ワークフロー定義](https://github.com/pitekusu/shittim-chest/tree/main/.github/workflows)、
 通知の挙動は[通知運用設計](21_GitHub・Discord通知運用設計.md)を正とする。

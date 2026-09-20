@@ -13,6 +13,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 import boto3
@@ -20,9 +21,12 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from mypy_boto3_dynamodb.client import DynamoDBClient
 
-DYNAMODB_LOCAL_IMAGE: Final = (
-    "amazon/dynamodb-local@sha256:d89f8fcc6b1a39cb35976c248ed42a28c66ae00dc043099210f5571e42648ab4"
-)
+# Also support direct script execution from the independently locked Records project.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.container_images import load_image
+
 DEFAULT_TEST_COMMAND: Final = ("uv", "run", "--frozen", "pytest")
 PORT_PATTERN: Final = re.compile(r"^127\.0\.0\.1:(?P<port>[1-9][0-9]{0,4})$")
 
@@ -125,7 +129,7 @@ def start_dynamodb_local(container_cli: str) -> StartedDynamoDbLocal:
             name,
             "--publish",
             "127.0.0.1::8000",
-            DYNAMODB_LOCAL_IMAGE,
+            load_image("dynamodb-local"),
             "-jar",
             "DynamoDBLocal.jar",
             "-inMemory",

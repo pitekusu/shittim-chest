@@ -29,6 +29,8 @@ RUNTIME_CONTEXT_FILES = frozenset(
 RUNTIME_CONTEXT_PREFIXES = ("src/",)
 RUNTIME_VALIDATION_FILES = frozenset(
     {
+        "tools/containers/Dockerfile",
+        "tools/container_images.py",
         ".github/tool-versions.json",
         ".github/workflows/ci.yml",
         "security/container-risk-acceptance.json",
@@ -56,6 +58,9 @@ RECORDS_PREFIXES = (
 )
 RECORDS_FILES = frozenset(
     {
+        "tools/containers/Dockerfile",
+        "tools/container_images.py",
+        "tools/run_dynamodb_local.py",
         ".github/workflows/ci.yml",
         "docs/00_シッテムの箱_ドキュメント索引.md",
         "docs/24_シッテムの箱 議事録設計.md",
