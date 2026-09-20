@@ -1,0 +1,349 @@
+{
+  "$defs": {
+    "ImageAvatarRef": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Alt",
+          "type": "string"
+        },
+        "fallbackVariant": {
+          "enum": [
+            "cyan",
+            "pink",
+            "lavender"
+          ],
+          "title": "Fallbackvariant",
+          "type": "string"
+        },
+        "kind": {
+          "const": "image",
+          "title": "Kind",
+          "type": "string"
+        },
+        "url": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "url",
+        "alt",
+        "fallbackVariant"
+      ],
+      "title": "ImageAvatarRef",
+      "type": "object"
+    },
+    "MobileAuthorizeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "transaction": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Transaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transaction"
+      ],
+      "title": "MobileAuthorizeRequest",
+      "type": "object"
+    },
+    "MobileCallbackParameters": {
+      "additionalProperties": false,
+      "description": "App Link query on success: correlation and one-time code, never a session token.",
+      "properties": {
+        "code": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "state": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "State",
+          "type": "string"
+        },
+        "transaction": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Transaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transaction",
+        "code",
+        "state"
+      ],
+      "title": "MobileCallbackParameters",
+      "type": "object"
+    },
+    "MobileExchangeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "codeVerifier": {
+          "pattern": "^[A-Za-z0-9._~-]{43,128}$",
+          "title": "Codeverifier",
+          "type": "string"
+        },
+        "transactionId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Transactionid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transactionId",
+        "code",
+        "codeVerifier"
+      ],
+      "title": "MobileExchangeRequest",
+      "type": "object"
+    },
+    "MobileExchangeResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "accessToken": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Accesstoken",
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "isAdmin": {
+          "title": "Isadmin",
+          "type": "boolean"
+        },
+        "returnTo": {
+          "pattern": "^/(?:records/[A-Za-z0-9_-]{43})?$",
+          "title": "Returnto",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "tokenType": {
+          "const": "Bearer",
+          "title": "Tokentype",
+          "type": "string"
+        },
+        "user": {
+          "$ref": "#/$defs/SessionUser"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "user",
+        "isAdmin",
+        "expiresAt",
+        "accessToken",
+        "tokenType",
+        "returnTo"
+      ],
+      "title": "MobileExchangeResponse",
+      "type": "object"
+    },
+    "MobileSessionResponse": {
+      "additionalProperties": false,
+      "description": "An invalid/expired Bearer session returns 401, not this success DTO.",
+      "properties": {
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "isAdmin": {
+          "title": "Isadmin",
+          "type": "boolean"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "user": {
+          "$ref": "#/$defs/SessionUser"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "user",
+        "isAdmin",
+        "expiresAt"
+      ],
+      "title": "MobileSessionResponse",
+      "type": "object"
+    },
+    "MobileStartRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "codeChallenge": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Codechallenge",
+          "type": "string"
+        },
+        "codeChallengeMethod": {
+          "const": "S256",
+          "title": "Codechallengemethod",
+          "type": "string"
+        },
+        "returnTo": {
+          "default": "/",
+          "pattern": "^/(?:records/[A-Za-z0-9_-]{43})?$",
+          "title": "Returnto",
+          "type": "string"
+        },
+        "state": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "codeChallenge",
+        "codeChallengeMethod",
+        "state"
+      ],
+      "title": "MobileStartRequest",
+      "type": "object"
+    },
+    "MobileStartResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizePath": {
+          "pattern": "^/api/v1/auth/mobile/authorize\\?transaction=[A-Za-z0-9_-]{43}$",
+          "title": "Authorizepath",
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "transactionId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Transactionid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "transactionId",
+        "authorizePath",
+        "expiresAt"
+      ],
+      "title": "MobileStartResponse",
+      "type": "object"
+    },
+    "PlaceholderAvatarRef": {
+      "additionalProperties": false,
+      "properties": {
+        "alt": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Alt",
+          "type": "string"
+        },
+        "fallbackVariant": {
+          "enum": [
+            "cyan",
+            "pink",
+            "lavender"
+          ],
+          "title": "Fallbackvariant",
+          "type": "string"
+        },
+        "kind": {
+          "const": "placeholder",
+          "title": "Kind",
+          "type": "string"
+        },
+        "url": {
+          "default": null,
+          "title": "Url",
+          "type": "null"
+        }
+      },
+      "required": [
+        "kind",
+        "alt",
+        "fallbackVariant"
+      ],
+      "title": "PlaceholderAvatarRef",
+      "type": "object"
+    },
+    "SessionUser": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
+        },
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        }
+      },
+      "required": [
+        "displayName",
+        "avatar"
+      ],
+      "title": "SessionUser",
+      "type": "object"
+    }
+  },
+  "$id": "https://shittim-chest.invalid/contracts/records/v1/mobile-auth.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/MobileStartRequest"
+    },
+    {
+      "$ref": "#/$defs/MobileStartResponse"
+    },
+    {
+      "$ref": "#/$defs/MobileAuthorizeRequest"
+    },
+    {
+      "$ref": "#/$defs/MobileCallbackParameters"
+    },
+    {
+      "$ref": "#/$defs/MobileExchangeRequest"
+    },
+    {
+      "$ref": "#/$defs/MobileSessionResponse"
+    },
+    {
+      "$ref": "#/$defs/MobileExchangeResponse"
+    }
+  ],
+  "title": "Records mobile authentication (not yet routed)"
+}

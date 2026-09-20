@@ -14,6 +14,7 @@ from shittim_records.contracts import (
     RECORDS_API_SCHEMA_VERSION,
     ParticipantSlot,
 )
+from shittim_records.mobile_auth import build_mobile_auth_schema
 
 SCHEMA_FILENAME = "records-api.schema.json"
 OPENAPI_FILENAME = "openapi.json"
@@ -732,6 +733,7 @@ def expected_documents() -> dict[str, bytes]:
         SCHEMA_FILENAME: _encoded(build_json_schema()),
         OPENAPI_FILENAME: _encoded(build_openapi()),
         INVARIANTS_FILENAME: build_typescript_invariants(),
+        "mobile-auth.schema.json": _encoded(build_mobile_auth_schema()),
     }
 
 
