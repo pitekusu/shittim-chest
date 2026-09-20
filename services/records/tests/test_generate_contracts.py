@@ -16,7 +16,12 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     write_or_check(tmp_path, check=True)
 
     assert first == expected_documents()
-    assert set(first) == {"openapi.json", "records-api.schema.json", "records-invariants.ts"}
+    assert set(first) == {
+        "openapi.json",
+        "records-api.schema.json",
+        "records-invariants.ts",
+        "mobile-auth.schema.json",
+    }
     schema = json.loads(first["records-api.schema.json"])
     openapi = json.loads(first["openapi.json"])
     for filename, prefix, definitions in (

@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-19
+updated: 2026-09-20
 ---
 
 # Androidアプリ設計
@@ -13,7 +13,7 @@ updated: 2026-09-19
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CIである。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
+現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05のモバイル認証契約である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -22,11 +22,14 @@ updated: 2026-09-19
 | C02 | Circuit・Metroによる準備画面の状態管理・依存接続 | 実装済み |
 | C03 | Android CI | 実装済み |
 | C04 | CodeQL接続 | Kotlin 2.4.20へのCodeQL対応待ち。GitHub切替は未実施 |
+| C05 | モバイル認証の要求・応答・内部状態 | 契約定義のみ実装済み。保存・認証実行・公開ルートは未接続 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
 
-実装計画のC01、C02…を、それぞれ独立したPRとして番号順に進める。複数のCを1本のPRへまとめない。
+実装計画のC01、C02…を、それぞれ独立したPRとして進める。複数のCを1本のPRへまとめない。
+原則は番号順だが、2026年9月20日の合意により、独立したC04を保留してC05へ先行する。
+C04を完了扱いにはせず、[Issue #376](https://github.com/pitekusu/shittim-chest/issues/376)で安定版の対応と再開を追跡する。
 各PRには対象Cの実装・関連試験・文書を含め、同じCの不具合修正もそのPRで扱う。
 C01には合意済みのExpressiveデザイン基盤の先行実装を含めるが、C02以降の機能は追加しない。
 PRの公開状態はその工程の依頼に従う。C02・C03は確認後に通常PRとして公開した。
@@ -102,6 +105,72 @@ debug APK／テストAPK・LintとAPI 36の画面テストを実行する。画�
 - `android-gate`は必要なビルドの失敗・取消・skipや分類失敗を成功扱いしない。
 - レポートのみを短期保存し、APK／署名済み配布は後続工程に残す。
 - Kotlin 2.4.20とMaterial 3 1.5.0-alpha28は維持する。CodeQL対応待ちのC04は分離する。
+
+## C05：モバイル認証の契約（公開前）
+
+Recordsの`mobile_auth.py`に要求・応答と内部状態を定義する。既存の`PublicModel`、`SessionUser`、
+OAuth／セッション有効期間を再利用し、`AuthService`・WebのCookie／CSRF・Discord callbackは変更しない。
+APIはC12まで公開せず、C05ではDBアクセス・トークン発行・PKCE照合・状態遷移の実行を行わない。
+`mobile-auth.schema.json`は既存の契約生成コマンドで生成するが、live OpenAPIとWeb validatorには混ぜない。
+
+### 受け渡しと期限
+
+Androidはログインごとにランダムなverifierとstateを用意する。verifierは43〜128文字のASCII unreserved文字、
+challengeはSHA-256をpaddingなしbase64urlにした43文字、方式は`S256`だけとする。
+このPKCEはAndroidとRecords間の一回限りコードの交換を保護するもので、Discord OAuthのPKCE対応を仮定しない。
+方式・長さは[RFC 7636](https://www.rfc-editor.org/rfc/rfc7636.html)、外部ブラウザーとApp Linksの方針は
+[RFC 8252](https://www.rfc-editor.org/rfc/rfc8252.html)に基づく。
+
+| 境界 | 契約 |
+|---|---|
+| ログイン取引 | 開始から最長10分。ブラウザー往復で延長しない |
+| 一回限りコード | 発行から最長60秒、かつ取引期限まで |
+| モバイルセッション | 発行から90日の絶対期限。利用で延長せず、refresh tokenを設けない |
+| state・取引ID・コード・Bearer token | 独立した256-bit乱数をpaddingなしbase64urlで表す。stateは端末内の開始値と照合 |
+| アプリ復帰先 | Records設定のHTTPS origin＋固定`/auth/mobile/callback`。任意のredirect URIは受け付けない |
+| 復帰query | `transaction`・`code`・`state`のみ。アクセストークン・Discord token・ユーザー情報を載せない |
+| 認証後の目的画面 | `/`または`/records/{43文字のrecordId}`のみ。query・fragment・外部URL・管理画面は拒否 |
+
+期限ちょうどは失効とし、後続実装で毎回サーバー時刻と比較する。TTL削除を待たない。
+App Linksの公開証明書と配布版の接続はC19で確定する。C05はAndroid manifestや公開ページを追加しない。
+
+### 予定するAPIの入出力
+
+以下は未公開の契約であり、ルートはまだ存在しない。全応答を`private, no-store`とする。
+JSONはcamelCase、unknown field・余分／重複queryを拒否し、検証例外は固定コードだけへ変換する。
+
+| 予定ルート | 入力／出力 |
+|---|---|
+| `POST /api/v1/auth/mobile/start` | `codeChallenge`・`codeChallengeMethod`・`state`・省略時`/`の`returnTo` → `schemaVersion`・`transactionId`・`authorizePath`・offset付き`expiresAt` |
+| `GET /api/v1/auth/mobile/authorize` | queryの`transaction`のみ。開始端末に結び付く取引とブラウザーの使い捨てCookieを確認してDiscordへ302 |
+| 既存Discord callback | 現在の本人・Guild確認を再利用。モバイル取引だけを固定App Linkへ302。失敗時はコード・セッションを発行せず、Web側で安全なエラーを表示 |
+| `POST /api/v1/auth/mobile/exchange` | `transactionId`・`code`・`codeVerifier` → `schemaVersion`・`accessToken`・`tokenType: Bearer`・`expiresAt`・`user`・`isAdmin`・`returnTo` |
+| `GET /api/v1/auth/mobile/session` | Bearerを確認し、exchange応答からtoken・returnToを除いた本人情報を返す。無効／失効は401 |
+| `POST /api/v1/auth/mobile/logout` | Bearerを失効して204。body・queryなし |
+
+`authorizePath`は固定API originに対する相対パスで、任意URLを開かせない。ブラウザー側の一意な取引使用権はC06〜C08で実装する。
+Web CookieとBearerの混在拒否、既存所属・管理者認可、Origin／CSRF、body上限はC07〜C12のHTTP接続で検証する。
+リクエスト不正は`mobile_request_invalid`、取引・コード・PKCEの不一致／期限切れ／再使用は同一の
+`mobile_grant_invalid`として詳細を漏らさない（公開時の400）。セッション不正は既存の401形式を維持する。
+
+### 内部状態と保存境界
+
+```mermaid
+stateDiagram-v2
+    [*] --> started: 取引作成
+    started --> authorizing: ブラウザーが一度だけ取得
+    authorizing --> authorized: Discord本人・Guild確認後にコード発行
+    authorized --> consumed: S256照合とセッション発行を原子的に実行
+```
+
+- 状態ごとの型を判別可能なunionにし、`authorizing`はブラウザーnonce／OAuth stateのハッシュ、
+  `authorized`はコードhash・期限・opaque requester key・表示用プロフィール・所属確認日時を必須にする。
+- 内部の時刻はepoch秒、APIはoffset付き日時。取引10分・コード60秒と取引期限の包含関係を型の検証で守る。
+- コード・verifier・Bearer tokenの平文を内部状態に保存しない。ID・nonce・コードは用途別HMACで保存する設計とする。
+  client stateだけはアプリへそのまま返す相関値として保持するが、それだけで認証や交換を許可しない。
+- 状態の形の検証と、保存時のCAS／原子更新・有効期限判定は別物。後者と一回限りの保証はC06／C09で実装する。
+- `repr`と検証エラー表示へ機密フィールドを出さない。HTTP／adapterでPydanticの`errors()`や入力全体をログに記録しない。
+- C05の試験はredirect・S256入力境界・状態必須項目・期限の関係・内部情報の非公開・既存OpenAPI不変に絞る。
 
 ## 最小構成
 
