@@ -16,6 +16,7 @@ RUN = {
     "head_sha": SHA,
     "head_branch": "main",
     "event": "push",
+    "run_started_at": "2026-09-20T15:00:00Z",
     "status": "completed",
     "conclusion": "success",
 }
@@ -72,6 +73,19 @@ def test_an_older_success_cannot_hide_a_newer_unsuccessful_run(
     newer = {**RUN, "id": 11, "status": status, "conclusion": conclusion}
     with pytest.raises(ValueError, match="latest main workflow"):
         latest_main_run([{"workflow_runs": [RUN, newer]}], SHA)
+
+
+@pytest.mark.parametrize(
+    "status,conclusion", [("queued", None), ("completed", "failure"), ("completed", "cancelled")]
+)
+def test_rerunning_an_older_run_cannot_hide_its_failure_behind_a_newer_run_id(
+    status: str, conclusion: str | None
+) -> None:
+    rerun = {**RUN, "id": 9, "run_attempt": 3, "status": status, "conclusion": conclusion}
+    if status == "completed":
+        rerun["run_started_at"] = "2026-09-20T16:00:00Z"
+    with pytest.raises(ValueError, match="latest main workflow"):
+        latest_main_run([{"workflow_runs": [RUN, rerun]}], SHA)
 
 
 @pytest.mark.parametrize("field,value", [("id", True), ("run_attempt", 0), ("run_attempt", "2")])

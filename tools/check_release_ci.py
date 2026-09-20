@@ -39,7 +39,22 @@ def latest_main_run(pages: list[dict[str, Any]], sha: str) -> dict[str, Any]:
     ]
     if not candidates:
         raise ValueError("no main workflow run exists for the release SHA")
-    run = max(candidates, key=lambda candidate: candidate["id"])
+    # A rerun keeps its run ID. Its attempt start, not that original ID or the
+    # order in which parallel runs finish, determines the newest verification.
+    # A queued rerun may still expose the previous start time, so wait for every
+    # in-flight main run rather than authorizing from an older completed one.
+    for candidate in candidates:
+        if candidate.get("status") != "completed":
+            raise ValueError("the latest main workflow run has not succeeded")
+        if (
+            re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+                candidate.get("run_started_at", ""),
+            )
+            is None
+        ):
+            raise ValueError("invalid workflow attempt start time")
+    run = max(candidates, key=lambda candidate: (candidate["run_started_at"], candidate["id"]))
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise ValueError("the latest main workflow run has not succeeded")
     for key in ("id", "run_attempt"):
