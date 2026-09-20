@@ -1219,42 +1219,56 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     if re.search(r"(?m)^\s{4,}(?:paths|paths-ignore):", records_text[:trigger_end]):
         raise WorkflowPolicyError("Records CI triggers must not use path filters")
 
-    runtime_condition = "if: needs.changes.outputs.runtime_container == 'true'"
-    for job in ("container-arm64-build", "grype-build"):
-        block = _workflow_job_block(ci_text, job)
-        if block.count(runtime_condition) != 1:
-            raise WorkflowPolicyError(
-                f"CI {job} must run only for canonical Runtime image or risk inputs"
-            )
-
-    runtime_gates = {
+    scopes = {
+        "tests": ("core", ("verify-tests",)),
+        "package": ("core", ("build-package", "verify-package")),
+        "cdk": ("core", ("audit-infra", "verify-infra")),
+        "android-gate": ("android", ("build-android", "verify-android", "reports-android")),
         "container-arm64": (
-            "- container-arm64-build",
-            "BUILD_RESULT: ${{ needs.container-arm64-build.result }}",
+            "runtime_container",
+            ("verify-container", "verify-sbom", "verify-record", "retain-sbom"),
         ),
         "grype": (
-            "- grype-build",
-            "SCAN_RESULT: ${{ needs.grype-build.result }}",
+            "runtime_container",
+            ("scan", "verify-reports", "source-sarif", "image-sarif", "verify-risk"),
         ),
     }
-    for job, markers in runtime_gates.items():
+    for job, (scope, steps) in scopes.items():
         block = _workflow_job_block(ci_text, job)
+        header = block.split("    steps:\n", 1)[0]
         required = (
-            "if: always()",
-            "- changes",
-            "CHANGES_RESULT: ${{ needs.changes.result }}",
-            "REQUIRED: ${{ needs.changes.outputs.runtime_container }}",
-            'test "${CHANGES_RESULT}" = success',
-            'if [ "${REQUIRED}" = true ]',
-            'elif [ "${REQUIRED}" = false ]',
-            "= success",
-            "= skipped",
-            *markers,
+            "    if: always()\n",
+            "CI_CHANGES_RESULT: ${{ needs.changes.result }}",
+            "CI_REQUIRED: ${{ needs.changes.outputs." + scope + " }}",
         )
-        if any(marker not in block for marker in required):
-            raise WorkflowPolicyError(
-                f"CI {job} must preserve one required result around its conditional heavy job"
-            )
+        if any(marker not in header for marker in required):
+            raise WorkflowPolicyError(f"CI {job} must use the canonical fail-closed scope")
+        guard = _workflow_step_block(block, "Require an explicit CI scope")
+        final = _workflow_step_block(
+            block, "Verify the required work or report it as not applicable"
+        )
+        if (
+            'python3 tools/check_ci_scope.py --github-output "${GITHUB_OUTPUT}"' not in guard
+            or "if: always()" not in final
+            or "python3 tools/check_ci_scope.py" not in final
+            or "CI_STEP_RESULTS: ${{ toJSON(steps) }}" not in final
+            or any(f"--require-step {step}" not in final for step in steps)
+        ):
+            raise WorkflowPolicyError(f"CI {job} must verify every required step outcome")
+        for name in re.findall(r"(?m)^      - name: (.+)$", block):
+            if name in {
+                "Check out the tested commit",
+                "Require an explicit CI scope",
+                "Verify the required work or report it as not applicable",
+            }:
+                continue
+            if "steps.scope.outputs.required == 'true'" not in _workflow_step_block(block, name):
+                raise WorkflowPolicyError(f"CI {job} must scope every heavy step")
+        if job == "grype" and any(
+            f"--require-dependency {dependency}" not in guard
+            for dependency in ("security", "container-arm64")
+        ):
+            raise WorkflowPolicyError("CI Grype must require successful SBOM producers")
 
     records_condition = "if: needs.records-changes.outputs.records == 'true'"
     for job in ("records-python", "records-contract", "records-web", "records-infra"):

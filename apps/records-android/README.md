@@ -103,7 +103,7 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 
 ## C03のCI
 
-- 共通CIの`android-build`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で既存2件を確認する。
+- 共通CIの`android-gate`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で既存2件を確認する。
 - JDKは`.java-version`、GradleはWrapperをローカルと共有する。CIにもアプリと同じSDK／Build Toolsを用意する。
 - Android配下と関連文書だけの差分ではCoreの全pytest・パッケージ・CDK検証を省略する。
 - `android-gate`は必要な処理の失敗・取消・skipを不合格にする。手動CIではAndroidも必ず検証する。

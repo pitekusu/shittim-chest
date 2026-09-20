@@ -99,7 +99,7 @@ flowchart LR
 
 ## C03：Android CI
 
-[CI設計](15_GitHub・CI-CD詳細設計.md)の`android-build`で、ローカルと同じJDK・Wrapper・SDKを使い、
+[CI設計](15_GitHub・CI-CD詳細設計.md)の`android-gate`で、ローカルと同じJDK・Wrapper・SDKを使い、
 debug APK／テストAPK・LintとAPI 36の画面テストを実行する。画面・認証・配布機能は追加しない。
 
 - C02の既存2件をそのまま実行し、別の大量のテストや端末matrixは設けない。
