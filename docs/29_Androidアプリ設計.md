@@ -13,7 +13,7 @@ updated: 2026-09-20
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05〜C06のモバイル認証契約・保存処理である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
+現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05〜C07のモバイル認証契約・保存・ブラウザー認可の内部処理である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -24,6 +24,7 @@ updated: 2026-09-20
 | C04 | CodeQL接続 | Kotlin 2.4.20へのCodeQL対応待ち。GitHub切替は未実施 |
 | C05 | モバイル認証の要求・応答・内部状態 | 契約定義を実装済み。認証実行・公開ルートは未接続 |
 | C06 | 認証取引と一回限りコードの保存処理 | 条件付き保存・期限確認・消費用transaction部品を実装済み。セッション発行との結合はC09 |
+| C07 | ログイン開始とブラウザー認可 | 内部serviceを実装済み。state・Cookieを検証するが、Discord本人確認・コード発行・公開ルートは未接続 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -127,7 +128,7 @@ challengeはSHA-256をpaddingなしbase64urlにした43文字、方式は`S256`�
 | ログイン取引 | 開始から最長10分。ブラウザー往復で延長しない |
 | 一回限りコード | 発行から最長60秒、かつ取引期限まで |
 | モバイルセッション | 発行から90日の絶対期限。利用で延長せず、refresh tokenを設けない |
-| state・取引ID・コード・Bearer token | 独立した256-bit乱数をpaddingなしbase64urlで表す。stateは端末内の開始値と照合 |
+| アプリstate・取引ID・コード・Bearer token | 独立した256-bit乱数をpaddingなしbase64urlで表す。アプリstateは端末内の開始値と照合 |
 | アプリ復帰先 | Records設定のHTTPS origin＋固定`/auth/mobile/callback`。任意のredirect URIは受け付けない |
 | 復帰query | `transaction`・`code`・`state`のみ。アクセストークン・Discord token・ユーザー情報を載せない |
 | 認証後の目的画面 | `/`または`/records/{43文字のrecordId}`のみ。query・fragment・外部URL・管理画面は拒否 |
@@ -205,6 +206,43 @@ flowchart LR
   このadapterは検証済みの状態型とハッシュだけを受け取り、ログへ保存内容を出さない。
 - DynamoDB Localで同時取得・同時消費・再発行拒否・期限境界・セッション側の失敗時に未消費で残ることを確認する。
   単体試験は破損データ、束縛の変更、状態飛ばし、保存障害を扱う。未使用の公開APIやIAMを先行追加しない。
+
+## C07：ログイン開始とブラウザー認可（公開前）
+
+`mobile_login.py`の`MobileLoginService`はC06の保存インターフェースを使い、既存のHMAC・Cookie・
+時刻処理と検証済みOAuth設定を再利用する。外部SDK・Discord APIクライアント・セッション発行権限は持たない。
+
+| 処理 | 実装済みの動作 |
+|---|---|
+| `begin` | 検証済みS256 challenge・アプリstate・目的画面を、独立乱数の取引IDと開始から10分の期限に結び付けて保存。取引IDの平文は保存せず、固定相対authorizeパスを返す |
+| `authorize` | 未使用かつ有効な`started`だけを取得し、ブラウザーnonceと独立OAuth stateを生成。C06のCASが成功した場合だけDiscord認可URLと専用Cookieを返す |
+| `validate_callback` | OAuth stateの書式・取引・期限・`authorizing`状態、stateとCookieのHMACを検証。コード消費やDiscord本人確認は行わず、C08へ渡すsnapshotを返す |
+
+```mermaid
+sequenceDiagram
+    participant App as Android（接続は後続）
+    participant Login as C07内部service
+    participant Store as C06保存
+    App->>Login: challenge・アプリstate・目的画面
+    Login->>Store: startedを一度だけ保存
+    Login-->>App: 取引ID・authorizeパス・期限
+    App->>Login: ブラウザーで取引IDを提示
+    Login->>Store: started → authorizingをCAS
+    Login-->>App: Discord認可URL・ブラウザー専用Cookie
+    Note over Login: callback時にOAuth stateとCookieを検証
+```
+
+- アプリstateとDiscord OAuth stateは別物。後者は`m.<取引ID>.<独立256-bit乱数>`とし、C08で共有callbackの
+  モバイル処理を判別できるようにする。prefix・取引IDだけでは受理せず、state全体のHMACを照合する。
+- HMACの用途を`mobile-transaction`・`mobile-browser-nonce`・`mobile-oauth-state`へ分離する。
+  OAuth state・nonceはハッシュだけを保存し、認可URLとCookieは`repr`へ出さない。
+- Cookieは`__Host-shittim-records-mobile-oauth`とし、Webログイン用を上書きしない。
+  `Secure`・`HttpOnly`・`SameSite=Lax`・`Path=/`、Domainなし。Max-Ageは取引の残り秒数に限定し、期限を延長しない。
+- 認可先とcallback先・scopeはサーバー側の固定値／設定だけを使用する。アプリstate・challengeをDiscordへ送らない。
+- callback検証自体は読取のみ。C08では本人・Guild確認後に返されたsnapshotをCASしてコードを発行する。
+  失敗したモバイルcallbackをWeb処理へフォールバックさせない。公開接続はC12で行う。
+- `test_mobile_login.py`でCookie・期限・独立state・取引間の差し替え・CAS失敗・再使用・秘密非表示を確認する。
+  既存Web認証／HTTP試験も維持する。実Discordログインや本番データ書き込みはこの工程の試験に含めない。
 
 ## 最小構成
 
