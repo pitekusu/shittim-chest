@@ -131,6 +131,13 @@ updates:
       timezone: "Asia/Tokyo"
     registries:
       - "dhi"
+    cooldown:
+      default-days: 3
+      # Dependabot cannot obtain registry publication dates from DHI or GHCR.
+      # Exclude only these images from cooldown to avoid date-unavailable warnings.
+      exclude:
+        - "python"
+        - "astral-sh/uv"
     assignees:
       - "pitekusu"
     commit-message:
