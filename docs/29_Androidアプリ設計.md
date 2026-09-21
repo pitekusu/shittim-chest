@@ -13,7 +13,7 @@ updated: 2026-09-21
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05〜C12のサーバー側モバイル認証・議論読取APIへのBearer接続である。認証ルートの公開接続まで実装したが、端末側ログイン・Google Play配布は後続工程である。実際の配信状態は実装・試験・検証記録で管理する。
+現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存である。ログイン画面・通信との接続、Google Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -30,6 +30,7 @@ updated: 2026-09-21
 | C10 | モバイルセッション確認・ログアウト | 90日の絶対期限、本人情報の応答、提示tokenだけの失効を実装済み。公開接続はC12 |
 | C11 | Records読取APIへBearer認証を接続 | 議論一覧・詳細へ接続済み。Cookie混在を拒否し、他APIへ認可を広げない |
 | C12 | モバイル認証ルートとAWS設定 | 5ルート・共有callback・OpenAPIを既存Auth Lambdaへ接続。追加IAM・設定値なし |
+| C13 | Keystoreによるトークン保存 | 保存・読取・削除、改ざん拒否、バックアップ除外を実装。ログイン画面・通信は未接続 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -378,6 +379,36 @@ OpenAPIへ認証DTOを追加するが、Web用schema／standalone validatorへ�
 通常PRのRecords Releaseで配信し、匿名session／logoutの401・no-store・Bearer challengeをsmokeで確認する。
 smokeは取引作成・セッション削除・実Discord認証を行わない。復帰先と既存Discord callback設定は変更せず、
 Androidの鍵保存・ログイン画面はC13〜C16、署名済みApp Linksの証明書確定はC19で行う。
+
+## C13：端末内トークンの暗号化保存
+
+`auth/KeystoreTokenStore.kt`を、C14以降の認証処理から呼ぶ小さな保存部品とする。
+未使用のRepository・DI scope・認証画面・通信権限は追加しない。
+
+| 対象 | 契約 |
+|---|---|
+| 保存内容 | `StoredToken`の43文字Bearerとサーバー発行のepoch秒の有効期限。氏名・画像・Discord tokenは保存しない |
+| 鍵 | アプリ専用のAndroid Keystore AES-256鍵。GCM／NoPadding・128-bit tag・暗号化ごとの96-bit IV。鍵のexportや独自暗号providerを使わない |
+| 保存形式v1 | version 1 byte＋IV 12 bytes＋暗号化payload 51 bytes＋tag 16 bytes。用途・package・versionをAADで束縛 |
+| 保存先 | credential-protectedな`noBackupFilesDir`。既存のバックアップ無効化とcloud／device-transfer除外も維持 |
+| 更新 | `AtomicFile`で暗号文だけを書き、完了後に再読込して一致確認。複数インスタンスの操作を単一process内で直列化 |
+| 失敗 | 不正形式・改ざん・鍵消失・I/O失敗は固定`token_storage_unavailable`。原因例外やtokenを表示せず、平文へのfallbackもしない |
+| 削除 | 専用鍵を失効させてから本体・作業ファイルを除去。失敗を成功扱いせず、他の鍵やアプリデータを削除しない |
+
+`read`は未保存ならnull、破損や鍵消失なら例外とする。読取時に鍵を再作成せず、
+鍵消失後の保存は明示的な`clear`を必要とする。既存内容を黙って消去・置換しない。
+保存／読取だけでは認証成立・有効期限延長としない。期限切れの画面状態はC16、
+記録キャッシュのオフライン認可はC30で接続する。`clear`はローカル削除であり、サーバーのlogoutとは別である。
+
+`StoredToken`の文字列化は伏せ字とし、OSの例外をログ・上位例外へ引き渡さない。
+平文payloadと復号用byte配列は使用後に消去するが、JVM上の全コピーや侵害されたprocessまで秘密を保護できるとは扱わない。
+生体認証・StrongBoxを必須にせず、ハードウェア内保護の有無は端末に依存する。PQCを用いる記録保存はC26〜C29に分離する。
+
+API 36のinstrumentation testで保存・再読込・IV更新・鍵の非export・改ざん／鍵消失・削除範囲・書込失敗を確認する。
+実ユーザーの資格情報と別のテスト用directory／aliasを使う。エミュレーターの成功は実機のハードウェア保護確認と混同しない。
+実装根拠は[Android Keystore](https://developer.android.com/privacy-and-security/keystore)、
+[AtomicFile](https://developer.android.com/reference/android/util/AtomicFile)、
+[バックアップの除外](https://developer.android.com/identity/data/autobackup)を参照する。
 
 ## 最小構成
 
