@@ -1,8 +1,9 @@
 # Records Android
 
 C01のExpressive画面へC02のCircuit／Metroを接続し、C03のAndroid専用CIで確認している。
-画面は準備画面と一時的な明暗表示切替のみ。C13のトークン保存とC14の認証APIクライアントを追加したが、
-画面からの認証・通信・記録保存はまだ行わない。ブラウザー／ログイン接続、署名済み配布は後続工程とする。
+画面は準備画面と一時的な明暗表示切替のみ。C13のトークン保存、C14の認証APIクライアント、
+C15のAuth Tabによるブラウザーログイン処理を追加したが、画面からの認証・通信・記録保存はまだ行わない。
+ログイン画面の状態管理はC16、署名済み配布とApp Linksの実証明書設定は後続工程とする。
 CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -139,7 +140,21 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 - native通信にはCookieを使わず、Bearerはsession／logoutにだけ付ける。TLSの標準検証・平文HTTP禁止を維持し、HTTP loggingやdisk cacheを持たせない。
 - 接続10秒、request／socket 20秒、JSON応答64 KiB。redirect・接続復旧retryを無効化し、POSTはone-shot bodyとする。
 - 401・grant不正・通信失敗・サーバー障害等は固定分類で返し、応答本文や原因例外を表示しない。キャンセルはそのまま伝播する。
-- クライアントだけでは保存tokenの消去・延長・再認証を行わない。Custom Tabs・App Links・ログイン画面との接続はC15以降へ分離する。
+- クライアントだけでは保存tokenの消去・延長・再認証を行わない。ブラウザー接続はC15、ログイン画面との接続はC16へ分離する。
+
+## C15のブラウザーログイン
+
+- `auth/MobileLoginActivity.kt`：AndroidX Browser 1.10.0のAuth Tabを起動し、Activity Resultで復帰・取消を受ける。`onResume`から取消を推測しない。
+- 対応していないブラウザーではAuth TabのCustom Tabs fallbackを使い、公開するのは固定HTTPS callback専用のreceiverだけとする。
+  両方の復帰経路を同じ検証へ渡し、通常の画面復帰や二重callbackで交換を繰り返さない。
+- HTTPSのAuth TabにはDigital Asset Linksが必要。検証失敗・時間切れは拒否し、検証を迂回するブラウザーへ切り替えない。
+  C19で実際のPlay署名証明書を設定するまでは、本番ブラウザー認証の完了を保証しない。
+- `auth/MobileLoginFlow.kt`：既存の独自APIに合わせ、S256、独立したランダムstate、取引ID、固定callback、期限、一回限り交換を検証する。
+  verifier／state／codeはメモリ内だけに保持する。process消失・取消・期限切れの復帰は、新しい認証取引を作らず拒否する。
+- `auth/MobileLoginModel.kt`：回転をまたぐ進捗と交換・Keystore保存を管理。保存はUI thread外で行い、保存失敗をログイン成功にしない。
+- `auth/MobileLoginContract.kt`：呼出元へは結果分類と元の目的画面だけを返し、tokenや復帰URLは渡さない。ログイン画面への接続はC16で行う。
+- テストは合成データとMockEngineを使い、Auth Tab結果、fallback、取消、不正・古いcallback、二重交換、保存失敗を確認する。
+  本番Discordや既存の保存tokenには触れない。端末のブラウザーと署名証明書による疎通確認はC19の配布確認で実施する。
 
 ## デザイン基盤
 

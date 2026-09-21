@@ -13,7 +13,7 @@ updated: 2026-09-21
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアントである。ブラウザー・画面・保存との接続、Google Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
+現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡しである。ログイン画面とGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -31,7 +31,8 @@ updated: 2026-09-21
 | C11 | Records読取APIへBearer認証を接続 | 議論一覧・詳細へ接続済み。Cookie混在を拒否し、他APIへ認可を広げない |
 | C12 | モバイル認証ルートとAWS設定 | 5ルート・共有callback・OpenAPIを既存Auth Lambdaへ接続。追加IAM・設定値なし |
 | C13 | Keystoreによるトークン保存 | 保存・読取・削除、改ざん拒否、バックアップ除外を実装。ログイン画面・通信は未接続 |
-| C14 | モバイル認証APIクライアント | 4操作の通信・型変換・失敗分類を実装。Custom Tabs・画面・保存への接続はC15以降 |
+| C14 | モバイル認証APIクライアント | 4操作の通信・型変換・失敗分類を実装。ブラウザー・画面・保存への接続はC15以降 |
+| C15 | ブラウザー認証からアプリ復帰・コード交換 | Auth TabとCustom Tabs fallback、PKCE・復帰検証・保存を接続。ログイン画面はC16、配布証明書の設定と実認証確認はC19 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -82,6 +83,60 @@ CodeQL互換性も別の条件であり、Native Imageを解析回避には使�
 
 配布仕様は[Kotlin 2.4.20のNative Image](https://kotlinlang.org/docs/whatsnew2420.html#native-image)、
 利用方法はリポジトリの`apps/records-android/README.md`を参照する。
+
+## 高レベルAPI・ライブラリ優先の開発方針
+
+対象はAndroidアプリと、それを支えるPythonの認証・閲覧APIとする。Coreの討論処理や無関係なRecords機能は含めない。
+既存のMaterial 3 Expressive・Circuit・Metro・Ktor・kotlinx.serialization・Pydanticを活用し、全面的な作り直しは行わない。
+Authlib・Auth Tab・認証検証の共通化も維持する。この方針の追加では、公開API・保存形式・認可範囲を変更しない。
+
+実装前に既採用ライブラリと標準SDKの高レベルAPIを確認し、足りない場合は保守されている外部ライブラリを検討する。
+採用時には保守状況・ライセンス・脆弱性・既存バージョンとの互換性・依存の増加・安全な設定の可否を確認する。
+独自実装は必要な安全条件・互換性・性能・端末機能を満たせない部分に限定し、理由を設計またはコードへ短く残す。
+行数削減や抽象化した見た目のために層を追加せず、専用の承認工程や大量の比較資料も設けない。
+
+### 用途ごとの採用先と責務
+
+「継続」は既存実装を利用する方針、「導入予定」は該当C工程で実装・検証する方針であり、導入済みとは扱わない。
+詳細な依存バージョンはVersion Catalog・lockfileを正とし、この表へ重複管理しない。
+
+| 用途・工程 | 採用先 | 独自処理を残す理由・境界 |
+|---|---|---|
+| Python認証（継続） | Authlib、Pydantic、共通認証ガード | OAuthの要求・応答や型検証はライブラリへ任せる。Guild・管理者・本人限定の規則はサービス固有の認可として管理 |
+| C13：トークン保存（継続） | Android Keystore、標準暗号API、AtomicFile | 鍵の保護・暗号演算・原子的なファイル更新を利用。用途への束縛と保存形式の検証は残し、高レベル化だけを理由に形式を変えない |
+| C14：認証通信（継続） | Ktor、kotlinx.serialization | 通信・JSON変換を利用。再送防止・応答上限・秘密非表示は認証専用の境界として維持 |
+| C15：ブラウザー認証（継続） | Auth Tab、Activity Result API | 起動・結果受け渡しを利用。非対応ブラウザーのfallbackも同じ固定callback・取引・state・期限の検証へ接続 |
+| C16〜17：画面・通常API（導入予定） | 既存Circuitの状態管理・ナビゲーション、Metro、[Ktor ContentNegotiation](https://ktor.io/docs/client-serialization.html) | 通常JSON通信の変換を任せる。画面固有の状態と認可を残し、C14の認証専用通信とは分離 |
+| C21：画像表示（導入予定） | [Coil AsyncImage](https://coil-kt.github.io/coil/compose/) | 取得・縮小・placeholderは自作しない。非公開画像の平文disk cacheを無効化し、ログアウト時にmemory cacheを消去 |
+| C22：一覧の追加取得（導入予定） | [Paging／PagingSource](https://developer.android.com/topic/libraries/architecture/paging/v3-overview) | loading・retry・要求制御を任せる。APIのcursorを接続し、期限切れcursorはAPI契約に従って扱う |
+| C23：Markdown（導入予定） | [Compose Markdown RendererのMaterial 3対応](https://github.com/mikepenz/multiplatform-markdown-renderer) | 独自パーサー・WebViewは追加しない。外部リンクの許可判定はアプリ側に残す |
+| C26〜29：暗号化保存（導入予定） | Bouncy Castle、Android Keystore、[Room](https://developer.android.com/training/data-storage/room) | 独自暗号方式・DBアクセス基盤は作らない。保存形式・鍵の取り扱いを管理し、Roomには暗号化済み本文を保存 |
+| C31：同期（導入予定） | Coroutines、保存済み進捗からの再開 | 画面起点で同期し、サービス固有の取得順序と再開点を管理。バックグラウンド継続を新要件にしない限りWorkManagerは導入しない |
+
+### C15までの独自処理を残す理由
+
+次の処理はライブラリを使わないためではなく、既存APIだけでは満たせない安全条件やサービス固有の契約を守るために残す。
+
+| 処理 | 残す理由 | 詳細の参照先 |
+|---|---|---|
+| 認証POSTのone-shot body | 接続復旧retryの無効化だけでは防げない再送を抑え、一回限りコードの意図しない再交換を防ぐ | C14「通信と失敗の境界」 |
+| 認証応答の上限付き読み込み | Content-Lengthの有無や正しさに依存せず、実際の応答を64 KiBまでに制限する | C14「通信と失敗の境界」 |
+| JSON辞書化前の重複キー・サイズ検査 | 辞書化後のPydantic検証だけでは失われる重複キーを検出し、大きすぎる入力も先に拒否する | C12、`mobile_http.py` |
+| DynamoDBの条件付きtransaction | 一回限りコードの消費とセッション発行を原子的に行い、期限・競合・二重消費をサービスの契約どおりに制御する | C06・C09 |
+| 標準ライブラリによる短いS256、固定callback照合、期限・権限判定 | 暗号方式やOAuth全体を独自実装せず、開始端末との束縛とサービス固有の許可条件だけを扱う | C09〜C11、C15 |
+
+これらをライブラリへ移すことだけを目的に、新しいProtocolやDI層を作らない。
+FastAPIへの全面移行、新しい認証基盤、ORMの導入もこの方針の対象外とする。
+
+### 各C工程への組み込みと確認
+
+- 既存のC単位・PR単位を維持し、必要になる工程で依存を導入・固定する。未使用の依存は先行追加しない。
+- 導入時に互換性と安全設定を確認する。問題があれば採用判断を見直し、独自実装へ即座に切り替えたり、Kotlin・Compose・Materialの既定バージョンを無断で変えたりしない。
+- 試験は利用する機能と自サービスとの接続境界に絞る。ライブラリ内部の再試験、件数・カバレッジ目標は追加しない。
+- 認証は再送防止・期限・二重交換・権限分離・秘密非表示を維持する。画像・DBは平文キャッシュとログアウト後の情報残存を確認する。
+- Markdownは長文・リンク・主要構文に加え、Releaseビルドでの表示を確認する。
+- 方針・文書だけの変更は文書整合・mirror・公開情報・差分を確認する。関連変更のない成功済み試験は繰り返さない。
+- 実署名・App Links・実Discordログインの確認は引き続きC19で行い、今回の文書整備の完了条件へ追加しない。
 
 ## C02：CircuitとMetroの接続
 
@@ -455,7 +510,53 @@ POSTはKtorの`ReadChannelContent`を使い、[OkHttp用one-shot body](https://g
 型の2件と[MockEngine](https://ktor.io/docs/client-testing.html)の5件で、4操作、Bearer／Cookie境界、
 不正復帰先、401と通信失敗の区別、転送拒否、応答上限、キャンセル、秘密非表示を確認する。
 既存のエミュレーターCIへ追加し、本番API・Discord認可・実アカウントへ接続する試験は行わない。
-画面・Custom Tabs・stateの生成／照合・C13への保存はC15〜C16、実配布でのApp LinksはC19へ分離する。
+ブラウザー・stateの生成／照合・C13への保存はC15、ログイン画面はC16、実配布でのApp LinksはC19へ分離する。
+
+## C15：ブラウザー認証とアプリ復帰
+
+### Auth Tabと既存APIの接続
+
+[AndroidX Auth Tab](https://developer.chrome.com/docs/android/custom-tabs/guide-auth-tab)を使い、
+ブラウザーの起動と認証結果をActivity Result APIで扱う。対応しないブラウザーではCustom Tabsへfallbackし、
+固定HTTPS callbackのApp Linksから同じ検証処理へ渡す。Auth Tabの成功結果だけでログイン完了とは扱わない。
+
+```mermaid
+flowchart LR
+    Start[C14の開始API] --> Browser[Auth Tab／Custom Tabs]
+    Browser --> Result[結果callback／固定App Links]
+    Result --> Check[取引・state・期限を検証]
+    Check --> Exchange[C14の一回限りコード交換]
+    Exchange --> Store[C13のKeystore保存]
+```
+
+- Auth Tabはブラウザー往復を担当する。Records独自のJSON API、PKCE、サーバー側の原子的なコード消費は維持する。
+- キャンセル、ブラウザー不在、HTTPS検証失敗・timeoutは成功扱いせず、進行中の試行を終了する。
+  fallbackとAuth Tabの両方から結果が届いても、同じコードを二度交換しない。
+- HTTPS復帰にはDigital Asset Linksが必要。非対応ブラウザーのfallbackでも検証済みApp Linksを使い、
+  custom schemeや任意redirectへ緩めない。署名証明書と`assetlinks.json`の実設定・配布版での確認はC19で行う。
+- 成功時は検証済みtokenと絶対期限だけをC13へ保存し、呼び出し元へは結果と許可された目的画面を返す。
+  token・code・state・verifierをActivityの結果や永続状態に含めない。
+
+この工程はログイン画面を追加しない。架空応答による開始・復帰・保存の検証と、実Discord／配布証明書での
+ログイン確認を分け、ビルドやエミュレーター試験の成功を本番認証の確認とみなさない。
+
+### PKCEと一回限りの交換
+
+`MobileLoginFlow`はC14のクライアントを使い、開始時のverifier・state・取引・目的画面をメモリ内で結び付ける。
+同時に進められる試行は1件だけとし、開始・交換を自動再試行しない。
+
+| 境界 | 扱い |
+|---|---|
+| S256 | `SecureRandom`の独立した32 bytesをverifier・stateに使う。verifierのSHA-256をpaddingなしbase64urlで送信 |
+| 復帰URL | 固定HTTPS origin・完全一致のcallback path・3つのqueryだけ。重複・余分なfield・percent escape・userinfo・port・fragmentを拒否 |
+| 開始端末との束縛 | 生きている取引IDとstateを照合。stateはconstant-time比較し、verifierはURLへ載せない |
+| 有効期限 | サーバーの残り時間と開始から10分の短い方。端末のmonotonic clockで判定し、時計を戻しても延長しない。コードの60秒期限はサーバーが照合 |
+| 交換 | 最初のsuspend前に取引を使用中にし、重複Intentでは再交換しない。結果不明の通信失敗でもコードを再使用しない |
+| 応答 | 開始時の目的画面との一致と未失効を確認。古い取引、キャンセル済み、開始情報を失ったプロセスからの交換を拒否 |
+
+verifier・stateはBundle、SavedStateHandle、ファイル、logへ保存しない。プロセス終了時は再ログインする。
+RFCの公開vectorと架空API応答で、S256・復帰URL・キャンセル・古いコード・期限・交換中の重複・応答不明を確認する。
+PKCEの根拠は[RFC 7636](https://www.rfc-editor.org/rfc/rfc7636.html)を参照する。
 
 ## 最小構成
 
