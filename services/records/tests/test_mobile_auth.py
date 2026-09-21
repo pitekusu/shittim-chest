@@ -118,6 +118,7 @@ def test_mobile_schema_has_no_internal_records_or_live_routes() -> None:
     assert "paths" not in schema
     for private_field in ("requester_key", "transaction_hash", "browser_nonce_hash", "code_hash"):
         assert private_field not in encoded
+    assert "MobileSessionRecord" not in encoded
     # Web consumers keep the existing contracts; C12 will explicitly connect public routes.
     from shittim_records.generate_contracts import build_openapi
 

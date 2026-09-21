@@ -210,6 +210,15 @@ flowchart LR
 - DynamoDB Localで同時取得・同時消費・再発行拒否・期限境界・セッション側の失敗時に未消費で残ることを確認する。
   単体試験は破損データ、束縛の変更、状態飛ばし、保存障害を扱う。未使用の公開APIやIAMを先行追加しない。
 
+### C09の保存部品（内部service接続前）
+
+`MobileSessionRecord`と`issue_session`を追加し、コード消費・モバイルセッション新規作成・
+既存形式のプロフィール更新を同じDynamoDB transactionへ結合する。セッションは発行から90日で固定し、
+`MOBILE_SESSION#{hash} / META`へ保存する。Webの`SESSION#`と分離し、tokenや署名付きURLは保存しない。
+コード側の条件不一致と、セッションキー衝突・一時的なtransaction失敗を区別する。
+既存のDynamoDB Local試験を実処理へ置き換え、二重発行と部分確定を防ぐことを確認する。
+このコミット時点では交換service・S256照合・公開ルートへ未接続であり、C09全体は未完了。
+
 ## C07：ログイン開始とブラウザー認可（公開前）
 
 `mobile_login.py`の`MobileLoginService`はC06の保存インターフェースを使い、既存のHMAC・Cookie・

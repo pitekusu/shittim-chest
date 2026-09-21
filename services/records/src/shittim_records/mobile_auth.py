@@ -164,6 +164,27 @@ class MobileConsumedTransaction(MobileTransaction):
         return self
 
 
+class MobileSessionRecord(BaseModel):
+    """Server-only Bearer session, separate from Web cookies and without raw tokens."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    requester_key: OpaqueValue
+    display_name: NonEmptyText = Field(repr=False)
+    avatar_asset_key: str | None = Field(repr=False)
+    guild_verified_at: AwareDatetime
+    created_at: EpochSeconds
+    expires_at: EpochSeconds
+
+    @model_validator(mode="after")
+    def validate_session(self) -> MobileSessionRecord:
+        if self.expires_at - self.created_at != MOBILE_SESSION_TTL_SECONDS:
+            raise ValueError("invalid_mobile_session_lifetime")
+        if self.avatar_asset_key not in (None, f"requesters/{self.requester_key}/avatar.webp"):
+            raise ValueError("invalid_mobile_avatar_asset")
+        return self
+
+
 MobileTransactionState = Annotated[
     MobileStartedTransaction
     | MobileAuthorizingTransaction
