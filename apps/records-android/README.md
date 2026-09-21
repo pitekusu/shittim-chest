@@ -1,8 +1,8 @@
 # Records Android
 
 C01のExpressive画面へC02のCircuit／Metroを接続し、C03のAndroid専用CIで確認している。
-画面は準備画面と一時的な明暗表示切替のみ。C13でトークンの暗号化保存部品を追加したが、
-画面からの認証・通信・記録保存はまだ行わない。ログイン接続、署名済み配布は後続工程とする。
+画面は準備画面と一時的な明暗表示切替のみ。C13のトークン保存とC14の認証APIクライアントを追加したが、
+画面からの認証・通信・記録保存はまだ行わない。ブラウザー／ログイン接続、署名済み配布は後続工程とする。
 CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -55,6 +55,7 @@ C02の接続確認は、専用エミュレーターまたはテスト端末で�
 実Activityを起動する2件でMetro→Circuit→UIの接続、表示切替、Activity再生成後の復元を確認する。
 C13の6件は実Android Keystoreで暗号化保存・再読込・改ざん／鍵消失の拒否・削除・書込失敗・
 バックアップ除外を確認する。テスト専用のディレクトリと鍵を使い、既存の認証情報には触れない。
+C14は型検証2件とMockEngineによる5件で認証APIの変換・失効／通信失敗・転送拒否・上限・キャンセルを確認し、本番へ通信しない。
 装飾の座標やライブラリ内部を写す試験は追加しない。
 CodeQL 2.27.0でのKotlin解析は未完了。通常ビルドの成功と混同しない。
 見た目の変更はエミュレーターで自動／明暗切替、320dp・文字2倍、840dp境界・広い幅、回転、アニメーション無効時を確認する。
@@ -129,12 +130,16 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 - ファイル／Keystore操作は同期処理のためUI thread外から呼ぶ。単一process内の複数インスタンスを直列化する。
 - 有効期限の延長・認可判定・プロフィール保存は行わない。ログイン画面・通信・PQCによる記録キャッシュはこの工程へ含めない。
 
-## C14の認証契約
+## C14の認証APIクライアント
 
 - `auth/MobileAuthModels.kt`：既存モバイルAPIに対応する要求・応答。S256、取引ID、復帰先、Bearer、日時を検証する。
 - DTOは通常classとし、文字列化で認証情報・本人情報を表示しない。
 - Ktor 3.6.0＋OkHttp engine、kotlinx.serialization 1.11.0、Coroutines 1.11.0を固定。compiler pluginはKotlinと同じ版を使用する。
-- HTTP接続は同じC14の次コミット、Custom Tabs・App Links・ログイン画面はC15以降へ分離する。
+- `auth/MobileAuthClient.kt`：固定HTTPS originへ開始・交換・session・logoutを送るsuspend API。渡したengineを所有し、利用終了時に`close`する。
+- native通信にはCookieを使わず、Bearerはsession／logoutにだけ付ける。TLSの標準検証・平文HTTP禁止を維持し、HTTP loggingやdisk cacheを持たせない。
+- 接続10秒、request／socket 20秒、JSON応答64 KiB。redirect・接続復旧retryを無効化し、POSTはone-shot bodyとする。
+- 401・grant不正・通信失敗・サーバー障害等は固定分類で返し、応答本文や原因例外を表示しない。キャンセルはそのまま伝播する。
+- クライアントだけでは保存tokenの消去・延長・再認証を行わない。Custom Tabs・App Links・ログイン画面との接続はC15以降へ分離する。
 
 ## デザイン基盤
 
