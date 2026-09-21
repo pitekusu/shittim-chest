@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-20
+updated: 2026-09-21
 ---
 
 # GitHub・CI-CD詳細設計
@@ -351,6 +351,10 @@ Lambdaのbase64 SHA-256は既定値のないCloudFormationパラメーター、�
    公開ホスト名は本番CORSオリジンと完全一致させ、マニフェストにも固定する。
 4. 承認後に変更を配信し、Application/Edgeのパラメーターと公開オリジンを照合する。
 5. 匿名の`GET /api/v1/admin/prompts`が401と`private, no-store`を返す等の構造確認を行う。
+
+モバイル認証は匿名の`GET /api/v1/auth/mobile/session`と`POST /api/v1/auth/mobile/logout`について、
+401・`private, no-store`・Bearer challengeを確認する。tokenを渡さないためセッションの作成・削除は行わない。
+App Linksの実機確認はAndroid配布工程で別に実施し、Release smokeで実Discordログインを開始しない。
 
 変更セットは次の条件で扱う。
 

@@ -171,7 +171,9 @@ Recordsの配信ロールには元の討論テーブルの読み書きを許可�
 
 RecordsEdgeはOACで非公開S3へ接続し、Route 53のA/AAAAレコードを管理する。
 公開証明書はECDSA P-256、CloudFrontの閲覧者向けTLSポリシーは`TLSv1.3_2025`。
-`/api/*`はキャッシュせずCookieをAPI Gatewayへ転送し、`/assets/*`だけを変更不能なアセットとしてキャッシュする。
+`/api/*`はキャッシュせずCookieとAuthorizationをAPI Gatewayへ転送し、`/assets/*`だけを変更不能なアセットとしてキャッシュする。
+モバイル認証の5ルートは既存Auth Lambdaへ接続する。Session Table・限定SSM・アバター領域の既存権限で処理し、
+新規Lambda・IAM権限・環境変数・Statefulリソースは追加しない。認証の境界は[Android設計](29_Androidアプリ設計.md)を参照する。
 過去のRSAからECDSAへの一度限りの変更を、今後の証明書置換への包括承認として扱わない。
 
 ## 7. 監視・費用・変更の検証

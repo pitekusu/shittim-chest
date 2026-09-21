@@ -2285,6 +2285,221 @@
         "title": "MemorialUploadResponse",
         "type": "object"
       },
+      "MobileAuthorizeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "transaction": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Transaction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction"
+        ],
+        "title": "MobileAuthorizeRequest",
+        "type": "object"
+      },
+      "MobileCallbackParameters": {
+        "additionalProperties": false,
+        "description": "App Link query on success: correlation and one-time code, never a session token.",
+        "properties": {
+          "code": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "state": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "State",
+            "type": "string"
+          },
+          "transaction": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Transaction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction",
+          "code",
+          "state"
+        ],
+        "title": "MobileCallbackParameters",
+        "type": "object"
+      },
+      "MobileExchangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "codeVerifier": {
+            "pattern": "^[A-Za-z0-9._~-]{43,128}$",
+            "title": "Codeverifier",
+            "type": "string"
+          },
+          "transactionId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Transactionid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transactionId",
+          "code",
+          "codeVerifier"
+        ],
+        "title": "MobileExchangeRequest",
+        "type": "object"
+      },
+      "MobileExchangeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accessToken": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Accesstoken",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "isAdmin": {
+            "title": "Isadmin",
+            "type": "boolean"
+          },
+          "returnTo": {
+            "pattern": "^/(?:records/[A-Za-z0-9_-]{43})?$",
+            "title": "Returnto",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "tokenType": {
+            "const": "Bearer",
+            "title": "Tokentype",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "user",
+          "isAdmin",
+          "expiresAt",
+          "accessToken",
+          "tokenType",
+          "returnTo"
+        ],
+        "title": "MobileExchangeResponse",
+        "type": "object"
+      },
+      "MobileSessionResponse": {
+        "additionalProperties": false,
+        "description": "An invalid/expired Bearer session returns 401, not this success DTO.",
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "isAdmin": {
+            "title": "Isadmin",
+            "type": "boolean"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "user",
+          "isAdmin",
+          "expiresAt"
+        ],
+        "title": "MobileSessionResponse",
+        "type": "object"
+      },
+      "MobileStartRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "codeChallenge": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Codechallenge",
+            "type": "string"
+          },
+          "codeChallengeMethod": {
+            "const": "S256",
+            "title": "Codechallengemethod",
+            "type": "string"
+          },
+          "returnTo": {
+            "default": "/",
+            "pattern": "^/(?:records/[A-Za-z0-9_-]{43})?$",
+            "title": "Returnto",
+            "type": "string"
+          },
+          "state": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "codeChallenge",
+          "codeChallengeMethod",
+          "state"
+        ],
+        "title": "MobileStartRequest",
+        "type": "object"
+      },
+      "MobileStartResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authorizePath": {
+            "pattern": "^/api/v1/auth/mobile/authorize\\?transaction=[A-Za-z0-9_-]{43}$",
+            "title": "Authorizepath",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "transactionId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Transactionid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "transactionId",
+          "authorizePath",
+          "expiresAt"
+        ],
+        "title": "MobileStartResponse",
+        "type": "object"
+      },
       "MomotalkImage": {
         "additionalProperties": false,
         "properties": {
@@ -4451,6 +4666,7 @@
     },
     "/api/v1/auth/discord/callback": {
       "get": {
+        "description": "Webは既存Cookie認証を完了。m.で始まるstateは専用Cookieと照合し、固定App Linkへ一回限りコードを渡す。Bearer tokenはURLへ載せない。",
         "operationId": "completeDiscordOAuth",
         "parameters": [
           {
@@ -4474,7 +4690,16 @@
         ],
         "responses": {
           "302": {
-            "description": "Authenticated SPA redirect"
+            "description": "Web session or one-time mobile handoff"
+          },
+          "400": {
+            "description": "Mobile login invalid/cancelled; fixed no-store HTML"
+          },
+          "403": {
+            "description": "Mobile guild check denied; fixed no-store HTML"
+          },
+          "503": {
+            "description": "Service unavailable; no-store"
           }
         },
         "security": []
@@ -4498,6 +4723,376 @@
         "responses": {
           "302": {
             "description": "Discord authorization redirect"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/mobile/authorize": {
+      "get": {
+        "description": "transactionのみ受理。専用Cookieでブラウザーを束縛してDiscordへ遷移。no-store。",
+        "operationId": "authorizeMobileLogin",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "transaction",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Discord authorization redirect"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/mobile/exchange": {
+      "post": {
+        "description": "Cookie・Authorization・queryを受け付けない。JSON bodyは4 KiB以下、未知・重複fieldとbase64を拒否。Originがある場合は設定済みoriginと完全一致。全応答private, no-store。交換は一回限りコードとS256 verifierを検証する。",
+        "operationId": "exchangeMobileLogin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileExchangeResponse"
+                }
+              }
+            },
+            "description": "Mobile login"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/mobile/logout": {
+      "post": {
+        "description": "Cookie・body・queryを拒否。Originがある場合は設定済みoriginと完全一致。90日の絶対期限と失効を毎回確認し、全応答private, no-store。401はBearer challenge付き。",
+        "operationId": "logoutMobileSession",
+        "responses": {
+          "204": {
+            "description": "Presented token revoked"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "mobileBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mobile/session": {
+      "get": {
+        "description": "Cookie・body・queryを拒否。Originがある場合は設定済みoriginと完全一致。90日の絶対期限と失効を毎回確認し、全応答private, no-store。401はBearer challenge付き。",
+        "operationId": "sessionMobileSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileSessionResponse"
+                }
+              }
+            },
+            "description": "Current mobile session"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "mobileBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mobile/start": {
+      "post": {
+        "description": "Cookie・Authorization・queryを受け付けない。JSON bodyは4 KiB以下、未知・重複fieldとbase64を拒否。Originがある場合は設定済みoriginと完全一致。全応答private, no-store。交換は一回限りコードとS256 verifierを検証する。",
+        "operationId": "startMobileLogin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileStartResponse"
+                }
+              }
+            },
+            "description": "Mobile login"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
           }
         },
         "security": []

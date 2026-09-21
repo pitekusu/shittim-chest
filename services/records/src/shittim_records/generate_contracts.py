@@ -14,7 +14,7 @@ from shittim_records.contracts import (
     RECORDS_API_SCHEMA_VERSION,
     ParticipantSlot,
 )
-from shittim_records.mobile_auth import build_mobile_auth_schema
+from shittim_records.mobile_auth import MOBILE_WIRE_MODELS, build_mobile_auth_schema
 
 SCHEMA_FILENAME = "records-api.schema.json"
 OPENAPI_FILENAME = "openapi.json"
@@ -36,9 +36,13 @@ def _rewrite_refs(value: Any, *, reference_prefix: str) -> Any:
     return value
 
 
-def _component_schemas(*, reference_prefix: str) -> dict[str, Any]:
+def _component_schemas(*, reference_prefix: str, include_mobile: bool = False) -> dict[str, Any]:
     components: dict[str, Any] = {}
-    for model in (*PUBLIC_RESPONSE_MODELS, *PUBLIC_REQUEST_MODELS):
+    for model in (
+        *PUBLIC_RESPONSE_MODELS,
+        *PUBLIC_REQUEST_MODELS,
+        *(MOBILE_WIRE_MODELS if include_mobile else ()),
+    ):
         schema = model.model_json_schema(by_alias=True, mode="serialization")
         definitions = schema.pop("$defs", {})
         rewritten_definitions = _rewrite_refs(
@@ -219,6 +223,70 @@ def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _mobile_auth_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
+    errors = {key: error_responses[key] for key in ("400", "401", "403", "429", "503")}
+    result = {}
+    for name, request, response in (
+        ("start", "MobileStartRequest", "MobileStartResponse"),
+        ("exchange", "MobileExchangeRequest", "MobileExchangeResponse"),
+    ):
+        result[f"/api/v1/auth/mobile/{name}"] = {
+            "post": {
+                "operationId": f"{name}MobileLogin",
+                "security": [],
+                "description": (
+                    "Cookie・Authorization・queryを受け付けない。JSON bodyは4 KiB以下、"
+                    "未知・重複fieldとbase64を拒否。Originがある場合は設定済みoriginと完全一致。"
+                    "全応答private, no-store。交換は一回限りコードとS256 verifierを検証する。"
+                ),
+                "requestBody": _request_body(request),
+                "responses": {"200": _response(response, "Mobile login"), **errors},
+            }
+        }
+    result["/api/v1/auth/mobile/authorize"] = {
+        "get": {
+            "operationId": "authorizeMobileLogin",
+            "security": [],
+            "description": (
+                "transactionのみ受理。専用Cookieでブラウザーを束縛してDiscordへ遷移。no-store。"
+            ),
+            "parameters": [
+                _parameter(
+                    "transaction",
+                    "query",
+                    {
+                        "type": "string",
+                        "pattern": r"^[A-Za-z0-9_-]{43}$",
+                    },
+                    required=True,
+                )
+            ],
+            "responses": {"302": {"description": "Discord authorization redirect"}, **errors},
+        }
+    }
+    for name, method in (("session", "get"), ("logout", "post")):
+        result[f"/api/v1/auth/mobile/{name}"] = {
+            method: {
+                "operationId": f"{name}MobileSession",
+                "security": [{"mobileBearer": []}],
+                "description": (
+                    "Cookie・body・queryを拒否。Originがある場合は設定済みoriginと完全一致。"
+                    "90日の絶対期限と失効を毎回確認し、全応答private, no-store。"
+                    "401はBearer challenge付き。"
+                ),
+                "responses": {
+                    **(
+                        {"200": _response("MobileSessionResponse", "Current mobile session")}
+                        if name == "session"
+                        else {"204": {"description": "Presented token revoked"}}
+                    ),
+                    **errors,
+                },
+            }
+        }
+    return result
+
+
 def build_openapi() -> dict[str, Any]:
     error_responses = {
         code: _response("ErrorResponse", description)
@@ -240,6 +308,7 @@ def build_openapi() -> dict[str, Any]:
         },
         "paths": {
             **_momotalk_paths(error_responses),
+            **_mobile_auth_paths(error_responses),
             "/records/{recordId}": _preview_path(image=False),
             "/og/records/{recordId}/{version}.png": _preview_path(image=True),
             "/api/v1/auth/discord/start": {
@@ -264,6 +333,10 @@ def build_openapi() -> dict[str, Any]:
                 "get": {
                     "operationId": "completeDiscordOAuth",
                     "security": [],
+                    "description": (
+                        "Webは既存Cookie認証を完了。m.で始まるstateは専用Cookieと照合し、"
+                        "固定App Linkへ一回限りコードを渡す。Bearer tokenはURLへ載せない。"
+                    ),
                     "parameters": [
                         _parameter(
                             "code", "query", {"type": "string", "minLength": 1}, required=True
@@ -272,7 +345,14 @@ def build_openapi() -> dict[str, Any]:
                             "state", "query", {"type": "string", "minLength": 1}, required=True
                         ),
                     ],
-                    "responses": {"302": {"description": "Authenticated SPA redirect"}},
+                    "responses": {
+                        "302": {"description": "Web session or one-time mobile handoff"},
+                        "400": {
+                            "description": "Mobile login invalid/cancelled; fixed no-store HTML"
+                        },
+                        "403": {"description": "Mobile guild check denied; fixed no-store HTML"},
+                        "503": {"description": "Service unavailable; no-store"},
+                    },
                 }
             },
             "/api/v1/session": {
@@ -614,7 +694,9 @@ def build_openapi() -> dict[str, Any]:
             },
         },
         "components": {
-            "schemas": _component_schemas(reference_prefix="#/components/schemas/"),
+            "schemas": _component_schemas(
+                reference_prefix="#/components/schemas/", include_mobile=True
+            ),
             "securitySchemes": {
                 "sessionCookie": {
                     "type": "apiKey",

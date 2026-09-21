@@ -112,14 +112,10 @@ def test_internal_state_requires_phase_specific_fields_and_bounded_lifetimes() -
     assert MOBILE_SESSION_TTL_SECONDS == 90 * 24 * 60 * 60
 
 
-def test_mobile_schema_has_no_internal_records_or_live_routes() -> None:
+def test_mobile_schema_has_no_internal_records() -> None:
     schema = build_mobile_auth_schema()
     encoded = json.dumps(schema)
     assert "paths" not in schema
     for private_field in ("requester_key", "transaction_hash", "browser_nonce_hash", "code_hash"):
         assert private_field not in encoded
     assert "MobileSessionRecord" not in encoded
-    # Web consumers keep the existing contracts; C12 will explicitly connect public routes.
-    from shittim_records.generate_contracts import build_openapi
-
-    assert not any("/auth/mobile/" in path for path in build_openapi()["paths"])
