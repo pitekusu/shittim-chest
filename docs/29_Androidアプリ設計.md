@@ -328,6 +328,27 @@ DynamoDB Localの既存C06試験は仮のsession書き込みをC09の実処理�
 
 今回もHTTPルート・Cookie・IAM・本番設定は変更しない。既存読取APIのBearer認証はC11、公開接続はC12が担当する。
 
+## C11：Records読取APIのBearer認証
+
+`ReadHttpController`へモバイルセッションの読取口を追加する。C10の期限確認は
+`authenticate_mobile_session`として共用し、Read側へアバター署名・管理者設定・書込権限を要求しない。
+
+| 入力 | 読取時の扱い |
+|---|---|
+| WebのセッションCookieのみ | 従来のWebセッションと期限を確認。既存の閲覧範囲・応答形式を維持 |
+| `Authorization: Bearer <token>`のみ | 議論一覧・詳細の2つのGETだけで、モバイルセッションを毎回確認 |
+| AuthorizationとCookieの併記 | 有効／無効にかかわらず400。どちらかへフォールバックしない |
+| 不正・複数のAuthorization、期限切れ・削除済みtoken | 読取を許可しない。認証失敗は401、保存データ破損は503 |
+| URLやbodyに載せたtoken | 認証情報として使用しない |
+
+Bearerの利用先は`GET /api/v1/records`と`GET /api/v1/records/{recordId}`に限定する。
+ランキング・モモトーク・ADMIN・メモリアル・書込操作には広げない。アプリからWebの機能を開く場合はWeb側でログインする。
+成功・失敗とも`private, no-store`を維持し、認証401にはBearer challengeを付ける。
+通常の一覧query・cursor・詳細の検証と公開フィールドは、Webと同じ処理を使用する。
+
+試験はWeb／Bearerの応答一致、混在・重複header、不正token、期限・失効、対象外API拒否に絞る。
+既存Web認証・管理画面の認可処理は変更しない。新しいモバイル認証ルートの公開はC12で行う。
+
 ## 最小構成
 
 `apps/records-android/`を独立したGradleプロジェクトとし、C01では`:app`の1モジュールだけを置く。

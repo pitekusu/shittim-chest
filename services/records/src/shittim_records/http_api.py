@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hmac
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.cookies import SimpleCookie
@@ -31,6 +32,7 @@ from shittim_records.contracts import (
     SessionResponse,
     SessionUser,
 )
+from shittim_records.mobile_session import MobileSessionReader, authenticate_mobile_session
 from shittim_records.read_api import (
     AffectionRankingQuery,
     ListQuery,
@@ -49,6 +51,7 @@ REDIRECT_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
+MOBILE_READ_ROUTES = frozenset({"GET /api/v1/records", "GET /api/v1/records/{recordId}"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,23 +175,44 @@ class ReadHttpController:
         session_key: bytes,
         records: RecordsReadService,
         momotalk: Any | None = None,
+        mobile_store: MobileSessionReader | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._store = store
         self._session_key = session_key
         self._records = records
         self._momotalk = momotalk
+        self._mobile_store = mobile_store
+        self._clock = clock if clock is not None else lambda: datetime.now(UTC)
 
     def handle(self, event: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
         request = parse_request(event)
-        raw_session = request.cookies.get(SESSION_COOKIE_NAME)
-        if not raw_session:
-            return error_response(401, "AUTHENTICATION_REQUIRED", request.request_id)
         try:
-            session = self._store.get_session(
-                session_hash=session_hash(self._session_key, raw_session)
+            raw_token = _read_bearer_token(
+                event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
             )
-            if session is None or session.expires_at <= int(now.astimezone(UTC).timestamp()):
-                return error_response(401, "AUTHENTICATION_REQUIRED", request.request_id)
+            if raw_token is not None:
+                if request.route_key not in MOBILE_READ_ROUTES or self._mobile_store is None:
+                    raise AuthFailure("session_required")
+                if (
+                    authenticate_mobile_session(
+                        store=self._mobile_store,
+                        session_key=self._session_key,
+                        raw_token=raw_token,
+                        clock=self._clock,
+                    )
+                    is None
+                ):
+                    raise AuthFailure("session_required")
+            else:
+                raw_session = request.cookies.get(SESSION_COOKIE_NAME)
+                if not raw_session:
+                    raise AuthFailure("session_required")
+                session = self._store.get_session(
+                    session_hash=session_hash(self._session_key, raw_session)
+                )
+                if session is None or session.expires_at <= int(now.astimezone(UTC).timestamp()):
+                    raise AuthFailure("session_required")
             if request.route_key.startswith("GET /api/v1/momotalk/"):
                 result = self._momotalk_read(request, now)
             elif request.route_key == "GET /api/v1/records":
@@ -239,9 +263,11 @@ class ReadHttpController:
                 _omit_zero_reset_counts(payload)
             return json_response(200, payload)
         except AuthFailure as error:
-            status = 400 if error.code == "oauth_request_invalid" else 503
-            code = "REQUEST_INVALID" if status == 400 else "RECORDS_UNAVAILABLE"
-            return error_response(status, code, request.request_id)
+            status = {"oauth_request_invalid": 400, "session_required": 401}.get(error.code, 503)
+            response = error_response(status, _public_error_code(error.code), request.request_id)
+            if status == 401 and "authorization" in request.headers:
+                response["headers"] = {**JSON_HEADERS, "WWW-Authenticate": "Bearer"}
+            return response
         except ReadFailure as error:
             return error_response(error.status, error.code, request.request_id)
 
@@ -277,6 +303,24 @@ class ReadHttpController:
         except Exception:
             # Storage and validation exceptions can contain generated/private text.
             raise ReadFailure("MOMOTALK_UNAVAILABLE", 503) from None
+
+
+def _read_bearer_token(headers: Mapping[str, str], *, has_cookies: bool) -> str | None:
+    """Only an absent Authorization permits Cookie auth; malformed or mixed input never does."""
+
+    values = [value for name, value in headers.items() if name.lower() == "authorization"]
+    if not values:
+        return None
+    if len(values) != 1 or has_cookies or any(name.lower() == "cookie" for name in headers):
+        raise AuthFailure("oauth_request_invalid")
+    # HTTP API v2 joins repeated headers with commas. The exact format rejects those too.
+    value = values[0]
+    match = (
+        re.fullmatch(r"(?i:Bearer) +([A-Za-z0-9_-]{43})", value) if isinstance(value, str) else None
+    )
+    if match is None:
+        raise AuthFailure("session_required")
+    return match[1]
 
 
 def parse_request(event: Mapping[str, Any]) -> Request:

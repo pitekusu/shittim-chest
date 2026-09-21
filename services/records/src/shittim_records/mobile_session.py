@@ -11,10 +11,31 @@ from shittim_records.contracts import ImageAvatarRef, PlaceholderAvatarRef, Sess
 from shittim_records.mobile_auth import MobileSessionRecord, MobileSessionResponse
 
 
-class MobileSessionStore(Protocol):
+class MobileSessionReader(Protocol):
     def get_session(self, *, session_hash: str) -> MobileSessionRecord | None: ...
 
+
+class MobileSessionStore(MobileSessionReader, Protocol):
     def delete_session(self, *, session_hash: str) -> None: ...
+
+
+def authenticate_mobile_session(
+    *,
+    store: MobileSessionReader,
+    session_key: bytes,
+    raw_token: str | None,
+    clock: Callable[[], datetime],
+) -> MobileSessionRecord | None:
+    """Shared read-only authentication, without avatar signing or administrator configuration."""
+
+    if raw_token is None or re.fullmatch(r"[A-Za-z0-9_-]{43}", raw_token) is None:
+        return None
+    session = store.get_session(session_hash=_digest(session_key, "mobile-session", raw_token))
+    # Read the clock after storage I/O so a delayed read cannot extend authorization.
+    now_epoch = int(_utc(clock()).timestamp())
+    if session is None or not session.created_at <= now_epoch < session.expires_at:
+        return None
+    return session
 
 
 class MobileSessionService:
@@ -38,16 +59,12 @@ class MobileSessionService:
     def authenticate(self, *, raw_token: str | None) -> MobileSessionRecord | None:
         """Check every request without extending expiry or relying on TTL cleanup."""
 
-        if raw_token is None or re.fullmatch(r"[A-Za-z0-9_-]{43}", raw_token) is None:
-            return None
-        session = self._store.get_session(
-            session_hash=_digest(self._session_key, "mobile-session", raw_token)
+        return authenticate_mobile_session(
+            store=self._store,
+            session_key=self._session_key,
+            raw_token=raw_token,
+            clock=self._clock,
         )
-        # Read the clock after storage I/O so a delayed read cannot extend authorization.
-        now_epoch = int(_utc(self._clock()).timestamp())
-        if session is None or not session.created_at <= now_epoch < session.expires_at:
-            return None
-        return session
 
     def session(self, *, raw_token: str | None) -> MobileSessionResponse:
         session = self.authenticate(raw_token=raw_token)
