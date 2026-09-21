@@ -1,8 +1,8 @@
 # Records Android
 
-C02までの最小Composeアプリ。C01のExpressive画面へCircuit／Metroを接続している。
-現在は準備画面と一時的な明暗表示切替のみで、認証・通信・記録保存は行わない。
-C03でAndroid専用CIを接続済み。認証、署名済み配布は後続コミットの対象とする。
+C01のExpressive画面へC02のCircuit／Metroを接続し、C03のAndroid専用CIで確認している。
+画面は準備画面と一時的な明暗表示切替のみ。C13でトークンの暗号化保存部品を追加したが、
+画面からの認証・通信・記録保存はまだ行わない。ログイン接続、署名済み配布は後続工程とする。
 CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -52,8 +52,10 @@ C02の接続確認は、専用エミュレーターまたはテスト端末で�
 ./gradlew :app:connectedDebugAndroidTest
 ```
 
-実Activityを起動する2件に絞り、Metro→Circuit→UIの接続、表示切替のイベント往復、
-Activity再生成後の選択復元を確認する。装飾の座標やライブラリ内部を写す試験は追加しない。
+実Activityを起動する2件でMetro→Circuit→UIの接続、表示切替、Activity再生成後の復元を確認する。
+C13の6件は実Android Keystoreで暗号化保存・再読込・改ざん／鍵消失の拒否・削除・書込失敗・
+バックアップ除外を確認する。テスト専用のディレクトリと鍵を使い、既存の認証情報には触れない。
+装飾の座標やライブラリ内部を写す試験は追加しない。
 CodeQL 2.27.0でのKotlin解析は未完了。通常ビルドの成功と混同しない。
 見た目の変更はエミュレーターで自動／明暗切替、320dp・文字2倍、840dp境界・広い幅、回転、アニメーション無効時を確認する。
 狭い幅のoverflow menuとkeyboard操作からも表示を選べることを確認する。
@@ -103,7 +105,7 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 
 ## C03のCI
 
-- 共通CIの`android-gate`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で既存2件を確認する。
+- 共通CIの`android-gate`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で画面・保存のinstrumentation testを確認する。
 - JDKは`.java-version`、GradleはWrapperをローカルと共有する。CIにもアプリと同じSDK／Build Toolsを用意する。
 - Android配下と関連文書だけの差分ではCoreの全pytest・パッケージ・CDK検証を省略する。
 - `android-gate`は必要な処理の失敗・取消・skipを不合格にする。手動CIではAndroidも必ず検証する。
@@ -116,6 +118,16 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 - `BootstrapPresenter.kt`：画面識別子・State・Eventと、一時的な表示選択の保持／復元。
 - `BootstrapUi.kt`：Stateを受けて描画し、選択操作をeventSinkへ返す。Previewは固定Stateだけで表示。
 - Circuit `0.39.0`、Metro `1.4.4`を固定。Kotlin `2.4.20`とMaterial 3 `1.5.0-alpha28`は維持。
+
+## C13のトークン保存
+
+- `auth/StoredToken.kt`：43文字のBearer tokenと、サーバーが発行した秒単位の有効期限だけを保持する。`toString()`は常に伏せる。
+- `auth/KeystoreTokenStore.kt`：`save`／`read`／`clear`。Android KeystoreのAES-256-GCM鍵を使用し、`noBackupFilesDir`へ暗号文だけを原子的に保存する。
+- 鍵・保存形式はモバイル認証専用。鍵は書き出さず、IVは暗号化ごとに生成する。バックアップ・端末転送を禁止する既存Manifest／XMLも維持する。
+- 破損・鍵消失・書込失敗は固定例外で通知し、平文保存へ切り替えない。鍵を失った保存データは明示的に`clear`してから再ログインする。
+- `clear`は専用鍵と保存ファイルだけを削除する。サーバーでの失効は別処理であり、C14以降から接続する。
+- ファイル／Keystore操作は同期処理のためUI thread外から呼ぶ。単一process内の複数インスタンスを直列化する。
+- 有効期限の延長・認可判定・プロフィール保存は行わない。ログイン画面・通信・PQCによる記録キャッシュはこの工程へ含めない。
 
 ## デザイン基盤
 
