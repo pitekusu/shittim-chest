@@ -837,6 +837,24 @@ jobs:
           test "${records_status}" = 401
           jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
             "${RUNNER_TEMP}/records-list.json" >/dev/null
+          # No token is supplied: verify routing/denial without creating or deleting sessions.
+          for mobile_operation in session logout; do
+            mobile_method=GET
+            if test "${mobile_operation}" = logout; then mobile_method=POST; fi
+            mobile_status=$(curl --silent --show-error --max-time 20 \
+              --request "${mobile_method}" \
+              --dump-header "${RUNNER_TEMP}/mobile-${mobile_operation}.headers" \
+              --output "${RUNNER_TEMP}/mobile-${mobile_operation}.json" \
+              --write-out '%{http_code}' \
+              "${endpoint}/api/v1/auth/mobile/${mobile_operation}")
+            test "${mobile_status}" = 401
+            jq --exit-status '.error.code == "AUTHENTICATION_REQUIRED"' \
+              "${RUNNER_TEMP}/mobile-${mobile_operation}.json" >/dev/null
+            grep --ignore-case --quiet '^cache-control: private, no-store' \
+              "${RUNNER_TEMP}/mobile-${mobile_operation}.headers"
+            grep --ignore-case --quiet '^www-authenticate: Bearer' \
+              "${RUNNER_TEMP}/mobile-${mobile_operation}.headers"
+          done
           preview_record_id="0000000000000000000000000000000000000000000"
           preview_status=$(curl --silent --show-error --max-time 20 \
             --dump-header "${RUNNER_TEMP}/records-preview.headers" \

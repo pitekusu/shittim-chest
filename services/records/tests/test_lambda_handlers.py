@@ -491,6 +491,37 @@ def test_read_handler_storage_failure_does_not_expose_bearer_or_exception_detail
     assert private_payload not in response["body"] + caplog.text
 
 
+def test_auth_factory_connects_mobile_routes_with_existing_configuration(monkeypatch: Any) -> None:
+    from tests.test_auth import configuration
+    from tests.test_http_api import event
+    from tests.test_mobile_http import start_event
+
+    writes = []
+    database = SimpleNamespace(put_item=lambda **kwargs: writes.append(kwargs))
+    clients = []
+
+    def client(service, **kwargs):
+        clients.append(service)
+        return database if service == "dynamodb" else object()
+
+    monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", None)
+    monkeypatch.setattr(lambda_handlers, "_environment", lambda name: name.lower())
+    monkeypatch.setattr(lambda_handlers.boto3, "client", client)
+    monkeypatch.setattr(lambda_handlers, "_regional_s3_client", lambda: object())
+    monkeypatch.setattr(
+        lambda_handlers,
+        "AuthConfigurationRepository",
+        lambda *args, **kwargs: SimpleNamespace(load=configuration),
+    )
+    response = lambda_handlers.auth_handler(start_event(), object())
+    assert response["statusCode"] == 200
+    assert len(writes) == 1 and writes[0]["Item"]["PK"]["S"].startswith("MOBILE#")
+    assert writes[0]["TableName"] == "session_table_name"
+    denied = lambda_handlers.auth_handler(event("GET /api/v1/auth/mobile/session"), object())
+    assert denied["statusCode"] == 401
+    assert clients == ["dynamodb", "ssm"]  # Cached factory, no new credential source.
+
+
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:
     controller = cast(Any, FakeHttpController())
     monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", controller)

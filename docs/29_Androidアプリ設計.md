@@ -13,7 +13,7 @@ updated: 2026-09-21
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05〜C11のモバイル認証内部処理・議論読取APIへのBearer接続である。モバイル認証ルートは未公開で、製品機能の提供やGoogle Playへの配布を完了した状態ではない。
+現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05〜C12のサーバー側モバイル認証・議論読取APIへのBearer接続である。認証ルートの公開接続まで実装したが、端末側ログイン・Google Play配布は後続工程である。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -22,13 +22,14 @@ updated: 2026-09-21
 | C02 | Circuit・Metroによる準備画面の状態管理・依存接続 | 実装済み |
 | C03 | Android CI | 実装済み |
 | C04 | CodeQL接続 | Kotlin 2.4.20へのCodeQL対応待ち。GitHub切替は未実施 |
-| C05 | モバイル認証の要求・応答・内部状態 | 契約定義を実装済み。認証実行・公開ルートは未接続 |
+| C05 | モバイル認証の要求・応答・内部状態 | 契約定義を実装済み。C12で公開接続 |
 | C06 | 認証取引と一回限りコードの保存処理 | 条件付き保存・期限確認・消費用transaction部品を実装済み。C09でセッション発行と結合 |
-| C07 | ログイン開始とブラウザー認可 | 内部serviceを実装済み。state・Cookie検証をC08から利用。公開ルートは未接続 |
+| C07 | ログイン開始とブラウザー認可 | 内部serviceを実装済み。state・Cookie検証をC08から利用。C12で公開接続 |
 | C08 | Discord認証結果からアプリ復帰コードを発行 | 本人・Guild確認、最長60秒のコード発行を実装済み。公開接続はC12 |
 | C09 | コード交換とモバイルセッション発行 | S256照合、コード消費と90日セッションの一括作成を実装済み。公開接続はC12 |
 | C10 | モバイルセッション確認・ログアウト | 90日の絶対期限、本人情報の応答、提示tokenだけの失効を実装済み。公開接続はC12 |
 | C11 | Records読取APIへBearer認証を接続 | 議論一覧・詳細へ接続済み。Cookie混在を拒否し、他APIへ認可を広げない |
+| C12 | モバイル認証ルートとAWS設定 | 5ルート・共有callback・OpenAPIを既存Auth Lambdaへ接続。追加IAM・設定値なし |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -140,12 +141,12 @@ challengeはSHA-256をpaddingなしbase64urlにした43文字、方式は`S256`�
 期限ちょうどは失効とし、後続実装で毎回サーバー時刻と比較する。TTL削除を待たない。
 App Linksの公開証明書と配布版の接続はC19で確定する。C05はAndroid manifestや公開ページを追加しない。
 
-### 予定するAPIの入出力
+### APIの入出力
 
-以下は未公開の契約であり、ルートはまだ存在しない。全応答を`private, no-store`とする。
+C05で定義した以下の契約をC12で公開ルートへ接続する。全応答を`private, no-store`とする。
 JSONはcamelCase、unknown field・余分／重複queryを拒否し、検証例外は固定コードだけへ変換する。
 
-| 予定ルート | 入力／出力 |
+| ルート | 入力／出力 |
 |---|---|
 | `POST /api/v1/auth/mobile/start` | `codeChallenge`・`codeChallengeMethod`・`state`・省略時`/`の`returnTo` → `schemaVersion`・`transactionId`・`authorizePath`・offset付き`expiresAt` |
 | `GET /api/v1/auth/mobile/authorize` | queryの`transaction`のみ。開始端末に結び付く取引とブラウザーの使い捨てCookieを確認してDiscordへ302 |
@@ -355,6 +356,28 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 試験はWeb／Bearerの応答一致、混在・重複header、不正token、期限・失効、対象外API拒否に絞る。
 既存Web認証・管理画面の認可処理は変更しない。新しいモバイル認証ルートの公開はC12で行うため、
 この段階だけでアプリのログインが利用可能になるわけではない。
+
+## C12：モバイル認証のHTTP境界と公開接続
+
+`mobile_http.py`はC07〜C10の処理に薄いHTTP境界を設ける。JSON body・queryはそれぞれ4 KiB以下とし、
+余分な項目、重複JSON field／query、base64 bodyを拒否する。成功・失敗とも`private, no-store`とする。
+開始・交換はCookie／Authorizationを受け付けず、確認・ログアウトはBearerだけを使用する。
+ネイティブ通信ではOriginを要求しないが、付いていれば設定済みHTTPS originとの完全一致を要求する。
+ブラウザーのCookieに依存する認可・callbackは専用nonceとOAuth stateを照合し、Webセッションとは分離する。
+
+共有Discord callbackは`m.`で始まるstateをモバイルへ振り分ける。この判別自体に認証効果はなく、
+state全体・専用Cookie・期限を既存処理で照合する。重複state・キャンセル・不正CookieでもWebへフォールバックしない。
+失敗時は外部入力を含まないHTMLで再ログインを案内し、モバイルOAuth Cookieだけを消す。
+開始→認可→callback→交換→議論閲覧→ログアウトを架空データで通し、コード再使用拒否とWeb認証の維持を確認する。
+
+既存Auth Lambdaの`live` aliasへ5つのHTTP API v2ルートを接続する。Session Table・用途別HMAC・
+SSM設定・`requesters/`のアバター権限は既存のものを使い、IAM・環境変数・テーブル・indexを追加しない。
+API Gatewayの既存スロットリングと、本文・query・headerを記録しないアクセスログを維持する。
+OpenAPIへ認証DTOを追加するが、Web用schema／standalone validatorへモバイル専用型を混入させない。
+
+通常PRのRecords Releaseで配信し、匿名session／logoutの401・no-store・Bearer challengeをsmokeで確認する。
+smokeは取引作成・セッション削除・実Discord認証を行わない。復帰先と既存Discord callback設定は変更せず、
+Androidの鍵保存・ログイン画面はC13〜C16、署名済みApp Linksの証明書確定はC19で行う。
 
 ## 最小構成
 

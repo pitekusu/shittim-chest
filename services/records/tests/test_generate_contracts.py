@@ -40,7 +40,21 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         for method, operation in operations.items()
         if {"mobileBearer": []} in operation.get("security", [])
     }
-    assert bearer_routes == {("get", "/api/v1/records"), ("get", "/api/v1/records/{recordId}")}
+    assert bearer_routes == {
+        ("get", "/api/v1/records"),
+        ("get", "/api/v1/records/{recordId}"),
+        ("get", "/api/v1/auth/mobile/session"),
+        ("post", "/api/v1/auth/mobile/logout"),
+    }
+    mobile_paths = {path for path in openapi["paths"] if "/auth/mobile/" in path}
+    assert mobile_paths == {
+        f"/api/v1/auth/mobile/{name}"
+        for name in ("start", "authorize", "exchange", "session", "logout")
+    }
+    assert "MobileStartRequest" not in schema["$defs"]  # Web validators stay independent.
+    for name in ("start", "exchange"):
+        operation = openapi["paths"][f"/api/v1/auth/mobile/{name}"]["post"]
+        assert operation["security"] == [] and operation["requestBody"]["required"]
     assert openapi["components"]["securitySchemes"]["mobileBearer"]["scheme"] == "bearer"
     for route in ("/api/v1/auth/discord/start", "/api/v1/auth/discord/callback", "/api/v1/session"):
         assert openapi["paths"][route]["get"]["security"] == []

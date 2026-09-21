@@ -235,7 +235,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 6);
     template.resourceCountIs("AWS::Lambda::Alias", 6);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 28);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 33);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -616,6 +616,24 @@ describe("RecordsApplicationStack", () => {
         },
       });
     }
+  });
+
+  test("routes mobile login through the existing Auth integration without new storage or roles", () => {
+    const { template } = fixture;
+    const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
+    const authTarget = routes.find(route => route.Properties.RouteKey === "GET /api/v1/session")!.Properties.Target;
+    const expected = [
+      "POST /api/v1/auth/mobile/start",
+      "GET /api/v1/auth/mobile/authorize",
+      "POST /api/v1/auth/mobile/exchange",
+      "GET /api/v1/auth/mobile/session",
+      "POST /api/v1/auth/mobile/logout",
+    ];
+    const mobile = routes.filter(route => route.Properties.RouteKey.includes("/auth/mobile/"));
+    expect(mobile.map(route => route.Properties.RouteKey).sort()).toEqual(expected.sort());
+    for (const route of mobile) expect(route.Properties.Target).toEqual(authTarget);
+    template.resourceCountIs("AWS::DynamoDB::Table", 0);
+    template.resourceCountIs("AWS::Lambda::Function", recordsFunctionNames.length);
   });
 
   test("keeps Auth, Read, Ranking, Cost, and translation IAM exact and disjoint", () => {

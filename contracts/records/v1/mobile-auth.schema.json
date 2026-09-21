@@ -345,5 +345,5 @@
       "$ref": "#/$defs/MobileExchangeResponse"
     }
   ],
-  "title": "Records mobile authentication (not yet routed)"
+  "title": "Records mobile authentication"
 }

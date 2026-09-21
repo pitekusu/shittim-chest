@@ -1892,6 +1892,8 @@ export class RecordsApplicationStack extends Stack {
       "/api/v1/auth/discord/start",
       "/api/v1/auth/discord/callback",
       "/api/v1/session",
+      "/api/v1/auth/mobile/authorize",
+      "/api/v1/auth/mobile/session",
     ]) {
       api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.GET], integration: authIntegration });
     }
@@ -1900,6 +1902,13 @@ export class RecordsApplicationStack extends Stack {
       methods: [apigatewayv2.HttpMethod.POST],
       integration: authIntegration,
     });
+    for (const path of [
+      "/api/v1/auth/mobile/start",
+      "/api/v1/auth/mobile/exchange",
+      "/api/v1/auth/mobile/logout",
+    ]) {
+      api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.POST], integration: authIntegration });
+    }
     api.addRoutes({
       path: "/api/v1/records",
       methods: [apigatewayv2.HttpMethod.GET],

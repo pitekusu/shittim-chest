@@ -89,6 +89,11 @@ from shittim_records.memorial_adapters import (
 )
 from shittim_records.memorial_http import MemorialHttpController
 from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
+from shittim_records.mobile_callback import MobileCallbackService
+from shittim_records.mobile_exchange import MobileExchangeService
+from shittim_records.mobile_http import MobileAuthHttpController
+from shittim_records.mobile_login import MobileLoginService
+from shittim_records.mobile_session import MobileSessionService
 from shittim_records.ogp_adapters import LambdaPreviewPreparer
 from shittim_records.projector import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
@@ -522,18 +527,44 @@ def _auth_controller() -> AuthHttpController:
             session_key_parameter_name=_environment("SESSION_KEY_PARAMETER_NAME"),
             admin_user_id_parameter_name=_environment("ADMIN_DISCORD_USER_ID_PARAMETER_NAME"),
         ).load()
+        discord = DiscordOAuthClient(
+            httpx.Client(timeout=httpx.Timeout(3.0, connect=2.0), follow_redirects=False)
+        )
+        avatars = S3AvatarStore(_regional_s3_client(), _environment("MEDIA_BUCKET_NAME"))
+        mobile_store = DynamoMobileAuthStore(dynamodb, _environment("SESSION_TABLE_NAME"))
         service = AuthService(
             store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
-            discord=DiscordOAuthClient(
-                httpx.Client(timeout=httpx.Timeout(3.0, connect=2.0), follow_redirects=False)
-            ),
-            avatars=S3AvatarStore(
-                _regional_s3_client(),
-                _environment("MEDIA_BUCKET_NAME"),
-            ),
+            discord=discord,
+            avatars=avatars,
             configuration=configuration,
         )
-        _AUTH_CONTROLLER = AuthHttpController(service)
+        mobile = MobileAuthHttpController(
+            login=MobileLoginService(
+                store=mobile_store,
+                oauth=configuration.oauth,
+                hmac_key=configuration.session_hmac_key,
+            ),
+            callback=MobileCallbackService(
+                store=mobile_store,
+                discord=discord,
+                avatars=avatars,
+                configuration=configuration,
+            ),
+            exchange=MobileExchangeService(
+                store=mobile_store,
+                avatars=avatars,
+                session_key=configuration.session_hmac_key,
+                admin_requester_key=configuration.admin_requester_key,
+            ),
+            sessions=MobileSessionService(
+                store=mobile_store,
+                avatars=avatars,
+                session_key=configuration.session_hmac_key,
+                admin_requester_key=configuration.admin_requester_key,
+            ),
+            allowed_origin=configuration.oauth.allowed_origin,
+        )
+        _AUTH_CONTROLLER = AuthHttpController(service, mobile)
     return _AUTH_CONTROLLER
 
 

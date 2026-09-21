@@ -206,7 +206,7 @@ MOBILE_WIRE_MODELS = (
 
 
 def build_mobile_auth_schema() -> dict[str, object]:
-    """Unpublished wire contract, deliberately separate from live OpenAPI and Web validators."""
+    """Mobile wire DTOs, kept separate from the Web response-validator bundle."""
 
     definitions: dict[str, object] = {}
     for model in MOBILE_WIRE_MODELS:
@@ -216,7 +216,7 @@ def build_mobile_auth_schema() -> dict[str, object]:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://shittim-chest.invalid/contracts/records/v1/mobile-auth.schema.json",
-        "title": "Records mobile authentication (not yet routed)",
+        "title": "Records mobile authentication",
         "$defs": definitions,
         "oneOf": [{"$ref": f"#/$defs/{model.__name__}"} for model in MOBILE_WIRE_MODELS],
     }
