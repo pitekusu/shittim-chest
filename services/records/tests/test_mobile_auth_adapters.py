@@ -181,3 +181,70 @@ def test_exchange_cancellation_is_sanitized_and_distinguishes_grant_reuse(reason
                 mobile_states()[2], session_hash="a" * 64, session=mobile_session(), now_epoch=1041
             )
         assert failure.value.__suppress_context__
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"payload": "private invalid data"},
+        {"payload": '{"access_token":"private-token"}'},
+        {"payload": None},
+        {"schema_version": True},
+        {"expiresAt": 99999999},
+        {"record_type": "session"},
+        {"PK": "MOBILE_SESSION#" + "b" * 64},
+        {"SK": "PROFILE"},
+    ],
+)
+def test_corrupt_mobile_sessions_fail_closed_without_private_details(change):
+    session = mobile_session()
+    client = boto3.client(
+        "dynamodb",
+        region_name="ap-northeast-1",
+        aws_access_key_id="local",
+        aws_secret_access_key="local",  # noqa: S106 - Stubber only.
+    )
+    item = {
+        "PK": "MOBILE_SESSION#" + "a" * 64,
+        "SK": "META",
+        "schema_version": 1,
+        "record_type": "mobile_session",
+        "expiresAt": session.expires_at,
+        "payload": session.model_dump_json(),
+        **change,
+    }
+    with Stubber(client) as stub:
+        stub.add_response(
+            "get_item",
+            {"Item": marshal_item(item)},
+            {
+                "TableName": "test-mobile-auth",
+                "Key": marshal_item({"PK": "MOBILE_SESSION#" + "a" * 64, "SK": "META"}),
+                "ConsistentRead": True,
+            },
+        )
+        with pytest.raises(AuthFailure, match=r"^mobile_session_record_invalid$") as failure:
+            DynamoMobileAuthStore(client, "test-mobile-auth").get_session(session_hash="a" * 64)
+        assert failure.value.__suppress_context__
+
+
+def test_session_storage_rejects_raw_keys_and_does_not_hide_aws_failure():
+    client = boto3.client(
+        "dynamodb",
+        region_name="ap-northeast-1",
+        aws_access_key_id="local",
+        aws_secret_access_key="local",  # noqa: S106 - Stubber only.
+    )
+    store = DynamoMobileAuthStore(client, "test-mobile-auth")
+    with Stubber(client) as stub:
+        for operation in (store.get_session, store.delete_session):
+            with pytest.raises(AuthFailure, match=r"^session_required$"):
+                operation(session_hash="not-a-digest")
+        for operation in ("get_item", "delete_item"):
+            stub.add_client_error(
+                operation, service_error_code="ProvisionedThroughputExceededException"
+            )
+        with pytest.raises(client.exceptions.ProvisionedThroughputExceededException):
+            store.get_session(session_hash="a" * 64)
+        with pytest.raises(client.exceptions.ProvisionedThroughputExceededException):
+            store.delete_session(session_hash="a" * 64)

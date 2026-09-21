@@ -302,6 +302,16 @@ Discordへの再問い合わせ、Webセッション作成、Cookie発行、公�
 DynamoDB Localの既存C06試験は仮のsession書き込みをC09の実処理へ置き換え、同時交換で1件だけ作成されること、
 セッション作成失敗時にコードとプロフィールが変更されないこと、Web用として読めないことを確認する。
 
+## C10：モバイルセッション確認とログアウト（公開前）
+
+保存部品はC09の`MOBILE_SESSION#{hash} / META`をそのまま使い、移行やテーブル変更を行わない。
+`DynamoMobileAuthStore.get_session`は強い整合性で読み、schema・キー・期限属性・payload全体の一致を検証する。
+破損データは`mobile_session_record_invalid`とし、例外に保存内容を含めない。DB障害を未ログインとして隠さない。
+
+削除は指定tokenのHMACに対応する1件だけに限定する。Webの`SESSION#`、別端末のセッション、
+プロフィール、認証取引は変更しない。期限判定は自動削除ではなく、後続のセッション確認処理が担当する。
+保存試験は破損データの拒否と障害の伝播、DynamoDB LocalでC09形式の読取と削除対象の分離を確認する。
+
 ## 最小構成
 
 `apps/records-android/`を独立したGradleプロジェクトとし、C01では`:app`の1モジュールだけを置く。

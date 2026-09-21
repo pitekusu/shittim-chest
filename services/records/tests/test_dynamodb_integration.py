@@ -155,6 +155,22 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
     assert profile["display_name"] == session.display_name
     assert profile["updated_at"] == session.guild_verified_at.isoformat()
 
+    # C10 reads C09's exact format and revokes only the presented mobile session.
+    digest = str(stored["PK"]).removeprefix("MOBILE_SESSION#")
+    assert store.get_session(session_hash=digest) == session
+    web = {"PK": f"SESSION#{digest}", "SK": "META", "sentinel": "Web session"}
+    dynamodb_client.put_item(TableName=table, Item=marshal_item(web))
+    store.delete_session(session_hash=digest)
+    assert store.get_session(session_hash=digest) is None
+    store.delete_session(session_hash=digest)  # A repeated deletion cannot touch another key.
+    for untouched in (web, collision, profile, saved):
+        result = dynamodb_client.get_item(
+            TableName=table,
+            Key=marshal_item({"PK": untouched["PK"], "SK": untouched["SK"]}),
+            ConsistentRead=True,
+        )
+        assert unmarshal_item(result["Item"]) == untouched
+
 
 def test_mobile_grants_expire_without_waiting_for_ttl(dynamodb_client, table_names):
     store = DynamoMobileAuthStore(dynamodb_client, table_names[0])

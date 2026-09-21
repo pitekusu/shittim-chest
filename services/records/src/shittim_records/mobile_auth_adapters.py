@@ -145,16 +145,7 @@ class DynamoMobileAuthStore:
             {
                 "Put": {
                     "TableName": self._table_name,
-                    "Item": marshal_item(
-                        {
-                            "PK": f"MOBILE_SESSION#{session_hash}",
-                            "SK": "META",
-                            "schema_version": 1,
-                            "record_type": "mobile_session",
-                            "expiresAt": session.expires_at,
-                            "payload": session.model_dump_json(),
-                        }
-                    ),
+                    "Item": marshal_item(_session_item(session_hash, session)),
                     "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
                 }
             },
@@ -188,6 +179,41 @@ class DynamoMobileAuthStore:
             ]:
                 raise AuthFailure("mobile_grant_invalid") from None
             raise AuthFailure("mobile_session_unavailable") from None
+
+    def get_session(self, *, session_hash: str) -> MobileSessionRecord | None:
+        """Read the latest session; the service checks its absolute deadline after I/O."""
+
+        response = self._client.get_item(
+            TableName=self._table_name,
+            Key=marshal_item(_session_key(session_hash)),
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        if raw is None:
+            return None
+        try:
+            item = unmarshal_item(raw)
+            payload = item.get("payload")
+            if not isinstance(payload, str):
+                raise ValueError
+            session = MobileSessionRecord.model_validate_json(payload)
+            if (
+                type(item.get("schema_version")) is not int
+                or type(item.get("expiresAt")) is not int
+                or item != _session_item(session_hash, session)
+            ):
+                raise ValueError
+        except ValueError, PersistenceFormatError:
+            raise AuthFailure("mobile_session_record_invalid") from None
+        return session
+
+    def delete_session(self, *, session_hash: str) -> None:
+        """Revoke only this token, never its profile, other devices or Web sessions."""
+
+        self._client.delete_item(
+            TableName=self._table_name,
+            Key=marshal_item(_session_key(session_hash)),
+        )
 
     def _replacement_write(
         self,
@@ -230,6 +256,22 @@ def _item(state: MobileTransactionState) -> dict[str, str | int]:
         "record_type": "mobile_transaction",
         "expiresAt": state.expires_at,
         "payload": state.model_dump_json(by_alias=True),
+    }
+
+
+def _session_key(session_hash: str) -> dict[str, str]:
+    if re.fullmatch(r"[0-9a-f]{64}", session_hash) is None:
+        raise AuthFailure("session_required")
+    return {"PK": f"MOBILE_SESSION#{session_hash}", "SK": "META"}
+
+
+def _session_item(session_hash: str, session: MobileSessionRecord) -> dict[str, str | int]:
+    return {
+        **_session_key(session_hash),
+        "schema_version": 1,
+        "record_type": "mobile_session",
+        "expiresAt": session.expires_at,
+        "payload": session.model_dump_json(),
     }
 
 
