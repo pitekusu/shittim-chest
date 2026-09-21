@@ -212,6 +212,12 @@ Dependabotの対象はActions、Core/Recordsのuv、ルート/Webのnpm/pnpm、A
 試験・ビルド用Docker 10:15、ルートnpm 10:30、Web npm/pnpm 10:45の順に分散する。
 共通イメージ定義を変更した場合は、Runtimeのコンテナ検証とRecordsの永続化試験をどちらも実行する。
 
+Dependabotの通常更新には、`cooldown`を省略しても既定で3日の待機期間が適用される。
+ルートDockerfileのDHI `python`とGHCR `astral-sh/uv`は、Dependabotがレジストリの公開日時を取得できず、
+待機期間を適用できない警告が出るため、ルートDocker設定の`cooldown.exclude`へ依存名で指定する。
+この除外は待機期間だけに適用し、日次の更新確認、tag・digest固定、PRの検証は継続する。
+Docker Hubを使う試験・ビルド用イメージには既定の待機期間を適用する。
+
 Vite+の`npm:`エイリアスとpnpmの固定overrideは、Dependabotの通常更新だけでは揃わない。
 Vite+関連は専用グループへ分け、CLI・coreエイリアス・Vitest overrideの不一致を通常CIで拒否する。
 coreエイリアス、Vitest、fast-uriの固定overrideは専用監視でも確認し、対応系列と組み合わせを検証して更新する。
