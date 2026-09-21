@@ -87,14 +87,8 @@ def test_internal_state_requires_phase_specific_fields_and_bounded_lifetimes() -
         "code_issued_at": 1580,
         "code_expires_at": 1600,
         "requester_key": "r" * 43,
-        "user": {
-            "displayName": "Test",
-            "avatar": {
-                "kind": "placeholder",
-                "alt": "Test",
-                "fallbackVariant": "cyan",
-            },
-        },
+        "display_name": "Test",
+        "avatar_asset_key": f"requesters/{'r' * 43}/avatar.webp",
         "guild_verified_at": "2026-09-20T00:00:00Z",
     }
     consumed = {**TRANSACTION, "status": "consumed", "consumed_at": 1599}
@@ -109,6 +103,8 @@ def test_internal_state_requires_phase_specific_fields_and_bounded_lifetimes() -
         {**authorizing, "browser_nonce_hash": "bad"},
         {**authorized, "code_issued_at": 1539},
         {**authorized, "code_expires_at": 1601},
+        {**authorized, "avatar_asset_key": f"requesters/{'x' * 43}/avatar.webp"},
+        {**authorized, "avatar_asset_key": "https://media.invalid/signed-avatar"},
         {**consumed, "consumed_at": 1600},
     ):
         with pytest.raises(ValidationError):

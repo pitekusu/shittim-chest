@@ -171,6 +171,39 @@ class AvatarStore(Protocol):
     def requester_avatar_url(self, *, object_key: str) -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class AuthenticatedRequester:
+    """Verified profile, without provider tokens, raw IDs or expiring image URLs."""
+
+    requester_key: str = field(repr=False)
+    display_name: str = field(repr=False)
+    avatar_asset_key: str | None = field(repr=False)
+
+
+def authenticate_discord_requester(
+    *, code: str, discord: DiscordOAuth, avatars: AvatarStore, configuration: AuthConfiguration
+) -> AuthenticatedRequester:
+    """Share the existing Discord identity/Guild checks and best-effort avatar cache."""
+
+    tokens = discord.exchange_code(code=code, configuration=configuration)
+    identity = discord.get_identity(tokens=tokens, guild_id=configuration.oauth.guild_id)
+    display_name = (identity.guild_nickname or identity.global_name or identity.username).strip()
+    if not display_name:
+        raise AuthFailure("discord_identity_invalid")
+    requester_key = derive_requester_key(configuration.identity_hmac_key, identity.user_id)
+    avatar_asset_key = None
+    try:
+        body = discord.fetch_avatar(identity=identity, guild_id=configuration.oauth.guild_id)
+        if body is not None:
+            object_key = f"requesters/{requester_key}/avatar.webp"
+            avatars.put_requester_avatar(object_key=object_key, body=body)
+            avatar_asset_key = object_key
+    except Exception:
+        # Avatar availability must not decide login eligibility; never log private failures.
+        avatar_asset_key = None
+    return AuthenticatedRequester(requester_key, display_name, avatar_asset_key)
+
+
 class AuthService:
     """Execute OAuth and session transitions without leaking browser secrets."""
 
@@ -242,30 +275,21 @@ class AuthService:
             now_epoch=int(now.timestamp()),
             claimed_at=now.isoformat(),
         )
-        tokens = self._discord.exchange_code(code=code, configuration=self._configuration)
-        identity = self._discord.get_identity(
-            tokens=tokens,
-            guild_id=self._configuration.oauth.guild_id,
+        requester = authenticate_discord_requester(
+            code=code,
+            discord=self._discord,
+            avatars=self._avatars,
+            configuration=self._configuration,
         )
-        display_name = (
-            identity.guild_nickname or identity.global_name or identity.username
-        ).strip()
-        if not display_name:
-            raise AuthFailure("discord_identity_invalid")
-        requester_key = derive_requester_key(
-            self._configuration.identity_hmac_key,
-            identity.user_id,
-        )
-        avatar_asset_key = self._cache_avatar(identity=identity, requester_key=requester_key)
         raw_session = secrets.token_urlsafe(32)
         raw_csrf = secrets.token_urlsafe(32)
         expires_at = int((now + SESSION_TTL).timestamp())
         self._store.create_session(
             session_hash=_digest(session_key, "session", raw_session),
             session=SessionRecord(
-                requester_key=requester_key,
-                display_name=display_name,
-                avatar_asset_key=avatar_asset_key,
+                requester_key=requester.requester_key,
+                display_name=requester.display_name,
+                avatar_asset_key=requester.avatar_asset_key,
                 csrf_hash=_digest(session_key, "csrf", raw_csrf),
                 guild_verified_at=now.isoformat(),
                 expires_at=expires_at,
@@ -340,25 +364,6 @@ class AuthService:
             CSRF_COOKIE_NAME,
             http_only=False,
         )
-
-    def _cache_avatar(
-        self,
-        *,
-        identity: DiscordIdentity,
-        requester_key: str,
-    ) -> str | None:
-        try:
-            body = self._discord.fetch_avatar(
-                identity=identity,
-                guild_id=self._configuration.oauth.guild_id,
-            )
-            if body is None:
-                return None
-            object_key = f"requesters/{requester_key}/avatar.webp"
-            self._avatars.put_requester_avatar(object_key=object_key, body=body)
-            return object_key
-        except Exception:
-            return None
 
 
 def validate_return_to(value: str | None) -> str:
