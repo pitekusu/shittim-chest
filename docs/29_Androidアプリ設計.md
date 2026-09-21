@@ -356,6 +356,16 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 既存Web認証・管理画面の認可処理は変更しない。新しいモバイル認証ルートの公開はC12で行うため、
 この段階だけでアプリのログインが利用可能になるわけではない。
 
+## C12：モバイル認証のHTTP境界と公開接続
+
+`mobile_http.py`はC07〜C10の処理に薄いHTTP境界を設ける。JSON body・queryはそれぞれ4 KiB以下とし、
+余分な項目、重複JSON field／query、base64 bodyを拒否する。成功・失敗とも`private, no-store`とする。
+開始・交換はCookie／Authorizationを受け付けず、確認・ログアウトはBearerだけを使用する。
+ネイティブ通信ではOriginを要求しないが、付いていれば設定済みHTTPS originとの完全一致を要求する。
+ブラウザーのCookieに依存する認可・callbackは専用nonceとOAuth stateを照合し、Webセッションとは分離する。
+
+この境界だけではルートは公開されない。同工程内で共有callback・Auth Lambda・API Gateway・OpenAPIへ接続する。
+
 ## 最小構成
 
 `apps/records-android/`を独立したGradleプロジェクトとし、C01では`:app`の1モジュールだけを置く。
