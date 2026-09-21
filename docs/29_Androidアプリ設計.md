@@ -364,7 +364,12 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 ネイティブ通信ではOriginを要求しないが、付いていれば設定済みHTTPS originとの完全一致を要求する。
 ブラウザーのCookieに依存する認可・callbackは専用nonceとOAuth stateを照合し、Webセッションとは分離する。
 
-この境界だけではルートは公開されない。同工程内で共有callback・Auth Lambda・API Gateway・OpenAPIへ接続する。
+共有Discord callbackは`m.`で始まるstateをモバイルへ振り分ける。この判別自体に認証効果はなく、
+state全体・専用Cookie・期限を既存処理で照合する。重複state・キャンセル・不正CookieでもWebへフォールバックしない。
+失敗時は外部入力を含まないHTMLで再ログインを案内し、モバイルOAuth Cookieだけを消す。
+開始→認可→callback→交換→議論閲覧→ログアウトを架空データで通し、コード再使用拒否とWeb認証の維持を確認する。
+
+この境界だけではルートは公開されない。同工程内でAuth Lambda・API Gateway・OpenAPIへ接続する。
 
 ## 最小構成
 

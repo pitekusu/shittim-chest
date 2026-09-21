@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.cookies import SimpleCookie
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode
 
 from shittim_records.auth import (
@@ -40,6 +40,9 @@ from shittim_records.read_api import (
     RecordsReadService,
 )
 
+if TYPE_CHECKING:
+    from shittim_records.mobile_http import MobileAuthHttpController
+
 JSON_HEADERS = {
     "Cache-Control": "private, no-store",
     "Content-Type": "application/json; charset=utf-8",
@@ -65,20 +68,32 @@ class Request:
 
 
 class AuthHttpController:
-    """Expose only the four OAuth and session routes."""
+    """Dispatch Web and mobile login without falling back between their credentials."""
 
-    def __init__(self, service: AuthService) -> None:
+    def __init__(
+        self, service: AuthService, mobile: MobileAuthHttpController | None = None
+    ) -> None:
         self._service = service
+        self._mobile = mobile
 
     def handle(self, event: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
         request = parse_request(event)
         try:
+            if self._mobile is not None and request.route_key.partition(" ")[2].startswith(
+                "/api/v1/auth/mobile/"
+            ):
+                return self._mobile.handle(event, now=now)
             if request.route_key == "GET /api/v1/auth/discord/start":
                 query = _query(request.raw_query)
                 result = self._service.begin(return_to=_optional_single(query, "returnTo"), now=now)
                 return redirect(result.location, cookies=[result.oauth_cookie])
             if request.route_key == "GET /api/v1/auth/discord/callback":
                 query = _query(request.raw_query)
+                # This is routing only. C07 still verifies the complete state and browser nonce.
+                if any(state.startswith("m.") for state in query.get("state", [])):
+                    if self._mobile is None:
+                        raise AuthFailure("configuration_invalid")
+                    return self._mobile.handle(event, now=now)
                 result = self._service.complete(
                     code=_required_single(query, "code"),
                     state=_required_single(query, "state"),
@@ -362,6 +377,7 @@ def error_response(status: int, code: str, request_id: str) -> dict[str, Any]:
         "RECORD_NOT_FOUND": "指定された記録は見つかりませんでした。",
         "ROUTE_NOT_FOUND": "指定されたAPIは存在しません。",
         "REQUEST_INVALID": "リクエストが正しくありません。",
+        "MOBILE_GRANT_INVALID": "アプリに戻り、ログインをやり直してください。",
         "CSRF_INVALID": "画面を再読み込みしてから、もう一度お試しください。",
         "ORIGIN_INVALID": "この画面からは操作できません。",
         "IDEMPOTENCY_KEY_INVALID": "操作識別子が正しくありません。",
