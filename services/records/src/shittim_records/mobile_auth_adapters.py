@@ -12,6 +12,7 @@ from shittim_records.mobile_auth import (
     MobileAuthorizedTransaction,
     MobileAuthorizingTransaction,
     MobileConsumedTransaction,
+    MobileSessionRecord,
     MobileStartedTransaction,
     MobileTransaction,
     MobileTransactionState,
@@ -25,8 +26,8 @@ if TYPE_CHECKING:
 class DynamoMobileAuthStore:
     """CAS the entire state, preserving the original deadline and device binding.
 
-    Use the existing low-level client/codec so consumption can join the session
-    transaction in C09. No raw transaction ID, code, verifier or token is accepted.
+    Use the existing low-level client/codec to consume a grant and issue its session
+    atomically. No raw transaction ID, code, verifier or token is accepted.
     """
 
     def __init__(self, client: DynamoDBClient, table_name: str) -> None:
@@ -103,9 +104,8 @@ class DynamoMobileAuthStore:
     ) -> TransactWriteItemTypeDef:
         """Build, but do not execute, the consume write for atomic session issuance.
 
-        C09 must verify the supplied code and S256 first, then submit this Put and
-        session creation together. A standalone consume method would allow a lost
-        session on partial failure, so it is intentionally not provided.
+        The exchange service verifies the code and S256 before issue_session uses
+        this Put. Never execute it alone: a partial failure could lose the session.
         """
 
         _require_live(expected, now_epoch)
@@ -115,6 +115,79 @@ class DynamoMobileAuthStore:
             consumed_at=now_epoch,
         )
         return {"Put": self._replacement_write(expected, consumed, now_epoch)}
+
+    def issue_session(
+        self,
+        expected: MobileAuthorizedTransaction,
+        *,
+        session_hash: str,
+        session: MobileSessionRecord,
+        now_epoch: int,
+    ) -> None:
+        """Consume the exact grant, create a Bearer session and update its profile together."""
+
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", session_hash) is None
+            or session.created_at != now_epoch
+            or any(
+                getattr(session, field) != getattr(expected, field)
+                for field in (
+                    "requester_key",
+                    "display_name",
+                    "avatar_asset_key",
+                    "guild_verified_at",
+                )
+            )
+        ):
+            raise AuthFailure("mobile_grant_invalid")
+        writes: list[TransactWriteItemTypeDef] = [
+            self.consumption_write(expected, now_epoch=now_epoch),
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(
+                        {
+                            "PK": f"MOBILE_SESSION#{session_hash}",
+                            "SK": "META",
+                            "schema_version": 1,
+                            "record_type": "mobile_session",
+                            "expiresAt": session.expires_at,
+                            "payload": session.model_dump_json(),
+                        }
+                    ),
+                    "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+                }
+            },
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(
+                        {
+                            "PK": "PROFILE#REQUESTER",
+                            "SK": session.requester_key,
+                            "schema_version": 1,
+                            "record_type": "requester_profile",
+                            "display_name": session.display_name,
+                            "avatar_asset_key": session.avatar_asset_key,
+                            "updated_at": session.guild_verified_at.isoformat(),
+                        }
+                    ),
+                }
+            },
+        ]
+        try:
+            self._client.transact_write_items(TransactItems=writes)
+        except self._client.exceptions.TransactionCanceledException as error:
+            reasons = error.response.get("CancellationReasons", [])
+            # Only the grant's failed CAS means an invalid/reused code. Capacity,
+            # transaction conflicts or session-key collisions must remain retryable.
+            if [reason.get("Code") for reason in reasons] == [
+                "ConditionalCheckFailed",
+                "None",
+                "None",
+            ]:
+                raise AuthFailure("mobile_grant_invalid") from None
+            raise AuthFailure("mobile_session_unavailable") from None
 
     def _replacement_write(
         self,

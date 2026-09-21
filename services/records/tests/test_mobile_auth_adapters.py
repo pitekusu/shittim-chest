@@ -9,8 +9,10 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item
 
 from shittim_records.auth import AuthFailure
 from shittim_records.mobile_auth import (
+    MOBILE_SESSION_TTL_SECONDS,
     MobileAuthorizedTransaction,
     MobileAuthorizingTransaction,
+    MobileSessionRecord,
     MobileStartedTransaction,
 )
 from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
@@ -50,6 +52,18 @@ def mobile_states() -> tuple[
                 "guild_verified_at": "2026-09-20T00:00:00Z",
             }
         ),
+    )
+
+
+def mobile_session(*, now_epoch: int = 1041) -> MobileSessionRecord:
+    authorized = mobile_states()[2]
+    return MobileSessionRecord(
+        requester_key=authorized.requester_key,
+        display_name=authorized.display_name,
+        avatar_asset_key=authorized.avatar_asset_key,
+        guild_verified_at=authorized.guild_verified_at,
+        created_at=now_epoch,
+        expires_at=now_epoch + MOBILE_SESSION_TTL_SECONDS,
     )
 
 
@@ -133,3 +147,37 @@ def test_storage_failure_is_not_reported_as_an_invalid_grant() -> None:
         )
         with pytest.raises(client.exceptions.ProvisionedThroughputExceededException):
             DynamoMobileAuthStore(client, "test-mobile-auth").create(started, now_epoch=1000)
+
+
+@pytest.mark.parametrize(
+    "reasons,category",
+    [
+        (["ConditionalCheckFailed", "None", "None"], "mobile_grant_invalid"),
+        (["None", "ConditionalCheckFailed", "None"], "mobile_session_unavailable"),
+        (["TransactionConflict", "None", "None"], "mobile_session_unavailable"),
+        (["None", "ProvisionedThroughputExceeded", "None"], "mobile_session_unavailable"),
+        ([], "mobile_session_unavailable"),
+    ],
+)
+def test_exchange_cancellation_is_sanitized_and_distinguishes_grant_reuse(reasons, category):
+    client = boto3.client(
+        "dynamodb",
+        region_name="ap-northeast-1",
+        aws_access_key_id="local",
+        aws_secret_access_key="local",  # noqa: S106 - Stubber only.
+    )
+    store = DynamoMobileAuthStore(client, "test-mobile-auth")
+    with Stubber(client) as stub:
+        stub.add_client_error(
+            "transact_write_items",
+            service_error_code="TransactionCanceledException",
+            service_message="private storage detail",
+            modeled_fields={"CancellationReasons": [{"Code": code} for code in reasons]}
+            if reasons
+            else {},
+        )
+        with pytest.raises(AuthFailure, match=f"^{category}$") as failure:
+            store.issue_session(
+                mobile_states()[2], session_hash="a" * 64, session=mobile_session(), now_epoch=1041
+            )
+        assert failure.value.__suppress_context__
