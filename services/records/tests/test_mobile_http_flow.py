@@ -48,7 +48,9 @@ def flow():
     config = configuration()
     web_store, store, discord, avatars = FakeStore(), MobileStore(), FakeDiscord(), FakeAvatars()
     mobile = MobileAuthHttpController(
-        login=MobileLoginService(store=store, oauth=config.oauth, hmac_key=config.session_hmac_key),
+        login=MobileLoginService(
+            store=store, oauth=config.oauth, hmac_key=config.session_hmac_key, discord=discord
+        ),
         callback=MobileCallbackService(
             store=store, discord=discord, avatars=avatars, configuration=config, clock=lambda: NOW
         ),

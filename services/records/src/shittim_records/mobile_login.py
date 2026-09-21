@@ -6,11 +6,10 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
-from urllib.parse import urlencode
 
 from shittim_records.auth import (
-    DISCORD_AUTHORIZE_URL,
     AuthFailure,
+    DiscordOAuth,
     RecordsOAuthConfig,
     _cookie,
     _digest,
@@ -56,13 +55,19 @@ class MobileBrowserAuthorization:
 
 class MobileLoginService:
     def __init__(
-        self, *, store: MobileLoginStore, oauth: RecordsOAuthConfig, hmac_key: bytes
+        self,
+        *,
+        store: MobileLoginStore,
+        oauth: RecordsOAuthConfig,
+        hmac_key: bytes,
+        discord: DiscordOAuth,
     ) -> None:
         if len(hmac_key) < 32:
             raise AuthFailure("configuration_invalid")
         self._store = store
         self._oauth = oauth
         self._hmac_key = hmac_key
+        self._discord = discord
 
     def begin(self, request: MobileStartRequest, *, now: datetime) -> MobileStartResponse:
         now_epoch = int(_utc(now).timestamp())
@@ -104,17 +109,8 @@ class MobileLoginService:
             oauth_state_hash=_digest(self._hmac_key, "mobile-oauth-state", oauth_state),
         )
         self._store.advance(state, authorizing, now_epoch=now_epoch)
-        query = urlencode(
-            {
-                "client_id": self._oauth.client_id,
-                "redirect_uri": self._oauth.oauth_callback_url,
-                "response_type": "code",
-                "scope": "identify guilds.members.read",
-                "state": oauth_state,
-            }
-        )
         return MobileBrowserAuthorization(
-            location=f"{DISCORD_AUTHORIZE_URL}?{query}",
+            location=self._discord.authorization_url(configuration=self._oauth, state=oauth_state),
             oauth_cookie=_cookie(
                 MOBILE_OAUTH_COOKIE_NAME, browser_nonce, max_age=state.expires_at - now_epoch
             ),

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from tests.test_auth import FakeAvatars, configuration
+from tests.test_auth import FakeAvatars, FakeDiscord, configuration
 from tests.test_http_api import event
 from tests.test_mobile_login import NOW, REQUEST, MemoryStore
 from tests.test_mobile_session import SessionStore
@@ -26,7 +26,9 @@ def mobile():
         raise AssertionError("invalid input reached a service")
 
     controller = MobileAuthHttpController(
-        login=MobileLoginService(store=store, oauth=config.oauth, hmac_key=config.session_hmac_key),
+        login=MobileLoginService(
+            store=store, oauth=config.oauth, hmac_key=config.session_hmac_key, discord=FakeDiscord()
+        ),
         callback=cast(Any, SimpleNamespace(complete=unexpected)),
         exchange=cast(Any, SimpleNamespace(exchange=unexpected)),
         sessions=MobileSessionService(

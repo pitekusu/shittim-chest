@@ -23,10 +23,12 @@ def prepare_callback(
 ) -> tuple[MobileCallbackService, MemoryStore, FakeDiscord, dict[str, str]]:
     config = configuration()
     store = MemoryStore()
-    login = MobileLoginService(store=store, oauth=config.oauth, hmac_key=config.session_hmac_key)
+    discord = FakeDiscord()
+    login = MobileLoginService(
+        store=store, oauth=config.oauth, hmac_key=config.session_hmac_key, discord=discord
+    )
     started = login.begin(REQUEST, now=NOW)
     browser = login.authorize(MobileAuthorizeRequest(transaction=started.transaction_id), now=NOW)
-    discord = FakeDiscord()
     callback = MobileCallbackService(
         store=store,
         discord=discord,

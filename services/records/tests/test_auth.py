@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import cast
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
@@ -18,7 +18,9 @@ from shittim_records.auth import (
     OAuthState,
     RecordsOAuthConfig,
     SessionRecord,
+    authenticate_browser_session,
     csrf_hash,
+    require_csrf_submission,
     session_hash,
     validate_return_to,
 )
@@ -80,6 +82,17 @@ class FakeDiscord:
     def __init__(self, *, avatar: bytes | None = b"webp") -> None:
         self.avatar = avatar
         self.codes: list[str] = []
+
+    def authorization_url(self, *, configuration: RecordsOAuthConfig, state: str) -> str:
+        return "https://discord.com/oauth2/authorize?" + urlencode(
+            {
+                "client_id": configuration.client_id,
+                "redirect_uri": configuration.oauth_callback_url,
+                "response_type": "code",
+                "scope": "identify guilds.members.read",
+                "state": state,
+            }
+        )
 
     def exchange_code(self, *, code: str, configuration: AuthConfiguration) -> DiscordTokens:
         assert configuration.client_secret == "private-client-secret"  # noqa: S105
@@ -293,3 +306,65 @@ def test_avatar_url_rejects_non_requester_keys() -> None:
     assert auth.avatar_url(asset_key="requesters/opaque/avatar.webp").startswith("https://")
     with pytest.raises(AuthFailure):
         auth.avatar_url(asset_key=cast(str, "participants/a.webp"))
+
+
+def test_shared_cookie_authentication_checks_revocation_and_absolute_expiry() -> None:
+    store = FakeStore()
+    session = SessionRecord(
+        requester_key="requester-key",
+        display_name="Requester",
+        avatar_asset_key=None,
+        csrf_hash=csrf_hash(SESSION_KEY, "csrf-token"),
+        guild_verified_at=NOW.isoformat(),
+        expires_at=int(NOW.timestamp()),
+    )
+    key = session_hash(SESSION_KEY, "session-token")
+    store.sessions[key] = session
+    for raw_session, now, expected in (
+        (None, NOW - timedelta(seconds=1), None),
+        ("unknown-token", NOW - timedelta(seconds=1), None),
+        ("session-token", NOW - timedelta(seconds=1), session),
+        ("session-token", NOW, None),
+    ):
+        assert (
+            authenticate_browser_session(
+                store=store, session_key=SESSION_KEY, raw_session=raw_session, now=now
+            )
+            is expected
+        )
+    assert store.sessions[key].expires_at == int(NOW.timestamp())
+    store.delete_session(session_hash=key)
+    assert (
+        authenticate_browser_session(
+            store=store,
+            session_key=SESSION_KEY,
+            raw_session="session-token",
+            now=NOW - timedelta(seconds=1),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("cookie", "header"),
+    [
+        (None, "csrf-token"),
+        ("csrf-token", None),
+        ("csrf-token", "wrong"),
+        ("other-session", "other-session"),
+        ("非ASCII", "非ASCII"),
+    ],
+)
+def test_shared_csrf_requires_cookie_header_and_session_binding(cookie, header) -> None:
+    session = SessionRecord(
+        requester_key="requester-key",
+        display_name="Requester",
+        avatar_asset_key=None,
+        csrf_hash=csrf_hash(SESSION_KEY, "csrf-token"),
+        guild_verified_at=NOW.isoformat(),
+        expires_at=int((NOW + timedelta(minutes=1)).timestamp()),
+    )
+    with pytest.raises(AuthFailure, match=r"^csrf_invalid$"):
+        require_csrf_submission(
+            session=session, session_key=SESSION_KEY, raw_csrf=cookie, csrf_header=header
+        )

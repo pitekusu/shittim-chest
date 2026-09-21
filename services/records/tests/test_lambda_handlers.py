@@ -548,6 +548,23 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
     }
 
 
+def test_auth_handler_suppresses_transport_metadata(monkeypatch: Any, caplog: Any) -> None:
+    class Controller:
+        def handle(self, event, *, now):
+            logging.getLogger("httpx2").info("private member request path")
+            logging.getLogger("httpcore").debug("private authorization header")
+            return {"statusCode": 200}
+
+    monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", Controller())
+    with (
+        caplog.at_level(logging.DEBUG, logger="httpx2"),
+        caplog.at_level(logging.DEBUG, logger="httpcore"),
+    ):
+        assert lambda_handlers.auth_handler({}, object())["statusCode"] == 200
+    assert "private member" not in caplog.text
+    assert "private authorization" not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("factory_name", "handler_name", "expected_code"),
     (

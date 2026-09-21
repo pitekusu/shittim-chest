@@ -24,6 +24,17 @@
   opaque Debate ID／provider response IDは本文を含まない障害相関に限って使用する。
 - 本番はARM64 On-Demand Fargate、平常`desiredCount=0`、最大1 task。
 
+## Android・関連Pythonの実装方針
+
+Androidアプリと、それを支えるPythonの認証・閲覧APIに適用する。
+
+- 実装前に、既採用ライブラリ・標準SDKの高レベルAPIを確認する。適切なものがなければ、保守されている外部ライブラリを検討する。
+- 独自実装は、既存APIで必要な安全条件・互換性・性能・端末機能を満たせない部分に限定する。
+- 採用時は保守状況・ライセンス・脆弱性・既存バージョンとの互換性・依存の増加・安全な設定の可否を確認する。
+- 行数削減や抽象化した見た目を目的に、層・汎用フレームワーク・ラッパーを増やさない。
+- 不採用や低レベル処理を残す理由は、該当設計またはコードへ短く記載する。専用の承認工程や大量の比較資料は要求しない。
+- 未使用の依存は先行追加せず、必要になるC工程で導入・固定する。用途ごとの採用方針は`docs/29_Androidアプリ設計.md`を参照する。
+
 ## 必要な場所だけ読む
 
 | 対象 | 場所 |
@@ -31,10 +42,11 @@
 | Core／討論runtime | `src/shittim_chest/`, `tests/` |
 | Records API／認証／管理／親愛度／メモリアル | `services/records/`, `contracts/records/` |
 | Records Web | `apps/records-web/` |
+| Records Android | `apps/records-android/` |
 | AWS／CI／運用ツール | `infra/`, `.github/workflows/`, `tools/` |
 | 仕様・運用・試験 | `docs/00_*`を索引に、該当節だけ参照 |
 
-依存バージョンと実行コマンドは、各projectのlockfile・`pyproject.toml`・`package.json`を正とする。
+依存バージョンと実行コマンドは、各projectのVersion Catalog・lockfile・`pyproject.toml`・`package.json`を正とする。
 
 ## 必要十分な検証
 

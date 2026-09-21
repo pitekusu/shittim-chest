@@ -4,6 +4,8 @@ kotlin = "2.4.20"
 compose-bom = "2026.09.00"
 material3 = "1.5.0-alpha28"
 activity = "1.13.0"
+browser = "1.10.0"
+lifecycle = "2.11.0"
 circuit = "0.39.0"
 metro = "1.4.4"
 ktor = "3.6.0"
@@ -28,6 +30,9 @@ build-bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk18on", versio
 build-bouncycastle-bcutil = { module = "org.bouncycastle:bcutil-jdk18on", version.ref = "bouncycastle" }
 build-jdom2 = { module = "org.jdom:jdom2", version.ref = "jdom2" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
+androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
+androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycle" }
+androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime", version.ref = "lifecycle" }
 # Adopt the preview Compose stack together, not only Material 3.
 androidx-compose-bom = { module = "androidx.compose:compose-bom-alpha", version.ref = "compose-bom" }
 androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }

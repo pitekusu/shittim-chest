@@ -14,7 +14,14 @@ from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 from shittim_records.archive import derive_requester_key
-from shittim_records.auth import SessionRecord, csrf_hash, session_hash
+from shittim_records.auth import (
+    AuthFailure,
+    BrowserSessionReader,
+    SessionRecord,
+    authenticate_browser_session,
+    require_csrf_submission,
+    require_same_origin,
+)
 
 PROMPT_KEYS = (
     "system",
@@ -152,10 +159,6 @@ class PromptCurrent:
     prompts: PromptValues = field(repr=False)
 
 
-class AdminSessionStore(Protocol):
-    def get_session(self, *, session_hash: str) -> SessionRecord | None: ...
-
-
 class PromptRevisionStore(Protocol):
     def load_active_revision_id(self) -> str | None: ...
 
@@ -215,7 +218,7 @@ class AdminAuthorizer:
     def __init__(
         self,
         *,
-        store: AdminSessionStore,
+        store: BrowserSessionReader,
         configuration: AdminSecurityConfiguration,
     ) -> None:
         self._store = store
@@ -226,12 +229,13 @@ class AdminAuthorizer:
         return self._configuration.allowed_origin
 
     def authenticate(self, *, raw_session: str | None, now: datetime) -> SessionRecord:
-        if not raw_session:
-            raise AdminFailure("AUTHENTICATION_REQUIRED", 401)
-        stored = self._store.get_session(
-            session_hash=session_hash(self._configuration.session_hmac_key, raw_session)
+        stored = authenticate_browser_session(
+            store=self._store,
+            session_key=self._configuration.session_hmac_key,
+            raw_session=raw_session,
+            now=now,
         )
-        if stored is None or stored.expires_at <= int(_utc(now).timestamp()):
+        if stored is None:
             raise AdminFailure("AUTHENTICATION_REQUIRED", 401)
         return stored
 
@@ -287,13 +291,18 @@ class AdminAuthorizer:
         origin: str | None,
         idempotency_key: str | None,
     ) -> str:
-        if origin != self._configuration.allowed_origin:
-            raise AdminFailure("ORIGIN_INVALID", 403)
-        if not raw_csrf or not csrf_header or not hmac.compare_digest(raw_csrf, csrf_header):
-            raise AdminFailure("CSRF_INVALID", 403)
-        expected_csrf = csrf_hash(self._configuration.session_hmac_key, raw_csrf)
-        if not hmac.compare_digest(expected_csrf, session.csrf_hash):
-            raise AdminFailure("CSRF_INVALID", 403)
+        try:
+            require_same_origin(origin=origin, allowed_origin=self._configuration.allowed_origin)
+            require_csrf_submission(
+                session=session,
+                session_key=self._configuration.session_hmac_key,
+                raw_csrf=raw_csrf,
+                csrf_header=csrf_header,
+            )
+        except AuthFailure as error:
+            if error.code not in {"origin_invalid", "csrf_invalid"}:
+                raise
+            raise AdminFailure(error.code.upper(), 403) from None
         if idempotency_key is None or IDEMPOTENCY_PATTERN.fullmatch(idempotency_key) is None:
             raise AdminFailure("IDEMPOTENCY_KEY_INVALID", 400)
         return hashlib.sha256(idempotency_key.encode()).hexdigest()

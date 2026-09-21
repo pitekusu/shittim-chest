@@ -52,7 +52,10 @@ class MobileCallbackService:
         self._configuration = configuration
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._login = MobileLoginService(
-            store=store, oauth=configuration.oauth, hmac_key=configuration.session_hmac_key
+            store=store,
+            oauth=configuration.oauth,
+            hmac_key=configuration.session_hmac_key,
+            discord=discord,
         )
 
     def complete(

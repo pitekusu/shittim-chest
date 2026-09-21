@@ -5,7 +5,7 @@ from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from tests.test_auth import configuration
+from tests.test_auth import FakeDiscord, configuration
 
 from shittim_records.auth import OAUTH_COOKIE_NAME, AuthFailure, _digest
 from shittim_records.mobile_auth import (
@@ -56,7 +56,9 @@ class MemoryStore:
 @pytest.fixture
 def login() -> tuple[MobileLoginService, MemoryStore]:
     store = MemoryStore()
-    return MobileLoginService(store=store, oauth=configuration().oauth, hmac_key=KEY), store
+    return MobileLoginService(
+        store=store, oauth=configuration().oauth, hmac_key=KEY, discord=FakeDiscord()
+    ), store
 
 
 def test_begin_preserves_device_binding_and_only_stores_domain_separated_hash(login) -> None:
@@ -178,7 +180,9 @@ def test_expiry_wrong_phase_and_storage_conflict_do_not_return_a_redirect(login)
 def test_weak_configuration_and_naive_time_fail_before_storage(login) -> None:
     service, store = login
     with pytest.raises(AuthFailure, match=r"^configuration_invalid$"):
-        MobileLoginService(store=store, oauth=configuration().oauth, hmac_key=b"short")
+        MobileLoginService(
+            store=store, oauth=configuration().oauth, hmac_key=b"short", discord=FakeDiscord()
+        )
     with pytest.raises(ValueError, match="timezone-aware"):
         service.begin(REQUEST, now=NOW.replace(tzinfo=None))
     assert not store.states
