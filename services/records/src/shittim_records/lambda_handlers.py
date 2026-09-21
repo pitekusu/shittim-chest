@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import boto3
 import httpx
+import httpx2
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -273,6 +274,9 @@ def inspector_translation_handler(_event: Mapping[str, Any], _context: object) -
 def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle public OAuth and session routes."""
 
+    # Discord member/avatar paths and HTTP headers contain private identifiers.
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     try:
         return _auth_controller().handle(event, now=datetime.now(UTC))
     except Exception as error:
@@ -528,7 +532,7 @@ def _auth_controller() -> AuthHttpController:
             admin_user_id_parameter_name=_environment("ADMIN_DISCORD_USER_ID_PARAMETER_NAME"),
         ).load()
         discord = DiscordOAuthClient(
-            httpx.Client(timeout=httpx.Timeout(3.0, connect=2.0), follow_redirects=False)
+            httpx2.Client(timeout=httpx2.Timeout(3.0, connect=2.0), follow_redirects=False)
         )
         avatars = S3AvatarStore(_regional_s3_client(), _environment("MEDIA_BUCKET_NAME"))
         mobile_store = DynamoMobileAuthStore(dynamodb, _environment("SESSION_TABLE_NAME"))
@@ -541,6 +545,7 @@ def _auth_controller() -> AuthHttpController:
         mobile = MobileAuthHttpController(
             login=MobileLoginService(
                 store=mobile_store,
+                discord=discord,
                 oauth=configuration.oauth,
                 hmac_key=configuration.session_hmac_key,
             ),

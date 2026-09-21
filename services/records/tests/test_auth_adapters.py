@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import traceback
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 
-import httpx
+import httpx2
 import pytest
 from botocore.exceptions import ClientError
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
@@ -219,19 +221,26 @@ def test_oauth_state_claim_uses_strong_read_and_conditional_update() -> None:
 
 
 def test_discord_oauth_uses_form_token_exchange_and_guild_member_endpoint() -> None:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         if request.url.path == "/api/v10/oauth2/token":
             assert request.headers["content-type"].startswith("application/x-www-form-urlencoded")
             assert b"grant_type=authorization_code" in request.content
-            return httpx.Response(
+            assert parse_qs(request.content.decode()) == {
+                "client_id": [CLIENT_ID],
+                "client_secret": ["client-secret"],
+                "grant_type": ["authorization_code"],
+                "code": ["code"],
+                "redirect_uri": [oauth_config().oauth_callback_url],
+            }
+            return httpx2.Response(
                 200,
                 json={"access_token": "access-token", "token_type": "Bearer"},
             )
         if request.url.path == "/api/v10/users/@me":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "id": USER_ID,
@@ -241,12 +250,12 @@ def test_discord_oauth_uses_form_token_exchange_and_guild_member_endpoint() -> N
                 },
             )
         if request.url.path.endswith(f"/guilds/{GUILD_ID}/member"):
-            return httpx.Response(200, json={"nick": "Guild", "avatar": "b" * 32})
+            return httpx2.Response(200, json={"nick": "Guild", "avatar": "b" * 32})
         if request.url.host == "cdn.discordapp.com":
-            return httpx.Response(200, content=b"webp", headers={"content-type": "image/webp"})
+            return httpx2.Response(200, content=b"webp", headers={"content-type": "image/webp"})
         raise AssertionError(f"unexpected request path: {request.url}")
 
-    client = DiscordOAuthClient(httpx.Client(transport=httpx.MockTransport(handler)))
+    client = DiscordOAuthClient(httpx2.Client(transport=httpx2.MockTransport(handler)))
     configuration = AuthConfiguration(
         identity_hmac_key=b"i" * 32,
         session_hmac_key=b"s" * 32,
@@ -264,13 +273,120 @@ def test_discord_oauth_uses_form_token_exchange_and_guild_member_endpoint() -> N
     assert requests[-1].url.path.startswith(f"/guilds/{GUILD_ID}/users/")
 
 
-def test_discord_non_member_never_returns_an_identity() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/v10/users/@me":
-            return httpx.Response(200, json={"id": "user", "username": "name"})
-        return httpx.Response(404)
+def test_discord_authorization_url_preserves_scope_callback_and_state() -> None:
+    with httpx2.Client() as transport:
+        location = DiscordOAuthClient(transport).authorization_url(
+            configuration=oauth_config(), state="m.transaction.opaque-state"
+        )
 
-    client = DiscordOAuthClient(httpx.Client(transport=httpx.MockTransport(handler)))
+    parsed = urlsplit(location)
+    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
+        "https://discord.com/oauth2/authorize"
+    )
+    assert parse_qs(parsed.query) == {
+        "client_id": [CLIENT_ID],
+        "response_type": ["code"],
+        "scope": ["identify guilds.members.read"],
+        "redirect_uri": [oauth_config().oauth_callback_url],
+        "state": ["m.transaction.opaque-state"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "category"),
+    [
+        (302, {}, "discord_token_exchange_failed"),
+        (400, {"error": "invalid_grant"}, "discord_token_exchange_failed"),
+        (
+            200,
+            {"error": "invalid_grant", "error_description": "private-provider-data"},
+            "discord_token_response_invalid",
+        ),
+        (200, {"token_type": "Bearer"}, "discord_token_response_invalid"),
+        (200, {"access_token": "inert"}, "discord_token_response_invalid"),
+        (200, {"access_token": "", "token_type": "Bearer"}, "discord_token_response_invalid"),
+        (200, {"access_token": 123, "token_type": "Bearer"}, "discord_token_response_invalid"),
+        (200, {"access_token": "inert", "token_type": "Basic"}, "discord_token_response_invalid"),
+        (200, [], "discord_token_response_invalid"),
+        (200, None, "discord_token_response_invalid"),
+    ],
+)
+def test_token_failure_is_sanitized_and_never_retried_or_redirected(
+    status: int, body: object, category: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    from tests.test_auth import configuration
+
+    requests = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(
+            status,
+            json=body,
+            headers={"Location": "https://unexpected.example.invalid/credential-sink"},
+        )
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler), follow_redirects=False) as http:
+        client = DiscordOAuthClient(http)
+        with pytest.raises(AuthFailure) as caught:
+            client.exchange_code(code="inert-code", configuration=configuration())
+
+    assert caught.value.code == category
+    assert len(requests) == 1
+    output = "".join(traceback.format_exception(caught.value)) + caplog.text
+    assert configuration().client_secret not in output
+    assert "private-provider-data" not in output
+
+
+def test_token_timeout_has_no_retry_or_private_exception_context() -> None:
+    from tests.test_auth import configuration
+
+    calls = 0
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx2.ReadTimeout("private-provider-data", request=request)
+
+    with (
+        httpx2.Client(transport=httpx2.MockTransport(handler)) as http,
+        pytest.raises(AuthFailure) as caught,
+    ):
+        DiscordOAuthClient(http).exchange_code(code="inert-code", configuration=configuration())
+
+    assert caught.value.code == "discord_token_exchange_failed"
+    assert calls == 1
+    assert "private-provider-data" not in "".join(traceback.format_exception(caught.value))
+
+
+def test_token_exchange_does_not_reuse_a_previous_users_bearer_token() -> None:
+    from tests.test_auth import configuration
+
+    requests = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        assert "Authorization" not in request.headers
+        code = parse_qs(request.content.decode())["code"][0]
+        return httpx2.Response(200, json={"access_token": code, "token_type": "Bearer"})
+
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as http:
+        client = DiscordOAuthClient(http)
+        for code in ("first", "second"):
+            assert (
+                client.exchange_code(code=code, configuration=configuration()).access_token == code
+            )
+
+    assert len(requests) == 2
+
+
+def test_discord_non_member_never_returns_an_identity() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/api/v10/users/@me":
+            return httpx2.Response(200, json={"id": "user", "username": "name"})
+        return httpx2.Response(404)
+
+    client = DiscordOAuthClient(httpx2.Client(transport=httpx2.MockTransport(handler)))
     with pytest.raises(AuthFailure) as caught:
         client.get_identity(
             tokens=DiscordTokens(access_token="token", token_type="Bearer"),  # noqa: S106

@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -128,7 +128,11 @@ class OAuthCompletion:
     clear_oauth_cookie: str
 
 
-class AuthStore(Protocol):
+class BrowserSessionReader(Protocol):
+    def get_session(self, *, session_hash: str) -> SessionRecord | None: ...
+
+
+class AuthStore(BrowserSessionReader, Protocol):
     def create_oauth_state(self, *, state_hash: str, state: OAuthState) -> None: ...
 
     def claim_oauth_state(
@@ -147,12 +151,12 @@ class AuthStore(Protocol):
         session: SessionRecord,
     ) -> None: ...
 
-    def get_session(self, *, session_hash: str) -> SessionRecord | None: ...
-
     def delete_session(self, *, session_hash: str) -> None: ...
 
 
 class DiscordOAuth(Protocol):
+    def authorization_url(self, *, configuration: RecordsOAuthConfig, state: str) -> str: ...
+
     def exchange_code(self, *, code: str, configuration: AuthConfiguration) -> DiscordTokens: ...
 
     def get_identity(
@@ -243,17 +247,10 @@ class AuthService:
                 expires_at=int((now + OAUTH_TTL).timestamp()),
             ),
         )
-        query = urlencode(
-            {
-                "client_id": self._configuration.oauth.client_id,
-                "redirect_uri": self._configuration.oauth.oauth_callback_url,
-                "response_type": "code",
-                "scope": "identify guilds.members.read",
-                "state": state,
-            }
-        )
         return OAuthStart(
-            location=f"{DISCORD_AUTHORIZE_URL}?{query}",
+            location=self._discord.authorization_url(
+                configuration=self._configuration.oauth, state=state
+            ),
             oauth_cookie=_cookie(OAUTH_COOKIE_NAME, nonce, max_age=int(OAUTH_TTL.total_seconds())),
         )
 
@@ -312,14 +309,12 @@ class AuthService:
         )
 
     def authenticate(self, *, raw_session: str | None, now: datetime) -> SessionRecord | None:
-        if not raw_session:
-            return None
-        session = self._store.get_session(
-            session_hash=_digest(self._configuration.session_hmac_key, "session", raw_session)
+        return authenticate_browser_session(
+            store=self._store,
+            session_key=self._configuration.session_hmac_key,
+            raw_session=raw_session,
+            now=now,
         )
-        if session is None or session.expires_at <= int(_utc(now).timestamp()):
-            return None
-        return session
 
     def avatar_url(self, *, asset_key: str) -> str:
         """Return a short-lived URL only for a validated requester asset key."""
@@ -345,16 +340,16 @@ class AuthService:
         origin: str | None,
         now: datetime,
     ) -> tuple[str, str]:
-        if origin != self._configuration.oauth.allowed_origin:
-            raise AuthFailure("origin_invalid")
+        require_same_origin(origin=origin, allowed_origin=self._configuration.oauth.allowed_origin)
         session = self.authenticate(raw_session=raw_session, now=now)
         if session is None or not raw_csrf or not csrf_header:
             raise AuthFailure("session_required")
-        if not hmac.compare_digest(raw_csrf, csrf_header):
-            raise AuthFailure("csrf_invalid")
-        expected = _digest(self._configuration.session_hmac_key, "csrf", raw_csrf)
-        if not hmac.compare_digest(expected, session.csrf_hash):
-            raise AuthFailure("csrf_invalid")
+        require_csrf_submission(
+            session=session,
+            session_key=self._configuration.session_hmac_key,
+            raw_csrf=raw_csrf,
+            csrf_header=csrf_header,
+        )
         if raw_session is None:
             raise AuthFailure("session_required")
         self._store.delete_session(
@@ -364,6 +359,56 @@ class AuthService:
             CSRF_COOKIE_NAME,
             http_only=False,
         )
+
+
+def authenticate_browser_session(
+    *,
+    store: BrowserSessionReader,
+    session_key: bytes,
+    raw_session: str | None,
+    now: datetime,
+) -> SessionRecord | None:
+    """Read a live cookie session without extending its absolute expiry or relying on TTL."""
+
+    if not raw_session:
+        return None
+    session = store.get_session(session_hash=session_hash(session_key, raw_session))
+    if session is None or session.expires_at <= int(_utc(now).timestamp()):
+        return None
+    return session
+
+
+def require_same_origin(*, origin: str | None, allowed_origin: str) -> None:
+    if origin != allowed_origin:
+        raise AuthFailure("origin_invalid")
+
+
+def csrf_token_matches(*, session: SessionRecord, session_key: bytes, token: str | None) -> bool:
+    """Validate a session's CSRF cookie; this alone does not authorize a write."""
+
+    if not token:
+        return False
+    return hmac.compare_digest(csrf_hash(session_key, token), session.csrf_hash)
+
+
+def require_csrf_submission(
+    *,
+    session: SessionRecord,
+    session_key: bytes,
+    raw_csrf: str | None,
+    csrf_header: str | None,
+) -> None:
+    """A write needs matching cookie/header tokens bound to the authenticated session."""
+
+    if (
+        not raw_csrf
+        or not csrf_header
+        or not raw_csrf.isascii()
+        or not csrf_header.isascii()
+        or not hmac.compare_digest(raw_csrf, csrf_header)
+        or not csrf_token_matches(session=session, session_key=session_key, token=raw_csrf)
+    ):
+        raise AuthFailure("csrf_invalid")
 
 
 def validate_return_to(value: str | None) -> str:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import hmac
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -14,7 +13,14 @@ from types import MappingProxyType
 from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
 
-from shittim_records.auth import SessionRecord, csrf_hash, session_hash
+from shittim_records.auth import (
+    AuthFailure,
+    BrowserSessionReader,
+    SessionRecord,
+    authenticate_browser_session,
+    require_csrf_submission,
+    require_same_origin,
+)
 from shittim_records.contracts import MemorialStateName, MemorialUploadContentType, ParticipantSlot
 
 GENERATE_CONFIRMATION = "GENERATE MEMORIAL"
@@ -276,10 +282,6 @@ class GeneratedMemorialImage:
             raise ValueError("generated memorial image dimensions are invalid")
 
 
-class MemorialSessionStore(Protocol):
-    def get_session(self, *, session_hash: str) -> SessionRecord | None: ...
-
-
 class MemorialRepository(Protocol):
     """Own atomic owner/cycle, one-generation, idempotency, and reset invariants."""
 
@@ -452,19 +454,20 @@ class MemorialAuthorizer:
     def __init__(
         self,
         *,
-        store: MemorialSessionStore,
+        store: BrowserSessionReader,
         configuration: MemorialSecurityConfiguration,
     ) -> None:
         self._store = store
         self._configuration = configuration
 
     def authenticate(self, *, raw_session: str | None, now: datetime) -> SessionRecord:
-        if not raw_session:
-            raise MemorialFailure("AUTHENTICATION_REQUIRED", 401)
-        stored = self._store.get_session(
-            session_hash=session_hash(self._configuration.session_hmac_key, raw_session)
+        stored = authenticate_browser_session(
+            store=self._store,
+            session_key=self._configuration.session_hmac_key,
+            raw_session=raw_session,
+            now=now,
         )
-        if stored is None or stored.expires_at <= int(_utc(now).timestamp()):
+        if stored is None:
             raise MemorialFailure("AUTHENTICATION_REQUIRED", 401)
         try:
             _require_requester_key(stored.requester_key)
@@ -481,13 +484,18 @@ class MemorialAuthorizer:
         origin: str | None,
         idempotency_key: str | None,
     ) -> str:
-        if origin != self._configuration.allowed_origin:
-            raise MemorialFailure("ORIGIN_INVALID", 403)
-        if not raw_csrf or not csrf_header or not hmac.compare_digest(raw_csrf, csrf_header):
-            raise MemorialFailure("CSRF_INVALID", 403)
-        expected_csrf = csrf_hash(self._configuration.session_hmac_key, raw_csrf)
-        if not hmac.compare_digest(expected_csrf, session.csrf_hash):
-            raise MemorialFailure("CSRF_INVALID", 403)
+        try:
+            require_same_origin(origin=origin, allowed_origin=self._configuration.allowed_origin)
+            require_csrf_submission(
+                session=session,
+                session_key=self._configuration.session_hmac_key,
+                raw_csrf=raw_csrf,
+                csrf_header=csrf_header,
+            )
+        except AuthFailure as error:
+            if error.code not in {"origin_invalid", "csrf_invalid"}:
+                raise
+            raise MemorialFailure(error.code.upper(), 403) from None
         if idempotency_key is None or _IDEMPOTENCY.fullmatch(idempotency_key) is None:
             raise MemorialFailure("IDEMPOTENCY_KEY_INVALID", 400)
         return hashlib.sha256(idempotency_key.encode()).hexdigest()

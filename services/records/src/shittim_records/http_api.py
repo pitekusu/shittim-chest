@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -19,8 +18,8 @@ from shittim_records.auth import (
     AuthFailure,
     AuthService,
     AuthStore,
-    csrf_hash,
-    session_hash,
+    authenticate_browser_session,
+    csrf_token_matches,
 )
 from shittim_records.contracts import (
     AnonymousSession,
@@ -146,8 +145,9 @@ class AuthHttpController:
                 root=AnonymousSession(schema_version=1, authenticated=False, is_admin=False)
             )
         else:
-            expected = csrf_hash(self._service.session_hmac_key, raw_csrf)
-            if not hmac.compare_digest(expected, session.csrf_hash):
+            if not csrf_token_matches(
+                session=session, session_key=self._service.session_hmac_key, token=raw_csrf
+            ):
                 payload = SessionResponse(
                     root=AnonymousSession(schema_version=1, authenticated=False)
                 )
@@ -220,13 +220,13 @@ class ReadHttpController:
                 ):
                     raise AuthFailure("session_required")
             else:
-                raw_session = request.cookies.get(SESSION_COOKIE_NAME)
-                if not raw_session:
-                    raise AuthFailure("session_required")
-                session = self._store.get_session(
-                    session_hash=session_hash(self._session_key, raw_session)
+                session = authenticate_browser_session(
+                    store=self._store,
+                    session_key=self._session_key,
+                    raw_session=request.cookies.get(SESSION_COOKIE_NAME),
+                    now=now,
                 )
-                if session is None or session.expires_at <= int(now.astimezone(UTC).timestamp()):
+                if session is None:
                     raise AuthFailure("session_required")
             if request.route_key.startswith("GET /api/v1/momotalk/"):
                 result = self._momotalk_read(request, now)

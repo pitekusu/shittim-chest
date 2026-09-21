@@ -5,6 +5,7 @@ description = "Read-model services for Shittim Chest Records"
 requires-python = ">=3.14,<3.15"
 license = "MIT"
 dependencies = [
+    "authlib>=1.8.0,<2",
     "boto3>=1.43.66,<2",
     "budoux>=0.9.1,<0.10",
     "httpx>=0.28.1,<0.29",

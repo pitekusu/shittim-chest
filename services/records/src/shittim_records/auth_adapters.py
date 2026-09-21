@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2
+from authlib.integrations.httpx_client import OAuth2ClientAuth
+from authlib.oauth2 import OAuth2Error
+from authlib.oauth2.client import OAuth2Client
 from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
@@ -17,6 +20,7 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
 from shittim_records.archive import derive_requester_key
 from shittim_records.auth import (
+    DISCORD_AUTHORIZE_URL,
     AuthConfiguration,
     AuthFailure,
     DiscordIdentity,
@@ -274,32 +278,44 @@ class DynamoAuthStore:
 class DiscordOAuthClient:
     """Bounded Discord OAuth and avatar client."""
 
-    def __init__(self, client: httpx.Client) -> None:
+    def __init__(self, client: httpx2.Client) -> None:
         self._client = client
 
+    def authorization_url(self, *, configuration: RecordsOAuthConfig, state: str) -> str:
+        oauth = OAuth2Client(
+            session=self._client,
+            client_id=configuration.client_id,
+            redirect_uri=configuration.oauth_callback_url,
+            scope="identify guilds.members.read",
+        )
+        location, _ = oauth.create_authorization_url(DISCORD_AUTHORIZE_URL, state=state)
+        return location
+
     def exchange_code(self, *, code: str, configuration: AuthConfiguration) -> DiscordTokens:
+        # Share only the HTTP connection pool; OAuth tokens are request-local.
+        oauth = OAuth2Client(
+            session=self._client,
+            client_id=configuration.oauth.client_id,
+            redirect_uri=configuration.oauth.oauth_callback_url,
+        )
+        oauth.register_compliance_hook("access_token_response", _require_token_success)
         try:
-            response = self._client.post(
+            payload = oauth.fetch_token(
                 DISCORD_TOKEN_URL,
-                data={
-                    "client_id": configuration.oauth.client_id,
-                    "client_secret": configuration.client_secret,
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": configuration.oauth.oauth_callback_url,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                grant_type="authorization_code",
+                code=code,
+                auth=OAuth2ClientAuth(
+                    configuration.oauth.client_id,
+                    configuration.client_secret,
+                    "client_secret_post",
+                ),
             )
-        except httpx.HTTPError as error:
-            raise AuthFailure("discord_token_exchange_failed") from error
-        if response.status_code != 200:
-            raise AuthFailure("discord_token_exchange_failed")
-        try:
-            payload = response.json()
             token = payload["access_token"]
             token_type = payload["token_type"]
-        except (KeyError, TypeError, ValueError) as error:
-            raise AuthFailure("discord_token_response_invalid") from error
+        except httpx2.HTTPError:
+            raise AuthFailure("discord_token_exchange_failed") from None
+        except OAuth2Error, KeyError, TypeError, ValueError, AttributeError:
+            raise AuthFailure("discord_token_response_invalid") from None
         if not isinstance(token, str) or not token or token_type != "Bearer":  # noqa: S105
             raise AuthFailure("discord_token_response_invalid")
         return DiscordTokens(access_token=token, token_type=token_type)
@@ -317,7 +333,7 @@ class DiscordOAuthClient:
                 f"{DISCORD_API_ROOT}/users/@me/guilds/{guild_id}/member",
                 headers=headers,
             )
-        except httpx.HTTPError as error:
+        except httpx2.HTTPError as error:
             raise AuthFailure("discord_identity_unavailable") from error
         if member_response.status_code in {401, 403, 404}:
             raise AuthFailure("guild_membership_required")
@@ -369,7 +385,7 @@ class DiscordOAuthClient:
             return None
         try:
             response = self._client.get(url)
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             return None
         if response.status_code != 200:
             return None
@@ -378,6 +394,13 @@ class DiscordOAuthClient:
         if content_type != "image/webp" or not body or len(body) > MAX_AVATAR_BYTES:
             return None
         return body
+
+
+def _require_token_success(response: httpx2.Response) -> httpx2.Response:
+    """Authlib parses OAuth errors; Discord must still return exactly HTTP 200."""
+    if response.status_code != 200:
+        raise AuthFailure("discord_token_exchange_failed")
+    return response
 
 
 class S3AvatarStore:
