@@ -464,6 +464,33 @@ def test_inspector_translation_handler_suppresses_provider_exception_chain(
     assert sensitive_output not in caplog.text
 
 
+def test_read_handler_storage_failure_does_not_expose_bearer_or_exception_details(
+    monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    private_token = "private-mobile-token"  # noqa: S105 - inert failure-path test value.
+    private_payload = "private-session-payload"
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError(f"{private_token}: {private_payload}")
+
+    monkeypatch.setattr(lambda_handlers, "_READ_CONTROLLER", SimpleNamespace(handle=fail))
+    with caplog.at_level(logging.INFO, logger=lambda_handlers.LOGGER.name):
+        response = lambda_handlers.read_handler(
+            {
+                "routeKey": "GET /api/v1/records",
+                "requestContext": {"requestId": "opaque-request"},
+                "headers": {"authorization": f"Bearer {private_token}"},
+            },
+            object(),
+        )
+    assert response["statusCode"] == 503
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    assert "RECORDS_UNAVAILABLE" in response["body"]
+    assert "records_read_request_failed" in caplog.text
+    assert private_token not in response["body"] + caplog.text
+    assert private_payload not in response["body"] + caplog.text
+
+
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:
     controller = cast(Any, FakeHttpController())
     monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", controller)
@@ -494,6 +521,7 @@ def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeyp
     ("factory_name", "handler_name", "expected_code"),
     (
         ("_auth_controller", "auth_handler", "RECORDS_UNAVAILABLE"),
+        ("_read_controller", "read_handler", "RECORDS_UNAVAILABLE"),
         (
             "_admin_config_controller",
             "admin_config_handler",

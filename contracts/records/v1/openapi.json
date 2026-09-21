@@ -3708,6 +3708,12 @@
       }
     },
     "securitySchemes": {
+      "mobileBearer": {
+        "bearerFormat": "opaque",
+        "description": "Mobile session token, not a JWT. Use Authorization only; do not combine it with cookies or send tokens in URLs or bodies.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "sessionCookie": {
         "in": "cookie",
         "name": "__Host-shittim-records-session",
@@ -5924,7 +5930,15 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/records/{recordId}": {
@@ -6022,7 +6036,15 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/session": {

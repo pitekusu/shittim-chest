@@ -34,6 +34,14 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         assert all(reference.removeprefix(prefix) in definitions for reference in references)
 
     assert openapi["security"] == [{"sessionCookie": []}]
+    bearer_routes = {
+        (method, path)
+        for path, operations in openapi["paths"].items()
+        for method, operation in operations.items()
+        if {"mobileBearer": []} in operation.get("security", [])
+    }
+    assert bearer_routes == {("get", "/api/v1/records"), ("get", "/api/v1/records/{recordId}")}
+    assert openapi["components"]["securitySchemes"]["mobileBearer"]["scheme"] == "bearer"
     for route in ("/api/v1/auth/discord/start", "/api/v1/auth/discord/callback", "/api/v1/session"):
         assert openapi["paths"][route]["get"]["security"] == []
     for route in (

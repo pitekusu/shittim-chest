@@ -309,6 +309,7 @@ def build_openapi() -> dict[str, Any]:
             "/api/v1/records": {
                 "get": {
                     "operationId": "listRecords",
+                    "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                     "parameters": [
                         _parameter(
                             "cursor",
@@ -347,6 +348,7 @@ def build_openapi() -> dict[str, Any]:
             "/api/v1/records/{recordId}": {
                 "get": {
                     "operationId": "getRecord",
+                    "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                     "parameters": [
                         {
                             "name": "recordId",
@@ -618,7 +620,16 @@ def build_openapi() -> dict[str, Any]:
                     "type": "apiKey",
                     "in": "cookie",
                     "name": "__Host-shittim-records-session",
-                }
+                },
+                "mobileBearer": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "opaque",
+                    "description": (
+                        "Mobile session token, not a JWT. Use Authorization only; "
+                        "do not combine it with cookies or send tokens in URLs or bodies."
+                    ),
+                },
             },
         },
         "security": [{"sessionCookie": []}],
