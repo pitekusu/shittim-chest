@@ -13,7 +13,7 @@ updated: 2026-09-21
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存である。ログイン画面・通信との接続、Google Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
+現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアントである。ブラウザー・画面・保存との接続、Google Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -31,6 +31,7 @@ updated: 2026-09-21
 | C11 | Records読取APIへBearer認証を接続 | 議論一覧・詳細へ接続済み。Cookie混在を拒否し、他APIへ認可を広げない |
 | C12 | モバイル認証ルートとAWS設定 | 5ルート・共有callback・OpenAPIを既存Auth Lambdaへ接続。追加IAM・設定値なし |
 | C13 | Keystoreによるトークン保存 | 保存・読取・削除、改ざん拒否、バックアップ除外を実装。ログイン画面・通信は未接続 |
+| C14 | モバイル認証APIクライアント | 4操作の通信・型変換・失敗分類を実装。Custom Tabs・画面・保存への接続はC15以降 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -409,6 +410,52 @@ API 36のinstrumentation testで保存・再読込・IV更新・鍵の非export�
 実装根拠は[Android Keystore](https://developer.android.com/privacy-and-security/keystore)、
 [AtomicFile](https://developer.android.com/reference/android/util/AtomicFile)、
 [バックアップの除外](https://developer.android.com/identity/data/autobackup)を参照する。
+
+## C14：モバイル認証APIクライアント
+
+`MobileAuthModels.kt`は[モバイル認証契約](https://github.com/pitekusu/shittim-chest/blob/main/contracts/records/v1/mobile-auth.schema.json)に対応する
+開始・交換・セッション応答と本人情報のKotlin型を持つ。サーバー側の契約やWeb validatorは変更しない。
+
+- S256、43文字のopaque値、verifierの長さ、許可された`returnTo`、schema version 1、Bearer方式を検証する。
+- ブラウザーに渡す`authorizePath`は、応答の取引IDと一致する固定相対パスだけを受理する。
+- offset付き日時を`Instant`へ変換し、C13へ渡す秒単位の絶対期限を保持する。期限延長や認可判定は行わない。
+- 正常応答の未知fieldは読み飛ばし、将来の任意field追加に対応する。必須値・型・安全上の境界は省略しない。
+- DTOを通常classとし、`toString()`にtoken・code・state・verifier・本人情報を含めない。
+
+通信依存はKtor 3.6.0、OkHttp engine、kotlinx.serialization 1.11.0、Coroutines 1.11.0を
+Version Catalogで固定する。serialization compiler pluginは既存Kotlin 2.4.20と揃える。
+2026年9月21日に[Ktor公式](https://ktor.io/docs/client-engines.html#okhttp)と
+[serializationのリリース](https://github.com/Kotlin/kotlinx.serialization/releases/tag/v1.11.0)を確認。
+1.12.0-RCは今回採用せず、JSON runtimeは安定版を使う。通信・ブラウザー・画面・保存は責務を分ける。
+
+### 通信と失敗の境界
+
+`MobileAuthClient`は`start`・`exchange`・`session`・`logout`のsuspend関数を提供する。
+`authorize`はブラウザー用であり、このクライアントからGETしない。固定のRecords HTTPS origin以外へ
+要求を送る入口は設けず、`INTERNET`権限だけを追加する。OS標準のTLS／証明書検証と平文HTTP禁止を維持する。
+
+| 項目 | C14の扱い |
+|---|---|
+| 認証情報 | 開始・交換はJSONのみ。session・logoutだけ明示的なBearerを付け、Cookie・Originを送らない |
+| 再送・転送 | KtorのRetry／Auth pluginなし。接続復旧retryとredirectを無効化し、全POSTをone-shot bodyにする |
+| 時間・サイズ | 接続10秒、request／socket 20秒。JSON応答はstreamから64 KiB＋1 byteまで読み、上限超過を拒否 |
+| 保持 | HTTP cache・Cookie jar・HTTP loggingなし。DTOはメモリ内だけ。保存・削除は呼び出し側の別責務 |
+| 終了 | クライアントを再利用し、不要になったら`close`。渡されたテストengineもクライアントが所有する |
+
+OkHttpでは接続復旧retryを無効にしても、503の`Retry-After: 0`による再送があり得る。
+POSTはKtorの`ReadChannelContent`を使い、[OkHttp用one-shot body](https://github.com/ktorio/ktor/blob/3.6.0/ktor-client/ktor-client-okhttp/jvm/src/io/ktor/client/engine/okhttp/StreamRequestBody.kt)へ変換させる。
+応答不明時にコード交換を自動再実行せず、再ログイン等の判断をC15〜C16へ渡す。
+
+`MobileAuthException`は固定の分類だけを持ち、HTTP・JSON・TLS例外のcauseや応答本文を引き継がない。
+通信切断・timeoutは`NETWORK`、401は`AUTHENTICATION_REQUIRED`、400の一回限りコード不正は
+`GRANT_REJECTED`とする。その他の400、403、429、5xx、不正な正常応答も別の分類で返す。
+キャンセルはそのまま伝播し、通信失敗やログアウト成功に置き換えない。
+この層だけでは保存済みtokenを消去せず、refresh・自動再認証・期限延長もしない。
+
+型の2件と[MockEngine](https://ktor.io/docs/client-testing.html)の5件で、4操作、Bearer／Cookie境界、
+不正復帰先、401と通信失敗の区別、転送拒否、応答上限、キャンセル、秘密非表示を確認する。
+既存のエミュレーターCIへ追加し、本番API・Discord認可・実アカウントへ接続する試験は行わない。
+画面・Custom Tabs・stateの生成／照合・C13への保存はC15〜C16、実配布でのApp LinksはC19へ分離する。
 
 ## 最小構成
 
