@@ -1,6 +1,7 @@
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
+  alias(libs.plugins.serialization)
   alias(libs.plugins.metro)
 }
 
@@ -49,9 +50,14 @@ dependencies {
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.circuit.foundation)
+  implementation(libs.ktor.client.core)
+  implementation(libs.ktor.client.okhttp)
+  implementation(libs.kotlinx.serialization.json)
+  implementation(libs.kotlinx.coroutines.core)
   debugImplementation(libs.androidx.compose.ui.tooling)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.test.junit)
   androidTestImplementation(libs.androidx.test.runner)
+  androidTestImplementation(libs.ktor.client.mock)
 }

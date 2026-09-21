@@ -129,6 +129,13 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 - ファイル／Keystore操作は同期処理のためUI thread外から呼ぶ。単一process内の複数インスタンスを直列化する。
 - 有効期限の延長・認可判定・プロフィール保存は行わない。ログイン画面・通信・PQCによる記録キャッシュはこの工程へ含めない。
 
+## C14の認証契約
+
+- `auth/MobileAuthModels.kt`：既存モバイルAPIに対応する要求・応答。S256、取引ID、復帰先、Bearer、日時を検証する。
+- DTOは通常classとし、文字列化で認証情報・本人情報を表示しない。
+- Ktor 3.6.0＋OkHttp engine、kotlinx.serialization 1.11.0、Coroutines 1.11.0を固定。compiler pluginはKotlinと同じ版を使用する。
+- HTTP接続は同じC14の次コミット、Custom Tabs・App Links・ログイン画面はC15以降へ分離する。
+
 ## デザイン基盤
 
 - `ui/ShittimTheme.kt`：surface／inverse／fixed色を含む意味別の配色、LINE Seed JP、Delogy、形状、Expressiveモーション。

@@ -31,6 +31,7 @@ updated: 2026-09-21
 | C11 | Records読取APIへBearer認証を接続 | 議論一覧・詳細へ接続済み。Cookie混在を拒否し、他APIへ認可を広げない |
 | C12 | モバイル認証ルートとAWS設定 | 5ルート・共有callback・OpenAPIを既存Auth Lambdaへ接続。追加IAM・設定値なし |
 | C13 | Keystoreによるトークン保存 | 保存・読取・削除、改ざん拒否、バックアップ除外を実装。ログイン画面・通信は未接続 |
+| C14 | モバイル認証APIクライアント | 要求・応答のKotlin型と通信依存を追加。HTTP接続は同工程の次コミット |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -409,6 +410,23 @@ API 36のinstrumentation testで保存・再読込・IV更新・鍵の非export�
 実装根拠は[Android Keystore](https://developer.android.com/privacy-and-security/keystore)、
 [AtomicFile](https://developer.android.com/reference/android/util/AtomicFile)、
 [バックアップの除外](https://developer.android.com/identity/data/autobackup)を参照する。
+
+## C14：モバイル認証APIクライアント
+
+`MobileAuthModels.kt`は[モバイル認証契約](https://github.com/pitekusu/shittim-chest/blob/main/contracts/records/v1/mobile-auth.schema.json)に対応する
+開始・交換・セッション応答と本人情報のKotlin型を持つ。サーバー側の契約やWeb validatorは変更しない。
+
+- S256、43文字のopaque値、verifierの長さ、許可された`returnTo`、schema version 1、Bearer方式を検証する。
+- ブラウザーに渡す`authorizePath`は、応答の取引IDと一致する固定相対パスだけを受理する。
+- offset付き日時を`Instant`へ変換し、C13へ渡す秒単位の絶対期限を保持する。期限延長や認可判定は行わない。
+- 正常応答の未知fieldは読み飛ばし、将来の任意field追加に対応する。必須値・型・安全上の境界は省略しない。
+- DTOを通常classとし、`toString()`にtoken・code・state・verifier・本人情報を含めない。
+
+通信依存はKtor 3.6.0、OkHttp engine、kotlinx.serialization 1.11.0、Coroutines 1.11.0を
+Version Catalogで固定する。serialization compiler pluginは既存Kotlin 2.4.20と揃える。
+2026年9月21日に[Ktor公式](https://ktor.io/docs/client-engines.html#okhttp)と
+[serializationのリリース](https://github.com/Kotlin/kotlinx.serialization/releases/tag/v1.11.0)を確認。
+1.12.0-RCは今回採用せず、JSON runtimeは安定版を使う。通信・ブラウザー・画面・保存は責務を分ける。
 
 ## 最小構成
 
