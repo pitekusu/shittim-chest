@@ -88,6 +88,7 @@ from shittim_records.memorial_adapters import (
     SqsMemorialJobQueue,
 )
 from shittim_records.memorial_http import MemorialHttpController
+from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
 from shittim_records.ogp_adapters import LambdaPreviewPreparer
 from shittim_records.projector import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
@@ -281,7 +282,15 @@ def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
 def read_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle authenticated Archive list and detail routes."""
 
-    return _read_controller().handle(event, now=datetime.now(UTC))
+    try:
+        return _read_controller().handle(event, now=datetime.now(UTC))
+    except Exception as error:
+        return _content_free_http_failure(
+            event,
+            code="RECORDS_UNAVAILABLE",
+            log_event="records_read_request_failed",
+            error=error,
+        )
 
 
 def admin_config_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
@@ -549,6 +558,7 @@ def _read_controller() -> ReadHttpController:
         )
         _READ_CONTROLLER = ReadHttpController(
             store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
+            mobile_store=DynamoMobileAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
             session_key=session_key,
             records=RecordsReadService(
                 reader=reader,
