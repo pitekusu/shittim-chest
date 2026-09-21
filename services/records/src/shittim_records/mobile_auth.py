@@ -13,7 +13,7 @@ from pydantic import (
 )
 
 from shittim_records.auth import OAUTH_TTL, SESSION_TTL, AuthFailure
-from shittim_records.contracts import PublicModel, SessionUser
+from shittim_records.contracts import NonEmptyText, PublicModel, SessionUser
 
 MOBILE_TRANSACTION_TTL_SECONDS = int(OAUTH_TTL.total_seconds())
 MOBILE_CODE_TTL_SECONDS = 60
@@ -133,7 +133,8 @@ class MobileAuthorizedTransaction(MobileTransaction):
     code_issued_at: EpochSeconds
     code_expires_at: EpochSeconds
     requester_key: OpaqueValue
-    user: SessionUser = Field(repr=False)
+    display_name: NonEmptyText = Field(repr=False)
+    avatar_asset_key: str | None = Field(repr=False)
     guild_verified_at: AwareDatetime
 
     @model_validator(mode="after")
@@ -143,6 +144,12 @@ class MobileAuthorizedTransaction(MobileTransaction):
             and self.code_expires_at - self.code_issued_at <= MOBILE_CODE_TTL_SECONDS
         ):
             raise ValueError("invalid_mobile_code_lifetime")
+        return self
+
+    @model_validator(mode="after")
+    def validate_avatar_asset(self) -> MobileAuthorizedTransaction:
+        if self.avatar_asset_key not in (None, f"requesters/{self.requester_key}/avatar.webp"):
+            raise ValueError("invalid_mobile_avatar_asset")
         return self
 
 

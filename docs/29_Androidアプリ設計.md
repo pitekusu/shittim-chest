@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-20
+updated: 2026-09-21
 ---
 
 # Androidアプリ設計
@@ -13,7 +13,7 @@ updated: 2026-09-20
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05〜C07のモバイル認証契約・保存・ブラウザー認可の内部処理である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
+現段階はC03までの最小アプリ・デザイン基盤・Android CIと、C05〜C08のモバイル認証契約・保存・ブラウザー認可・アプリ復帰コード発行の内部処理である。製品機能の提供やGoogle Playへの配布を完了した状態ではない。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -24,7 +24,8 @@ updated: 2026-09-20
 | C04 | CodeQL接続 | Kotlin 2.4.20へのCodeQL対応待ち。GitHub切替は未実施 |
 | C05 | モバイル認証の要求・応答・内部状態 | 契約定義を実装済み。認証実行・公開ルートは未接続 |
 | C06 | 認証取引と一回限りコードの保存処理 | 条件付き保存・期限確認・消費用transaction部品を実装済み。セッション発行との結合はC09 |
-| C07 | ログイン開始とブラウザー認可 | 内部serviceを実装済み。state・Cookieを検証するが、Discord本人確認・コード発行・公開ルートは未接続 |
+| C07 | ログイン開始とブラウザー認可 | 内部serviceを実装済み。state・Cookie検証をC08から利用。公開ルートは未接続 |
+| C08 | Discord認証結果からアプリ復帰コードを発行 | 本人・Guild確認、最長60秒のコード発行を実装済み。セッション発行はC09、公開接続はC12 |
 | 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
@@ -111,7 +112,7 @@ debug APK／テストAPK・LintとAPI 36の画面テストを実行する。画�
 ## C05：モバイル認証の契約（公開前）
 
 Recordsの`mobile_auth.py`に要求・応答と内部状態を定義する。既存の`PublicModel`、`SessionUser`、
-OAuth／セッション有効期間を再利用し、`AuthService`・WebのCookie／CSRF・Discord callbackは変更しない。
+OAuth／セッション有効期間を再利用する。C05では`AuthService`・WebのCookie／CSRF・Discord callbackを変更しない。
 APIはC12まで公開せず、C05ではDBアクセス・トークン発行・PKCE照合・状態遷移の実行を行わない。
 `mobile-auth.schema.json`は既存の契約生成コマンドで生成するが、live OpenAPIとWeb validatorには混ぜない。
 
@@ -166,7 +167,9 @@ stateDiagram-v2
 ```
 
 - 状態ごとの型を判別可能なunionにし、`authorizing`はブラウザーnonce／OAuth stateのハッシュ、
-  `authorized`はコードhash・期限・opaque requester key・表示用プロフィール・所属確認日時を必須にする。
+  `authorized`はコードhash・期限・opaque requester key・表示名・本人のavatar asset key（欠損時はnull）・所属確認日時を必須にする。
+- 期限付き画像URLは保存しない。asset keyは本人の`requesters/{requesterKey}/avatar.webp`だけを許可し、
+  セッション応答時に短時間のURLを発行する。これは公開前の内部状態の整理であり、公開DTOや既存データの移行は変更しない。
 - 内部の時刻はepoch秒、APIはoffset付き日時。取引10分・コード60秒と取引期限の包含関係を型の検証で守る。
 - コード・verifier・Bearer tokenの平文を内部状態に保存しない。ID・nonce・コードは用途別HMACで保存する設計とする。
   client stateだけはアプリへそのまま返す相関値として保持するが、それだけで認証や交換を許可しない。
@@ -232,7 +235,7 @@ sequenceDiagram
     Note over Login: callback時にOAuth stateとCookieを検証
 ```
 
-- アプリstateとDiscord OAuth stateは別物。後者は`m.<取引ID>.<独立256-bit乱数>`とし、C08で共有callbackの
+- アプリstateとDiscord OAuth stateは別物。後者は`m.<取引ID>.<独立256-bit乱数>`とし、C12で共有callbackの
   モバイル処理を判別できるようにする。prefix・取引IDだけでは受理せず、state全体のHMACを照合する。
 - HMACの用途を`mobile-transaction`・`mobile-browser-nonce`・`mobile-oauth-state`へ分離する。
   OAuth state・nonceはハッシュだけを保存し、認可URLとCookieは`repr`へ出さない。
@@ -243,6 +246,33 @@ sequenceDiagram
   失敗したモバイルcallbackをWeb処理へフォールバックさせない。公開接続はC12で行う。
 - `test_mobile_login.py`でCookie・期限・独立state・取引間の差し替え・CAS失敗・再使用・秘密非表示を確認する。
   既存Web認証／HTTP試験も維持する。実Discordログインや本番データ書き込みはこの工程の試験に含めない。
+
+## C08：Discord認証後のアプリ復帰コード（公開前）
+
+`mobile_callback.py`の`MobileCallbackService.complete`を内部処理として追加する。
+既存HTTP callbackへの分岐追加、モバイルルート、IAM、AndroidのApp Linksはこの工程では接続しない。
+
+```mermaid
+flowchart LR
+    Binding[C07のstate・Cookie・期限確認] --> Discord[既存のDiscord本人・Guild確認]
+    Discord --> Time[外部通信後に現在時刻を再取得]
+    Time --> CAS[期限内だけauthorizedへ条件付き更新]
+    CAS --> Link[固定App Linkと専用Cookie削除を返す]
+```
+
+- `auth.py`の`authenticate_discord_requester`をWeb／モバイルで共有する。
+  Discord token交換、所属確認、表示名の優先順、既存HMACによるrequester key、アバターのbest-effort保存を維持する。
+  Web側のstate消費、90日セッション、CSRF、Cookie、復帰先は変更しない。
+- 本人確認前にブラウザー束縛を検証し、通信後にも取引期限を確認する。
+  コードは独立した256-bit乱数で、保存するのは用途`mobile-code`のHMACのみ。
+  有効期限は発行時から60秒と、元の取引期限の早い方にする。
+- C06のCASで`authorizing → authorized`を確定してからだけ、固定HTTPS originの
+  `/auth/mobile/callback?transaction=…&code=…&state=…`を返す。競合・期限切れ・再使用ではコードを返さない。
+  URLへDiscord token、セッションtoken、プロフィール、認証後の目的画面を載せず、`repr`にも復帰URLを出さない。
+- 削除対象CookieはモバイルOAuth専用だけ。WebセッションやCSRF Cookieを発行・削除しない。
+  認証失敗時はコードを発行せず、既存の固定エラーを伝える。公開時の安全なエラー表示はC12で接続する。
+- `test_mobile_callback.py`で発行・再使用・通信中の期限切れ・CAS競合・Guild確認失敗・秘密非表示を確認する。
+  保存試験と既存Web認証／HTTP試験も実行する。一回限りコードのS256照合と原子的消費・セッション発行はC09に残す。
 
 ## 最小構成
 

@@ -45,10 +45,8 @@ def mobile_states() -> tuple[
                 "code_issued_at": 1040,
                 "code_expires_at": 1100,
                 "requester_key": "r" * 43,
-                "user": {
-                    "displayName": "Test",
-                    "avatar": {"kind": "placeholder", "alt": "Test", "fallbackVariant": "cyan"},
-                },
+                "display_name": "Test",
+                "avatar_asset_key": None,
                 "guild_verified_at": "2026-09-20T00:00:00Z",
             }
         ),
