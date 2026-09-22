@@ -1,9 +1,9 @@
 # Records Android
 
 C01のExpressive画面へC02のCircuit／Metroを接続し、C03のAndroid専用CIで確認している。
-画面は準備画面と一時的な明暗表示切替のみ。C13のトークン保存、C14の認証APIクライアント、
-C15のAuth Tabによるブラウザーログイン処理を追加したが、画面からの認証・通信・記録保存はまだ行わない。
-ログイン画面の状態管理はC16、署名済み配布とApp Linksの実証明書設定は後続工程とする。
+C16でC13のトークン保存、C14の認証APIクライアント、C15のAuth Tabを画面へ接続した。
+ログイン・期限切れ・通信障害・ログアウトを区別し、一時的な明暗表示切替も維持する。
+記録の取得・保存は未実装。署名済み配布とApp Linksの実証明書設定は後続工程とする。
 CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -100,6 +100,11 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 
 ### レビュー用スクリーンショット
 
+C16のログイン画面（API 36、未認証・実データなし）：
+
+- [ライト](screenshots/login-light.png)
+- [ダーク](screenshots/login-dark.png)
+
 2026年9月17日、API 36のエミュレーターで取得。アカウント情報・実データは含まない。
 
 - [通常表示](screenshots/bootstrap-default.png)
@@ -120,6 +125,15 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 - `BootstrapPresenter.kt`：画面識別子・State・Eventと、一時的な表示選択の保持／復元。
 - `BootstrapUi.kt`：Stateを受けて描画し、選択操作をeventSinkへ返す。Previewは固定Stateだけで表示。
 - Circuit `0.39.0`、Metro `1.4.4`を固定。Kotlin `2.4.20`とMaterial 3 `1.5.0-alpha28`は維持。
+
+## C16の認証画面
+
+- `auth/MobileSessionModel.kt`：Activity再生成をまたぐ認証の寿命。保存tokenとsession APIを照合し、期限・失効・通信障害を区別する。
+- `MainActivity.kt`／`RecordsGraph.kt`：既存AndroidX ViewModelをMetroへ注入。新規依存やRepository層は追加しない。
+- `BootstrapPresenter.kt`：Circuitの表示状態・イベントと、C15のActivity Resultを接続する。
+- `SessionPanel.kt`：認証状態別の説明と操作。tokenは受け取らず、ログアウト開始時に本人情報を隠す。
+- ログアウトは端末削除を先に行い、サーバー失効は1回だけ試す。応答不明では端末削除済み／サーバー失効未確認を明示する。
+- 架空APIの状態遷移と画面操作をinstrumentation testで確認する。本番通信は行わず、実署名によるDiscordログインはC19に残す。
 
 ## C13のトークン保存
 

@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-21
+updated: 2026-09-22
 ---
 
 # Androidアプリ設計
@@ -13,7 +13,7 @@ updated: 2026-09-21
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡しである。ログイン画面とGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
+現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡し、C16のログイン画面である。記録データの表示とGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -30,10 +30,11 @@ updated: 2026-09-21
 | C10 | モバイルセッション確認・ログアウト | 90日の絶対期限、本人情報の応答、提示tokenだけの失効を実装済み。公開接続はC12 |
 | C11 | Records読取APIへBearer認証を接続 | 議論一覧・詳細へ接続済み。Cookie混在を拒否し、他APIへ認可を広げない |
 | C12 | モバイル認証ルートとAWS設定 | 5ルート・共有callback・OpenAPIを既存Auth Lambdaへ接続。追加IAM・設定値なし |
-| C13 | Keystoreによるトークン保存 | 保存・読取・削除、改ざん拒否、バックアップ除外を実装。ログイン画面・通信は未接続 |
+| C13 | Keystoreによるトークン保存 | 保存・読取・削除、改ざん拒否、バックアップ除外を実装。C15〜C16で通信・画面へ接続 |
 | C14 | モバイル認証APIクライアント | 4操作の通信・型変換・失敗分類を実装。ブラウザー・画面・保存への接続はC15以降 |
 | C15 | ブラウザー認証からアプリ復帰・コード交換 | Auth TabとCustom Tabs fallback、PKCE・復帰検証・保存を接続。ログイン画面はC16、配布証明書の設定と実認証確認はC19 |
-| 後続 | 認証、記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
+| C16 | ログイン・期限切れ・ログアウト画面 | Circuit／MetroへC13〜C15を接続。通信障害と失効、端末削除とサーバー失効を区別 |
+| 後続 | 記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
 
@@ -106,7 +107,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C13：トークン保存（継続） | Android Keystore、標準暗号API、AtomicFile | 鍵の保護・暗号演算・原子的なファイル更新を利用。用途への束縛と保存形式の検証は残し、高レベル化だけを理由に形式を変えない |
 | C14：認証通信（継続） | Ktor、kotlinx.serialization | 通信・JSON変換を利用。再送防止・応答上限・秘密非表示は認証専用の境界として維持 |
 | C15：ブラウザー認証（継続） | Auth Tab、Activity Result API | 起動・結果受け渡しを利用。非対応ブラウザーのfallbackも同じ固定callback・取引・state・期限の検証へ接続 |
-| C16〜17：画面・通常API（導入予定） | 既存Circuitの状態管理・ナビゲーション、Metro、[Ktor ContentNegotiation](https://ktor.io/docs/client-serialization.html) | 通常JSON通信の変換を任せる。画面固有の状態と認可を残し、C14の認証専用通信とは分離 |
+| C16：認証画面（接続済み）／C17：通常API（導入予定） | 既存Circuit、Metro、AndroidX ViewModel／Activity Result。通常JSON通信には[Ktor ContentNegotiation](https://ktor.io/docs/client-serialization.html)を予定 | 認証の寿命はViewModel、描画状態・イベントはCircuitへ任せる。認証通信はC14を再利用し、通常API用依存を先行追加しない |
 | C21：画像表示（導入予定） | [Coil AsyncImage](https://coil-kt.github.io/coil/compose/) | 取得・縮小・placeholderは自作しない。非公開画像の平文disk cacheを無効化し、ログアウト時にmemory cacheを消去 |
 | C22：一覧の追加取得（導入予定） | [Paging／PagingSource](https://developer.android.com/topic/libraries/architecture/paging/v3-overview) | loading・retry・要求制御を任せる。APIのcursorを接続し、期限切れcursorはAPI契約に従って扱う |
 | C23：Markdown（導入予定） | [Compose Markdown RendererのMaterial 3対応](https://github.com/mikepenz/multiplatform-markdown-renderer) | 独自パーサー・WebViewは追加しない。外部リンクの許可判定はアプリ側に残す |
@@ -557,6 +558,36 @@ flowchart LR
 verifier・stateはBundle、SavedStateHandle、ファイル、logへ保存しない。プロセス終了時は再ログインする。
 RFCの公開vectorと架空API応答で、S256・復帰URL・キャンセル・古いコード・期限・交換中の重複・応答不明を確認する。
 PKCEの根拠は[RFC 7636](https://www.rfc-editor.org/rfc/rfc7636.html)を参照する。
+
+## C16：ログイン・期限切れ・ログアウト画面
+
+`MainActivity`がActivity再生成をまたいで保持する`MobileSessionModel`をMetro graphへ渡し、
+CircuitのPresenterからStateFlowを購読する。ブラウザー起動・復帰はC15のActivity Result契約を再利用する。
+新しい認証ライブラリ、Repository、汎用通信層は追加しない。
+
+| 状態 | 表示・操作 |
+|---|---|
+| 確認中 | 進捗表示。保存tokenをUI thread外で読み、未失効の場合だけsession APIへ確認 |
+| 未ログイン | Discordログイン。取消・期限切れ・ブラウザー不在等を区別して再操作を案内 |
+| ブラウザー認証中 | 認証中の表示。二重タップでActivityを重ねず、C15の結果を待つ |
+| ログイン済み | APIで確認した表示名とログアウト。記録取得・画像取得は後続工程 |
+| 通信等の確認失敗 | プロフィールを隠し、再試行または端末ログアウト。通信失敗だけで失効扱い・token削除しない |
+| ログアウト中 | 以前のプロフィールを直ちに隠し、追加操作を抑止 |
+| 保存領域の障害 | 認証済みとして扱わない。明示削除が成功してから再ログインを許可 |
+
+- 起動時、ログイン成功後、ログイン済み画面のforeground復帰時に保存値とsession APIを照合する。
+  Activityの成功結果だけでは認証済みにせず、許可された復帰先だけをメモリで保持する。
+- 保存期限とAPI期限の短い方を採用し、画面表示中にも期限到達でロックする。待機はmonotonicなdelayを使い、
+  表示中に端末時計を戻しても、その待機を延長しない。絶対期限の最終的な認可はサーバー側で行う。
+- 401または期限切れでは端末tokenを削除し、再ログインを案内する。削除失敗を成功扱いしない。
+- ログアウトは端末の認証情報を先に削除し、保持していたtokenのサーバー失効を1回だけ試す。
+  応答不明ではPOSTを自動再送せず、「端末から削除済み・サーバー失効は未確認」と表示する。
+  端末削除が失敗した場合は認証済み画面へ戻さず、明示的な削除再試行を案内する。
+- tokenは画面Stateへ渡さない。プロフィール・認証取引をBundleやSavedStateへ保存しない。
+  再ログイン時は新しく確認できたプロフィールだけを表示する。記録キャッシュの削除は将来の保存工程で扱う。
+
+架空APIと保存関数で、二重起動・期限・401・通信障害・削除失敗・ログアウト・アカウント切替を確認する。
+画面はエミュレーターで操作・明暗・狭幅／文字拡大を確認し、実署名とDiscordの縦断確認はC19に残す。
 
 ## 最小構成
 

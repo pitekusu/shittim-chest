@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import com.slack.circuit.foundation.Circuit
+import dev.pitekusu.shittim.records.auth.MobileSessionModel
 import dev.zacsweers.metro.DependencyGraph
 import dev.zacsweers.metro.Provides
 
@@ -8,6 +9,11 @@ import dev.zacsweers.metro.Provides
 @DependencyGraph
 internal interface RecordsGraph {
   val circuit: Circuit
+
+  @DependencyGraph.Factory
+  fun interface Factory {
+    fun create(@Provides session: MobileSessionModel): RecordsGraph
+  }
 
   @Provides
   fun provideCircuit(presenter: BootstrapPresenter): Circuit =
