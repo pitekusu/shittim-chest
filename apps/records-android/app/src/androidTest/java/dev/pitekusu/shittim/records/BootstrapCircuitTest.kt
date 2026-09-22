@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
@@ -18,6 +19,8 @@ class BootstrapCircuitTest {
   @Test
   fun graphRendersScreenAndRoutesThemeEvents() {
     compose.onNodeWithText(label(R.string.bootstrap_title)).assertIsDisplayed()
+    compose.onNodeWithText(label(R.string.session_login)).performScrollTo().assertIsDisplayed()
+    compose.onNodeWithText(label(R.string.preview_system)).performScrollTo()
     compose.onNodeWithText(label(R.string.preview_system)).assertIsOn()
     compose.onNodeWithText(label(R.string.preview_dark)).performClick().assertIsOn()
     compose.onNodeWithText(label(R.string.preview_system)).assertIsOff()
@@ -30,7 +33,7 @@ class BootstrapCircuitTest {
   fun themeChoiceSurvivesActivityRecreation() {
     val dark = label(R.string.preview_dark)
     val system = label(R.string.preview_system)
-    compose.onNodeWithText(dark).performClick().assertIsOn()
+    compose.onNodeWithText(dark).performScrollTo().performClick().assertIsOn()
     compose.activityRule.scenario.recreate()
     compose.onNodeWithText(dark).assertIsOn()
     compose.onNodeWithText(system).assertIsOff()

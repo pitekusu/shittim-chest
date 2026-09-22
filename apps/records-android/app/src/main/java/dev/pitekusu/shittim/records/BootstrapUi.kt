@@ -14,9 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -44,9 +42,6 @@ private fun BootstrapPreview() {
 @Composable
 internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modifier) {
   val themeChoice = state.themeChoice
-  val onThemeChange: (ThemeChoice) -> Unit = {
-    state.eventSink(BootstrapScreen.Event.SelectTheme(it))
-  }
   val darkTheme =
     when (themeChoice) {
       ThemeChoice.System -> isSystemInDarkTheme()
@@ -66,8 +61,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           ) {
             BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp))
             BootstrapControls(
-              themeChoice,
-              onThemeChange,
+              state,
               Modifier.weight(1f, fill = false).widthIn(max = 480.dp),
             )
           }
@@ -79,8 +73,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           ) {
             BootstrapHeader(Modifier.widthIn(max = 560.dp).fillMaxWidth())
             BootstrapControls(
-              themeChoice,
-              onThemeChange,
+              state,
               Modifier.widthIn(max = 560.dp).fillMaxWidth(),
             )
           }
@@ -116,34 +109,13 @@ private fun BootstrapHeader(modifier: Modifier) {
 
 @Composable
 private fun BootstrapControls(
-  themeChoice: ThemeChoice,
-  onThemeChange: (ThemeChoice) -> Unit,
+  state: BootstrapScreen.State,
   modifier: Modifier,
 ) {
   Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
-    BootstrapThemeSelector(themeChoice, onThemeChange)
-    Text(
-      stringResource(R.string.bootstrap_scope),
-      style = MaterialTheme.typography.titleMediumEmphasized,
-      color = MaterialTheme.colorScheme.onSurface,
-      modifier = Modifier.semantics { heading() },
-    )
-    // Informational rows, not disabled navigation to screens that do not exist yet.
-    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-      SegmentedListItem(
-        shapes = ListItemDefaults.segmentedShapes(index = 0, count = 2),
-        overlineContent = { Text(stringResource(R.string.bootstrap_available)) },
-        supportingContent = { Text(stringResource(R.string.bootstrap_preview_description)) },
-      ) {
-        Text(stringResource(R.string.bootstrap_preview))
-      }
-      SegmentedListItem(
-        shapes = ListItemDefaults.segmentedShapes(index = 1, count = 2),
-        overlineContent = { Text(stringResource(R.string.bootstrap_planned)) },
-        supportingContent = { Text(stringResource(R.string.bootstrap_records_description)) },
-      ) {
-        Text(stringResource(R.string.bootstrap_records))
-      }
+    SessionPanel(state.session, state.eventSink)
+    BootstrapThemeSelector(state.themeChoice) {
+      state.eventSink(BootstrapScreen.Event.SelectTheme(it))
     }
   }
 }
