@@ -13,7 +13,7 @@ updated: 2026-09-23
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡し、C16のログイン画面、C17の記録1件表示である。一覧全体やGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
+現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡し、C16のログイン画面、C17の記録1件表示、C18のRelease設定である。一覧全体やGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -35,7 +35,8 @@ updated: 2026-09-23
 | C15 | ブラウザー認証からアプリ復帰・コード交換 | Auth TabとCustom Tabs fallback、PKCE・復帰検証・保存を接続。ログイン画面はC16、配布証明書の設定と実認証確認はC19 |
 | C16 | ログイン・期限切れ・ログアウト画面 | Circuit／MetroへC13〜C15を接続。通信障害と失効、端末削除とサーバー失効を区別 |
 | C17 | 記録1件の取得と表示 | ログイン後に最新一覧から1件を取得し、議題・勝者・結論を表示。許可された復帰先の個別記録も取得 |
-| 後続 | 一覧全体、詳細全項目、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
+| C18 | Release variant・署名入力・版番号 | debugと配布用application IDを分離。秘密値を環境変数から受け、未設定時のRelease成果物作成を拒否 |
+| 後続 | 一覧全体、詳細全項目、暗号化保存、署名済み配布 | 未実装。実upload key・Play署名証明書・App Linksの接続はC19以降 |
 
 ### PRの分割単位
 
@@ -608,6 +609,18 @@ CircuitのPresenterからStateFlowを購読する。ブラウザー起動・復�
 C17は縦断動作の最小表示であり、C21の一覧カード、C22のpagination、C23〜C25の詳細項目を先取りしない。
 架空APIで一覧→詳細・空・個別復帰先・異なるID／勝者・401を確認し、画面で読み込み・結果・再試行と
 狭幅／文字拡大を確認する。実署名でのログインはC19で確認する。
+
+## C18：Release variantと署名入力
+
+Android Gradle Plugin標準の`release` build typeへupload keyの署名設定を接続する。`debug`は既存の`.dev`付きapplication IDとdebug署名を維持し、releaseは本来のapplication IDを使用する。
+
+| 入力 | 契約 |
+|---|---|
+| 版番号 | Gradleプロパティ`shittimAndroidVersionCode`は正の整数（既定1）、`shittimAndroidVersionName`は`major.minor.patch`（既定`0.0.1`）。配布時のcodeはPlay提出済みの値より大きくする |
+| upload key | keystoreの場所・store password・alias・key passwordをそれぞれ専用環境変数から取得し、build scriptやGradleプロパティに秘密値を保存しない |
+| 失敗条件 | 入力またはkeystoreファイルが欠けた場合は`assembleRelease`と`bundleRelease`を成果物作成前に拒否し、欠けた秘密値やファイルパスをエラーへ表示しない |
+
+合成テスト鍵によるAAB署名と、秘密入力なしでの失敗を確認する。実upload keyの発行・管理、Play app signing証明書によるApp Links、実Discordログイン・本人向け配布はC19以降の別工程とする。署名済み成果物はGitや通常CI artifactへ保存しない。
 
 ## 最小構成
 

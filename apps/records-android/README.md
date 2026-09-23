@@ -3,7 +3,7 @@
 C01のExpressive画面へC02のCircuit／Metroを接続し、C03のAndroid専用CIで確認している。
 C16でC13のトークン保存、C14の認証APIクライアント、C15のAuth Tabを画面へ接続した。
 ログイン・期限切れ・通信障害・ログアウトを区別し、一時的な明暗表示切替も維持する。
-C17ではログイン済み画面に記録1件の議題・勝者・結論を表示する。署名済み配布とApp Linksの実証明書設定は後続工程とする。
+C17ではログイン済み画面に記録1件の議題・勝者・結論を表示する。C18でRelease variantの署名入力と版番号を設定するが、署名済み配布とApp Linksの実証明書設定は後続工程とする。
 CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -125,6 +125,14 @@ C16のログイン画面（API 36、未認証・実データなし）：
 - `BootstrapPresenter.kt`：画面識別子・State・Eventと、一時的な表示選択の保持／復元。
 - `BootstrapUi.kt`：Stateを受けて描画し、選択操作をeventSinkへ返す。Previewは固定Stateだけで表示。
 - Circuit `0.39.0`、Metro `1.4.4`を固定。Kotlin `2.4.20`とMaterial 3 `1.5.0-alpha28`は維持。
+
+## C18のRelease設定
+
+- debug版は従来どおり`.dev`付きでビルドする。release版は本来のapplication IDを使用する。
+- `shittimAndroidVersionCode`（正の整数、既定`1`）と`shittimAndroidVersionName`（`major.minor.patch`、既定`0.0.1`）をGradleプロパティで指定できる。更新時はPlayに提出済みのcodeより大きくする。
+- 署名には環境変数`SHITTIM_ANDROID_UPLOAD_KEYSTORE`、`SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD`、`SHITTIM_ANDROID_UPLOAD_KEY_ALIAS`、`SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD`を使用する。秘密値をコマンド行、`gradle.properties`、Git、ログへ書かない。
+- いずれかの入力またはkeystoreファイルが欠ければ、`assembleRelease`・`bundleRelease`は成果物作成前に失敗する。実際のupload keyの発行・管理、Play署名証明書とApp Linksの接続はC19以降の運用で扱う。
+- 合成テスト鍵でのAAB署名確認は実施するが、配布版の署名や端末ログインの確認とは区別する。C39の配布Workflowは同一AABの検証・提出を別途実装する。
 
 ## C17の記録1件表示
 
