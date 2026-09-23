@@ -12,6 +12,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -72,11 +73,14 @@ class MobileSessionModelTest {
         val model = fixture.start()
         model.await<SessionState.SignedIn>()
         fixture.status = HttpStatusCode.ServiceUnavailable
+        fixture.sessionGate = CompletableDeferred()
         model.onForeground()
         assertEquals(SessionState.Checking, model.state.value)
+        fixture.sessionGate?.complete(Unit)
         model.await<SessionState.Unavailable>()
         assertNotNull(fixture.stored)
         fixture.status = HttpStatusCode.OK
+        fixture.sessionGate = null
         model.retry()
         assertEquals("利用者A", model.await<SessionState.SignedIn>().user.displayName)
       }
@@ -145,6 +149,27 @@ class MobileSessionModelTest {
     }
   }
 
+  @Test
+  fun responseFinishingAfterLogoutCannotBeUsedForTheOldAccount() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        val entered = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<String>()
+        val pending = async {
+          model.withAuthorizedToken { entered.complete(Unit); finish.await() }
+        }
+        entered.await()
+        model.logout()
+        model.await<SessionState.SignedOut>()
+        finish.complete("古い利用者の記録")
+        assertNull(pending.await())
+      }
+    }
+  }
+
   private suspend inline fun <reified T : SessionState> MobileSessionModel.await(): T =
     withTimeout(5_000) { state.first { it is T } as T }
 
@@ -159,6 +184,7 @@ class MobileSessionModelTest {
     var gets = 0
     var posts = 0
     var status = HttpStatusCode.OK
+    var sessionGate: CompletableDeferred<Unit>? = null
     var logoutGate: CompletableDeferred<Unit>? = null
     val postStarted = CompletableDeferred<Unit>()
     val owner = ViewModelStore()
@@ -166,6 +192,7 @@ class MobileSessionModelTest {
       when (request.url.encodedPath.substringAfterLast('/')) {
         "session" -> {
           gets++
+          sessionGate?.await()
           respond("""{"schemaVersion":1,"isAdmin":false,"expiresAt":"$serverExpiry",
             "user":{"displayName":"$name","avatar":{"kind":"placeholder","alt":"架空","fallbackVariant":"cyan"}}}""",
             status, headersOf(HttpHeaders.ContentType, "application/json"))
