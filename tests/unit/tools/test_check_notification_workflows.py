@@ -220,22 +220,54 @@ def test_records_ci_excludes_local_workspace_paths_from_hashed_audit(directory: 
         validate_notification_workflows(directory)
 
 
-def test_records_ci_requires_the_pinned_pnpm_vite_plus_toolchain(directory: Path) -> None:
+def test_records_ci_requires_the_web_gates(directory: Path) -> None:
     _replace(directory / RECORDS_CI_WORKFLOW, "pnpm exec vp check", "npm run check", 1)
 
-    with pytest.raises(WorkflowPolicyError, match=r"pinned pnpm and Vite\+"):
+    with pytest.raises(WorkflowPolicyError, match="frozen install and web gates"):
         validate_notification_workflows(directory)
 
 
-def test_records_ci_rejects_the_non_allowlisted_vite_plus_action(directory: Path) -> None:
+@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
+def test_records_web_setup_requires_the_reviewed_commit(directory: Path, workflow: str) -> None:
     _replace(
-        directory / RECORDS_CI_WORKFLOW,
-        "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+        directory / workflow,
+        "voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1",
         "voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0",
         1,
     )
 
-    with pytest.raises(WorkflowPolicyError, match="allowlisted GitHub-owned"):
+    with pytest.raises(WorkflowPolicyError, match="pinned Records Web setup"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
+def test_records_web_setup_requires_the_package_boundary(directory: Path, workflow: str) -> None:
+    _replace(
+        directory / workflow,
+        "          working-directory: apps/records-web\n          run-install: false",
+        "          working-directory: .\n          run-install: false",
+        1,
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="pinned Records Web setup"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
+def test_records_web_install_requires_the_frozen_lock(directory: Path, workflow: str) -> None:
+    _replace(directory / workflow, "vp install --frozen-lockfile", "vp install", 1)
+
+    with pytest.raises(WorkflowPolicyError, match=r"frozen install|package boundary"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
+def test_records_web_setup_cannot_install_without_the_frozen_flag(
+    directory: Path, workflow: str
+) -> None:
+    _replace(directory / workflow, "          run-install: false", "          run-install: true", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="pinned Records Web setup"):
         validate_notification_workflows(directory)
 
 

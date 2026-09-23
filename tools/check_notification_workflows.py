@@ -1268,22 +1268,26 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         raise WorkflowPolicyError("Records CI must run the pinned DynamoDB Local integration test")
 
     records_web = _workflow_job_block(records_text, "records-web")
-    if "voidzero-dev/setup-vp@" in records_web:
-        raise WorkflowPolicyError(
-            "Records CI must use the allowlisted GitHub-owned Node setup action"
-        )
+    setup = _workflow_step_block(records_web, "Set up the pinned Records Web toolchain")
+    required_setup = (
+        "uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1",
+        "node-version: ${{ env.NODE_VERSION }}",
+        "working-directory: apps/records-web",
+        "run-install: false",
+        "cache: true",
+        "cache-save: ${{ github.ref == 'refs/heads/main' }}",
+    )
+    if any(marker not in setup for marker in required_setup):
+        raise WorkflowPolicyError("Records CI must use the pinned Records Web setup")
     required_records_web = (
-        "uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
-        "corepack enable pnpm",
-        'test "$(pnpm --version)" = "11.25.0"',
-        "pnpm install --frozen-lockfile",
+        "vp install --frozen-lockfile",
         "pnpm exec vp check",
         "pnpm exec vp test",
         "pnpm exec vp build",
         "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
     )
     if any(marker not in records_web for marker in required_records_web):
-        raise WorkflowPolicyError("Records CI must use the pinned pnpm and Vite+ toolchain")
+        raise WorkflowPolicyError("Records CI must retain the frozen install and web gates")
     if "npm ci" in records_web or "package-lock.json" in records_web:
         raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
 
@@ -1327,13 +1331,22 @@ def _validate_records_workflows(directory: Path) -> None:
     if "secrets." in release or "secrets." in backfill:
         raise WorkflowPolicyError("Records workflows must consume only pre-registered handles")
 
+    setup = _workflow_step_block(release, "Set up the pinned Records Web toolchain")
+    required_setup = (
+        "uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1",
+        "node-version: ${{ env.NODE_VERSION }}",
+        "working-directory: apps/records-web",
+        "run-install: false",
+        "cache: true",
+    )
+    if any(marker not in setup for marker in required_setup):
+        raise WorkflowPolicyError("Records Release must use the pinned Records Web setup")
+
     install_step = _workflow_step_block(release, "Install frozen build environments")
     app_local_pnpm = (
         "          (\n"
         "            cd apps/records-web\n"
-        "            corepack enable pnpm\n"
-        '            test "$(pnpm --version)" = "11.25.0"\n'
-        "            pnpm install --frozen-lockfile\n"
+        "            vp install --frozen-lockfile\n"
         "          )"
     )
     if install_step.count(app_local_pnpm) != 1:
