@@ -1634,7 +1634,8 @@ def _validate_records_workflows(directory: Path) -> None:
         or "--delete" in web_publish_block
     ):
         raise WorkflowPolicyError(
-            "Records Release must publish assets and App Links before index without deletion"
+            "Records Release must publish assets and App Links before index "
+            "without deleting old hashes"
         )
 
     backfill_markers = (
