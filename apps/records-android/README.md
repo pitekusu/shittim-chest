@@ -165,13 +165,12 @@ C16のログイン画面（API 36、未認証・実データなし）：
      -storetype PKCS12
    ```
 
-3. Play Consoleの「内部テスト」で本人のGoogleアカウントだけをテスターに追加する。提出済みの最大`versionCode`より大きい番号を選び、秘密値を対話入力して同じ端末で署名済みAABを作る。パスワードをコマンド引数、`gradle.properties`、シェル履歴へ書かない。
+3. Play Consoleの「内部テスト」で本人のGoogleアカウントだけをテスターに追加する。提出済みの最大`versionCode`より大きい番号を選び、秘密値を対話入力して同じ端末で署名済みAABを作る。この手順で作るPKCS12では鍵パスワードに保管庫と同じ値を使う。パスワードをコマンド引数、`gradle.properties`、シェル履歴へ書かない。
 
-   ```sh
+   ```bash
    # 保管庫のパスワードを入力してEnter（入力内容は表示されない）
    read -r -s SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD; printf '\n'
-   # 鍵のパスワードを入力してEnter（入力内容は表示されない）
-   read -r -s SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD; printf '\n'
+   SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD=$SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD
    export SHITTIM_ANDROID_UPLOAD_KEYSTORE SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD
    export SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD
    SHITTIM_ANDROID_UPLOAD_KEY_ALIAS=shittim-upload ./gradlew :app:bundleRelease \
