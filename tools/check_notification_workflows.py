@@ -1617,16 +1617,24 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError("Records Release must not build or push a Fargate image")
     web_publish_block = _workflow_step_block(release, "Publish the attested Records Web artifact")
     asset_upload = 'aws s3 cp "${web_stage}/assets" "s3://${web_bucket}/assets"'
+    app_links_upload = 'aws s3 cp "${assetlinks}" "s3://${web_bucket}/.well-known/assetlinks.json"'
     entry_upload = 'aws s3 cp "${web_stage}/index.html" "s3://${web_bucket}/index.html"'
     if (
         web_publish_block.count(asset_upload) != 1
+        or web_publish_block.count(app_links_upload) != 1
         or web_publish_block.count(entry_upload) != 1
         or web_publish_block.count("public,max-age=31536000,immutable") != 1
-        or web_publish_block.index(asset_upload) >= web_publish_block.index(entry_upload)
+        or not (
+            web_publish_block.index(asset_upload)
+            < web_publish_block.index(app_links_upload)
+            < web_publish_block.index(entry_upload)
+        )
+        or '--content-type "application/json"' not in web_publish_block
+        or '"/.well-known/assetlinks.json"' not in web_publish_block
         or "--delete" in web_publish_block
     ):
         raise WorkflowPolicyError(
-            "Records Release must publish immutable assets before index without deleting old hashes"
+            "Records Release must publish assets and App Links before index without deletion"
         )
 
     backfill_markers = (

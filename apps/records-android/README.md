@@ -3,7 +3,7 @@
 C01のExpressive画面へC02のCircuit／Metroを接続し、C03のAndroid専用CIで確認している。
 C16でC13のトークン保存、C14の認証APIクライアント、C15のAuth Tabを画面へ接続した。
 ログイン・期限切れ・通信障害・ログアウトを区別し、一時的な明暗表示切替も維持する。
-C17ではログイン済み画面に記録1件の議題・勝者・結論を表示する。C18でRelease variantの署名入力と版番号を設定するが、署名済み配布とApp Linksの実証明書設定は後続工程とする。
+C17ではログイン済み画面に記録1件の議題・勝者・結論を表示する。C18でRelease variantの署名入力と版番号を設定した。C19でPlay証明書のApp Linksと記録リンクからの復帰を接続する。
 CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -133,6 +133,13 @@ C16のログイン画面（API 36、未認証・実データなし）：
 - 署名には環境変数`SHITTIM_ANDROID_UPLOAD_KEYSTORE`、`SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD`、`SHITTIM_ANDROID_UPLOAD_KEY_ALIAS`、`SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD`を使用する。秘密値をコマンド行、`gradle.properties`、Git、ログへ書かない。
 - いずれかの入力またはkeystoreファイルが欠ければ、`assembleRelease`・`bundleRelease`は成果物作成前に失敗する。実際のupload keyの発行・管理、Play署名証明書とApp Linksの接続はC19以降の運用で扱う。
 - 合成テスト鍵でのAAB署名確認は実施するが、配布版の署名や端末ログインの確認とは区別する。C39の配布Workflowは同一AABの検証・提出を別途実装する。
+
+## C19のApp Links
+
+- `https://shittim.pitekusu.dev/.well-known/assetlinks.json`はRecords Web Releaseが配信する。Play Consoleのアプリ署名鍵（従来鍵とポスト量子暗号鍵）を登録し、upload/debug鍵は登録しない。
+- 固定認証callbackと`/records/{43文字のID}`だけがアプリのHTTPSリンク対象。記録リンクは固定host・query／fragmentなしを確認してから画面へ渡す。
+- 未ログインで記録リンクを開いた場合はその記録をログイン後の復帰先にし、ログイン済みなら記録を再取得する。記録の公開範囲はAPIの認可で決まる。
+- Play配布版でのOS検証、実Discordログイン、実upload keyで署名したAABの提出は、本番配布の準備ができた時点で行う。debug署名のエミュレーター確認はその代替にならない。
 
 ## C17の記録1件表示
 

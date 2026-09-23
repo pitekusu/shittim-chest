@@ -43,6 +43,8 @@ internal class MobileSessionModel(
   private var expiry: Job? = null
   private var returnTo = "/"
 
+  val loginDestination: String get() = returnTo
+
   init { refresh() }
 
   fun onForeground() {
@@ -51,6 +53,16 @@ internal class MobileSessionModel(
 
   fun retry() {
     if (state.value == SessionState.Unavailable) refresh()
+  }
+
+  fun openDestination(destination: String) {
+    if (!destination.startsWith("/records/") || !isMobileReturnTo(destination) ||
+      state.value == SessionState.Browser || state.value == SessionState.SigningOut) return
+    if (returnTo == destination) return
+    returnTo = destination
+    (state.value as? SessionState.SignedIn)?.let {
+      mutableState.value = SessionState.SignedIn(it.user, it.expiresAt, destination)
+    }
   }
 
   // The token is available only inside the request callback, never in a UI state or saved value.

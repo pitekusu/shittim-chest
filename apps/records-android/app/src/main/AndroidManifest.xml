@@ -18,7 +18,6 @@
             android:name=".auth.MobileLoginRedirectActivity"
             android:exported="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar">
-            <!-- Digital Asset Links for the actual Play certificate are configured in C19. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -33,6 +32,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="shittim.pitekusu.dev"
+                    android:pathPrefix="/records/" />
             </intent-filter>
         </activity>
     </application>

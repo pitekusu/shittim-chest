@@ -13,8 +13,10 @@ from tools.build_records_web_artifact import build_artifact
 def test_artifact_is_deterministic_and_path_safe(tmp_path: Path) -> None:
     source = tmp_path / "dist"
     (source / "assets").mkdir(parents=True)
+    (source / ".well-known").mkdir()
     (source / "index.html").write_text("<main>Records</main>\n", encoding="utf-8")
     (source / "assets" / "app.js").write_text("export {};\n", encoding="utf-8")
+    (source / ".well-known" / "assetlinks.json").write_text("[]\n", encoding="utf-8")
     first = tmp_path / "first.zip"
     second = tmp_path / "second.zip"
 
@@ -25,9 +27,10 @@ def test_artifact_is_deterministic_and_path_safe(tmp_path: Path) -> None:
         hashlib.sha256(first.read_bytes()).digest() == hashlib.sha256(second.read_bytes()).digest()
     )
     with zipfile.ZipFile(first) as archive:
-        assert archive.namelist() == ["assets/app.js", "index.html"]
+        assert archive.namelist() == [".well-known/assetlinks.json", "assets/app.js", "index.html"]
         assert all(item.date_time == (1980, 1, 1, 0, 0, 0) for item in archive.infolist())
         assert archive.read("index.html") == b"<main>Records</main>\n"
+        assert archive.read(".well-known/assetlinks.json") == b"[]\n"
 
 
 def test_artifact_rejects_missing_entrypoint(tmp_path: Path) -> None:

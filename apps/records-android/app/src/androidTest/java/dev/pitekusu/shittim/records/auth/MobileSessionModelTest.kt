@@ -25,6 +25,30 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun recordLinkBecomesLoginDestinationAndUpdatesActiveSession() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        val model = fixture.start()
+        model.await<SessionState.SignedOut>()
+        val first = "/records/${"a".repeat(43)}"
+        val second = "/records/${"b".repeat(43)}"
+        model.openDestination(first)
+        assertEquals(first, model.loginDestination)
+        assertTrue(model.beginLogin())
+        model.openDestination(second) // A link cannot change an in-flight authorization request.
+        assertEquals(first, model.loginDestination)
+        fixture.stored = fixture.validToken
+        model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN, first))
+        assertEquals(first, model.await<SessionState.SignedIn>().returnTo)
+        model.openDestination(second)
+        assertEquals(second, model.await<SessionState.SignedIn>().returnTo)
+        model.openDestination("/admin")
+        assertEquals(second, model.loginDestination)
+      }
+    }
+  }
+
+  @Test
   fun loginIsSingleFlightAndReadsSavedCredentialsInsteadOfTrustingResult() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->

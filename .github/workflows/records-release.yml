@@ -763,16 +763,29 @@ jobs:
           fi
           printf '%s' "${web_bucket}" > "${RUNNER_TEMP}/records-web-bucket"
           printf '%s' "${distribution_id}" > "${RUNNER_TEMP}/records-distribution-id"
+          assetlinks="${web_stage}/.well-known/assetlinks.json"
+          test -f "${assetlinks}"
+          jq --exit-status '
+            length == 1 and
+            .[0].relation == ["delegate_permission/common.handle_all_urls"] and
+            .[0].target.namespace == "android_app" and
+            .[0].target.package_name == "dev.pitekusu.shittim.records" and
+            (.[0].target.sha256_cert_fingerprints | length >= 1 and
+              all(.[]; test("^([0-9A-F]{2}:){31}[0-9A-F]{2}$")))
+          ' "${assetlinks}" >/dev/null
           aws s3 cp "${web_stage}/assets" "s3://${web_bucket}/assets" \
             --recursive \
             --cache-control "public,max-age=31536000,immutable"
           test "$(find "${web_stage}" -mindepth 1 -maxdepth 1 -type f \
             ! -name index.html | wc -l)" -eq 0
+          aws s3 cp "${assetlinks}" "s3://${web_bucket}/.well-known/assetlinks.json" \
+            --cache-control "public,max-age=300" --content-type "application/json"
           aws s3 cp "${web_stage}/index.html" "s3://${web_bucket}/index.html" \
             --cache-control "no-cache" --content-type "text/html; charset=utf-8"
           touch "${RUNNER_TEMP}/records-index-published"
           invalidation_id=$(aws cloudfront create-invalidation \
-            --distribution-id "${distribution_id}" --paths "/index.html" \
+            --distribution-id "${distribution_id}" \
+            --paths "/index.html" "/.well-known/assetlinks.json" \
             --query 'Invalidation.Id' --output text)
           aws cloudfront wait invalidation-completed \
             --distribution-id "${distribution_id}" --id "${invalidation_id}"
@@ -807,6 +820,16 @@ jobs:
             "${endpoint}/")
           test "${index_status}" = 200
           grep --quiet '<div id="root"></div>' "${RUNNER_TEMP}/records-index.html"
+          assetlinks_status=$(curl --silent --show-error --max-redirs 0 \
+            --dump-header "${RUNNER_TEMP}/records-assetlinks.headers" \
+            --output "${RUNNER_TEMP}/records-assetlinks.json" --write-out '%{http_code}' \
+            "${endpoint}/.well-known/assetlinks.json")
+          test "${assetlinks_status}" = 200
+          grep --ignore-case --extended-regexp --quiet \
+            '^content-type: application/json([;[:space:]]|$)' \
+            "${RUNNER_TEMP}/records-assetlinks.headers"
+          cmp "${RUNNER_TEMP}/records-assetlinks.json" \
+            "${RUNNER_TEMP}/records-web-dist/.well-known/assetlinks.json"
           account=$(aws sts get-caller-identity --query Account --output text)
           expected_upload_origin="https://shittim-chest-production-records-memorial-upload-${account}.s3.${AWS_REGION}.amazonaws.com"
           grep --ignore-case --fixed-strings --quiet \
