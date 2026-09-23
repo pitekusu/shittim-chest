@@ -47,7 +47,7 @@ from shittim_chest.domain import (
     InitialOpinion,
     ParticipantSlot,
 )
-from tools.evaluate_escalation import UsageCollector
+from tools.usage_collector import UsageCollector
 
 TOPICS = (
     ("food", r"夕飯|夕食|昼食|朝食|食べ|料理|ラーメン|弁当"),

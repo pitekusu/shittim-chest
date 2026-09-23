@@ -25,9 +25,9 @@ from tools.evaluate_deliberation import (
     load_service,
     usage_summary,
 )
-from tools.evaluate_escalation import UsageCollector
 from tools.evaluate_overlap import PAIR_RULES, Overlap, reconsider, reconsider_targets
 from tools.evaluate_speech_quality import RUBRIC, Assessment, Judgment
+from tools.usage_collector import UsageCollector
 
 
 def select_records(records: list[dict[str, Any]], seed: int) -> list[dict[str, Any]]:

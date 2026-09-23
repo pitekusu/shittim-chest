@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, openai, prompt, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-21
+updated: 2026-09-23
 ---
 
 # OpenAI・プロンプト詳細設計
@@ -29,7 +29,7 @@ OpenAIのマルチエージェント機能へ進行を委ねず、Pythonが再�
 
 | 対象 | 方針 |
 |---|---|
-| 通常討論モデル | `gpt-5.6-luna`の標準設定（`standard`）。上位モデルへ自動切替しない |
+| 通常討論モデル | `gpt-6-luna`の標準設定（`standard`）。上位モデルへ自動切替しない |
 | OpenAI接続 | Core／RecordsともSDK 3系・HTTPX2 2系。正確な版は各ロックファイルで固定 |
 | 他のHTTP通信 | Discord・認証・費用取得等のHTTPXと境界を分ける |
 | Responsesの保存 | `store=false`を明示 |
@@ -358,7 +358,7 @@ flowchart TD
 | 画像生成 | `gpt-image-2.5-sunburst`、品質`xhigh`で親密なデフォルメ2ショット。実写調・第三者の追加・入力画像内の命令追従を禁止 |
 | 最終寸法 | 1920×1088で生成後、中央を切り抜いて1920×1080へ固定 |
 | 文字の合成 | アプリケーションでDelogyの`THE SHITTIM CHEST`とLINE Seed JPの日本時間の達成日を描画 |
-| 思い出文 | `gpt-5.6-luna`、約800字。実装では平文出力を650〜950字で検証 |
+| 思い出文 | `gpt-6-luna`、約800字。実装では平文出力を650〜950字で検証 |
 | 文章の内容 | 達成時のDiscord表示名と直近10質問を素材に、最大親愛度の口調で語る。質問を引用・列挙しない |
 | 通信 | 各呼出120秒、SDK自動再試行0回、終了処理用15秒を確保 |
 

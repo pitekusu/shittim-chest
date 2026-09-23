@@ -1,4 +1,4 @@
-"""SDK-independent production and evaluation-only OpenAI generation policies."""
+"""SDK-independent OpenAI generation policy."""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ from typing import Final
 @unique
 class GenerationPolicyId(StrEnum):
     LUNA_STANDARD = "luna_standard"
-    TERRA_STANDARD = "terra_standard"
-    LUNA_PRO = "luna_pro"
 
 
 @unique
@@ -76,19 +74,8 @@ def _policy(
 
 LUNA_STANDARD: Final = _policy(
     GenerationPolicyId.LUNA_STANDARD,
-    "gpt-5.6-luna",
+    "gpt-6-luna",
     ReasoningMode.STANDARD,
 )
-# The production bootstrap must use this invariant. Alternative policies below
-# remain available only to the explicit, repository-external evaluation tool.
+# The production bootstrap must use this invariant.
 PRODUCTION_POLICY: Final = LUNA_STANDARD
-TERRA_STANDARD: Final = _policy(
-    GenerationPolicyId.TERRA_STANDARD,
-    "gpt-5.6-terra",
-    ReasoningMode.STANDARD,
-)
-LUNA_PRO: Final = _policy(
-    GenerationPolicyId.LUNA_PRO,
-    "gpt-5.6-luna",
-    ReasoningMode.PRO,
-)

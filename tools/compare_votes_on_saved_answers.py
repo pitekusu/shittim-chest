@@ -33,7 +33,7 @@ from shittim_chest.domain import (
 from shittim_chest.domain.composite_voting import CompositeBallot, select_composite_winner
 from tools.compare_for_humans import NAMES, private_directory
 from tools.evaluate_deliberation import _parallel, load_baseline, load_service, usage_summary
-from tools.evaluate_escalation import UsageCollector
+from tools.usage_collector import UsageCollector
 
 AXES = ("entertainment", "character", "originality", "responsiveness", "interaction")
 WEIGHTS = (5, 5, 4, 4, 2)
@@ -148,7 +148,7 @@ def render(report: dict[str, Any]) -> str:
         "<p>各質問で、現行投票と総合評価をそれぞれ2回実行しました。「通常順／逆順」は投票者が見る他の2人の候補の順番で、議論の順序ではありません。同じ回答なので独立した20問ではなく10問×2回です。順番の影響と確率的な揺らぎは分離できません。</p>",
         "<p>現行：投票者が1案を選び、正確性・有用性・安全性を各1～5点で採点。多数決後の同票では得点、項目別得点、最後に固定優先順を使用します。総合評価：他の2案を各5項目0～5点で採点し、重み付き合計が高い方へPythonが投票。多数決→両投票者の合計点→固定キーによる抽選で決定します。</p>",
         "<p>総合評価の重み：面白さ25%、キャラクター性25%、独創性20%、質問への対応20%、議論への反応10%。100点換算＝各素点×(5,5,4,4,2)の合計です。現行の15点満点とは直接比較できません。</p>",
-        "<p>両方式で同じ現在の人格とgpt-5.6-luna、空Evidenceを使用。総合評価だけが議論への反応を採点するため初回意見も読みます。内部の判断準備資料は保存されていないため渡しません。候補名を置換しても文体や本文から作者を推測できる可能性は残ります。勝数の均等化自体を品質の目標にはしません。</p>",
+        "<p>両方式で同じ現在の人格とgpt-6-luna、空Evidenceを使用。総合評価だけが議論への反応を採点するため初回意見も読みます。内部の判断準備資料は保存されていないため渡しません。候補名を置換しても文体や本文から作者を推測できる可能性は残ります。勝数の均等化自体を品質の目標にはしません。</p>",
         "<h2>勝数</h2><div class='scroll'><table><tr><th>投票方式・順序</th><th>アロナ</th><th>プラナ</th><th>安倍晋三AI</th></tr>",
     ]
     for scheme, label in (("legacy", "現行"), ("composite", "総合評価")):

@@ -310,7 +310,7 @@ def test_openai_translator_uses_luna_structured_stateless_output() -> None:
     ).translate((source,), translated_at=NOW)
 
     assert summaries == (summary_for(source),)
-    assert calls[0]["model"] == "gpt-5.6-luna"
+    assert calls[0]["model"] == "gpt-6-luna"
     assert calls[0]["store"] is False
     assert calls[0]["tools"] == []
     assert calls[0]["reasoning"] == {"effort": "none"}
@@ -409,7 +409,7 @@ def test_dynamo_cache_round_trip_never_stores_the_english_description() -> None:
         "vulnerability_id": source.vulnerability_id,
         "source_sha256": source.source_sha256,
         "summary_ja": SUMMARY_JA,
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "translated_at": NOW.isoformat(),
     }
     with Stubber(sdk) as stubber:

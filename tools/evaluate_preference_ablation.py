@@ -20,7 +20,7 @@ from shittim_chest.adapters.openai.schemas import StrictOutput
 from shittim_chest.application.generation_policy import PhaseBudget, ReasoningEffort
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot, PreferenceFrame
 from tools.evaluate_deliberation import _parallel, load_service, usage_summary
-from tools.evaluate_escalation import UsageCollector
+from tools.usage_collector import UsageCollector
 
 Option = Annotated[str, Field(min_length=1, max_length=150)]
 Fit = Literal["supported", "compatible_but_generic", "contradicted", "uncertain"]

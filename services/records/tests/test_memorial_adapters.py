@@ -1199,7 +1199,7 @@ def test_openai_generation_is_stateless_split_and_uses_two_reference_images(
         )
 
     text_call = client.response_calls[0]
-    assert text_call["model"] == "gpt-5.6-luna"
+    assert text_call["model"] == "gpt-6-luna"
     assert text_call["store"] is False
     assert text_call["tools"] == []
     assert "trusted persona" in text_call["instructions"]

@@ -37,7 +37,7 @@ from tools.evaluate_deliberation import (
     load_service,
     usage_summary,
 )
-from tools.evaluate_escalation import UsageCollector
+from tools.usage_collector import UsageCollector
 
 Relation = Literal["duplicate", "different", "shared_conclusion_distinct_position", "uncertain"]
 
