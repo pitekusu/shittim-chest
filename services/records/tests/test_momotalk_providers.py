@@ -84,7 +84,7 @@ def test_independent_persona_request_contains_history_and_week_facts(name, addre
         assert payload["topic"] == room.plan.turns[index].topic
         assert payload["previousTopic"] == (room.plan.turns[index - 1].topic if index else None)
         assert name not in request["instructions"]
-        assert request["model"] == "gpt-5.6-luna"
+        assert request["model"] == "gpt-6-luna"
         assert request["store"] is False and request["tools"] == []
         assert state.snapshot.personas[slot] in request["instructions"]
         assert all(

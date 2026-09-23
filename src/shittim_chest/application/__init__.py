@@ -47,10 +47,8 @@ from shittim_chest.application.errors import (
     RuntimeNotReady,
 )
 from shittim_chest.application.generation_policy import (
-    LUNA_PRO,
     LUNA_STANDARD,
     PRODUCTION_POLICY,
-    TERRA_STANDARD,
     GenerationPolicy,
     GenerationPolicyId,
     PhaseBudget,
@@ -145,7 +143,6 @@ __all__ = (
     "IDLE_TIMEOUT",
     "INGRESS_CLAIM_SECONDS",
     "INGRESS_QUEUE_LIMIT",
-    "LUNA_PRO",
     "LUNA_STANDARD",
     "OUTBOX_CLAIM_SECONDS",
     "PRODUCTION_POLICY",
@@ -154,7 +151,6 @@ __all__ = (
     "STARTUP_TIMEOUT",
     "STATUS_PUBLICATION_SWEEP_LIMIT",
     "TERMINAL_TIMEOUT",
-    "TERRA_STANDARD",
     "AcceptDebateRequest",
     "AcceptedDebate",
     "AcceptedRetry",

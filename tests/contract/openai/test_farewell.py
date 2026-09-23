@@ -114,7 +114,7 @@ def response(
             "completed_at": 1_786_448_401,
             "error": None,
             "incomplete_details": None,
-            "model": "gpt-5.6-luna",
+            "model": "gpt-6-luna",
             "output": output,
             "parallel_tool_calls": False,
             "tool_choice": "required",

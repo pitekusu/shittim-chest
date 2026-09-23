@@ -33,7 +33,7 @@ from tools.evaluate_deliberation import (
     load_service,
     usage_summary,
 )
-from tools.evaluate_escalation import UsageCollector
+from tools.usage_collector import UsageCollector
 
 
 class Case(StrictOutput):

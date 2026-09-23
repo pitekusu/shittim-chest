@@ -31,7 +31,7 @@ from shittim_records.momotalk import (
     validate_image_choices,
 )
 
-TEXT_MODEL = "gpt-5.6-luna"
+TEXT_MODEL = "gpt-6-luna"
 IMAGE_MODEL = "gpt-image-2.5-sunburst"
 BOUNDARY = """
 ## モモトークの場面

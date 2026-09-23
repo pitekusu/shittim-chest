@@ -29,10 +29,7 @@ from shittim_chest.adapters.openai import (
     create_openai_client,
 )
 from shittim_chest.application import (
-    LUNA_PRO,
     LUNA_STANDARD,
-    TERRA_STANDARD,
-    GenerationPolicy,
 )
 from shittim_chest.domain import (
     PARTICIPANTS,
@@ -93,7 +90,7 @@ def response_with(output: dict[str, object], *, response_id: str = "resp_test") 
         "completed_at": 1_752_710_401,
         "error": None,
         "incomplete_details": None,
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "output": [
             {
                 "id": f"msg_{response_id}",
@@ -247,7 +244,7 @@ async def test_structured_phases_map_to_domain_and_never_enable_multi_agent() ->
     assert observer.failures == []
 
     for request, headers in zip(server.requests, server.headers, strict=True):
-        assert request["model"] == "gpt-5.6-luna"
+        assert request["model"] == "gpt-6-luna"
         assert request["store"] is False
         assert request["tools"] == []
         assert request["tool_choice"] == "none"
@@ -470,7 +467,7 @@ async def test_incomplete_and_missing_parsed_output_are_distinct() -> None:
     assert failure.diagnostic_context == "response_status"
     assert failure.diagnostic_kind == "max_output_tokens"
     assert failure.response_id == "resp_test"
-    assert failure.model == "gpt-5.6-luna"
+    assert failure.model == "gpt-6-luna"
     assert failure.reasoning_mode == "standard"
     assert failure.max_output_tokens == 2_400
     assert failure.input_tokens == 100
@@ -785,37 +782,6 @@ def test_config_and_participant_profiles_fail_closed() -> None:
     with pytest.raises(ValueError, match="model"):
         OpenAIAdapterConfig(policy=replace(LUNA_STANDARD, model=" "))
     assert OpenAIAdapterConfig().policy is LUNA_STANDARD
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("policy", "expected_model", "expected_reasoning"),
-    [
-        (TERRA_STANDARD, "gpt-5.6-terra", {"effort": "high"}),
-        (LUNA_PRO, "gpt-5.6-luna", {"effort": "high", "mode": "pro"}),
-    ],
-)
-async def test_comparison_policies_have_explicit_request_shapes(
-    policy: GenerationPolicy,
-    expected_model: str,
-    expected_reasoning: dict[str, str],
-) -> None:
-    service, server, observer, http_client = await service_for(
-        [response_with({"summary": "summary", "proposal": "proposal"})],
-        config=OpenAIAdapterConfig(policy=policy),
-    )
-    try:
-        await service.generate_initial_opinion(
-            participant=ParticipantSlot.PARTICIPANT_A,
-            question="question",
-            evidence=EvidenceBundle(),
-        )
-    finally:
-        await http_client.aclose()
-
-    assert server.requests[0]["model"] == expected_model
-    assert server.requests[0]["reasoning"] == expected_reasoning
-    assert observer.usages[0].policy_id == policy.policy_id.value
 
 
 @pytest.mark.asyncio

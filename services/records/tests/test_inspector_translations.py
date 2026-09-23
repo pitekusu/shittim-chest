@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
@@ -310,7 +311,7 @@ def test_openai_translator_uses_luna_structured_stateless_output() -> None:
     ).translate((source,), translated_at=NOW)
 
     assert summaries == (summary_for(source),)
-    assert calls[0]["model"] == "gpt-5.6-luna"
+    assert calls[0]["model"] == "gpt-6-luna"
     assert calls[0]["store"] is False
     assert calls[0]["tools"] == []
     assert calls[0]["reasoning"] == {"effort": "none"}
@@ -409,7 +410,7 @@ def test_dynamo_cache_round_trip_never_stores_the_english_description() -> None:
         "vulnerability_id": source.vulnerability_id,
         "source_sha256": source.source_sha256,
         "summary_ja": SUMMARY_JA,
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "translated_at": NOW.isoformat(),
     }
     with Stubber(sdk) as stubber:
@@ -447,6 +448,113 @@ def test_dynamo_cache_round_trip_never_stores_the_english_description() -> None:
 
     assert loaded == {source.key: summary}
     assert DESCRIPTION not in json.dumps(stored, ensure_ascii=False)
+
+
+def test_legacy_cache_remains_readable_and_only_missing_descriptions_are_translated() -> None:
+    legacy_source = inspector_description(
+        vulnerability_id="CVE-2026-12345",
+        description=DESCRIPTION,
+    )
+    new_source = inspector_description(
+        vulnerability_id="CVE-2026-12346",
+        description=f"{DESCRIPTION} Another affected package.",
+    )
+    legacy_summary = replace(summary_for(legacy_source), model="gpt-5.6-luna")
+    table_name = "statistics"
+    sdk = boto3.client(
+        "dynamodb",
+        region_name="ap-northeast-1",
+        config=Config(signature_version=UNSIGNED),
+    )
+
+    class Source:
+        def list_descriptions(self) -> tuple[Any, ...]:
+            return (legacy_source, new_source)
+
+    class Translator:
+        def translate(
+            self,
+            descriptions: tuple[Any, ...],
+            *,
+            translated_at: datetime,
+        ) -> tuple[InspectorJapaneseSummary, ...]:
+            assert descriptions == (new_source,)
+            assert translated_at == NOW
+            return (summary_for(new_source),)
+
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "batch_get_item",
+            {
+                "Responses": {
+                    table_name: [
+                        marshal_item(
+                            {
+                                "PK": "ADMIN#INSPECTOR_TRANSLATION",
+                                "SK": f"SUMMARY#{legacy_source.key}",
+                                "schema_version": 1,
+                                "record_type": "inspector_translation",
+                                "vulnerability_id": legacy_source.vulnerability_id,
+                                "source_sha256": legacy_source.source_sha256,
+                                "summary_ja": legacy_summary.summary_ja,
+                                "model": legacy_summary.model,
+                                "translated_at": NOW.isoformat(),
+                            }
+                        )
+                    ]
+                }
+            },
+            {
+                "RequestItems": {
+                    table_name: {
+                        "Keys": [
+                            marshal_item(
+                                {"PK": "ADMIN#INSPECTOR_TRANSLATION", "SK": f"SUMMARY#{source.key}"}
+                            )
+                            for source in (legacy_source, new_source)
+                        ],
+                        "ConsistentRead": True,
+                    }
+                }
+            },
+        )
+        stubber.add_response(
+            "put_item",
+            {},
+            {
+                "TableName": table_name,
+                "Item": marshal_item(
+                    {
+                        "PK": "ADMIN#INSPECTOR_TRANSLATION",
+                        "SK": f"SUMMARY#{new_source.key}",
+                        "schema_version": 1,
+                        "record_type": "inspector_translation",
+                        "vulnerability_id": new_source.vulnerability_id,
+                        "source_sha256": new_source.source_sha256,
+                        "summary_ja": SUMMARY_JA,
+                        "model": "gpt-6-luna",
+                        "translated_at": NOW.isoformat(),
+                    }
+                ),
+                "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            },
+        )
+        result = InspectorTranslationService(
+            source=Source(),
+            translator=Translator(),
+            store=DynamoInspectorTranslationStore(sdk, table_name),
+        ).refresh(now=NOW)
+
+    assert result.discovered == 2
+    assert result.cached == 1
+    assert result.translated == 1
+    assert result.remaining == 0
+
+
+def test_unknown_cache_model_is_rejected() -> None:
+    source = inspector_description(vulnerability_id="CVE-2026-12345", description=DESCRIPTION)
+    with pytest.raises(ValueError, match="model is invalid"):
+        replace(summary_for(source), model="unknown-model")
 
 
 def test_configuration_repository_rejects_missing_key_without_exposing_values() -> None:

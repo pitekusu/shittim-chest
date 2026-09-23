@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from tools import evaluate_deliberation
 from tools.evaluate_deliberation import HistoryCase, _parallel, usage_summary
-from tools.evaluate_escalation import UsageCollector
+from tools.usage_collector import UsageCollector
 
 from shittim_chest.adapters.openai import OpenAIFailureRecord, OpenAIUsageRecord
 

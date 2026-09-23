@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-INSPECTOR_TRANSLATION_MODEL = "gpt-5.6-luna"
+INSPECTOR_TRANSLATION_MODEL = "gpt-6-luna"
 INSPECTOR_SUMMARY_MIN_CHARS = 100
 INSPECTOR_SUMMARY_MAX_CHARS = 300
 INSPECTOR_TRANSLATION_BATCH_SIZE = 10
@@ -71,7 +71,8 @@ class InspectorJapaneseSummary:
             raise ValueError("Inspector Japanese summary is not normalized")
         if self.translated_at.tzinfo is None or self.translated_at.utcoffset() is None:
             raise ValueError("Inspector translation timestamp must be timezone-aware")
-        if self.model != INSPECTOR_TRANSLATION_MODEL:
+        # Preserve the generating model on existing cache rows during the upgrade.
+        if self.model not in ("gpt-5.6-luna", INSPECTOR_TRANSLATION_MODEL):
             raise ValueError("Inspector translation model is invalid")
 
 

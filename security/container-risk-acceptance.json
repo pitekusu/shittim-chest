@@ -8,14 +8,15 @@
       "image_config_digests": {
         "production": [
           "sha256:8ff1989bca63a603061629a2fb3663cb32952e2c603fdb3a324b9c2c06011ea3",
-          "sha256:93175f29e2d294979dd055b02a4ea919b9883bbf066422e58be49ef3eebedb2a"
+          "sha256:93175f29e2d294979dd055b02a4ea919b9883bbf066422e58be49ef3eebedb2a",
+          "sha256:5063fc440e1d0c66647b450cfe01067796e3554f62089cc9b622bd0a843d4ddd"
         ]
       },
       "status": "under_investigation",
       "justification": "Debian 13 has no fixed expat package yet, and the verified DHI VEX does not mark this finding not affected.",
       "impact": "Malformed UTF-16 XML may hide markup from Expat and permit XML injection if untrusted XML reaches a parser.",
       "exploitability": "The production debate service accepts signed Discord JSON and has no XML request endpoint; SDK XML parsing remains a possible indirect path.",
-      "evidence": "Debian tracker https://security-tracker.debian.org/tracker/CVE-2026-93990 and PR 423 Grype ARM64 reports show libexpat1 2.8.3-1~deb13u1+dhi3 as not-fixed without a DHI VEX exemption.",
+      "evidence": "Debian tracker https://security-tracker.debian.org/tracker/CVE-2026-93990 and PR 423/424 Grype ARM64 reports show libexpat1 2.8.3-1~deb13u1+dhi3 as not-fixed without a DHI VEX exemption.",
       "approved_on": "2026-09-23",
       "expires_on": "2026-09-30",
       "reevaluation_conditions": "Remove this acceptance when Debian or DHI ships a fix, a verified VEX changes status, the image digest changes, or XML exposure changes.",

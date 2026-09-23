@@ -63,7 +63,7 @@ def searched_response(
             "completed_at": 1_752_710_401,
             "error": None,
             "incomplete_details": None,
-            "model": "gpt-5.6-luna",
+            "model": "gpt-6-luna",
             "output": [
                 {
                     "id": "ws_1",

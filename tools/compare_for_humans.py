@@ -19,8 +19,8 @@ from typing import Any
 
 from tools.evaluate_composite_voting import query
 from tools.evaluate_deliberation import generate_speech, load_baseline, load_service, usage_summary
-from tools.evaluate_escalation import UsageCollector
 from tools.reconsideration_v2 import generate
+from tools.usage_collector import UsageCollector
 
 NAMES = {"participant-a": "アロナ", "participant-b": "プラナ", "participant-c": "安倍晋三AI"}
 BRANCHES = {"released": "現行方式（今回再生成）", "revised": "改修方式 v2（今回再生成）"}
