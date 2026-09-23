@@ -63,6 +63,7 @@ class RecordsReadClientTest {
       detail(id, winner = "participant-c").replace(
         "\"finalDecision\":{\"winner\":\"participant-c\"",
         "\"finalDecision\":{\"winner\":\"participant-a\""),
+      detail(id, winner = "participant-x"),
       detail(id).replace("\"schemaVersion\":2", "\"schemaVersion\":3"),
     )) {
       RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->

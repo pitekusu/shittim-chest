@@ -82,6 +82,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     if (detail.schemaVersion != 2 || detail.recordId != recordId ||
       detail.question.isBlank() || detail.finalDecision.decision.isBlank() ||
       detail.result.winner != detail.finalDecision.winner ||
+      detail.result.winner !in PARTICIPANTS ||
       detail.participants.size != 3 ||
       detail.participants.map { it.slot }.toSet() != PARTICIPANTS) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
