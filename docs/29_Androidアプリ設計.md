@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-22
+updated: 2026-09-23
 ---
 
 # Androidアプリ設計
@@ -13,7 +13,7 @@ updated: 2026-09-22
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡し、C16のログイン画面である。記録データの表示とGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
+現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡し、C16のログイン画面、C17の記録1件表示である。一覧全体やGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -34,7 +34,8 @@ updated: 2026-09-22
 | C14 | モバイル認証APIクライアント | 4操作の通信・型変換・失敗分類を実装。ブラウザー・画面・保存への接続はC15以降 |
 | C15 | ブラウザー認証からアプリ復帰・コード交換 | Auth TabとCustom Tabs fallback、PKCE・復帰検証・保存を接続。ログイン画面はC16、配布証明書の設定と実認証確認はC19 |
 | C16 | ログイン・期限切れ・ログアウト画面 | Circuit／MetroへC13〜C15を接続。通信障害と失効、端末削除とサーバー失効を区別 |
-| 後続 | 記録閲覧、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
+| C17 | 記録1件の取得と表示 | ログイン後に最新一覧から1件を取得し、議題・勝者・結論を表示。許可された復帰先の個別記録も取得 |
+| 後続 | 一覧全体、詳細全項目、暗号化保存、署名済み配布 | 未実装。未使用のAPI・権限は先行追加しない |
 
 ### PRの分割単位
 
@@ -107,7 +108,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C13：トークン保存（継続） | Android Keystore、標準暗号API、AtomicFile | 鍵の保護・暗号演算・原子的なファイル更新を利用。用途への束縛と保存形式の検証は残し、高レベル化だけを理由に形式を変えない |
 | C14：認証通信（継続） | Ktor、kotlinx.serialization | 通信・JSON変換を利用。再送防止・応答上限・秘密非表示は認証専用の境界として維持 |
 | C15：ブラウザー認証（継続） | Auth Tab、Activity Result API | 起動・結果受け渡しを利用。非対応ブラウザーのfallbackも同じ固定callback・取引・state・期限の検証へ接続 |
-| C16：認証画面（接続済み）／C17：通常API（導入予定） | 既存Circuit、Metro、AndroidX ViewModel／Activity Result。通常JSON通信には[Ktor ContentNegotiation](https://ktor.io/docs/client-serialization.html)を予定 | 認証の寿命はViewModel、描画状態・イベントはCircuitへ任せる。認証通信はC14を再利用し、通常API用依存を先行追加しない |
+| C16：認証画面／C17：通常API（接続済み） | 既存Circuit、Metro、AndroidX ViewModel／Activity Result。記録JSONの変換に[Ktor ContentNegotiation](https://ktor.io/docs/client-serialization.html)を使用 | 認証の寿命はViewModel、描画状態・イベントはCircuitへ任せる。記録本文の一時表示だけ行い、永続キャッシュや全件取得を先行追加しない |
 | C21：画像表示（導入予定） | [Coil AsyncImage](https://coil-kt.github.io/coil/compose/) | 取得・縮小・placeholderは自作しない。非公開画像の平文disk cacheを無効化し、ログアウト時にmemory cacheを消去 |
 | C22：一覧の追加取得（導入予定） | [Paging／PagingSource](https://developer.android.com/topic/libraries/architecture/paging/v3-overview) | loading・retry・要求制御を任せる。APIのcursorを接続し、期限切れcursorはAPI契約に従って扱う |
 | C23：Markdown（導入予定） | [Compose Markdown RendererのMaterial 3対応](https://github.com/mikepenz/multiplatform-markdown-renderer) | 独自パーサー・WebViewは追加しない。外部リンクの許可判定はアプリ側に残す |
@@ -588,6 +589,25 @@ CircuitのPresenterからStateFlowを購読する。ブラウザー起動・復�
 
 架空APIと保存関数で、二重起動・期限・401・通信障害・削除失敗・ログアウト・アカウント切替を確認する。
 画面はエミュレーターで操作・明暗・狭幅／文字拡大を確認し、実署名とDiscordの縦断確認はC19に残す。
+
+## C17：記録1件の取得と表示
+
+ログイン済みの場合だけ、C11でBearerを許可した既存Records読取APIへアクセスする。
+通常起動では`GET /api/v1/records?limit=1&sort=newest`から最新1件のopaque IDを選び、
+続いて`GET /api/v1/records/{recordId}`を取得する。C15から渡された許可済みの個別記録URLがあれば、
+そのIDの詳細を直接取得する。空の一覧は「記録がまだない」と表示する。
+
+| 責務 | 扱い |
+|---|---|
+| 通信・JSON | KtorとContentNegotiationを使用。固定HTTPS origin、Bearer、no-store、redirect禁止、Cookie・disk cache・HTTP loggingなし |
+| 表示 | 詳細APIの議題・既存winnerと対応する表示名・最終決定を表示。アプリ側で勝者を再判定しない |
+| 認証 | 保存tokenは認証ViewModelの要求callback内だけで使用し、画面Stateへ渡さない。セッションが変わった要求の結果は表示しない |
+| 失敗 | 記録404・一時的障害・不正応答を区別して再読込を案内。401ならC16のsession API再確認へ進む |
+| 保存 | 質問・結果は画面表示中のメモリだけに保持し、ログアウトで非表示にする。Room・検索用複製・SavedStateは作らない |
+
+C17は縦断動作の最小表示であり、C21の一覧カード、C22のpagination、C23〜C25の詳細項目を先取りしない。
+架空APIで一覧→詳細・空・個別復帰先・異なるID／勝者・401を確認し、画面で読み込み・結果・再試行と
+狭幅／文字拡大を確認する。実署名でのログインはC19で確認する。
 
 ## 最小構成
 

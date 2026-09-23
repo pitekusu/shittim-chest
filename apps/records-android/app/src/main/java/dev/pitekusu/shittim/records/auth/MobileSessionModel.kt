@@ -53,6 +53,18 @@ internal class MobileSessionModel(
     if (state.value == SessionState.Unavailable) refresh()
   }
 
+  // The token is available only inside the request callback, never in a UI state or saved value.
+  // A response that finishes after logout, expiry, or a new session cannot be displayed.
+  suspend fun <T> withAuthorizedToken(request: suspend (String) -> T): T? {
+    val signedIn = state.value as? SessionState.SignedIn ?: return null
+    val active = token ?: return null
+    if (!active.expiresAt.isAfter(clock.instant())) return null
+    val result = request(active.accessToken)
+    return result.takeIf {
+      state.value === signedIn && token === active && active.expiresAt.isAfter(clock.instant())
+    }
+  }
+
   // Claim synchronously, before launching the Activity, to ignore double taps.
   fun beginLogin(): Boolean {
     if (state.value !is SessionState.SignedOut || operation?.isActive == true) return false

@@ -29,6 +29,7 @@ import dev.pitekusu.shittim.records.ui.ShittimBackdrop
 import dev.pitekusu.shittim.records.ui.ShittimDisplayFont
 import dev.pitekusu.shittim.records.ui.ShittimEmblem
 import dev.pitekusu.shittim.records.ui.ShittimTheme
+import dev.pitekusu.shittim.records.auth.SessionState
 
 @Preview(name = "Light", widthDp = 360, heightDp = 800)
 @Preview(name = "Dark", uiMode = Configuration.UI_MODE_NIGHT_YES, widthDp = 360, heightDp = 800)
@@ -114,6 +115,9 @@ private fun BootstrapControls(
 ) {
   Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
     SessionPanel(state.session, state.eventSink)
+    if (state.session is SessionState.SignedIn) {
+      RecordPreviewPanel(state.record, state.eventSink)
+    }
     BootstrapThemeSelector(state.themeChoice) {
       state.eventSink(BootstrapScreen.Event.SelectTheme(it))
     }

@@ -60,7 +60,7 @@ internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) 
         }
         is SessionState.SignedIn -> {
           Text(state.user.displayName, style = MaterialTheme.typography.titleMedium)
-          Text(stringResource(R.string.session_records_pending))
+          Text(stringResource(R.string.session_records_ready))
           FilledTonalButton(onClick = { onEvent(BootstrapScreen.Event.Logout) }) {
             Text(stringResource(R.string.session_logout))
           }
