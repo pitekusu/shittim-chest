@@ -630,6 +630,8 @@ Play Consoleに表示される従来鍵とポスト量子暗号鍵のSHA-256を�
 Records Webの検証済みartifactに同ファイルを含め、ReleaseでWeb S3へ`application/json`として配置する。
 CloudFrontは拡張子付きのパスを書き換えず、同じHTTPS originからGET／HEADを返す。
 Release smokeでは200・content type・artifactとの一致を確かめる。証明書の追加やローテーション時はPlay Consoleの表示を確認して更新する。
+配信失敗時は直前の`assetlinks.json`へ戻し、初回配信で旧ファイルがなければ削除する。
+このロールバックにはRecords配信ロールの対象ファイル限定の削除権限が必要なため、初回配信前にReleaseIdentityの変更を反映する。
 
 | App Link | 受け手と検証 |
 |---|---|

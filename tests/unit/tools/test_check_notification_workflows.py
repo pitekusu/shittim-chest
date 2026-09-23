@@ -370,6 +370,18 @@ def test_records_release_preserves_old_hashed_web_assets(directory: Path) -> Non
         validate_notification_workflows(directory)
 
 
+def test_records_release_restores_app_links_after_publish_failure(directory: Path) -> None:
+    _replace(
+        directory / RECORDS_RELEASE_WORKFLOW,
+        '          if [ -f "${RUNNER_TEMP}/records-assetlinks-published" ]; then',
+        '          if [ -f "${RUNNER_TEMP}/records-assetlinks-not-published" ]; then',
+        1,
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="restore the prior App Links"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_revalidates_bundle_checksum_before_deploy(directory: Path) -> None:
     _replace(
         directory / RECORDS_RELEASE_WORKFLOW,

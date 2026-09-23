@@ -167,7 +167,8 @@ internal class MobileSessionModel(
   private suspend fun expire() {
     withContext(Dispatchers.IO) { clearToken() }
     token = null
-    returnTo = "/"
+    // Keep a validated record link across expiry so the next login can return to it.
+    // Explicit logout still clears the destination when switching accounts.
     mutableState.value = SessionState.SignedOut(SessionNotice.EXPIRED)
   }
 

@@ -49,6 +49,24 @@ class MobileSessionModelTest {
   }
 
   @Test
+  fun expiredStoredSessionKeepsARecordLinkForTheNextLogin() = runBlocking {
+    withContext(Dispatchers.Main) {
+      for (serverRejects in listOf(false, true)) {
+        Fixture().use { fixture ->
+          fixture.stored = if (serverRejects) fixture.validToken
+            else StoredToken("t".repeat(43), fixture.now)
+          if (serverRejects) fixture.status = HttpStatusCode.Unauthorized
+          val model = fixture.start()
+          val destination = "/records/${"c".repeat(43)}"
+          model.openDestination(destination)
+          assertEquals(SessionNotice.EXPIRED, model.await<SessionState.SignedOut>().notice)
+          assertEquals(destination, model.loginDestination)
+        }
+      }
+    }
+  }
+
+  @Test
   fun loginIsSingleFlightAndReadsSavedCredentialsInsteadOfTrustingResult() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->

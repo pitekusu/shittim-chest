@@ -761,6 +761,19 @@ jobs:
               "${RUNNER_TEMP}/records-previous-index.error"
             : > "${RUNNER_TEMP}/records-previous-index-version"
           fi
+          if aws s3api head-object --bucket "${web_bucket}" \
+            --key .well-known/assetlinks.json \
+            > "${RUNNER_TEMP}/records-previous-assetlinks.json" \
+            2> "${RUNNER_TEMP}/records-previous-assetlinks.error"
+          then
+            jq --exit-status --raw-output '.VersionId // empty' \
+              "${RUNNER_TEMP}/records-previous-assetlinks.json" \
+              > "${RUNNER_TEMP}/records-previous-assetlinks-version"
+          else
+            grep --extended-regexp --quiet '404|Not Found' \
+              "${RUNNER_TEMP}/records-previous-assetlinks.error"
+            : > "${RUNNER_TEMP}/records-previous-assetlinks-version"
+          fi
           printf '%s' "${web_bucket}" > "${RUNNER_TEMP}/records-web-bucket"
           printf '%s' "${distribution_id}" > "${RUNNER_TEMP}/records-distribution-id"
           assetlinks="${web_stage}/.well-known/assetlinks.json"
@@ -778,6 +791,7 @@ jobs:
             --cache-control "public,max-age=31536000,immutable"
           test "$(find "${web_stage}" -mindepth 1 -maxdepth 1 -type f \
             ! -name index.html | wc -l)" -eq 0
+          touch "${RUNNER_TEMP}/records-assetlinks-published"
           aws s3 cp "${assetlinks}" "s3://${web_bucket}/.well-known/assetlinks.json" \
             --cache-control "public,max-age=300" --content-type "application/json"
           aws s3 cp "${web_stage}/index.html" "s3://${web_bucket}/index.html" \
@@ -938,31 +952,52 @@ jobs:
             "${RUNNER_TEMP}/records-momotalk.json" >/dev/null
           grep --ignore-case --quiet '^cache-control: private, no-store' \
             "${RUNNER_TEMP}/records-momotalk.headers"
-      - name: Restore the previous Records entry point after a post-publish failure
+      - name: Restore the previous Records Web files after a post-publish failure
         if: failure()
         continue-on-error: true
         run: |
-          if [ ! -f "${RUNNER_TEMP}/records-index-published" ]; then
+          if [ ! -f "${RUNNER_TEMP}/records-index-published" ] && \
+            [ ! -f "${RUNNER_TEMP}/records-assetlinks-published" ]; then
             exit 0
           fi
           web_bucket=$(cat "${RUNNER_TEMP}/records-web-bucket")
           distribution_id=$(cat "${RUNNER_TEMP}/records-distribution-id")
-          previous_version=$(cat "${RUNNER_TEMP}/records-previous-index-version")
-          if [ -n "${previous_version}" ]; then
-            encoded_version=$(jq --null-input --raw-output --arg value "${previous_version}" \
-              '$value | @uri')
-            aws s3api copy-object \
-              --bucket "${web_bucket}" \
-              --key index.html \
-              --copy-source "${web_bucket}/index.html?versionId=${encoded_version}" \
-              --cache-control "no-cache" \
-              --content-type "text/html; charset=utf-8" \
-              --metadata-directive REPLACE >/dev/null
-          else
-            aws s3api delete-object --bucket "${web_bucket}" --key index.html >/dev/null
+          if [ -f "${RUNNER_TEMP}/records-index-published" ]; then
+            previous_version=$(cat "${RUNNER_TEMP}/records-previous-index-version")
+            if [ -n "${previous_version}" ]; then
+              encoded_version=$(jq --null-input --raw-output --arg value "${previous_version}" \
+                '$value | @uri')
+              aws s3api copy-object \
+                --bucket "${web_bucket}" \
+                --key index.html \
+                --copy-source "${web_bucket}/index.html?versionId=${encoded_version}" \
+                --cache-control "no-cache" \
+                --content-type "text/html; charset=utf-8" \
+                --metadata-directive REPLACE >/dev/null
+            else
+              aws s3api delete-object --bucket "${web_bucket}" --key index.html >/dev/null
+            fi
+          fi
+          if [ -f "${RUNNER_TEMP}/records-assetlinks-published" ]; then
+            previous_version=$(cat "${RUNNER_TEMP}/records-previous-assetlinks-version")
+            if [ -n "${previous_version}" ]; then
+              encoded_version=$(jq --null-input --raw-output --arg value "${previous_version}" \
+                '$value | @uri')
+              aws s3api copy-object \
+                --bucket "${web_bucket}" \
+                --key .well-known/assetlinks.json \
+                --copy-source "${web_bucket}/.well-known/assetlinks.json?versionId=${encoded_version}" \
+                --cache-control "public,max-age=300" \
+                --content-type "application/json" \
+                --metadata-directive REPLACE >/dev/null
+            else
+              aws s3api delete-object --bucket "${web_bucket}" \
+                --key .well-known/assetlinks.json >/dev/null
+            fi
           fi
           rollback_invalidation=$(aws cloudfront create-invalidation \
-            --distribution-id "${distribution_id}" --paths "/index.html" \
+            --distribution-id "${distribution_id}" \
+            --paths "/index.html" "/.well-known/assetlinks.json" \
             --query 'Invalidation.Id' --output text)
           aws cloudfront wait invalidation-completed \
             --distribution-id "${distribution_id}" --id "${rollback_invalidation}"

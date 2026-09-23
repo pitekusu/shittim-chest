@@ -608,7 +608,10 @@ export class ReleaseIdentityStack extends Stack {
     this.recordsDeployRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["s3:DeleteObject"],
-        resources: [`${recordsWebBucketArn}/index.html`],
+        resources: [
+          `${recordsWebBucketArn}/index.html`,
+          `${recordsWebBucketArn}/.well-known/assetlinks.json`,
+        ],
       }),
     );
     this.recordsDeployRole.addToPolicy(

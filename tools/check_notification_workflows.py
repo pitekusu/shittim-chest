@@ -1527,7 +1527,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "web_sbom_sha256",
         "records_public_hostname",
         "cloudfront create-invalidation",
-        "Restore the previous Records entry point after a post-publish failure",
+        "Restore the previous Records Web files after a post-publish failure",
         "records-previous-index-version",
         "s3api copy-object",
         "s3api delete-object",
@@ -1636,6 +1636,24 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Records Release must publish assets and App Links before index "
             "without deleting old hashes"
+        )
+    web_rollback_block = _workflow_step_block(
+        release, "Restore the previous Records Web files after a post-publish failure"
+    )
+    if (
+        web_publish_block.count("records-previous-assetlinks-version") < 2
+        or web_publish_block.count("records-assetlinks-published") != 1
+        or 'if [ -f "${RUNNER_TEMP}/records-assetlinks-published" ]; then' not in web_rollback_block
+        or "--key .well-known/assetlinks.json" not in web_rollback_block
+        or (
+            'aws s3api delete-object --bucket "${web_bucket}" \\\n'
+            "                --key .well-known/assetlinks.json"
+        )
+        not in web_rollback_block
+        or '"/.well-known/assetlinks.json"' not in web_rollback_block
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must restore the prior App Links file after a publish failure"
         )
 
     backfill_markers = (

@@ -166,6 +166,11 @@ describe("ReleaseIdentityStack", () => {
         (statement: { Action?: string | string[] }) =>
           [statement.Action].flat().includes("cloudformation:UpdateTerminationProtection"),
       );
+    const webDeletionStatements =
+      deployPolicy?.Properties.PolicyDocument.Statement.filter(
+        (statement: { Action?: string | string[] }) =>
+          [statement.Action].flat().includes("s3:DeleteObject"),
+      );
 
     expect(plan).toContain("cloudformation:CreateChangeSet");
     expect(plan).toContain("iam:PassRole");
@@ -195,6 +200,29 @@ describe("ReleaseIdentityStack", () => {
     expect(deploy).toContain("shittim-chest-production-records-web");
     expect(deploy).toContain("s3:DeleteObject");
     expect(deploy).toContain("index.html");
+    expect(webDeletionStatements).toHaveLength(1);
+    expect(webDeletionStatements?.[0].Resource).toEqual([
+      {
+        "Fn::Join": [
+          "",
+          [
+            "arn:aws:s3:::shittim-chest-production-records-web-",
+            { Ref: "AWS::AccountId" },
+            "/index.html",
+          ],
+        ],
+      },
+      {
+        "Fn::Join": [
+          "",
+          [
+            "arn:aws:s3:::shittim-chest-production-records-web-",
+            { Ref: "AWS::AccountId" },
+            "/.well-known/assetlinks.json",
+          ],
+        ],
+      },
+    ]);
     expect(terminationProtectionStatements).toEqual([
       {
         Action: "cloudformation:UpdateTerminationProtection",
