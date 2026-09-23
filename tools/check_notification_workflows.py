@@ -1527,7 +1527,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "web_sbom_sha256",
         "records_public_hostname",
         "cloudfront create-invalidation",
-        "Restore the previous Records entry point after a post-publish failure",
+        "Restore the previous Records Web files after a post-publish failure",
         "records-previous-index-version",
         "s3api copy-object",
         "s3api delete-object",
@@ -1617,16 +1617,43 @@ def _validate_records_workflows(directory: Path) -> None:
         raise WorkflowPolicyError("Records Release must not build or push a Fargate image")
     web_publish_block = _workflow_step_block(release, "Publish the attested Records Web artifact")
     asset_upload = 'aws s3 cp "${web_stage}/assets" "s3://${web_bucket}/assets"'
+    app_links_upload = 'aws s3 cp "${assetlinks}" "s3://${web_bucket}/.well-known/assetlinks.json"'
     entry_upload = 'aws s3 cp "${web_stage}/index.html" "s3://${web_bucket}/index.html"'
     if (
         web_publish_block.count(asset_upload) != 1
+        or web_publish_block.count(app_links_upload) != 1
         or web_publish_block.count(entry_upload) != 1
         or web_publish_block.count("public,max-age=31536000,immutable") != 1
-        or web_publish_block.index(asset_upload) >= web_publish_block.index(entry_upload)
+        or not (
+            web_publish_block.index(asset_upload)
+            < web_publish_block.index(app_links_upload)
+            < web_publish_block.index(entry_upload)
+        )
+        or '--content-type "application/json"' not in web_publish_block
+        or '"/.well-known/assetlinks.json"' not in web_publish_block
         or "--delete" in web_publish_block
     ):
         raise WorkflowPolicyError(
-            "Records Release must publish immutable assets before index without deleting old hashes"
+            "Records Release must publish assets and App Links before index "
+            "without deleting old hashes"
+        )
+    web_rollback_block = _workflow_step_block(
+        release, "Restore the previous Records Web files after a post-publish failure"
+    )
+    if (
+        web_publish_block.count("records-previous-assetlinks-version") < 2
+        or web_publish_block.count("records-assetlinks-published") != 1
+        or 'if [ -f "${RUNNER_TEMP}/records-assetlinks-published" ]; then' not in web_rollback_block
+        or "--key .well-known/assetlinks.json" not in web_rollback_block
+        or (
+            'aws s3api delete-object --bucket "${web_bucket}" \\\n'
+            "                --key .well-known/assetlinks.json"
+        )
+        not in web_rollback_block
+        or '"/.well-known/assetlinks.json"' not in web_rollback_block
+    ):
+        raise WorkflowPolicyError(
+            "Records Release must restore the prior App Links file after a publish failure"
         )
 
     backfill_markers = (

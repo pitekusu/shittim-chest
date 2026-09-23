@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,12 +27,24 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    openRecordLink(intent)
     enableEdgeToEdge()
     setContent { CircuitContent(screen = BootstrapScreen, circuit = graph.circuit) }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    openRecordLink(intent)
   }
 
   override fun onResume() {
     super.onResume()
     session.onForeground()
+  }
+
+  private fun openRecordLink(intent: Intent?) {
+    if (intent?.action == Intent.ACTION_VIEW) {
+      recordDestination(intent.dataString)?.let(session::openDestination)
+    }
   }
 }

@@ -83,7 +83,7 @@ internal class BootstrapPresenter(
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin()) {
-          try { launcher.launch("/") }
+          try { launcher.launch(session.loginDestination) }
           catch (_: ActivityNotFoundException) {
             session.loginResult(MobileLoginStep.Finished(MobileLoginStatus.BROWSER_UNAVAILABLE))
           }

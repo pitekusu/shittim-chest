@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "dev.pitekusu.shittim.records",
+      "sha256_cert_fingerprints": [
+        "B3:85:9A:03:5D:5A:CF:05:2B:4E:39:25:7B:10:9E:C0:38:B2:AC:99:AC:07:0C:97:A2:6E:82:76:2F:31:92:37",
+        "C4:B8:87:BC:27:B5:52:A0:07:65:D5:B6:73:80:1C:66:87:FC:64:B6:9E:0B:31:76:42:0D:41:DF:31:3E:48:8E"
+      ]
+    }
+  }
+]
