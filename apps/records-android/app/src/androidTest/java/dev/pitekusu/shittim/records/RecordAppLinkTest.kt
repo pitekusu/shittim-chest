@@ -17,6 +17,7 @@ class RecordAppLinkTest {
       "https://shittim.pitekusu.dev/records/short",
       "https://shittim.pitekusu.dev$path?next=/admin",
       "https://shittim.pitekusu.dev$path#fragment",
+      "https://shittim.pitekusu.dev$path%",
       "https://shittim.pitekusu.dev/records/%61${"a".repeat(42)}",
       "https://shittim.pitekusu.dev.evil.example$path",
       "http://shittim.pitekusu.dev$path",
