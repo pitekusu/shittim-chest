@@ -9,6 +9,12 @@ const week = {
   periodEnd: "2026-09-13T09:00:00Z",
   publishAt: "2026-09-13T11:00:00Z",
 };
+const previousWeek = {
+  weekId: "2026-09-06",
+  periodStart: "2026-08-30T09:00:00Z",
+  periodEnd: "2026-09-06T09:00:00Z",
+  publishAt: "2026-09-06T11:00:00Z",
+};
 const avatar = (name: string, variant = "cyan") => ({
   kind: "placeholder",
   url: null as string | null,
@@ -44,7 +50,7 @@ const messages = lines.map(([slot, text], index) => ({
   text,
 }));
 
-async function setup(page: Page) {
+async function setup(page: Page, availableWeeks = [week]) {
   for (const participant of participants) {
     participant.avatar = {
       ...participant.avatar,
@@ -72,11 +78,15 @@ async function setup(page: Page) {
     }),
   );
   await page.route("**/api/v1/momotalk/weeks?*", (route) =>
-    route.fulfill({ json: { schemaVersion: 1, weeks: [week], nextCursor: null } }),
+    route.fulfill({ json: { schemaVersion: 1, weeks: availableWeeks, nextCursor: null } }),
   );
-  await page.route(`**/api/v1/momotalk/weeks/${week.weekId}/rooms?*`, (route) =>
-    route.fulfill({ json: { schemaVersion: 1, week, rooms: [room], nextCursor: null } }),
-  );
+  for (const availableWeek of availableWeeks) {
+    await page.route(`**/api/v1/momotalk/weeks/${availableWeek.weekId}/rooms?*`, (route) =>
+      route.fulfill({
+        json: { schemaVersion: 1, week: availableWeek, rooms: [room], nextCursor: null },
+      }),
+    );
+  }
   await page.route(`**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}`, (route) =>
     route.fulfill({
       json: {
@@ -151,4 +161,74 @@ test("reduced motion reveals all messages immediately and dark mode remains read
     .first()
     .scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("momotalk-dark.png"), fullPage: true });
+});
+
+test("week menu is readable and switches weeks with keyboard and touch", async ({
+  page,
+}, testInfo) => {
+  await setup(page, [week, previousWeek]);
+  const trigger = page.getByRole("button", { name: "今週とこれまでの会話 2026年9月13日の週" });
+  await trigger.click();
+  const current = page.getByRole("button", { name: "2026年9月13日の週 最新" });
+  const previous = page.getByRole("button", { name: "2026年9月6日の週", exact: true });
+  await expect(current).toHaveAttribute("aria-current", "true");
+  await expect(previous).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.locator("#momotalk-week-menu").screenshot({
+    path: testInfo.outputPath("momotalk-week-menu-detail.png"),
+  });
+  await page.screenshot({
+    path: testInfo.outputPath("momotalk-week-menu-light.png"),
+    fullPage: true,
+  });
+
+  await page.keyboard.press("ArrowDown");
+  await expect(previous).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("button", { name: "今週とこれまでの会話 2026年9月6日の週" }),
+  ).toBeFocused();
+  await expect(page.locator('[data-room-open="false"]')).toBeVisible();
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.getByRole("button", { name: "今週とこれまでの会話 2026年9月6日の週" }).click();
+  await expect(previous).toHaveAttribute("aria-current", "true");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({
+    path: testInfo.outputPath("momotalk-week-menu-dark.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "200%";
+  });
+  const menuBox = await page.locator("#momotalk-week-menu").boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(320);
+  await page.screenshot({
+    path: testInfo.outputPath("momotalk-week-menu-320px-large-text.png"),
+    fullPage: true,
+  });
+  await page.keyboard.press("Escape");
+  await expect(previous).toBeHidden();
+});
+
+test("loads earlier weeks from within the week menu", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/v1/momotalk/weeks?*", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    return route.fulfill({
+      json: {
+        schemaVersion: 1,
+        weeks: cursor ? [previousWeek] : [week],
+        nextCursor: cursor ? null : "older",
+      },
+    });
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "今週とこれまでの会話 2026年9月13日の週" }).click();
+  await page.getByRole("button", { name: "以前の週を読み込む" }).click();
+  await expect(page.getByRole("button", { name: "2026年9月6日の週", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "以前の週を読み込む" })).toHaveCount(0);
 });

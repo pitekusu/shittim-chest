@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import {
@@ -8,6 +8,7 @@ import {
   type MomotalkImage,
   type MomotalkMessage,
   type MomotalkRoomResponse,
+  type MomotalkWeek,
 } from "../api/momotalk";
 import { Avatar } from "../components/Avatar";
 import { ErrorPanel } from "../components/ErrorPanel";
@@ -23,6 +24,159 @@ const weekDate = new Intl.DateTimeFormat("ja-JP", {
   day: "numeric",
 });
 const graphemes = new Intl.Segmenter("ja", { granularity: "grapheme" });
+
+function WeekPicker({
+  weeks,
+  value,
+  onChange,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  readonly weeks: readonly MomotalkWeek[];
+  readonly value: string;
+  readonly onChange: (weekId: string) => void;
+  readonly hasMore: boolean;
+  readonly loadingMore: boolean;
+  readonly onLoadMore: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const options = useRef<(HTMLButtonElement | null)[]>([]);
+  const selectedIndex = Math.max(
+    0,
+    weeks.findIndex((week) => week.weekId === value),
+  );
+  const selected = weeks[selectedIndex];
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnOutsideFocus = (event: FocusEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && root.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        closeAndFocus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("focusin", closeOnOutsideFocus);
+    document.addEventListener("keydown", closeOnEscape);
+    options.current[selectedIndex]?.focus();
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("focusin", closeOnOutsideFocus);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open, selectedIndex]);
+
+  function closeAndFocus() {
+    setOpen(false);
+    trigger.current?.focus();
+  }
+
+  function moveOption(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let next: number | undefined;
+    if (event.key === "ArrowDown") next = Math.min(index + 1, weeks.length - 1);
+    if (event.key === "ArrowUp") next = Math.max(index - 1, 0);
+    if (event.key === "Home") next = 0;
+    if (event.key === "End") next = weeks.length - 1;
+    if (next === undefined) return;
+    event.preventDefault();
+    options.current[next]?.focus();
+  }
+
+  return (
+    <div ref={root} className={styles.weekPicker}>
+      <span id="momotalk-week-label">今週とこれまでの会話</span>
+      <button
+        ref={trigger}
+        className={styles.weekTrigger}
+        type="button"
+        aria-labelledby="momotalk-week-label momotalk-week-value"
+        aria-expanded={open}
+        aria-controls="momotalk-week-menu"
+        onClick={() => setOpen(!open)}
+        onKeyDown={(event) => {
+          if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        <span className={styles.weekTriggerIcon} aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="5" width="18" height="16" rx="2" />
+            <path d="M7 3v4m10-4v4M3 10h18" />
+          </svg>
+        </span>
+        <span id="momotalk-week-value" className={styles.weekTriggerValue}>
+          {selected ? `${weekDate.format(new Date(selected.publishAt))}の週` : "週を選択"}
+        </span>
+        <span className={styles.weekChevron} aria-hidden="true">
+          ⌄
+        </span>
+      </button>
+      {open && (
+        <div id="momotalk-week-menu" className={styles.weekMenu}>
+          <div className={styles.weekMenuHeading}>会話の週を選択</div>
+          <div className={styles.weekOptions}>
+            {weeks.map((week, index) => (
+              <button
+                key={week.weekId}
+                ref={(node) => {
+                  options.current[index] = node;
+                }}
+                type="button"
+                className={styles.weekOption}
+                aria-current={week.weekId === value ? "true" : undefined}
+                onKeyDown={(event) => moveOption(event, index)}
+                onClick={() => {
+                  onChange(week.weekId);
+                  closeAndFocus();
+                }}
+              >
+                <span className={styles.weekOptionDate}>
+                  {weekDate.format(new Date(week.publishAt))}の週
+                </span>
+                {index === 0 && <span className={styles.weekLatest}>最新</span>}
+                {week.weekId === value && (
+                  <span className={styles.weekCheck} aria-hidden="true">
+                    ✓
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          {hasMore && (
+            <button
+              type="button"
+              className={styles.weekLoadMore}
+              disabled={loadingMore}
+              onClick={onLoadMore}
+            >
+              {loadingMore ? "読み込み中…" : "以前の週を読み込む"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function usePlayback(messages: readonly MomotalkMessage[]) {
   const [completed, setCompleted] = useState(0);
@@ -336,32 +490,17 @@ export default function MomotalkPage() {
           <h1>モモトーク</h1>
         </div>
         {weekId && (
-          <div className={styles.weekPicker}>
-            <label htmlFor="momotalk-week">今週とこれまでの会話</label>
-            <select
-              id="momotalk-week"
-              value={weekId}
-              onChange={(event) => {
-                setChosenWeek(event.target.value);
-                setRoomId(null);
-              }}
-            >
-              {weeks.map((week) => (
-                <option key={week.weekId} value={week.weekId}>
-                  {weekDate.format(new Date(week.publishAt))}の週
-                </option>
-              ))}
-            </select>
-            {weeksQuery.hasNextPage && (
-              <button
-                type="button"
-                disabled={weeksQuery.isFetchingNextPage}
-                onClick={() => void weeksQuery.fetchNextPage()}
-              >
-                以前の週を読み込む
-              </button>
-            )}
-          </div>
+          <WeekPicker
+            weeks={weeks}
+            value={weekId}
+            onChange={(week) => {
+              setChosenWeek(week);
+              setRoomId(null);
+            }}
+            hasMore={Boolean(weeksQuery.hasNextPage)}
+            loadingMore={weeksQuery.isFetchingNextPage}
+            onLoadMore={() => void weeksQuery.fetchNextPage()}
+          />
         )}
       </header>
       {error && (
