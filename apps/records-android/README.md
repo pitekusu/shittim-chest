@@ -3,7 +3,7 @@
 C01のExpressive画面へC02のCircuit／Metroを接続し、C03のAndroid専用CIで確認している。
 C16でC13のトークン保存、C14の認証APIクライアント、C15のAuth Tabを画面へ接続した。
 ログイン・期限切れ・通信障害・ログアウトを区別し、一時的な明暗表示切替も維持する。
-記録の取得・保存は未実装。署名済み配布とApp Linksの実証明書設定は後続工程とする。
+C17ではログイン済み画面に記録1件の議題・勝者・結論を表示する。署名済み配布とApp Linksの実証明書設定は後続工程とする。
 CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -125,6 +125,14 @@ C16のログイン画面（API 36、未認証・実データなし）：
 - `BootstrapPresenter.kt`：画面識別子・State・Eventと、一時的な表示選択の保持／復元。
 - `BootstrapUi.kt`：Stateを受けて描画し、選択操作をeventSinkへ返す。Previewは固定Stateだけで表示。
 - Circuit `0.39.0`、Metro `1.4.4`を固定。Kotlin `2.4.20`とMaterial 3 `1.5.0-alpha28`は維持。
+
+## C17の記録1件表示
+
+- `RecordsReadClient.kt`：既存の一覧から最新1件のIDを選び、詳細APIを取得。Ktor ContentNegotiationで必要な表示項目だけ変換する。
+- `RecordPreviewPanel.kt`：読み込み・空・エラー・議題／勝者／結論を表示。本文はメモリ内の画面状態だけで保持する。
+- `MobileSessionModel.withAuthorizedToken`：保存tokenをリクエスト中だけ貸し、ログアウト・期限切れ・アカウント切替後に戻る結果を捨てる。
+- 既存の認証後復帰先が個別記録なら、そのIDを直接取得する。記録の全件一覧や追加項目は後続工程。
+- 架空APIとエミュレーターで画面・境界条件を確認する。C19の実署名ログインはこの工程の検証には含めない。
 
 ## C16の認証画面
 

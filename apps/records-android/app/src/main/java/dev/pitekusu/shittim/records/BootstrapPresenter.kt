@@ -3,9 +3,12 @@ package dev.pitekusu.shittim.records
 import android.content.ActivityNotFoundException
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.slack.circuit.runtime.CircuitUiEvent
@@ -30,6 +33,7 @@ internal data object BootstrapScreen : Screen {
   class State(
     val themeChoice: ThemeChoice,
     val session: SessionState = SessionState.SignedOut(),
+    val record: RecordPreviewState = RecordPreviewState.Idle,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -38,6 +42,7 @@ internal data object BootstrapScreen : Screen {
     data object Login : Event
     data object Logout : Event
     data object Retry : Event
+    data object RetryRecord : Event
   }
 }
 
@@ -51,7 +56,30 @@ internal class BootstrapPresenter(
     var themeChoice by rememberSaveable { mutableStateOf(ThemeChoice.System) }
     val sessionState by session.state.collectAsState()
     val launcher = rememberLauncherForActivityResult(MobileLoginContract(), session::loginResult)
-    return BootstrapScreen.State(themeChoice, sessionState) { event ->
+    val records = remember { RecordsReadClient() }
+    DisposableEffect(records) { onDispose { records.close() } }
+    // The preview belongs to this exact session, including after an account switch.
+    var record by remember(sessionState) { mutableStateOf<RecordPreviewState>(RecordPreviewState.Idle) }
+    var recordRetry by remember { mutableStateOf(0) }
+    LaunchedEffect(sessionState, recordRetry) {
+      record = RecordPreviewState.Idle
+      val signedIn = sessionState as? SessionState.SignedIn
+      if (signedIn != null) {
+        record = RecordPreviewState.Loading
+        record = try {
+          val result = session.withAuthorizedToken { records.firstRecord(it, signedIn.returnTo) }
+          when (result) {
+            null -> RecordPreviewState.Idle
+            RecordReadResult.Empty -> RecordPreviewState.Empty
+            is RecordReadResult.Found -> RecordPreviewState.Ready(result.preview)
+          }
+        } catch (error: RecordReadException) {
+          if (error.failure == RecordReadFailure.AUTH_REQUIRED) session.onForeground()
+          RecordPreviewState.Error(error.failure)
+        }
+      }
+    }
+    return BootstrapScreen.State(themeChoice, sessionState, record) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin()) {
@@ -62,6 +90,7 @@ internal class BootstrapPresenter(
         }
         BootstrapScreen.Event.Logout -> session.logout()
         BootstrapScreen.Event.Retry -> session.retry()
+        BootstrapScreen.Event.RetryRecord -> recordRetry++
       }
     }
   }
