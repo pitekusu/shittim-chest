@@ -9,7 +9,8 @@
         "production": [
           "sha256:8ff1989bca63a603061629a2fb3663cb32952e2c603fdb3a324b9c2c06011ea3",
           "sha256:93175f29e2d294979dd055b02a4ea919b9883bbf066422e58be49ef3eebedb2a",
-          "sha256:5063fc440e1d0c66647b450cfe01067796e3554f62089cc9b622bd0a843d4ddd"
+          "sha256:5063fc440e1d0c66647b450cfe01067796e3554f62089cc9b622bd0a843d4ddd",
+          "sha256:aa164dc1f8672e5618a64f88075ce213b2789d88016c2afa8883682ce46c7fa1"
         ]
       },
       "status": "under_investigation",
