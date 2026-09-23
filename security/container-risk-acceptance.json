@@ -7,10 +7,10 @@
       "package": "libexpat1",
       "image_config_digests": {
         "production": [
-          "sha256:8ff1989bca63a603061629a2fb3663cb32952e2c603fdb3a324b9c2c06011ea3",
-          "sha256:93175f29e2d294979dd055b02a4ea919b9883bbf066422e58be49ef3eebedb2a",
           "sha256:5063fc440e1d0c66647b450cfe01067796e3554f62089cc9b622bd0a843d4ddd",
-          "sha256:aa164dc1f8672e5618a64f88075ce213b2789d88016c2afa8883682ce46c7fa1"
+          "sha256:aa164dc1f8672e5618a64f88075ce213b2789d88016c2afa8883682ce46c7fa1",
+          "sha256:d7ac28da5bf634984880889db0affc14df56523eb0166b31c1fd8d45a3ab4216",
+          "sha256:ae19a1937a602c3afd27ca521e5d8951f428bb45c969c7c2797873a6cb421d31"
         ]
       },
       "status": "under_investigation",
