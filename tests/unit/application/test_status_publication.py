@@ -12,6 +12,7 @@ from shittim_chest.application.ports import Clock, StatusPublicationRepository
 from shittim_chest.application.scale_to_zero import (
     STATUS_PUBLICATION_CLAIM_SECONDS,
     IngressRequest,
+    IngressStatus,
     IngressStatusPublication,
     StatusHistoryCheckpoint,
     StatusMessageState,
@@ -405,7 +406,36 @@ def test_timeout_and_recovery_guidance_matches_the_canonical_user_actions() -> N
     assert "再実行は不要" in startup_timeout
     assert "復旧しました" in recovered
     assert "議論を開始します" in recovered
-    assert "依頼を再実行してください" in terminal
+    assert "起動できませんでした" in startup_timeout
+    assert "依頼の処理に失敗しました。再実行してください" in terminal
+    assert "起動できませんでした" not in terminal
+
+
+@pytest.mark.parametrize(
+    ("error_code", "processing_started_at"),
+    [
+        ("startup_terminal_deadline_exceeded", None),
+        ("openai_incomplete", NOW + timedelta(seconds=1)),
+    ],
+)
+def test_terminal_failure_text_covers_startup_and_processing_failures(
+    error_code: str,
+    processing_started_at: datetime | None,
+) -> None:
+    failed = replace(
+        request(),
+        status=IngressStatus.FAILED,
+        status_message_state=StatusMessageState.TERMINAL_FAILED,
+        processing_started_at=processing_started_at,
+        completed_at=NOW + timedelta(minutes=15),
+        updated_at=NOW + timedelta(minutes=15),
+        error_code=error_code,
+    )
+
+    content = render_public_status(failed, StatusMessageState.TERMINAL_FAILED)
+    assert "依頼の処理に失敗しました。再実行してください" in content
+    assert "起動できませんでした" not in content
+    assert status_publication_marker(failed.interaction_id) in content
 
 
 def test_sanitizer_truncates_after_neutralizing_controls_and_markdown() -> None:

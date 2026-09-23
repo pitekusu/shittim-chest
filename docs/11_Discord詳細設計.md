@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, discord, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-05
+updated: 2026-09-23
 ---
 
 # Discord詳細設計
@@ -68,6 +68,8 @@ sequenceDiagram
 
 3分の警告は再入力を求めるものではない。復旧した受付は同じ要求として処理し、重複した討論を作らない。
 起動待ちの期限は、処理開始後の討論セッション期限やOutboxの配送期限とは別である。
+終端失敗は起動期限切れと処理開始後の失敗で共通の`TERMINAL_FAILED`とし、
+「依頼の処理に失敗しました。再実行してください」と表示する。3分時点の起動遅延警告は変えない。
 正確な定義は[scale_to_zero.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/application/scale_to_zero.py)、
 期限後の収束は[runtime_reconciler.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/application/runtime_reconciler.py)を参照する。
 

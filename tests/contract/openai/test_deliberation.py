@@ -213,3 +213,49 @@ async def test_preparation_incomplete_is_bounded_and_fails_closed(reason: str | 
         await client.aclose()
     assert len(server.requests) == len(observer.failures) == expected_calls
     assert observer.usages == []
+
+
+@pytest.mark.asyncio
+async def test_initial_opinion_retries_token_limit_once_with_more_room() -> None:
+    incomplete = response_with({"summary": "partial", "proposal": "partial"})
+    incomplete.update(status="incomplete", incomplete_details={"reason": "max_output_tokens"})
+    completed = response_with({"summary": "complete", "proposal": "complete"})
+    service, server, observer, client = await service_for([incomplete, completed])
+    try:
+        opinion = await service.generate_initial_opinion(
+            participant=PARTICIPANTS[0], question="weekend", evidence=EvidenceBundle()
+        )
+    finally:
+        await client.aclose()
+
+    assert opinion.summary == opinion.proposal == "complete"
+    first, retry = server.requests
+    assert first["max_output_tokens"] == 2_400
+    assert retry == {**first, "max_output_tokens": 4_800}
+    assert len(observer.usages) == len(observer.failures) == 1
+    assert observer.failures[0].diagnostic_context == "response_status"
+    assert observer.failures[0].diagnostic_kind == "max_output_tokens"
+    assert observer.failures[0].max_output_tokens == 2_400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["content_filter", None])
+async def test_initial_opinion_does_not_retry_other_incomplete_reasons(
+    reason: str | None,
+) -> None:
+    incomplete = response_with({"summary": "partial", "proposal": "partial"})
+    incomplete.update(
+        status="incomplete", incomplete_details={"reason": reason} if reason is not None else None
+    )
+    service, server, observer, client = await service_for([incomplete])
+    try:
+        with pytest.raises(OpenAIIncompleteResponse):
+            await service.generate_initial_opinion(
+                participant=PARTICIPANTS[0], question="weekend", evidence=EvidenceBundle()
+            )
+    finally:
+        await client.aclose()
+
+    assert len(server.requests) == len(observer.failures) == 1
+    assert observer.usages == []
+    assert observer.failures[0].diagnostic_kind == (reason or "missing")
