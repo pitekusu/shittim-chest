@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-21
+updated: 2026-09-23
 ---
 
 # GitHub・CI-CD詳細設計
@@ -165,7 +165,8 @@ Android system imageとAVD snapshotもmainだけで保存し、PRは復元だけ
 mainのcache missではアプリを入れる前のAVDを起動して保存する。試験中はsnapshotを保存せず、
 cache hitでも全instrumentation testを実行する。cache missや互換性不一致では通常起動して同じ試験を実行する。
 
-Webはlockfile・package manager・Node・runnerに対応するpnpm storeをキャッシュする。
+Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
+Actionのpnpm依存キャッシュを使う。CIのキャッシュ保存はmainのみとし、依存は`vp install --frozen-lockfile`で固定する。
 Playwrightの2並列と全画面試験は維持し、変更分類でWeb対象外の実行だけを省く。
 Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既存の日次／週次頻度とセキュリティ更新方針は変えない。
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。

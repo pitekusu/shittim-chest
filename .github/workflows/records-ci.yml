@@ -142,31 +142,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Set up the pinned Records Web toolchain
+        uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Enable the package-manager version declared by Records web
-        run: |
-          corepack enable pnpm
-          test "$(pnpm --version)" = "11.25.0"
-      - name: Locate the pnpm content-addressed store
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "${GITHUB_OUTPUT}"
-      - name: Restore the locked pnpm store
-        id: pnpm-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ env.NODE_VERSION }}-${{ hashFiles('apps/records-web/pnpm-lock.yaml', 'apps/records-web/package.json', 'apps/records-web/pnpm-workspace.yaml') }}
+          working-directory: apps/records-web
+          run-install: false
+          cache: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
       - name: Install locked Records web dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Save the main pnpm store
-        if: ${{ github.ref == 'refs/heads/main' && steps.pnpm-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
+        run: vp install --frozen-lockfile
       - name: Check Records web formatting, lint, and types
         run: pnpm exec vp check
       - name: Test Records web
