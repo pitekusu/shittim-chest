@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-09-23
+updated: 2026-09-24
 ---
 
 # Androidアプリ設計
@@ -37,7 +37,8 @@ updated: 2026-09-23
 | C17 | 記録1件の取得と表示 | ログイン後に最新一覧から1件を取得し、議題・勝者・結論を表示。許可された復帰先の個別記録も取得 |
 | C18 | Release variant・署名入力・版番号 | debugと配布用application IDを分離。秘密値を環境変数から受け、未設定時のRelease成果物作成を拒否 |
 | C19 | App Links・配布証明書 | 固定callbackと記録リンクをPlay署名証明書に関連付け、許可された記録へのログイン後復帰を接続 |
-| 後続 | 一覧全体、詳細全項目、暗号化保存、署名済み配布 | 未実装。実upload keyによるPlay配布・実端末ログインの確認は配布準備とともに実施 |
+| C20 | 本人向け内部テスト | 配布手順を整備。upload key作成後に本人だけへAABを配布し、実機でログイン・記録リンク・更新を確認 |
+| 後続 | 一覧全体、詳細全項目、暗号化保存、友人向け配布 | 未実装。本人向け内部テストの受入はC20で実施 |
 
 ### PRの分割単位
 
@@ -641,6 +642,20 @@ Release smokeでは200・content type・artifactとの一致を確かめる。�
 リンクから来た値をAPIや認証の権限としては扱わない。記録の読み取りは従来どおりBearer認証とAPIの認可で決まる。
 無効なリンクはアプリ内の復帰先に採用せず、ブラウザーに開く権限を広げるようなfallbackは作らない。
 実upload keyによるAAB提出、Play配布版でのリンク検証、実Discordログインは実際の配布環境が整った時点で確認する。
+
+## C20：本人向け内部テストの配布と確認
+
+初回は本人のGoogleアカウントだけをPlay Consoleの内部テストトラックへ登録する。
+内部アプリ共有は別鍵で再署名されるため、App Linksの受入確認に使わない。
+upload keyは本人がリポジトリ外で生成・バックアップし、Git・CI artifact・チャットへ秘密鍵やパスワードを渡さない。
+ビルド入力とPlay Console操作の具体的な手順は`apps/records-android/README.md`を参照する。
+
+配布前にReleaseIdentityの限定IAM変更とRecords Releaseによる`assetlinks.json`配信を確認する。
+Play Consoleに表示されるアプリ署名鍵のSHA-256を改めて全件確認し、追加の鍵が表示された場合は公開ファイルへ反映してから配布する。
+Playの内部テストへ未使用の`versionCode`を持つAABを提出し、本人だけが参加できる状態を確認する。
+配布後は実機でOSのドメイン検証、Discordログイン、記録リンクからの復帰、同じupload keyによる更新を確認する。
+debug版・エミュレーター・内部アプリ共有はこの受入の代替にならない。
+未確認や失敗を成功扱いせず、問題版はより大きい版番号で修正する。友人への配布や公開は後続工程とする。
 
 ## 最小構成
 
