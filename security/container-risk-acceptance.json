@@ -9,15 +9,15 @@
         "production": [
           "sha256:5063fc440e1d0c66647b450cfe01067796e3554f62089cc9b622bd0a843d4ddd",
           "sha256:aa164dc1f8672e5618a64f88075ce213b2789d88016c2afa8883682ce46c7fa1",
-          "sha256:d7ac28da5bf634984880889db0affc14df56523eb0166b31c1fd8d45a3ab4216",
-          "sha256:ae19a1937a602c3afd27ca521e5d8951f428bb45c969c7c2797873a6cb421d31"
+          "sha256:c95174770c00a7b62e56555549bd19860e84e09f88fff757d9320defbfe9473a",
+          "sha256:62a52c09c91d8b0e79b3daa7685537b18a195ef5e88c24c85dd089e3d0c28b33"
         ]
       },
       "status": "under_investigation",
       "justification": "Debian 13 has no fixed expat package yet, and the verified DHI VEX does not mark this finding not affected.",
       "impact": "Malformed UTF-16 XML may hide markup from Expat and permit XML injection if untrusted XML reaches a parser.",
       "exploitability": "The production debate service accepts signed Discord JSON and has no XML request endpoint; SDK XML parsing remains a possible indirect path.",
-      "evidence": "Debian tracker https://security-tracker.debian.org/tracker/CVE-2026-93990 and PR 423/424 Grype ARM64 reports show libexpat1 2.8.3-1~deb13u1+dhi3 as not-fixed without a DHI VEX exemption.",
+      "evidence": "Debian tracker https://security-tracker.debian.org/tracker/CVE-2026-93990 and PR 423/424/430 Grype ARM64 reports show libexpat1 2.8.3-1~deb13u1+dhi3 as not-fixed without a DHI VEX exemption.",
       "approved_on": "2026-09-23",
       "expires_on": "2026-09-30",
       "reevaluation_conditions": "Remove this acceptance when Debian or DHI ships a fix, a verified VEX changes status, the image digest changes, or XML exposure changes.",

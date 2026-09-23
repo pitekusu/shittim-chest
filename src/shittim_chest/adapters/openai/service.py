@@ -216,7 +216,7 @@ class OpenAIResponsesService:
         participant: ParticipantSlot,
         question: str,
     ) -> PreferenceFrame:
-        output = await self._parse_preparation(
+        output = await self._parse_with_token_limit_retry(
             operation="preferences",
             schema=PreferenceFrameOutputV1,
             instructions=deliberation_instructions(
@@ -240,7 +240,7 @@ class OpenAIResponsesService:
         preference_frame: PreferenceFrame | None = None,
     ) -> CandidatePlan:
         _validate_frame_owner(preference_frame, participant)
-        output = await self._parse_preparation(
+        output = await self._parse_with_token_limit_retry(
             operation="candidates",
             schema=CandidatePlanOutputV1,
             instructions=deliberation_instructions(
@@ -268,7 +268,7 @@ class OpenAIResponsesService:
         candidate_plan: CandidatePlan | None = None,
     ) -> InitialOpinion:
         _validate_frame_owner(preference_frame, participant, candidate_plan)
-        output = await self._parse(
+        output = await self._parse_with_token_limit_retry(
             operation="initial_opinion",
             schema=OpinionOutputV1,
             instructions=(
@@ -400,7 +400,7 @@ class OpenAIResponsesService:
             output.victory_message,
         )
 
-    async def _parse_preparation(
+    async def _parse_with_token_limit_retry(
         self,
         *,
         operation: str,
@@ -409,7 +409,7 @@ class OpenAIResponsesService:
         input_text: str,
         settings: PhaseSettings,
     ) -> _OutputT:
-        """Retry only a confirmed token limit, once, inside the caller's deadline.
+        """Retry a confirmed token limit once inside the caller's deadline.
 
         Partial output is discarded. Other participants' calls and saved checkpoints
         are untouched; refusals, filters and unknown incomplete reasons propagate.

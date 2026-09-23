@@ -542,9 +542,7 @@ def _state_text(state: StatusMessageState) -> str:
         StatusMessageState.COMPLETED: "完了",
         StatusMessageState.CANCELLED: "中止",
         StatusMessageState.REJECTED: "受付不可",
-        StatusMessageState.TERMINAL_FAILED: (
-            "シッテムの箱を起動できませんでした。依頼を再実行してください"
-        ),
+        StatusMessageState.TERMINAL_FAILED: "依頼の処理に失敗しました。再実行してください",
     }
     return labels[state]
 

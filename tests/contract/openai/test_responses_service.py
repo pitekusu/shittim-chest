@@ -442,7 +442,9 @@ async def test_incomplete_and_missing_parsed_output_are_distinct() -> None:
     incomplete["incomplete_details"] = {"reason": "max_output_tokens"}
     missing = response_with({})
     missing["output"] = []
-    service, _, observer, http_client = await service_for([incomplete, missing])
+    service, server, observer, http_client = await service_for(
+        [incomplete, incomplete.copy(), missing]
+    )
     try:
         with pytest.raises(OpenAIIncompleteResponse):
             await service.generate_initial_opinion(
@@ -461,8 +463,10 @@ async def test_incomplete_and_missing_parsed_output_are_distinct() -> None:
 
     assert [record.code for record in observer.failures] == [
         "openai_incomplete",
+        "openai_incomplete",
         "openai_invalid_output",
     ]
+    assert [request["max_output_tokens"] for request in server.requests] == [2_400, 4_800, 2_400]
     failure = observer.failures[0]
     assert failure.diagnostic_context == "response_status"
     assert failure.diagnostic_kind == "max_output_tokens"
@@ -474,8 +478,10 @@ async def test_incomplete_and_missing_parsed_output_are_distinct() -> None:
     assert failure.output_tokens == 30
     assert failure.cached_input_tokens == 20
     assert failure.reasoning_tokens == 10
-    assert observer.failures[1].diagnostic_context == "structured_output"
-    assert observer.failures[1].diagnostic_kind == "missing"
+    assert observer.failures[1].diagnostic_context == "response_status"
+    assert observer.failures[1].max_output_tokens == 4_800
+    assert observer.failures[2].diagnostic_context == "structured_output"
+    assert observer.failures[2].diagnostic_kind == "missing"
 
 
 @pytest.mark.asyncio
