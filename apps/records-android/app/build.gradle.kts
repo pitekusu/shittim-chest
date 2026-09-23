@@ -5,6 +5,21 @@ plugins {
   alias(libs.plugins.metro)
 }
 
+val appVersionCode = providers.gradleProperty("shittimAndroidVersionCode").orElse("1").get()
+  .toIntOrNull()?.takeIf { it > 0 }
+  ?: throw GradleException("shittimAndroidVersionCode must be a positive integer")
+val appVersionName = providers.gradleProperty("shittimAndroidVersionName").orElse("0.0.1").get()
+if (!Regex("[0-9]+\\.[0-9]+\\.[0-9]+").matches(appVersionName)) {
+  throw GradleException("shittimAndroidVersionName must use major.minor.patch")
+}
+
+// Never keep signing values in Gradle properties, source control, or build output.
+val releaseStoreFile = providers.environmentVariable("SHITTIM_ANDROID_UPLOAD_KEYSTORE").orNull
+  ?.takeIf { it.isNotBlank() }?.let(::file)
+val releaseStorePassword = providers.environmentVariable("SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("SHITTIM_ANDROID_UPLOAD_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD").orNull
+
 android {
   namespace = "dev.pitekusu.shittim.records"
   compileSdk { version = release(37) { minorApiLevel = 1 } }
@@ -14,15 +29,27 @@ android {
     applicationId = "dev.pitekusu.shittim.records"
     minSdk = 26
     targetSdk = 37
-    versionCode = 1
-    versionName = "0.0.1"
+    versionCode = appVersionCode
+    versionName = appVersionName
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  signingConfigs {
+    create("upload") {
+      storeFile = releaseStoreFile
+      storePassword = releaseStorePassword
+      keyAlias = releaseKeyAlias
+      keyPassword = releaseKeyPassword
+    }
   }
 
   buildTypes {
     debug {
       applicationIdSuffix = ".dev"
       versionNameSuffix = "-dev"
+    }
+    release {
+      signingConfig = signingConfigs.getByName("upload")
     }
   }
 
@@ -31,6 +58,19 @@ android {
     targetCompatibility = JavaVersion.VERSION_17
   }
   buildFeatures { compose = true }
+}
+
+// Fail closed before packaging; AGP can otherwise produce an unsigned release artifact.
+val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
+  doLast {
+    if (releaseStoreFile?.isFile != true ||
+      listOf(releaseStorePassword, releaseKeyAlias, releaseKeyPassword).any { it.isNullOrBlank() }) {
+      throw GradleException("Android release upload signing inputs are incomplete")
+    }
+  }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+  dependsOn(verifyReleaseSigning)
 }
 
 kotlin { jvmToolchain(21) }
