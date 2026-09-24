@@ -18,6 +18,9 @@ import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import java.io.Closeable
 import java.io.IOException
+import java.net.URI
+import java.time.Instant
+import java.time.OffsetDateTime
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -39,6 +42,19 @@ internal sealed interface RecordReadResult {
   data object Empty : RecordReadResult
   class Found(val preview: RecordPreview) : RecordReadResult
 }
+
+internal class RecordListEntry(
+  val recordId: String,
+  val questionPreview: String,
+  val requesterName: String,
+  val requesterAvatar: RecordAvatar,
+  val completedAt: Instant,
+  val winnerName: String,
+)
+
+internal class RecordAvatar(val url: String?, val fallbackVariant: String)
+
+internal class RecordListPage(val items: List<RecordListEntry>, val hasMore: Boolean)
 
 internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.create {
   config {
@@ -93,6 +109,52 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       RecordPreview(detail.question, detail.finalDecision.decision, winner.displayName))
   }
 
+  suspend fun recentRecords(accessToken: String): RecordListPage {
+    if (!mobileOpaqueValue.matches(accessToken)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
+    val page: RecordListResponse = read("/api/v1/records?limit=12&sort=newest", accessToken)
+    if (page.schemaVersion != 1 || page.items.size > 12 ||
+      page.items.map { it.recordId }.toSet().size != page.items.size ||
+      (page.nextCursor != null && (page.nextCursor.isBlank() || page.nextCursor.length > 4096))) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    return try {
+      RecordListPage(page.items.map { item ->
+        if (item.schemaVersion != 1 || !mobileOpaqueValue.matches(item.recordId) ||
+          item.questionPreview.isBlank() || item.requester.displayName.isBlank() ||
+          item.participants.size != 3 ||
+          item.participants.map { it.slot }.toSet() != PARTICIPANTS ||
+          item.result.winner !in PARTICIPANTS) {
+          throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        }
+        val winner = item.participants.first { it.slot == item.result.winner }
+        if (winner.displayName.isBlank()) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        val avatar = item.requester.avatar
+        val avatarUrl = when (avatar.kind) {
+          "placeholder" -> if (avatar.url == null) null else throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+          "image" -> avatar.url?.takeIf(::validAvatarUrl)
+            ?: throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+          else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        }
+        if (avatar.alt.isBlank() || avatar.fallbackVariant !in AVATAR_VARIANTS) {
+          throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        }
+        RecordListEntry(item.recordId, item.questionPreview, item.requester.displayName,
+          RecordAvatar(avatarUrl, avatar.fallbackVariant),
+          OffsetDateTime.parse(item.completedAt).toInstant(), winner.displayName)
+      }, page.nextCursor != null)
+    } catch (error: RecordReadException) {
+      throw error
+    } catch (_: Exception) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+  }
+
+  private fun validAvatarUrl(raw: String): Boolean = try {
+    val uri = URI(raw)
+    uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null &&
+      uri.fragment == null
+  } catch (_: Exception) { false }
+
   private suspend inline fun <reified T> read(path: String, accessToken: String): T {
     try {
       val response = client.get("$RECORDS_ORIGIN$path") {
@@ -129,6 +191,27 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
 
   @Serializable private class RecordPage(val schemaVersion: Int, val items: List<RecordReference>)
   @Serializable private class RecordReference(val recordId: String)
+  @Serializable private class RecordListResponse(
+    val schemaVersion: Int,
+    val items: List<RecordListItem>,
+    val nextCursor: String? = null,
+  )
+  @Serializable private class RecordListItem(
+    val schemaVersion: Int,
+    val recordId: String,
+    val questionPreview: String,
+    val completedAt: String,
+    val requester: RecordRequester,
+    val participants: List<RecordParticipant>,
+    val result: RecordResult,
+  )
+  @Serializable private class RecordRequester(val displayName: String, val avatar: RecordAvatarRef)
+  @Serializable private class RecordAvatarRef(
+    val kind: String,
+    val url: String? = null,
+    val alt: String,
+    val fallbackVariant: String,
+  )
   @Serializable private class RecordDetail(
     val schemaVersion: Int,
     val recordId: String,
@@ -143,5 +226,6 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
 
   private companion object {
     val PARTICIPANTS = setOf("participant-a", "participant-b", "participant-c")
+    val AVATAR_VARIANTS = setOf("cyan", "pink", "lavender")
   }
 }

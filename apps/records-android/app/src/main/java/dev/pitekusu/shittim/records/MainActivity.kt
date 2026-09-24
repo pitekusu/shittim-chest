@@ -9,6 +9,9 @@ import androidx.activity.viewModels
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.slack.circuit.foundation.CircuitContent
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.request.CachePolicy
 import dev.pitekusu.shittim.records.auth.KeystoreTokenStore
 import dev.pitekusu.shittim.records.auth.MobileAuthClient
 import dev.pitekusu.shittim.records.auth.MobileSessionModel
@@ -27,6 +30,10 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // Presigned requester avatars must not become plaintext files on the device.
+    SingletonImageLoader.setSafe { context ->
+      ImageLoader.Builder(context).diskCachePolicy(CachePolicy.DISABLED).build()
+    }
     openRecordLink(intent)
     enableEdgeToEdge()
     setContent { CircuitContent(screen = BootstrapScreen, circuit = graph.circuit) }

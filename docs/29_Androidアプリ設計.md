@@ -13,7 +13,7 @@ updated: 2026-09-24
 ## 目的と現在の範囲
 
 既存のDiscord・Records・Webを維持し、友人向けのAndroidネイティブアプリを段階的に追加する。
-現段階はC03までの最小アプリ・デザイン基盤・Android CI、C05〜C12のサーバー側モバイル認証、C13の端末内トークン保存、C14の認証APIクライアント、C15の認証受け渡し、C16のログイン画面、C17の記録1件表示、C18のRelease設定である。一覧全体やGoogle Play配布は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
+現段階ではC03までの基盤、C05〜C12のサーバー認証、C13〜C19のAndroid認証・記録1件表示・App Linksを実装済み。C20でPlay内部テスト版の実機ログインと記録表示を確認した。C21は最近の記録の一覧表示で、追加ページ・詳細全項目・暗号化保存は後続工程とする。実際の配信状態は実装・試験・検証記録で管理する。
 
 | 段階 | 内容 | 現在の扱い |
 |---|---|---|
@@ -37,8 +37,9 @@ updated: 2026-09-24
 | C17 | 記録1件の取得と表示 | ログイン後に最新一覧から1件を取得し、議題・勝者・結論を表示。許可された復帰先の個別記録も取得 |
 | C18 | Release variant・署名入力・版番号 | debugと配布用application IDを分離。秘密値を環境変数から受け、未設定時のRelease成果物作成を拒否 |
 | C19 | App Links・配布証明書 | 固定callbackと記録リンクをPlay署名証明書に関連付け、許可された記録へのログイン後復帰を接続 |
-| C20 | 本人向け内部テスト | 配布手順を整備。upload key作成後に本人だけへAABを配布し、実機でログイン・記録リンク・更新を確認 |
-| 後続 | 一覧全体、詳細全項目、暗号化保存、友人向け配布 | 未実装。本人向け内部テストの受入はC20で実施 |
+| C20 | 本人向け内部テスト | Play版のApp Links検証・Discordログイン・記録1件表示を実機で確認。記録リンク復帰と更新試験は未確認 |
+| C21 | 議論一覧の最初のページ | 最新12件のカード、依頼者アイコン、読み込み・空・エラー状態を実装。カードから既存の1件表示へ遷移 |
+| 後続 | 追加ページ、詳細全項目、暗号化保存、友人向け配布 | 未実装。C22以降で分けて進める |
 
 ### PRの分割単位
 
@@ -112,7 +113,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C14：認証通信（継続） | Ktor、kotlinx.serialization | 通信・JSON変換を利用。再送防止・応答上限・秘密非表示は認証専用の境界として維持 |
 | C15：ブラウザー認証（継続） | Auth Tab、Activity Result API | 起動・結果受け渡しを利用。非対応ブラウザーのfallbackも同じ固定callback・取引・state・期限の検証へ接続 |
 | C16：認証画面／C17：通常API（接続済み） | 既存Circuit、Metro、AndroidX ViewModel／Activity Result。記録JSONの変換に[Ktor ContentNegotiation](https://ktor.io/docs/client-serialization.html)を使用 | 認証の寿命はViewModel、描画状態・イベントはCircuitへ任せる。記録本文の一時表示だけ行い、永続キャッシュや全件取得を先行追加しない |
-| C21：画像表示（導入予定） | [Coil AsyncImage](https://coil-kt.github.io/coil/compose/) | 取得・縮小・placeholderは自作しない。非公開画像の平文disk cacheを無効化し、ログアウト時にmemory cacheを消去 |
+| C21：画像表示（接続済み） | [Coil AsyncImage](https://coil-kt.github.io/coil/compose/) | 取得・縮小はCoilに任せる。署名付き画像のdisk cacheを無効化し、認証状態から離れた際にmemory cacheを消去 |
 | C22：一覧の追加取得（導入予定） | [Paging／PagingSource](https://developer.android.com/topic/libraries/architecture/paging/v3-overview) | loading・retry・要求制御を任せる。APIのcursorを接続し、期限切れcursorはAPI契約に従って扱う |
 | C23：Markdown（導入予定） | [Compose Markdown RendererのMaterial 3対応](https://github.com/mikepenz/multiplatform-markdown-renderer) | 独自パーサー・WebViewは追加しない。外部リンクの許可判定はアプリ側に残す |
 | C26〜29：暗号化保存（導入予定） | Bouncy Castle、Android Keystore、[Room](https://developer.android.com/training/data-storage/room) | 独自暗号方式・DBアクセス基盤は作らない。保存形式・鍵の取り扱いを管理し、Roomには暗号化済み本文を保存 |
@@ -612,6 +613,8 @@ C17は縦断動作の最小表示であり、C21の一覧カード、C22のpagin
 架空APIで一覧→詳細・空・個別復帰先・異なるID／勝者・401を確認し、画面で読み込み・結果・再試行と
 狭幅／文字拡大を確認する。実署名でのログインはC19で確認する。
 
+C21以降は通常起動で一覧を表示し、カード選択か個別記録リンクからこの1件表示へ進む。
+
 ## C18：Release variantと署名入力
 
 Android Gradle Plugin標準の`release` build typeへupload keyの署名設定を接続する。`debug`は既存の`.dev`付きapplication IDとdebug署名を維持し、releaseは本来のapplication IDを使用する。
@@ -656,6 +659,12 @@ Playの内部テストへ未使用の`versionCode`を持つAABを提出し、本
 配布後は実機でOSのドメイン検証、Discordログイン、記録リンクからの復帰、同じupload keyによる更新を確認する。
 debug版・エミュレーター・内部アプリ共有はこの受入の代替にならない。
 未確認や失敗を成功扱いせず、問題版はより大きい版番号で修正する。友人への配布や公開は後続工程とする。
+
+## C21：議論一覧のカード
+
+ログイン後に`GET /api/v1/records?limit=12&sort=newest`の最初のページを読み、議題の要約、依頼者名・アイコン、完了日、既存の勝者をカードへ表示する。カードを選ぶとC17の1件表示を開く。追加ページの取得・cursor管理はC22に残す。
+
+一覧の読み込み・空・通信失敗を区別し、失敗時は再試行できるようにする。Bearer tokenは通信中だけ使用し、ログアウト・失効・アカウント切替後の応答を表示しない。署名付きアイコンはCoilの`AsyncImage`で読み、disk cacheを無効化して認証状態から離れた際にmemory cacheを消去する。本文とアイコンを永続保存しない。
 
 ## 最小構成
 

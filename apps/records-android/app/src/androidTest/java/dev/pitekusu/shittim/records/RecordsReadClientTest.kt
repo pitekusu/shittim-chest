@@ -39,6 +39,40 @@ class RecordsReadClientTest {
   }
 
   @Test
+  fun recentListUsesBearerAndReturnsRequesterCardsWithoutFetchingDetails() = runBlocking {
+    var requests = 0
+    RecordsReadClient(MockEngine { request ->
+      requests++
+      assertEquals("/api/v1/records?limit=12&sort=newest", request.url.toString()
+        .removePrefix("https://shittim.pitekusu.dev"))
+      assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+      assertFalse(request.headers.contains(HttpHeaders.Cookie))
+      respond(listPage(), headers = jsonHeader)
+    }).use { client ->
+      val page = client.recentRecords(token)
+      assertEquals(1, page.items.size)
+      assertEquals("架空の依頼者", page.items.single().requesterName)
+      assertEquals("アロナ", page.items.single().winnerName)
+      assertEquals("cyan", page.items.single().requesterAvatar.fallbackVariant)
+      assertTrue(page.hasMore)
+    }
+    assertEquals(1, requests)
+  }
+
+  @Test
+  fun invalidListAvatarOrWinnerIsRejectedWithoutLeakingResponse() = runBlocking {
+    for (payload in listOf(
+      listPage().replace("\"kind\":\"placeholder\"", "\"kind\":\"unknown\""),
+      listPage().replace("\"winner\":\"participant-a\"", "\"winner\":\"participant-x\""),
+      listPage().replace("2026-09-24T00:00:00Z", "not-a-date"),
+    )) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.recentRecords(token) }
+      }
+    }
+  }
+
+  @Test
   fun emptyListNeverRequestsDetailAndApprovedDestinationSkipsList() = runBlocking {
     var requests = 0
     RecordsReadClient(MockEngine {
@@ -109,6 +143,16 @@ class RecordsReadClientTest {
 
   private fun page(recordId: String?): String =
     """{"schemaVersion":1,"items":${if (recordId == null) "[]" else "[{\"recordId\":\"$recordId\"}]"},"nextCursor":null}"""
+
+  private fun listPage(): String =
+    """{"schemaVersion":1,"items":[{"schemaVersion":1,"recordId":"$id",
+      "questionPreview":"架空の議題","completedAt":"2026-09-24T00:00:00Z",
+      "requester":{"displayName":"架空の依頼者","avatar":{"kind":"placeholder",
+        "url":null,"alt":"架空の依頼者","fallbackVariant":"cyan"}},
+      "participants":[{"slot":"participant-a","displayName":"アロナ"},
+        {"slot":"participant-b","displayName":"プラナ"},
+        {"slot":"participant-c","displayName":"安倍晋三AI"}],
+      "result":{"winner":"participant-a"}}],"nextCursor":"next"}"""
 
   private fun detail(recordId: String, winner: String = "participant-a"): String =
     """{"schemaVersion":2,"recordId":"$recordId","question":"夕飯は何がいい？",
