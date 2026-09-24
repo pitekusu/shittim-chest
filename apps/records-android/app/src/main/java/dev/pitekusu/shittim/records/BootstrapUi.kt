@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,11 +14,12 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -52,9 +54,15 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
     }
   ShittimTheme(darkTheme) {
     ShittimBackdrop(modifier) {
+      BackHandler(enabled = state.session is SessionState.SignedIn && state.selectedRecordId != null) {
+        state.eventSink(BootstrapScreen.Event.CloseRecord)
+      }
       BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-        val scrollState = rememberScrollState()
-        LaunchedEffect(state.selectedRecordId) { scrollState.scrollTo(0) }
+        val listScrollState = rememberScrollState()
+        val detailScrollState = rememberSaveable(state.selectedRecordId, saver = ScrollState.Saver) {
+          ScrollState(0)
+        }
+        val scrollState = if (state.selectedRecordId == null) listScrollState else detailScrollState
         val layout = Modifier.fillMaxSize().verticalScroll(scrollState).padding(24.dp)
         // Large text keeps a single readable column even in a wide window.
         if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
