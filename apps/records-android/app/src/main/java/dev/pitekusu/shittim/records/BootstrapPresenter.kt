@@ -87,8 +87,11 @@ internal class BootstrapPresenter(
       when (currentSession) {
         is SessionState.SignedIn -> {
           // Destination-only updates retain the same user instance and loaded page.
+          // An in-flight request is cancelled by LaunchedEffect and must restart.
+          val completedList = recordList is RecordListState.Ready ||
+            recordList == RecordListState.Empty || recordList is RecordListState.Error
           if (listOwner === currentSession.user && loadedRetry == listRetry &&
-            recordList != RecordListState.Idle) return@LaunchedEffect
+            completedList) return@LaunchedEffect
           listOwner = currentSession.user
           loadedRetry = listRetry
           recordList = RecordListState.Loading
