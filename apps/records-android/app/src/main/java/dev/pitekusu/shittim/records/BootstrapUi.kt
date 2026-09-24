@@ -62,7 +62,13 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
         val detailScrollState = rememberSaveable(state.selectedRecordId, saver = ScrollState.Saver) {
           ScrollState(0)
         }
-        val scrollState = if (state.selectedRecordId == null) listScrollState else detailScrollState
+        val transientScrollState = rememberScrollState()
+        val scrollState = when {
+          state.session !is SessionState.SignedIn -> transientScrollState
+          state.selectedRecordId != null -> detailScrollState
+          state.records is RecordListState.Ready -> listScrollState
+          else -> transientScrollState
+        }
         val layout = Modifier.fillMaxSize().verticalScroll(scrollState).padding(24.dp)
         // Large text keeps a single readable column even in a wide window.
         if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
