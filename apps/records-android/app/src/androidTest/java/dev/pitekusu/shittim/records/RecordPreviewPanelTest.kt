@@ -2,13 +2,20 @@ package dev.pitekusu.shittim.records
 
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.pitekusu.shittim.records.ui.ShittimTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +39,55 @@ class RecordPreviewPanelTest {
     compose.onNodeWithText("架空の議題").assertDoesNotExist()
     compose.onNodeWithText(label(R.string.record_retry)).performClick()
     assertEquals(BootstrapScreen.Event.RetryRecord, events.single())
+  }
+
+  @Test
+  fun markdownBodyShowsAllThreeOpinionsAndLongText() {
+    val longProposal = "長文の提案です。".repeat(80)
+    val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
+      RecordOpinion(name, "要約${index + 1}", "**強調** と [資料](https://example.com)\n\n- 箇条書き",
+        "案${index + 1}", longProposal)
+    }
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) {
+        RecordPreviewPanel(RecordPreviewState.Ready(
+          RecordPreview("架空の議題", "架空の結論", "アロナ", opinions)), {})
+      } }
+    }
+    compose.onNodeWithText("3人の意見").assertExists()
+    for (name in listOf("アロナ", "プラナ", "安倍晋三AI")) {
+      compose.onAllNodesWithText(name).onFirst().assertExists()
+    }
+    for (text in listOf("強調", "資料", "箇条書き", longProposal)) {
+      compose.onAllNodesWithText(text, substring = true).onFirst().assertExists()
+    }
+  }
+
+  @Test
+  fun onlyAbsoluteHttpsLinksCanLeaveTheRecord() {
+    assertTrue(allowedRecordLink("https://example.com/article?q=1"))
+    for (url in listOf("http://example.com", "javascript:alert(1)", "intent://example.com",
+      "file:///etc/passwd", "content://other.app/private", "//example.com",
+      "https://user:pass" + "@" + "example.com", "https://")) {
+      assertFalse(url, allowedRecordLink(url))
+    }
+  }
+
+  @Test
+  fun markdownLinksApplyTheAppPolicyBeforeOpening() {
+    val opened = mutableListOf<String>()
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) {
+        CompositionLocalProvider(LocalUriHandler provides object : UriHandler {
+          override fun openUri(uri: String) { opened += uri }
+        }) {
+          RecordMarkdown("[安全なリンク](https://example.com)\n\n[拒否するリンク](intent://other.app)")
+        }
+      } }
+    }
+    compose.onNodeWithText("安全なリンク").performClick()
+    compose.onNodeWithText("拒否するリンク").performClick()
+    compose.runOnIdle { assertEquals(listOf("https://example.com"), opened) }
   }
 
   private fun label(id: Int): String = compose.activity.getString(id)

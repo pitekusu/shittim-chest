@@ -32,11 +32,19 @@ internal enum class RecordReadFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, C
 internal class RecordReadException(val failure: RecordReadFailure) :
   Exception("record_read_${failure.name.lowercase()}")
 
-// Only the fields needed by C17 are kept in memory. This is a read-only, one-record view.
 internal class RecordPreview(
   val question: String,
   val decision: String,
   val winnerName: String,
+  val opinions: List<RecordOpinion> = emptyList(),
+)
+
+internal class RecordOpinion(
+  val participantName: String,
+  val summary: String,
+  val initialProposal: String,
+  val finalTitle: String,
+  val finalProposal: String,
 )
 
 internal sealed interface RecordReadResult {
@@ -101,13 +109,26 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       detail.result.winner != detail.finalDecision.winner ||
       detail.result.winner !in PARTICIPANTS ||
       detail.participants.size != 3 ||
-      detail.participants.map { it.slot }.toSet() != PARTICIPANTS) {
+      detail.participants.map { it.slot }.toSet() != PARTICIPANTS ||
+      detail.participants.any { it.displayName.isBlank() } ||
+      detail.initialOpinions.map { it.participant }.toSet() != PARTICIPANTS ||
+      detail.initialOpinions.size != 3 ||
+      detail.finalProposals.map { it.participant }.toSet() != PARTICIPANTS ||
+      detail.finalProposals.size != 3 ||
+      detail.initialOpinions.any { it.summary.isBlank() || it.proposal.isBlank() } ||
+      detail.finalProposals.any { it.title.isBlank() || it.proposal.isBlank() }) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
     val winner = detail.participants.first { it.slot == detail.result.winner }
     if (winner.displayName.isBlank()) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     return RecordReadResult.Found(
-      RecordPreview(detail.question, detail.finalDecision.decision, winner.displayName))
+      RecordPreview(detail.question, detail.finalDecision.decision, winner.displayName,
+        detail.participants.map { participant ->
+          val initial = detail.initialOpinions.first { it.participant == participant.slot }
+          val final = detail.finalProposals.first { it.participant == participant.slot }
+          RecordOpinion(participant.displayName, initial.summary, initial.proposal,
+            final.title, final.proposal)
+        }))
   }
 
   suspend fun recentRecords(accessToken: String, cursor: String? = null): RecordListPage {
@@ -234,10 +255,14 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val recordId: String,
     val question: String,
     val participants: List<RecordParticipant>,
+    val initialOpinions: List<InitialOpinion>,
+    val finalProposals: List<FinalProposal>,
     val result: RecordResult,
     val finalDecision: FinalDecision,
   )
   @Serializable private class RecordParticipant(val slot: String, val displayName: String)
+  @Serializable private class InitialOpinion(val participant: String, val summary: String, val proposal: String)
+  @Serializable private class FinalProposal(val participant: String, val title: String, val proposal: String)
   @Serializable private class RecordResult(val winner: String)
   @Serializable private class FinalDecision(val winner: String, val decision: String)
 

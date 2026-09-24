@@ -31,6 +31,9 @@
     <string name="record_error">記録を読み込めませんでした。</string>
     <string name="record_retry">記録を再読み込み</string>
     <string name="record_question">議題</string>
+    <string name="record_opinions">3人の意見</string>
+    <string name="record_initial_opinion">初回意見</string>
+    <string name="record_final_proposal">最終案</string>
     <string name="record_winner">勝者</string>
     <string name="record_decision">結論</string>
     <string name="session_logout">ログアウト</string>
