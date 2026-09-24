@@ -103,6 +103,8 @@ dependencies {
   implementation(libs.coil.network.okhttp)
   implementation(libs.androidx.paging.runtime)
   implementation(libs.androidx.paging.compose)
+  implementation(libs.markdown.core)
+  implementation(libs.markdown.material3)
   debugImplementation(libs.androidx.compose.ui.tooling)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)

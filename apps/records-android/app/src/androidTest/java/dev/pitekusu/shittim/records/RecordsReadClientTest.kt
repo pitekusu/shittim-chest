@@ -34,6 +34,10 @@ class RecordsReadClientTest {
       assertEquals("夕飯は何がいい？", result.preview.question)
       assertEquals("アロナ", result.preview.winnerName)
       assertEquals("今日は寿司にします。", result.preview.decision)
+      assertEquals(listOf("アロナ", "プラナ", "安倍晋三AI"),
+        result.preview.opinions.map { it.participantName })
+      assertEquals("アロナの案", result.preview.opinions.first().initialProposal)
+      assertEquals("最終案A", result.preview.opinions.first().finalTitle)
     }
     assertEquals(listOf("/api/v1/records?limit=1&sort=newest", "/api/v1/records/$id"), paths)
   }
@@ -115,6 +119,8 @@ class RecordsReadClientTest {
         "\"finalDecision\":{\"winner\":\"participant-a\""),
       detail(id, winner = "participant-x"),
       detail(id).replace("\"schemaVersion\":2", "\"schemaVersion\":3"),
+      detail(id).replace("\"participant\":\"participant-c\",\"title\"",
+        "\"participant\":\"participant-a\",\"title\""),
     )) {
       RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
         assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
@@ -175,6 +181,12 @@ class RecordsReadClientTest {
       "participants":[{"slot":"participant-a","displayName":"アロナ"},
         {"slot":"participant-b","displayName":"プラナ"},
         {"slot":"participant-c","displayName":"安倍晋三AI"}],
+      "initialOpinions":[{"participant":"participant-a","summary":"要約A","proposal":"アロナの案"},
+        {"participant":"participant-b","summary":"要約B","proposal":"プラナの案"},
+        {"participant":"participant-c","summary":"要約C","proposal":"安倍の案"}],
+      "finalProposals":[{"participant":"participant-a","title":"最終案A","proposal":"決定案A"},
+        {"participant":"participant-b","title":"最終案B","proposal":"決定案B"},
+        {"participant":"participant-c","title":"最終案C","proposal":"決定案C"}],
       "result":{"winner":"$winner"},
       "finalDecision":{"winner":"$winner","decision":"今日は寿司にします。"}}"""
 }

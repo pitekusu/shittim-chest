@@ -6,10 +6,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -50,13 +51,33 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
         is RecordPreviewState.Ready -> {
           Text(stringResource(R.string.record_question), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
-          Text(state.preview.question, style = MaterialTheme.typography.titleMedium)
+          RecordMarkdown(state.preview.question)
+          if (state.preview.opinions.isNotEmpty()) {
+            Text(stringResource(R.string.record_opinions),
+              style = MaterialTheme.typography.titleMediumEmphasized,
+              modifier = Modifier.semantics { heading() })
+            state.preview.opinions.forEach { opinion ->
+              HorizontalDivider()
+              Text(opinion.participantName, style = MaterialTheme.typography.titleMediumEmphasized,
+                modifier = Modifier.semantics { heading() })
+              Text(stringResource(R.string.record_initial_opinion),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary)
+              Text(opinion.summary, style = MaterialTheme.typography.titleSmall)
+              RecordMarkdown(opinion.initialProposal)
+              Text(stringResource(R.string.record_final_proposal),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary)
+              Text(opinion.finalTitle, style = MaterialTheme.typography.titleSmall)
+              RecordMarkdown(opinion.finalProposal)
+            }
+          }
           Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
           Text(state.preview.winnerName, style = MaterialTheme.typography.titleMediumEmphasized)
           Text(stringResource(R.string.record_decision), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
-          Text(state.preview.decision)
+          RecordMarkdown(state.preview.decision)
         }
       }
     }
