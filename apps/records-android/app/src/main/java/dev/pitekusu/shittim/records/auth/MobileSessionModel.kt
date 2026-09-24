@@ -65,6 +65,13 @@ internal class MobileSessionModel(
     }
   }
 
+  fun closeDestination() {
+    val signedIn = state.value as? SessionState.SignedIn ?: return
+    if (returnTo == "/") return
+    returnTo = "/"
+    mutableState.value = SessionState.SignedIn(signedIn.user, signedIn.expiresAt, "/")
+  }
+
   // The token is available only inside the request callback, never in a UI state or saved value.
   // A response that finishes after logout, expiry, or a new session cannot be displayed.
   suspend fun <T> withAuthorizedToken(request: suspend (String) -> T): T? {

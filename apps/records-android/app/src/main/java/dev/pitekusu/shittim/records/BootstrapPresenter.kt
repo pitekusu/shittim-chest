@@ -76,10 +76,9 @@ internal class BootstrapPresenter(
     var recordRetry by remember { mutableStateOf(0) }
     var recordList by remember(sessionState) { mutableStateOf<RecordListState>(RecordListState.Idle) }
     var listRetry by remember { mutableStateOf(0) }
-    var selectedRecordId by remember(sessionState) {
-      mutableStateOf((sessionState as? SessionState.SignedIn)?.returnTo
-        ?.takeIf { it.startsWith("/records/") }?.removePrefix("/records/"))
-    }
+    // The session model owns the validated destination across foreground checks and rotation.
+    val selectedRecordId = (sessionState as? SessionState.SignedIn)?.returnTo
+      ?.takeIf { it.startsWith("/records/") }?.removePrefix("/records/")
     LaunchedEffect(sessionState, listRetry) {
       recordList = RecordListState.Idle
       if (sessionState is SessionState.SignedIn) {
@@ -132,8 +131,8 @@ internal class BootstrapPresenter(
         BootstrapScreen.Event.RetryRecords -> listRetry++
         is BootstrapScreen.Event.OpenRecord -> if (
           (recordList as? RecordListState.Ready)?.page?.items?.any { it.recordId == event.recordId } == true
-        ) selectedRecordId = event.recordId
-        BootstrapScreen.Event.CloseRecord -> selectedRecordId = null
+        ) session.openDestination("/records/${event.recordId}")
+        BootstrapScreen.Event.CloseRecord -> session.closeDestination()
       }
     }
   }
