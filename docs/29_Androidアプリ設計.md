@@ -627,7 +627,7 @@ Android Gradle Plugin標準の`release` build typeへupload keyの署名設定�
 ## C19：App Linksと記録への復帰
 
 `dev.pitekusu.shittim.records`のPlayアプリ署名証明書を、`/.well-known/assetlinks.json`で公開する。
-Play Consoleに表示される旧来の従来鍵、量子対応用の新しい従来鍵、ポスト量子暗号鍵のSHA-256を全件登録し、アップロード鍵やdebug鍵は登録しない。
+Play Consoleに表示される現行のアプリ署名鍵（従来の鍵・ポスト量子暗号鍵）に加え、以前のアプリ署名鍵がある場合はそのSHA-256も登録する。配布版の実機署名と照合し、アップロード鍵やdebug鍵は登録しない。
 Records Webの検証済みartifactに同ファイルを含め、ReleaseでWeb S3へ`application/json`として配置する。
 CloudFrontは拡張子付きのパスを書き換えず、同じHTTPS originからGET／HEADを返す。
 Release smokeでは200・content type・artifactとの一致を確かめる。証明書の追加やローテーション時はPlay Consoleの表示を確認して更新する。
