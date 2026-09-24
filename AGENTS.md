@@ -35,6 +35,24 @@ Androidアプリと、それを支えるPythonの認証・閲覧APIに適用す�
 - 不採用や低レベル処理を残す理由は、該当設計またはコードへ短く記載する。専用の承認工程や大量の比較資料は要求しない。
 - 未使用の依存は先行追加せず、必要になるC工程で導入・固定する。用途ごとの採用方針は`docs/29_Androidアプリ設計.md`を参照する。
 
+## Android内部テスト配布の認証と署名
+
+- 配布手順の詳細は`apps/records-android/README.md`の「C20：本人向け内部テスト」を参照する。
+  この端末ではPlay Developer API用のサービスアカウントJSONを
+  `${XDG_DATA_HOME:-$HOME/.local/share}/shittim-chest/play-api/service-account.json`に保管する。
+  JSONはAPI認証専用であり、AABの署名パスワードではない。存在・権限・JSON形式だけを確認し、秘密値を表示しない。
+- upload keyは同じくリポジトリ外の`shittim-chest/android-upload/upload-key.p12`に保管する。
+  このPKCS12は空パスワードでは開けない。署名には別途その鍵のパスワードが必要。
+  この端末ではSecret Serviceの`application=shittim-chest, purpose=android-upload-password`、
+  ラベル`Shittim Chest Android upload key`に保存済み。検索結果や秘密値をstdoutへ表示せず、
+  プロセス内で取得して鍵を開けるか検証する。`service=...`や`purpose=android-upload`では見つからない。
+  見つからなければ「本人が設定したはず」と決めつけず、鍵の作成経緯・安全な保管先を調べる。
+  復旧不能なら勝手に別の鍵で署名せず、Playのupload key再設定を含む対応を本人と決める。
+  パスワードをチャット・Git・コマンド引数・ログ・サービスアカウントJSONへ書かない。
+- Play APIで内部テストの現行`versionCode`を確認し、より大きい番号で現行`main`からAABを作る。
+  同じupload keyで署名されたことを確認して内部テストだけへ提出し、Play APIで反映後のtrackを再取得する。
+  API認証だけ成功しても署名可能とは判断しない。署名情報が不足すれば提出を止め、未配布と報告する。
+
 ## 必要な場所だけ読む
 
 | 対象 | 場所 |
