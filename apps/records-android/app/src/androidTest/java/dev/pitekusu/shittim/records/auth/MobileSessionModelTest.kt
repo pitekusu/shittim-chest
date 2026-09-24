@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,6 +45,14 @@ class MobileSessionModelTest {
         assertEquals(second, model.await<SessionState.SignedIn>().returnTo)
         model.openDestination("/admin")
         assertEquals(second, model.loginDestination)
+        yield()
+        model.onForeground()
+        assertEquals(second, model.await<SessionState.SignedIn>().returnTo)
+        model.closeDestination()
+        assertEquals("/", model.await<SessionState.SignedIn>().returnTo)
+        yield()
+        model.onForeground()
+        assertEquals("/", model.await<SessionState.SignedIn>().returnTo)
       }
     }
   }

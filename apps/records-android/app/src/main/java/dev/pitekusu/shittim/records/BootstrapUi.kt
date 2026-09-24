@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,10 +14,12 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -51,8 +54,22 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
     }
   ShittimTheme(darkTheme) {
     ShittimBackdrop(modifier) {
+      BackHandler(enabled = state.session is SessionState.SignedIn && state.selectedRecordId != null) {
+        state.eventSink(BootstrapScreen.Event.CloseRecord)
+      }
       BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-        val layout = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp)
+        val listScrollState = rememberScrollState()
+        val detailScrollState = rememberSaveable(state.selectedRecordId, saver = ScrollState.Saver) {
+          ScrollState(0)
+        }
+        val transientScrollState = rememberScrollState()
+        val scrollState = when {
+          state.session !is SessionState.SignedIn -> transientScrollState
+          state.selectedRecordId != null -> detailScrollState
+          state.records is RecordListState.Ready -> listScrollState
+          else -> transientScrollState
+        }
+        val layout = Modifier.fillMaxSize().verticalScroll(scrollState).padding(24.dp)
         // Large text keeps a single readable column even in a wide window.
         if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
           Row(
@@ -60,7 +77,8 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
             horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
           ) {
-            BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp))
+            BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp),
+              compact = state.session is SessionState.SignedIn)
             BootstrapControls(
               state,
               Modifier.weight(1f, fill = false).widthIn(max = 480.dp),
@@ -72,7 +90,8 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
             verticalArrangement = Arrangement.spacedBy(32.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
           ) {
-            BootstrapHeader(Modifier.widthIn(max = 560.dp).fillMaxWidth())
+            BootstrapHeader(Modifier.widthIn(max = 560.dp).fillMaxWidth(),
+              compact = state.session is SessionState.SignedIn)
             BootstrapControls(
               state,
               Modifier.widthIn(max = 560.dp).fillMaxWidth(),
@@ -85,26 +104,29 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
 }
 
 @Composable
-private fun BootstrapHeader(modifier: Modifier) {
+private fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
   Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-    ShittimEmblem(Modifier.size(72.dp))
+    ShittimEmblem(Modifier.size(if (compact) 40.dp else 72.dp))
     Text(
       stringResource(R.string.brand_title),
       fontFamily = ShittimDisplayFont,
-      style = MaterialTheme.typography.headlineMedium,
+      style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineMedium,
       color = MaterialTheme.colorScheme.primary,
     )
     Text(
       stringResource(R.string.app_name),
-      style = MaterialTheme.typography.headlineLargeEmphasized,
+      style = if (compact) MaterialTheme.typography.titleLargeEmphasized
+        else MaterialTheme.typography.headlineLargeEmphasized,
       color = MaterialTheme.colorScheme.onSurface,
       modifier = Modifier.semantics { heading() },
     )
-    Text(
-      stringResource(R.string.bootstrap_title),
-      style = MaterialTheme.typography.titleLarge,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    if (!compact) {
+      Text(
+        stringResource(R.string.bootstrap_title),
+        style = MaterialTheme.typography.titleLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
   }
 }
 
@@ -116,7 +138,11 @@ private fun BootstrapControls(
   Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
     SessionPanel(state.session, state.eventSink)
     if (state.session is SessionState.SignedIn) {
-      RecordPreviewPanel(state.record, state.eventSink)
+      if (state.selectedRecordId == null) {
+        RecordListPanel(state.records, state.eventSink)
+      } else {
+        RecordPreviewPanel(state.record, state.eventSink)
+      }
     }
     BootstrapThemeSelector(state.themeChoice) {
       state.eventSink(BootstrapScreen.Event.SelectTheme(it))

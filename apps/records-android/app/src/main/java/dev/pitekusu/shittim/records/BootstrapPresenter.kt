@@ -11,14 +11,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import com.slack.circuit.runtime.CircuitUiEvent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.Presenter
 import com.slack.circuit.runtime.screen.Screen
+import coil3.SingletonImageLoader
 import dev.pitekusu.shittim.records.auth.MobileLoginContract
 import dev.pitekusu.shittim.records.auth.MobileLoginStatus
 import dev.pitekusu.shittim.records.auth.MobileLoginStep
 import dev.pitekusu.shittim.records.auth.MobileSessionModel
+import dev.pitekusu.shittim.records.auth.MobileSessionUser
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
 
@@ -33,7 +36,9 @@ internal data object BootstrapScreen : Screen {
   class State(
     val themeChoice: ThemeChoice,
     val session: SessionState = SessionState.SignedOut(),
+    val records: RecordListState = RecordListState.Idle,
     val record: RecordPreviewState = RecordPreviewState.Idle,
+    val selectedRecordId: String? = null,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -43,6 +48,9 @@ internal data object BootstrapScreen : Screen {
     data object Logout : Event
     data object Retry : Event
     data object RetryRecord : Event
+    data object RetryRecords : Event
+    data class OpenRecord(val recordId: String) : Event
+    data object CloseRecord : Event
   }
 }
 
@@ -55,22 +63,70 @@ internal class BootstrapPresenter(
     // Restore the presentation state, without persisting a device/account preference.
     var themeChoice by rememberSaveable { mutableStateOf(ThemeChoice.System) }
     val sessionState by session.state.collectAsState()
+    val context = LocalContext.current
+    val signedIn = sessionState is SessionState.SignedIn
+    DisposableEffect(signedIn) {
+      // Discard presigned avatar bitmaps when authentication leaves this screen.
+      onDispose { if (signedIn) SingletonImageLoader.get(context).memoryCache?.clear() }
+    }
     val launcher = rememberLauncherForActivityResult(MobileLoginContract(), session::loginResult)
     val records = remember { RecordsReadClient() }
     DisposableEffect(records) { onDispose { records.close() } }
     // The preview belongs to this exact session, including after an account switch.
     var record by remember(sessionState) { mutableStateOf<RecordPreviewState>(RecordPreviewState.Idle) }
     var recordRetry by remember { mutableStateOf(0) }
-    LaunchedEffect(sessionState, recordRetry) {
+    var recordList by remember { mutableStateOf<RecordListState>(RecordListState.Idle) }
+    var listOwner by remember { mutableStateOf<MobileSessionUser?>(null) }
+    var listRetry by remember { mutableStateOf(0) }
+    var loadedRetry by remember { mutableStateOf(-1) }
+    // The session model owns the validated destination across foreground checks and rotation.
+    val selectedRecordId = (sessionState as? SessionState.SignedIn)?.returnTo
+      ?.takeIf { it.startsWith("/records/") }?.removePrefix("/records/")
+    LaunchedEffect(sessionState, listRetry) {
+      val currentSession = sessionState
+      when (currentSession) {
+        is SessionState.SignedIn -> {
+          // Destination-only updates retain the same user instance and loaded page.
+          // An in-flight request is cancelled by LaunchedEffect and must restart.
+          val completedList = recordList is RecordListState.Ready ||
+            recordList == RecordListState.Empty || recordList is RecordListState.Error
+          if (listOwner === currentSession.user && loadedRetry == listRetry &&
+            completedList) return@LaunchedEffect
+          listOwner = currentSession.user
+          loadedRetry = listRetry
+          recordList = RecordListState.Loading
+          recordList = try {
+            val page = session.withAuthorizedToken(records::recentRecords)
+            when {
+              page == null -> RecordListState.Idle
+              page.items.isEmpty() -> RecordListState.Empty
+              else -> RecordListState.Ready(page)
+            }
+          } catch (error: RecordReadException) {
+            if (error.failure == RecordReadFailure.AUTH_REQUIRED) session.onForeground()
+            RecordListState.Error(error.failure)
+          }
+        }
+        is SessionState.SignedOut, SessionState.SigningOut, SessionState.Browser,
+        SessionState.StorageError -> {
+          listOwner = null
+          recordList = RecordListState.Idle
+        }
+        SessionState.Checking, SessionState.Unavailable -> Unit
+      }
+    }
+    LaunchedEffect(sessionState, selectedRecordId, recordRetry) {
       record = RecordPreviewState.Idle
       val signedIn = sessionState as? SessionState.SignedIn
-      if (signedIn != null) {
+      if (signedIn != null && selectedRecordId != null) {
         record = RecordPreviewState.Loading
         record = try {
-          val result = session.withAuthorizedToken { records.firstRecord(it, signedIn.returnTo) }
+          val result = session.withAuthorizedToken {
+            records.firstRecord(it, "/records/$selectedRecordId")
+          }
           when (result) {
             null -> RecordPreviewState.Idle
-            RecordReadResult.Empty -> RecordPreviewState.Empty
+            RecordReadResult.Empty -> RecordPreviewState.Error(RecordReadFailure.INVALID_RESPONSE)
             is RecordReadResult.Found -> RecordPreviewState.Ready(result.preview)
           }
         } catch (error: RecordReadException) {
@@ -79,7 +135,10 @@ internal class BootstrapPresenter(
         }
       }
     }
-    return BootstrapScreen.State(themeChoice, sessionState, record) { event ->
+    val currentSignedIn = sessionState as? SessionState.SignedIn
+    val visibleList = if (currentSignedIn != null &&
+      listOwner === currentSignedIn.user) recordList else RecordListState.Idle
+    return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin()) {
@@ -91,6 +150,11 @@ internal class BootstrapPresenter(
         BootstrapScreen.Event.Logout -> session.logout()
         BootstrapScreen.Event.Retry -> session.retry()
         BootstrapScreen.Event.RetryRecord -> recordRetry++
+        BootstrapScreen.Event.RetryRecords -> listRetry++
+        is BootstrapScreen.Event.OpenRecord -> if (
+          (visibleList as? RecordListState.Ready)?.page?.items?.any { it.recordId == event.recordId } == true
+        ) session.openDestination("/records/${event.recordId}")
+        BootstrapScreen.Event.CloseRecord -> session.closeDestination()
       }
     }
   }

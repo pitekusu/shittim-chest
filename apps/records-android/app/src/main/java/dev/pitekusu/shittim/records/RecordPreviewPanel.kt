@@ -8,6 +8,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -28,6 +29,9 @@ internal sealed interface RecordPreviewState {
 internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapScreen.Event) -> Unit) {
   OutlinedCard(Modifier.fillMaxWidth()) {
     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+      TextButton(onClick = { onEvent(BootstrapScreen.Event.CloseRecord) }) {
+        Text(stringResource(R.string.record_close))
+      }
       Text(stringResource(R.string.record_title), style = MaterialTheme.typography.titleLargeEmphasized,
         modifier = Modifier.semantics { heading() })
       when (state) {

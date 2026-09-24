@@ -17,6 +17,11 @@
     <string name="session_signed_in">ログインしました</string>
     <string name="session_records_ready">以下に議論の記録を表示します。</string>
     <string name="record_title">議論の記録</string>
+    <string name="record_list_loading">最近の記録を読み込んでいます</string>
+    <string name="record_list_error">記録の一覧を読み込めませんでした。</string>
+    <string name="record_list_first_page">最近の記録を表示しています。</string>
+    <string name="record_list_winner">勝者：%1$s</string>
+    <string name="record_close">一覧に戻る</string>
     <string name="record_loading">最新の記録を読み込んでいます</string>
     <string name="record_empty">表示できる議論の記録はまだありません。</string>
     <string name="record_not_found">指定された議論の記録が見つかりません。</string>
