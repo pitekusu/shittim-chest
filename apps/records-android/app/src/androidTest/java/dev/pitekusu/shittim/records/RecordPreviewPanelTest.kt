@@ -85,8 +85,13 @@ class RecordPreviewPanelTest {
         }
       } }
     }
-    compose.onNodeWithText("安全なリンク").performClick()
-    compose.onNodeWithText("拒否するリンク").performClick()
+    // Markdown parsing is asynchronous, especially on CI's cold emulator.
+    compose.waitUntil(10_000) {
+      compose.onAllNodesWithText("安全なリンク", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+        compose.onAllNodesWithText("拒否するリンク", substring = true).fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onAllNodesWithText("安全なリンク", substring = true).onFirst().performClick()
+    compose.onAllNodesWithText("拒否するリンク", substring = true).onFirst().performClick()
     compose.runOnIdle { assertEquals(listOf("https://example.com"), opened) }
   }
 
