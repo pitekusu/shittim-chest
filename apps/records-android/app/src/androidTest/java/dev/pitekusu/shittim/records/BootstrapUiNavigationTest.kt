@@ -4,7 +4,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollToNode
@@ -58,7 +57,8 @@ class BootstrapUiNavigationTest {
       selectedRecordId = id, eventSink = {})
     val state = mutableStateOf(list)
     compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
-    compose.waitUntil(5_000) { compose.onAllNodesWithText("議題 1").fetchSemanticsNodes().isNotEmpty() }
+    // The first card may start below the fold on a smaller CI device.
+    compose.waitForIdle()
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("議題 12"))
     compose.onNodeWithText("議題 12").assertIsDisplayed()
     compose.runOnIdle { state.value = detail }
