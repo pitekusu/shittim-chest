@@ -34,7 +34,8 @@ class MainActivity : ComponentActivity() {
     SingletonImageLoader.setSafe { context ->
       ImageLoader.Builder(context).diskCachePolicy(CachePolicy.DISABLED).build()
     }
-    openRecordLink(intent)
+    // A recreated Activity must not replay an App Link the user already closed.
+    if (savedInstanceState == null) openRecordLink(intent)
     enableEdgeToEdge()
     setContent { CircuitContent(screen = BootstrapScreen, circuit = graph.circuit) }
   }
