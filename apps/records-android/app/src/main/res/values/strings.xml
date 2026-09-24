@@ -19,7 +19,10 @@
     <string name="record_title">議論の記録</string>
     <string name="record_list_loading">最近の記録を読み込んでいます</string>
     <string name="record_list_error">記録の一覧を読み込めませんでした。</string>
-    <string name="record_list_first_page">最近の記録を表示しています。</string>
+    <string name="record_list_more_loading">続きを読み込んでいます</string>
+    <string name="record_list_more_error">続きを読み込めませんでした。表示済みの記録はそのまま読めます。</string>
+    <string name="record_list_cursor_expired">ページ情報の期限が切れました。先頭から読み直してください。</string>
+    <string name="record_list_restart">先頭から読み直す</string>
     <string name="record_list_winner">勝者：%1$s</string>
     <string name="record_close">一覧に戻る</string>
     <string name="record_loading">最新の記録を読み込んでいます</string>

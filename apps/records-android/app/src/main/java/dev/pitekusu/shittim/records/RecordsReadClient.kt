@@ -12,6 +12,7 @@ import io.ktor.client.request.accept
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.parameter
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
@@ -26,7 +27,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.CookieJar
 
-internal enum class RecordReadFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, INVALID_RESPONSE }
+internal enum class RecordReadFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, CURSOR_INVALID, INVALID_RESPONSE }
 
 internal class RecordReadException(val failure: RecordReadFailure) :
   Exception("record_read_${failure.name.lowercase()}")
@@ -54,7 +55,7 @@ internal class RecordListEntry(
 
 internal class RecordAvatar(val url: String?, val fallbackVariant: String)
 
-internal class RecordListPage(val items: List<RecordListEntry>, val hasMore: Boolean)
+internal class RecordListPage(val items: List<RecordListEntry>, val nextCursor: String?)
 
 internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.create {
   config {
@@ -109,12 +110,15 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       RecordPreview(detail.question, detail.finalDecision.decision, winner.displayName))
   }
 
-  suspend fun recentRecords(accessToken: String): RecordListPage {
+  suspend fun recentRecords(accessToken: String, cursor: String? = null): RecordListPage {
     if (!mobileOpaqueValue.matches(accessToken)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
-    val page: RecordListResponse = read("/api/v1/records?limit=12&sort=newest", accessToken)
+    if (cursor != null && !validCursor(cursor)) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    val page: RecordListResponse = read("/api/v1/records?limit=12&sort=newest", accessToken, cursor)
     if (page.schemaVersion != 1 || page.items.size > 12 ||
       page.items.map { it.recordId }.toSet().size != page.items.size ||
-      (page.nextCursor != null && (page.nextCursor.isBlank() || page.nextCursor.length > 4096))) {
+      (page.nextCursor != null && (!validCursor(page.nextCursor) || page.nextCursor == cursor))) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
     return try {
@@ -141,7 +145,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
         RecordListEntry(item.recordId, item.questionPreview, item.requester.displayName,
           RecordAvatar(avatarUrl, avatar.fallbackVariant),
           OffsetDateTime.parse(item.completedAt).toInstant(), winner.displayName)
-      }, page.nextCursor != null)
+      }, page.nextCursor)
     } catch (error: RecordReadException) {
       throw error
     } catch (_: Exception) {
@@ -149,16 +153,22 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     }
   }
 
+  private fun validCursor(value: String): Boolean =
+    value.length <= 4096 && CURSOR_PATTERN.matches(value)
+
   private fun validAvatarUrl(raw: String): Boolean = try {
     val uri = URI(raw)
     uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null &&
       uri.fragment == null
   } catch (_: Exception) { false }
 
-  private suspend inline fun <reified T> read(path: String, accessToken: String): T {
+  private suspend inline fun <reified T> read(
+    path: String, accessToken: String, cursor: String? = null,
+  ): T {
     try {
       val response = client.get("$RECORDS_ORIGIN$path") {
         bearerAuth(accessToken)
+        if (cursor != null) parameter("cursor", cursor)
         header(HttpHeaders.CacheControl, "no-store")
         accept(ContentType.Application.Json)
       }
@@ -166,6 +176,11 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
         200 -> Unit
         401 -> throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
         404 -> throw RecordReadException(RecordReadFailure.NOT_FOUND)
+        400 -> {
+          val error: RecordErrorResponse = response.body()
+          throw RecordReadException(if (error.error.code == "CURSOR_INVALID")
+            RecordReadFailure.CURSOR_INVALID else RecordReadFailure.INVALID_RESPONSE)
+        }
         in 500..599 -> throw RecordReadException(RecordReadFailure.UNAVAILABLE)
         else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
       }
@@ -190,6 +205,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   }
 
   @Serializable private class RecordPage(val schemaVersion: Int, val items: List<RecordReference>)
+  @Serializable private class RecordErrorResponse(val error: RecordErrorBody)
+  @Serializable private class RecordErrorBody(val code: String)
   @Serializable private class RecordReference(val recordId: String)
   @Serializable private class RecordListResponse(
     val schemaVersion: Int,
@@ -227,5 +244,6 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   private companion object {
     val PARTICIPANTS = setOf("participant-a", "participant-b", "participant-c")
     val AVATAR_VARIANTS = setOf("cyan", "pink", "lavender")
+    val CURSOR_PATTERN = Regex("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+")
   }
 }

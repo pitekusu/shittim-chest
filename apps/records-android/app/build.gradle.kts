@@ -101,6 +101,8 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.coil.compose)
   implementation(libs.coil.network.okhttp)
+  implementation(libs.androidx.paging.runtime)
+  implementation(libs.androidx.paging.compose)
   debugImplementation(libs.androidx.compose.ui.tooling)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
