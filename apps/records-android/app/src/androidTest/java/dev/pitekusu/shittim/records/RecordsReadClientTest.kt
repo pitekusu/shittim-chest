@@ -54,9 +54,25 @@ class RecordsReadClientTest {
       assertEquals("架空の依頼者", page.items.single().requesterName)
       assertEquals("アロナ", page.items.single().winnerName)
       assertEquals("cyan", page.items.single().requesterAvatar.fallbackVariant)
-      assertTrue(page.hasMore)
+      assertEquals("next.cursor", page.nextCursor)
     }
     assertEquals(1, requests)
+  }
+
+  @Test
+  fun nextPageUsesOpaqueCursorAndRejectsExpiredCursorCode() = runBlocking {
+    val paths = mutableListOf<String>()
+    RecordsReadClient(MockEngine { request ->
+      paths += request.url.toString().removePrefix("https://shittim.pitekusu.dev")
+      if (paths.size == 1) respond(listPage(), headers = jsonHeader)
+      else respond("""{"error":{"code":"CURSOR_INVALID","message":"expired","requestId":"test"}}""",
+        HttpStatusCode.BadRequest, jsonHeader)
+    }).use { client ->
+      assertEquals("next.cursor", client.recentRecords(token).nextCursor)
+      assertFailure(RecordReadFailure.CURSOR_INVALID) { client.recentRecords(token, "next.cursor") }
+    }
+    assertEquals(listOf("/api/v1/records?limit=12&sort=newest",
+      "/api/v1/records?limit=12&sort=newest&cursor=next.cursor"), paths)
   }
 
   @Test
@@ -152,7 +168,7 @@ class RecordsReadClientTest {
       "participants":[{"slot":"participant-a","displayName":"アロナ"},
         {"slot":"participant-b","displayName":"プラナ"},
         {"slot":"participant-c","displayName":"安倍晋三AI"}],
-      "result":{"winner":"participant-a"}}],"nextCursor":"next"}"""
+      "result":{"winner":"participant-a"}}],"nextCursor":"next.cursor"}"""
 
   private fun detail(recordId: String, winner: String = "participant-a"): String =
     """{"schemaVersion":2,"recordId":"$recordId","question":"夕飯は何がいい？",

@@ -4,21 +4,24 @@ import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,8 +29,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
 import dev.pitekusu.shittim.records.ui.ShittimBackdrop
 import dev.pitekusu.shittim.records.ui.ShittimDisplayFont
 import dev.pitekusu.shittim.records.ui.ShittimEmblem
@@ -57,46 +64,43 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
       BackHandler(enabled = state.session is SessionState.SignedIn && state.selectedRecordId != null) {
         state.eventSink(BootstrapScreen.Event.CloseRecord)
       }
+      val pagingItems = (state.records as? RecordListState.Ready)?.pages?.collectAsLazyPagingItems()
+      val refreshError = pagingItems?.loadState?.refresh as? LoadState.Error
+      val appendError = pagingItems?.loadState?.append as? LoadState.Error
+      LaunchedEffect(refreshError, appendError) {
+        if (listOfNotNull(refreshError, appendError).any {
+            (it.error as? RecordReadException)?.failure == RecordReadFailure.AUTH_REQUIRED
+          }) state.eventSink(BootstrapScreen.Event.RecordsAuthRequired)
+      }
       BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-        val listScrollState = rememberScrollState()
-        val detailScrollState = rememberSaveable(state.selectedRecordId, saver = ScrollState.Saver) {
-          ScrollState(0)
+        val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+        val detailScrollState = rememberSaveable(state.selectedRecordId, saver = LazyListState.Saver) {
+          LazyListState()
         }
-        val transientScrollState = rememberScrollState()
+        val transientScrollState = rememberLazyListState()
         val scrollState = when {
           state.session !is SessionState.SignedIn -> transientScrollState
           state.selectedRecordId != null -> detailScrollState
           state.records is RecordListState.Ready -> listScrollState
           else -> transientScrollState
         }
-        val layout = Modifier.fillMaxSize().verticalScroll(scrollState).padding(24.dp)
         // Large text keeps a single readable column even in a wide window.
         if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
           Row(
-            layout,
+            Modifier.fillMaxSize().padding(24.dp),
             horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
           ) {
             BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp),
               compact = state.session is SessionState.SignedIn)
             BootstrapControls(
-              state,
-              Modifier.weight(1f, fill = false).widthIn(max = 480.dp),
+              state, pagingItems, scrollState, false,
+              Modifier.weight(1f, fill = false).widthIn(max = 480.dp).fillMaxHeight(),
             )
           }
         } else {
-          Column(
-            layout,
-            verticalArrangement = Arrangement.spacedBy(32.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-          ) {
-            BootstrapHeader(Modifier.widthIn(max = 560.dp).fillMaxWidth(),
-              compact = state.session is SessionState.SignedIn)
-            BootstrapControls(
-              state,
-              Modifier.widthIn(max = 560.dp).fillMaxWidth(),
-            )
-          }
+          BootstrapControls(state, pagingItems, scrollState, true,
+            Modifier.align(Alignment.TopCenter).widthIn(max = 560.dp).fillMaxSize())
         }
       }
     }
@@ -133,19 +137,28 @@ private fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
 @Composable
 private fun BootstrapControls(
   state: BootstrapScreen.State,
+  pagingItems: LazyPagingItems<RecordListEntry>?,
+  scrollState: LazyListState,
+  showHeader: Boolean,
   modifier: Modifier,
 ) {
-  Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
-    SessionPanel(state.session, state.eventSink)
-    if (state.session is SessionState.SignedIn) {
-      if (state.selectedRecordId == null) {
-        RecordListPanel(state.records, state.eventSink)
-      } else {
-        RecordPreviewPanel(state.record, state.eventSink)
+  LazyColumn(modifier.testTag("bootstrap-content"), state = scrollState,
+    contentPadding = PaddingValues(if (showHeader) 24.dp else 0.dp),
+    verticalArrangement = if (state.session is SessionState.SignedIn) Arrangement.spacedBy(24.dp)
+      else Arrangement.spacedBy(32.dp, Alignment.CenterVertically),
+    horizontalAlignment = Alignment.CenterHorizontally) {
+    if (showHeader) item(key = "brand") {
+      BootstrapHeader(Modifier.fillMaxWidth(), compact = state.session is SessionState.SignedIn)
+    }
+    item(key = "session") { SessionPanel(state.session, state.eventSink) }
+    item(key = "theme") {
+      BootstrapThemeSelector(state.themeChoice) {
+        state.eventSink(BootstrapScreen.Event.SelectTheme(it))
       }
     }
-    BootstrapThemeSelector(state.themeChoice) {
-      state.eventSink(BootstrapScreen.Event.SelectTheme(it))
+    if (state.session is SessionState.SignedIn) {
+      if (state.selectedRecordId == null) recordListItems(state.records, pagingItems, state.eventSink)
+      else item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink) }
     }
   }
 }

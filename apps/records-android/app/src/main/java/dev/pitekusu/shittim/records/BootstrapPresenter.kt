@@ -12,6 +12,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
 import com.slack.circuit.runtime.CircuitUiEvent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.Presenter
@@ -24,6 +26,7 @@ import dev.pitekusu.shittim.records.auth.MobileSessionModel
 import dev.pitekusu.shittim.records.auth.MobileSessionUser
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
+import java.util.concurrent.ConcurrentHashMap
 
 internal enum class ThemeChoice {
   System,
@@ -48,7 +51,7 @@ internal data object BootstrapScreen : Screen {
     data object Logout : Event
     data object Retry : Event
     data object RetryRecord : Event
-    data object RetryRecords : Event
+    data object RecordsAuthRequired : Event
     data class OpenRecord(val recordId: String) : Event
     data object CloseRecord : Event
   }
@@ -77,35 +80,30 @@ internal class BootstrapPresenter(
     var recordRetry by remember { mutableStateOf(0) }
     var recordList by remember { mutableStateOf<RecordListState>(RecordListState.Idle) }
     var listOwner by remember { mutableStateOf<MobileSessionUser?>(null) }
-    var listRetry by remember { mutableStateOf(0) }
-    var loadedRetry by remember { mutableStateOf(-1) }
     // The session model owns the validated destination across foreground checks and rotation.
     val selectedRecordId = (sessionState as? SessionState.SignedIn)?.returnTo
       ?.takeIf { it.startsWith("/records/") }?.removePrefix("/records/")
-    LaunchedEffect(sessionState, listRetry) {
+    LaunchedEffect(sessionState) {
       val currentSession = sessionState
       when (currentSession) {
         is SessionState.SignedIn -> {
-          // Destination-only updates retain the same user instance and loaded page.
-          // An in-flight request is cancelled by LaunchedEffect and must restart.
-          val completedList = recordList is RecordListState.Ready ||
-            recordList == RecordListState.Empty || recordList is RecordListState.Error
-          if (listOwner === currentSession.user && loadedRetry == listRetry &&
-            completedList) return@LaunchedEffect
-          listOwner = currentSession.user
-          loadedRetry = listRetry
-          recordList = RecordListState.Loading
-          recordList = try {
-            val page = session.withAuthorizedToken(records::recentRecords)
-            when {
-              page == null -> RecordListState.Idle
-              page.items.isEmpty() -> RecordListState.Empty
-              else -> RecordListState.Ready(page)
-            }
-          } catch (error: RecordReadException) {
-            if (error.failure == RecordReadFailure.AUTH_REQUIRED) session.onForeground()
-            RecordListState.Error(error.failure)
+          // Keep loaded pages while navigating to a detail; replace them on account change.
+          if (listOwner === currentSession.user && recordList is RecordListState.Ready) {
+            return@LaunchedEffect
           }
+          listOwner = currentSession.user
+          val loadedIds = ConcurrentHashMap.newKeySet<String>()
+          val pages = Pager(PagingConfig(pageSize = 12, initialLoadSize = 12,
+            prefetchDistance = 3, enablePlaceholders = false)) {
+            RecordPagingSource(
+              loadPage = { cursor ->
+                session.withAuthorizedToken { token -> records.recentRecords(token, cursor) }
+                  ?: throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
+              },
+              onLoaded = { entries -> loadedIds.addAll(entries.map { it.recordId }) },
+            )
+            }
+          recordList = RecordListState.Ready(pages.flow, loadedIds)
         }
         is SessionState.SignedOut, SessionState.SigningOut, SessionState.Browser,
         SessionState.StorageError -> {
@@ -150,9 +148,9 @@ internal class BootstrapPresenter(
         BootstrapScreen.Event.Logout -> session.logout()
         BootstrapScreen.Event.Retry -> session.retry()
         BootstrapScreen.Event.RetryRecord -> recordRetry++
-        BootstrapScreen.Event.RetryRecords -> listRetry++
+        BootstrapScreen.Event.RecordsAuthRequired -> session.onForeground()
         is BootstrapScreen.Event.OpenRecord -> if (
-          (visibleList as? RecordListState.Ready)?.page?.items?.any { it.recordId == event.recordId } == true
+          event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
         ) session.openDestination("/records/${event.recordId}")
         BootstrapScreen.Event.CloseRecord -> session.closeDestination()
       }

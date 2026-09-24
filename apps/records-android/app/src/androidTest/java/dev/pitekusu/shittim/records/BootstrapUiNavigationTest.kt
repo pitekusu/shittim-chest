@@ -5,12 +5,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasText
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.paging.PagingData
 import dev.pitekusu.shittim.records.auth.MobileAvatar
 import dev.pitekusu.shittim.records.auth.MobileSessionUser
 import dev.pitekusu.shittim.records.auth.SessionState
 import java.time.Instant
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -40,19 +44,23 @@ class BootstrapUiNavigationTest {
     val id = "a".repeat(43)
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
     val session = SessionState.SignedIn(user, Instant.parse("2027-01-01T00:00:00Z"), "/")
-    val page = RecordListPage((1..12).map { index ->
+    val entries = (1..12).map { index ->
       RecordListEntry(index.toString().padStart(43, 'a'), "議題 $index", "架空の依頼者",
         RecordAvatar(null, "cyan"), Instant.parse("2026-09-24T00:00:00Z"), "アロナ")
-    }, false)
+    }
+    val recordList = RecordListState.Ready(flowOf(PagingData.from(entries)), entries.map { it.recordId }.toSet())
     val list = BootstrapScreen.State(ThemeChoice.System, session,
-      records = RecordListState.Ready(page), eventSink = {})
+      records = recordList, eventSink = {})
     val detail = BootstrapScreen.State(ThemeChoice.System, session,
-      records = RecordListState.Ready(page),
+      records = recordList,
       record = RecordPreviewState.Ready(RecordPreview("架空の議題", "架空の結論", "アロナ")),
       selectedRecordId = id, eventSink = {})
     val state = mutableStateOf(list)
     compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
-    compose.onNodeWithText("議題 12").performScrollTo().assertIsDisplayed()
+    // The first card may start below the fold on a smaller CI device.
+    compose.waitForIdle()
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("議題 12"))
+    compose.onNodeWithText("議題 12").assertIsDisplayed()
     compose.runOnIdle { state.value = detail }
     compose.runOnIdle { state.value = list }
     compose.onNodeWithText("議題 12").assertIsDisplayed()

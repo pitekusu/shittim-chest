@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,59 +26,88 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.paging.LoadState
+import androidx.paging.PagingData
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.itemKey
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import dev.pitekusu.shittim.records.ui.ShittimDisplayFont
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.flow.Flow
 
 internal sealed interface RecordListState {
   data object Idle : RecordListState
-  data object Loading : RecordListState
-  data object Empty : RecordListState
-  class Ready(val page: RecordListPage) : RecordListState
-  class Error(val reason: RecordReadFailure) : RecordListState
+  class Ready(
+    val pages: Flow<PagingData<RecordListEntry>>,
+    val loadedIds: Set<String>,
+  ) : RecordListState
 }
 
 private val japanZone = ZoneId.of("Asia/Tokyo")
 private val recordDate = DateTimeFormatter.ofPattern("yyyy.MM.dd", Locale.JAPAN).withZone(japanZone)
 
-@Composable
-internal fun RecordListPanel(
+internal fun LazyListScope.recordListItems(
   state: RecordListState,
+  pagingItems: LazyPagingItems<RecordListEntry>?,
   onEvent: (BootstrapScreen.Event) -> Unit,
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-    Text("RECORDS ARCHIVE", fontFamily = ShittimDisplayFont,
-      color = MaterialTheme.colorScheme.primary)
-    Text(stringResource(R.string.record_title), style = MaterialTheme.typography.headlineSmallEmphasized,
-      modifier = Modifier.semantics { heading() })
-    when (state) {
-      RecordListState.Idle, RecordListState.Loading -> {
-        Text(stringResource(R.string.record_list_loading))
-        CircularProgressIndicator()
-      }
-      RecordListState.Empty -> Text(stringResource(R.string.record_empty))
-      is RecordListState.Error -> {
+  item(key = "records-heading") {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text("RECORDS ARCHIVE", fontFamily = ShittimDisplayFont,
+        color = MaterialTheme.colorScheme.primary)
+      Text(stringResource(R.string.record_title), style = MaterialTheme.typography.headlineSmallEmphasized,
+        modifier = Modifier.semantics { heading() })
+    }
+  }
+  if (state !is RecordListState.Ready || pagingItems == null) {
+    item(key = "records-waiting") { LoadingRecords() }
+    return
+  }
+  when (pagingItems.loadState.refresh) {
+    is LoadState.Loading -> item(key = "records-loading") { LoadingRecords() }
+    is LoadState.Error -> item(key = "records-error") {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.record_list_error))
-        Button(onClick = { onEvent(BootstrapScreen.Event.RetryRecords) }) {
-          Text(stringResource(R.string.record_retry))
-        }
+        Button(onClick = pagingItems::retry) { Text(stringResource(R.string.record_retry)) }
       }
-      is RecordListState.Ready -> {
-        state.page.items.forEach { item ->
-          RecordListCard(item) {
-            onEvent(BootstrapScreen.Event.OpenRecord(item.recordId))
-          }
-        }
-        if (state.page.hasMore) {
-          Text(stringResource(R.string.record_list_first_page),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall)
+    }
+    is LoadState.NotLoading -> if (pagingItems.itemCount == 0) {
+      item(key = "records-empty") { Text(stringResource(R.string.record_empty)) }
+    }
+  }
+  items(count = pagingItems.itemCount, key = pagingItems.itemKey { it.recordId }) { index ->
+    pagingItems[index]?.let { entry ->
+      RecordListCard(entry) { onEvent(BootstrapScreen.Event.OpenRecord(entry.recordId)) }
+    }
+  }
+  when (val append = pagingItems.loadState.append) {
+    is LoadState.Loading -> item(key = "records-more-loading") {
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(24.dp))
+        Text(stringResource(R.string.record_list_more_loading))
+      }
+    }
+    is LoadState.Error -> item(key = "records-more-error") {
+      val expired = (append.error as? RecordReadException)?.failure == RecordReadFailure.CURSOR_INVALID
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(if (expired) R.string.record_list_cursor_expired else R.string.record_list_more_error))
+        Button(onClick = if (expired) pagingItems::refresh else pagingItems::retry) {
+          Text(stringResource(if (expired) R.string.record_list_restart else R.string.record_retry))
         }
       }
     }
+    is LoadState.NotLoading -> Unit
+  }
+}
+
+@Composable
+private fun LoadingRecords() {
+  Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    CircularProgressIndicator(Modifier.size(24.dp))
+    Text(stringResource(R.string.record_list_loading))
   }
 }
 
