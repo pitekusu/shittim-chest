@@ -38,8 +38,83 @@ class RecordsReadClientTest {
         result.preview.opinions.map { it.participantName })
       assertEquals("アロナの案", result.preview.opinions.first().initialProposal)
       assertEquals("最終案A", result.preview.opinions.first().finalTitle)
+      assertEquals(listOf(2, 1, 0), result.preview.voting?.counts?.map { it.count })
+      assertEquals(null, result.preview.voting?.decidedBy)
+      assertEquals(null, result.preview.voting?.votes?.first()?.assessments)
     }
     assertEquals(listOf("/api/v1/records?limit=1&sort=newest", "/api/v1/records/$id"), paths)
+  }
+
+  @Test
+  fun modernVotesKeepTheSavedWinnerAndBothAssessments() = runBlocking {
+    RecordsReadClient(MockEngine { respond(detail(id, modern = true), headers = jsonHeader) }).use { client ->
+      val preview = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview
+      assertEquals("アロナ", preview.winnerName)
+      assertEquals(VoteDecisionMethod.MAJORITY, preview.voting?.decidedBy)
+      assertEquals("アロナ", preview.voting?.votes?.get(1)?.candidateName)
+      assertEquals(2, preview.voting?.votes?.first()?.assessments?.size)
+      assertEquals(67, preview.voting?.votes?.first()?.assessments?.first()?.total)
+    }
+  }
+
+  @Test
+  fun tiedModernVotesRequireTheSavedWinnerAndMethodToMatchScores() = runBlocking {
+    RecordsReadClient(MockEngine {
+      respond(tiedModernDetail("participant-c", "composite_score"), headers = jsonHeader)
+    }).use { client ->
+      val preview = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview
+      assertEquals("安倍晋三AI", preview.winnerName)
+      assertEquals(VoteDecisionMethod.COMPOSITE_SCORE, preview.voting?.decidedBy)
+    }
+    for (payload in listOf(
+      tiedModernDetail("participant-a", "composite_score"),
+      tiedModernDetail("participant-c", "tie_lottery"),
+    )) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
+  }
+
+  @Test
+  fun inconsistentBallotOrAssessmentIsNotDisplayed() = runBlocking {
+    for (payload in listOf(
+      detail(id).replace("\"count\":2", "\"count\":1"),
+      detail(id).replace("\"voter\":\"participant-c\"", "\"voter\":\"participant-a\""),
+      detail(id).replace("\"candidate\":\"participant-b\"", "\"candidate\":\"participant-a\""),
+      detail(id, winner = "participant-c"),
+      detail(id).replace("\"tieBreakApplied\":false", "\"tieBreakApplied\":true"),
+      detail(id, modern = true).replace("\"entertainment\":5", "\"entertainment\":6"),
+      detail(id, modern = true).replaceFirst(
+        "\"candidate\":\"participant-b\",\"entertainment\":5",
+        "\"candidate\":\"participant-b\",\"entertainment\":0"),
+      detail(id, modern = true).replaceFirst(
+        "\"reason\":\"具体的な個性がある\"", "\"reason\":\"別の理由\""),
+      detail(id, modern = true).replace("\"rulesVersion\":\"entertainment-v1\"",
+        "\"rulesVersion\":\"unknown\""),
+    )) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
+  }
+
+  @Test
+  fun voteReasonsUseUnicodeCharacterLimits() = runBlocking {
+    val validVote = detail(id).replaceFirst("具体的な投票理由", "😀".repeat(500))
+    val invalidVote = detail(id).replaceFirst("具体的な投票理由", "😀".repeat(501))
+    val validAssessment = detail(id, modern = true).replace("具体的な個性がある", "😀".repeat(500))
+    val invalidAssessment = detail(id, modern = true).replace("具体的な個性がある", "😀".repeat(501))
+    for (payload in listOf(validVote, validAssessment)) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertEquals("アロナ", (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview.winnerName)
+      }
+    }
+    for (payload in listOf(invalidVote, invalidAssessment)) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
   }
 
   @Test
@@ -176,7 +251,7 @@ class RecordsReadClientTest {
         {"slot":"participant-c","displayName":"安倍晋三AI"}],
       "result":{"winner":"participant-a"}}],"nextCursor":"next.cursor"}"""
 
-  private fun detail(recordId: String, winner: String = "participant-a"): String =
+  private fun detail(recordId: String, winner: String = "participant-a", modern: Boolean = false): String =
     """{"schemaVersion":2,"recordId":"$recordId","question":"夕飯は何がいい？",
       "participants":[{"slot":"participant-a","displayName":"アロナ"},
         {"slot":"participant-b","displayName":"プラナ"},
@@ -187,6 +262,35 @@ class RecordsReadClientTest {
       "finalProposals":[{"participant":"participant-a","title":"最終案A","proposal":"決定案A"},
         {"participant":"participant-b","title":"最終案B","proposal":"決定案B"},
         {"participant":"participant-c","title":"最終案C","proposal":"決定案C"}],
-      "result":{"winner":"$winner"},
-      "finalDecision":{"winner":"$winner","decision":"今日は寿司にします。"}}"""
+      "votes":[${vote("participant-a", "participant-b", modern)},
+        ${vote("participant-b", "participant-a", modern)},
+        ${vote("participant-c", "participant-a", modern)}],
+      "result":{"winner":"$winner","voteCounts":[{"participant":"participant-a","count":2},
+        {"participant":"participant-b","count":1},{"participant":"participant-c","count":0}],
+        "tieBreakApplied":false},
+      "finalDecision":{"winner":"$winner","decision":"今日は寿司にします。"}
+      ${if (modern) ",\"voting\":{\"rulesVersion\":\"entertainment-v1\",\"decidedBy\":\"majority\"}" else ""}}"""
+
+  private fun vote(voter: String, candidate: String, modern: Boolean): String {
+    val assessments = if (modern) {
+      val otherCandidates = listOf("participant-a", "participant-b", "participant-c") - voter
+      ",\"assessments\":[${otherCandidates.joinToString { assessed ->
+        """{"candidate":"$assessed","entertainment":5,"character":4,"originality":3,
+          "responsiveness":2,"interaction":1,"reason":"具体的な個性がある"}"""
+      }}]"
+    } else ""
+    val reason = if (modern) "具体的な個性がある" else "具体的な投票理由"
+    return """{"voter":"$voter","candidate":"$candidate","reason":"$reason"$assessments}"""
+  }
+
+  private fun tiedModernDetail(winner: String, method: String): String =
+    detail(id, winner, modern = true)
+      .replace(vote("participant-b", "participant-a", modern = true),
+        vote("participant-b", "participant-c", modern = true).replace(
+          "\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":4",
+          "\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":5"))
+      .replace("\"participant-a\",\"count\":2", "\"participant-a\",\"count\":1")
+      .replace("\"participant-c\",\"count\":0", "\"participant-c\",\"count\":1")
+      .replace("\"tieBreakApplied\":false", "\"tieBreakApplied\":true")
+      .replace("\"decidedBy\":\"majority\"", "\"decidedBy\":\"$method\"")
 }

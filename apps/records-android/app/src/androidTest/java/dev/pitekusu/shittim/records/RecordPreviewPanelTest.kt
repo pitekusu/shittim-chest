@@ -64,6 +64,26 @@ class RecordPreviewPanelTest {
   }
 
   @Test
+  fun votingShowsSavedBallotsAndExpandsAssessmentDetails() {
+    val score = RecordAssessment("プラナ", 5, 4, 3, 2, 1, "プラナらしい視点です。", 67)
+    val voting = RecordVoting(
+      listOf(RecordVote("アロナ", "プラナ", "理由を話します。", listOf(score,
+        RecordAssessment("安倍晋三AI", 1, 2, 3, 4, 5, "別の視点です。", 53)))),
+      listOf(RecordVoteCount("アロナ", 0), RecordVoteCount("プラナ", 1),
+        RecordVoteCount("安倍晋三AI", 0)),
+      VoteDecisionMethod.COMPOSITE_SCORE, true)
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) { RecordVotingPanel(voting) } }
+    }
+    compose.onNodeWithText("アロナ → プラナ").assertExists()
+    compose.onNodeWithText("プラナ：1票").assertExists()
+    compose.onNodeWithText("同票のため、5項目の総合評価で決定しました。").assertExists()
+    compose.onNodeWithText("採点の内訳を見る").performClick()
+    compose.onNodeWithText("プラナ：67 / 100点").assertExists()
+    compose.onNodeWithText("プラナらしい視点です。").assertExists()
+  }
+
+  @Test
   fun onlyAbsoluteHttpsLinksCanLeaveTheRecord() {
     assertTrue(allowedRecordLink("https://example.com/article?q=1"))
     for (url in listOf("http://example.com", "javascript:alert(1)", "intent://example.com",

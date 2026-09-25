@@ -72,6 +72,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
               RecordMarkdown(opinion.finalProposal)
             }
           }
+          state.preview.voting?.let { RecordVotingPanel(it) }
           Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
           Text(state.preview.winnerName, style = MaterialTheme.typography.titleMediumEmphasized)
