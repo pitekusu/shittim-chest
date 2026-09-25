@@ -37,6 +37,7 @@ internal class RecordPreview(
   val decision: String,
   val winnerName: String,
   val opinions: List<RecordOpinion> = emptyList(),
+  val voting: RecordVoting? = null,
 )
 
 internal class RecordOpinion(
@@ -46,6 +47,37 @@ internal class RecordOpinion(
   val finalTitle: String,
   val finalProposal: String,
 )
+
+internal class RecordVoting(
+  val votes: List<RecordVote>,
+  val counts: List<RecordVoteCount>,
+  val decidedBy: VoteDecisionMethod?,
+  val legacyTieBreakApplied: Boolean,
+)
+
+internal class RecordVote(
+  val voterName: String,
+  val candidateName: String,
+  val reason: String,
+  val assessments: List<RecordAssessment>?,
+)
+
+internal class RecordVoteCount(val participantName: String, val count: Int)
+
+internal class RecordAssessment(
+  val candidateName: String,
+  val entertainment: Int,
+  val character: Int,
+  val originality: Int,
+  val responsiveness: Int,
+  val interaction: Int,
+  val reason: String,
+) {
+  val total: Int get() = entertainment * 5 + character * 5 + originality * 4 +
+    responsiveness * 4 + interaction * 2
+}
+
+internal enum class VoteDecisionMethod { MAJORITY, COMPOSITE_SCORE, TIE_LOTTERY }
 
 internal sealed interface RecordReadResult {
   data object Empty : RecordReadResult
@@ -121,6 +153,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     }
     val winner = detail.participants.first { it.slot == detail.result.winner }
     if (winner.displayName.isBlank()) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    val voting = mapVoting(detail)
     return RecordReadResult.Found(
       RecordPreview(detail.question, detail.finalDecision.decision, winner.displayName,
         detail.participants.map { participant ->
@@ -128,7 +161,57 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           val final = detail.finalProposals.first { it.participant == participant.slot }
           RecordOpinion(participant.displayName, initial.summary, initial.proposal,
             final.title, final.proposal)
-        }))
+        }, voting))
+  }
+
+  private fun mapVoting(detail: RecordDetail): RecordVoting {
+    val names = detail.participants.associate { it.slot to it.displayName }
+    val votes = detail.votes
+    val counts = detail.result.voteCounts
+    val legacyTieBreakApplied = detail.result.tieBreakApplied
+    if (votes.size != 3 || votes.map { it.voter }.toSet() != PARTICIPANTS ||
+      counts == null || counts.size != 3 || counts.map { it.participant }.toSet() != PARTICIPANTS ||
+      legacyTieBreakApplied == null) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    val decidedBy = when (detail.voting?.decidedBy) {
+      null -> null
+      "majority" -> VoteDecisionMethod.MAJORITY
+      "composite_score" -> VoteDecisionMethod.COMPOSITE_SCORE
+      "tie_lottery" -> VoteDecisionMethod.TIE_LOTTERY
+      else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    if (detail.voting != null && detail.voting.rulesVersion != "entertainment-v1") {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    val tallies = PARTICIPANTS.associateWith { slot -> votes.count { it.candidate == slot } }
+    val leaders = tallies.filterValues { it == tallies.values.max() }.keys
+    if (detail.result.winner !in leaders || legacyTieBreakApplied != (leaders.size > 1) ||
+      votes.any { it.candidate !in PARTICIPANTS || it.candidate == it.voter ||
+        it.reason.isBlank() || it.reason.length > 500 ||
+        (it.assessments != null) != (decidedBy != null) } ||
+      counts.any { it.count !in 0..3 || tallies[it.participant] != it.count }) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    val mappedVotes = detail.participants.map { participant ->
+      val vote = votes.first { it.voter == participant.slot }
+      val assessments = vote.assessments?.also { items ->
+        if (items.size != 2 || items.map { it.candidate }.toSet() != PARTICIPANTS - vote.voter ||
+          items.any { it.reason.isBlank() || it.reason.length > 500 ||
+            listOf(it.entertainment, it.character, it.originality,
+            it.responsiveness, it.interaction).any { score -> score !in 0..5 } }) {
+          throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        }
+      }?.map { assessment ->
+        RecordAssessment(names.getValue(assessment.candidate), assessment.entertainment,
+          assessment.character, assessment.originality, assessment.responsiveness,
+          assessment.interaction, assessment.reason)
+      }
+      RecordVote(participant.displayName, names.getValue(vote.candidate), vote.reason, assessments)
+    }
+    return RecordVoting(mappedVotes, detail.participants.map { participant ->
+      RecordVoteCount(participant.displayName, counts.first { it.participant == participant.slot }.count)
+    }, decidedBy, legacyTieBreakApplied)
   }
 
   suspend fun recentRecords(accessToken: String, cursor: String? = null): RecordListPage {
@@ -257,13 +340,36 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val participants: List<RecordParticipant>,
     val initialOpinions: List<InitialOpinion>,
     val finalProposals: List<FinalProposal>,
+    val votes: List<RecordVoteRef>,
     val result: RecordResult,
     val finalDecision: FinalDecision,
+    val voting: VotingRef? = null,
   )
   @Serializable private class RecordParticipant(val slot: String, val displayName: String)
   @Serializable private class InitialOpinion(val participant: String, val summary: String, val proposal: String)
   @Serializable private class FinalProposal(val participant: String, val title: String, val proposal: String)
-  @Serializable private class RecordResult(val winner: String)
+  @Serializable private class RecordVoteRef(
+    val voter: String,
+    val candidate: String,
+    val reason: String,
+    val assessments: List<RecordAssessmentRef>? = null,
+  )
+  @Serializable private class RecordAssessmentRef(
+    val candidate: String,
+    val entertainment: Int,
+    val character: Int,
+    val originality: Int,
+    val responsiveness: Int,
+    val interaction: Int,
+    val reason: String,
+  )
+  @Serializable private class VoteCountRef(val participant: String, val count: Int)
+  @Serializable private class VotingRef(val rulesVersion: String, val decidedBy: String)
+  @Serializable private class RecordResult(
+    val winner: String,
+    val voteCounts: List<VoteCountRef>? = null,
+    val tieBreakApplied: Boolean? = null,
+  )
   @Serializable private class FinalDecision(val winner: String, val decision: String)
 
   private companion object {

@@ -38,8 +38,41 @@ class RecordsReadClientTest {
         result.preview.opinions.map { it.participantName })
       assertEquals("アロナの案", result.preview.opinions.first().initialProposal)
       assertEquals("最終案A", result.preview.opinions.first().finalTitle)
+      assertEquals(listOf(2, 1, 0), result.preview.voting?.counts?.map { it.count })
+      assertEquals(null, result.preview.voting?.decidedBy)
+      assertEquals(null, result.preview.voting?.votes?.first()?.assessments)
     }
     assertEquals(listOf("/api/v1/records?limit=1&sort=newest", "/api/v1/records/$id"), paths)
+  }
+
+  @Test
+  fun modernVotesKeepTheSavedWinnerAndBothAssessments() = runBlocking {
+    RecordsReadClient(MockEngine { respond(detail(id, modern = true), headers = jsonHeader) }).use { client ->
+      val preview = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview
+      assertEquals("アロナ", preview.winnerName)
+      assertEquals(VoteDecisionMethod.MAJORITY, preview.voting?.decidedBy)
+      assertEquals("アロナ", preview.voting?.votes?.get(1)?.candidateName)
+      assertEquals(2, preview.voting?.votes?.first()?.assessments?.size)
+      assertEquals(67, preview.voting?.votes?.first()?.assessments?.first()?.total)
+    }
+  }
+
+  @Test
+  fun inconsistentBallotOrAssessmentIsNotDisplayed() = runBlocking {
+    for (payload in listOf(
+      detail(id).replace("\"count\":2", "\"count\":1"),
+      detail(id).replace("\"voter\":\"participant-c\"", "\"voter\":\"participant-a\""),
+      detail(id).replace("\"candidate\":\"participant-b\"", "\"candidate\":\"participant-a\""),
+      detail(id, winner = "participant-c"),
+      detail(id).replace("\"tieBreakApplied\":false", "\"tieBreakApplied\":true"),
+      detail(id, modern = true).replace("\"entertainment\":5", "\"entertainment\":6"),
+      detail(id, modern = true).replace("\"rulesVersion\":\"entertainment-v1\"",
+        "\"rulesVersion\":\"unknown\""),
+    )) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
   }
 
   @Test
@@ -176,7 +209,7 @@ class RecordsReadClientTest {
         {"slot":"participant-c","displayName":"安倍晋三AI"}],
       "result":{"winner":"participant-a"}}],"nextCursor":"next.cursor"}"""
 
-  private fun detail(recordId: String, winner: String = "participant-a"): String =
+  private fun detail(recordId: String, winner: String = "participant-a", modern: Boolean = false): String =
     """{"schemaVersion":2,"recordId":"$recordId","question":"夕飯は何がいい？",
       "participants":[{"slot":"participant-a","displayName":"アロナ"},
         {"slot":"participant-b","displayName":"プラナ"},
@@ -187,6 +220,23 @@ class RecordsReadClientTest {
       "finalProposals":[{"participant":"participant-a","title":"最終案A","proposal":"決定案A"},
         {"participant":"participant-b","title":"最終案B","proposal":"決定案B"},
         {"participant":"participant-c","title":"最終案C","proposal":"決定案C"}],
-      "result":{"winner":"$winner"},
-      "finalDecision":{"winner":"$winner","decision":"今日は寿司にします。"}}"""
+      "votes":[${vote("participant-a", "participant-b", modern)},
+        ${vote("participant-b", "participant-a", modern)},
+        ${vote("participant-c", "participant-a", modern)}],
+      "result":{"winner":"$winner","voteCounts":[{"participant":"participant-a","count":2},
+        {"participant":"participant-b","count":1},{"participant":"participant-c","count":0}],
+        "tieBreakApplied":false},
+      "finalDecision":{"winner":"$winner","decision":"今日は寿司にします。"}
+      ${if (modern) ",\"voting\":{\"rulesVersion\":\"entertainment-v1\",\"decidedBy\":\"majority\"}" else ""}}"""
+
+  private fun vote(voter: String, candidate: String, modern: Boolean): String {
+    val assessments = if (modern) {
+      val otherCandidates = listOf("participant-a", "participant-b", "participant-c") - voter
+      ",\"assessments\":[${otherCandidates.joinToString { assessed ->
+        """{"candidate":"$assessed","entertainment":5,"character":4,"originality":3,
+          "responsiveness":2,"interaction":1,"reason":"具体的な個性がある"}"""
+      }}]"
+    } else ""
+    return """{"voter":"$voter","candidate":"$candidate","reason":"具体的な投票理由"$assessments}"""
+  }
 }
