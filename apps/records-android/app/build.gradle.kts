@@ -105,6 +105,7 @@ dependencies {
   implementation(libs.androidx.paging.compose)
   implementation(libs.markdown.core)
   implementation(libs.markdown.material3)
+  implementation(libs.bouncycastle.bcprov)
   debugImplementation(libs.androidx.compose.ui.tooling)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
