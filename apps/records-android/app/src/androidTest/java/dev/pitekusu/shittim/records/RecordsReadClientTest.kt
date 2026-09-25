@@ -58,6 +58,25 @@ class RecordsReadClientTest {
   }
 
   @Test
+  fun tiedModernVotesRequireTheSavedWinnerAndMethodToMatchScores() = runBlocking {
+    RecordsReadClient(MockEngine {
+      respond(tiedModernDetail("participant-c", "composite_score"), headers = jsonHeader)
+    }).use { client ->
+      val preview = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview
+      assertEquals("安倍晋三AI", preview.winnerName)
+      assertEquals(VoteDecisionMethod.COMPOSITE_SCORE, preview.voting?.decidedBy)
+    }
+    for (payload in listOf(
+      tiedModernDetail("participant-a", "composite_score"),
+      tiedModernDetail("participant-c", "tie_lottery"),
+    )) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
+  }
+
+  @Test
   fun inconsistentBallotOrAssessmentIsNotDisplayed() = runBlocking {
     for (payload in listOf(
       detail(id).replace("\"count\":2", "\"count\":1"),
@@ -239,4 +258,15 @@ class RecordsReadClientTest {
     } else ""
     return """{"voter":"$voter","candidate":"$candidate","reason":"具体的な投票理由"$assessments}"""
   }
+
+  private fun tiedModernDetail(winner: String, method: String): String =
+    detail(id, winner, modern = true)
+      .replaceFirst("\"voter\":\"participant-b\",\"candidate\":\"participant-a\"",
+        "\"voter\":\"participant-b\",\"candidate\":\"participant-c\"")
+      .replace("\"participant-a\",\"count\":2", "\"participant-a\",\"count\":1")
+      .replace("\"participant-c\",\"count\":0", "\"participant-c\",\"count\":1")
+      .replace("\"tieBreakApplied\":false", "\"tieBreakApplied\":true")
+      .replaceFirst("\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":4",
+        "\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":5")
+      .replace("\"decidedBy\":\"majority\"", "\"decidedBy\":\"$method\"")
 }

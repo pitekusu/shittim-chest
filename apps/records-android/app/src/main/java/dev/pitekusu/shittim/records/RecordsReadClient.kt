@@ -72,10 +72,8 @@ internal class RecordAssessment(
   val responsiveness: Int,
   val interaction: Int,
   val reason: String,
-) {
-  val total: Int get() = entertainment * 5 + character * 5 + originality * 4 +
-    responsiveness * 4 + interaction * 2
-}
+  val total: Int,
+)
 
 internal enum class VoteDecisionMethod { MAJORITY, COMPOSITE_SCORE, TIE_LOTTERY }
 
@@ -205,9 +203,25 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       }?.map { assessment ->
         RecordAssessment(names.getValue(assessment.candidate), assessment.entertainment,
           assessment.character, assessment.originality, assessment.responsiveness,
-          assessment.interaction, assessment.reason)
+          assessment.interaction, assessment.reason, assessment.total)
       }
       RecordVote(participant.displayName, names.getValue(vote.candidate), vote.reason, assessments)
+    }
+    if (decidedBy != null) {
+      var possibleWinners = leaders
+      val expectedMethod = if (leaders.size == 1) VoteDecisionMethod.MAJORITY else {
+        val scores = PARTICIPANTS.associateWith { slot ->
+          votes.sumOf { vote -> vote.assessments.orEmpty()
+            .filter { it.candidate == slot }.sumOf { it.total } }
+        }
+        val highestScore = leaders.maxOf { scores.getValue(it) }
+        possibleWinners = leaders.filterTo(mutableSetOf()) { scores.getValue(it) == highestScore }
+        if (possibleWinners.size == 1) VoteDecisionMethod.COMPOSITE_SCORE
+        else VoteDecisionMethod.TIE_LOTTERY
+      }
+      if (decidedBy != expectedMethod || detail.result.winner !in possibleWinners) {
+        throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+      }
     }
     return RecordVoting(mappedVotes, detail.participants.map { participant ->
       RecordVoteCount(participant.displayName, counts.first { it.participant == participant.slot }.count)
@@ -362,7 +376,10 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val responsiveness: Int,
     val interaction: Int,
     val reason: String,
-  )
+  ) {
+    val total: Int get() = entertainment * 5 + character * 5 + originality * 4 +
+      responsiveness * 4 + interaction * 2
+  }
   @Serializable private class VoteCountRef(val participant: String, val count: Int)
   @Serializable private class VotingRef(val rulesVersion: String, val decidedBy: String)
   @Serializable private class RecordResult(

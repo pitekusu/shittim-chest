@@ -65,10 +65,10 @@ class RecordPreviewPanelTest {
 
   @Test
   fun votingShowsSavedBallotsAndExpandsAssessmentDetails() {
-    val score = RecordAssessment("プラナ", 5, 4, 3, 2, 1, "プラナらしい視点です。")
+    val score = RecordAssessment("プラナ", 5, 4, 3, 2, 1, "プラナらしい視点です。", 67)
     val voting = RecordVoting(
       listOf(RecordVote("アロナ", "プラナ", "理由を話します。", listOf(score,
-        RecordAssessment("安倍晋三AI", 1, 2, 3, 4, 5, "別の視点です。")))),
+        RecordAssessment("安倍晋三AI", 1, 2, 3, 4, 5, "別の視点です。", 53)))),
       listOf(RecordVoteCount("アロナ", 0), RecordVoteCount("プラナ", 1),
         RecordVoteCount("安倍晋三AI", 0)),
       VoteDecisionMethod.COMPOSITE_SCORE, true)
