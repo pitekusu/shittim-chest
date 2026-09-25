@@ -3,7 +3,11 @@ plugins {
   alias(libs.plugins.compose.compiler)
   alias(libs.plugins.serialization)
   alias(libs.plugins.metro)
+  alias(libs.plugins.ksp)
+  alias(libs.plugins.room3)
 }
+
+room3 { schemaDirectory("$projectDir/schemas") }
 
 val appVersionCode = providers.gradleProperty("shittimAndroidVersionCode").orElse("1").get()
   .toIntOrNull()?.takeIf { it > 0 }
@@ -106,6 +110,9 @@ dependencies {
   implementation(libs.markdown.core)
   implementation(libs.markdown.material3)
   implementation(libs.bouncycastle.bcprov)
+  implementation(libs.room3.runtime)
+  implementation(libs.sqlite.framework)
+  ksp(libs.room3.compiler)
   debugImplementation(libs.androidx.compose.ui.tooling)
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
