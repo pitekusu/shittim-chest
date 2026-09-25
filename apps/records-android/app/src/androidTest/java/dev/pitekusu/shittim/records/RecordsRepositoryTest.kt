@@ -9,6 +9,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.storage.EncryptedRecordStore
 import dev.pitekusu.shittim.records.storage.EncryptedRecordsDatabase
 import dev.pitekusu.shittim.records.storage.KeystorePrivateKeyStore
+import dev.pitekusu.shittim.records.storage.RecordCacheAccount
+import dev.pitekusu.shittim.records.storage.CachedRecordPart
 import dev.pitekusu.shittim.records.storage.RecordDataKeyProtector
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -17,6 +19,8 @@ import io.ktor.http.headersOf
 import java.io.File
 import java.nio.file.Files
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -34,16 +38,20 @@ class RecordsRepositoryTest {
   private val token = "t".repeat(43)
   private lateinit var app: Context
   private lateinit var privateDirectory: File
+  private lateinit var privateContext: Context
   private lateinit var privateKeys: KeystorePrivateKeyStore
   private lateinit var databaseName: String
+  private var activeAccountId = accountId
 
   @Before fun setUp() {
     app = InstrumentationRegistry.getInstrumentation().targetContext
     privateDirectory = Files.createTempDirectory(app.noBackupFilesDir.toPath(), "repo-test-").toFile()
-    privateKeys = KeystorePrivateKeyStore(object : ContextWrapper(app) {
+    privateContext = object : ContextWrapper(app) {
       override fun getNoBackupFilesDir(): File = privateDirectory
       override fun getPackageName(): String = "${app.packageName}.test.${UUID.randomUUID()}"
-    })
+    }
+    privateKeys = KeystorePrivateKeyStore(privateContext)
+    activeAccountId = accountId
     databaseName = "repo-test-${UUID.randomUUID()}.db"
   }
 
@@ -70,11 +78,67 @@ class RecordsRepositoryTest {
       assertEquals("架空の議題", reopened.cachedListEntry(accountId, recordId)?.questionPreview)
       assertEquals("アロナ", reopened.cachedRecord(accountId, recordId)?.winnerName)
       assertEquals("架空の結論", reopened.cachedRecord(accountId, recordId)?.decision)
-      assertNull(reopened.cachedListEntry("v".repeat(43), recordId))
+    }
+  }
+
+  @Test fun anotherAccountReplacesTheOldKeyAndCiphertext() = runBlocking {
+    val engine = { MockEngine { respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json")) } }
+    repository(engine()).use { it.recentRecords(token, accountId, null) }
+    val nextAccount = "v".repeat(43)
+    activeAccountId = nextAccount
+    repository(engine()).use { next ->
+      assertEquals("架空の議題", next.recentRecords(token, nextAccount, null).items.single().questionPreview)
+      assertEquals("架空の議題", next.cachedListEntry(nextAccount, recordId)?.questionPreview)
+      try {
+        next.cachedListEntry(accountId, recordId)
+        fail("previous account must not regain access")
+      } catch (error: RecordReadException) {
+        assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure)
+      }
+    }
+    val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
+      .setDriver(AndroidSQLiteDriver()).build()
+    try {
+      assertNull(EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys))
+        .load(accountId, recordId, CachedRecordPart.LIST))
+    } finally { database.close() }
+  }
+
+  @Test fun previousAccountsLateResponseCannotDeleteTheNewCache() = runBlocking {
+    val started = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val delayed = repository(MockEngine {
+      started.complete(Unit)
+      release.await()
+      respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    })
+    try {
+      val pending = async {
+        try {
+          delayed.recentRecords(token, accountId, null)
+          fail("old session result must be rejected")
+          null
+        } catch (error: RecordReadException) { error.failure }
+      }
+      started.await()
+      val nextAccount = "v".repeat(43)
+      activeAccountId = nextAccount
+      repository(MockEngine {
+        respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      }).use { next ->
+        next.recentRecords(token, nextAccount, null)
+        release.complete(Unit)
+        assertEquals(RecordReadFailure.AUTH_REQUIRED, pending.await())
+        assertEquals("架空の議題", next.cachedListEntry(nextAccount, recordId)?.questionPreview)
+      }
+    } finally {
+      release.complete(Unit)
+      delayed.close()
     }
   }
 
   @Test fun failedSaveNeverReturnsOnlinePlaintext() = runBlocking {
+    activeAccountId = "invalid account"
     repository(MockEngine { request ->
       respond(if (request.url.encodedPath.endsWith("/$recordId")) detail() else list(),
         headers = headersOf(HttpHeaders.ContentType, "application/json"))
@@ -97,7 +161,8 @@ class RecordsRepositoryTest {
     val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
       .setDriver(AndroidSQLiteDriver()).build()
     return RecordsRepository(RecordsReadClient(engine),
-      EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys)), database)
+      EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys)), database,
+      RecordCacheAccount(privateContext, privateKeys, database), { it == activeAccountId })
   }
 
   private fun list(): String = """{"schemaVersion":1,"items":[{"schemaVersion":1,"recordId":"$recordId",
