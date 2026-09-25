@@ -76,9 +76,28 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
           Text(state.preview.winnerName, style = MaterialTheme.typography.titleMediumEmphasized)
+          state.preview.victoryMessage?.let { message ->
+            Text(stringResource(R.string.record_victory_message),
+              style = MaterialTheme.typography.labelLarge,
+              color = MaterialTheme.colorScheme.primary)
+            Text(message, style = MaterialTheme.typography.bodyLarge)
+          }
           Text(stringResource(R.string.record_decision), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
           RecordMarkdown(state.preview.decision)
+          if (state.preview.actions.isNotEmpty()) {
+            Text(stringResource(R.string.record_actions),
+              style = MaterialTheme.typography.titleMediumEmphasized,
+              modifier = Modifier.semantics { heading() })
+            state.preview.actions.forEach { Text(stringResource(R.string.record_list_item, it)) }
+          }
+          if (state.preview.caveats.isNotEmpty()) {
+            Text(stringResource(R.string.record_caveats),
+              style = MaterialTheme.typography.titleMediumEmphasized,
+              modifier = Modifier.semantics { heading() })
+            state.preview.caveats.forEach { Text(stringResource(R.string.record_list_item, it)) }
+          }
+          RecordAffectionPanel(state.preview.affection)
         }
       }
     }

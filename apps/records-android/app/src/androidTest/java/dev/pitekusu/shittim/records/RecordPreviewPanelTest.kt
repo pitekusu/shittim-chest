@@ -84,6 +84,45 @@ class RecordPreviewPanelTest {
   }
 
   @Test
+  fun affectionSeparatesQuestionScoreFromRealChangeAndOptionalDecisionText() {
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
+      RecordAffectionChange("アロナ", 995, 50, 5, 1000),
+      RecordAffectionChange("プラナ", 500, -20, -20, 480),
+      RecordAffectionChange("安倍晋三AI", 100, 0, 0, 100),
+    ))
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) {
+        RecordPreviewPanel(RecordPreviewState.Ready(RecordPreview(
+          "架空の議題", "架空の結論", "アロナ", victoryMessage = "ありがとう！",
+          actions = listOf("まず確認する"), caveats = listOf("無理をしない"), affection = affection,
+        )), {})
+      } }
+    }
+    for (text in listOf("ありがとう！", "• まず確認する", "• 無理をしない",
+      "質問評価：+50点", "親愛度：995 → 1000", "実増減：+5点", "質問評価：-20点")) {
+      compose.onNodeWithText(text).assertExists()
+    }
+  }
+
+  @Test
+  fun oldAndUnavailableAffectionDoNotShowMadeUpScores() {
+    val current = mutableStateOf<RecordAffection?>(null)
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) { RecordAffectionPanel(current.value) } }
+    }
+    compose.onNodeWithText("この記録には親愛度データがありません。").assertExists()
+    compose.runOnIdle {
+      current.value = RecordAffection(RecordAffectionStatus.UNAVAILABLE, listOf(
+        RecordAffectionChange("アロナ", 500, null, 0, 500),
+      ))
+    }
+    compose.onNodeWithText("質問の評価を完了できなかったため、親愛度は変更されませんでした。").assertExists()
+    compose.onNodeWithText("質問評価：未評価").assertExists()
+    compose.onNodeWithText("実増減：0点").assertExists()
+    compose.onNodeWithText("この記録には親愛度データがありません。").assertDoesNotExist()
+  }
+
+  @Test
   fun onlyAbsoluteHttpsLinksCanLeaveTheRecord() {
     assertTrue(allowedRecordLink("https://example.com/article?q=1"))
     for (url in listOf("http://example.com", "javascript:alert(1)", "intent://example.com",
