@@ -106,6 +106,15 @@ class EncryptedRecordStoreTest {
     assertNull(privateKeys.read(account))
   }
 
+  @Test
+  fun largestAcceptedPayloadCanBeReadAndOversizeDoesNotReplaceIt() = runBlocking {
+    val payload = ByteArray(1024 * 1024) { (it % 251).toByte() }
+    store.save(account, record, CachedRecordPart.DETAIL, payload)
+    assertArrayEquals(payload, store.load(account, record, CachedRecordPart.DETAIL))
+    assertCacheFailure { store.save(account, record, CachedRecordPart.DETAIL, ByteArray(payload.size + 1)) }
+    assertArrayEquals(payload, store.load(account, record, CachedRecordPart.DETAIL))
+  }
+
   private fun openDatabase(): EncryptedRecordsDatabase =
     Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
       .setDriver(AndroidSQLiteDriver())

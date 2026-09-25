@@ -723,7 +723,7 @@ APIの1時間で期限切れになるcursorが`CURSOR_INVALID`になった場合
 
 ## C28：Roomの暗号化ペイロード保存
 
-`storage/EncryptedRecordStore.kt`は保存前に一覧項目または詳細のbyteペイロードをランダムな32-byteデータ鍵でAES-256-GCM暗号化し、そのデータ鍵をC27のHPKEで包む。標準暗号APIへAEADを任せ、独自暗号方式は作らない。保存のたびに新しいデータ鍵を生成して同一レコード・同一種別の行を置き換え、途中失敗では平文保存へ切り替えない。読込時は両方の認証を確認してから平文byteを呼出元へ返し、一時鍵は使用後に消去する。最大2 MiBの平文を受け付け、保存形式は1 byteのversion、12 bytesのIV、暗号文、16 bytesのtag。AADは用途・アカウント識別子・記録ID・一覧／詳細の種別を束縛する。
+`storage/EncryptedRecordStore.kt`は保存前に一覧項目または詳細のbyteペイロードをランダムな32-byteデータ鍵でAES-256-GCM暗号化し、そのデータ鍵をC27のHPKEで包む。標準暗号APIへAEADを任せ、独自暗号方式は作らない。保存のたびに新しいデータ鍵を生成して同一レコード・同一種別の行を置き換え、途中失敗では平文保存へ切り替えない。読込時は両方の認証を確認してから平文byteを呼出元へ返し、一時鍵は使用後に消去する。最大1 MiBの平文を受け付け、暗号文・鍵・列情報を含む行全体が旧端末のCursorWindow上限に収まる余裕を持たせる。保存形式は1 byteのversion、12 bytesのIV、暗号文、16 bytesのtag。AADは用途・アカウント識別子・記録ID・一覧／詳細の種別を束縛する。
 
 [Room 3.0.3](https://developer.android.com/jetpack/androidx/releases/room3)と[KSP 2.3.12](https://github.com/google/ksp/releases/tag/2.3.12)を導入し、Android標準SQLite driverを用いる。`EncryptedRecordsDatabase`のv1 schemaはアカウント索引用のSHA-256由来の擬名、opaqueな記録ID、種別、HPKEで包んだ鍵、認証付き暗号文のみを列とする。質問・依頼者名・回答・検索用本文を平文列へ複製しない。アカウント索引は秘密鍵ではなく、低エントロピーなIDを隠す保証はないため、後続の接続では安定したopaqueな本人識別子を供給する。既存Manifestのbackup／端末転送除外を維持し、schema JSONをGitで管理する。データができた後の破壊的migration fallbackは設定しない。
 

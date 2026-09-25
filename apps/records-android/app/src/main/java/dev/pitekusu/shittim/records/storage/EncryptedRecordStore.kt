@@ -107,7 +107,8 @@ internal class EncryptedRecordStore(
     const val DATA_KEY_BYTES = 32
     const val IV_BYTES = 12
     const val TAG_BITS = 128
-    const val MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
+    // Keep the complete encrypted row below older framework CursorWindow limits.
+    const val MAX_PAYLOAD_BYTES = 1024 * 1024
     const val MIN_ENVELOPE_BYTES = 1 + IV_BYTES + 1 + TAG_BITS / 8
     const val MAX_ENVELOPE_BYTES = 1 + IV_BYTES + MAX_PAYLOAD_BYTES + TAG_BITS / 8
   }
