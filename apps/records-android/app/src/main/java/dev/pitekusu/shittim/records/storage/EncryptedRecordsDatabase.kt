@@ -31,6 +31,9 @@ internal interface EncryptedRecordDao {
 
   @Query("DELETE FROM encrypted_records WHERE account_key = :accountKey")
   suspend fun deleteAccount(accountKey: String)
+
+  @Query("DELETE FROM encrypted_records")
+  suspend fun deleteAll()
 }
 
 @Database(entities = [EncryptedRecordRow::class], version = 1, exportSchema = true)

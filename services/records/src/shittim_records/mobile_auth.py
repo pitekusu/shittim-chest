@@ -1,5 +1,7 @@
 """Mobile handoff contracts only; no persistence, HTTP routes, or OAuth execution."""
 
+import base64
+import hmac
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -26,6 +28,17 @@ Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$", repr=False)]
 CodeVerifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9._~-]{43,128}$", repr=False)]
 ReturnDestination = Annotated[str, Field(pattern=r"^/(?:records/[A-Za-z0-9_-]{43})?$")]
 EpochSeconds = Annotated[int, Field(strict=True, ge=0)]
+
+
+def cache_account_id(session_key: bytes, requester_key: str) -> str:
+    """A stable, purpose-separated device cache ID; never expose the requester key itself."""
+
+    if len(session_key) < 32 or len(requester_key) != 43:
+        raise AuthFailure("configuration_invalid")
+    digest = hmac.digest(
+        session_key, f"records:mobile-cache-account:{requester_key}".encode(), "sha256"
+    )
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 class MobileModel(PublicModel):
@@ -77,6 +90,7 @@ class MobileSessionResponse(MobileModel):
     """An invalid/expired Bearer session returns 401, not this success DTO."""
 
     schema_version: Literal[1]
+    cache_account_id: OpaqueValue = Field(repr=False)
     user: SessionUser = Field(repr=False)
     is_admin: bool = Field(strict=True)
     expires_at: AwareDatetime

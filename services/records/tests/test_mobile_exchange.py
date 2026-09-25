@@ -98,6 +98,7 @@ def test_rfc7636_exchange_returns_one_90_day_bearer_without_cookie_or_private_ke
     assert result.user.display_name == "Test" and result.user.avatar.kind == "image"
     assert set(result.model_dump(by_alias=True)) == {
         "schemaVersion",
+        "cacheAccountId",
         "accessToken",
         "tokenType",
         "expiresAt",

@@ -2363,6 +2363,11 @@
             "title": "Accesstoken",
             "type": "string"
           },
+          "cacheAccountId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Cacheaccountid",
+            "type": "string"
+          },
           "expiresAt": {
             "format": "date-time",
             "title": "Expiresat",
@@ -2393,6 +2398,7 @@
         },
         "required": [
           "schemaVersion",
+          "cacheAccountId",
           "user",
           "isAdmin",
           "expiresAt",
@@ -2407,6 +2413,11 @@
         "additionalProperties": false,
         "description": "An invalid/expired Bearer session returns 401, not this success DTO.",
         "properties": {
+          "cacheAccountId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Cacheaccountid",
+            "type": "string"
+          },
           "expiresAt": {
             "format": "date-time",
             "title": "Expiresat",
@@ -2427,6 +2438,7 @@
         },
         "required": [
           "schemaVersion",
+          "cacheAccountId",
           "user",
           "isAdmin",
           "expiresAt"

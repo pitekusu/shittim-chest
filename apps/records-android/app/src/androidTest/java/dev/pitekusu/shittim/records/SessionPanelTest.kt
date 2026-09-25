@@ -26,7 +26,7 @@ class SessionPanelTest {
   fun expiryAndLogoutRemoveProfileAndExposeOnlyRelevantActions() {
     val state = mutableStateOf<SessionState>(SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "架空", "cyan")),
-      Instant.parse("2030-01-01T00:00:00Z"), "/"))
+      "u".repeat(43), Instant.parse("2030-01-01T00:00:00Z"), "/"))
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) { SessionPanel(state.value, events::add) } }

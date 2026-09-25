@@ -29,7 +29,7 @@ class BootstrapUiNavigationTest {
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
     val state = BootstrapScreen.State(
       ThemeChoice.System,
-      SessionState.SignedIn(user, Instant.parse("2027-01-01T00:00:00Z"), "/records/${"a".repeat(43)}"),
+      SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/records/${"a".repeat(43)}"),
       record = RecordPreviewState.Ready(RecordPreview("架空の議題", "架空の結論", "アロナ")),
       selectedRecordId = "a".repeat(43),
       eventSink = events::add,
@@ -43,7 +43,7 @@ class BootstrapUiNavigationTest {
   @Test fun listKeepsItsScrollPositionWhileDetailIsOpen() {
     val id = "a".repeat(43)
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
-    val session = SessionState.SignedIn(user, Instant.parse("2027-01-01T00:00:00Z"), "/")
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
     val entries = (1..12).map { index ->
       RecordListEntry(index.toString().padStart(43, 'a'), "議題 $index", "架空の依頼者",
         RecordAvatar(null, "cyan"), Instant.parse("2026-09-24T00:00:00Z"), "アロナ")

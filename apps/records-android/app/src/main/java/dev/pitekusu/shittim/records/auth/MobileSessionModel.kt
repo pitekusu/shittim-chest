@@ -22,7 +22,8 @@ internal sealed interface SessionState {
   data object Checking : SessionState
   class SignedOut(val notice: SessionNotice? = null) : SessionState
   data object Browser : SessionState
-  class SignedIn(val user: MobileSessionUser, val expiresAt: Instant, val returnTo: String) : SessionState
+  class SignedIn(val user: MobileSessionUser, val cacheAccountId: String,
+    val expiresAt: Instant, val returnTo: String) : SessionState
   data object SigningOut : SessionState
   data object Unavailable : SessionState
   data object StorageError : SessionState
@@ -61,7 +62,7 @@ internal class MobileSessionModel(
     if (returnTo == destination) return
     returnTo = destination
     (state.value as? SessionState.SignedIn)?.let {
-      mutableState.value = SessionState.SignedIn(it.user, it.expiresAt, destination)
+      mutableState.value = SessionState.SignedIn(it.user, it.cacheAccountId, it.expiresAt, destination)
     }
   }
 
@@ -69,7 +70,7 @@ internal class MobileSessionModel(
     val signedIn = state.value as? SessionState.SignedIn ?: return
     if (returnTo == "/") return
     returnTo = "/"
-    mutableState.value = SessionState.SignedIn(signedIn.user, signedIn.expiresAt, "/")
+    mutableState.value = SessionState.SignedIn(signedIn.user, signedIn.cacheAccountId, signedIn.expiresAt, "/")
   }
 
   // The token is available only inside the request callback, never in a UI state or saved value.
@@ -150,7 +151,7 @@ internal class MobileSessionModel(
           val deadline = minOf(stored.expiresAt, response.expiresAt)
           if (!deadline.isAfter(clock.instant())) expire()
           else {
-            mutableState.value = SessionState.SignedIn(response.user, deadline, returnTo)
+            mutableState.value = SessionState.SignedIn(response.user, response.cacheAccountId, deadline, returnTo)
             expiry = viewModelScope.launch {
               delay(Duration.between(clock.instant(), deadline).toMillis().coerceAtLeast(1))
               // Delay uses monotonic time, so moving the wall clock back cannot extend this session.

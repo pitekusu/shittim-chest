@@ -35,7 +35,7 @@ class MobileAuthClientTest {
   private val startBody = """{"schemaVersion":1,"transactionId":"$transaction",
     "authorizePath":"/api/v1/auth/mobile/authorize?transaction=$transaction",
     "expiresAt":"2030-01-01T09:00:00+09:00"}"""
-  private val sessionBody = """{"schemaVersion":1,"isAdmin":false,"expiresAt":"2030-01-01T00:00:00Z",
+  private val sessionBody = """{"schemaVersion":1,"isAdmin":false,"cacheAccountId":"${"u".repeat(43)}","expiresAt":"2030-01-01T00:00:00Z",
     "user":{"displayName":"テスト利用者","avatar":{"kind":"placeholder","alt":"テスト用","fallbackVariant":"cyan"}}}"""
   private val exchangeBody = sessionBody.dropLast(1) +
     """, "accessToken":"$token","tokenType":"Bearer","returnTo":"/"}"""
@@ -91,9 +91,12 @@ class MobileAuthClientTest {
       assertEquals(token, issued.accessToken)
       assertEquals("/", issued.returnTo)
       assertFalse(issued.isAdmin)
+      assertEquals("u".repeat(43), issued.cacheAccountId)
       assertEquals("テスト利用者", issued.user.displayName)
       assertEquals(issued.expiresAt, StoredToken(issued.accessToken, issued.expiresAt).expiresAt)
-      assertEquals("placeholder", client.session(token).user.avatar.kind)
+      val resumed = client.session(token)
+      assertEquals("placeholder", resumed.user.avatar.kind)
+      assertEquals(issued.cacheAccountId, resumed.cacheAccountId)
       client.logout(token)
       failure(MobileAuthFailure.REQUEST_REJECTED) { client.session("private\r\ntoken") }
       for (value in listOf(start, exchange, begun, issued, issued.user)) {
@@ -173,6 +176,7 @@ class MobileAuthClientTest {
     for (body in listOf(
       exchangeBody.replace("Bearer", "Basic"),
       exchangeBody.replace("\"returnTo\":\"/\"", "\"returnTo\":\"//untrusted.invalid\""),
+      exchangeBody.replace("\"cacheAccountId\":\"${"u".repeat(43)}\"", "\"cacheAccountId\":\"bad\""),
     )) {
       MobileAuthClient(MockEngine { respond(body, headers = jsonHeaders) }).use { client ->
         failure(MobileAuthFailure.INVALID_RESPONSE) { client.exchange(exchange) }

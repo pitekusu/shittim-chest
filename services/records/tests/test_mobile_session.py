@@ -64,7 +64,15 @@ def test_c09_token_returns_only_public_session_fields_without_extending_expiry(m
     assert first.user.avatar.url != second.user.avatar.url
     assert first.user.display_name == exchange.user.display_name
     assert first.expires_at == second.expires_at == exchange.expires_at
-    assert set(first.model_dump(by_alias=True)) == {"schemaVersion", "user", "isAdmin", "expiresAt"}
+    assert set(first.model_dump(by_alias=True)) == {
+        "schemaVersion",
+        "cacheAccountId",
+        "user",
+        "isAdmin",
+        "expiresAt",
+    }
+    assert first.cache_account_id == second.cache_account_id == exchange.cache_account_id
+    assert first.cache_account_id != "r" * 43
     assert store.sessions == before and not store.deleted
     serialized = first.model_dump_json() + repr(first)
     for private in (token, "r" * 43, REQUEST.code, REQUEST.code_verifier):
