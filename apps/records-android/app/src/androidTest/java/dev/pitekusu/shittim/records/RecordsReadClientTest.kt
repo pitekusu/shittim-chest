@@ -41,6 +41,9 @@ class RecordsReadClientTest {
       assertEquals(listOf(2, 1, 0), result.preview.voting?.counts?.map { it.count })
       assertEquals(null, result.preview.voting?.decidedBy)
       assertEquals(null, result.preview.voting?.votes?.first()?.assessments)
+      assertEquals(null, result.preview.affection)
+      assertEquals(null, result.preview.victoryMessage)
+      assertTrue(result.preview.actions.isEmpty())
     }
     assertEquals(listOf("/api/v1/records?limit=1&sort=newest", "/api/v1/records/$id"), paths)
   }
@@ -111,6 +114,67 @@ class RecordsReadClientTest {
       }
     }
     for (payload in listOf(invalidVote, invalidAssessment)) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
+  }
+
+  @Test
+  fun affectionKeepsQuestionScoreSeparateFromAppliedChangeAndShowsOptionalDecision() = runBlocking {
+    val payload = detail(id)
+      .replace("\"affection\":null", "\"affection\":${appliedAffection()}")
+      .replace("\"actions\":[],\"caveats\":[]",
+        "\"actions\":[\"まず確認する\"],\"caveats\":[\"無理をしない\"],\"victoryMessage\":\"ありがとう！\"")
+    RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+      val preview = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview
+      assertEquals("ありがとう！", preview.victoryMessage)
+      assertEquals(listOf("まず確認する"), preview.actions)
+      assertEquals(listOf("無理をしない"), preview.caveats)
+      assertEquals(RecordAffectionStatus.APPLIED, preview.affection?.status)
+      val first = preview.affection!!.changes.first()
+      assertEquals("アロナ", first.participantName)
+      assertEquals(50, first.questionScore)
+      assertEquals(5, first.appliedDelta)
+      assertEquals(1000, first.after)
+    }
+  }
+
+  @Test
+  fun unavailableAndInconsistentAffectionAreHandledWithoutInventingScores() = runBlocking {
+    RecordsReadClient(MockEngine {
+      respond(detail(id).replace("\"affection\":null", "\"affection\":${unavailableAffection()}"),
+        headers = jsonHeader)
+    }).use { client ->
+      val affection = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview.affection!!
+      assertEquals(RecordAffectionStatus.UNAVAILABLE, affection.status)
+      assertTrue(affection.changes.all { it.questionScore == null && it.appliedDelta == 0 })
+    }
+    for (invalid in listOf(
+      appliedAffection().replaceFirst("\"participant\":\"participant-c\"",
+        "\"participant\":\"participant-a\""),
+      appliedAffection().replaceFirst("\"after\":1000", "\"after\":999"),
+      appliedAffection().replaceFirst("\"questionScore\":50", "\"questionScore\":null"),
+      appliedAffection().replaceFirst("\"questionScore\":50", "\"questionScore\":101"),
+      unavailableAffection().replaceFirst(
+        "\"appliedDelta\":0,\"after\":995", "\"appliedDelta\":5,\"after\":1000"),
+    )) {
+      RecordsReadClient(MockEngine {
+        respond(detail(id).replace("\"affection\":null", "\"affection\":$invalid"), headers = jsonHeader)
+      }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
+  }
+
+  @Test
+  fun blankDecisionExtrasAndOversizedVictoryMessageAreRejected() = runBlocking {
+    for (payload in listOf(
+      detail(id).replace("\"actions\":[]", "\"actions\":[\" \" ]"),
+      detail(id).replace("\"caveats\":[]", "\"caveats\":[\" \" ]"),
+      detail(id).replace("\"actions\":[]",
+        "\"actions\":[],\"victoryMessage\":\"${"😀".repeat(501)}\""),
+    )) {
       RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
         assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
       }
@@ -268,8 +332,21 @@ class RecordsReadClientTest {
       "result":{"winner":"$winner","voteCounts":[{"participant":"participant-a","count":2},
         {"participant":"participant-b","count":1},{"participant":"participant-c","count":0}],
         "tieBreakApplied":false},
-      "finalDecision":{"winner":"$winner","decision":"今日は寿司にします。"}
+      "finalDecision":{"winner":"$winner","decision":"今日は寿司にします。",
+        "actions":[],"caveats":[]},"affection":null
       ${if (modern) ",\"voting\":{\"rulesVersion\":\"entertainment-v1\",\"decidedBy\":\"majority\"}" else ""}}"""
+
+  private fun appliedAffection(): String =
+    """{"status":"applied","rubricVersion":"v1","participants":[
+      {"participant":"participant-a","before":995,"questionScore":50,"appliedDelta":5,"after":1000},
+      {"participant":"participant-b","before":500,"questionScore":-20,"appliedDelta":-20,"after":480},
+      {"participant":"participant-c","before":100,"questionScore":0,"appliedDelta":0,"after":100}]}"""
+
+  private fun unavailableAffection(): String =
+    """{"status":"unavailable","rubricVersion":"v1","participants":[
+      {"participant":"participant-a","before":995,"questionScore":null,"appliedDelta":0,"after":995},
+      {"participant":"participant-b","before":500,"questionScore":null,"appliedDelta":0,"after":500},
+      {"participant":"participant-c","before":100,"questionScore":null,"appliedDelta":0,"after":100}]}"""
 
   private fun vote(voter: String, candidate: String, modern: Boolean): String {
     val assessments = if (modern) {

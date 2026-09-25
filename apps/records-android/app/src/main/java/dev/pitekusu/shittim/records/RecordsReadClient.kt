@@ -38,6 +38,10 @@ internal class RecordPreview(
   val winnerName: String,
   val opinions: List<RecordOpinion> = emptyList(),
   val voting: RecordVoting? = null,
+  val victoryMessage: String? = null,
+  val actions: List<String> = emptyList(),
+  val caveats: List<String> = emptyList(),
+  val affection: RecordAffection? = null,
 )
 
 internal class RecordOpinion(
@@ -76,6 +80,21 @@ internal class RecordAssessment(
 )
 
 internal enum class VoteDecisionMethod { MAJORITY, COMPOSITE_SCORE, TIE_LOTTERY }
+
+internal enum class RecordAffectionStatus { APPLIED, UNAVAILABLE }
+
+internal class RecordAffection(
+  val status: RecordAffectionStatus,
+  val changes: List<RecordAffectionChange>,
+)
+
+internal class RecordAffectionChange(
+  val participantName: String,
+  val before: Int,
+  val questionScore: Int?,
+  val appliedDelta: Int,
+  val after: Int,
+)
 
 internal sealed interface RecordReadResult {
   data object Empty : RecordReadResult
@@ -146,7 +165,10 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       detail.finalProposals.map { it.participant }.toSet() != PARTICIPANTS ||
       detail.finalProposals.size != 3 ||
       detail.initialOpinions.any { it.summary.isBlank() || it.proposal.isBlank() } ||
-      detail.finalProposals.any { it.title.isBlank() || it.proposal.isBlank() }) {
+      detail.finalProposals.any { it.title.isBlank() || it.proposal.isBlank() } ||
+      detail.finalDecision.victoryMessage?.let { it.isBlank() || it.codePointCount(0, it.length) > 500 } == true ||
+      detail.finalDecision.actions.any { it.isBlank() } ||
+      detail.finalDecision.caveats.any { it.isBlank() }) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
     val winner = detail.participants.first { it.slot == detail.result.winner }
@@ -159,7 +181,35 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           val final = detail.finalProposals.first { it.participant == participant.slot }
           RecordOpinion(participant.displayName, initial.summary, initial.proposal,
             final.title, final.proposal)
-        }, voting))
+        }, voting, detail.finalDecision.victoryMessage, detail.finalDecision.actions,
+        detail.finalDecision.caveats, mapAffection(detail)))
+  }
+
+  private fun mapAffection(detail: RecordDetail): RecordAffection? {
+    val affection = detail.affection ?: return null
+    val status = when (affection.status) {
+      "applied" -> RecordAffectionStatus.APPLIED
+      "unavailable" -> RecordAffectionStatus.UNAVAILABLE
+      else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    if (affection.rubricVersion.isBlank() || affection.participants.size != 3 ||
+      affection.participants.map { it.participant }.toSet() != PARTICIPANTS ||
+      affection.participants.any { change ->
+        change.before !in 0..1000 || change.after !in 0..1000 ||
+          change.appliedDelta !in -100..100 ||
+          (change.questionScore != null && change.questionScore !in -100..100) ||
+          change.after - change.before != change.appliedDelta ||
+          (change.questionScore == null && change.appliedDelta != 0) ||
+          (change.questionScore == null) != (status == RecordAffectionStatus.UNAVAILABLE)
+      }) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    val names = detail.participants.associate { it.slot to it.displayName }
+    return RecordAffection(status, detail.participants.map { participant ->
+      val change = affection.participants.first { it.participant == participant.slot }
+      RecordAffectionChange(names.getValue(participant.slot), change.before,
+        change.questionScore, change.appliedDelta, change.after)
+    })
   }
 
   private fun mapVoting(detail: RecordDetail): RecordVoting {
@@ -365,6 +415,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val votes: List<RecordVoteRef>,
     val result: RecordResult,
     val finalDecision: FinalDecision,
+    val affection: AffectionRef?,
     val voting: VotingRef? = null,
   )
   @Serializable private class RecordParticipant(val slot: String, val displayName: String)
@@ -395,7 +446,25 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val voteCounts: List<VoteCountRef>? = null,
     val tieBreakApplied: Boolean? = null,
   )
-  @Serializable private class FinalDecision(val winner: String, val decision: String)
+  @Serializable private class FinalDecision(
+    val winner: String,
+    val decision: String,
+    val actions: List<String>,
+    val caveats: List<String>,
+    val victoryMessage: String? = null,
+  )
+  @Serializable private class AffectionRef(
+    val status: String,
+    val rubricVersion: String,
+    val participants: List<AffectionChangeRef>,
+  )
+  @Serializable private class AffectionChangeRef(
+    val participant: String,
+    val before: Int,
+    val questionScore: Int?,
+    val appliedDelta: Int,
+    val after: Int,
+  )
 
   private companion object {
     val PARTICIPANTS = setOf("participant-a", "participant-b", "participant-c")
