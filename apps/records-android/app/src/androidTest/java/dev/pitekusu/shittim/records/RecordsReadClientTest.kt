@@ -85,9 +85,30 @@ class RecordsReadClientTest {
       detail(id, winner = "participant-c"),
       detail(id).replace("\"tieBreakApplied\":false", "\"tieBreakApplied\":true"),
       detail(id, modern = true).replace("\"entertainment\":5", "\"entertainment\":6"),
+      detail(id, modern = true).replaceFirst(
+        "\"candidate\":\"participant-b\",\"entertainment\":5",
+        "\"candidate\":\"participant-b\",\"entertainment\":0"),
       detail(id, modern = true).replace("\"rulesVersion\":\"entertainment-v1\"",
         "\"rulesVersion\":\"unknown\""),
     )) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
+    }
+  }
+
+  @Test
+  fun voteReasonsUseUnicodeCharacterLimits() = runBlocking {
+    val validVote = detail(id).replaceFirst("具体的な投票理由", "😀".repeat(500))
+    val invalidVote = detail(id).replaceFirst("具体的な投票理由", "😀".repeat(501))
+    val validAssessment = detail(id, modern = true).replaceFirst("具体的な個性がある", "😀".repeat(500))
+    val invalidAssessment = detail(id, modern = true).replaceFirst("具体的な個性がある", "😀".repeat(501))
+    for (payload in listOf(validVote, validAssessment)) {
+      RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
+        assertEquals("アロナ", (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview.winnerName)
+      }
+    }
+    for (payload in listOf(invalidVote, invalidAssessment)) {
       RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
         assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
       }
@@ -261,12 +282,12 @@ class RecordsReadClientTest {
 
   private fun tiedModernDetail(winner: String, method: String): String =
     detail(id, winner, modern = true)
-      .replaceFirst("\"voter\":\"participant-b\",\"candidate\":\"participant-a\"",
-        "\"voter\":\"participant-b\",\"candidate\":\"participant-c\"")
+      .replace(vote("participant-b", "participant-a", modern = true),
+        vote("participant-b", "participant-c", modern = true).replace(
+          "\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":4",
+          "\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":5"))
       .replace("\"participant-a\",\"count\":2", "\"participant-a\",\"count\":1")
       .replace("\"participant-c\",\"count\":0", "\"participant-c\",\"count\":1")
       .replace("\"tieBreakApplied\":false", "\"tieBreakApplied\":true")
-      .replaceFirst("\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":4",
-        "\"candidate\":\"participant-c\",\"entertainment\":5,\"character\":5")
       .replace("\"decidedBy\":\"majority\"", "\"decidedBy\":\"$method\"")
 }

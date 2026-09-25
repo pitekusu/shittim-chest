@@ -186,7 +186,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val leaders = tallies.filterValues { it == tallies.values.max() }.keys
     if (detail.result.winner !in leaders || legacyTieBreakApplied != (leaders.size > 1) ||
       votes.any { it.candidate !in PARTICIPANTS || it.candidate == it.voter ||
-        it.reason.isBlank() || it.reason.length > 500 ||
+        !validVoteReason(it.reason) ||
         (it.assessments != null) != (decidedBy != null) } ||
       counts.any { it.count !in 0..3 || tallies[it.participant] != it.count }) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
@@ -195,9 +195,13 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       val vote = votes.first { it.voter == participant.slot }
       val assessments = vote.assessments?.also { items ->
         if (items.size != 2 || items.map { it.candidate }.toSet() != PARTICIPANTS - vote.voter ||
-          items.any { it.reason.isBlank() || it.reason.length > 500 ||
+          items.any { !validVoteReason(it.reason) ||
             listOf(it.entertainment, it.character, it.originality,
             it.responsiveness, it.interaction).any { score -> score !in 0..5 } }) {
+          throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        }
+        val bestScore = items.maxOf { it.total }
+        if (items.none { it.candidate == vote.candidate && it.total == bestScore }) {
           throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
         }
       }?.map { assessment ->
@@ -227,6 +231,9 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       RecordVoteCount(participant.displayName, counts.first { it.participant == participant.slot }.count)
     }, decidedBy, legacyTieBreakApplied)
   }
+
+  private fun validVoteReason(reason: String): Boolean =
+    reason.isNotBlank() && reason.codePointCount(0, reason.length) <= 500
 
   suspend fun recentRecords(accessToken: String, cursor: String? = null): RecordListPage {
     if (!mobileOpaqueValue.matches(accessToken)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
