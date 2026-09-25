@@ -27,11 +27,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.CookieJar
 
-internal enum class RecordReadFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, CURSOR_INVALID, INVALID_RESPONSE }
+internal enum class RecordReadFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, CURSOR_INVALID, INVALID_RESPONSE, STORAGE_UNAVAILABLE }
 
 internal class RecordReadException(val failure: RecordReadFailure) :
   Exception("record_read_${failure.name.lowercase()}")
 
+@Serializable
 internal class RecordPreview(
   val question: String,
   val decision: String,
@@ -44,6 +45,7 @@ internal class RecordPreview(
   val affection: RecordAffection? = null,
 )
 
+@Serializable
 internal class RecordOpinion(
   val participantName: String,
   val summary: String,
@@ -52,6 +54,7 @@ internal class RecordOpinion(
   val finalProposal: String,
 )
 
+@Serializable
 internal class RecordVoting(
   val votes: List<RecordVote>,
   val counts: List<RecordVoteCount>,
@@ -59,6 +62,7 @@ internal class RecordVoting(
   val legacyTieBreakApplied: Boolean,
 )
 
+@Serializable
 internal class RecordVote(
   val voterName: String,
   val candidateName: String,
@@ -66,8 +70,10 @@ internal class RecordVote(
   val assessments: List<RecordAssessment>?,
 )
 
+@Serializable
 internal class RecordVoteCount(val participantName: String, val count: Int)
 
+@Serializable
 internal class RecordAssessment(
   val candidateName: String,
   val entertainment: Int,
@@ -79,15 +85,19 @@ internal class RecordAssessment(
   val total: Int,
 )
 
+@Serializable
 internal enum class VoteDecisionMethod { MAJORITY, COMPOSITE_SCORE, TIE_LOTTERY }
 
+@Serializable
 internal enum class RecordAffectionStatus { APPLIED, UNAVAILABLE }
 
+@Serializable
 internal class RecordAffection(
   val status: RecordAffectionStatus,
   val changes: List<RecordAffectionChange>,
 )
 
+@Serializable
 internal class RecordAffectionChange(
   val participantName: String,
   val before: Int,
@@ -101,15 +111,17 @@ internal sealed interface RecordReadResult {
   class Found(val preview: RecordPreview) : RecordReadResult
 }
 
+@Serializable
 internal class RecordListEntry(
   val recordId: String,
   val questionPreview: String,
   val requesterName: String,
   val requesterAvatar: RecordAvatar,
-  val completedAt: Instant,
+  @Serializable(with = CachedRecordInstantSerializer::class) val completedAt: Instant,
   val winnerName: String,
 )
 
+@Serializable
 internal class RecordAvatar(val url: String?, val fallbackVariant: String)
 
 internal class RecordListPage(val items: List<RecordListEntry>, val nextCursor: String?)

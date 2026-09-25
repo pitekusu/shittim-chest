@@ -8,7 +8,7 @@ from typing import Protocol
 
 from shittim_records.auth import AuthFailure, AvatarStore, _digest, _utc
 from shittim_records.contracts import ImageAvatarRef, PlaceholderAvatarRef, SessionUser
-from shittim_records.mobile_auth import MobileSessionRecord, MobileSessionResponse
+from shittim_records.mobile_auth import MobileSessionRecord, MobileSessionResponse, cache_account_id
 
 
 class MobileSessionReader(Protocol):
@@ -85,6 +85,7 @@ class MobileSessionService:
         response = MobileSessionResponse.model_validate(
             {
                 "schemaVersion": 1,
+                "cacheAccountId": cache_account_id(self._session_key, session.requester_key),
                 "user": SessionUser(display_name=session.display_name, avatar=avatar),
                 "isAdmin": hmac.compare_digest(self._admin_requester_key, session.requester_key),
                 "expiresAt": datetime.fromtimestamp(session.expires_at, UTC),

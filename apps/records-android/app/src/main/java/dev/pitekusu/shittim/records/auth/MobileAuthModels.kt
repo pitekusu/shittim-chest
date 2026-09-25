@@ -55,16 +55,18 @@ internal class MobileStartResponse(
 @Serializable
 internal class MobileSessionResponse(
   val schemaVersion: Int,
+  val cacheAccountId: String,
   val user: MobileSessionUser,
   val isAdmin: Boolean,
   @Serializable(with = MobileExpirySerializer::class) val expiresAt: Instant,
 ) {
-  init { require(schemaVersion == 1) { "invalid_mobile_session" } }
+  init { require(schemaVersion == 1 && mobileOpaqueValue.matches(cacheAccountId)) { "invalid_mobile_session" } }
 }
 
 @Serializable
 internal class MobileExchangeResponse(
   val schemaVersion: Int,
+  val cacheAccountId: String,
   val accessToken: String,
   val tokenType: String,
   @Serializable(with = MobileExpirySerializer::class) val expiresAt: Instant,
@@ -73,7 +75,8 @@ internal class MobileExchangeResponse(
   val returnTo: String,
 ) {
   init {
-    require(schemaVersion == 1 && mobileOpaqueValue.matches(accessToken) && tokenType == "Bearer" &&
+    require(schemaVersion == 1 && mobileOpaqueValue.matches(cacheAccountId) &&
+      mobileOpaqueValue.matches(accessToken) && tokenType == "Bearer" &&
       returnDestination.matches(returnTo)) { "invalid_mobile_exchange" }
   }
 }

@@ -244,7 +244,7 @@ class MobileSessionModelTest {
         "session" -> {
           gets++
           sessionGate?.await()
-          respond("""{"schemaVersion":1,"isAdmin":false,"expiresAt":"$serverExpiry",
+          respond("""{"schemaVersion":1,"isAdmin":false,"cacheAccountId":"${"u".repeat(43)}","expiresAt":"$serverExpiry",
             "user":{"displayName":"$name","avatar":{"kind":"placeholder","alt":"架空","fallbackVariant":"cyan"}}}""",
             status, headersOf(HttpHeaders.ContentType, "application/json"))
         }

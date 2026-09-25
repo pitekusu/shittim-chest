@@ -73,8 +73,11 @@ internal class BootstrapPresenter(
       onDispose { if (signedIn) SingletonImageLoader.get(context).memoryCache?.clear() }
     }
     val launcher = rememberLauncherForActivityResult(MobileLoginContract(), session::loginResult)
-    val records = remember { RecordsReadClient() }
-    DisposableEffect(records) { onDispose { records.close() } }
+    val records = remember(context.applicationContext) {
+      try { RecordsRepository.open(context.applicationContext) }
+      catch (_: Exception) { null }
+    }
+    DisposableEffect(records) { onDispose { records?.close() } }
     // The preview belongs to this exact session, including after an account switch.
     var record by remember(sessionState) { mutableStateOf<RecordPreviewState>(RecordPreviewState.Idle) }
     var recordRetry by remember { mutableStateOf(0) }
@@ -97,7 +100,10 @@ internal class BootstrapPresenter(
             prefetchDistance = 3, enablePlaceholders = false)) {
             RecordPagingSource(
               loadPage = { cursor ->
-                session.withAuthorizedToken { token -> records.recentRecords(token, cursor) }
+                session.withAuthorizedToken { token ->
+                  records?.recentRecords(token, currentSession.cacheAccountId, cursor)
+                    ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
+                }
                   ?: throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
               },
               onLoaded = { entries -> loadedIds.addAll(entries.map { it.recordId }) },
@@ -120,7 +126,8 @@ internal class BootstrapPresenter(
         record = RecordPreviewState.Loading
         record = try {
           val result = session.withAuthorizedToken {
-            records.firstRecord(it, "/records/$selectedRecordId")
+            records?.record(it, signedIn.cacheAccountId, selectedRecordId)
+              ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
           }
           when (result) {
             null -> RecordPreviewState.Idle

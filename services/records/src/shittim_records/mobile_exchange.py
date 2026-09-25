@@ -17,6 +17,7 @@ from shittim_records.mobile_auth import (
     MobileExchangeResponse,
     MobileSessionRecord,
     MobileTransactionState,
+    cache_account_id,
 )
 
 
@@ -100,6 +101,7 @@ class MobileExchangeService:
         response = MobileExchangeResponse.model_validate(
             {
                 "schemaVersion": 1,
+                "cacheAccountId": cache_account_id(self._session_key, session.requester_key),
                 "accessToken": raw_token,
                 "tokenType": "Bearer",
                 "expiresAt": datetime.fromtimestamp(session.expires_at, UTC),

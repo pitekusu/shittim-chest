@@ -43,7 +43,7 @@ internal class MobileLoginFixture : AutoCloseable {
         exchangeGate?.await()
         if (failExchange) throw IOException("synthetic private response")
         """{"schemaVersion":1,"accessToken":"$token","tokenType":"Bearer",
-          "expiresAt":"2030-04-01T00:00:00Z","isAdmin":false,"returnTo":"${startBody.getValue("returnTo")}",
+        "expiresAt":"2030-04-01T00:00:00Z","isAdmin":false,"cacheAccountId":"${"u".repeat(43)}","returnTo":"${startBody.getValue("returnTo")}",
           "user":{"displayName":"テスト利用者","avatar":{"kind":"placeholder","alt":"テスト用","fallbackVariant":"cyan"}}}"""
       }
       else -> error("unexpected_test_request")
