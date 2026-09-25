@@ -88,6 +88,8 @@ class RecordsReadClientTest {
       detail(id, modern = true).replaceFirst(
         "\"candidate\":\"participant-b\",\"entertainment\":5",
         "\"candidate\":\"participant-b\",\"entertainment\":0"),
+      detail(id, modern = true).replaceFirst(
+        "\"reason\":\"具体的な個性がある\"", "\"reason\":\"別の理由\""),
       detail(id, modern = true).replace("\"rulesVersion\":\"entertainment-v1\"",
         "\"rulesVersion\":\"unknown\""),
     )) {
@@ -101,8 +103,8 @@ class RecordsReadClientTest {
   fun voteReasonsUseUnicodeCharacterLimits() = runBlocking {
     val validVote = detail(id).replaceFirst("具体的な投票理由", "😀".repeat(500))
     val invalidVote = detail(id).replaceFirst("具体的な投票理由", "😀".repeat(501))
-    val validAssessment = detail(id, modern = true).replaceFirst("具体的な個性がある", "😀".repeat(500))
-    val invalidAssessment = detail(id, modern = true).replaceFirst("具体的な個性がある", "😀".repeat(501))
+    val validAssessment = detail(id, modern = true).replace("具体的な個性がある", "😀".repeat(500))
+    val invalidAssessment = detail(id, modern = true).replace("具体的な個性がある", "😀".repeat(501))
     for (payload in listOf(validVote, validAssessment)) {
       RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
         assertEquals("アロナ", (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview.winnerName)
@@ -277,7 +279,8 @@ class RecordsReadClientTest {
           "responsiveness":2,"interaction":1,"reason":"具体的な個性がある"}"""
       }}]"
     } else ""
-    return """{"voter":"$voter","candidate":"$candidate","reason":"具体的な投票理由"$assessments}"""
+    val reason = if (modern) "具体的な個性がある" else "具体的な投票理由"
+    return """{"voter":"$voter","candidate":"$candidate","reason":"$reason"$assessments}"""
   }
 
   private fun tiedModernDetail(winner: String, method: String): String =

@@ -201,7 +201,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
         }
         val bestScore = items.maxOf { it.total }
-        if (items.none { it.candidate == vote.candidate && it.total == bestScore }) {
+        if (items.none { it.candidate == vote.candidate && it.total == bestScore &&
+            it.reason == vote.reason }) {
           throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
         }
       }?.map { assessment ->
