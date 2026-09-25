@@ -58,7 +58,13 @@ class RecordPreviewPanelTest {
     for (name in listOf("アロナ", "プラナ", "安倍晋三AI")) {
       compose.onAllNodesWithText(name).onFirst().assertExists()
     }
-    for (text in listOf("強調", "資料", "箇条書き", longProposal)) {
+    val markdownTexts = listOf("強調", "資料", "箇条書き", longProposal)
+    compose.waitUntil(10_000) {
+      markdownTexts.all { text ->
+        compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+      }
+    }
+    for (text in markdownTexts) {
       compose.onAllNodesWithText(text, substring = true).onFirst().assertExists()
     }
   }
