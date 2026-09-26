@@ -104,6 +104,12 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 
 ### レビュー用スクリーンショット
 
+C31の同期パネル（API 36、架空の画面状態のみ・実データなし）：
+
+- [ライト](screenshots/sync-light.png)
+- [ダーク](screenshots/sync-dark.png)
+- [320dp・文字2倍](screenshots/sync-large-text.png)
+
 C16のログイン画面（API 36、未認証・実データなし）：
 
 - [ライト](screenshots/login-light.png)
