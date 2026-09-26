@@ -138,7 +138,9 @@ def test_sync_inventory_is_content_free_and_revisions_do_not_use_signed_urls(mon
     assert first == records.get_sync_index(cursor=None, now=NOW + timedelta(minutes=10))
     payload = first.model_dump(by_alias=True, mode="json")
     assert set(payload["items"][0]) == {"recordId", "revision", "avatarRevision"}
-    assert reader.meta["question"] not in str(payload)
+    question = reader.meta["question"]
+    assert isinstance(question, str)
+    assert question not in str(payload)
     assert reader.list_calls[-1]["limit"] == 50
     monkeypatch.setattr(
         reader,
