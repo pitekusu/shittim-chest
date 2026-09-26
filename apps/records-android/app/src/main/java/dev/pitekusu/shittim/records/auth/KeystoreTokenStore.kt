@@ -32,7 +32,6 @@ internal class KeystoreTokenStore(context: Context) {
       readEnvelope()
     } catch (error: FileNotFoundException) {
       if (file.baseFile.exists()) throw error
-      if (hasLogoutIntent()) clear() // A crash may leave intent after the token file was deleted.
       return@guarded null
     }
     val version = envelope[0]
@@ -52,7 +51,7 @@ internal class KeystoreTokenStore(context: Context) {
           val account = ByteArray(TOKEN_BYTES).also(payload::get).toString(Charsets.US_ASCII)
           CacheAuthorization(account, Instant.ofEpochSecond(payload.long), Instant.ofEpochSecond(payload.long))
         } else null
-        StoredToken(token.toString(Charsets.US_ASCII), expiry, authorization, hasLogoutIntent())
+        StoredToken(token.toString(Charsets.US_ASCII), expiry, authorization)
       } finally {
         token.fill(0)
       }
@@ -62,7 +61,7 @@ internal class KeystoreTokenStore(context: Context) {
   }
 
   fun save(token: StoredToken): Unit = guarded {
-    check(!hasLogoutIntent() && !token.logoutPending)
+    check(!hasLogoutIntent())
     val authorization = token.cacheAuthorization
     val version = if (authorization == null) VERSION else AUTHORIZED_VERSION
     val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -108,13 +107,22 @@ internal class KeystoreTokenStore(context: Context) {
     }
   }
 
+  fun isLogoutPending(): Boolean = guarded { hasLogoutIntent() }
+
+  /** Erase credentials even when record cleanup fails; keep its independent durable intent. */
   fun clear(): Unit = guarded {
     val keys = keyStore()
     keys.deleteEntry(keyAlias) // Invalidate any remaining ciphertext before removing the files.
     file.delete()
     check(!keys.containsAlias(keyAlias))
     check(listOf("", ".new", ".bak").none { File(file.baseFile.path + it).exists() })
-    logoutIntent.delete() // Intent ends only after token/key deletion was verified.
+  }
+
+  /** Called only after record deletion succeeds. Missing token alone is not completed logout. */
+  fun completeLogout(): Unit = guarded {
+    check(!keyStore().containsAlias(keyAlias))
+    check(listOf("", ".new", ".bak").none { File(file.baseFile.path + it).exists() })
+    logoutIntent.delete()
     check(!hasLogoutIntent())
   }
 

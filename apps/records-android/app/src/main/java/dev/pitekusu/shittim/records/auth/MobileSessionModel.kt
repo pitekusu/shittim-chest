@@ -40,6 +40,8 @@ internal class MobileSessionModel(
   private val saveToken: (StoredToken) -> Unit,
   private val clearToken: () -> Unit,
   private val beginLocalLogout: () -> Unit,
+  private val isLocalLogoutPending: () -> Boolean,
+  private val completeLocalLogout: () -> Unit,
   private val activateCacheAccount: suspend (String) -> Unit,
   private val clearRecords: suspend () -> Unit,
   private val clock: Clock = Clock.systemUTC(),
@@ -161,6 +163,8 @@ internal class MobileSessionModel(
       withContext(Dispatchers.IO) { beginLocalLogout() }
       try { clearRecords() }
       finally { withContext(Dispatchers.IO) { clearToken() } }
+      // Do not acknowledge intent if record deletion failed before its own marker was written.
+      withContext(Dispatchers.IO) { completeLocalLogout() }
     }
     pendingLogoutToken = null // Claim before the one POST; never replay an uncertain request.
     var notice: SessionNotice? = null
@@ -180,11 +184,17 @@ internal class MobileSessionModel(
     mutableState.value = SessionState.Checking
     operation = viewModelScope.launch {
       try {
+        if (withContext(Dispatchers.IO) { isLocalLogoutPending() }) {
+          val previous = withContext(Dispatchers.IO) {
+            // Credential loss must not block the independent, durable record cleanup request.
+            try { readToken() } catch (_: TokenStorageException) { null }
+          }
+          finishLogout(previous)
+          return@launch
+        }
         val stored = withContext(Dispatchers.IO) { readToken() }
         token = stored
-        if (stored?.logoutPending == true) {
-          finishLogout(stored) // Resume explicit logout, not session verification/login restoration.
-        } else if (stored == null) {
+        if (stored == null) {
           mutableState.value = SessionState.SignedOut()
         } else if (!stored.expiresAt.isAfter(clock.instant())) {
           expire()

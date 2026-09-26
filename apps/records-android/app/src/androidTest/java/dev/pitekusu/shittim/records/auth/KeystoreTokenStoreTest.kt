@@ -91,17 +91,22 @@ class KeystoreTokenStoreTest {
   }
 
   @Test
-  fun logoutIntentSurvivesRestartAndPreventsAReplacementLoginUntilTokenDeletion() {
+  fun logoutIntentSurvivesTokenDeletionAndBlocksLoginUntilRecordCleanupCompletes() {
     store.save(token)
     store.beginLogout()
     val reopened = KeystoreTokenStore(context)
-    assertTrue(reopened.read()!!.logoutPending)
+    assertTrue(reopened.isLogoutPending())
+    assertThrows(TokenStorageException::class.java) { reopened.completeLogout() }
     assertThrows(TokenStorageException::class.java) { reopened.save(token) }
     reopened.clear()
-    assertNull(reopened.read())
+    val restarted = KeystoreTokenStore(context)
+    assertNull(restarted.read())
+    assertTrue(restarted.isLogoutPending())
+    assertThrows(TokenStorageException::class.java) { restarted.save(token) }
+    restarted.completeLogout() // Session coordinator has now completed record deletion too.
     assertFalse(File(directory, "mobile-session-logout.v1").exists())
-    reopened.save(token)
-    assertFalse(reopened.read()!!.logoutPending)
+    restarted.save(token)
+    assertFalse(restarted.isLogoutPending())
   }
 
   @Test

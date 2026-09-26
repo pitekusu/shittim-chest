@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity() {
       initializer {
         val store = KeystoreTokenStore(applicationContext)
         MobileSessionModel(MobileAuthClient(), store::read, store::save, store::clear, store::beginLogout,
+          store::isLogoutPending, store::completeLogout,
           { accountId -> RecordCacheAccount.activate(applicationContext, accountId) },
           { RecordCacheAccount.clear(applicationContext) })
       }
