@@ -31,6 +31,7 @@ internal class RecordsRepository(
   private val json = Json { encodeDefaults = true }
 
   suspend fun recentRecords(token: String, accountId: String, cursor: String?): RecordListPage {
+    requireActive(accountId)
     val page = remote.recentRecords(token, cursor)
     accountLock.withLock {
       prepare(accountId)
@@ -45,6 +46,7 @@ internal class RecordsRepository(
   }
 
   suspend fun record(token: String, accountId: String, recordId: String): RecordReadResult {
+    requireActive(accountId)
     val result = remote.firstRecord(token, "/records/$recordId")
     if (result is RecordReadResult.Found) {
       accountLock.withLock {
