@@ -14,8 +14,6 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 
-internal class RecordSyncStatus(val state: RecordSyncState, val updatedAt: Long)
-
 internal object RecordSyncScheduler {
   private const val PERIODIC = "records-periodic-sync-v1"
   private const val IMMEDIATE = "records-immediate-sync-v1"
@@ -42,12 +40,12 @@ internal object RecordSyncScheduler {
     manager.cancelUniqueWork(PERIODIC)
   }
 
-  fun states(context: Context): Flow<RecordSyncStatus> {
+  fun states(context: Context): Flow<RecordSyncState> {
     val manager = WorkManager.getInstance(context)
     return combine(manager.getWorkInfosForUniqueWorkFlow(PERIODIC),
       manager.getWorkInfosForUniqueWorkFlow(IMMEDIATE)) { periodic, immediate ->
       val all = periodic + immediate
-      val state = when {
+      when {
         all.any { it.state == WorkInfo.State.RUNNING } -> RecordSyncState.Running
         immediate.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED } -> RecordSyncState.Idle
         else -> {
@@ -62,9 +60,6 @@ internal object RecordSyncScheduler {
           }
         }
       }
-      RecordSyncStatus(state, all.maxOfOrNull {
-        maxOf(it.progress.getLong("updatedAt", 0), it.outputData.getLong("finishedAt", 0))
-      } ?: 0)
     }
   }
 }

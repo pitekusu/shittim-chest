@@ -99,11 +99,12 @@ internal class BootstrapPresenter(
     LaunchedEffect(cacheAccountId) {
       syncState = RecordSyncState.Idle
       if (cacheAccountId != null) {
-        var updatedAt = 0L
         RecordSyncScheduler.states(context).collect { status ->
-          syncState = status.state
-          if (status.updatedAt > updatedAt) { updatedAt = status.updatedAt; listRetry++ }
-          if ((status.state as? RecordSyncState.Failed)?.reason == RecordReadFailure.AUTH_REQUIRED) {
+          syncState = status
+          // Periodic work resets to ENQUEUED without retaining its result output.
+          // Observe work/progress changes as well, including deletion-only completion.
+          listRetry++
+          if ((status as? RecordSyncState.Failed)?.reason == RecordReadFailure.AUTH_REQUIRED) {
             session.onForeground()
           }
         }
