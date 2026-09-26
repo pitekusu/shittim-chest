@@ -20,6 +20,28 @@ class RecordsReadClientTest {
   private val token = "t".repeat(43)
   private val jsonHeader = headersOf(HttpHeaders.ContentType, "application/json")
 
+  @Test fun avatarTransportNeverSendsCredentialsAndRejectsOversizeOrRedirectedImages() = runBlocking {
+    val url = "https://fictional.s3.ap-northeast-1.amazonaws.com/requesters/fictional/avatar.webp?signature=sample"
+    var calls = 0
+    RecordsReadClient(MockEngine { request ->
+      calls++
+      assertFalse(request.headers.contains(HttpHeaders.Authorization))
+      assertFalse(request.headers.contains(HttpHeaders.Cookie))
+      respond(ByteArray(262_145), headers = headersOf(HttpHeaders.ContentType, "image/webp"))
+    }).use { client ->
+      assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.avatar(url) }
+      assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.avatar("https://example.invalid/avatar.png") }
+    }
+    assertEquals(1, calls)
+    calls = 0
+    RecordsReadClient(MockEngine {
+      calls++
+      respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "https://example.invalid/avatar.png"))
+    }).use { client -> assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.avatar(url) } }
+    assertEquals(1, calls)
+    assertFalse(validStoredAvatarUrl(url.replace("/fictional/", "/../")))
+  }
+
   @Test
   fun latestListFetchesOneDetailWithBearerAndKeepsServerWinner() = runBlocking {
     val paths = mutableListOf<String>()

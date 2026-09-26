@@ -11,7 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal enum class CachedRecordPart(val code: String) {
-  LIST("list"), DETAIL("detail"), SYNC_PROGRESS("sync-progress")
+  LIST("list"), DETAIL("detail"), SYNC_PROGRESS("sync-progress"), AVATAR("avatar"), REVISION("revision")
 }
 
 internal class RecordCacheException : Exception("record_cache_unavailable")

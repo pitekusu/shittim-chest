@@ -13,6 +13,8 @@ import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
@@ -24,7 +26,10 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
+import io.ktor.utils.io.readBuffer
+import kotlinx.io.readByteArray
 import okhttp3.CookieJar
 
 internal enum class RecordReadFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, CURSOR_INVALID, INVALID_RESPONSE, STORAGE_UNAVAILABLE }
@@ -108,7 +113,7 @@ internal class RecordAffectionChange(
 
 internal sealed interface RecordReadResult {
   data object Empty : RecordReadResult
-  class Found(val preview: RecordPreview) : RecordReadResult
+  class Found(val preview: RecordPreview, val listEntry: RecordListEntry? = null) : RecordReadResult
 }
 
 @Serializable
@@ -122,7 +127,15 @@ internal class RecordListEntry(
 )
 
 @Serializable
-internal class RecordAvatar(val url: String?, val fallbackVariant: String)
+internal class RecordAvatar(val url: String?, val fallbackVariant: String,
+  @Transient val bytes: ByteArray? = null, val revision: String? = null)
+
+@Serializable
+internal class RecordSyncReference(val recordId: String, val revision: String, val avatarRevision: String)
+
+@Serializable
+internal class RecordSyncIndex(val schemaVersion: Int, val items: List<RecordSyncReference>,
+  val nextCursor: String? = null)
 
 internal class RecordListPage(val items: List<RecordListEntry>, val nextCursor: String?)
 
@@ -198,7 +211,69 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           RecordOpinion(participant.displayName, initial.summary, initial.proposal,
             final.title, final.proposal)
         }, voting, detail.finalDecision.victoryMessage, detail.finalDecision.actions,
-        detail.finalDecision.caveats, mapAffection(detail)))
+        detail.finalDecision.caveats, mapAffection(detail)),
+      if (detail.requester != null && detail.completedAt != null) {
+        try {
+          val question = detail.question.replace(Regex("[\\s\\p{Z}]+"), " ").trim()
+          val end = question.offsetByCodePoints(0, minOf(160, question.codePointCount(0, question.length)))
+          RecordListEntry(recordId, question.substring(0, end),
+            detail.requester.displayName.also { check(it.isNotBlank()) },
+            mapAvatar(detail.requester.avatar), OffsetDateTime.parse(detail.completedAt).toInstant(), winner.displayName)
+        } catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
+      } else null)
+  }
+
+  suspend fun syncIndex(accessToken: String, cursor: String?): RecordSyncIndex {
+    if (!mobileOpaqueValue.matches(accessToken)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
+    if (cursor != null && !validRecordCursor(cursor)) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    val index: RecordSyncIndex = read("/api/v1/records/sync-index", accessToken, cursor)
+    if (index.schemaVersion != 1 || index.items.size > 50 ||
+      index.items.map { it.recordId }.distinct().size != index.items.size ||
+      index.items.any { !mobileOpaqueValue.matches(it.recordId) || !mobileOpaqueValue.matches(it.revision) ||
+        !mobileOpaqueValue.matches(it.avatarRevision) } ||
+      index.nextCursor?.let { !validRecordCursor(it) || it == cursor } == true) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    return index
+  }
+
+  private fun mapAvatar(avatar: RecordAvatarRef): RecordAvatar {
+    val url = when (avatar.kind) {
+      "placeholder" -> if (avatar.url == null) null else throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+      "image" -> avatar.url?.takeIf(::validAvatarUrl)
+        ?: throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+      else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    if (avatar.alt.isBlank() || avatar.fallbackVariant !in AVATAR_VARIANTS) {
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    }
+    return RecordAvatar(url, avatar.fallbackVariant)
+  }
+
+  suspend fun avatar(url: String): ByteArray? {
+    // S3 is a separate, credential-free transport boundary; never attach Bearer/Cookies.
+    if (!validStoredAvatarUrl(url)) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    return try {
+      client.prepareGet(url) { header(HttpHeaders.CacheControl, "no-store") }.execute { response ->
+        when (response.status.value) {
+          404 -> null // Persist a fallback until the profile revision changes.
+          200 -> {
+            if (response.contentType()?.contentType != "image") {
+              throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+            }
+            // Bounded streaming is intentional: Content-Length alone cannot cap allocation.
+            val bytes = response.bodyAsChannel().readBuffer(262_145L).readByteArray()
+            if (bytes.size !in 1..262_144) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+            bytes
+          }
+          in 500..599, 403, 429 -> throw RecordReadException(RecordReadFailure.UNAVAILABLE)
+          else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        }
+      }
+    } catch (error: CancellationException) { throw error }
+    catch (error: RecordReadException) { throw error }
+    catch (_: IOException) { throw RecordReadException(RecordReadFailure.UNAVAILABLE) }
+    catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
   }
 
   private fun mapAffection(detail: RecordDetail): RecordAffection? {
@@ -422,6 +497,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val schemaVersion: Int,
     val recordId: String,
     val question: String,
+    val completedAt: String? = null,
+    val requester: RecordRequester? = null,
     val participants: List<RecordParticipant>,
     val initialOpinions: List<InitialOpinion>,
     val finalProposals: List<FinalProposal>,

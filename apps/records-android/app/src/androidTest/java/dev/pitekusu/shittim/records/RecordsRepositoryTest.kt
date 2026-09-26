@@ -2,6 +2,9 @@ package dev.pitekusu.shittim.records
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Bitmap
+import android.graphics.Color
+import java.io.ByteArrayOutputStream
 import androidx.room3.Room
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -183,17 +186,17 @@ class RecordsRepositoryTest {
     val calls = mutableListOf<String>()
     repository(MockEngine { request ->
       val id = request.url.encodedPath.substringAfterLast('/')
-      val body = if (id == "records") {
+      val body = if (id == "sync-index") {
         val cursor = request.url.parameters["cursor"]
         calls.add("list:${cursor ?: "first"}")
-        if (cursor == null) list(listOf(a, b), "next.signature") else list(listOf(b, c))
+        if (cursor == null) index(listOf(a, b), "next.signature") else index(listOf(b, c))
       } else { calls.add("detail:$id"); detail(id) }
       respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       records.record(token, accountId, a)
       calls.clear()
       records.synchronize(token, accountId)
-      assertEquals(listOf("list:first", "detail:$b", "list:next.signature", "detail:$c"), calls)
+      assertEquals(listOf("list:first", "detail:$a", "detail:$b", "list:next.signature", "detail:$c"), calls)
       assertEquals(true, records.syncCheckpoint(accountId)?.complete)
       for (id in listOf(a, b, c)) assertEquals("架空の結論", records.cachedRecord(accountId, id)?.decision)
       calls.clear()
@@ -213,7 +216,7 @@ class RecordsRepositoryTest {
           entered.complete(Unit)
           if (cancel) release.await() else throw IOException("synthetic_failure")
         }
-        respond(if (id == "records") list(listOf(recordId, nextId)) else detail(id),
+        respond(if (id == "sync-index") index(listOf(recordId, nextId)) else detail(id),
           headers = headersOf(HttpHeaders.ContentType, "application/json"))
       })
       try {
@@ -245,6 +248,60 @@ class RecordsRepositoryTest {
     }
   }
 
+  @Test fun deltaFetchesOnlyNewOrChangedResultsAndPersistsSharedIconsOffline() = runBlocking {
+    val a = "a".repeat(43)
+    val b = "b".repeat(43)
+    val c = "c".repeat(43)
+    var changed = false
+    val calls = mutableListOf<String>()
+    val bitmap = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.CYAN) }
+    val png = ByteArrayOutputStream().use { output ->
+      bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+      output.toByteArray()
+    }
+    bitmap.recycle()
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      calls.add(id)
+      if (id == "avatar.png") {
+        assertNull(request.headers[HttpHeaders.Authorization])
+        respond(png, headers = headersOf(HttpHeaders.ContentType, "image/png"))
+      } else {
+        val response = if (id == "sync-index") {
+          index(if (changed) listOf(a, b, c) else listOf(a, b)).let { body ->
+            if (changed) body.replace("\"recordId\":\"$b\",\"revision\":\"${"z".repeat(43)}\"",
+              "\"recordId\":\"$b\",\"revision\":\"${"y".repeat(43)}\"") else body
+          }
+        } else detail(id).replace("\"kind\":\"placeholder\",\"url\":null",
+          "\"kind\":\"image\",\"url\":\"https://fixture.s3.ap-northeast-1.amazonaws.com/requesters/fake/avatar.png?signature=${if (changed) 2 else 1}\"")
+          .let { if (changed && id == b) it.replace("架空の結論", "更新後の結論") else it }
+        respond(response, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      }
+    }).use { records ->
+      records.synchronize(token, accountId)
+      assertEquals(1, calls.count { it == "avatar.png" })
+      calls.clear()
+      changed = true
+      records.synchronize(token, accountId)
+      assertEquals(listOf("sync-index", b, c), calls)
+      assertEquals("更新後の結論", records.cachedRecord(accountId, b)?.decision)
+      calls.clear()
+      records.synchronize(token, accountId)
+      assertEquals(listOf("sync-index"), calls)
+    }
+    repository(MockEngine { error("offline_must_not_request_network") }).use { records ->
+      val entries = records.cachedRecords(accountId)
+      assertEquals(3, entries.size)
+      for (entry in entries) {
+        assertNull(entry.requesterAvatar.url)
+        org.junit.Assert.assertNotNull(entry.requesterAvatar.bytes)
+      }
+      activeAccountId = ""
+      try { records.cachedRecords(accountId); fail("expired session must not read icons") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure) }
+    }
+  }
+
   @Test fun expiredCursorRestartsOnceWithoutDownloadingSavedDetailsAgain() = runBlocking {
     val calls = mutableListOf<String>()
     repository(MockEngine { request ->
@@ -252,12 +309,13 @@ class RecordsRepositoryTest {
       calls.add(cursor ?: "first")
       if (cursor != null) respond("""{"error":{"code":"CURSOR_INVALID"}}""",
         HttpStatusCode.BadRequest, headersOf(HttpHeaders.ContentType, "application/json"))
-      else respond(list(cursor = "new.signature"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      else respond(index(cursor = "new.signature"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       // Detail already exists, so the restart will enumerate it but must not request it again.
       repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
         .use { it.record(token, accountId, recordId) }
-      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(cursor = "old.signature", removalCandidates = emptySet()))
+      records.saveRevision(accountId, RecordSyncReference(recordId, "z".repeat(43), "i".repeat(43)))
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(cursor = "old.signature", removalCandidates = emptySet(), indexBased = true))
       try { records.synchronize(token, accountId); fail("a second invalid cursor must stop sync") }
       catch (error: RecordReadException) { assertEquals(RecordReadFailure.CURSOR_INVALID, error.failure) }
       assertEquals(listOf("old.signature", "first", "new.signature"), calls)
@@ -269,7 +327,7 @@ class RecordsRepositoryTest {
     var calls = 0
     repository(MockEngine {
       val next = listOf("a.signature", "b.signature", "a.signature")[calls++]
-      respond(list(emptyList(), next), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      respond(index(emptyList(), next), headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       try { records.synchronize(token, accountId); fail("cursor cycle must not loop forever") }
       catch (error: RecordReadException) { assertEquals(RecordReadFailure.INVALID_RESPONSE, error.failure) }
@@ -279,7 +337,7 @@ class RecordsRepositoryTest {
     repository(MockEngine { request ->
       val id = request.url.encodedPath.substringAfterLast('/')
       if (id == recordId) respond("", HttpStatusCode.NotFound)
-      else respond(if (id == "records") list(listOf(recordId, remaining)) else detail(id),
+      else respond(if (id == "sync-index") index(listOf(recordId, remaining)) else detail(id),
         headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint())
@@ -293,8 +351,8 @@ class RecordsRepositoryTest {
   @Test fun authorizationLossDuringSyncCannotSaveTheDelayedDetailOrAdvanceProgress() = runBlocking {
     repository(MockEngine { request ->
       val id = request.url.encodedPath.substringAfterLast('/')
-      if (id != "records") activeAccountId = ""
-      respond(if (id == "records") list() else detail(),
+      if (id != "sync-index") activeAccountId = ""
+      respond(if (id == "sync-index") index() else detail(),
         headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       try { records.synchronize(token, accountId); fail("lost authorization must stop sync") }
@@ -329,20 +387,20 @@ class RecordsRepositoryTest {
     val missing = "m".repeat(43)
     val engine = MockEngine { request ->
       val id = request.url.encodedPath.substringAfterLast('/')
-      respond(if (id == "records") list(listOf(recordId, missing)) else detail(id),
+      respond(if (id == "sync-index") index(listOf(recordId, missing)) else detail(id),
         headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }
     repository(engine).use { it.synchronize(token, accountId) }
     repository(MockEngine { request ->
       if (request.url.parameters["cursor"] != null) throw IOException("synthetic_failure")
-      respond(list(cursor = "next.signature"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      respond(index(cursor = "next.signature"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       try { records.synchronize(token, accountId); fail("partial enumeration cannot prune") }
       catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
       assertEquals(2, records.cachedRecords(accountId).size)
       assertEquals(setOf(missing), records.syncCheckpoint(accountId)?.removalCandidates)
     }
-    repository(MockEngine { respond(list(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
+    repository(MockEngine { respond(index(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
       .use { records ->
         records.synchronize(token, accountId) // Resume the final page, not a fresh enumeration.
         assertEquals(listOf(recordId), records.cachedRecords(accountId).map { it.recordId })
@@ -353,7 +411,7 @@ class RecordsRepositoryTest {
 
   @Test fun confirmed404RemovesListAndDetailButServerFailureDoesNot() = runBlocking {
     repository(MockEngine { request ->
-      respond(if (request.url.encodedPath.endsWith("/$recordId")) detail() else list(),
+      respond(if (request.url.encodedPath.endsWith("/$recordId")) detail() else index(),
         headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { it.synchronize(token, accountId) }
     for (status in listOf(HttpStatusCode.ServiceUnavailable, HttpStatusCode.NotFound)) {
@@ -463,6 +521,9 @@ class RecordsRepositoryTest {
       RecordCacheAccount(privateContext, privateKeys, database), { it == activeAccountId })
   }
 
+  private fun index(ids: List<String> = listOf(recordId), cursor: String? = null): String =
+    """{"schemaVersion":1,"items":[${ids.joinToString { """{"recordId":"$it","revision":"${"z".repeat(43)}","avatarRevision":"${"i".repeat(43)}"}""" }}],"nextCursor":${cursor?.let { "\"$it\"" } ?: "null"}}"""
+
   private fun list(ids: List<String> = listOf(recordId), cursor: String? = null): String =
     """{"schemaVersion":1,"items":[${ids.joinToString { listItem(it) }}],"nextCursor":${cursor?.let { "\"$it\"" } ?: "null"}}"""
 
@@ -476,6 +537,8 @@ class RecordsRepositoryTest {
     "result":{"winner":"participant-a"}}"""
 
   private fun detail(id: String = recordId): String = """{"schemaVersion":2,"recordId":"$id","question":"架空の議題",
+    "completedAt":"2026-09-24T00:00:00Z",
+    "requester":{"displayName":"架空の依頼者","avatar":{"kind":"placeholder","url":null,"alt":"依頼者","fallbackVariant":"cyan"}},
     "participants":[{"slot":"participant-a","displayName":"アロナ"},
       {"slot":"participant-b","displayName":"プラナ"},
       {"slot":"participant-c","displayName":"安倍晋三AI"}],
