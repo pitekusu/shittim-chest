@@ -13,6 +13,11 @@ private val recordSyncLock = Mutex()
 /** Coroutines handle cancellation; encrypted page-sized checkpoints handle process restart. */
 internal suspend fun RecordsRepository.synchronize(token: String, accountId: String): Unit = recordSyncLock.withLock {
   var progress = syncCheckpoint(accountId)?.takeUnless { it.complete } ?: RecordSyncCheckpoint()
+  // C31 checkpoints cannot prove which earlier pages were seen: restart, never guess deletions.
+  if (progress.removalCandidates == null) {
+    progress = RecordSyncCheckpoint(removalCandidates = cachedRecordIds(accountId))
+    saveSyncCheckpoint(accountId, progress)
+  }
   var restartedCursor = false
   while (true) {
     currentCoroutineContext().ensureActive()
@@ -23,7 +28,7 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
         if (error.failure != RecordReadFailure.CURSOR_INVALID || progress.cursor == null || restartedCursor) throw error
         // Signed cursors expire. Keep saved records, but restart enumeration once per attempt.
         restartedCursor = true
-        progress = RecordSyncCheckpoint()
+        progress = RecordSyncCheckpoint(removalCandidates = cachedRecordIds(accountId))
         saveSyncCheckpoint(accountId, progress)
         continue
       }
@@ -32,7 +37,8 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
         throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
       }
       progress = progress.copy(cursor = page.nextCursor, pendingIds = page.items.map { it.recordId },
-        pageLoaded = true, cursorHashes = hashes)
+        pageLoaded = true, cursorHashes = hashes,
+        removalCandidates = progress.removalCandidates.orEmpty() - page.items.map { it.recordId }.toSet())
       saveSyncCheckpoint(accountId, progress) // Save work before advancing beyond this page.
     }
     val recordId = progress.pendingIds.firstOrNull()
@@ -44,14 +50,16 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
             throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
           }
         } catch (error: RecordReadException) {
-          // Deleted between enumeration and detail read. C32 reconciles stale cached records.
+          // The repository removes list/detail only after a confirmed authenticated 404.
           if (error.failure != RecordReadFailure.NOT_FOUND) throw error
         }
       }
       progress = progress.copy(pendingIds = progress.pendingIds.drop(1))
       saveSyncCheckpoint(accountId, progress) // Interrupted writes can replay, never skip unsaved data.
     } else if (progress.cursor == null) {
-      saveSyncCheckpoint(accountId, progress.copy(complete = true))
+      // Never prune on a failed/partial pass. An interrupted prune is safe to repeat.
+      removeRecords(accountId, progress.removalCandidates.orEmpty())
+      saveSyncCheckpoint(accountId, progress.copy(complete = true, removalCandidates = emptySet()))
       return@withLock
     } else {
       progress = progress.copy(pageLoaded = false)

@@ -28,7 +28,14 @@
     <string name="record_sync_hint">全記録を順番に取得して暗号化保存します。中断した分は続きから再開します。</string>
     <string name="record_sync_running">記録を取得・保存しています。画面を離れると一時停止します。</string>
     <string name="record_sync_paused">同期を一時停止しました。保存済みの記録を残し、続きから再開できます。</string>
-    <string name="record_sync_completed">記録の保存が完了しました。オフラインでの表示は今後の更新で対応します。</string>
+    <string name="record_sync_completed">記録の保存が完了しました。保存済みの一覧と詳細はオフラインでも閲覧できます。</string>
+    <string name="record_saved">保存済みの記録</string>
+    <string name="record_refresh">最新の記録に更新</string>
+    <string name="record_refreshing">最新の記録を確認しています…</string>
+    <string name="record_refresh_failed">更新できませんでした。保存済みの記録を表示しています。</string>
+    <string name="record_save_failed">端末に保存できませんでした。空き容量などを確認してください。既存の保存済み記録は残っています。</string>
+    <string name="record_offline">オフライン閲覧中です。前回の認証期限内の保存済み記録のみ表示します。</string>
+    <string name="record_not_saved">この記録の詳細はまだ端末に保存されていません。接続後にもう一度開いてください。</string>
     <string name="record_sync_auth_error">ログイン状態を確認できませんでした。再ログイン後に再開してください。</string>
     <string name="record_sync_storage_error">端末に保存できませんでした。保存済みの記録は削除していません。</string>
     <string name="record_sync_error">同期を完了できませんでした。通信状況を確認して、続きから再開してください。</string>

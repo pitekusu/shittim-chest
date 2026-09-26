@@ -257,7 +257,7 @@ class RecordsRepositoryTest {
       // Detail already exists, so the restart will enumerate it but must not request it again.
       repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
         .use { it.record(token, accountId, recordId) }
-      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(cursor = "old.signature"))
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(cursor = "old.signature", removalCandidates = emptySet()))
       try { records.synchronize(token, accountId); fail("a second invalid cursor must stop sync") }
       catch (error: RecordReadException) { assertEquals(RecordReadFailure.CURSOR_INVALID, error.failure) }
       assertEquals(listOf("old.signature", "first", "new.signature"), calls)
@@ -322,6 +322,66 @@ class RecordsRepositoryTest {
           assertEquals(RecordReadFailure.STORAGE_UNAVAILABLE, error.failure)
         }
       }
+    }
+  }
+
+  @Test fun completedEnumerationPrunesOnlyAbsentRecordsAndFailureKeepsThem() = runBlocking {
+    val missing = "m".repeat(43)
+    val engine = MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      respond(if (id == "records") list(listOf(recordId, missing)) else detail(id),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }
+    repository(engine).use { it.synchronize(token, accountId) }
+    repository(MockEngine { request ->
+      if (request.url.parameters["cursor"] != null) throw IOException("synthetic_failure")
+      respond(list(cursor = "next.signature"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      try { records.synchronize(token, accountId); fail("partial enumeration cannot prune") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
+      assertEquals(2, records.cachedRecords(accountId).size)
+      assertEquals(setOf(missing), records.syncCheckpoint(accountId)?.removalCandidates)
+    }
+    repository(MockEngine { respond(list(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
+      .use { records ->
+        records.synchronize(token, accountId) // Resume the final page, not a fresh enumeration.
+        assertEquals(listOf(recordId), records.cachedRecords(accountId).map { it.recordId })
+        assertNull(records.cachedRecord(accountId, missing))
+        assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+      }
+  }
+
+  @Test fun confirmed404RemovesListAndDetailButServerFailureDoesNot() = runBlocking {
+    repository(MockEngine { request ->
+      respond(if (request.url.encodedPath.endsWith("/$recordId")) detail() else list(),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { it.synchronize(token, accountId) }
+    for (status in listOf(HttpStatusCode.ServiceUnavailable, HttpStatusCode.NotFound)) {
+      repository(MockEngine { respond("", status) }).use { records ->
+        try { records.record(token, accountId, recordId); fail("HTTP failure must be reported") }
+        catch (error: RecordReadException) {
+          assertEquals(if (status == HttpStatusCode.NotFound) RecordReadFailure.NOT_FOUND
+            else RecordReadFailure.UNAVAILABLE, error.failure)
+        }
+        assertEquals(if (status == HttpStatusCode.NotFound) 0 else 1, records.cachedRecords(accountId).size)
+        assertEquals(status != HttpStatusCode.NotFound, records.cachedRecord(accountId, recordId) != null)
+      }
+    }
+  }
+
+  @Test fun failedDatabaseUpdatePreservesThePreviousEncryptedDetail() = runBlocking {
+    repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
+      .use { it.record(token, accountId, recordId) }
+    AndroidSQLiteDriver().open(app.getDatabasePath(databaseName).path).use { connection ->
+      // Simulate a rejected write (e.g. exhausted storage), not a destructive database corruption.
+      connection.prepare("CREATE TRIGGER reject_record_write BEFORE INSERT ON encrypted_records BEGIN SELECT RAISE(ABORT, 'synthetic_write_failure'); END")
+        .use { it.step() }
+    }
+    repository(MockEngine { respond(detail().replace("架空の結論", "更新後の結論"),
+      headers = headersOf(HttpHeaders.ContentType, "application/json")) }).use { records ->
+      try { records.record(token, accountId, recordId); fail("save failure must be reported") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.STORAGE_UNAVAILABLE, error.failure) }
+      assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
     }
   }
 

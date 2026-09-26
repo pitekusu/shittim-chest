@@ -40,9 +40,12 @@ import kotlinx.coroutines.flow.Flow
 
 internal sealed interface RecordListState {
   data object Idle : RecordListState
+  class Error(val reason: RecordReadFailure) : RecordListState
   class Ready(
     val pages: Flow<PagingData<RecordListEntry>>,
     val loadedIds: Set<String>,
+    val saved: Boolean = false,
+    val refreshFailure: RecordReadFailure? = null,
   ) : RecordListState
 }
 
@@ -63,8 +66,20 @@ internal fun LazyListScope.recordListItems(
     }
   }
   if (state !is RecordListState.Ready || pagingItems == null) {
-    item(key = "records-waiting") { LoadingRecords() }
+    item(key = "records-waiting") {
+      if (state is RecordListState.Error) Text(stringResource(R.string.record_list_error)) else LoadingRecords()
+    }
     return
+  }
+  item(key = "records-source") {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      if (state.saved) Text(stringResource(R.string.record_saved), color = MaterialTheme.colorScheme.primary)
+      if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
+        R.string.record_save_failed else R.string.record_refresh_failed))
+      Button(onClick = { onEvent(BootstrapScreen.Event.RefreshRecords) }) {
+        Text(stringResource(R.string.record_refresh))
+      }
+    }
   }
   when (pagingItems.loadState.refresh) {
     is LoadState.Loading -> item(key = "records-loading") { LoadingRecords() }

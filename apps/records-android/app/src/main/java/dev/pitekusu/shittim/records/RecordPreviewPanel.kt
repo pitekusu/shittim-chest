@@ -22,7 +22,8 @@ internal sealed interface RecordPreviewState {
   data object Idle : RecordPreviewState
   data object Loading : RecordPreviewState
   data object Empty : RecordPreviewState
-  class Ready(val preview: RecordPreview) : RecordPreviewState
+  class Ready(val preview: RecordPreview, val saved: Boolean = false,
+    val updating: Boolean = false, val refreshFailure: RecordReadFailure? = null) : RecordPreviewState
   class Error(val reason: RecordReadFailure) : RecordPreviewState
 }
 
@@ -40,7 +41,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           Text(stringResource(R.string.record_loading))
           CircularProgressIndicator()
         }
-        RecordPreviewState.Empty -> Text(stringResource(R.string.record_empty))
+        RecordPreviewState.Empty -> Text(stringResource(R.string.record_not_saved))
         is RecordPreviewState.Error -> {
           Text(stringResource(if (state.reason == RecordReadFailure.NOT_FOUND)
             R.string.record_not_found else R.string.record_error))
@@ -49,6 +50,13 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           }
         }
         is RecordPreviewState.Ready -> {
+          if (state.saved) Text(stringResource(R.string.record_saved), color = MaterialTheme.colorScheme.primary)
+          if (state.updating) Text(stringResource(R.string.record_refreshing))
+          if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
+            R.string.record_save_failed else R.string.record_refresh_failed))
+          TextButton(onClick = { onEvent(BootstrapScreen.Event.RetryRecord) }, enabled = !state.updating) {
+            Text(stringResource(R.string.record_refresh))
+          }
           Text(stringResource(R.string.record_question), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
           RecordMarkdown(state.preview.question)

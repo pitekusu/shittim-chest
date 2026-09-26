@@ -52,12 +52,16 @@ internal class MobileSessionModel(
   private var pendingLogoutToken: StoredToken? = null
   private var operation: Job? = null
   private var expiry: Job? = null
-  private var returnTo = "/"
+  private val mutableDestination = MutableStateFlow("/")
+  val destination = mutableDestination.asStateFlow()
+  private var returnTo: String
+    get() = mutableDestination.value
+    set(value) { mutableDestination.value = value }
   private var offlineAllowed = false
 
   val loginDestination: String get() = returnTo
 
-  // C31/C32 can read this gate without credentials or a saved profile. The UI remains online-only.
+  // Offline readers receive neither credentials nor a persisted profile.
   val offlineCacheAccountId: String? get() {
     val currentState = state.value
     val active = token ?: return null
@@ -93,10 +97,11 @@ internal class MobileSessionModel(
   }
 
   fun closeDestination() {
-    val signedIn = state.value as? SessionState.SignedIn ?: return
+    if (offlineCacheAccountId == null) return
+    val signedIn = state.value as? SessionState.SignedIn
     if (returnTo == "/") return
     returnTo = "/"
-    mutableState.value = SessionState.SignedIn(signedIn.user, signedIn.cacheAccountId, signedIn.expiresAt, "/")
+    signedIn?.let { mutableState.value = SessionState.SignedIn(it.user, it.cacheAccountId, it.expiresAt, "/") }
   }
 
   // The token is available only inside the request callback, never in a UI state or saved value.
