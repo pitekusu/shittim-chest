@@ -15,6 +15,7 @@ import coil3.request.CachePolicy
 import dev.pitekusu.shittim.records.auth.KeystoreTokenStore
 import dev.pitekusu.shittim.records.auth.MobileAuthClient
 import dev.pitekusu.shittim.records.auth.MobileSessionModel
+import dev.pitekusu.shittim.records.storage.RecordCacheAccount
 import dev.zacsweers.metro.createGraphFactory
 
 class MainActivity : ComponentActivity() {
@@ -22,7 +23,10 @@ class MainActivity : ComponentActivity() {
     viewModelFactory {
       initializer {
         val store = KeystoreTokenStore(applicationContext)
-        MobileSessionModel(MobileAuthClient(), store::read, store::clear)
+        MobileSessionModel(MobileAuthClient(), store::read, store::save, store::clear, store::beginLogout,
+          store::isLogoutPending, store::completeLogout,
+          { accountId -> RecordCacheAccount.activate(applicationContext, accountId) },
+          { RecordCacheAccount.clear(applicationContext) })
       }
     }
   }

@@ -75,9 +75,7 @@ internal class BootstrapPresenter(
     val launcher = rememberLauncherForActivityResult(MobileLoginContract(), session::loginResult)
     val records = remember(context.applicationContext) {
       try {
-        RecordsRepository.open(context.applicationContext) { accountId ->
-          (session.state.value as? SessionState.SignedIn)?.cacheAccountId == accountId
-        }
+        RecordsRepository.open(context.applicationContext, session::isCacheAuthorized)
       }
       catch (_: Exception) { null }
     }

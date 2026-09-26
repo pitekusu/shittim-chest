@@ -65,6 +65,51 @@ class KeystoreTokenStoreTest {
   }
 
   @Test
+  fun verifiedPermitIsBoundToEncryptedTokenAndV1RemainsReadable() {
+    store.save(token)
+    assertNull(KeystoreTokenStore(context).read()!!.cacheAuthorization)
+    val verifiedAt = token.expiresAt.minusSeconds(90L * 86_400)
+    val permit = CacheAuthorization("u".repeat(43), verifiedAt, token.expiresAt)
+    store.save(StoredToken(token.accessToken, token.expiresAt, permit))
+    val restored = KeystoreTokenStore(context).read()!!
+    val restoredPermit = restored.cacheAuthorization!!
+    assertEquals(token.accessToken, restored.accessToken)
+    assertEquals(permit.accountId, restoredPermit.accountId)
+    assertEquals(verifiedAt, restoredPermit.verifiedAt)
+    assertTrue(restoredPermit.permits(token.expiresAt.minusNanos(1)))
+    assertFalse(restoredPermit.permits(token.expiresAt))
+    assertFalse(restoredPermit.permits(verifiedAt.minusNanos(1)))
+    assertFalse(file.readBytes().toString(Charsets.ISO_8859_1).contains(permit.accountId))
+    assertThrows(IllegalArgumentException::class.java) {
+      CacheAuthorization(permit.accountId, verifiedAt, token.expiresAt.plusSeconds(1))
+    }
+    assertThrows(IllegalArgumentException::class.java) {
+      StoredToken(token.accessToken, token.expiresAt.minusSeconds(1), permit)
+    }
+    file.writeBytes(file.readBytes().apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() })
+    assertThrows(TokenStorageException::class.java) { store.read() }
+  }
+
+  @Test
+  fun logoutIntentSurvivesTokenDeletionAndBlocksLoginUntilRecordCleanupCompletes() {
+    store.save(token)
+    store.beginLogout()
+    val reopened = KeystoreTokenStore(context)
+    assertTrue(reopened.isLogoutPending())
+    assertThrows(TokenStorageException::class.java) { reopened.completeLogout() }
+    assertThrows(TokenStorageException::class.java) { reopened.save(token) }
+    reopened.clear()
+    val restarted = KeystoreTokenStore(context)
+    assertNull(restarted.read())
+    assertTrue(restarted.isLogoutPending())
+    assertThrows(TokenStorageException::class.java) { restarted.save(token) }
+    restarted.completeLogout() // Session coordinator has now completed record deletion too.
+    assertFalse(File(directory, "mobile-session-logout.v1").exists())
+    restarted.save(token)
+    assertFalse(restarted.isLogoutPending())
+  }
+
+  @Test
   fun tamperingAndInvalidEnvelopesFailClosedWithoutDisclosingContents() {
     store.save(token)
     val original = file.readBytes()

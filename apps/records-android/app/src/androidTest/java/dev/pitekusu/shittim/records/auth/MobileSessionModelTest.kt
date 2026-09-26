@@ -152,6 +152,7 @@ class MobileSessionModelTest {
         assertEquals(SessionState.SigningOut, model.state.value)
         fixture.postStarted.await()
         assertNull(fixture.stored)
+        assertEquals(1, fixture.cacheClears)
         fixture.logoutGate!!.complete(Unit)
         assertEquals(SessionNotice.LOCAL_LOGOUT, model.await<SessionState.SignedOut>().notice)
         assertEquals(1, fixture.posts)
@@ -221,6 +222,135 @@ class MobileSessionModelTest {
     }
   }
 
+  @Test
+  fun offlinePermitSurvivesRestartButNotAnUnverifiedTokenOrExplicitDenial() = runBlocking {
+    withContext(Dispatchers.Main) {
+      val permit = CacheAuthorization("u".repeat(43), Instant.parse("2030-01-01T00:00:00Z"),
+        Instant.parse("2030-01-01T00:10:00Z"))
+      for (status in listOf(HttpStatusCode.ServiceUnavailable, HttpStatusCode.Forbidden,
+        HttpStatusCode.Unauthorized, HttpStatusCode.Found)) {
+        Fixture().use { fixture ->
+          fixture.stored = StoredToken(fixture.validToken.accessToken, fixture.validToken.expiresAt, permit)
+          fixture.status = status
+          val model = fixture.start()
+          if (status in listOf(HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden)) {
+            model.await<SessionState.SignedOut>()
+          } else model.await<SessionState.Unavailable>()
+          assertEquals(status == HttpStatusCode.ServiceUnavailable, model.isCacheAuthorized(permit.accountId))
+          assertFalse(model.isCacheAuthorized("v".repeat(43)))
+          assertEquals(0, fixture.cacheClears)
+        }
+      }
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken // Deployed v1 token has no verified account permit.
+        fixture.status = HttpStatusCode.ServiceUnavailable
+        val model = fixture.start()
+        model.await<SessionState.Unavailable>()
+        assertNull(model.offlineCacheAccountId)
+      }
+    }
+  }
+
+  @Test
+  fun absoluteDeadlineCannotBeExtendedAndExpiryPreservesRecordsForReauthentication() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        fixture.serverExpiry = fixture.now.plusSeconds(90L * 86_400 + 600)
+        val model = fixture.start()
+        assertEquals(fixture.validToken.expiresAt, model.await<SessionState.SignedIn>().expiresAt)
+        val saved = fixture.stored!!
+        assertEquals(saved.expiresAt, saved.cacheAuthorization!!.expiresAt)
+        assertEquals(listOf("u".repeat(43)), fixture.activatedAccounts)
+      }
+      Fixture().use { fixture ->
+        val past = fixture.now.minusSeconds(90L * 86_400)
+        fixture.stored = StoredToken("t".repeat(43), fixture.now,
+          CacheAuthorization("u".repeat(43), past, fixture.now))
+        val model = fixture.start()
+        model.await<SessionState.SignedOut>()
+        assertNull(model.offlineCacheAccountId)
+        assertEquals(0, fixture.cacheClears)
+        yield()
+        assertTrue(model.beginLogin())
+        fixture.stored = fixture.validToken
+        model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN))
+        model.await<SessionState.SignedIn>()
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
+        assertEquals(0, fixture.cacheClears)
+      }
+    }
+  }
+
+  @Test
+  fun failedCacheDeletionStillClearsCredentialsAndPreventsLoginUntilRetried() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        fixture.cacheClearFails = true
+        model.logout()
+        model.await<SessionState.StorageError>()
+        assertNull(fixture.stored)
+        assertTrue(fixture.logoutPending)
+        assertNull(model.offlineCacheAccountId)
+        assertFalse(model.beginLogin())
+        fixture.cacheClearFails = false
+        yield()
+        model.logout()
+        model.await<SessionState.SignedOut>()
+        assertEquals(2, fixture.cacheClears)
+        assertEquals(1, fixture.posts)
+        assertFalse(fixture.logoutPending)
+      }
+    }
+  }
+
+  @Test
+  fun pendingLogoutAfterRestartNeverRestoresTheSessionAndCompletesCleanup() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        fixture.logoutPending = true
+        val model = fixture.start()
+        model.await<SessionState.SignedOut>()
+        assertEquals(0, fixture.gets)
+        assertEquals(1, fixture.cacheClears)
+        assertEquals(1, fixture.posts)
+        assertNull(fixture.stored)
+        assertFalse(fixture.logoutPending)
+        assertNull(model.offlineCacheAccountId)
+      }
+    }
+  }
+
+  @Test
+  fun pendingLogoutWithoutReadableCredentialsResumesRecordDeletionBeforeAllowingLogin() = runBlocking {
+    withContext(Dispatchers.Main) {
+      for (readFails in listOf(false, true)) {
+        Fixture().use { fixture ->
+          // A prior logout erased credentials, but failed before the record deletion marker.
+          fixture.logoutPending = true
+          fixture.readFails = readFails
+          fixture.cacheClearFails = true
+          val model = fixture.start()
+          model.await<SessionState.StorageError>()
+          assertTrue(fixture.logoutPending)
+          assertFalse(model.beginLogin())
+          assertEquals(0, fixture.gets + fixture.posts)
+          fixture.cacheClearFails = false
+          yield()
+          model.logout()
+          model.await<SessionState.SignedOut>()
+          assertFalse(fixture.logoutPending)
+          assertEquals(2, fixture.cacheClears)
+          assertTrue(model.beginLogin())
+        }
+      }
+    }
+  }
+
   private suspend inline fun <reified T : SessionState> MobileSessionModel.await(): T =
     withTimeout(5_000) { state.first { it is T } as T }
 
@@ -232,6 +362,10 @@ class MobileSessionModelTest {
     var name = "利用者A"
     var readFails = false
     var clearFails = false
+    var cacheClearFails = false
+    var logoutPending = false
+    var cacheClears = 0
+    val activatedAccounts = mutableListOf<String>()
     var gets = 0
     var posts = 0
     var status = HttpStatusCode.OK
@@ -262,10 +396,19 @@ class MobileSessionModelTest {
       assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
       if (readFails) throw TokenStorageException()
       stored
-    }, {
+    }, { assertFalse(logoutPending); stored = it }, {
       assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
       if (clearFails) throw TokenStorageException()
       stored = null
+    }, {
+      logoutPending = true
+    }, { logoutPending }, {
+      assertNull(stored)
+      assertFalse(cacheClearFails)
+      logoutPending = false
+    }, { activatedAccounts.add(it) }, {
+      cacheClears++
+      if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()
     }, Clock.fixed(now, ZoneOffset.UTC)).also { owner.put("session", it) }
 
     override fun close() { owner.clear(); client.close() }

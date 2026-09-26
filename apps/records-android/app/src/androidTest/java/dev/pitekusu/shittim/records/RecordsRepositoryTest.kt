@@ -12,6 +12,7 @@ import dev.pitekusu.shittim.records.storage.KeystorePrivateKeyStore
 import dev.pitekusu.shittim.records.storage.RecordCacheAccount
 import dev.pitekusu.shittim.records.storage.CachedRecordPart
 import dev.pitekusu.shittim.records.storage.RecordDataKeyProtector
+import dev.pitekusu.shittim.records.storage.RecordCacheException
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
@@ -22,6 +23,7 @@ import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.withLock
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -155,6 +157,73 @@ class RecordsRepositoryTest {
         }
       }
     }
+  }
+
+  @Test fun authorizationExpiryLocksButSameAccountReauthenticationKeepsTheCiphertext() = runBlocking {
+    repository(MockEngine {
+      respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { it.recentRecords(token, accountId, null) }
+    activeAccountId = "" // The session gate is closed, but no deletion is requested.
+    repository(MockEngine { error("unexpected_network_request") }).use { cached ->
+      try {
+        cached.cachedListEntry(accountId, recordId)
+        fail("expired authorization must lock the cache")
+      } catch (error: RecordReadException) {
+        assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure)
+      }
+      activeAccountId = accountId
+      assertEquals("架空の議題", cached.cachedListEntry(accountId, recordId)?.questionPreview)
+    }
+  }
+
+  @Test fun explicitLogoutInvalidatesPrivateKeyAndErasesAllRowsAndOwnerMarker() = runBlocking {
+    repository(MockEngine {
+      respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { it.recentRecords(token, accountId, null) }
+    val unrelated = File(privateDirectory, "unrelated").apply { writeText("keep") }
+    val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
+      .setDriver(AndroidSQLiteDriver()).build()
+    try {
+      RecordCacheAccount.lock.withLock {
+        RecordCacheAccount(privateContext, privateKeys, database).clear()
+      }
+      assertNull(privateKeys.read(accountId))
+      assertNull(EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys))
+        .load(accountId, recordId, CachedRecordPart.LIST))
+      assertEquals(listOf(unrelated.name), privateDirectory.listFiles()!!.map { it.name })
+    } finally { database.close() }
+    // The same account can start a genuinely empty cache after an explicit logout.
+    repository(MockEngine {
+      respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { assertEquals(1, it.recentRecords(token, accountId, null).items.size) }
+  }
+
+  @Test fun interruptedLogoutResumesDeletionBeforeTheSameAccountCanReadAgain() = runBlocking {
+    repository(MockEngine {
+      respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { it.recentRecords(token, accountId, null) }
+    val closed = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
+      .setDriver(AndroidSQLiteDriver()).build()
+    closed.records().get("unused", recordId, "list") // Open, then force a real deletion failure.
+    closed.close()
+    RecordCacheAccount.lock.withLock {
+      try {
+        RecordCacheAccount(privateContext, privateKeys, closed).clear()
+        fail("closed database must not report successful logout cleanup")
+      } catch (_: RecordCacheException) { }
+    }
+    assertNull(privateKeys.read(accountId))
+    assertEquals(true, File(privateDirectory, "records-cache-delete.v1").exists())
+    val reopened = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
+      .setDriver(AndroidSQLiteDriver()).build()
+    try {
+      RecordCacheAccount.lock.withLock {
+        RecordCacheAccount(privateContext, privateKeys, reopened).activate(accountId)
+      }
+      assertNull(EncryptedRecordStore(reopened, RecordDataKeyProtector(privateKeys))
+        .load(accountId, recordId, CachedRecordPart.LIST))
+      assertFalse(File(privateDirectory, "records-cache-delete.v1").exists())
+    } finally { reopened.close() }
   }
 
   private fun repository(engine: MockEngine): RecordsRepository {
