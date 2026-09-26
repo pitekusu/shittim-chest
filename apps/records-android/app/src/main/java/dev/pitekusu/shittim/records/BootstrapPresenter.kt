@@ -133,11 +133,12 @@ internal class BootstrapPresenter(
         }
         if (!session.isCacheAuthorized(cacheAccountId)) return@collect
         // Network reconciliation belongs to the worker, not ordinary screen navigation.
-        recordList = if (currentSessionState == SessionState.Unavailable) RecordListState.Ready.fromSaved(saved)
-        else if (saved.isEmpty() && syncState is RecordSyncState.Failed) {
+        recordList = if (currentSessionState == SessionState.Unavailable) {
+          RecordListState.Ready.fromSaved(saved, recordList as? RecordListState.Ready)
+        } else if (saved.isEmpty() && syncState is RecordSyncState.Failed) {
           RecordListState.Error((syncState as RecordSyncState.Failed).reason)
         } else if (saved.isEmpty() && syncState != RecordSyncState.Completed) RecordListState.Idle
-        else RecordListState.Ready.fromSaved(saved)
+        else RecordListState.Ready.fromSaved(saved, recordList as? RecordListState.Ready)
       }
     }
     LaunchedEffect(cacheAccountId, selectedRecordId) {
