@@ -3,7 +3,7 @@ package dev.pitekusu.shittim.records
 import dev.pitekusu.shittim.records.auth.mobileOpaqueValue
 import kotlinx.serialization.Serializable
 
-/** Page-sized work only: no token, profile, question, or unbounded list of all records. */
+/** No token, profile or question. Removal candidates are encrypted and cleared on completion. */
 @Serializable
 internal data class RecordSyncCheckpoint(
   val schemaVersion: Int = 1,
@@ -12,12 +12,14 @@ internal data class RecordSyncCheckpoint(
   val pageLoaded: Boolean = false,
   val cursorHashes: Set<String> = emptySet(),
   val complete: Boolean = false,
+  val removalCandidates: Set<String>? = null,
 ) {
   fun validate() {
     check(schemaVersion == 1 && (cursor == null || validRecordCursor(cursor)))
     check(pendingIds.size <= 12 && pendingIds.distinct().size == pendingIds.size &&
       pendingIds.all(mobileOpaqueValue::matches) && cursorHashes.all(mobileOpaqueValue::matches))
     check(pageLoaded || pendingIds.isEmpty())
+    check(removalCandidates?.all(mobileOpaqueValue::matches) != false)
     check(!complete || (pageLoaded && cursor == null && pendingIds.isEmpty()))
   }
 

@@ -47,7 +47,11 @@ internal class RecordsRepository(
 
   suspend fun record(token: String, accountId: String, recordId: String): RecordReadResult {
     requireActive(accountId)
-    val result = remote.firstRecord(token, "/records/$recordId")
+    val result = try { remote.firstRecord(token, "/records/$recordId") }
+    catch (error: RecordReadException) {
+      if (error.failure == RecordReadFailure.NOT_FOUND) removeRecords(accountId, setOf(recordId))
+      throw error
+    }
     if (result is RecordReadResult.Found) {
       accountLock.withLock {
         prepare(accountId)
@@ -58,6 +62,37 @@ internal class RecordsRepository(
       }
     }
     return result
+  }
+
+  suspend fun cachedRecordIds(accountId: String): Set<String> = accountLock.withLock {
+    prepareRead(accountId)
+    val ids = try {
+      (cache.recordIds(accountId, CachedRecordPart.LIST) +
+        cache.recordIds(accountId, CachedRecordPart.DETAIL)).toSet()
+    } catch (_: RecordCacheException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+    requireActive(accountId)
+    ids
+  }
+
+  suspend fun cachedRecords(accountId: String): List<RecordListEntry> {
+    val ids = accountLock.withLock {
+      prepareRead(accountId)
+      try { cache.recordIds(accountId, CachedRecordPart.LIST) }
+      catch (_: RecordCacheException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+    }
+    return ids.mapNotNull { cachedListEntry(accountId, it) }.sortedByDescending { it.completedAt }
+      .map { entry ->
+        // Presigned URLs expire and offline browsing must not trigger image network requests.
+        RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
+          RecordAvatar(null, entry.requesterAvatar.fallbackVariant), entry.completedAt, entry.winnerName)
+      }.also { requireActive(accountId) }
+  }
+
+  suspend fun removeRecords(accountId: String, recordIds: Set<String>): Unit = accountLock.withLock {
+    prepareRead(accountId)
+    try { cache.deleteRecords(accountId, recordIds) }
+    catch (_: RecordCacheException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+    requireActive(accountId)
   }
 
   suspend fun syncCheckpoint(accountId: String): RecordSyncCheckpoint? = accountLock.withLock {

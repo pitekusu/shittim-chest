@@ -47,7 +47,19 @@ internal class EncryptedRecordStore(
     }
   }
 
-  /** Removes ciphertext only; C30 will coordinate this with Keystore key invalidation. */
+  suspend fun recordIds(accountId: String, part: CachedRecordPart): List<String> = guarded {
+    check(accountId.matches(OPAQUE_ID))
+    database.records().recordIds(accountKey(accountId), part.code)
+      .also { ids -> check(ids.all(OPAQUE_ID::matches)) }
+  }
+
+  suspend fun deleteRecords(accountId: String, recordIds: Collection<String>): Unit = guarded {
+    recordIds.forEach { validateIds(accountId, it) }
+    // Stay below SQLite's bind-variable limit; each delete removes list and detail together.
+    recordIds.chunked(200).forEach { database.records().deleteRecords(accountKey(accountId), it) }
+  }
+
+  /** Removes ciphertext only; account lifecycle coordinates Keystore key invalidation. */
   suspend fun deleteAccount(accountId: String): Unit = guarded {
     check(accountId.matches(OPAQUE_ID))
     database.records().deleteAccount(accountKey(accountId))
