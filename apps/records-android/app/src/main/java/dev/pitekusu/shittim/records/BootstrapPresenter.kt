@@ -12,7 +12,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.paging.PagingData
 import com.slack.circuit.runtime.CircuitUiEvent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.Presenter
@@ -25,7 +24,6 @@ import dev.pitekusu.shittim.records.auth.MobileSessionModel
 import dev.pitekusu.shittim.records.auth.MobileSessionUser
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
-import kotlinx.coroutines.flow.flowOf
 
 internal enum class ThemeChoice {
   System,
@@ -140,14 +138,14 @@ internal class BootstrapPresenter(
           recordList = if (saved.isEmpty() && syncState is RecordSyncState.Failed) {
             RecordListState.Error((syncState as RecordSyncState.Failed).reason)
           } else if (saved.isEmpty() && syncState != RecordSyncState.Completed) RecordListState.Idle
-          else RecordListState.Ready(flowOf(PagingData.from(saved)), saved.map { it.recordId }.toSet(), saved = true)
+          else RecordListState.Ready.fromSaved(saved)
         }
         SessionState.Unavailable -> {
           listOwner = null
           recordList = try {
             val saved = records?.cachedRecords(cacheAccountId)
               ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
-            RecordListState.Ready(flowOf(PagingData.from(saved)), saved.map { it.recordId }.toSet(), saved = true)
+            RecordListState.Ready.fromSaved(saved)
           } catch (error: RecordReadException) { RecordListState.Error(error.failure) }
         }
         is SessionState.SignedOut, SessionState.SigningOut, SessionState.Browser,

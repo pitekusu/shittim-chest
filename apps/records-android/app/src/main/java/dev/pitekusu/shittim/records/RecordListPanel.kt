@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.paging.LoadState
+import androidx.paging.LoadStates
 import androidx.paging.PagingData
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
@@ -37,6 +38,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 internal sealed interface RecordListState {
   data object Idle : RecordListState
@@ -46,7 +48,20 @@ internal sealed interface RecordListState {
     val loadedIds: Set<String>,
     val saved: Boolean = false,
     val refreshFailure: RecordReadFailure? = null,
-  ) : RecordListState
+  ) : RecordListState {
+    companion object {
+      fun fromSaved(entries: List<RecordListEntry>): Ready = Ready(
+        // Static snapshots must publish completion so Compose leaves its initial Loading state.
+        flowOf(PagingData.from(entries, sourceLoadStates = LoadStates(
+          refresh = LoadState.NotLoading(false),
+          prepend = LoadState.NotLoading(true),
+          append = LoadState.NotLoading(true),
+        ))),
+        entries.map { it.recordId }.toSet(),
+        saved = true,
+      )
+    }
+  }
 }
 
 private val japanZone = ZoneId.of("Asia/Tokyo")
