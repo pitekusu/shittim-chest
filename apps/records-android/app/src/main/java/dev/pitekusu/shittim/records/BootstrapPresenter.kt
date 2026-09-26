@@ -9,9 +9,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import com.slack.circuit.runtime.CircuitUiEvent
@@ -27,6 +29,8 @@ import dev.pitekusu.shittim.records.auth.MobileSessionUser
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.launch
 
 internal enum class ThemeChoice {
   System,
@@ -42,6 +46,7 @@ internal data object BootstrapScreen : Screen {
     val records: RecordListState = RecordListState.Idle,
     val record: RecordPreviewState = RecordPreviewState.Idle,
     val selectedRecordId: String? = null,
+    val sync: RecordSyncState = RecordSyncState.Idle,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -52,6 +57,8 @@ internal data object BootstrapScreen : Screen {
     data object Retry : Event
     data object RetryRecord : Event
     data object RecordsAuthRequired : Event
+    data object StartSync : Event
+    data object PauseSync : Event
     data class OpenRecord(val recordId: String) : Event
     data object CloseRecord : Event
   }
@@ -85,6 +92,49 @@ internal class BootstrapPresenter(
     var recordRetry by remember { mutableStateOf(0) }
     var recordList by remember { mutableStateOf<RecordListState>(RecordListState.Idle) }
     var listOwner by remember { mutableStateOf<MobileSessionUser?>(null) }
+    var syncState by remember { mutableStateOf<RecordSyncState>(RecordSyncState.Idle) }
+    var syncRequest by remember { mutableStateOf<SessionState.SignedIn?>(null) }
+    val syncScope = rememberCoroutineScope()
+    LaunchedEffect(sessionState) {
+      if (syncRequest != null && syncRequest !== sessionState) {
+        syncRequest = null
+        syncState = RecordSyncState.Paused
+      }
+      if (sessionState !is SessionState.SignedIn) syncState = RecordSyncState.Idle
+    }
+    // Lifecycle cancels directly at STOP, even when the stopped UI cannot recompose.
+    LifecycleStartEffect(syncRequest) {
+      val request = syncRequest
+      val job = request?.let {
+        syncScope.launch {
+          try {
+            val completed = session.withAuthorizedToken { token ->
+              records?.synchronize(token, request.cacheAccountId)
+                ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
+              true
+            }
+            if (syncRequest === request && session.state.value === request) {
+              syncRequest = null
+              syncState = if (completed == true) RecordSyncState.Completed else RecordSyncState.Paused
+            }
+          } catch (error: CancellationException) { throw error }
+          catch (error: RecordReadException) {
+            if (syncRequest === request && session.state.value === request) {
+              syncRequest = null
+              syncState = RecordSyncState.Failed(error.failure)
+              if (error.failure == RecordReadFailure.AUTH_REQUIRED) session.onForeground()
+            }
+          }
+        }
+      }
+      onStopOrDispose {
+        job?.cancel()
+        if (request != null && syncRequest === request) {
+          syncRequest = null
+          syncState = RecordSyncState.Paused
+        }
+      }
+    }
     // The session model owns the validated destination across foreground checks and rotation.
     val selectedRecordId = (sessionState as? SessionState.SignedIn)?.returnTo
       ?.takeIf { it.startsWith("/records/") }?.removePrefix("/records/")
@@ -145,7 +195,7 @@ internal class BootstrapPresenter(
     val currentSignedIn = sessionState as? SessionState.SignedIn
     val visibleList = if (currentSignedIn != null &&
       listOwner === currentSignedIn.user) recordList else RecordListState.Idle
-    return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId) { event ->
+    return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId, syncState) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin()) {
@@ -158,6 +208,14 @@ internal class BootstrapPresenter(
         BootstrapScreen.Event.Retry -> session.retry()
         BootstrapScreen.Event.RetryRecord -> recordRetry++
         BootstrapScreen.Event.RecordsAuthRequired -> session.onForeground()
+        BootstrapScreen.Event.StartSync -> if (currentSignedIn != null && syncRequest == null) {
+          syncState = RecordSyncState.Running // Claim synchronously: double taps cannot start two jobs.
+          syncRequest = currentSignedIn
+        }
+        BootstrapScreen.Event.PauseSync -> if (syncRequest != null) {
+          syncRequest = null
+          syncState = RecordSyncState.Paused
+        }
         is BootstrapScreen.Event.OpenRecord -> if (
           event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
         ) session.openDestination("/records/${event.recordId}")
