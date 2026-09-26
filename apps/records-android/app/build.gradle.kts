@@ -93,6 +93,7 @@ dependencies {
   implementation(libs.androidx.browser)
   implementation(libs.androidx.lifecycle.viewmodel)
   implementation(libs.androidx.lifecycle.runtime)
+  implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.compose.foundation)
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui.tooling.preview)

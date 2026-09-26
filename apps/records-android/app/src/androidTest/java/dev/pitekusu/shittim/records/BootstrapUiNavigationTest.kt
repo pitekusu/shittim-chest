@@ -65,4 +65,18 @@ class BootstrapUiNavigationTest {
     compose.runOnIdle { state.value = list }
     compose.onNodeWithText("議題 12").assertIsDisplayed()
   }
+
+  @Test fun syncActionIsHiddenAfterLeavingTheAuthenticatedSession() {
+    val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
+    val state = mutableStateOf(BootstrapScreen.State(ThemeChoice.System,
+      SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/"),
+      sync = RecordSyncState.Running, eventSink = {}))
+    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
+    val title = compose.activity.getString(R.string.record_sync_title)
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(title))
+    compose.onNodeWithText(title).assertIsDisplayed()
+    compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.System) {} }
+    compose.onNodeWithText(title).assertDoesNotExist()
+    compose.onNodeWithText(compose.activity.getString(R.string.record_sync_pause)).assertDoesNotExist()
+  }
 }

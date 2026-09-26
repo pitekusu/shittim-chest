@@ -40,6 +40,7 @@ androidx-activity-compose = { module = "androidx.activity:activity-compose", ver
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
 androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycle" }
 androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 # Adopt the preview Compose stack together, not only Material 3.
 androidx-compose-bom = { module = "androidx.compose:compose-bom-alpha", version.ref = "compose-bom" }
 androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }

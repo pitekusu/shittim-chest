@@ -31,6 +31,7 @@ internal class RecordsRepository(
   private val json = Json { encodeDefaults = true }
 
   suspend fun recentRecords(token: String, accountId: String, cursor: String?): RecordListPage {
+    requireActive(accountId)
     val page = remote.recentRecords(token, cursor)
     accountLock.withLock {
       prepare(accountId)
@@ -45,6 +46,7 @@ internal class RecordsRepository(
   }
 
   suspend fun record(token: String, accountId: String, recordId: String): RecordReadResult {
+    requireActive(accountId)
     val result = remote.firstRecord(token, "/records/$recordId")
     if (result is RecordReadResult.Found) {
       accountLock.withLock {
@@ -56,6 +58,24 @@ internal class RecordsRepository(
       }
     }
     return result
+  }
+
+  suspend fun syncCheckpoint(accountId: String): RecordSyncCheckpoint? = accountLock.withLock {
+    prepare(accountId)
+    val checkpoint = load(accountId, SYNC_RECORD_ID, CachedRecordPart.SYNC_PROGRESS)?.let { bytes ->
+      decode(bytes) { json.decodeFromString<RecordSyncCheckpoint>(it).also { state -> state.validate() } }
+    }
+    requireActive(accountId)
+    checkpoint
+  }
+
+  suspend fun saveSyncCheckpoint(accountId: String, checkpoint: RecordSyncCheckpoint): Unit = accountLock.withLock {
+    prepare(accountId)
+    save(accountId, SYNC_RECORD_ID, CachedRecordPart.SYNC_PROGRESS) {
+      checkpoint.validate()
+      json.encodeToString(checkpoint)
+    }
+    requireActive(accountId)
   }
 
   // Offline readers use the session's persisted permit; they cannot activate another owner.
@@ -141,6 +161,7 @@ internal class RecordsRepository(
 
   companion object {
     private val accountLock = RecordCacheAccount.lock
+    private const val SYNC_RECORD_ID = "record-sync-v1" // Separate authenticated part, not an API record.
 
     fun open(context: Context, isActiveAccount: (String) -> Boolean): RecordsRepository {
       val database = EncryptedRecordsDatabase.open(context)

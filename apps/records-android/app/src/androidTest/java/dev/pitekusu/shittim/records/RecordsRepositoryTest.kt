@@ -16,12 +16,16 @@ import dev.pitekusu.shittim.records.storage.RecordCacheException
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
 import org.junit.After
@@ -106,6 +110,39 @@ class RecordsRepositoryTest {
     } finally { database.close() }
   }
 
+  @Test fun syncCheckpointSurvivesReopenAndRejectsInvalidOrUnauthorizedState() = runBlocking {
+    val checkpoint = RecordSyncCheckpoint(cursor = "synthetic_cursor.signature",
+      pendingIds = listOf(recordId), pageLoaded = true)
+    repository(MockEngine { error("unexpected_network_request") }).use { records ->
+      assertNull(records.syncCheckpoint(accountId))
+      records.saveSyncCheckpoint(accountId, checkpoint)
+      try {
+        records.saveSyncCheckpoint(accountId, checkpoint.copy(pageLoaded = false))
+        fail("invalid progress must not replace the saved checkpoint")
+      } catch (error: RecordReadException) {
+        assertEquals(RecordReadFailure.STORAGE_UNAVAILABLE, error.failure)
+      }
+    }
+    val marker = checkpoint.cursor!!
+    app.getDatabasePath(databaseName).parentFile!!.listFiles()!!
+      .filter { it.name.startsWith(databaseName) && it.isFile }
+      .forEach { assertFalse(it.readBytes().toString(Charsets.ISO_8859_1).contains(marker)) }
+    repository(MockEngine { error("unexpected_network_request") }).use { records ->
+      assertEquals(checkpoint, records.syncCheckpoint(accountId))
+      activeAccountId = ""
+      try {
+        records.syncCheckpoint(accountId)
+        fail("expired authorization must not read progress")
+      } catch (error: RecordReadException) {
+        assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure)
+      }
+    }
+    activeAccountId = "v".repeat(43)
+    repository(MockEngine { error("unexpected_network_request") }).use { records ->
+      assertNull(records.syncCheckpoint(activeAccountId))
+    }
+  }
+
   @Test fun previousAccountsLateResponseCannotDeleteTheNewCache() = runBlocking {
     val started = CompletableDeferred<Unit>()
     val release = CompletableDeferred<Unit>()
@@ -136,6 +173,135 @@ class RecordsRepositoryTest {
     } finally {
       release.complete(Unit)
       delayed.close()
+    }
+  }
+
+  @Test fun syncWalksEveryPageSeriallyAndFetchesOnlyMissingDetails() = runBlocking {
+    val a = "a".repeat(43)
+    val b = "b".repeat(43)
+    val c = "c".repeat(43)
+    val calls = mutableListOf<String>()
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      val body = if (id == "records") {
+        val cursor = request.url.parameters["cursor"]
+        calls.add("list:${cursor ?: "first"}")
+        if (cursor == null) list(listOf(a, b), "next.signature") else list(listOf(b, c))
+      } else { calls.add("detail:$id"); detail(id) }
+      respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.record(token, accountId, a)
+      calls.clear()
+      records.synchronize(token, accountId)
+      assertEquals(listOf("list:first", "detail:$b", "list:next.signature", "detail:$c"), calls)
+      assertEquals(true, records.syncCheckpoint(accountId)?.complete)
+      for (id in listOf(a, b, c)) assertEquals("架空の結論", records.cachedRecord(accountId, id)?.decision)
+      calls.clear()
+      records.synchronize(token, accountId) // A completed pass checks new list pages, not old details.
+      assertEquals(listOf("list:first", "list:next.signature"), calls)
+    }
+  }
+
+  @Test fun failedOrCancelledSyncResumesThePendingDetailAfterReopen() = runBlocking {
+    val nextId = "b".repeat(43)
+    for (cancel in listOf(false, true)) {
+      val entered = CompletableDeferred<Unit>()
+      val release = CompletableDeferred<Unit>()
+      val first = repository(MockEngine { request ->
+        val id = request.url.encodedPath.substringAfterLast('/')
+        if (id == nextId) {
+          entered.complete(Unit)
+          if (cancel) release.await() else throw IOException("synthetic_failure")
+        }
+        respond(if (id == "records") list(listOf(recordId, nextId)) else detail(id),
+          headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      })
+      try {
+        if (cancel) {
+          val job = launch { first.synchronize(token, accountId) }
+          entered.await()
+          job.cancelAndJoin()
+        } else {
+          try { first.synchronize(token, accountId); fail("network failure must stop sync") }
+          catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
+        }
+        assertEquals(listOf(nextId), first.syncCheckpoint(accountId)?.pendingIds)
+        assertEquals(false, first.syncCheckpoint(accountId)?.complete)
+      } finally { first.close() }
+      val resumed = mutableListOf<String>()
+      repository(MockEngine { request ->
+        val id = request.url.encodedPath.substringAfterLast('/')
+        resumed.add(id)
+        respond(detail(id), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      }).use { records ->
+        records.synchronize(token, accountId)
+        assertEquals(listOf(nextId), resumed)
+        assertEquals(true, records.syncCheckpoint(accountId)?.complete)
+      }
+      val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
+        .setDriver(AndroidSQLiteDriver()).build()
+      try { RecordCacheAccount.lock.withLock { RecordCacheAccount(privateContext, privateKeys, database).clear() } }
+      finally { database.close() }
+    }
+  }
+
+  @Test fun expiredCursorRestartsOnceWithoutDownloadingSavedDetailsAgain() = runBlocking {
+    val calls = mutableListOf<String>()
+    repository(MockEngine { request ->
+      val cursor = request.url.parameters["cursor"]
+      calls.add(cursor ?: "first")
+      if (cursor != null) respond("""{"error":{"code":"CURSOR_INVALID"}}""",
+        HttpStatusCode.BadRequest, headersOf(HttpHeaders.ContentType, "application/json"))
+      else respond(list(cursor = "new.signature"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      // Detail already exists, so the restart will enumerate it but must not request it again.
+      repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
+        .use { it.record(token, accountId, recordId) }
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(cursor = "old.signature"))
+      try { records.synchronize(token, accountId); fail("a second invalid cursor must stop sync") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.CURSOR_INVALID, error.failure) }
+      assertEquals(listOf("old.signature", "first", "new.signature"), calls)
+      assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+    }
+  }
+
+  @Test fun cyclicCursorsStopAndMissingDetailsDoNotBlockRemainingRecords() = runBlocking {
+    var calls = 0
+    repository(MockEngine {
+      val next = listOf("a.signature", "b.signature", "a.signature")[calls++]
+      respond(list(emptyList(), next), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      try { records.synchronize(token, accountId); fail("cursor cycle must not loop forever") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.INVALID_RESPONSE, error.failure) }
+      assertEquals(3, calls)
+    }
+    val remaining = "c".repeat(43)
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      if (id == recordId) respond("", HttpStatusCode.NotFound)
+      else respond(if (id == "records") list(listOf(recordId, remaining)) else detail(id),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint())
+      records.synchronize(token, accountId)
+      assertNull(records.cachedRecord(accountId, recordId))
+      assertEquals("架空の結論", records.cachedRecord(accountId, remaining)?.decision)
+      assertEquals(true, records.syncCheckpoint(accountId)?.complete)
+    }
+  }
+
+  @Test fun authorizationLossDuringSyncCannotSaveTheDelayedDetailOrAdvanceProgress() = runBlocking {
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      if (id != "records") activeAccountId = ""
+      respond(if (id == "records") list() else detail(),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      try { records.synchronize(token, accountId); fail("lost authorization must stop sync") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure) }
+      activeAccountId = accountId
+      assertNull(records.cachedRecord(accountId, recordId))
+      assertEquals(listOf(recordId), records.syncCheckpoint(accountId)?.pendingIds)
     }
   }
 
@@ -179,7 +345,10 @@ class RecordsRepositoryTest {
   @Test fun explicitLogoutInvalidatesPrivateKeyAndErasesAllRowsAndOwnerMarker() = runBlocking {
     repository(MockEngine {
       respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
-    }).use { it.recentRecords(token, accountId, null) }
+    }).use {
+      it.recentRecords(token, accountId, null)
+      it.saveSyncCheckpoint(accountId, RecordSyncCheckpoint())
+    }
     val unrelated = File(privateDirectory, "unrelated").apply { writeText("keep") }
     val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
       .setDriver(AndroidSQLiteDriver()).build()
@@ -234,16 +403,19 @@ class RecordsRepositoryTest {
       RecordCacheAccount(privateContext, privateKeys, database), { it == activeAccountId })
   }
 
-  private fun list(): String = """{"schemaVersion":1,"items":[{"schemaVersion":1,"recordId":"$recordId",
+  private fun list(ids: List<String> = listOf(recordId), cursor: String? = null): String =
+    """{"schemaVersion":1,"items":[${ids.joinToString { listItem(it) }}],"nextCursor":${cursor?.let { "\"$it\"" } ?: "null"}}"""
+
+  private fun listItem(id: String): String = """{"schemaVersion":1,"recordId":"$id",
     "questionPreview":"架空の議題","completedAt":"2026-09-24T00:00:00Z",
     "requester":{"displayName":"架空の依頼者","avatar":{"kind":"placeholder",
       "url":null,"alt":"架空の依頼者","fallbackVariant":"cyan"}},
     "participants":[{"slot":"participant-a","displayName":"アロナ"},
       {"slot":"participant-b","displayName":"プラナ"},
       {"slot":"participant-c","displayName":"安倍晋三AI"}],
-    "result":{"winner":"participant-a"}}],"nextCursor":null}"""
+    "result":{"winner":"participant-a"}}"""
 
-  private fun detail(): String = """{"schemaVersion":2,"recordId":"$recordId","question":"架空の議題",
+  private fun detail(id: String = recordId): String = """{"schemaVersion":2,"recordId":"$id","question":"架空の議題",
     "participants":[{"slot":"participant-a","displayName":"アロナ"},
       {"slot":"participant-b","displayName":"プラナ"},
       {"slot":"participant-c","displayName":"安倍晋三AI"}],

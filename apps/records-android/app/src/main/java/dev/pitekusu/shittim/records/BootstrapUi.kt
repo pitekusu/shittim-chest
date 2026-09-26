@@ -157,6 +157,9 @@ private fun BootstrapControls(
       }
     }
     if (state.session is SessionState.SignedIn) {
+      if (state.selectedRecordId == null) item(key = "record-sync") {
+        RecordSyncPanel(state.sync, state.eventSink)
+      }
       if (state.selectedRecordId == null) recordListItems(state.records, pagingItems, state.eventSink)
       else item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink) }
     }
