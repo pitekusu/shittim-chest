@@ -78,4 +78,37 @@ class BootstrapUiNavigationTest {
     compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.System) {} }
     compose.onNodeWithText(status).assertDoesNotExist()
   }
+
+  @Test fun savedSnapshotsKeepTheVisibleRecordWhileSyncIsRunningAndNewRecordsArrive() {
+    val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    val entries = (1..12).map { index ->
+      RecordListEntry(index.toString().padStart(43, 'a'), "同期中の議題 $index", "架空の依頼者",
+        RecordAvatar(null, "cyan"), Instant.parse("2026-09-24T00:00:00Z"), "アロナ")
+    }
+    var saved = RecordListState.Ready.fromSaved(entries)
+    val state = mutableStateOf(BootstrapScreen.State(ThemeChoice.System, session,
+      records = saved, sync = RecordSyncState.Running, eventSink = {}))
+    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
+    compose.waitForIdle()
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("同期中の議題 10"))
+    compose.onNodeWithText("同期中の議題 10").assertIsDisplayed()
+    val newEntry = RecordListEntry("n".repeat(43), "新しい架空の議題", "架空の依頼者",
+      RecordAvatar(null, "cyan"), Instant.parse("2026-09-25T00:00:00Z"), "プラナ")
+    for (updated in listOf(entries, listOf(newEntry) + entries, listOf(newEntry) + entries)) {
+      compose.runOnIdle {
+        saved = RecordListState.Ready.fromSaved(updated, saved)
+        state.value = BootstrapScreen.State(ThemeChoice.System, session,
+          records = saved, sync = RecordSyncState.Running, eventSink = {})
+      }
+      compose.onNodeWithText("同期中の議題 10").assertIsDisplayed()
+    }
+    compose.runOnIdle {
+      state.value = BootstrapScreen.State(ThemeChoice.System, session,
+        records = saved, sync = RecordSyncState.Completed, eventSink = {})
+    }
+    compose.onNodeWithText("同期中の議題 10").assertIsDisplayed()
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(newEntry.questionPreview))
+    compose.onNodeWithText(newEntry.questionPreview).assertIsDisplayed()
+  }
 }

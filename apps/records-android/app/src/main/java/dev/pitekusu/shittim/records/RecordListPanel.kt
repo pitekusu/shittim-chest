@@ -38,7 +38,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.MutableStateFlow
 
 internal sealed interface RecordListState {
   data object Idle : RecordListState
@@ -48,18 +48,23 @@ internal sealed interface RecordListState {
     val loadedIds: Set<String>,
     val saved: Boolean = false,
     val refreshFailure: RecordReadFailure? = null,
+    private val savedSnapshots: MutableStateFlow<PagingData<RecordListEntry>>? = null,
   ) : RecordListState {
     companion object {
-      fun fromSaved(entries: List<RecordListEntry>): Ready = Ready(
+      fun fromSaved(entries: List<RecordListEntry>, previous: Ready? = null): Ready {
         // Static snapshots must publish completion so Compose leaves its initial Loading state.
-        flowOf(PagingData.from(entries, sourceLoadStates = LoadStates(
+        val snapshot = PagingData.from(entries, sourceLoadStates = LoadStates(
           refresh = LoadState.NotLoading(false),
           prepend = LoadState.NotLoading(true),
           append = LoadState.NotLoading(true),
-        ))),
-        entries.map { it.recordId }.toSet(),
-        saved = true,
-      )
+        ))
+        // Keep the Paging presenter alive: replacing its Flow briefly removes every card
+        // and clamps the LazyColumn to the top before the next snapshot arrives.
+        val snapshots = previous?.savedSnapshots ?: MutableStateFlow(snapshot)
+        snapshots.value = snapshot
+        return Ready(snapshots, entries.map { it.recordId }.toSet(),
+          saved = true, savedSnapshots = snapshots)
+      }
     }
   }
 }
