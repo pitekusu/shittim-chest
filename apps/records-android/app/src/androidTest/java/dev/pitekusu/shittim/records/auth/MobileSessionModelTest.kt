@@ -130,6 +130,12 @@ class MobileSessionModelTest {
         fixture.sessionGate?.complete(Unit)
         model.await<SessionState.Unavailable>()
         assertNotNull(fixture.stored)
+        val destination = "/records/${"r".repeat(43)}"
+        model.openDestination(destination)
+        assertEquals(destination, model.destination.value)
+        assertNotNull(model.offlineCacheAccountId)
+        model.closeDestination()
+        assertEquals("/", model.destination.value)
         fixture.status = HttpStatusCode.OK
         fixture.sessionGate = null
         model.retry()

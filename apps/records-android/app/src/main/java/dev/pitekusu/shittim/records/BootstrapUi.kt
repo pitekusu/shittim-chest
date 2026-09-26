@@ -61,7 +61,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
     }
   ShittimTheme(darkTheme) {
     ShittimBackdrop(modifier) {
-      BackHandler(enabled = state.session is SessionState.SignedIn && state.selectedRecordId != null) {
+      BackHandler(enabled = state.canReadRecords && state.selectedRecordId != null) {
         state.eventSink(BootstrapScreen.Event.CloseRecord)
       }
       val pagingItems = (state.records as? RecordListState.Ready)?.pages?.collectAsLazyPagingItems()
@@ -79,7 +79,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
         }
         val transientScrollState = rememberLazyListState()
         val scrollState = when {
-          state.session !is SessionState.SignedIn -> transientScrollState
+          !state.canReadRecords -> transientScrollState
           state.selectedRecordId != null -> detailScrollState
           state.records is RecordListState.Ready -> listScrollState
           else -> transientScrollState
@@ -156,8 +156,11 @@ private fun BootstrapControls(
         state.eventSink(BootstrapScreen.Event.SelectTheme(it))
       }
     }
-    if (state.session is SessionState.SignedIn) {
-      if (state.selectedRecordId == null) item(key = "record-sync") {
+    if (state.canReadRecords) {
+      if (state.session == SessionState.Unavailable) item(key = "offline-notice") {
+        Text(stringResource(R.string.record_offline))
+      }
+      if (state.session is SessionState.SignedIn && state.selectedRecordId == null) item(key = "record-sync") {
         RecordSyncPanel(state.sync, state.eventSink)
       }
       if (state.selectedRecordId == null) recordListItems(state.records, pagingItems, state.eventSink)
