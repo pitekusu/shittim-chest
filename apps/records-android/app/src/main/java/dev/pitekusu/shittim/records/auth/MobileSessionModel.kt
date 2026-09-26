@@ -3,12 +3,15 @@ package dev.pitekusu.shittim.records.auth
 import androidx.annotation.MainThread
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.pitekusu.shittim.records.storage.RecordCacheException
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,7 +37,10 @@ internal sealed interface SessionState {
 internal class MobileSessionModel(
   private val client: MobileAuthClient,
   private val readToken: () -> StoredToken?,
+  private val saveToken: (StoredToken) -> Unit,
   private val clearToken: () -> Unit,
+  private val activateCacheAccount: suspend (String) -> Unit,
+  private val clearRecords: suspend () -> Unit,
   private val clock: Clock = Clock.systemUTC(),
 ) : ViewModel() {
   private val mutableState = MutableStateFlow<SessionState>(SessionState.Checking)
@@ -43,8 +49,24 @@ internal class MobileSessionModel(
   private var operation: Job? = null
   private var expiry: Job? = null
   private var returnTo = "/"
+  private var offlineAllowed = false
 
   val loginDestination: String get() = returnTo
+
+  // C31/C32 can read this gate without credentials or a saved profile. The UI remains online-only.
+  val offlineCacheAccountId: String? get() {
+    val currentState = state.value
+    val active = token ?: return null
+    val authorization = active.cacheAuthorization ?: return null
+    val readable = (currentState is SessionState.SignedIn &&
+      currentState.cacheAccountId == authorization.accountId) ||
+      (currentState == SessionState.Unavailable && offlineAllowed)
+    return authorization.accountId.takeIf {
+      readable && authorization.permits(clock.instant()) && state.value === currentState && token === active
+    }
+  }
+
+  fun isCacheAuthorized(accountId: String): Boolean = offlineCacheAccountId == accountId
 
   init { refresh() }
 
@@ -113,13 +135,18 @@ internal class MobileSessionModel(
       state.value is SessionState.SignedOut) return
     expiry?.cancel()
     val previous = token
+    token = null
+    offlineAllowed = false
     mutableState.value = SessionState.SigningOut
     returnTo = "/"
     operation = viewModelScope.launch {
       try {
         // Remove local access even if the network fails; never call an uncertain POST twice.
-        withContext(Dispatchers.IO) { clearToken() }
-        token = null
+        // Finish local deletion even if the Activity/ViewModel disappears during logout.
+        withContext(NonCancellable) {
+          try { clearRecords() }
+          finally { withContext(Dispatchers.IO) { clearToken() } }
+        }
         var notice: SessionNotice? = null
         if (previous != null) {
           try { client.logout(previous.accessToken) }
@@ -130,12 +157,14 @@ internal class MobileSessionModel(
         mutableState.value = SessionState.SignedOut(notice)
       } catch (error: CancellationException) { throw error }
       catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
+      catch (_: RecordCacheException) { mutableState.value = SessionState.StorageError }
     }
   }
 
   private fun refresh() {
     if (operation?.isActive == true) return
     expiry?.cancel()
+    offlineAllowed = false
     mutableState.value = SessionState.Checking
     operation = viewModelScope.launch {
       try {
@@ -148,33 +177,57 @@ internal class MobileSessionModel(
         } else {
           val response = client.session(stored.accessToken)
           // Neither a stale response nor a longer server value can extend the saved deadline.
-          val deadline = minOf(stored.expiresAt, response.expiresAt)
+          val verifiedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS)
+          val deadline = minOf(stored.expiresAt, response.expiresAt, verifiedAt.plus(Duration.ofDays(90)))
           if (!deadline.isAfter(clock.instant())) expire()
           else {
-            mutableState.value = SessionState.SignedIn(response.user, response.cacheAccountId, deadline, returnTo)
-            expiry = viewModelScope.launch {
-              delay(Duration.between(clock.instant(), deadline).toMillis().coerceAtLeast(1))
-              // Delay uses monotonic time, so moving the wall clock back cannot extend this session.
-              mutableState.value = SessionState.Checking
-              try { expire() }
-              catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
+            // Switch/erase before issuing a new permit, even when no record is fetched afterward.
+            activateCacheAccount(response.cacheAccountId)
+            val authorized = StoredToken(stored.accessToken, deadline,
+              CacheAuthorization(response.cacheAccountId, verifiedAt, deadline))
+            withContext(Dispatchers.IO) { saveToken(authorized) }
+            token = authorized
+            if (!deadline.isAfter(clock.instant())) expire()
+            else {
+              mutableState.value = SessionState.SignedIn(response.user, response.cacheAccountId, deadline, returnTo)
+              scheduleExpiry(deadline)
             }
           }
         }
       } catch (error: CancellationException) { throw error }
       catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
+      catch (_: RecordCacheException) { mutableState.value = SessionState.StorageError }
       catch (error: MobileAuthException) {
-        if (error.failure == MobileAuthFailure.AUTHENTICATION_REQUIRED) {
+        if (error.failure in setOf(MobileAuthFailure.AUTHENTICATION_REQUIRED, MobileAuthFailure.FORBIDDEN)) {
           try { expire() }
           catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
-        } else mutableState.value = SessionState.Unavailable
+        } else {
+          // Only connectivity/service failures allow the already-verified offline permit.
+          offlineAllowed = error.failure in setOf(MobileAuthFailure.NETWORK, MobileAuthFailure.UNAVAILABLE)
+          mutableState.value = SessionState.Unavailable
+          token?.let { stored ->
+            scheduleExpiry(minOf(stored.expiresAt, stored.cacheAuthorization?.expiresAt ?: stored.expiresAt))
+          }
+        }
       }
     }
   }
 
+  private fun scheduleExpiry(deadline: Instant) {
+    expiry = viewModelScope.launch {
+      delay(Duration.between(clock.instant(), deadline).toMillis().coerceAtLeast(1))
+      // The monotonic delay cannot be prolonged by moving the wall clock backward in this process.
+      mutableState.value = SessionState.Checking
+      try { expire() }
+      catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
+    }
+  }
+
   private suspend fun expire() {
-    withContext(Dispatchers.IO) { clearToken() }
+    offlineAllowed = false
     token = null
+    withContext(Dispatchers.IO) { clearToken() }
+    // Preserve record keys/ciphertext. Same-account reauthentication can unlock them again.
     // Keep a validated record link across expiry so the next login can return to it.
     // Explicit logout still clears the destination when switching accounts.
     mutableState.value = SessionState.SignedOut(SessionNotice.EXPIRED)
