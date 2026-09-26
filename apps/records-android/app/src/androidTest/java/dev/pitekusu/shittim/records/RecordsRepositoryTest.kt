@@ -106,6 +106,39 @@ class RecordsRepositoryTest {
     } finally { database.close() }
   }
 
+  @Test fun syncCheckpointSurvivesReopenAndRejectsInvalidOrUnauthorizedState() = runBlocking {
+    val checkpoint = RecordSyncCheckpoint(cursor = "synthetic_cursor.signature",
+      pendingIds = listOf(recordId), pageLoaded = true)
+    repository(MockEngine { error("unexpected_network_request") }).use { records ->
+      assertNull(records.syncCheckpoint(accountId))
+      records.saveSyncCheckpoint(accountId, checkpoint)
+      try {
+        records.saveSyncCheckpoint(accountId, checkpoint.copy(pageLoaded = false))
+        fail("invalid progress must not replace the saved checkpoint")
+      } catch (error: RecordReadException) {
+        assertEquals(RecordReadFailure.STORAGE_UNAVAILABLE, error.failure)
+      }
+    }
+    val marker = checkpoint.cursor!!
+    app.getDatabasePath(databaseName).parentFile!!.listFiles()!!
+      .filter { it.name.startsWith(databaseName) && it.isFile }
+      .forEach { assertFalse(it.readBytes().toString(Charsets.ISO_8859_1).contains(marker)) }
+    repository(MockEngine { error("unexpected_network_request") }).use { records ->
+      assertEquals(checkpoint, records.syncCheckpoint(accountId))
+      activeAccountId = ""
+      try {
+        records.syncCheckpoint(accountId)
+        fail("expired authorization must not read progress")
+      } catch (error: RecordReadException) {
+        assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure)
+      }
+    }
+    activeAccountId = "v".repeat(43)
+    repository(MockEngine { error("unexpected_network_request") }).use { records ->
+      assertNull(records.syncCheckpoint(activeAccountId))
+    }
+  }
+
   @Test fun previousAccountsLateResponseCannotDeleteTheNewCache() = runBlocking {
     val started = CompletableDeferred<Unit>()
     val release = CompletableDeferred<Unit>()
@@ -179,7 +212,10 @@ class RecordsRepositoryTest {
   @Test fun explicitLogoutInvalidatesPrivateKeyAndErasesAllRowsAndOwnerMarker() = runBlocking {
     repository(MockEngine {
       respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
-    }).use { it.recentRecords(token, accountId, null) }
+    }).use {
+      it.recentRecords(token, accountId, null)
+      it.saveSyncCheckpoint(accountId, RecordSyncCheckpoint())
+    }
     val unrelated = File(privateDirectory, "unrelated").apply { writeText("keep") }
     val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
       .setDriver(AndroidSQLiteDriver()).build()

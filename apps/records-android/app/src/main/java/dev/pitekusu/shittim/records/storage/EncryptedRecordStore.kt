@@ -10,7 +10,9 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal enum class CachedRecordPart(val code: String) { LIST("list"), DETAIL("detail") }
+internal enum class CachedRecordPart(val code: String) {
+  LIST("list"), DETAIL("detail"), SYNC_PROGRESS("sync-progress")
+}
 
 internal class RecordCacheException : Exception("record_cache_unavailable")
 

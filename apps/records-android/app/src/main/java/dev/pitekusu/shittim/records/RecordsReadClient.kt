@@ -126,6 +126,10 @@ internal class RecordAvatar(val url: String?, val fallbackVariant: String)
 
 internal class RecordListPage(val items: List<RecordListEntry>, val nextCursor: String?)
 
+private val recordCursorPattern = Regex("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+")
+internal fun validRecordCursor(value: String): Boolean =
+  value.length <= 4096 && recordCursorPattern.matches(value)
+
 internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.create {
   config {
     followRedirects(false)
@@ -300,13 +304,13 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
 
   suspend fun recentRecords(accessToken: String, cursor: String? = null): RecordListPage {
     if (!mobileOpaqueValue.matches(accessToken)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
-    if (cursor != null && !validCursor(cursor)) {
+    if (cursor != null && !validRecordCursor(cursor)) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
     val page: RecordListResponse = read("/api/v1/records?limit=12&sort=newest", accessToken, cursor)
     if (page.schemaVersion != 1 || page.items.size > 12 ||
       page.items.map { it.recordId }.toSet().size != page.items.size ||
-      (page.nextCursor != null && (!validCursor(page.nextCursor) || page.nextCursor == cursor))) {
+      (page.nextCursor != null && (!validRecordCursor(page.nextCursor) || page.nextCursor == cursor))) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
     return try {
@@ -340,9 +344,6 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
   }
-
-  private fun validCursor(value: String): Boolean =
-    value.length <= 4096 && CURSOR_PATTERN.matches(value)
 
   private fun validAvatarUrl(raw: String): Boolean = try {
     val uri = URI(raw)
@@ -481,6 +482,5 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   private companion object {
     val PARTICIPANTS = setOf("participant-a", "participant-b", "participant-c")
     val AVATAR_VARIANTS = setOf("cyan", "pink", "lavender")
-    val CURSOR_PATTERN = Regex("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+")
   }
 }
