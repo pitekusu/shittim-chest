@@ -26,7 +26,10 @@ class MainActivity : ComponentActivity() {
         MobileSessionModel(MobileAuthClient(), store::read, store::save, store::clear, store::beginLogout,
           store::isLogoutPending, store::completeLogout,
           { accountId -> RecordCacheAccount.activate(applicationContext, accountId) },
-          { RecordCacheAccount.clear(applicationContext) })
+          {
+            RecordSyncScheduler.cancel(applicationContext)
+            RecordCacheAccount.clear(applicationContext)
+          })
       }
     }
   }

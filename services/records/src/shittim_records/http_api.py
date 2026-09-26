@@ -53,7 +53,9 @@ REDIRECT_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
-MOBILE_READ_ROUTES = frozenset({"GET /api/v1/records", "GET /api/v1/records/{recordId}"})
+MOBILE_READ_ROUTES = frozenset(
+    {"GET /api/v1/records", "GET /api/v1/records/{recordId}", "GET /api/v1/records/sync-index"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +244,13 @@ class ReadHttpController:
                         cursor=_optional_single(query, "cursor"),
                     ),
                     now=now,
+                )
+            elif request.route_key == "GET /api/v1/records/sync-index":
+                query = _query(request.raw_query)
+                if not set(query).issubset({"cursor"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.get_sync_index(
+                    cursor=_optional_single(query, "cursor"), now=now
                 )
             elif request.route_key == "GET /api/v1/records/{recordId}":
                 result = self._records.get_record(

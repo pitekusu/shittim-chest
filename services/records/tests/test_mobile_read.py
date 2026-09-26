@@ -12,7 +12,7 @@ from tests.test_mobile_auth_adapters import mobile_session
 from tests.test_mobile_session import SessionStore
 
 from shittim_records.auth import SESSION_COOKIE_NAME, AuthFailure, _digest
-from shittim_records.contracts import RecordDetailResponse
+from shittim_records.contracts import RecordDetailResponse, RecordSyncIndexResponse
 from shittim_records.http_api import ReadHttpController
 
 TOKEN = "t" * 43
@@ -22,6 +22,9 @@ DIGEST = _digest(SESSION_KEY, "mobile-session", TOKEN)
 
 
 class Records(FakeRecords):
+    def get_sync_index(self, **kwargs: Any) -> RecordSyncIndexResponse:
+        return RecordSyncIndexResponse(schema_version=1, items=())
+
     def get_record(self, **kwargs: Any) -> Any:
         assert kwargs["record_id"] == "r" * 43
         return RecordDetailResponse.model_validate(_record_detail_payload())
@@ -42,7 +45,10 @@ def read():
     return controller, store, records
 
 
-@pytest.mark.parametrize("route", ["GET /api/v1/records", "GET /api/v1/records/{recordId}"])
+@pytest.mark.parametrize(
+    "route",
+    ["GET /api/v1/records", "GET /api/v1/records/{recordId}", "GET /api/v1/records/sync-index"],
+)
 def test_cookie_and_bearer_return_the_same_public_records_without_cookies(read, route):
     controller, store, _records = read
     path = {"recordId": "r" * 43}
@@ -54,6 +60,17 @@ def test_cookie_and_bearer_return_the_same_public_records_without_cookies(read, 
     assert TOKEN not in bearer["body"] and DIGEST not in bearer["body"]
     assert store.reads == [DIGEST]
     assert len(store.sessions) == 1 and not store.deleted
+
+
+def test_sync_index_requires_auth_and_rejects_unknown_or_duplicate_parameters(read):
+    controller, _store, _records = read
+    route = "GET /api/v1/records/sync-index"
+    assert controller.handle(event(route), now=NOW)["statusCode"] == 401
+    for query in ("limit=100", "cursor=a&cursor=b"):
+        assert (
+            controller.handle(event(route, query=query, headers=BEARER), now=NOW)["statusCode"]
+            == 400
+        )
 
 
 @pytest.mark.parametrize(

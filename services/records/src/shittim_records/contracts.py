@@ -225,6 +225,20 @@ class RecordListResponse(PublicModel):
     next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
 
 
+class RecordSyncReference(PublicModel):
+    record_id: RecordId
+    revision: RecordId
+    avatar_revision: RecordId
+
+
+class RecordSyncIndexResponse(PublicModel):
+    """Content-free inventory; clients download only missing or changed records."""
+
+    schema_version: Literal[1]
+    items: Annotated[tuple[RecordSyncReference, ...], Field(max_length=50)]
+    next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
+
+
 class InitialOpinionView(PublicModel):
     participant: ParticipantSlot
     summary: NonEmptyText
@@ -943,6 +957,7 @@ class MomotalkRoomResponse(PublicModel):
 
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordListResponse,
+    RecordSyncIndexResponse,
     RecordDetailResponse,
     RankingsResponse,
     AffectionRankingsResponse,

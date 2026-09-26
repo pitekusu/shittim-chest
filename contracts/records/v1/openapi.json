@@ -3628,6 +3628,72 @@
         "title": "RecordResultSummary",
         "type": "object"
       },
+      "RecordSyncIndexResponse": {
+        "additionalProperties": false,
+        "description": "Content-free inventory; clients download only missing or changed records.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordSyncReference"
+            },
+            "maxItems": 50,
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nextcursor"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "items"
+        ],
+        "title": "RecordSyncIndexResponse",
+        "type": "object"
+      },
+      "RecordSyncReference": {
+        "additionalProperties": false,
+        "properties": {
+          "avatarRevision": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Avatarrevision",
+            "type": "string"
+          },
+          "recordId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Recordid",
+            "type": "string"
+          },
+          "revision": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recordId",
+          "revision",
+          "avatarRevision"
+        ],
+        "title": "RecordSyncReference",
+        "type": "object"
+      },
       "RequesterSummary": {
         "additionalProperties": false,
         "properties": {
@@ -6466,6 +6532,113 @@
               }
             },
             "description": "Completed debate records"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/records/sync-index": {
+      "get": {
+        "operationId": "getRecordSyncIndex",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordSyncIndexResponse"
+                }
+              }
+            },
+            "description": "Content-free sync inventory"
           },
           "400": {
             "content": {

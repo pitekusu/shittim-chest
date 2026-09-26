@@ -42,6 +42,7 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
     }
     assert bearer_routes == {
         ("get", "/api/v1/records"),
+        ("get", "/api/v1/records/sync-index"),
         ("get", "/api/v1/records/{recordId}"),
         ("get", "/api/v1/auth/mobile/session"),
         ("post", "/api/v1/auth/mobile/logout"),

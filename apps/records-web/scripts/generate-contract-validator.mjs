@@ -12,6 +12,7 @@ const validators = [
   ["ErrorResponse", "error-response-validator.mjs"],
   ["SessionResponse", "session-response-validator.mjs"],
   ["RecordListResponse", "record-list-response-validator.mjs"],
+  ["RecordSyncIndexResponse", "record-sync-index-response-validator.mjs"],
   ["RecordDetailResponse", "record-detail-response-validator.mjs"],
   ["RankingsResponse", "rankings-response-validator.mjs"],
   ["AffectionRankingsResponse", "affection-rankings-response-validator.mjs"],

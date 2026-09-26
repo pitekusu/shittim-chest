@@ -54,9 +54,6 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           if (state.updating) Text(stringResource(R.string.record_refreshing))
           if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
             R.string.record_save_failed else R.string.record_refresh_failed))
-          TextButton(onClick = { onEvent(BootstrapScreen.Event.RetryRecord) }, enabled = !state.updating) {
-            Text(stringResource(R.string.record_refresh))
-          }
           Text(stringResource(R.string.record_question), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary)
           RecordMarkdown(state.preview.question)

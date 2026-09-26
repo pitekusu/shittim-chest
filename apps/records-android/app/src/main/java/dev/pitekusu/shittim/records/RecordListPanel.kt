@@ -56,6 +56,7 @@ internal fun LazyListScope.recordListItems(
   state: RecordListState,
   pagingItems: LazyPagingItems<RecordListEntry>?,
   onEvent: (BootstrapScreen.Event) -> Unit,
+  sync: RecordSyncState = RecordSyncState.Idle,
 ) {
   item(key = "records-heading") {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -65,20 +66,22 @@ internal fun LazyListScope.recordListItems(
         modifier = Modifier.semantics { heading() })
     }
   }
+  if (sync == RecordSyncState.Running || sync is RecordSyncState.Failed) {
+    item(key = "records-sync-status") { RecordSyncStatus(sync) }
+  }
   if (state !is RecordListState.Ready || pagingItems == null) {
     item(key = "records-waiting") {
-      if (state is RecordListState.Error) Text(stringResource(R.string.record_list_error)) else LoadingRecords()
+      if (state is RecordListState.Error) {
+        if (sync !is RecordSyncState.Failed) Text(stringResource(R.string.record_list_error))
+      } else LoadingRecords()
     }
     return
   }
-  item(key = "records-source") {
+  if (state.saved || state.refreshFailure != null) item(key = "records-source") {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       if (state.saved) Text(stringResource(R.string.record_saved), color = MaterialTheme.colorScheme.primary)
       if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
         R.string.record_save_failed else R.string.record_refresh_failed))
-      Button(onClick = { onEvent(BootstrapScreen.Event.RefreshRecords) }) {
-        Text(stringResource(R.string.record_refresh))
-      }
     }
   }
   when (pagingItems.loadState.refresh) {
@@ -162,8 +165,8 @@ private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
       }
     }
     val context = LocalContext.current
-    val request = remember(avatar.url) {
-      avatar.url?.let { ImageRequest.Builder(context).data(it).build() }
+    val request = remember(avatar.bytes, avatar.url) {
+      (avatar.bytes ?: avatar.url)?.let { ImageRequest.Builder(context).data(it).build() }
     }
     if (request != null) {
       AsyncImage(model = request, contentDescription = null,

@@ -235,7 +235,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 6);
     template.resourceCountIs("AWS::Lambda::Alias", 6);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 33);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 34);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -622,6 +622,9 @@ describe("RecordsApplicationStack", () => {
     const { template } = fixture;
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
     const authTarget = routes.find(route => route.Properties.RouteKey === "GET /api/v1/session")!.Properties.Target;
+    const readTarget = routes.find(route => route.Properties.RouteKey === "GET /api/v1/records")!.Properties.Target;
+    expect(routes.find(route => route.Properties.RouteKey === "GET /api/v1/records/sync-index")?.Properties.Target)
+      .toEqual(readTarget);
     const expected = [
       "POST /api/v1/auth/mobile/start",
       "GET /api/v1/auth/mobile/authorize",

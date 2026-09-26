@@ -160,10 +160,8 @@ private fun BootstrapControls(
       if (state.session == SessionState.Unavailable) item(key = "offline-notice") {
         Text(stringResource(R.string.record_offline))
       }
-      if (state.session is SessionState.SignedIn && state.selectedRecordId == null) item(key = "record-sync") {
-        RecordSyncPanel(state.sync, state.eventSink)
-      }
-      if (state.selectedRecordId == null) recordListItems(state.records, pagingItems, state.eventSink)
+      if (state.selectedRecordId == null) recordListItems(state.records, pagingItems, state.eventSink,
+        sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle)
       else item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink) }
     }
   }
