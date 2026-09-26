@@ -9,8 +9,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalContext
 import com.slack.circuit.runtime.CircuitUiEvent
 import com.slack.circuit.runtime.CircuitUiState
@@ -21,9 +23,9 @@ import dev.pitekusu.shittim.records.auth.MobileLoginContract
 import dev.pitekusu.shittim.records.auth.MobileLoginStatus
 import dev.pitekusu.shittim.records.auth.MobileLoginStep
 import dev.pitekusu.shittim.records.auth.MobileSessionModel
-import dev.pitekusu.shittim.records.auth.MobileSessionUser
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
+import kotlinx.coroutines.flow.conflate
 
 internal enum class ThemeChoice {
   System,
@@ -65,13 +67,16 @@ internal class BootstrapPresenter(
     // Restore the presentation state, without persisting a device/account preference.
     var themeChoice by rememberSaveable { mutableStateOf(ThemeChoice.System) }
     val sessionState by session.state.collectAsState()
+    val cachePermit by session.cachePermit.collectAsState()
     val destination by session.destination.collectAsState()
-    val cacheAccountId = session.offlineCacheAccountId
+    val cacheAccountId = cachePermit?.accountId?.takeIf(session::isCacheAuthorized)
     val context = LocalContext.current
     val signedIn = sessionState is SessionState.SignedIn
-    DisposableEffect(signedIn) {
-      // Discard presigned avatar bitmaps when authentication leaves this screen.
-      onDispose { if (signedIn) SingletonImageLoader.get(context).memoryCache?.clear() }
+    val currentSignedIn by rememberUpdatedState(signedIn)
+    val currentSessionState by rememberUpdatedState(sessionState)
+    DisposableEffect(cacheAccountId) {
+      // Restored offline access can show decoded avatars before SignedIn exists.
+      onDispose { if (cacheAccountId != null) SingletonImageLoader.get(context).memoryCache?.clear() }
     }
     val launcher = rememberLauncherForActivityResult(MobileLoginContract(), session::loginResult)
     val records = remember(context.applicationContext) {
@@ -81,13 +86,13 @@ internal class BootstrapPresenter(
       catch (_: Exception) { null }
     }
     DisposableEffect(records) { onDispose { records?.close() } }
-    // The preview belongs to this exact session, including after an account switch.
-    var record by remember(sessionState) { mutableStateOf<RecordPreviewState>(RecordPreviewState.Idle) }
+    // Keep the same account's saved preview during a foreground session check.
+    // Permission loss, account change, or navigation drops it immediately.
+    var record by remember(cacheAccountId, destination) { mutableStateOf<RecordPreviewState>(RecordPreviewState.Idle) }
     var recordRetry by remember { mutableStateOf(0) }
     var listRetry by remember { mutableStateOf(0) }
     var recordList by remember { mutableStateOf<RecordListState>(RecordListState.Idle) }
-    var listOwner by remember { mutableStateOf<MobileSessionUser?>(null) }
-    var lastListRetry by remember { mutableStateOf(-1) }
+    var listOwner by remember { mutableStateOf<String?>(null) }
     var syncState by remember { mutableStateOf<RecordSyncState>(RecordSyncState.Idle) }
     LaunchedEffect(cacheAccountId, signedIn) {
       if (cacheAccountId != null && signedIn) RecordSyncScheduler.schedule(context)
@@ -101,7 +106,7 @@ internal class BootstrapPresenter(
           // Observe work/progress changes as well, including deletion-only completion.
           listRetry++
           if ((status as? RecordSyncState.Failed)?.reason == RecordReadFailure.AUTH_REQUIRED) {
-            session.onForeground()
+            session.onSyncAuthenticationRequired()
           }
         }
       }
@@ -109,84 +114,63 @@ internal class BootstrapPresenter(
     // The session model owns the validated destination across foreground checks and rotation.
     val selectedRecordId = destination.takeIf { cacheAccountId != null && it.startsWith("/records/") }
       ?.removePrefix("/records/")
-    LaunchedEffect(sessionState, listRetry) {
-      val currentSession = sessionState
+    LaunchedEffect(cacheAccountId) {
       if (cacheAccountId == null) {
-        if (currentSession != SessionState.Checking) {
-          listOwner = null
-          recordList = RecordListState.Idle
-        }
+        listOwner = null
+        recordList = RecordListState.Idle
         return@LaunchedEffect
       }
-      when (currentSession) {
-        is SessionState.SignedIn -> {
-          // Keep loaded pages while navigating to a detail; replace them on account change.
-          if (lastListRetry == listRetry && listOwner === currentSession.user && recordList is RecordListState.Ready) {
-            return@LaunchedEffect
-          }
-          listOwner = currentSession.user
-          lastListRetry = listRetry
-          val saved = try { records?.cachedRecords(cacheAccountId)
-            ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
-          catch (error: RecordReadException) {
-            if (error.failure == RecordReadFailure.AUTH_REQUIRED) return@LaunchedEffect
-            recordList = RecordListState.Error(error.failure)
-            return@LaunchedEffect
-          }
-          // No online paging/detail refresh on ordinary navigation: the worker alone
-          // reconciles revisions, while the UI reads decrypted local data immediately.
-          recordList = if (saved.isEmpty() && syncState is RecordSyncState.Failed) {
-            RecordListState.Error((syncState as RecordSyncState.Failed).reason)
-          } else if (saved.isEmpty() && syncState != RecordSyncState.Completed) RecordListState.Idle
-          else RecordListState.Ready.fromSaved(saved)
+      if (listOwner != cacheAccountId) recordList = RecordListState.Idle
+      listOwner = cacheAccountId
+      // Finish the current local read; progress only queues the latest reload.
+      // collectLatest / effect keys based on progress would starve a slow decrypted read.
+      snapshotFlow { listRetry to (currentSessionState == SessionState.Unavailable) }.conflate().collect {
+        val saved = try { records?.cachedRecords(cacheAccountId)
+          ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+        catch (error: RecordReadException) {
+          if (session.isCacheAuthorized(cacheAccountId)) recordList = RecordListState.Error(error.failure)
+          return@collect
         }
-        SessionState.Unavailable -> {
-          listOwner = null
-          recordList = try {
-            val saved = records?.cachedRecords(cacheAccountId)
-              ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
-            RecordListState.Ready.fromSaved(saved)
-          } catch (error: RecordReadException) { RecordListState.Error(error.failure) }
-        }
-        is SessionState.SignedOut, SessionState.SigningOut, SessionState.Browser,
-        SessionState.StorageError -> {
-          listOwner = null
-          recordList = RecordListState.Idle
-        }
-        SessionState.Checking -> Unit
+        if (!session.isCacheAuthorized(cacheAccountId)) return@collect
+        // Network reconciliation belongs to the worker, not ordinary screen navigation.
+        recordList = if (currentSessionState == SessionState.Unavailable) RecordListState.Ready.fromSaved(saved)
+        else if (saved.isEmpty() && syncState is RecordSyncState.Failed) {
+          RecordListState.Error((syncState as RecordSyncState.Failed).reason)
+        } else if (saved.isEmpty() && syncState != RecordSyncState.Completed) RecordListState.Idle
+        else RecordListState.Ready.fromSaved(saved)
       }
     }
-    LaunchedEffect(sessionState, selectedRecordId, recordRetry, listRetry) {
-      record = RecordPreviewState.Idle
+    LaunchedEffect(cacheAccountId, selectedRecordId) {
       if (cacheAccountId != null && selectedRecordId != null) {
-        record = RecordPreviewState.Loading
-        record = try {
-          val saved = records?.cachedRecord(cacheAccountId, selectedRecordId)
-          if (saved != null) RecordPreviewState.Ready(saved, saved = true)
-          else if (!signedIn) RecordPreviewState.Empty
-          else try {
-            val result = session.withAuthorizedToken {
-              records?.record(it, cacheAccountId, selectedRecordId)
-                ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
-            }
-            when (result) {
-              null -> RecordPreviewState.Idle
-              RecordReadResult.Empty -> RecordPreviewState.Error(RecordReadFailure.INVALID_RESPONSE)
-              is RecordReadResult.Found -> RecordPreviewState.Ready(result.preview)
+        snapshotFlow { Triple(recordRetry, listRetry, currentSignedIn) }.conflate().collect {
+          if (record !is RecordPreviewState.Ready) record = RecordPreviewState.Loading
+          val loaded = try {
+            val saved = records?.cachedRecord(cacheAccountId, selectedRecordId)
+            if (saved != null) RecordPreviewState.Ready(saved, saved = true)
+            else if (!currentSignedIn) RecordPreviewState.Empty
+            else try {
+              val result = session.withAuthorizedToken {
+                records?.record(it, cacheAccountId, selectedRecordId)
+                  ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
+              }
+              when (result) {
+                null -> RecordPreviewState.Idle
+                RecordReadResult.Empty -> RecordPreviewState.Error(RecordReadFailure.INVALID_RESPONSE)
+                is RecordReadResult.Found -> RecordPreviewState.Ready(result.preview)
+              }
+            } catch (error: RecordReadException) {
+              if (error.failure == RecordReadFailure.NOT_FOUND) listRetry++
+              throw error
             }
           } catch (error: RecordReadException) {
-            if (error.failure == RecordReadFailure.NOT_FOUND) listRetry++
-            throw error
+            if (error.failure == RecordReadFailure.AUTH_REQUIRED) session.onAuthenticationRequired()
+            RecordPreviewState.Error(error.failure)
           }
-        } catch (error: RecordReadException) {
-          if (error.failure == RecordReadFailure.AUTH_REQUIRED) session.onForeground()
-          RecordPreviewState.Error(error.failure)
+          if (session.isCacheAuthorized(cacheAccountId)) record = loaded
         }
       }
     }
-    val currentSignedIn = sessionState as? SessionState.SignedIn
-    val visibleList = if (cacheAccountId != null && (currentSignedIn == null ||
-      listOwner === currentSignedIn.user)) recordList else RecordListState.Idle
+    val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId) recordList else RecordListState.Idle
     return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId, syncState,
       canReadRecords = cacheAccountId != null) { event ->
       when (event) {
@@ -203,7 +187,7 @@ internal class BootstrapPresenter(
           recordRetry++
           if (!signedIn) session.retry() else RecordSyncScheduler.syncNow(context)
         }
-        BootstrapScreen.Event.RecordsAuthRequired -> session.onForeground()
+        BootstrapScreen.Event.RecordsAuthRequired -> session.onAuthenticationRequired()
         is BootstrapScreen.Event.OpenRecord -> if (
           event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
         ) session.openDestination("/records/${event.recordId}")

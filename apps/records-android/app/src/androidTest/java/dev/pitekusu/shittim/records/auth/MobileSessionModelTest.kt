@@ -26,6 +26,188 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun knownDenialStaysLockedAfterNetworkFailureAndOfflineRestart() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.status = HttpStatusCode.ServiceUnavailable
+        model.onAuthenticationRequired()
+        assertNull(model.cachePermit.value)
+        model.await<SessionState.Unavailable>()
+        assertNull(fixture.stored?.cacheAuthorization)
+        val saved = fixture.stored
+        fixture.owner.clear()
+        Fixture().use { afterRestart ->
+          afterRestart.stored = saved
+          afterRestart.status = HttpStatusCode.ServiceUnavailable
+          val restarted = afterRestart.start()
+          restarted.await<SessionState.Unavailable>()
+          assertNull(restarted.offlineCacheAccountId)
+          assertNull(restarted.cachePermit.value)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun denialAfterSessionResponseCannotPublishItsOlderPermit() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.activationGate = CompletableDeferred()
+        fixture.activationStarted = CompletableDeferred()
+        model.onForeground()
+        withTimeout(5_000) { fixture.activationStarted.await() }
+        model.onAuthenticationRequired()
+        assertNull(model.cachePermit.value)
+        fixture.status = HttpStatusCode.Forbidden
+        fixture.activationGate!!.complete(Unit)
+        model.await<SessionState.SignedOut>()
+        assertNull(model.cachePermit.value)
+        assertNull(fixture.stored)
+        assertEquals(3, fixture.gets) // The final check starts after the denial.
+      }
+    }
+  }
+
+  @Test
+  fun logoutDuringRestoredAccessCancelsVerificationAndCompletesLocalDeletion() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = StoredToken(fixture.validToken.accessToken, fixture.validToken.expiresAt,
+          CacheAuthorization("u".repeat(43), fixture.now, fixture.validToken.expiresAt))
+        fixture.sessionGate = CompletableDeferred()
+        fixture.logoutGate = CompletableDeferred()
+        val model = fixture.start()
+        withTimeout(5_000) { fixture.sessionStarted.await() }
+        model.logout()
+        model.logout()
+        assertEquals(SessionState.SigningOut, model.state.value)
+        assertNull(model.offlineCacheAccountId)
+        fixture.logoutGate!!.complete(Unit)
+        model.await<SessionState.SignedOut>()
+        fixture.sessionGate!!.complete(Unit)
+        yield()
+        assertNull(fixture.stored)
+        assertFalse(fixture.logoutPending)
+        assertEquals(1, fixture.cacheClears)
+        assertEquals(1, fixture.posts)
+        assertTrue(fixture.activatedAccounts.isEmpty())
+      }
+    }
+  }
+
+  @Test
+  fun savedPermitAllowsReadsBeforeSessionResponseButNeverAuthorizesNetworkRequests() = runBlocking {
+    withContext(Dispatchers.Main) {
+      for (hasPermit in listOf(true, false)) {
+        Fixture().use { fixture ->
+          val permit = CacheAuthorization("u".repeat(43), fixture.now, fixture.validToken.expiresAt)
+          fixture.stored = StoredToken(fixture.validToken.accessToken, fixture.validToken.expiresAt,
+            permit.takeIf { hasPermit })
+          fixture.sessionGate = CompletableDeferred()
+          fixture.status = HttpStatusCode.Unauthorized
+          val model = fixture.start()
+          withTimeout(5_000) { fixture.sessionStarted.await() }
+          assertEquals(SessionState.Checking, model.state.value)
+          assertEquals(hasPermit, model.isCacheAuthorized(permit.accountId))
+          assertNull(model.withAuthorizedToken { fail("checking must not authorize a record request") })
+          assertEquals(0, fixture.activatedAccounts.size)
+          fixture.sessionGate!!.complete(Unit)
+          model.await<SessionState.SignedOut>()
+          assertNull(model.cachePermit.value)
+          assertNull(model.offlineCacheAccountId)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun rejectionDuringForegroundCheckImmediatelyLocksCacheAndNetworkFailureCannotRestoreIt() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.sessionStarted = CompletableDeferred()
+        fixture.sessionGate = CompletableDeferred()
+        fixture.status = HttpStatusCode.ServiceUnavailable
+        model.onForeground()
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
+        withTimeout(5_000) { fixture.sessionStarted.await() }
+        model.onAuthenticationRequired()
+        assertNull(model.cachePermit.value)
+        fixture.sessionGate!!.complete(Unit)
+        model.await<SessionState.Unavailable>()
+        assertNull(model.offlineCacheAccountId)
+        fixture.sessionGate = null
+        fixture.status = HttpStatusCode.OK
+        yield()
+        model.retry()
+        model.await<SessionState.SignedIn>()
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
+      }
+    }
+  }
+
+  @Test
+  fun savedDeadlineExpiresEvenWhileSessionVerificationIsPending() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        val deadline = fixture.now.plusSeconds(1)
+        fixture.stored = StoredToken("t".repeat(43), deadline,
+          CacheAuthorization("u".repeat(43), fixture.now, deadline))
+        fixture.sessionGate = CompletableDeferred()
+        val model = fixture.start()
+        withTimeout(5_000) { fixture.sessionStarted.await() }
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
+        model.await<SessionState.SignedOut>()
+        fixture.sessionGate!!.complete(Unit)
+        yield()
+        assertNull(model.cachePermit.value)
+        assertNull(fixture.stored)
+        assertEquals(0, fixture.activatedAccounts.size)
+      }
+    }
+  }
+
+  @Test
+  fun syncFailureOnlyLocksThePermitThatTheWorkerActuallyInvalidated() = runBlocking {
+    withContext(Dispatchers.Main) {
+      for (invalidated in listOf(false, true)) {
+        Fixture().use { fixture ->
+          fixture.stored = fixture.validToken
+          val model = fixture.start()
+          model.await<SessionState.SignedIn>()
+          yield()
+          fixture.status = HttpStatusCode.ServiceUnavailable
+          if (invalidated) {
+            fixture.sessionStarted = CompletableDeferred()
+            fixture.sessionGate = CompletableDeferred()
+            model.onForeground()
+            withTimeout(5_000) { fixture.sessionStarted.await() }
+            fixture.stored = fixture.validToken // Worker strips only its matching permit.
+          }
+          model.onSyncAuthenticationRequired()
+          if (invalidated) {
+            withTimeout(5_000) { model.cachePermit.first { it == null } }
+            fixture.sessionGate!!.complete(Unit)
+          }
+          model.await<SessionState.Unavailable>()
+          assertEquals(!invalidated, model.isCacheAuthorized("u".repeat(43)))
+        }
+      }
+    }
+  }
+
+  @Test
   fun recordLinkBecomesLoginDestinationAndUpdatesActiveSession() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
@@ -127,6 +309,7 @@ class MobileSessionModelTest {
         fixture.sessionGate = CompletableDeferred()
         model.onForeground()
         assertEquals(SessionState.Checking, model.state.value)
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
         fixture.sessionGate?.complete(Unit)
         model.await<SessionState.Unavailable>()
         assertNotNull(fixture.stored)
@@ -210,20 +393,33 @@ class MobileSessionModelTest {
   @Test
   fun responseFinishingAfterLogoutCannotBeUsedForTheOldAccount() = runBlocking {
     withContext(Dispatchers.Main) {
-      Fixture().use { fixture ->
-        fixture.stored = fixture.validToken
-        val model = fixture.start()
-        model.await<SessionState.SignedIn>()
-        val entered = CompletableDeferred<Unit>()
-        val finish = CompletableDeferred<String>()
-        val pending = async {
-          model.withAuthorizedToken { entered.complete(Unit); finish.await() }
+      for (rejected in listOf(false, true)) {
+        Fixture().use { fixture ->
+          fixture.stored = fixture.validToken
+          val model = fixture.start()
+          model.await<SessionState.SignedIn>()
+          val entered = CompletableDeferred<Unit>()
+          val finish = CompletableDeferred<String>()
+          val pending = async {
+            model.withAuthorizedToken {
+              entered.complete(Unit)
+              val result = finish.await()
+              if (rejected) throw MobileAuthException(MobileAuthFailure.AUTHENTICATION_REQUIRED)
+              result
+            }
+          }
+          entered.await()
+          model.logout()
+          model.await<SessionState.SignedOut>()
+          yield()
+          assertTrue(model.beginLogin())
+          fixture.stored = StoredToken("x".repeat(43), fixture.validToken.expiresAt)
+          model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN))
+          model.await<SessionState.SignedIn>()
+          finish.complete("古い利用者の記録")
+          assertNull(pending.await())
+          assertTrue(model.isCacheAuthorized("u".repeat(43)))
         }
-        entered.await()
-        model.logout()
-        model.await<SessionState.SignedOut>()
-        finish.complete("古い利用者の記録")
-        assertNull(pending.await())
       }
     }
   }
@@ -376,6 +572,9 @@ class MobileSessionModelTest {
     var posts = 0
     var status = HttpStatusCode.OK
     var sessionGate: CompletableDeferred<Unit>? = null
+    var sessionStarted = CompletableDeferred<Unit>()
+    var activationGate: CompletableDeferred<Unit>? = null
+    var activationStarted = CompletableDeferred<Unit>()
     var logoutGate: CompletableDeferred<Unit>? = null
     val postStarted = CompletableDeferred<Unit>()
     val owner = ViewModelStore()
@@ -383,6 +582,7 @@ class MobileSessionModelTest {
       when (request.url.encodedPath.substringAfterLast('/')) {
         "session" -> {
           gets++
+          sessionStarted.complete(Unit)
           sessionGate?.await()
           respond("""{"schemaVersion":1,"isAdmin":false,"cacheAccountId":"${"u".repeat(43)}","expiresAt":"$serverExpiry",
             "user":{"displayName":"$name","avatar":{"kind":"placeholder","alt":"架空","fallbackVariant":"cyan"}}}""",
@@ -406,13 +606,16 @@ class MobileSessionModelTest {
       assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
       if (clearFails) throw TokenStorageException()
       stored = null
+    }, { expected ->
+      assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
+      stored?.takeIf { it.accessToken == expected }?.let { stored = StoredToken(it.accessToken, it.expiresAt) }
     }, {
       logoutPending = true
     }, { logoutPending }, {
       assertNull(stored)
       assertFalse(cacheClearFails)
       logoutPending = false
-    }, { activatedAccounts.add(it) }, {
+    }, { activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it) }, {
       cacheClears++
       if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()
     }, Clock.fixed(now, ZoneOffset.UTC)).also { owner.put("session", it) }

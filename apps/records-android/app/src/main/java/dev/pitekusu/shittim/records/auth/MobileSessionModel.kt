@@ -12,6 +12,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +40,7 @@ internal class MobileSessionModel(
   private val readToken: () -> StoredToken?,
   private val saveToken: (StoredToken) -> Unit,
   private val clearToken: () -> Unit,
+  private val invalidateCacheAuthorization: (String) -> Unit,
   private val beginLocalLogout: () -> Unit,
   private val isLocalLogoutPending: () -> Boolean,
   private val completeLocalLogout: () -> Unit,
@@ -48,6 +50,8 @@ internal class MobileSessionModel(
 ) : ViewModel() {
   private val mutableState = MutableStateFlow<SessionState>(SessionState.Checking)
   val state = mutableState.asStateFlow()
+  private val mutableCachePermit = MutableStateFlow<CacheAuthorization?>(null)
+  val cachePermit = mutableCachePermit.asStateFlow()
   private var token: StoredToken? = null
   private var pendingLogoutToken: StoredToken? = null
   private var operation: Job? = null
@@ -58,6 +62,7 @@ internal class MobileSessionModel(
     get() = mutableDestination.value
     set(value) { mutableDestination.value = value }
   private var offlineAllowed = false
+  private var cacheAccessBlocked = false
 
   val loginDestination: String get() = returnTo
 
@@ -66,8 +71,10 @@ internal class MobileSessionModel(
     val currentState = state.value
     val active = token ?: return null
     val authorization = active.cacheAuthorization ?: return null
+    if (mutableCachePermit.value !== authorization) return null
     val readable = (currentState is SessionState.SignedIn &&
       currentState.cacheAccountId == authorization.accountId) ||
+      currentState == SessionState.Checking ||
       (currentState == SessionState.Unavailable && offlineAllowed)
     return authorization.accountId.takeIf {
       readable && authorization.permits(clock.instant()) && state.value === currentState && token === active
@@ -80,6 +87,56 @@ internal class MobileSessionModel(
 
   fun onForeground() {
     if (state.value is SessionState.SignedIn || state.value == SessionState.Unavailable) refresh()
+  }
+
+  fun onAuthenticationRequired() {
+    val rejected = token ?: return
+    // A rejected request blocks saved reads immediately, even during an ongoing check.
+    // Only a successful server check may issue a new permit; connectivity failure cannot.
+    cacheAccessBlocked = true
+    mutableCachePermit.value = null
+    offlineAllowed = false
+    mutableState.value = SessionState.Checking
+    val verification = operation
+    verification?.cancel()
+    operation = viewModelScope.launch {
+      try {
+        // Join any older token write before stripping the matching persisted permit.
+        // Activity cancellation cannot interrupt this known-denial persistence.
+        withContext(NonCancellable) {
+          verification?.join()
+          withContext(Dispatchers.IO) { invalidateCacheAuthorization(rejected.accessToken) }
+        }
+        if (token === rejected && state.value == SessionState.Checking) {
+          operation = null
+          refresh() // Only a check started after the durable lock may reopen records.
+        }
+      } catch (error: CancellationException) { throw error }
+      catch (_: TokenStorageException) {
+        if (token === rejected) mutableState.value = SessionState.StorageError
+      }
+    }
+  }
+
+  fun onSyncAuthenticationRequired() {
+    // WorkData deliberately contains no credential/session identity. The worker
+    // invalidates its own stored permit with a token comparison; inspect that result.
+    viewModelScope.launch {
+      val active = token ?: return@launch
+      val stored = try { withContext(Dispatchers.IO) { readToken() } }
+      catch (_: TokenStorageException) {
+        if (token === active) {
+          mutableCachePermit.value = null
+          mutableState.value = SessionState.StorageError
+        }
+        return@launch
+      }
+      if (token !== active) return@launch
+      if (stored?.accessToken == active.accessToken &&
+        stored.cacheAuthorization?.accountId == active.cacheAuthorization?.accountId &&
+        stored.cacheAuthorization?.permits(clock.instant()) == true) onForeground()
+      else onAuthenticationRequired()
+    }
   }
 
   fun retry() {
@@ -109,10 +166,18 @@ internal class MobileSessionModel(
   suspend fun <T> withAuthorizedToken(request: suspend (String) -> T): T? {
     val signedIn = state.value as? SessionState.SignedIn ?: return null
     val active = token ?: return null
-    if (!active.expiresAt.isAfter(clock.instant())) return null
-    val result = request(active.accessToken)
+    if (!active.expiresAt.isAfter(clock.instant()) || !isCacheAuthorized(signedIn.cacheAccountId)) return null
+    val result = try { request(active.accessToken) }
+    catch (error: CancellationException) { throw error }
+    catch (error: Exception) {
+      // An old credential's failure cannot lock a newly authenticated session.
+      // The same credential's rejection still matters during a foreground check.
+      if (token?.accessToken != active.accessToken) return null
+      throw error
+    }
     return result.takeIf {
-      state.value === signedIn && token === active && active.expiresAt.isAfter(clock.instant())
+      state.value === signedIn && token === active && active.expiresAt.isAfter(clock.instant()) &&
+        isCacheAuthorized(signedIn.cacheAccountId)
     }
   }
 
@@ -140,32 +205,40 @@ internal class MobileSessionModel(
   }
 
   fun logout() {
-    if (operation?.isActive == true || state.value == SessionState.Checking || state.value == SessionState.Browser ||
+    val restoredCheck = state.value == SessionState.Checking && offlineCacheAccountId != null
+    if (((operation?.isActive == true || state.value == SessionState.Checking) && !restoredCheck) ||
+      state.value == SessionState.Browser ||
       state.value is SessionState.SignedOut) return
+    val verification = operation.takeIf { restoredCheck }
+    verification?.cancel()
     expiry?.cancel()
     val previous = pendingLogoutToken ?: token
     pendingLogoutToken = previous
     token = null
+    mutableCachePermit.value = null
     offlineAllowed = false
     mutableState.value = SessionState.SigningOut
     returnTo = "/"
     operation = viewModelScope.launch {
       try {
-        finishLogout(previous)
+        finishLogout(previous, verification)
       } catch (error: CancellationException) { throw error }
       catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
       catch (_: RecordCacheException) { mutableState.value = SessionState.StorageError }
     }
   }
 
-  private suspend fun finishLogout(previous: StoredToken?) {
+  private suspend fun finishLogout(previous: StoredToken?, verification: Job? = null) {
     pendingLogoutToken = previous // A failed local deletion can retry without losing revocation.
     token = null
+    mutableCachePermit.value = null
     offlineAllowed = false
     returnTo = "/"
     mutableState.value = SessionState.SigningOut
     withContext(NonCancellable) {
       withContext(Dispatchers.IO) { beginLocalLogout() }
+      // Persist deletion intent before waiting; an Activity exit cannot resume the old check.
+      verification?.join()
       try { clearRecords() }
       finally { withContext(Dispatchers.IO) { clearToken() } }
       // Do not acknowledge intent if record deletion failed before its own marker was written.
@@ -184,7 +257,6 @@ internal class MobileSessionModel(
 
   private fun refresh() {
     if (operation?.isActive == true) return
-    expiry?.cancel()
     offlineAllowed = false
     mutableState.value = SessionState.Checking
     operation = viewModelScope.launch {
@@ -200,10 +272,17 @@ internal class MobileSessionModel(
         val stored = withContext(Dispatchers.IO) { readToken() }
         token = stored
         if (stored == null) {
+          mutableCachePermit.value = null
           mutableState.value = SessionState.SignedOut()
         } else if (!stored.expiresAt.isAfter(clock.instant())) {
           expire()
         } else {
+          // Restore only an already-verified, unexpired local permit, never a profile.
+          // Repository reads still require the matching existing cache owner on disk.
+          mutableCachePermit.value = stored.cacheAuthorization?.takeIf {
+            !cacheAccessBlocked && it.permits(clock.instant())
+          }
+          scheduleExpiry(minOf(stored.expiresAt, stored.cacheAuthorization?.expiresAt ?: stored.expiresAt))
           val response = client.session(stored.accessToken)
           // Neither a stale response nor a longer server value can extend the saved deadline.
           val verifiedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS)
@@ -211,6 +290,7 @@ internal class MobileSessionModel(
           if (!deadline.isAfter(clock.instant())) expire()
           else {
             // Switch/erase before issuing a new permit, even when no record is fetched afterward.
+            if (mutableCachePermit.value?.accountId != response.cacheAccountId) mutableCachePermit.value = null
             activateCacheAccount(response.cacheAccountId)
             val authorized = StoredToken(stored.accessToken, deadline,
               CacheAuthorization(response.cacheAccountId, verifiedAt, deadline))
@@ -218,21 +298,31 @@ internal class MobileSessionModel(
             token = authorized
             if (!deadline.isAfter(clock.instant())) expire()
             else {
+              cacheAccessBlocked = false
+              mutableCachePermit.value = authorized.cacheAuthorization
               mutableState.value = SessionState.SignedIn(response.user, response.cacheAccountId, deadline, returnTo)
               scheduleExpiry(deadline)
             }
           }
         }
       } catch (error: CancellationException) { throw error }
-      catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
-      catch (_: RecordCacheException) { mutableState.value = SessionState.StorageError }
+      catch (_: TokenStorageException) {
+        mutableCachePermit.value = null
+        mutableState.value = SessionState.StorageError
+      }
+      catch (_: RecordCacheException) {
+        mutableCachePermit.value = null
+        mutableState.value = SessionState.StorageError
+      }
       catch (error: MobileAuthException) {
         if (error.failure in setOf(MobileAuthFailure.AUTHENTICATION_REQUIRED, MobileAuthFailure.FORBIDDEN)) {
           try { expire() }
           catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
         } else {
           // Only connectivity/service failures allow the already-verified offline permit.
-          offlineAllowed = error.failure in setOf(MobileAuthFailure.NETWORK, MobileAuthFailure.UNAVAILABLE)
+          offlineAllowed = !cacheAccessBlocked &&
+            error.failure in setOf(MobileAuthFailure.NETWORK, MobileAuthFailure.UNAVAILABLE)
+          if (!offlineAllowed) mutableCachePermit.value = null
           mutableState.value = SessionState.Unavailable
           token?.let { stored ->
             scheduleExpiry(minOf(stored.expiresAt, stored.cacheAuthorization?.expiresAt ?: stored.expiresAt))
@@ -243,10 +333,14 @@ internal class MobileSessionModel(
   }
 
   private fun scheduleExpiry(deadline: Instant) {
+    expiry?.cancel()
     expiry = viewModelScope.launch {
       delay(Duration.between(clock.instant(), deadline).toMillis().coerceAtLeast(1))
       // The monotonic delay cannot be prolonged by moving the wall clock backward in this process.
+      mutableCachePermit.value = null
       mutableState.value = SessionState.Checking
+      // Join any token-storage write before deletion; a late check cannot restore access.
+      operation?.cancelAndJoin()
       try { expire() }
       catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
     }
@@ -255,6 +349,7 @@ internal class MobileSessionModel(
   private suspend fun expire() {
     offlineAllowed = false
     token = null
+    mutableCachePermit.value = null
     withContext(Dispatchers.IO) { clearToken() }
     // Preserve record keys/ciphertext. Same-account reauthentication can unlock them again.
     // Keep a validated record link across expiry so the next login can return to it.
@@ -265,6 +360,7 @@ internal class MobileSessionModel(
   override fun onCleared() {
     expiry?.cancel()
     token = null
+    mutableCachePermit.value = null
     pendingLogoutToken = null
     client.close()
   }

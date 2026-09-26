@@ -171,6 +171,22 @@ class KeystoreTokenStoreTest {
   }
 
   @Test
+  fun failedPermitInvalidationRevokesTheKeyBeforeReportingCleanupFailure() {
+    val permit = CacheAuthorization("u".repeat(43), token.expiresAt.minusSeconds(600), token.expiresAt)
+    store.save(StoredToken(token.accessToken, token.expiresAt, permit))
+    // A nonempty directory prevents AtomicFile from replacing its existing envelope.
+    val blockedWrite = File(file.path + ".new").apply {
+      assertTrue(mkdir())
+      File(this, "write-blocker").writeText("fixture")
+    }
+    try {
+      assertThrows(TokenStorageException::class.java) { store.invalidateCacheAuthorization(token.accessToken) }
+      assertFalse(keys().containsAlias(alias))
+      assertNull(KeystoreTokenStore(context).read())
+    } finally { blockedWrite.deleteRecursively() }
+  }
+
+  @Test
   fun storageRemainsOutsideBackupsAndDoesNotAcceptMalformedCredentials() {
     val app = InstrumentationRegistry.getInstrumentation().targetContext
     assertTrue(directory.canonicalPath.startsWith(app.noBackupFilesDir.canonicalPath + "/"))

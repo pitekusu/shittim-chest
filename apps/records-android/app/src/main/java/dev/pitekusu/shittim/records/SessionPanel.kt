@@ -23,7 +23,8 @@ import dev.pitekusu.shittim.records.auth.SessionState
 import dev.pitekusu.shittim.records.ui.ShittimDisplayFont
 
 @Composable
-internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) -> Unit) {
+internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) -> Unit,
+  canReadRecords: Boolean = false) {
   OutlinedCard(Modifier.fillMaxWidth()) {
     Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
       Text("ACCOUNT", fontFamily = ShittimDisplayFont, color = MaterialTheme.colorScheme.primary)
@@ -39,7 +40,13 @@ internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) 
       Text(stringResource(title), style = MaterialTheme.typography.titleLargeEmphasized,
         modifier = Modifier.semantics { heading(); liveRegion = LiveRegionMode.Polite })
       when (state) {
-        SessionState.Checking, SessionState.SigningOut -> CircularProgressIndicator()
+        SessionState.Checking -> {
+          CircularProgressIndicator()
+          if (canReadRecords) FilledTonalButton(onClick = { onEvent(BootstrapScreen.Event.Logout) }) {
+            Text(stringResource(R.string.session_local_logout_action))
+          }
+        }
+        SessionState.SigningOut -> CircularProgressIndicator()
         SessionState.Browser -> {
           Text(stringResource(R.string.session_browser_hint))
           CircularProgressIndicator()

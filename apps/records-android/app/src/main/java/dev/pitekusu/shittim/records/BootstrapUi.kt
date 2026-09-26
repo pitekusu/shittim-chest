@@ -92,7 +92,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
             verticalAlignment = Alignment.CenterVertically,
           ) {
             BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp),
-              compact = state.session is SessionState.SignedIn)
+              compact = state.canReadRecords)
             BootstrapControls(
               state, pagingItems, scrollState, false,
               Modifier.weight(1f, fill = false).widthIn(max = 480.dp).fillMaxHeight(),
@@ -144,13 +144,13 @@ private fun BootstrapControls(
 ) {
   LazyColumn(modifier.testTag("bootstrap-content"), state = scrollState,
     contentPadding = PaddingValues(if (showHeader) 24.dp else 0.dp),
-    verticalArrangement = if (state.session is SessionState.SignedIn) Arrangement.spacedBy(24.dp)
+    verticalArrangement = if (state.canReadRecords) Arrangement.spacedBy(24.dp)
       else Arrangement.spacedBy(32.dp, Alignment.CenterVertically),
     horizontalAlignment = Alignment.CenterHorizontally) {
     if (showHeader) item(key = "brand") {
-      BootstrapHeader(Modifier.fillMaxWidth(), compact = state.session is SessionState.SignedIn)
+      BootstrapHeader(Modifier.fillMaxWidth(), compact = state.canReadRecords)
     }
-    item(key = "session") { SessionPanel(state.session, state.eventSink) }
+    item(key = "session") { SessionPanel(state.session, state.eventSink, canReadRecords = state.canReadRecords) }
     item(key = "theme") {
       BootstrapThemeSelector(state.themeChoice) {
         state.eventSink(BootstrapScreen.Event.SelectTheme(it))

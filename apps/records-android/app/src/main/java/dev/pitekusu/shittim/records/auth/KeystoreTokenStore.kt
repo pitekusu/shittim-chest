@@ -113,7 +113,14 @@ internal class KeystoreTokenStore(context: Context) {
   fun invalidateCacheAuthorization(expectedToken: String): Unit = guarded {
     if (!hasLogoutIntent()) {
       val current = read()
-      if (current?.accessToken == expectedToken) save(StoredToken(current.accessToken, current.expiresAt))
+      if (current?.accessToken == expectedToken) {
+        try { save(StoredToken(current.accessToken, current.expiresAt)) }
+        catch (_: TokenStorageException) {
+          // AtomicFile may retain the old authorized envelope after a failed write.
+          // Revoke its Keystore key before cleanup; never restore a known-denied permit.
+          clear()
+        }
+      }
     }
   }
 
