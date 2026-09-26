@@ -300,6 +300,24 @@ class MobileSessionModelTest {
         model.logout()
         model.await<SessionState.SignedOut>()
         assertEquals(2, fixture.cacheClears)
+        assertEquals(1, fixture.posts)
+      }
+    }
+  }
+
+  @Test
+  fun pendingLogoutAfterRestartNeverRestoresTheSessionAndCompletesCleanup() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = StoredToken(fixture.validToken.accessToken, fixture.validToken.expiresAt,
+          logoutPending = true)
+        val model = fixture.start()
+        model.await<SessionState.SignedOut>()
+        assertEquals(0, fixture.gets)
+        assertEquals(1, fixture.cacheClears)
+        assertEquals(1, fixture.posts)
+        assertNull(fixture.stored)
+        assertNull(model.offlineCacheAccountId)
       }
     }
   }
@@ -352,6 +370,8 @@ class MobileSessionModelTest {
       assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
       if (clearFails) throw TokenStorageException()
       stored = null
+    }, {
+      stored = stored?.let { StoredToken(it.accessToken, it.expiresAt, it.cacheAuthorization, logoutPending = true) }
     }, { activatedAccounts.add(it) }, {
       cacheClears++
       if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()

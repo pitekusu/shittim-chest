@@ -39,6 +39,7 @@ internal class MobileSessionModel(
   private val readToken: () -> StoredToken?,
   private val saveToken: (StoredToken) -> Unit,
   private val clearToken: () -> Unit,
+  private val beginLocalLogout: () -> Unit,
   private val activateCacheAccount: suspend (String) -> Unit,
   private val clearRecords: suspend () -> Unit,
   private val clock: Clock = Clock.systemUTC(),
@@ -46,6 +47,7 @@ internal class MobileSessionModel(
   private val mutableState = MutableStateFlow<SessionState>(SessionState.Checking)
   val state = mutableState.asStateFlow()
   private var token: StoredToken? = null
+  private var pendingLogoutToken: StoredToken? = null
   private var operation: Job? = null
   private var expiry: Job? = null
   private var returnTo = "/"
@@ -134,31 +136,41 @@ internal class MobileSessionModel(
     if (operation?.isActive == true || state.value == SessionState.Checking || state.value == SessionState.Browser ||
       state.value is SessionState.SignedOut) return
     expiry?.cancel()
-    val previous = token
+    val previous = pendingLogoutToken ?: token
+    pendingLogoutToken = previous
     token = null
     offlineAllowed = false
     mutableState.value = SessionState.SigningOut
     returnTo = "/"
     operation = viewModelScope.launch {
       try {
-        // Remove local access even if the network fails; never call an uncertain POST twice.
-        // Finish local deletion even if the Activity/ViewModel disappears during logout.
-        withContext(NonCancellable) {
-          try { clearRecords() }
-          finally { withContext(Dispatchers.IO) { clearToken() } }
-        }
-        var notice: SessionNotice? = null
-        if (previous != null) {
-          try { client.logout(previous.accessToken) }
-          catch (error: MobileAuthException) {
-            if (error.failure != MobileAuthFailure.AUTHENTICATION_REQUIRED) notice = SessionNotice.LOCAL_LOGOUT
-          }
-        }
-        mutableState.value = SessionState.SignedOut(notice)
+        finishLogout(previous)
       } catch (error: CancellationException) { throw error }
       catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
       catch (_: RecordCacheException) { mutableState.value = SessionState.StorageError }
     }
+  }
+
+  private suspend fun finishLogout(previous: StoredToken?) {
+    pendingLogoutToken = previous // A failed local deletion can retry without losing revocation.
+    token = null
+    offlineAllowed = false
+    returnTo = "/"
+    mutableState.value = SessionState.SigningOut
+    withContext(NonCancellable) {
+      withContext(Dispatchers.IO) { beginLocalLogout() }
+      try { clearRecords() }
+      finally { withContext(Dispatchers.IO) { clearToken() } }
+    }
+    pendingLogoutToken = null // Claim before the one POST; never replay an uncertain request.
+    var notice: SessionNotice? = null
+    if (previous != null) {
+      try { client.logout(previous.accessToken) }
+      catch (error: MobileAuthException) {
+        if (error.failure != MobileAuthFailure.AUTHENTICATION_REQUIRED) notice = SessionNotice.LOCAL_LOGOUT
+      }
+    }
+    mutableState.value = SessionState.SignedOut(notice)
   }
 
   private fun refresh() {
@@ -170,7 +182,9 @@ internal class MobileSessionModel(
       try {
         val stored = withContext(Dispatchers.IO) { readToken() }
         token = stored
-        if (stored == null) {
+        if (stored?.logoutPending == true) {
+          finishLogout(stored) // Resume explicit logout, not session verification/login restoration.
+        } else if (stored == null) {
           mutableState.value = SessionState.SignedOut()
         } else if (!stored.expiresAt.isAfter(clock.instant())) {
           expire()
@@ -236,6 +250,7 @@ internal class MobileSessionModel(
   override fun onCleared() {
     expiry?.cancel()
     token = null
+    pendingLogoutToken = null
     client.close()
   }
 }

@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
     viewModelFactory {
       initializer {
         val store = KeystoreTokenStore(applicationContext)
-        MobileSessionModel(MobileAuthClient(), store::read, store::save, store::clear,
+        MobileSessionModel(MobileAuthClient(), store::read, store::save, store::clear, store::beginLogout,
           { accountId -> RecordCacheAccount.activate(applicationContext, accountId) },
           { RecordCacheAccount.clear(applicationContext) })
       }

@@ -16,7 +16,7 @@ internal class CacheAuthorization(val accountId: String, val verifiedAt: Instant
 
 /** Credentials and a verified cache permit only; no saved profile or UI state. */
 internal class StoredToken(val accessToken: String, val expiresAt: Instant,
-  val cacheAuthorization: CacheAuthorization? = null) {
+  val cacheAuthorization: CacheAuthorization? = null, val logoutPending: Boolean = false) {
   init {
     require(
       accessToken.matches(Regex("[A-Za-z0-9_-]{43}")) &&

@@ -20,6 +20,7 @@ import javax.crypto.spec.GCMParameterSpec
 @WorkerThread
 internal class KeystoreTokenStore(context: Context) {
   private val file = AtomicFile(File(context.noBackupFilesDir, "mobile-session.v1"))
+  private val logoutIntent = AtomicFile(File(context.noBackupFilesDir, "mobile-session-logout.v1"))
   private val keyAlias = "${context.packageName}.mobile-session.v1"
 
   init {
@@ -31,6 +32,7 @@ internal class KeystoreTokenStore(context: Context) {
       readEnvelope()
     } catch (error: FileNotFoundException) {
       if (file.baseFile.exists()) throw error
+      if (hasLogoutIntent()) clear() // A crash may leave intent after the token file was deleted.
       return@guarded null
     }
     val version = envelope[0]
@@ -50,7 +52,7 @@ internal class KeystoreTokenStore(context: Context) {
           val account = ByteArray(TOKEN_BYTES).also(payload::get).toString(Charsets.US_ASCII)
           CacheAuthorization(account, Instant.ofEpochSecond(payload.long), Instant.ofEpochSecond(payload.long))
         } else null
-        StoredToken(token.toString(Charsets.US_ASCII), expiry, authorization)
+        StoredToken(token.toString(Charsets.US_ASCII), expiry, authorization, hasLogoutIntent())
       } finally {
         token.fill(0)
       }
@@ -60,6 +62,7 @@ internal class KeystoreTokenStore(context: Context) {
   }
 
   fun save(token: StoredToken): Unit = guarded {
+    check(!hasLogoutIntent() && !token.logoutPending)
     val authorization = token.cacheAuthorization
     val version = if (authorization == null) VERSION else AUTHORIZED_VERSION
     val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -92,13 +95,31 @@ internal class KeystoreTokenStore(context: Context) {
     }
   }
 
+  /** Persist before record/token deletion; any surviving intent prohibits session restoration. */
+  fun beginLogout(): Unit = guarded {
+    val output = logoutIntent.startWrite()
+    try {
+      output.write(1) // No credential or user data; this is only a deletion intent.
+      logoutIntent.finishWrite(output)
+      logoutIntent.openRead().use { check(it.read() == 1 && it.read() == -1) }
+    } catch (error: Exception) {
+      logoutIntent.failWrite(output)
+      throw error
+    }
+  }
+
   fun clear(): Unit = guarded {
     val keys = keyStore()
     keys.deleteEntry(keyAlias) // Invalidate any remaining ciphertext before removing the files.
     file.delete()
     check(!keys.containsAlias(keyAlias))
     check(listOf("", ".new", ".bak").none { File(file.baseFile.path + it).exists() })
+    logoutIntent.delete() // Intent ends only after token/key deletion was verified.
+    check(!hasLogoutIntent())
   }
+
+  private fun hasLogoutIntent(): Boolean = listOf("", ".new", ".bak")
+    .any { File(logoutIntent.baseFile.path + it).exists() }
 
   private fun readEnvelope(): ByteArray = DataInputStream(file.openRead()).use { input ->
     // Read the authenticated version with a strict bound; accept the deployed v1 format.

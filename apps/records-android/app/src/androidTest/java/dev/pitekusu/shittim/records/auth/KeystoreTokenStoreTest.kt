@@ -91,6 +91,20 @@ class KeystoreTokenStoreTest {
   }
 
   @Test
+  fun logoutIntentSurvivesRestartAndPreventsAReplacementLoginUntilTokenDeletion() {
+    store.save(token)
+    store.beginLogout()
+    val reopened = KeystoreTokenStore(context)
+    assertTrue(reopened.read()!!.logoutPending)
+    assertThrows(TokenStorageException::class.java) { reopened.save(token) }
+    reopened.clear()
+    assertNull(reopened.read())
+    assertFalse(File(directory, "mobile-session-logout.v1").exists())
+    reopened.save(token)
+    assertFalse(reopened.read()!!.logoutPending)
+  }
+
+  @Test
   fun tamperingAndInvalidEnvelopesFailClosedWithoutDisclosingContents() {
     store.save(token)
     val original = file.readBytes()
