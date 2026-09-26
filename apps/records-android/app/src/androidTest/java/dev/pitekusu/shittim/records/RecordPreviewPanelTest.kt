@@ -6,6 +6,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -31,6 +32,11 @@ class RecordPreviewPanelTest {
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) { RecordPreviewPanel(state.value, events::add) } }
+    }
+    // Markdown parsing is asynchronous; wait for both bodies before checking the ready screen.
+    compose.waitUntil(10_000) {
+      compose.onNodeWithText("架空の議題").isDisplayed() &&
+        compose.onNodeWithText("架空の結論").isDisplayed()
     }
     compose.onNodeWithText("架空の議題").assertIsDisplayed()
     compose.onNodeWithText("アロナ").assertIsDisplayed()
