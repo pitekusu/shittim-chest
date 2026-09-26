@@ -18,7 +18,6 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** Keeps the existing authenticated API boundary and writes only encrypted, validated records. */
@@ -40,6 +39,7 @@ internal class RecordsRepository(
           json.encodeToString(CachedListEntry(1, entry))
         }
       }
+      requireActive(accountId)
     }
     return page
   }
@@ -52,32 +52,48 @@ internal class RecordsRepository(
         save(accountId, recordId, CachedRecordPart.DETAIL) {
           json.encodeToString(CachedDetail(1, result.preview))
         }
+        requireActive(accountId)
       }
     }
     return result
   }
 
-  // C30 gates offline use by the authenticated account and the 90-day deadline.
+  // Offline readers use the session's persisted permit; they cannot activate another owner.
   suspend fun cachedListEntry(accountId: String, recordId: String): RecordListEntry? = accountLock.withLock {
-    prepare(accountId)
-    load(accountId, recordId, CachedRecordPart.LIST)?.let { serialized ->
+    prepareRead(accountId)
+    val result = load(accountId, recordId, CachedRecordPart.LIST)?.let { serialized ->
       decode(serialized) {
         json.decodeFromString<CachedListEntry>(it).also { cached ->
           check(cached.schemaVersion == 1 && cached.entry.recordId == recordId)
         }.entry
       }
     }
+    requireActive(accountId)
+    result
   }
 
   suspend fun cachedRecord(accountId: String, recordId: String): RecordPreview? = accountLock.withLock {
-    prepare(accountId)
-    load(accountId, recordId, CachedRecordPart.DETAIL)?.let { serialized ->
+    prepareRead(accountId)
+    val result = load(accountId, recordId, CachedRecordPart.DETAIL)?.let { serialized ->
       decode(serialized) {
         json.decodeFromString<CachedDetail>(it).also { cached ->
           check(cached.schemaVersion == 1)
         }.preview
       }
     }
+    requireActive(accountId)
+    result
+  }
+
+  private suspend fun prepareRead(accountId: String) {
+    requireActive(accountId)
+    try { account.requireOwner(accountId) }
+    catch (_: RecordCacheException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+    requireActive(accountId)
+  }
+
+  private fun requireActive(accountId: String) {
+    if (!isActiveAccount(accountId)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
   }
 
   private suspend fun prepare(accountId: String) {
@@ -124,7 +140,7 @@ internal class RecordsRepository(
   }
 
   companion object {
-    private val accountLock = Mutex() // One key file across Activity/repository instances.
+    private val accountLock = RecordCacheAccount.lock
 
     fun open(context: Context, isActiveAccount: (String) -> Boolean): RecordsRepository {
       val database = EncryptedRecordsDatabase.open(context)
