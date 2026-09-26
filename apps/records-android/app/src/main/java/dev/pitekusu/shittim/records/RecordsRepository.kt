@@ -179,6 +179,22 @@ internal class RecordsRepository(
     requireActive(accountId)
   }
 
+  suspend fun removeIfDeleted(token: String, accountId: String, recordId: String) {
+    requireActive(accountId)
+    try {
+      // An eventually consistent index omission is not evidence of deletion.
+      // Confirm against the existing strongly consistent detail API, without
+      // overwriting a surviving record or its cached avatar metadata.
+      if (remote.firstRecord(token, "/records/$recordId") !is RecordReadResult.Found) {
+        throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+      }
+    } catch (error: RecordReadException) {
+      if (error.failure != RecordReadFailure.NOT_FOUND) throw error
+      removeRecords(accountId, setOf(recordId))
+    }
+    requireActive(accountId)
+  }
+
   suspend fun syncCheckpoint(accountId: String): RecordSyncCheckpoint? = accountLock.withLock {
     prepare(accountId)
     val checkpoint = load(accountId, SYNC_RECORD_ID, CachedRecordPart.SYNC_PROGRESS)?.let { bytes ->

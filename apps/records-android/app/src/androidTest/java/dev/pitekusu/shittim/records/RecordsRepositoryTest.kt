@@ -400,13 +400,47 @@ class RecordsRepositoryTest {
       assertEquals(2, records.cachedRecords(accountId).size)
       assertEquals(setOf(missing), records.syncCheckpoint(accountId)?.removalCandidates)
     }
-    repository(MockEngine { respond(index(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
+    repository(MockEngine { request ->
+      if (request.url.encodedPath.endsWith("/sync-index")) {
+        respond(index(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      } else respond("", HttpStatusCode.NotFound)
+    })
       .use { records ->
         records.synchronize(token, accountId) // Resume the final page, not a fresh enumeration.
         assertEquals(listOf(recordId), records.cachedRecords(accountId).map { it.recordId })
         assertNull(records.cachedRecord(accountId, missing))
         assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
       }
+  }
+
+  @Test fun indexOmissionKeepsLiveRecordsAndResumesFailedDeletionChecks() = runBlocking {
+    repository(MockEngine { request ->
+      respond(if (request.url.encodedPath.endsWith("/sync-index")) index() else detail(),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { it.synchronize(token, accountId) }
+    repository(MockEngine { request ->
+      if (request.url.encodedPath.endsWith("/sync-index")) {
+        respond(index(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      } else respond("", HttpStatusCode.ServiceUnavailable)
+    }).use { records ->
+      try { records.synchronize(token, accountId); fail("failed confirmation must preserve local data") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
+      assertEquals(setOf(recordId), records.syncCheckpoint(accountId)?.removalCandidates)
+      assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+    }
+    val calls = mutableListOf<String>()
+    repository(MockEngine { request ->
+      calls.add(request.url.encodedPath.substringAfterLast('/'))
+      // A newer response must not replace the surviving cache during existence confirmation.
+      respond(detail().replace("架空の結論", "別の結論"),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.synchronize(token, accountId)
+      assertEquals(listOf(recordId), calls)
+      assertEquals(listOf(recordId), records.cachedRecords(accountId).map { it.recordId })
+      assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+      assertEquals(true, records.syncCheckpoint(accountId)?.complete)
+    }
   }
 
   @Test fun confirmed404RemovesListAndDetailButServerFailureDoesNot() = runBlocking {

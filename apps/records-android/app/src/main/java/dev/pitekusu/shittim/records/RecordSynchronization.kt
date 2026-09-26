@@ -66,8 +66,14 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
       progress = progress.copy(pendingIds = progress.pendingIds.drop(1), pendingReferences = progress.pendingReferences.drop(1))
       saveSyncCheckpoint(accountId, progress) // Interrupted writes can replay, never skip unsaved data.
     } else if (progress.cursor == null) {
-      // Never prune on a failed/partial pass. An interrupted prune is safe to repeat.
-      removeRecords(accountId, progress.removalCandidates.orEmpty())
+      // A complete GSI enumeration can still omit a live record. Only an
+      // authenticated detail 404 may remove local data; checkpoint each check.
+      for (candidate in progress.removalCandidates.orEmpty()) {
+        currentCoroutineContext().ensureActive()
+        removeIfDeleted(token, accountId, candidate)
+        progress = progress.copy(removalCandidates = progress.removalCandidates.orEmpty() - candidate)
+        saveSyncCheckpoint(accountId, progress)
+      }
       pruneAvatars(accountId)
       saveSyncCheckpoint(accountId, progress.copy(complete = true, removalCandidates = emptySet()))
       return@withLock
