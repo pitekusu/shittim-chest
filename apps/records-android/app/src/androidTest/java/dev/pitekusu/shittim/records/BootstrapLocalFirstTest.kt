@@ -89,6 +89,9 @@ class BootstrapLocalFirstTest {
       var rendered: BootstrapScreen.State? = null
       compose.activityRule.scenario.onActivity { activity ->
         model = MobileSessionModel(client, { stored }, { stored = it }, { stored = null },
+          { expected -> stored?.takeIf { it.accessToken == expected }?.let {
+            stored = StoredToken(it.accessToken, it.expiresAt)
+          } },
           {}, { false }, {}, { RecordCacheAccount.activate(context, it) }, { RecordCacheAccount.clear(context) })
         owner.put("session", model)
         val presenter = BootstrapPresenter(model)

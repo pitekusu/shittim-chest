@@ -26,6 +26,33 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun knownDenialStaysLockedAfterNetworkFailureAndOfflineRestart() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.status = HttpStatusCode.ServiceUnavailable
+        model.onAuthenticationRequired()
+        assertNull(model.cachePermit.value)
+        model.await<SessionState.Unavailable>()
+        assertNull(fixture.stored?.cacheAuthorization)
+        val saved = fixture.stored
+        fixture.owner.clear()
+        Fixture().use { afterRestart ->
+          afterRestart.stored = saved
+          afterRestart.status = HttpStatusCode.ServiceUnavailable
+          val restarted = afterRestart.start()
+          restarted.await<SessionState.Unavailable>()
+          assertNull(restarted.offlineCacheAccountId)
+          assertNull(restarted.cachePermit.value)
+        }
+      }
+    }
+  }
+
+  @Test
   fun denialAfterSessionResponseCannotPublishItsOlderPermit() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
@@ -577,6 +604,9 @@ class MobileSessionModelTest {
       assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
       if (clearFails) throw TokenStorageException()
       stored = null
+    }, { expected ->
+      assertNotEquals(Looper.getMainLooper(), Looper.myLooper())
+      stored?.takeIf { it.accessToken == expected }?.let { stored = StoredToken(it.accessToken, it.expiresAt) }
     }, {
       logoutPending = true
     }, { logoutPending }, {

@@ -13,12 +13,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 internal enum class SessionNotice { EXPIRED, CANCELLED, LOGIN_FAILED, BROWSER_UNAVAILABLE, LOCAL_LOGOUT }
@@ -42,6 +40,7 @@ internal class MobileSessionModel(
   private val readToken: () -> StoredToken?,
   private val saveToken: (StoredToken) -> Unit,
   private val clearToken: () -> Unit,
+  private val invalidateCacheAuthorization: (String) -> Unit,
   private val beginLocalLogout: () -> Unit,
   private val isLocalLogoutPending: () -> Boolean,
   private val completeLocalLogout: () -> Unit,
@@ -64,7 +63,6 @@ internal class MobileSessionModel(
     set(value) { mutableDestination.value = value }
   private var offlineAllowed = false
   private var cacheAccessBlocked = false
-  private var rejectionGeneration = 0L
 
   val loginDestination: String get() = returnTo
 
@@ -92,14 +90,32 @@ internal class MobileSessionModel(
   }
 
   fun onAuthenticationRequired() {
+    val rejected = token ?: return
     // A rejected request blocks saved reads immediately, even during an ongoing check.
     // Only a successful server check may issue a new permit; connectivity failure cannot.
     cacheAccessBlocked = true
-    rejectionGeneration++
     mutableCachePermit.value = null
     offlineAllowed = false
-    if (state.value is SessionState.SignedIn || state.value == SessionState.Unavailable ||
-      state.value == SessionState.Checking) refresh()
+    mutableState.value = SessionState.Checking
+    val verification = operation
+    verification?.cancel()
+    operation = viewModelScope.launch {
+      try {
+        // Join any older token write before stripping the matching persisted permit.
+        // Activity cancellation cannot interrupt this known-denial persistence.
+        withContext(NonCancellable) {
+          verification?.join()
+          withContext(Dispatchers.IO) { invalidateCacheAuthorization(rejected.accessToken) }
+        }
+        if (token === rejected && state.value == SessionState.Checking) {
+          operation = null
+          refresh() // Only a check started after the durable lock may reopen records.
+        }
+      } catch (error: CancellationException) { throw error }
+      catch (_: TokenStorageException) {
+        if (token === rejected) mutableState.value = SessionState.StorageError
+      }
+    }
   }
 
   fun onSyncAuthenticationRequired() {
@@ -241,7 +257,6 @@ internal class MobileSessionModel(
 
   private fun refresh() {
     if (operation?.isActive == true) return
-    val checkGeneration = rejectionGeneration
     offlineAllowed = false
     mutableState.value = SessionState.Checking
     operation = viewModelScope.launch {
@@ -269,7 +284,6 @@ internal class MobileSessionModel(
           }
           scheduleExpiry(minOf(stored.expiresAt, stored.cacheAuthorization?.expiresAt ?: stored.expiresAt))
           val response = client.session(stored.accessToken)
-          if (checkGeneration != rejectionGeneration) return@launch
           // Neither a stale response nor a longer server value can extend the saved deadline.
           val verifiedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS)
           val deadline = minOf(stored.expiresAt, response.expiresAt, verifiedAt.plus(Duration.ofDays(90)))
@@ -278,11 +292,9 @@ internal class MobileSessionModel(
             // Switch/erase before issuing a new permit, even when no record is fetched afterward.
             if (mutableCachePermit.value?.accountId != response.cacheAccountId) mutableCachePermit.value = null
             activateCacheAccount(response.cacheAccountId)
-            if (checkGeneration != rejectionGeneration) return@launch
             val authorized = StoredToken(stored.accessToken, deadline,
               CacheAuthorization(response.cacheAccountId, verifiedAt, deadline))
             withContext(Dispatchers.IO) { saveToken(authorized) }
-            if (checkGeneration != rejectionGeneration) return@launch
             token = authorized
             if (!deadline.isAfter(clock.instant())) expire()
             else {
@@ -315,15 +327,6 @@ internal class MobileSessionModel(
           token?.let { stored ->
             scheduleExpiry(minOf(stored.expiresAt, stored.cacheAuthorization?.expiresAt ?: stored.expiresAt))
           }
-        }
-      } finally {
-        // A denial received after this check began supersedes its success, including
-        // one received while cache activation/storage was suspended. Recheck only
-        // after it finishes; logout/expiry cancellation must never launch a new check.
-        if (currentCoroutineContext().isActive && checkGeneration != rejectionGeneration &&
-          state.value == SessionState.Checking && token != null) {
-          operation = null
-          refresh()
         }
       }
     }
