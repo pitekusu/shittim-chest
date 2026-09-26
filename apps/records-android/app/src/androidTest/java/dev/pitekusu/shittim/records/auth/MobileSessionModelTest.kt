@@ -83,12 +83,14 @@ class MobileSessionModelTest {
         fixture.stored = StoredToken(fixture.validToken.accessToken, fixture.validToken.expiresAt,
           CacheAuthorization("u".repeat(43), fixture.now, fixture.validToken.expiresAt))
         fixture.sessionGate = CompletableDeferred()
+        fixture.logoutGate = CompletableDeferred()
         val model = fixture.start()
         withTimeout(5_000) { fixture.sessionStarted.await() }
         model.logout()
         model.logout()
         assertEquals(SessionState.SigningOut, model.state.value)
         assertNull(model.offlineCacheAccountId)
+        fixture.logoutGate!!.complete(Unit)
         model.await<SessionState.SignedOut>()
         fixture.sessionGate!!.complete(Unit)
         yield()
