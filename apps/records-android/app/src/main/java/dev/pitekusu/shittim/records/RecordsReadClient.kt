@@ -445,7 +445,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           throw RecordReadException(if (error.error.code == "CURSOR_INVALID")
             RecordReadFailure.CURSOR_INVALID else RecordReadFailure.INVALID_RESPONSE)
         }
-        in 500..599 -> throw RecordReadException(RecordReadFailure.UNAVAILABLE)
+        429, in 500..599 -> throw RecordReadException(RecordReadFailure.UNAVAILABLE)
         else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
       }
       if (response.contentType()?.withoutParameters() != ContentType.Application.Json) {

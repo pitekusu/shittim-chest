@@ -295,10 +295,11 @@ class RecordsReadClientTest {
   }
 
   @Test
-  fun unauthorizedAndMissingRecordHaveFixedErrorsWithoutTokenOrBody() = runBlocking {
+  fun httpFailuresHaveFixedErrorsWithoutTokenOrBody() = runBlocking {
     for ((status, expected) in listOf(
       HttpStatusCode.Unauthorized to RecordReadFailure.AUTH_REQUIRED,
       HttpStatusCode.NotFound to RecordReadFailure.NOT_FOUND,
+      HttpStatusCode.TooManyRequests to RecordReadFailure.UNAVAILABLE,
     )) {
       RecordsReadClient(MockEngine {
         respond("synthetic private response $token", status, jsonHeader)
