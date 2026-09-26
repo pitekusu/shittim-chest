@@ -52,6 +52,18 @@ export interface RecordListResponse {
   readonly nextCursor: string | null;
 }
 
+export interface RecordSyncReference {
+  readonly recordId: string;
+  readonly revision: string;
+  readonly avatarRevision: string;
+}
+
+export interface RecordSyncIndexResponse {
+  readonly schemaVersion: 1;
+  readonly items: readonly RecordSyncReference[];
+  readonly nextCursor: string | null;
+}
+
 export interface RankingEntry {
   readonly rank: number;
   readonly displayName: string;

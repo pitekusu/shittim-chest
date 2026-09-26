@@ -425,6 +425,21 @@ def build_openapi() -> dict[str, Any]:
                     },
                 }
             },
+            "/api/v1/records/sync-index": {
+                "get": {
+                    "operationId": "getRecordSyncIndex",
+                    "security": [{"sessionCookie": []}, {"mobileBearer": []}],
+                    "parameters": [
+                        _parameter(
+                            "cursor", "query", {"type": "string", "minLength": 1, "maxLength": 4096}
+                        ),
+                    ],
+                    "responses": {
+                        "200": _response("RecordSyncIndexResponse", "Content-free sync inventory"),
+                        **error_responses,
+                    },
+                }
+            },
             "/api/v1/records/{recordId}": {
                 "get": {
                     "operationId": "getRecord",

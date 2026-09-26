@@ -129,6 +129,54 @@ def service(reader: FakeReader | None = None) -> tuple[RecordsReadService, FakeR
     return RecordsReadService(reader=actual, cursor_codec=CursorCodec(SESSION_KEY)), actual
 
 
+def test_sync_inventory_is_content_free_and_revisions_do_not_use_signed_urls(monkeypatch):
+    records, reader = service()
+    monkeypatch.setattr(
+        reader, "avatar_url", lambda **kwargs: pytest.fail("inventory must not sign images")
+    )
+    first = records.get_sync_index(cursor=None, now=NOW)
+    assert first == records.get_sync_index(cursor=None, now=NOW + timedelta(minutes=10))
+    payload = first.model_dump(by_alias=True, mode="json")
+    assert set(payload["items"][0]) == {"recordId", "revision", "avatarRevision"}
+    assert reader.meta["question"] not in str(payload)
+    assert reader.list_calls[-1]["limit"] == 50
+    monkeypatch.setattr(
+        reader,
+        "load_profiles",
+        lambda **kwargs: {
+            reader.meta["requester_key"]: RequesterProfile(
+                "Updated name", "requesters/new/avatar.webp"
+            )
+        },
+    )
+    changed = records.get_sync_index(cursor=None, now=NOW)
+    assert changed.items[0].revision != first.items[0].revision
+    assert changed.items[0].avatar_revision != first.items[0].avatar_revision
+
+
+def test_sync_cursor_is_bound_to_sync_not_regular_list():
+    records, reader = service()
+    reader.page = replace(
+        reader.page,
+        last_evaluated_key={
+            "PK": reader.meta["PK"],
+            "SK": "META",
+            "gsi1pk": reader.meta["gsi1pk"],
+            "gsi1sk": reader.meta["gsi1sk"],
+        },
+    )
+    index = records.get_sync_index(cursor=None, now=NOW)
+    assert index.next_cursor
+    records.get_sync_index(cursor=index.next_cursor, now=NOW)
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.list_records(query=ListQuery(limit=50, cursor=index.next_cursor), now=NOW)
+    regular = records.list_records(query=ListQuery(limit=50), now=NOW)
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.get_sync_index(cursor=regular.next_cursor, now=NOW)
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.get_sync_index(cursor=index.next_cursor, now=NOW + timedelta(hours=2))
+
+
 @pytest.mark.parametrize("corruption", [None, "lower-score", "reason"])
 def test_composite_archive_projects_and_reads_both_assessments(corruption: str | None) -> None:
     from shittim_chest.domain import PARTICIPANTS

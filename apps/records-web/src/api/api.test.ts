@@ -10,6 +10,7 @@ import {
 } from "../test/recordsTestUtils";
 
 import affectionRankingsResponseValidator from "../generated/affection-rankings-response-validator.mjs";
+import recordSyncIndexResponseValidator from "../generated/record-sync-index-response-validator.mjs";
 import { getAffectionRankings, mergeAffectionRankingPages } from "./affectionRankings";
 import { getCosts } from "./costs";
 import {
@@ -26,6 +27,27 @@ import { getRecords } from "./recordList";
 import { getRankings } from "./rankings";
 import { getSession } from "./session";
 import type { AffectionRankingsResponse } from "./types";
+
+it("validates the content-free sync index and rejects extra private fields", () => {
+  const index = {
+    schemaVersion: 1,
+    items: [{ recordId: RECORD_ID, revision: "r".repeat(43), avatarRevision: "a".repeat(43) }],
+    nextCursor: null,
+  };
+  expect(recordSyncIndexResponseValidator(index)).toBe(true);
+  expect(
+    recordSyncIndexResponseValidator({
+      ...index,
+      items: [{ ...index.items[0], question: "公開しない本文" }],
+    }),
+  ).toBe(false);
+  expect(
+    recordSyncIndexResponseValidator({
+      ...index,
+      items: [{ ...index.items[0], revision: "invalid" }],
+    }),
+  ).toBe(false);
+});
 
 function rankingsResponse() {
   return {

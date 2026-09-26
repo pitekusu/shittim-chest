@@ -3400,6 +3400,72 @@
       "title": "RecordResultSummary",
       "type": "object"
     },
+    "RecordSyncIndexResponse": {
+      "additionalProperties": false,
+      "description": "Content-free inventory; clients download only missing or changed records.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RecordSyncReference"
+          },
+          "maxItems": 50,
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items"
+      ],
+      "title": "RecordSyncIndexResponse",
+      "type": "object"
+    },
+    "RecordSyncReference": {
+      "additionalProperties": false,
+      "properties": {
+        "avatarRevision": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Avatarrevision",
+          "type": "string"
+        },
+        "recordId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Recordid",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordId",
+        "revision",
+        "avatarRevision"
+      ],
+      "title": "RecordSyncReference",
+      "type": "object"
+    },
     "RequesterSummary": {
       "additionalProperties": false,
       "properties": {
@@ -3711,6 +3777,9 @@
   "oneOf": [
     {
       "$ref": "#/$defs/RecordListResponse"
+    },
+    {
+      "$ref": "#/$defs/RecordSyncIndexResponse"
     },
     {
       "$ref": "#/$defs/RecordDetailResponse"

@@ -30,6 +30,8 @@ from shittim_records.contracts import (
     RecordDetailResponse,
     RecordListItem,
     RecordListResponse,
+    RecordSyncIndexResponse,
+    RecordSyncReference,
 )
 from shittim_records.costs import (
     CostDataInvalid,
@@ -68,6 +70,7 @@ class ListQuery:
     sort: SortOrder = "newest"
     winner: ParticipantSlot | None = None
     cursor: str | None = None
+    sync_index: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +159,9 @@ class CursorCodec:
             "expires_at": int((_utc(now) + CURSOR_TTL).timestamp()),
             "last_evaluated_key": cursor_key,
         }
+        if query.sync_index:
+            payload["version"] = 3
+            payload["kind"] = "sync-index"
         encoded = _base64url(_canonical(payload))
         signature = _base64url(
             hmac.new(self._key, f"records:cursor:{encoded}".encode(), hashlib.sha256).digest()
@@ -188,11 +194,14 @@ class CursorCodec:
             "expires_at",
             "last_evaluated_key",
         }
+        if query.sync_index:
+            expected_fields.add("kind")
         if not isinstance(payload, dict) or set(payload) != expected_fields:
             raise ReadFailure("CURSOR_INVALID", 400)
         expected_index = "gsi2" if query.winner else "gsi1"
         if (
-            payload["version"] != 2
+            payload["version"] != (3 if query.sync_index else 2)
+            or (query.sync_index and payload["kind"] != "sync-index")
             or payload["index"] != expected_index
             or payload["limit"] != query.limit
             or payload["sort"] != query.sort
@@ -339,6 +348,63 @@ class RecordsReadService:
                 now=now,
             )
         return RecordListResponse(schema_version=1, items=items, next_cursor=next_cursor)
+
+    def get_sync_index(self, *, cursor: str | None, now: datetime) -> RecordSyncIndexResponse:
+        # Enumerate the complete index, not "completed_at > last_sync": late Archive
+        # projections and deletions must also converge. No question/profile text is sent.
+        query = ListQuery(limit=50, cursor=cursor, sync_index=True)
+        start_key = self._cursor_codec.decode(query=query, now=now)[1] if cursor else None
+        page = self._reader.list_meta(
+            limit=50, sort="newest", winner=None, exclusive_start_key=start_key
+        )
+        if page.index_name != "gsi1":
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        for item in page.items:
+            _validate_list_projection(item, index_name="gsi1", winner=None)
+            _validate_meta_item(item)
+        keys = tuple(dict.fromkeys(_required_text(item, "requester_key") for item in page.items))
+        profiles = self._reader.load_profiles(requester_keys=keys)
+        references = []
+        for item in page.items:
+            profile = profiles.get(_required_text(item, "requester_key"))
+            # Archive bodies are immutable. Include mutable profile information, but
+            # never expiring signed URLs, so unchanged icons/results are not re-fetched.
+            version = {
+                "template": 1,
+                "schema": int(cast(int, item["schema_version"])),
+                "id": _required_text(item, "record_id"),
+                "question": _required_text(item, "question"),
+                "completed": _required_text(item, "completed_at"),
+                "winner": _required_text(item, "winner"),
+                "names": {
+                    slot: _required_text(
+                        cast(DynamoItem, cast(DynamoItem, item["participants"])[slot]),
+                        "display_name",
+                    )
+                    for slot in PARTICIPANT_SLOTS
+                },
+                "requester": asdict(profile)
+                if profile is not None
+                else _required_text(item, "requester_display_name"),
+            }
+            references.append(
+                RecordSyncReference(
+                    record_id=version["id"],
+                    revision=_base64url(hashlib.sha256(_canonical(version)).digest()),
+                    avatar_revision=_base64url(
+                        hashlib.sha256(_canonical(asdict(profile) if profile else None)).digest()
+                    ),
+                )
+            )
+        return RecordSyncIndexResponse(
+            schema_version=1,
+            items=tuple(references),
+            next_cursor=self._cursor_codec.encode(
+                query=query, index_name="gsi1", last_evaluated_key=page.last_evaluated_key, now=now
+            )
+            if page.last_evaluated_key is not None
+            else None,
+        )
 
     def get_record(self, *, record_id: str, now: datetime) -> RecordDetailResponse:
         if not _is_record_id(record_id):
@@ -827,6 +893,7 @@ def validate_list_query(query: ListQuery) -> ListQuery:
         sort=query.sort,
         winner=query.winner,
         cursor=query.cursor,
+        sync_index=query.sync_index,
     )
 
 
