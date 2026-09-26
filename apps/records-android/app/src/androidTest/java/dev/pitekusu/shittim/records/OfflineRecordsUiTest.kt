@@ -10,8 +10,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -31,7 +33,7 @@ import org.junit.runner.RunWith
 class OfflineRecordsUiTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
-  @Test fun savedDetailAndUpdateFailureRemainReadableAndRetryable() {
+  @Test fun savedDetailAndUpdateFailureRemainReadableWithoutSyncControls() {
     val dark = mutableStateOf(false)
     val large = mutableStateOf(false)
     val events = mutableListOf<BootstrapScreen.Event>()
@@ -56,10 +58,11 @@ class OfflineRecordsUiTest {
       compose.runOnIdle { dark.value = isDark; large.value = isLarge }
       compose.onNodeWithText(label(R.string.record_saved)).assertIsDisplayed()
       compose.onNodeWithText(label(R.string.record_refresh_failed)).assertIsDisplayed()
-      compose.onNodeWithText(label(R.string.record_refresh)).performClick()
+      compose.onAllNodes(hasClickAction()).assertCountEquals(1) // Only the return-to-list action.
       capture(name)
     }
-    assertEquals(List(3) { BootstrapScreen.Event.RetryRecord }, events)
+    compose.onNodeWithText(label(R.string.record_close)).performClick()
+    assertEquals(listOf(BootstrapScreen.Event.CloseRecord), events)
   }
 
   @Test fun authorizedOfflineDetailClosesOnBackAndDisappearsWhenLocked() {

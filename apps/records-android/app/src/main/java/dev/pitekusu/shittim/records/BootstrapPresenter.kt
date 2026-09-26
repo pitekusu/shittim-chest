@@ -52,9 +52,7 @@ internal data object BootstrapScreen : Screen {
     data object Logout : Event
     data object Retry : Event
     data object RetryRecord : Event
-    data object RefreshRecords : Event
     data object RecordsAuthRequired : Event
-    data object StartSync : Event
     data class OpenRecord(val recordId: String) : Event
     data object CloseRecord : Event
   }
@@ -207,12 +205,7 @@ internal class BootstrapPresenter(
           recordRetry++
           if (!signedIn) session.retry() else RecordSyncScheduler.syncNow(context)
         }
-        BootstrapScreen.Event.RefreshRecords -> {
-          listRetry++
-          if (!signedIn) session.retry() else RecordSyncScheduler.syncNow(context)
-        }
         BootstrapScreen.Event.RecordsAuthRequired -> session.onForeground()
-        BootstrapScreen.Event.StartSync -> if (currentSignedIn != null) RecordSyncScheduler.syncNow(context)
         is BootstrapScreen.Event.OpenRecord -> if (
           event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
         ) session.openDestination("/records/${event.recordId}")
