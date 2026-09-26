@@ -74,9 +74,9 @@ internal class BootstrapPresenter(
     val signedIn = sessionState is SessionState.SignedIn
     val currentSignedIn by rememberUpdatedState(signedIn)
     val currentSessionState by rememberUpdatedState(sessionState)
-    DisposableEffect(signedIn) {
-      // Discard presigned avatar bitmaps when authentication leaves this screen.
-      onDispose { if (signedIn) SingletonImageLoader.get(context).memoryCache?.clear() }
+    DisposableEffect(cacheAccountId) {
+      // Restored offline access can show decoded avatars before SignedIn exists.
+      onDispose { if (cacheAccountId != null) SingletonImageLoader.get(context).memoryCache?.clear() }
     }
     val launcher = rememberLauncherForActivityResult(MobileLoginContract(), session::loginResult)
     val records = remember(context.applicationContext) {

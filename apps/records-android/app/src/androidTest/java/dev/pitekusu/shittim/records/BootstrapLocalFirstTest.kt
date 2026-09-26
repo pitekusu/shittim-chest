@@ -2,6 +2,7 @@ package dev.pitekusu.shittim.records
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Bitmap
 import androidx.activity.compose.setContent
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.compose.runtime.CompositionLocalProvider
@@ -14,6 +15,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToNode
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import coil3.SingletonImageLoader
+import coil3.asImage
+import coil3.memory.MemoryCache
 import dev.pitekusu.shittim.records.auth.CacheAuthorization
 import dev.pitekusu.shittim.records.auth.MobileAuthClient
 import dev.pitekusu.shittim.records.auth.MobileSessionModel
@@ -38,6 +42,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -105,10 +110,16 @@ class BootstrapLocalFirstTest {
         assertEquals(SessionState.Checking, model.state.value)
         assertFalse(responseGate.isCompleted)
         assertTrue(rendered!!.canReadRecords)
+        val imageCache = checkNotNull(SingletonImageLoader.get(context).memoryCache)
+        imageCache[MemoryCache.Key("restored-avatar-test")] =
+          MemoryCache.Value(Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).asImage())
         responseGate.complete(Unit)
       }
       compose.waitUntil(5_000) { rendered?.let { it.session is SessionState.SignedOut && !it.canReadRecords } == true }
       compose.onNodeWithText("通信前に見える架空の記録").assertDoesNotExist()
+      compose.runOnIdle {
+        assertNull(SingletonImageLoader.get(context).memoryCache?.get(MemoryCache.Key("restored-avatar-test")))
+      }
     } finally {
       compose.activityRule.scenario.onActivity { it.setContent {}; owner.clear() }
       client.close()

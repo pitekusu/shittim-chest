@@ -26,6 +26,30 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun denialAfterSessionResponseCannotPublishItsOlderPermit() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.activationGate = CompletableDeferred()
+        fixture.activationStarted = CompletableDeferred()
+        model.onForeground()
+        withTimeout(5_000) { fixture.activationStarted.await() }
+        model.onAuthenticationRequired()
+        assertNull(model.cachePermit.value)
+        fixture.status = HttpStatusCode.Forbidden
+        fixture.activationGate!!.complete(Unit)
+        model.await<SessionState.SignedOut>()
+        assertNull(model.cachePermit.value)
+        assertNull(fixture.stored)
+        assertEquals(3, fixture.gets) // The final check starts after the denial.
+      }
+    }
+  }
+
+  @Test
   fun logoutDuringRestoredAccessCancelsVerificationAndCompletesLocalDeletion() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
@@ -520,6 +544,8 @@ class MobileSessionModelTest {
     var status = HttpStatusCode.OK
     var sessionGate: CompletableDeferred<Unit>? = null
     var sessionStarted = CompletableDeferred<Unit>()
+    var activationGate: CompletableDeferred<Unit>? = null
+    var activationStarted = CompletableDeferred<Unit>()
     var logoutGate: CompletableDeferred<Unit>? = null
     val postStarted = CompletableDeferred<Unit>()
     val owner = ViewModelStore()
@@ -557,7 +583,7 @@ class MobileSessionModelTest {
       assertNull(stored)
       assertFalse(cacheClearFails)
       logoutPending = false
-    }, { activatedAccounts.add(it) }, {
+    }, { activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it) }, {
       cacheClears++
       if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()
     }, Clock.fixed(now, ZoneOffset.UTC)).also { owner.put("session", it) }
