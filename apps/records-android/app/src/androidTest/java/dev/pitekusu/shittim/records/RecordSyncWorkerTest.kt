@@ -45,8 +45,10 @@ class RecordSyncWorkerTest {
     val app = InstrumentationRegistry.getInstrumentation().targetContext
     directory = Files.createTempDirectory(app.noBackupFilesDir.toPath(), "worker-test-").toFile()
     context = object : ContextWrapper(app) {
+      override fun getApplicationContext(): Context = this
       override fun getNoBackupFilesDir() = directory
       override fun getPackageName() = "${app.packageName}.worker.${directory.name}"
+      override fun getDatabasePath(name: String): File = File(directory, name)
     }
     store = KeystoreTokenStore(context)
   }
@@ -79,8 +81,10 @@ class RecordSyncWorkerTest {
               RecordCacheAccount(context, keys, database), lease::permits, activateOwner = false)
           })
     }
-    val result = TestListenableWorkerBuilder<RecordSyncWorker>(context).setWorkerFactory(factory).build()
-      .doWork() as ListenableWorker.Result.Success
+    val result = TestListenableWorkerBuilder<RecordSyncWorker>(context).setWorkerFactory(factory).build().doWork()
+    assertTrue("worker_failure=${(result as? ListenableWorker.Result.Failure)?.outputData?.getString("failure")}",
+      result is ListenableWorker.Result.Success)
+    result as ListenableWorker.Result.Success
     assertEquals(1, calls)
     assertEquals(setOf("finishedAt"), result.outputData.keyValueMap.keys)
     assertEquals(token.cacheAuthorization?.accountId, store.read()?.cacheAuthorization?.accountId)

@@ -185,8 +185,12 @@ internal class MobileSessionModel(
   }
 
   fun logout() {
-    if (operation?.isActive == true || state.value == SessionState.Checking || state.value == SessionState.Browser ||
+    val restoredCheck = state.value == SessionState.Checking && offlineCacheAccountId != null
+    if (((operation?.isActive == true || state.value == SessionState.Checking) && !restoredCheck) ||
+      state.value == SessionState.Browser ||
       state.value is SessionState.SignedOut) return
+    val verification = operation.takeIf { restoredCheck }
+    verification?.cancel()
     expiry?.cancel()
     val previous = pendingLogoutToken ?: token
     pendingLogoutToken = previous
@@ -197,14 +201,14 @@ internal class MobileSessionModel(
     returnTo = "/"
     operation = viewModelScope.launch {
       try {
-        finishLogout(previous)
+        finishLogout(previous, verification)
       } catch (error: CancellationException) { throw error }
       catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
       catch (_: RecordCacheException) { mutableState.value = SessionState.StorageError }
     }
   }
 
-  private suspend fun finishLogout(previous: StoredToken?) {
+  private suspend fun finishLogout(previous: StoredToken?, verification: Job? = null) {
     pendingLogoutToken = previous // A failed local deletion can retry without losing revocation.
     token = null
     mutableCachePermit.value = null
@@ -213,6 +217,8 @@ internal class MobileSessionModel(
     mutableState.value = SessionState.SigningOut
     withContext(NonCancellable) {
       withContext(Dispatchers.IO) { beginLocalLogout() }
+      // Persist deletion intent before waiting; an Activity exit cannot resume the old check.
+      verification?.join()
       try { clearRecords() }
       finally { withContext(Dispatchers.IO) { clearToken() } }
       // Do not acknowledge intent if record deletion failed before its own marker was written.

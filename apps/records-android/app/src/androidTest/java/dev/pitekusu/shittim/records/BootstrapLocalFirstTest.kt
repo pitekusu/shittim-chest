@@ -98,6 +98,9 @@ class BootstrapLocalFirstTest {
       compose.waitUntil(10_000) { rendered?.records is RecordListState.Ready }
       compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("通信前に見える架空の記録"))
       compose.onNodeWithText("通信前に見える架空の記録").assertIsDisplayed()
+      val logout = compose.activity.getString(R.string.session_local_logout_action)
+      compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(logout))
+      compose.onNodeWithText(logout).assertIsDisplayed()
       compose.runOnIdle {
         assertEquals(SessionState.Checking, model.state.value)
         assertFalse(responseGate.isCompleted)

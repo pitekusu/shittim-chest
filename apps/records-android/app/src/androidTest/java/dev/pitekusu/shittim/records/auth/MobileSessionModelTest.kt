@@ -26,6 +26,31 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun logoutDuringRestoredAccessCancelsVerificationAndCompletesLocalDeletion() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = StoredToken(fixture.validToken.accessToken, fixture.validToken.expiresAt,
+          CacheAuthorization("u".repeat(43), fixture.now, fixture.validToken.expiresAt))
+        fixture.sessionGate = CompletableDeferred()
+        val model = fixture.start()
+        withTimeout(5_000) { fixture.sessionStarted.await() }
+        model.logout()
+        model.logout()
+        assertEquals(SessionState.SigningOut, model.state.value)
+        assertNull(model.offlineCacheAccountId)
+        model.await<SessionState.SignedOut>()
+        fixture.sessionGate!!.complete(Unit)
+        yield()
+        assertNull(fixture.stored)
+        assertFalse(fixture.logoutPending)
+        assertEquals(1, fixture.cacheClears)
+        assertEquals(1, fixture.posts)
+        assertTrue(fixture.activatedAccounts.isEmpty())
+      }
+    }
+  }
+
+  @Test
   fun savedPermitAllowsReadsBeforeSessionResponseButNeverAuthorizesNetworkRequests() = runBlocking {
     withContext(Dispatchers.Main) {
       for (hasPermit in listOf(true, false)) {

@@ -150,7 +150,7 @@ private fun BootstrapControls(
     if (showHeader) item(key = "brand") {
       BootstrapHeader(Modifier.fillMaxWidth(), compact = state.canReadRecords)
     }
-    item(key = "session") { SessionPanel(state.session, state.eventSink) }
+    item(key = "session") { SessionPanel(state.session, state.eventSink, canReadRecords = state.canReadRecords) }
     item(key = "theme") {
       BootstrapThemeSelector(state.themeChoice) {
         state.eventSink(BootstrapScreen.Event.SelectTheme(it))
