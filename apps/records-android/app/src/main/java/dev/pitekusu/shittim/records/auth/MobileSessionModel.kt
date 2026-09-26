@@ -98,6 +98,27 @@ internal class MobileSessionModel(
       state.value == SessionState.Checking) refresh()
   }
 
+  fun onSyncAuthenticationRequired() {
+    // WorkData deliberately contains no credential/session identity. The worker
+    // invalidates its own stored permit with a token comparison; inspect that result.
+    viewModelScope.launch {
+      val active = token ?: return@launch
+      val stored = try { withContext(Dispatchers.IO) { readToken() } }
+      catch (_: TokenStorageException) {
+        if (token === active) {
+          mutableCachePermit.value = null
+          mutableState.value = SessionState.StorageError
+        }
+        return@launch
+      }
+      if (token !== active) return@launch
+      if (stored?.accessToken == active.accessToken &&
+        stored.cacheAuthorization?.accountId == active.cacheAuthorization?.accountId &&
+        stored.cacheAuthorization?.permits(clock.instant()) == true) onForeground()
+      else onAuthenticationRequired()
+    }
+  }
+
   fun retry() {
     if (state.value == SessionState.Unavailable) refresh()
   }
@@ -126,7 +147,14 @@ internal class MobileSessionModel(
     val signedIn = state.value as? SessionState.SignedIn ?: return null
     val active = token ?: return null
     if (!active.expiresAt.isAfter(clock.instant()) || !isCacheAuthorized(signedIn.cacheAccountId)) return null
-    val result = request(active.accessToken)
+    val result = try { request(active.accessToken) }
+    catch (error: CancellationException) { throw error }
+    catch (error: Exception) {
+      // An old credential's failure cannot lock a newly authenticated session.
+      // The same credential's rejection still matters during a foreground check.
+      if (token?.accessToken != active.accessToken) return null
+      throw error
+    }
     return result.takeIf {
       state.value === signedIn && token === active && active.expiresAt.isAfter(clock.instant()) &&
         isCacheAuthorized(signedIn.cacheAccountId)

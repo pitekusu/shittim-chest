@@ -106,7 +106,7 @@ internal class BootstrapPresenter(
           // Observe work/progress changes as well, including deletion-only completion.
           listRetry++
           if ((status as? RecordSyncState.Failed)?.reason == RecordReadFailure.AUTH_REQUIRED) {
-            session.onAuthenticationRequired()
+            session.onSyncAuthenticationRequired()
           }
         }
       }

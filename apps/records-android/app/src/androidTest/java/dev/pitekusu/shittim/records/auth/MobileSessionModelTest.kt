@@ -101,6 +101,35 @@ class MobileSessionModelTest {
   }
 
   @Test
+  fun syncFailureOnlyLocksThePermitThatTheWorkerActuallyInvalidated() = runBlocking {
+    withContext(Dispatchers.Main) {
+      for (invalidated in listOf(false, true)) {
+        Fixture().use { fixture ->
+          fixture.stored = fixture.validToken
+          val model = fixture.start()
+          model.await<SessionState.SignedIn>()
+          yield()
+          fixture.status = HttpStatusCode.ServiceUnavailable
+          if (invalidated) {
+            fixture.sessionStarted = CompletableDeferred()
+            fixture.sessionGate = CompletableDeferred()
+            model.onForeground()
+            withTimeout(5_000) { fixture.sessionStarted.await() }
+            fixture.stored = fixture.validToken // Worker strips only its matching permit.
+          }
+          model.onSyncAuthenticationRequired()
+          if (invalidated) {
+            withTimeout(5_000) { model.cachePermit.first { it == null } }
+            fixture.sessionGate!!.complete(Unit)
+          }
+          model.await<SessionState.Unavailable>()
+          assertEquals(!invalidated, model.isCacheAuthorized("u".repeat(43)))
+        }
+      }
+    }
+  }
+
+  @Test
   fun recordLinkBecomesLoginDestinationAndUpdatesActiveSession() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
@@ -202,6 +231,7 @@ class MobileSessionModelTest {
         fixture.sessionGate = CompletableDeferred()
         model.onForeground()
         assertEquals(SessionState.Checking, model.state.value)
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
         fixture.sessionGate?.complete(Unit)
         model.await<SessionState.Unavailable>()
         assertNotNull(fixture.stored)
@@ -285,20 +315,33 @@ class MobileSessionModelTest {
   @Test
   fun responseFinishingAfterLogoutCannotBeUsedForTheOldAccount() = runBlocking {
     withContext(Dispatchers.Main) {
-      Fixture().use { fixture ->
-        fixture.stored = fixture.validToken
-        val model = fixture.start()
-        model.await<SessionState.SignedIn>()
-        val entered = CompletableDeferred<Unit>()
-        val finish = CompletableDeferred<String>()
-        val pending = async {
-          model.withAuthorizedToken { entered.complete(Unit); finish.await() }
+      for (rejected in listOf(false, true)) {
+        Fixture().use { fixture ->
+          fixture.stored = fixture.validToken
+          val model = fixture.start()
+          model.await<SessionState.SignedIn>()
+          val entered = CompletableDeferred<Unit>()
+          val finish = CompletableDeferred<String>()
+          val pending = async {
+            model.withAuthorizedToken {
+              entered.complete(Unit)
+              val result = finish.await()
+              if (rejected) throw MobileAuthException(MobileAuthFailure.AUTHENTICATION_REQUIRED)
+              result
+            }
+          }
+          entered.await()
+          model.logout()
+          model.await<SessionState.SignedOut>()
+          yield()
+          assertTrue(model.beginLogin())
+          fixture.stored = StoredToken("x".repeat(43), fixture.validToken.expiresAt)
+          model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN))
+          model.await<SessionState.SignedIn>()
+          finish.complete("古い利用者の記録")
+          assertNull(pending.await())
+          assertTrue(model.isCacheAuthorized("u".repeat(43)))
         }
-        entered.await()
-        model.logout()
-        model.await<SessionState.SignedOut>()
-        finish.complete("古い利用者の記録")
-        assertNull(pending.await())
       }
     }
   }
