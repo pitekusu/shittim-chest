@@ -21,7 +21,6 @@ import javax.crypto.spec.GCMParameterSpec
 internal class KeystoreTokenStore(context: Context) {
   private val file = AtomicFile(File(context.noBackupFilesDir, "mobile-session.v1"))
   private val keyAlias = "${context.packageName}.mobile-session.v1"
-  private val associatedData = keyAlias.toByteArray(Charsets.UTF_8) + VERSION
 
   init {
     require(!context.isDeviceProtectedStorage) { "credential_protected_storage_required" }
@@ -34,19 +33,24 @@ internal class KeystoreTokenStore(context: Context) {
       if (file.baseFile.exists()) throw error
       return@guarded null
     }
-    check(envelope[0] == VERSION)
+    val version = envelope[0]
+    check(envelope.size == envelopeSize(version))
     // A lost or invalidated key is not silently replaced while reading old ciphertext.
     val key = keyStore().getKey(keyAlias, null) as? SecretKey ?: throw TokenStorageException()
     val cipher = Cipher.getInstance(TRANSFORMATION)
     cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, envelope, 1, IV_BYTES))
-    cipher.updateAAD(associatedData)
+    cipher.updateAAD(keyAlias.toByteArray(Charsets.UTF_8) + version)
     val plaintext = cipher.doFinal(envelope, 1 + IV_BYTES, envelope.size - 1 - IV_BYTES)
     try {
       val payload = ByteBuffer.wrap(plaintext)
       val expiry = Instant.ofEpochSecond(payload.long)
       val token = ByteArray(TOKEN_BYTES).also(payload::get)
       try {
-        StoredToken(token.toString(Charsets.US_ASCII), expiry)
+        val authorization = if (version == AUTHORIZED_VERSION) {
+          val account = ByteArray(TOKEN_BYTES).also(payload::get).toString(Charsets.US_ASCII)
+          CacheAuthorization(account, Instant.ofEpochSecond(payload.long), Instant.ofEpochSecond(payload.long))
+        } else null
+        StoredToken(token.toString(Charsets.US_ASCII), expiry, authorization)
       } finally {
         token.fill(0)
       }
@@ -56,19 +60,26 @@ internal class KeystoreTokenStore(context: Context) {
   }
 
   fun save(token: StoredToken): Unit = guarded {
+    val authorization = token.cacheAuthorization
+    val version = if (authorization == null) VERSION else AUTHORIZED_VERSION
     val cipher = Cipher.getInstance(TRANSFORMATION)
     cipher.init(Cipher.ENCRYPT_MODE, encryptionKey()) // Keystore chooses a fresh random IV.
-    cipher.updateAAD(associatedData)
+    cipher.updateAAD(keyAlias.toByteArray(Charsets.UTF_8) + version)
     check(cipher.iv.size == IV_BYTES)
-    val plaintext = ByteBuffer.allocate(PAYLOAD_BYTES)
+    val payload = ByteBuffer.allocate(payloadSize(version))
       .putLong(token.expiresAt.epochSecond)
-      .put(token.accessToken.toByteArray(Charsets.US_ASCII)).array()
+      .put(token.accessToken.toByteArray(Charsets.US_ASCII))
+    if (authorization != null) {
+      payload.put(authorization.accountId.toByteArray(Charsets.US_ASCII))
+        .putLong(authorization.verifiedAt.epochSecond).putLong(authorization.expiresAt.epochSecond)
+    }
+    val plaintext = payload.array()
     val ciphertext = try {
       cipher.doFinal(plaintext)
     } finally {
       plaintext.fill(0)
     }
-    val envelope = byteArrayOf(VERSION) + cipher.iv + ciphertext
+    val envelope = byteArrayOf(version) + cipher.iv + ciphertext
     val output = file.startWrite()
     try {
       output.write(envelope) // Plaintext never reaches the file, including temporary files.
@@ -90,9 +101,12 @@ internal class KeystoreTokenStore(context: Context) {
   }
 
   private fun readEnvelope(): ByteArray = DataInputStream(file.openRead()).use { input ->
-    ByteArray(ENVELOPE_BYTES).also {
-      input.readFully(it)
-      check(input.read() == -1) // Reject oversized, truncated, or unknown records.
+    // Read the authenticated version with a strict bound; accept the deployed v1 format.
+    val version = input.readByte()
+    ByteArray(envelopeSize(version)).also { bytes ->
+      bytes[0] = version
+      input.readFully(bytes, 1, bytes.size - 1)
+      check(input.read() == -1)
     }
   }
 
@@ -132,10 +146,16 @@ internal class KeystoreTokenStore(context: Context) {
     const val KEYSTORE = "AndroidKeyStore"
     const val TRANSFORMATION = "AES/GCM/NoPadding"
     const val VERSION: Byte = 1
+    const val AUTHORIZED_VERSION: Byte = 2
     const val TOKEN_BYTES = 43
     const val IV_BYTES = 12
     const val TAG_BITS = 128
     const val PAYLOAD_BYTES = Long.SIZE_BYTES + TOKEN_BYTES
-    const val ENVELOPE_BYTES = 1 + IV_BYTES + PAYLOAD_BYTES + TAG_BITS / 8
+    fun payloadSize(version: Byte): Int = when (version) {
+      VERSION -> PAYLOAD_BYTES
+      AUTHORIZED_VERSION -> PAYLOAD_BYTES + TOKEN_BYTES + 2 * Long.SIZE_BYTES
+      else -> throw TokenStorageException()
+    }
+    fun envelopeSize(version: Byte): Int = 1 + IV_BYTES + payloadSize(version) + TAG_BITS / 8
   }
 }
