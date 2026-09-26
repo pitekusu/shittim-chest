@@ -113,6 +113,7 @@ dependencies {
   implementation(libs.bouncycastle.bcprov)
   implementation(libs.room3.runtime)
   implementation(libs.sqlite.framework)
+  implementation(libs.androidx.work.runtime)
   ksp(libs.room3.compiler)
   debugImplementation(libs.androidx.compose.ui.tooling)
   androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -120,4 +121,5 @@ dependencies {
   androidTestImplementation(libs.androidx.test.junit)
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.ktor.client.mock)
+  androidTestImplementation(libs.androidx.work.testing)
 }

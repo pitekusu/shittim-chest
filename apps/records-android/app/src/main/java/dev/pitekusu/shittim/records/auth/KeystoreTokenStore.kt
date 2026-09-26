@@ -109,6 +109,14 @@ internal class KeystoreTokenStore(context: Context) {
 
   fun isLogoutPending(): Boolean = guarded { hasLogoutIntent() }
 
+  /** Revocation locks offline data without erasing it or resurrecting another login. */
+  fun invalidateCacheAuthorization(expectedToken: String): Unit = guarded {
+    if (!hasLogoutIntent()) {
+      val current = read()
+      if (current?.accessToken == expectedToken) save(StoredToken(current.accessToken, current.expiresAt))
+    }
+  }
+
   /** Erase credentials even when record cleanup fails; keep its independent durable intent. */
   fun clear(): Unit = guarded {
     val keys = keyStore()
