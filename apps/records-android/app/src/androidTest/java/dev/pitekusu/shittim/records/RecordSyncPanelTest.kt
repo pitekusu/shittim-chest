@@ -52,16 +52,16 @@ class RecordSyncPanelTest {
     assertEquals(listOf(BootstrapScreen.Event.StartSync), events)
     compose.runOnIdle { state.value = RecordSyncState.Running }
     compose.onNodeWithText(label(R.string.record_sync_start)).assertDoesNotExist()
-    compose.onNodeWithText(label(R.string.record_sync_pause)).performClick()
-    assertEquals(BootstrapScreen.Event.PauseSync, events.last())
+    compose.onNodeWithText(label(R.string.record_sync_pause)).assertDoesNotExist()
     capture("sync-light")
     compose.runOnIdle { dark.value = true }
     compose.onNodeWithText(label(R.string.record_sync_running)).assertIsDisplayed()
     capture("sync-dark")
-    compose.runOnIdle { state.value = RecordSyncState.Paused; largeText.value = true }
-    compose.onNodeWithText(label(R.string.record_sync_paused)).assertIsDisplayed()
-    compose.onNodeWithText(label(R.string.record_sync_resume)).assertIsDisplayed().performClick()
+    compose.runOnIdle { state.value = RecordSyncState.Completed; largeText.value = true }
+    compose.onNodeWithText(label(R.string.record_sync_completed)).assertIsDisplayed()
+    compose.onNodeWithText(label(R.string.record_sync_again)).assertIsDisplayed()
     capture("sync-large-text")
+    compose.onNodeWithText(label(R.string.record_sync_again)).performClick()
     compose.runOnIdle { state.value = RecordSyncState.Failed(RecordReadFailure.STORAGE_UNAVAILABLE) }
     compose.onNodeWithText(label(R.string.record_sync_storage_error)).assertIsDisplayed()
     compose.runOnIdle { state.value = RecordSyncState.Completed }

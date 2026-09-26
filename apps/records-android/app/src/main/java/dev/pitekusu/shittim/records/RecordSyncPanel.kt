@@ -8,7 +8,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -49,9 +48,6 @@ internal fun RecordSyncPanel(state: RecordSyncState, onEvent: (BootstrapScreen.E
       if (state == RecordSyncState.Running) {
         // The total is not known until enumeration finishes; never invent a percentage.
         LinearProgressIndicator(Modifier.fillMaxWidth())
-        OutlinedButton(onClick = { onEvent(BootstrapScreen.Event.PauseSync) }) {
-          Text(stringResource(R.string.record_sync_pause))
-        }
       } else {
         Button(onClick = { onEvent(BootstrapScreen.Event.StartSync) }) {
           Text(stringResource(when (state) {

@@ -162,8 +162,8 @@ private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
       }
     }
     val context = LocalContext.current
-    val request = remember(avatar.url) {
-      avatar.url?.let { ImageRequest.Builder(context).data(it).build() }
+    val request = remember(avatar.bytes, avatar.url) {
+      (avatar.bytes ?: avatar.url)?.let { ImageRequest.Builder(context).data(it).build() }
     }
     if (request != null) {
       AsyncImage(model = request, contentDescription = null,

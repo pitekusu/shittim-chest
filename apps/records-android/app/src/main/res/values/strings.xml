@@ -25,8 +25,8 @@
     <string name="record_list_restart">先頭から読み直す</string>
     <string name="record_list_winner">勝者：%1$s</string>
     <string name="record_sync_title">記録を端末に保存</string>
-    <string name="record_sync_hint">全記録を順番に取得して暗号化保存します。中断した分は続きから再開します。</string>
-    <string name="record_sync_running">記録を取得・保存しています。画面を離れると一時停止します。</string>
+    <string name="record_sync_hint">記録とアイコンをバックグラウンドで自動保存します。約15分ごとに差分を確認しますが、省電力設定や通信状況により遅れる場合があります。</string>
+    <string name="record_sync_running">新規・更新分を取得して暗号化保存しています。画面を閉じても処理は続きます。</string>
     <string name="record_sync_paused">同期を一時停止しました。保存済みの記録を残し、続きから再開できます。</string>
     <string name="record_sync_completed">記録の保存が完了しました。保存済みの一覧と詳細はオフラインでも閲覧できます。</string>
     <string name="record_saved">保存済みの記録</string>
@@ -39,10 +39,10 @@
     <string name="record_sync_auth_error">ログイン状態を確認できませんでした。再ログイン後に再開してください。</string>
     <string name="record_sync_storage_error">端末に保存できませんでした。保存済みの記録は削除していません。</string>
     <string name="record_sync_error">同期を完了できませんでした。通信状況を確認して、続きから再開してください。</string>
-    <string name="record_sync_start">同期する</string>
+    <string name="record_sync_start">今すぐ差分を確認</string>
     <string name="record_sync_pause">一時停止</string>
     <string name="record_sync_resume">同期を再開</string>
-    <string name="record_sync_again">新しい記録も同期する</string>
+    <string name="record_sync_again">今すぐ差分を確認</string>
     <string name="record_close">一覧に戻る</string>
     <string name="record_loading">最新の記録を読み込んでいます</string>
     <string name="record_empty">表示できる議論の記録はまだありません。</string>
