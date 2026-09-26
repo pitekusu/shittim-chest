@@ -26,6 +26,81 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun savedPermitAllowsReadsBeforeSessionResponseButNeverAuthorizesNetworkRequests() = runBlocking {
+    withContext(Dispatchers.Main) {
+      for (hasPermit in listOf(true, false)) {
+        Fixture().use { fixture ->
+          val permit = CacheAuthorization("u".repeat(43), fixture.now, fixture.validToken.expiresAt)
+          fixture.stored = StoredToken(fixture.validToken.accessToken, fixture.validToken.expiresAt,
+            permit.takeIf { hasPermit })
+          fixture.sessionGate = CompletableDeferred()
+          fixture.status = HttpStatusCode.Unauthorized
+          val model = fixture.start()
+          withTimeout(5_000) { fixture.sessionStarted.await() }
+          assertEquals(SessionState.Checking, model.state.value)
+          assertEquals(hasPermit, model.isCacheAuthorized(permit.accountId))
+          assertNull(model.withAuthorizedToken { fail("checking must not authorize a record request") })
+          assertEquals(0, fixture.activatedAccounts.size)
+          fixture.sessionGate!!.complete(Unit)
+          model.await<SessionState.SignedOut>()
+          assertNull(model.cachePermit.value)
+          assertNull(model.offlineCacheAccountId)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun rejectionDuringForegroundCheckImmediatelyLocksCacheAndNetworkFailureCannotRestoreIt() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.sessionStarted = CompletableDeferred()
+        fixture.sessionGate = CompletableDeferred()
+        fixture.status = HttpStatusCode.ServiceUnavailable
+        model.onForeground()
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
+        withTimeout(5_000) { fixture.sessionStarted.await() }
+        model.onAuthenticationRequired()
+        assertNull(model.cachePermit.value)
+        fixture.sessionGate!!.complete(Unit)
+        model.await<SessionState.Unavailable>()
+        assertNull(model.offlineCacheAccountId)
+        fixture.sessionGate = null
+        fixture.status = HttpStatusCode.OK
+        yield()
+        model.retry()
+        model.await<SessionState.SignedIn>()
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
+      }
+    }
+  }
+
+  @Test
+  fun savedDeadlineExpiresEvenWhileSessionVerificationIsPending() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        val deadline = fixture.now.plusSeconds(1)
+        fixture.stored = StoredToken("t".repeat(43), deadline,
+          CacheAuthorization("u".repeat(43), fixture.now, deadline))
+        fixture.sessionGate = CompletableDeferred()
+        val model = fixture.start()
+        withTimeout(5_000) { fixture.sessionStarted.await() }
+        assertTrue(model.isCacheAuthorized("u".repeat(43)))
+        model.await<SessionState.SignedOut>()
+        fixture.sessionGate!!.complete(Unit)
+        yield()
+        assertNull(model.cachePermit.value)
+        assertNull(fixture.stored)
+        assertEquals(0, fixture.activatedAccounts.size)
+      }
+    }
+  }
+
+  @Test
   fun recordLinkBecomesLoginDestinationAndUpdatesActiveSession() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
@@ -376,6 +451,7 @@ class MobileSessionModelTest {
     var posts = 0
     var status = HttpStatusCode.OK
     var sessionGate: CompletableDeferred<Unit>? = null
+    var sessionStarted = CompletableDeferred<Unit>()
     var logoutGate: CompletableDeferred<Unit>? = null
     val postStarted = CompletableDeferred<Unit>()
     val owner = ViewModelStore()
@@ -383,6 +459,7 @@ class MobileSessionModelTest {
       when (request.url.encodedPath.substringAfterLast('/')) {
         "session" -> {
           gets++
+          sessionStarted.complete(Unit)
           sessionGate?.await()
           respond("""{"schemaVersion":1,"isAdmin":false,"cacheAccountId":"${"u".repeat(43)}","expiresAt":"$serverExpiry",
             "user":{"displayName":"$name","avatar":{"kind":"placeholder","alt":"架空","fallbackVariant":"cyan"}}}""",
