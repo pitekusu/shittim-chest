@@ -359,6 +359,15 @@ API 36・架空データによる画面確認。実DiscordログインやPlay配
 - 戻るgestureで標準ペイン遷移をプレビューし、確定時だけ一覧へ戻る。キャンセルでは詳細を開いたままにし、認可喪失や別記録への切替後に古いgestureを確定しない。通常の戻るボタンとアニメーション無効時も同じ選択・スクロールを維持する。
 - 日本語のpane名・見出し・表示中の選択状態をsemanticsへ設定し、装飾アイコンの代替イニシャルを重複して読ませない。文字拡大時は1列へ戻して折り返す。TalkBack実聴と実機・Play配布はエミュレーターのsemantics確認と区別する。
 
+### C36の画面写真
+
+API 36・架空データ。標準のテスト用window／font scale overrideで広幅と320dp・文字2倍を確認し、アニメーション倍率0／1で戻るの取消・確定も確認する。実機のTalkBack・Discord認証・Play配布の証拠ではない。
+
+![一覧／詳細・広幅ライト](screenshots/adaptive-wide-light.png)
+![一覧／詳細・広幅ダーク](screenshots/adaptive-wide-dark.png)
+![一覧・スマートフォン](screenshots/adaptive-compact-dark.png)
+![常時操作できる戻る・320dp文字2倍](screenshots/adaptive-large-text.png)
+
 ## C16の認証画面
 
 - `auth/MobileSessionModel.kt`：Activity再生成をまたぐ認証の寿命。保存tokenとsession APIを照合し、期限・失効・通信障害を区別する。
