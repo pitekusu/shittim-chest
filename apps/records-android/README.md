@@ -336,6 +336,18 @@ API 36・架空データで確認した保存済み詳細パネル：[ライト]
 ![320dp・文字2倍](screenshots/design-large-text.png)
 ![議論詳細・ダーク](screenshots/design-detail-dark.png)
 
+## C35：NEW／OLD切替
+
+- NEW＝新しい順、OLD＝古い順。標準ButtonGroup／ToggleButtonの接続形状と幅変化、MotionSchemeによる選択位置の移動を使用する。日本語の説明は文字拡大時に折り返し、選択状態は読み上げでも伝える。
+
+### C35の画面写真
+
+API 36・架空データによる画面確認。実DiscordログインやPlay配布の確認ではない。
+
+![NEW・ライト](screenshots/motion-order-light.png)
+![OLD・ダーク](screenshots/motion-order-dark.png)
+![320dp・文字2倍](screenshots/motion-order-large-text.png)
+
 ## C16の認証画面
 
 - `auth/MobileSessionModel.kt`：Activity再生成をまたぐ認証の寿命。保存tokenとsession APIを照合し、期限・失効・通信障害を区別する。

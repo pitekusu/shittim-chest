@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.ButtonGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -30,7 +28,6 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun RecordQueryControls(query: RecordListQuery, onEvent: (BootstrapScreen.Event) -> Unit) {
   val keyboard = LocalSoftwareKeyboardController.current
-  val orderLabels = listOf(stringResource(R.string.record_sort_newest), stringResource(R.string.record_sort_oldest))
   Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     OutlinedTextField(
       value = query.text,
@@ -62,17 +59,7 @@ internal fun RecordQueryControls(query: RecordListQuery, onEvent: (BootstrapScre
     }
     Text(stringResource(R.string.record_sort_label), style = MaterialTheme.typography.labelLarge,
       color = MaterialTheme.colorScheme.onSurfaceVariant)
-    ButtonGroup(overflowIndicator = { ButtonGroupDefaults.OverflowIndicator(it) },
-      modifier = Modifier.selectableGroup()) {
-      RecordOrder.entries.forEach { order ->
-        toggleableItem(checked = query.order == order,
-          label = orderLabels[order.ordinal],
-          onCheckedChange = { if (it) onEvent(BootstrapScreen.Event.SelectOrder(order)) },
-          icon = if (query.order == order) {
-            { Icon(painterResource(R.drawable.ic_check), contentDescription = null, Modifier.size(18.dp)) }
-          } else null)
-      }
-    }
+    RecordOrderSwitch(query.order) { onEvent(BootstrapScreen.Event.SelectOrder(it)) }
     if (!query.isDefault || query.text.isNotEmpty()) {
       TextButton(onClick = { onEvent(BootstrapScreen.Event.ClearRecordQuery) }) {
         Text(stringResource(R.string.record_search_reset))
