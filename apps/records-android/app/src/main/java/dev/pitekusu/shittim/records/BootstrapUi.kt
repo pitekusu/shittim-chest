@@ -1,7 +1,6 @@
 package dev.pitekusu.shittim.records
 
 import android.content.res.Configuration
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -62,9 +61,6 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
     }
   ShittimTheme(darkTheme) {
     ShittimBackdrop(modifier) {
-      BackHandler(enabled = state.canReadRecords && state.selectedRecordId != null) {
-        state.eventSink(BootstrapScreen.Event.CloseRecord)
-      }
       val pagingItems = (state.records as? RecordListState.Ready)?.pages?.collectAsLazyPagingItems()
       val refreshError = pagingItems?.loadState?.refresh as? LoadState.Error
       val appendError = pagingItems?.loadState?.append as? LoadState.Error

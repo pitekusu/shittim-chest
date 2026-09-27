@@ -53,7 +53,7 @@ updated: 2026-09-27
 | C33 | ローカル検索・勝者絞り込み・並べ替え | 保存済みの議題・依頼者・本文を通信なしで検索し、保存結果による勝者絞り込みと日時の新旧順を画面へ接続 |
 | C34 | 色・フォント・共通部品の整理 | 共通パネル・見出し・読み込み表示・人格色を接続。背景の文字色を明暗テーマへ統一 |
 | C35 | NEW／OLD切替とログイン完了演出 | 新旧順の選択位置・形状変化と、保存tokenのサーバー確認後だけ出る短い完了通知を接続 |
-| C36 | 可変幅レイアウト・画面操作の仕上げ | 一覧／詳細の標準Adaptive配置と読み上げ・文字拡大を接続 |
+| C36 | 可変幅レイアウト・戻る操作の仕上げ | 一覧／詳細の標準Adaptive配置、Predictive Back、読み上げ・文字拡大を接続 |
 | 後続 | Web機能への導線・友人向け配布 | 未実装。C37以降で分けて進める |
 
 ### PRの分割単位
@@ -133,7 +133,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C23：Markdown（接続済み） | [Compose Markdown RendererのMaterial 3対応](https://github.com/mikepenz/multiplatform-markdown-renderer) | 独自パーサー・WebViewは追加しない。外部リンクはHTTPSの絶対URLだけを許可し、Markdown画像URLは取得しない |
 | C26〜29：暗号化保存（導入予定） | Bouncy Castle、Android Keystore、[Room](https://developer.android.com/training/data-storage/room) | 独自暗号方式・DBアクセス基盤は作らない。保存形式・鍵の取り扱いを管理し、Roomには暗号化済み本文を保存 |
 | C31〜C32：同期 | Coroutines、WorkManager、保存済み進捗からの再開 | バックグラウンド継続を新要件として受け、予約・制約・再試行をWorkManagerへ任せる。差分照合・本人認可・暗号化の再開点だけをサービス側で管理 |
-| C36：可変幅の一覧／詳細 | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane | 配置・遷移・pane focus・hinge回避を利用。選択先は既存Circuitの状態を正とし、別のnavigation履歴は増やさない |
+| C36：可変幅の一覧／詳細と戻る | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane、ActivityのPredictiveBackHandler | 配置・遷移・pane focus・hinge回避とgesture配信を利用。選択先は既存Circuitを正とし、別のnavigation履歴は増やさない。確定時のCloseRecord接続と認可再確認だけをアプリ側で扱う |
 
 ### C15までの独自処理を残す理由
 
@@ -889,7 +889,9 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 詳細の「一覧に戻る」は本文のスクロール外に配置する。両ペインは読み上げのまとまりと日本語のpane名を持ち、一覧の表示中記録は文字とselected semanticsで伝える。名前の隣にある装飾アイコン／代替イニシャルは重複して読ませない。標準Card・TextButtonのkeyboard操作とtouch targetを維持し、文字を縮めて収めない。
 
-試験用の架空記録で広幅から狭幅への切替・選択先と一覧スクロールの維持・認可喪失後の非表示・320dp／文字2倍・keyboard操作を確認する。ヘッドレスエミュレーターでのsemantics確認をTalkBackの実聴確認とは扱わない。認証・API・同期・暗号化保存・Material／Composeの既定版・C37と配布処理は変更しない。
+システムの戻るgestureは`PredictiveBackHandler`から受け、標準`MutableThreePaneScaffoldState.seekTo()`で一覧への遷移をプレビューする。途中で取り消せば選択・スクロールは変えず、視覚状態だけ元へ戻す。確定した場合だけ既存`CloseRecord`を送る。アニメーション中の認可喪失・別記録への切替を再確認し、古いgestureで新しい記録を閉じない。処理の中断やcomposition解除ではframe待ちをせず標準状態を復元する。MainActivityだけにAndroid 13〜15でも利用できる予測型戻るのopt-inを設定し、認証ブラウザーのActivityは変更しない。アニメーション無効時も通常の戻ると確定・取消は機能する。
+
+試験用の架空記録で広幅から狭幅への切替・選択先と一覧スクロールの維持・認可喪失後の非表示・320dp／文字2倍・keyboard操作・gesture取消と確定を確認する。ヘッドレスエミュレーターでのsemantics確認をTalkBackの実聴確認とは扱わない。認証・API・同期・暗号化保存・Material／Composeの既定版・C37と配布処理は変更しない。
 
 ## UI・UXの設計方針
 

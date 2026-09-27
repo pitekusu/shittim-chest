@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.graphics.Bitmap
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
@@ -75,6 +76,8 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithText(lastQuestion).assertIsDisplayed()
       .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
     compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "議論詳細"))
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
     capture("adaptive-wide-dark")
     compose.runOnIdle { window.value = DpSize(820.dp, 700.dp) }
     compose.onNodeWithTag("record-detail-content").assertDoesNotExist()
@@ -82,6 +85,8 @@ class AdaptiveRecordsUiTest {
     compose.runOnIdle { window.value = DpSize(1000.dp, 700.dp) }
     compose.onNodeWithText(lastQuestion).assertIsDisplayed()
     compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    compose.runOnIdle { state.value = screen(entries.last().recordId, ThemeChoice.Light) }
+    capture("adaptive-wide-light")
     compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }
     compose.onNodeWithText(lastQuestion).assertDoesNotExist()
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
@@ -125,6 +130,74 @@ class AdaptiveRecordsUiTest {
     // The fallback initial repeats the adjacent name and must not become an extra TalkBack utterance.
     compose.onNodeWithText("レ").assertDoesNotExist()
     capture("adaptive-compact-dark")
+  }
+
+  @Test fun predictiveBackCanBeCancelledAndThenCommittedWithoutLosingListPosition() {
+    val state = mutableStateOf(screen())
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val selected = entries.last().recordId
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      BootstrapUi(screen(state.value.selectedRecordId, onEvent = { event ->
+        events.add(event)
+        if (event is BootstrapScreen.Event.OpenRecord) state.value = screen(event.recordId)
+        if (event == BootstrapScreen.Event.CloseRecord) state.value = screen()
+      }))
+    } }
+    val question = entries.last().questionPreview
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(question))
+    compose.onNodeWithText(question).performClick()
+    compose.waitForIdle()
+    val dispatcher = compose.activity.onBackPressedDispatcher
+    compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(120f, 0f, 0.65f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { assertEquals(selected, state.value.selectedRecordId) }
+    capture("adaptive-back-preview")
+    compose.runOnIdle { dispatcher.dispatchOnBackCancelled() }
+    compose.waitForIdle()
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
+    compose.runOnIdle { assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord }) }
+    compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(120f, 0f, 0.7f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { dispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.onNodeWithText(question).assertIsDisplayed()
+    compose.runOnIdle {
+      assertEquals(null, state.value.selectedRecordId)
+      assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
+    }
+  }
+
+  @Test fun revocationDuringTheBackGestureHidesTheRecordAndDoesNotCommitIt() {
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val state = mutableStateOf(screen(entries.first().recordId, onEvent = events::add))
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent { BootstrapUi(state.value) } }
+    val dispatcher = compose.activity.onBackPressedDispatcher
+    compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.4f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }
+    compose.waitForIdle()
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
+    compose.runOnIdle {
+      dispatcher.dispatchOnBackCancelled()
+      assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
+    }
+  }
+
+  @Test fun anOldGestureDoesNotCloseTheNewlySelectedRecord() {
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val state = mutableStateOf(screen(entries.first().recordId, onEvent = events::add))
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent { BootstrapUi(state.value) } }
+    val dispatcher = compose.activity.onBackPressedDispatcher
+    compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.4f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { state.value = screen(entries.last().recordId, onEvent = events::add) }
+    compose.runOnIdle { dispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.runOnIdle {
+      assertEquals(entries.last().recordId, state.value.selectedRecordId)
+      assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
+    }
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
   }
 
   private fun capture(name: String) {

@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,10 +21,14 @@ import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldDefaults
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.MutableThreePaneScaffoldState
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.calculateThreePaneScaffoldValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -37,6 +42,9 @@ import androidx.compose.ui.unit.dp
 import androidx.paging.compose.LazyPagingItems
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -56,9 +64,37 @@ internal fun AdaptiveRecordsUi(
       else ListDetailPaneScaffoldRole.Detail
     val value = calculateThreePaneScaffoldValue(directive.maxHorizontalPartitions,
       ListDetailPaneScaffoldDefaults.adaptStrategies(), ThreePaneScaffoldDestinationItem<Unit>(destination))
+    val listValue = calculateThreePaneScaffoldValue(directive.maxHorizontalPartitions,
+      ListDetailPaneScaffoldDefaults.adaptStrategies(),
+      ThreePaneScaffoldDestinationItem<Unit>(ListDetailPaneScaffoldRole.List))
+    // Circuit owns the selection; Adaptive owns only the current visual transition.
+    val scaffoldState = remember { MutableThreePaneScaffoldState(value) }
+    val currentState = rememberUpdatedState(state)
+    val currentValue = rememberUpdatedState(value)
+    LaunchedEffect(value) { scaffoldState.animateTo(value) }
+    PredictiveBackHandler(enabled = state.selectedRecordId != null) { progress ->
+      val selectedAtStart = currentState.value.selectedRecordId
+      try {
+        progress.collect { event ->
+          scaffoldState.seekTo(event.progress, listValue, isPredictiveBackInProgress = true)
+        }
+        // A completed gesture must not close another record or act after authentication is lost.
+        if (selectedAtStart != null && currentState.value.canReadRecords &&
+          currentState.value.selectedRecordId == selectedAtStart) {
+          scaffoldState.animateTo(listValue, isPredictiveBackInProgress = true)
+          if (currentState.value.canReadRecords && currentState.value.selectedRecordId == selectedAtStart) {
+            currentState.value.eventSink(BootstrapScreen.Event.CloseRecord)
+          } else scaffoldState.snapTo(currentValue.value)
+        } else scaffoldState.snapTo(currentValue.value)
+      } catch (cancelled: CancellationException) {
+        // Restore without waiting for frames: composition may already be removed after logout.
+        withContext(NonCancellable) { scaffoldState.snapTo(currentValue.value) }
+        throw cancelled
+      }
+    }
     val listTitle = stringResource(R.string.record_title)
     val detailTitle = stringResource(R.string.record_detail_title)
-    ListDetailPaneScaffold(directive, value, modifier = Modifier.fillMaxSize(),
+    ListDetailPaneScaffold(directive, scaffoldState, modifier = Modifier.fillMaxSize(),
       listPane = {
         AnimatedPane(Modifier.preferredWidth(400.dp).semantics {
           paneTitle = listTitle
