@@ -49,9 +49,10 @@ internal sealed interface RecordListState {
     val saved: Boolean = false,
     val refreshFailure: RecordReadFailure? = null,
     private val savedSnapshots: MutableStateFlow<PagingData<RecordListEntry>>? = null,
+    val savedTotal: Int? = null,
   ) : RecordListState {
     companion object {
-      fun fromSaved(entries: List<RecordListEntry>, previous: Ready? = null): Ready {
+      fun fromSaved(entries: List<RecordListEntry>, previous: Ready? = null, total: Int = entries.size): Ready {
         // Static snapshots must publish completion so Compose leaves its initial Loading state.
         val snapshot = PagingData.from(entries, sourceLoadStates = LoadStates(
           refresh = LoadState.NotLoading(false),
@@ -63,7 +64,7 @@ internal sealed interface RecordListState {
         val snapshots = previous?.savedSnapshots ?: MutableStateFlow(snapshot)
         snapshots.value = snapshot
         return Ready(snapshots, entries.map { it.recordId }.toSet(),
-          saved = true, savedSnapshots = snapshots)
+          saved = true, savedSnapshots = snapshots, savedTotal = total)
       }
     }
   }
@@ -77,6 +78,8 @@ internal fun LazyListScope.recordListItems(
   pagingItems: LazyPagingItems<RecordListEntry>?,
   onEvent: (BootstrapScreen.Event) -> Unit,
   sync: RecordSyncState = RecordSyncState.Idle,
+  query: RecordListQuery = RecordListQuery(),
+  searching: Boolean = false,
 ) {
   item(key = "records-heading") {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -85,6 +88,9 @@ internal fun LazyListScope.recordListItems(
       Text(stringResource(R.string.record_title), style = MaterialTheme.typography.headlineSmallEmphasized,
         modifier = Modifier.semantics { heading() })
     }
+  }
+  if ((state is RecordListState.Ready && state.saved) || !query.isDefault) item(key = "records-query") {
+    RecordQueryControls(query, onEvent)
   }
   if (sync == RecordSyncState.Running || sync is RecordSyncState.Failed) {
     item(key = "records-sync-status") { RecordSyncStatus(sync) }
@@ -100,6 +106,11 @@ internal fun LazyListScope.recordListItems(
   if (state.saved || state.refreshFailure != null) item(key = "records-source") {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       if (state.saved) Text(stringResource(R.string.record_saved), color = MaterialTheme.colorScheme.primary)
+      if (searching) Text(stringResource(R.string.record_searching), color = MaterialTheme.colorScheme.onSurfaceVariant)
+      else state.savedTotal?.let { total ->
+        Text(stringResource(R.string.record_search_count, pagingItems.itemCount, total),
+          color = MaterialTheme.colorScheme.onSurfaceVariant)
+      }
       if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
         R.string.record_save_failed else R.string.record_refresh_failed))
     }
@@ -112,8 +123,9 @@ internal fun LazyListScope.recordListItems(
         Button(onClick = pagingItems::retry) { Text(stringResource(R.string.record_retry)) }
       }
     }
-    is LoadState.NotLoading -> if (pagingItems.itemCount == 0) {
-      item(key = "records-empty") { Text(stringResource(R.string.record_empty)) }
+    is LoadState.NotLoading -> if (pagingItems.itemCount == 0 && !searching) {
+      item(key = "records-empty") { Text(stringResource(if (query.isDefault)
+        R.string.record_empty else R.string.record_search_empty)) }
     }
   }
   items(count = pagingItems.itemCount, key = pagingItems.itemKey { it.recordId }) { index ->
