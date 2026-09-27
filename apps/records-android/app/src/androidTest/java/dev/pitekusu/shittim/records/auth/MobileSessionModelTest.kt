@@ -267,17 +267,49 @@ class MobileSessionModelTest {
         assertFalse(model.beginLogin())
         model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.CANCELLED))
         assertEquals(SessionNotice.CANCELLED, model.await<SessionState.SignedOut>().notice)
+        assertEquals(0, model.loginCompletion.value)
         assertTrue(model.beginLogin())
         fixture.stored = fixture.validToken
+        fixture.sessionGate = CompletableDeferred()
         val destination = "/records/${"r".repeat(43)}"
         val result = MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN, destination)
         model.loginResult(result)
         model.loginResult(result)
+        withTimeout(5_000) { fixture.sessionStarted.await() }
+        assertEquals(0, model.loginCompletion.value) // Activity success alone is not authentication.
+        fixture.sessionGate!!.complete(Unit)
         val state = model.await<SessionState.SignedIn>()
         assertEquals(destination, state.returnTo)
         assertEquals("利用者A", state.user.displayName)
         assertEquals(1, fixture.gets)
+        assertEquals(1, model.loginCompletion.value)
         assertFalse(state.toString().contains(fixture.validToken.accessToken))
+        yield()
+        model.onForeground()
+        model.await<SessionState.SignedIn>()
+        assertEquals(1, model.loginCompletion.value) // Ordinary foreground verification is silent.
+      }
+    }
+  }
+
+  @Test
+  fun restoredAndRejectedSessionsDoNotAnnounceLoginSuccess() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { restored ->
+        restored.stored = restored.validToken
+        val model = restored.start()
+        model.await<SessionState.SignedIn>()
+        assertEquals(0, model.loginCompletion.value)
+      }
+      Fixture().use { rejected ->
+        val model = rejected.start()
+        model.await<SessionState.SignedOut>()
+        assertTrue(model.beginLogin())
+        rejected.stored = rejected.validToken
+        rejected.status = HttpStatusCode.Unauthorized
+        model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN))
+        model.await<SessionState.SignedOut>()
+        assertEquals(0, model.loginCompletion.value)
       }
     }
   }

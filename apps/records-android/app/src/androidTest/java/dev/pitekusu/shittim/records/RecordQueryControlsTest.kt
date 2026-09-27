@@ -15,6 +15,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -60,7 +62,8 @@ class RecordQueryControlsTest {
     compose.onNodeWithTag("record-search").performTextInput("架空の相談")
     compose.onNodeWithTag("record-search").performImeAction()
     compose.onNodeWithTag("winner-Plana").performScrollTo().performClick().assertIsSelected()
-    compose.onNodeWithText(label(R.string.record_sort_oldest)).performScrollTo().performClick()
+    compose.onNodeWithTag("order-Oldest").performScrollTo().performClick().assertIsOn()
+    compose.onNodeWithTag("order-Newest").assertIsOff()
     compose.runOnIdle {
       assertEquals(RecordListQuery("架空の相談", RecordWinner.Plana, RecordOrder.Oldest), query.value)
     }
@@ -72,6 +75,7 @@ class RecordQueryControlsTest {
   @Test fun controlsRemainReadableInBothThemesAndAt320dpWithDoubleText() {
     val dark = mutableStateOf(false)
     val large = mutableStateOf(false)
+    val query = mutableStateOf(RecordListQuery(winner = RecordWinner.Plana))
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent {
         val density = LocalDensity.current
@@ -79,19 +83,25 @@ class RecordQueryControlsTest {
           ShittimTheme(dark.value) { ShittimBackdrop {
             Column(Modifier.width(if (large.value) 320.dp else 360.dp)
               .verticalScroll(rememberScrollState()).padding(24.dp).testTag("query-preview")) {
-              RecordQueryControls(RecordListQuery(winner = RecordWinner.Plana)) {}
+              RecordQueryControls(query.value) { event ->
+                if (event is BootstrapScreen.Event.SelectOrder) query.value = query.value.copy(order = event.order)
+              }
             }
           } }
         }
       }
     }
     compose.onNodeWithTag("winner-Plana").assertIsSelected()
-    capture("search-light")
+    compose.onNodeWithTag("order-Newest").performScrollTo().assertIsOn()
+    capture("motion-order-light")
     compose.runOnIdle { dark.value = true }
-    capture("search-dark")
+    compose.onNodeWithTag("order-Oldest").performClick().assertIsOn()
+    capture("motion-order-dark")
     compose.runOnIdle { large.value = true }
     compose.onNodeWithTag("winner-Abe").performScrollTo().assertIsDisplayed()
-    capture("search-large-text")
+    compose.onNodeWithTag("order-Oldest").performScrollTo().assertIsOn().assertIsDisplayed()
+    compose.onNodeWithTag("order-Newest").performClick().assertIsOn()
+    capture("motion-order-large-text")
     compose.onNodeWithText(label(R.string.record_sort_label)).performScrollTo().assertIsDisplayed()
     compose.onNodeWithText(label(R.string.record_search_reset)).performScrollTo().assertIsDisplayed()
   }
