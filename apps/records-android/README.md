@@ -336,9 +336,12 @@ API 36・架空データで確認した保存済み詳細パネル：[ライト]
 ![320dp・文字2倍](screenshots/design-large-text.png)
 ![議論詳細・ダーク](screenshots/design-detail-dark.png)
 
-## C35：NEW／OLD切替
+## C35：NEW／OLD切替とログイン完了演出
 
 - NEW＝新しい順、OLD＝古い順。標準ButtonGroup／ToggleButtonの接続形状と幅変化、MotionSchemeによる選択位置の移動を使用する。日本語の説明は文字拡大時に折り返し、選択状態は読み上げでも伝える。
+- ログイン完了は、ブラウザーから戻っただけでは出さない。保存tokenをサーバーで確認できた対話的ログインの後だけ、チェック付きの標準Snackbarを約2秒表示する。アクセシビリティの推奨時間を優先する。
+- 通常起動・アプリ復帰・回転では再演しない。全画面の待機や一覧への項目追加を行わず、表示中も記録やログアウトを操作できる。システムのアニメーション無効設定を尊重する。
+- API・認可・暗号化保存・依存バージョンは変更しない。C36以降の仕上げ・配布は別工程とする。
 
 ### C35の画面写真
 
@@ -347,6 +350,7 @@ API 36・架空データによる画面確認。実DiscordログインやPlay配
 ![NEW・ライト](screenshots/motion-order-light.png)
 ![OLD・ダーク](screenshots/motion-order-dark.png)
 ![320dp・文字2倍](screenshots/motion-order-large-text.png)
+![ログイン完了・ダーク](screenshots/motion-login-complete.png)
 
 ## C16の認証画面
 

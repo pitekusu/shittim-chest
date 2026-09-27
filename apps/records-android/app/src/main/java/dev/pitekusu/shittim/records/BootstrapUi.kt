@@ -104,6 +104,9 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           BootstrapControls(state, pagingItems, scrollState, true,
             Modifier.align(Alignment.TopCenter).widthIn(max = 560.dp).fillMaxSize())
         }
+        // Overlay, not a list item: feedback cannot reset scroll or delay record access.
+        LoginCompletionFeedback(state.loginCompletion, state.session is SessionState.SignedIn,
+          Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).padding(ShittimSpacing.Medium))
       }
     }
   }

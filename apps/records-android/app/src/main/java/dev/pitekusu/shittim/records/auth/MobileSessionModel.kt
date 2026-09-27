@@ -50,6 +50,9 @@ internal class MobileSessionModel(
 ) : ViewModel() {
   private val mutableState = MutableStateFlow<SessionState>(SessionState.Checking)
   val state = mutableState.asStateFlow()
+  // Presentation-only event count. Restored/foreground sessions never trigger a login effect.
+  private val mutableLoginCompletion = MutableStateFlow(0)
+  val loginCompletion = mutableLoginCompletion.asStateFlow()
   private val mutableCachePermit = MutableStateFlow<CacheAuthorization?>(null)
   val cachePermit = mutableCachePermit.asStateFlow()
   private var token: StoredToken? = null
@@ -192,7 +195,7 @@ internal class MobileSessionModel(
     if (state.value != SessionState.Browser) return
     if (result.status == MobileLoginStatus.SIGNED_IN) {
       returnTo = result.returnTo?.takeIf(::isMobileReturnTo) ?: "/"
-      refresh() // C15 has saved the token. Re-read and validate it, not the Activity result.
+      refresh(afterLogin = true) // Re-read and validate the saved token, not the Activity result.
     } else {
       mutableState.value = when (result.status) {
         MobileLoginStatus.STORAGE_UNAVAILABLE -> SessionState.StorageError
@@ -255,7 +258,7 @@ internal class MobileSessionModel(
     mutableState.value = SessionState.SignedOut(notice)
   }
 
-  private fun refresh() {
+  private fun refresh(afterLogin: Boolean = false) {
     if (operation?.isActive == true) return
     offlineAllowed = false
     mutableState.value = SessionState.Checking
@@ -301,6 +304,7 @@ internal class MobileSessionModel(
               cacheAccessBlocked = false
               mutableCachePermit.value = authorized.cacheAuthorization
               mutableState.value = SessionState.SignedIn(response.user, response.cacheAccountId, deadline, returnTo)
+              if (afterLogin) mutableLoginCompletion.value++
               scheduleExpiry(deadline)
             }
           }

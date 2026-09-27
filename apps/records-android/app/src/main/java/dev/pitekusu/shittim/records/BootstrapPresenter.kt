@@ -46,6 +46,7 @@ internal data object BootstrapScreen : Screen {
     val canReadRecords: Boolean = session is SessionState.SignedIn,
     val listQuery: RecordListQuery = RecordListQuery(),
     val searching: Boolean = false,
+    val loginCompletion: Int = 0,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -74,6 +75,7 @@ internal class BootstrapPresenter(
     // Restore the presentation state, without persisting a device/account preference.
     var themeChoice by rememberSaveable { mutableStateOf(ThemeChoice.System) }
     val sessionState by session.state.collectAsState()
+    val loginCompletion by session.loginCompletion.collectAsState()
     val cachePermit by session.cachePermit.collectAsState()
     val destination by session.destination.collectAsState()
     val cacheAccountId = cachePermit?.accountId?.takeIf(session::isCacheAuthorized)
@@ -207,7 +209,8 @@ internal class BootstrapPresenter(
     }
     val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId) recordList else RecordListState.Idle
     return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId, syncState,
-      canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching) { event ->
+      canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
+      loginCompletion = loginCompletion) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin()) {
