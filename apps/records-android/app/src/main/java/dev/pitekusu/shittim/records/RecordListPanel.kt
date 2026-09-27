@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,7 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
@@ -23,8 +25,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.paging.LoadState
 import androidx.paging.LoadStates
@@ -33,7 +33,10 @@ import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
-import dev.pitekusu.shittim.records.ui.ShittimDisplayFont
+import dev.pitekusu.shittim.records.ui.ShittimProgress
+import dev.pitekusu.shittim.records.ui.ShittimSectionHeading
+import dev.pitekusu.shittim.records.ui.ShittimSpacing
+import dev.pitekusu.shittim.records.ui.shittimParticipantColor
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -82,12 +85,8 @@ internal fun LazyListScope.recordListItems(
   searching: Boolean = false,
 ) {
   item(key = "records-heading") {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Text("RECORDS ARCHIVE", fontFamily = ShittimDisplayFont,
-        color = MaterialTheme.colorScheme.primary)
-      Text(stringResource(R.string.record_title), style = MaterialTheme.typography.headlineSmallEmphasized,
-        modifier = Modifier.semantics { heading() })
-    }
+    ShittimSectionHeading(stringResource(R.string.record_title), kicker = "RECORDS ARCHIVE",
+      style = MaterialTheme.typography.headlineSmallEmphasized)
   }
   if ((state is RecordListState.Ready && state.saved) || !query.isDefault) item(key = "records-query") {
     RecordQueryControls(query, onEvent)
@@ -99,7 +98,7 @@ internal fun LazyListScope.recordListItems(
     item(key = "records-waiting") {
       if (state is RecordListState.Error) {
         if (sync !is RecordSyncState.Failed) Text(stringResource(R.string.record_list_error))
-      } else LoadingRecords()
+      } else ShittimProgress(stringResource(R.string.record_list_loading))
     }
     return
   }
@@ -116,7 +115,9 @@ internal fun LazyListScope.recordListItems(
     }
   }
   when (pagingItems.loadState.refresh) {
-    is LoadState.Loading -> item(key = "records-loading") { LoadingRecords() }
+    is LoadState.Loading -> item(key = "records-loading") {
+      ShittimProgress(stringResource(R.string.record_list_loading))
+    }
     is LoadState.Error -> item(key = "records-error") {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.record_list_error))
@@ -135,10 +136,7 @@ internal fun LazyListScope.recordListItems(
   }
   when (val append = pagingItems.loadState.append) {
     is LoadState.Loading -> item(key = "records-more-loading") {
-      Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(Modifier.size(24.dp))
-        Text(stringResource(R.string.record_list_more_loading))
-      }
+      ShittimProgress(stringResource(R.string.record_list_more_loading))
     }
     is LoadState.Error -> item(key = "records-more-error") {
       val expired = (append.error as? RecordReadException)?.failure == RecordReadFailure.CURSOR_INVALID
@@ -154,17 +152,11 @@ internal fun LazyListScope.recordListItems(
 }
 
 @Composable
-private fun LoadingRecords() {
-  Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-    CircularProgressIndicator(Modifier.size(24.dp))
-    Text(stringResource(R.string.record_list_loading))
-  }
-}
-
-@Composable
 private fun RecordListCard(item: RecordListEntry, onClick: () -> Unit) {
-  OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+  OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium,
+    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+      contentColor = MaterialTheme.colorScheme.onSurface)) {
+    Column(Modifier.padding(ShittimSpacing.Medium), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
       Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         RequesterAvatar(item.requesterName, item.requesterAvatar)
@@ -175,10 +167,11 @@ private fun RecordListCard(item: RecordListEntry, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
       }
+      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
       Text(item.questionPreview, style = MaterialTheme.typography.bodyLarge)
       Text(stringResource(R.string.record_list_winner, item.winnerName),
         style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary)
+        color = shittimParticipantColor(item.winnerName))
     }
   }
 }
@@ -186,11 +179,12 @@ private fun RecordListCard(item: RecordListEntry, onClick: () -> Unit) {
 @Composable
 private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
   val background = when (avatar.fallbackVariant) {
-    "pink" -> MaterialTheme.colorScheme.tertiaryContainer
-    "lavender" -> MaterialTheme.colorScheme.secondaryContainer
+    "pink" -> MaterialTheme.colorScheme.secondaryContainer
+    "lavender" -> MaterialTheme.colorScheme.tertiaryContainer
     else -> MaterialTheme.colorScheme.primaryContainer
   }
-  Box(Modifier.size(48.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
+  Box(Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+    .clip(CircleShape), contentAlignment = Alignment.Center) {
     Surface(color = background, shape = CircleShape, modifier = Modifier.size(48.dp)) {
       Box(contentAlignment = Alignment.Center) {
         Text(name.take(1), style = MaterialTheme.typography.titleMediumEmphasized)

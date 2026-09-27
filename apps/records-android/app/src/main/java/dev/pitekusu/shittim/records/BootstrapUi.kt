@@ -40,6 +40,7 @@ import dev.pitekusu.shittim.records.ui.ShittimBackdrop
 import dev.pitekusu.shittim.records.ui.ShittimDisplayFont
 import dev.pitekusu.shittim.records.ui.ShittimEmblem
 import dev.pitekusu.shittim.records.ui.ShittimTheme
+import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import dev.pitekusu.shittim.records.auth.SessionState
 
 @Preview(name = "Light", widthDp = 360, heightDp = 800)
@@ -88,7 +89,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
         // Large text keeps a single readable column even in a wide window.
         if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
           Row(
-            Modifier.fillMaxSize().padding(24.dp),
+            Modifier.fillMaxSize().padding(ShittimSpacing.Large),
             horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
           ) {
@@ -110,7 +111,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
 
 @Composable
 private fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
-  Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+  Column(modifier, verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
     ShittimEmblem(Modifier.size(if (compact) 40.dp else 72.dp))
     Text(
       stringResource(R.string.brand_title),
@@ -144,9 +145,9 @@ private fun BootstrapControls(
   modifier: Modifier,
 ) {
   LazyColumn(modifier.testTag("bootstrap-content"), state = scrollState,
-    contentPadding = PaddingValues(if (showHeader) 24.dp else 0.dp),
-    verticalArrangement = if (state.canReadRecords) Arrangement.spacedBy(24.dp)
-      else Arrangement.spacedBy(32.dp, Alignment.CenterVertically),
+    contentPadding = PaddingValues(if (showHeader) ShittimSpacing.Large else 0.dp),
+    verticalArrangement = if (state.canReadRecords) Arrangement.spacedBy(ShittimSpacing.Large)
+      else Arrangement.spacedBy(ShittimSpacing.ExtraLarge, Alignment.CenterVertically),
     horizontalAlignment = Alignment.CenterHorizontally) {
     if (showHeader) item(key = "brand") {
       BootstrapHeader(Modifier.fillMaxWidth(), compact = state.canReadRecords)
