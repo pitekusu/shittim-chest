@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
@@ -13,9 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.pitekusu.shittim.records.ui.ShittimSectionHeading
 
 @Composable
 internal fun BootstrapThemeSelector(selected: ThemeChoice, onSelect: (ThemeChoice) -> Unit) {
@@ -25,13 +25,8 @@ internal fun BootstrapThemeSelector(selected: ThemeChoice, onSelect: (ThemeChoic
       stringResource(R.string.preview_light),
       stringResource(R.string.preview_dark),
     )
-  Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    Text(
-      stringResource(R.string.preview_theme),
-      style = MaterialTheme.typography.titleMediumEmphasized,
-      color = MaterialTheme.colorScheme.onSurface,
-      modifier = Modifier.semantics { heading() },
-    )
+  Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    ShittimSectionHeading(stringResource(R.string.preview_theme))
     ButtonGroup(
       overflowIndicator = { ButtonGroupDefaults.OverflowIndicator(it) },
       // Let the overflow indicator measure within the remaining width (not a forced minimum).
