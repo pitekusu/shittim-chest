@@ -73,7 +73,7 @@ class OfflineRecordsUiTest {
     compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
     compose.waitForIdle()
     compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
-    assertEquals(listOf(BootstrapScreen.Event.CloseRecord), events)
+    compose.runOnIdle { assertEquals(listOf(BootstrapScreen.Event.CloseRecord), events) }
     compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }
     compose.onNodeWithText("保存済みの架空議題").assertDoesNotExist()
     compose.onNodeWithText(label(R.string.record_saved)).assertDoesNotExist()

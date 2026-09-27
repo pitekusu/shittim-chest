@@ -55,7 +55,8 @@ class BootstrapLocalFirstTest {
   @Test fun encryptedSavedRecordIsVisibleBeforeNetworkCompletesAndHiddenOnDenial() {
     val app = compose.activity.applicationContext
     val directory = Files.createTempDirectory(app.noBackupFilesDir.toPath(), "local-first-").toFile()
-    val context = object : ContextWrapper(app) {
+    // Isolate storage without replacing the Activity's UI context required by Adaptive's window API.
+    val context = object : ContextWrapper(compose.activity) {
       override fun getApplicationContext(): Context = this
       override fun getNoBackupFilesDir(): File = directory
       override fun getPackageName(): String = "${app.packageName}.${directory.name}"
