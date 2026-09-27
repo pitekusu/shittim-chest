@@ -113,6 +113,35 @@ class RecordsRepositoryTest {
     } finally { database.close() }
   }
 
+  @Test fun localSearchReadsEncryptedBodyWithoutNetworkAndHonorsFiltersAndPermission() = runBlocking {
+    repository(MockEngine {
+      respond(detail().replace("架空の結論", "Ｐｙｔｈｏｎで月の観測"),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { it.record(token, accountId, recordId) }
+    repository(MockEngine { error("search_must_not_request_network") }).use { saved ->
+      val entries = saved.cachedRecords(accountId)
+      assertEquals(recordId, saved.queryCachedRecords(accountId, entries,
+        RecordListQuery("python 観測")).single().recordId)
+      assertEquals(recordId, saved.queryCachedRecords(accountId, entries,
+        RecordListQuery("架空 観測", RecordWinner.Arona)).single().recordId)
+      assertEquals(emptyList<RecordListEntry>(), saved.queryCachedRecords(accountId, entries,
+        RecordListQuery("観測", RecordWinner.Plana)))
+      assertEquals(emptyList<RecordListEntry>(), saved.queryCachedRecords(accountId, entries,
+        RecordListQuery("存在しない語句")))
+      assertEquals(recordId, saved.queryCachedRecords(accountId, entries, RecordListQuery("理由B"))
+        .single().recordId)
+      activeAccountId = ""
+      try {
+        saved.queryCachedRecords(accountId, entries, RecordListQuery("観測"))
+        fail("revoked permission must not search cached body")
+      } catch (error: RecordReadException) { assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure) }
+    }
+    val marker = "月の観測".toByteArray().toString(Charsets.ISO_8859_1)
+    app.getDatabasePath(databaseName).parentFile!!.listFiles()!!
+      .filter { it.name.startsWith(databaseName) && it.isFile }
+      .forEach { assertFalse(it.readBytes().toString(Charsets.ISO_8859_1).contains(marker)) }
+  }
+
   @Test fun syncCheckpointSurvivesReopenAndRejectsInvalidOrUnauthorizedState() = runBlocking {
     val checkpoint = RecordSyncCheckpoint(cursor = "synthetic_cursor.signature",
       pendingIds = listOf(recordId), pageLoaded = true)
