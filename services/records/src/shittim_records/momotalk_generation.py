@@ -1,5 +1,6 @@
 """Restartable weekly collection and bounded, one-step-at-a-time generation."""
 
+import logging
 from collections.abc import Iterator
 from datetime import date, datetime
 from typing import Any, Protocol
@@ -21,6 +22,31 @@ from shittim_records.momotalk import (
     question_chunks,
     validate_image_choices,
 )
+
+LOGGER = logging.getLogger(__name__)
+FAILURE_CODES = frozenset(
+    {
+        "MOMOTALK_GENERATION_FAILED",
+        "MOMOTALK_OUTPUT_INVALID",
+        "MOMOTALK_IMAGE_INVALID",
+        "MOMOTALK_UNAVAILABLE",
+    }
+)
+
+
+def _log_step_failure(room: Room, error: MomotalkFailure) -> None:
+    stage = (
+        "prepare"
+        if room.plan is None
+        else ("utter" if len(room.messages) < len(room.plan.turns) else "image")
+    )
+    LOGGER.warning(
+        "momotalk_step_failed week=%s stage=%s attempt=%s code=%s",
+        room.week_id,
+        stage,
+        room.attempts,
+        error.code if error.code in FAILURE_CODES else "MOMOTALK_UNAVAILABLE",
+    )
 
 
 class Store(Protocol):
@@ -124,7 +150,8 @@ class MomotalkGenerationService:
                 raise MomotalkFailure("MOMOTALK_JOB_INVALID")
             try:
                 self._step(snapshot, requester, room)
-            except MomotalkFailure:
+            except MomotalkFailure as error:
+                _log_step_failure(room, error)
                 if room.attempts < MAX_ATTEMPTS:
                     self.store.save(room)
                     return False
@@ -140,6 +167,51 @@ class MomotalkGenerationService:
         else:
             self._cleanup(week_id, week)
         return True
+
+    def retry_failed_image(
+        self, week_id: date, room_id: str, mood: str, source: InputSource, *, now: datetime
+    ) -> bool:
+        """One operator-authorized attempt, preserving the published conversation and plan."""
+        room = self.store.get_room(week_id, room_id)
+        if room is None or room.state != "ready" or not room.complete or room.plan is None:
+            raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
+        index = next((i for i, image in enumerate(room.images) if image.mood == mood), None)
+        if index is None:
+            raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
+        if room.images[index].state == "ready":
+            return True
+        if room.images[index].state != "failed":
+            raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
+        # Completed weeks have no frozen input. Recollect original Archive questions;
+        # the saved plan still owns the subject, speaker, mood and composition.
+        stored_week = self.store.get_week(week_id)
+        if stored_week is None:
+            raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
+        snapshot = source.collect(MomotalkWeek.model_validate(stored_week["week"]))
+        requester = next((r for r in snapshot.requesters if r.room_id == room_id), None)
+        choice = room.plan.images[index]
+        if (
+            snapshot.week.week_id != week_id
+            or requester is None
+            or not any(q.record_id == choice.record_id for q in requester.questions)
+        ):
+            raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
+        claimed = self.store.claim(room, now)
+        if claimed is None:
+            raise MomotalkFailure("MOMOTALK_REPAIR_BUSY")
+        image = claimed.images[index]
+        try:
+            if not self.assets.image_exists(claimed, mood):
+                content = self.generator.selfie(snapshot, requester, image, choice)
+                self.assets.store_image(claimed, mood, content)
+            image.state = "ready"
+            return True
+        except MomotalkFailure as error:
+            _log_step_failure(claimed, error)
+            return False
+        finally:
+            claimed.attempts = 0
+            self.store.save(claimed)
 
     def _step(self, snapshot: WeeklyInput, requester: RequesterInput, room: Room) -> None:
         if room.plan is None:

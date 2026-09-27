@@ -2,10 +2,11 @@
 
 import base64
 import json
+import logging
 from typing import Any
 
 import httpx2
-from openai import OpenAI, OpenAIError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, OpenAIError
 from pydantic import BaseModel, Field, create_model
 
 from shittim_records.memorial_adapters import (
@@ -33,6 +34,79 @@ from shittim_records.momotalk import (
 
 TEXT_MODEL = "gpt-6-luna"
 IMAGE_MODEL = "gpt-image-2.5-sunburst"
+LOGGER = logging.getLogger(__name__)
+# Provider fields are untrusted: only known classifications may reach logs.
+PROVIDER_CODES = frozenset(
+    {
+        "content_policy_violation",
+        "moderation_blocked",
+        "safety_violations",
+        "invalid_image",
+        "invalid_request_error",
+        "model_not_found",
+        "insufficient_quota",
+        "rate_limit_exceeded",
+        "billing_hard_limit_reached",
+        "organization_verification_required",
+        "invalid_api_key",
+        "unsupported_parameter",
+        "server_error",
+        "image_generation_failed",
+    }
+)
+PROVIDER_PARAMETERS = frozenset(
+    {"image", "prompt", "model", "size", "quality", "output_format", "n"}
+)
+PROVIDER_TYPES = frozenset(
+    {
+        "invalid_request_error",
+        "image_generation_user_error",
+        "rate_limit_error",
+        "server_error",
+        "authentication_error",
+        "permission_error",
+        "insufficient_quota",
+    }
+)
+
+
+def _log_provider_failure(operation: str, error: Exception) -> None:
+    category = "invalid_output"
+    status = None
+    code = "unclassified"
+    parameter = "unclassified"
+    error_type = "unclassified"
+    if isinstance(error, APIStatusError):
+        category = "api_status"
+        status = error.status_code
+        code = error.code if isinstance(error.code, str) and error.code in PROVIDER_CODES else code
+        parameter = (
+            error.param
+            if isinstance(error.param, str) and error.param in PROVIDER_PARAMETERS
+            else parameter
+        )
+        error_type = (
+            error.type
+            if isinstance(error.type, str) and error.type in PROVIDER_TYPES
+            else error_type
+        )
+    elif isinstance(error, APITimeoutError):
+        category = "timeout"
+    elif isinstance(error, APIConnectionError):
+        category = "connection"
+    elif isinstance(error, OpenAIError):
+        category = "sdk_error"
+    LOGGER.warning(
+        "momotalk_provider_failed operation=%s category=%s status=%s code=%s parameter=%s type=%s",
+        operation,
+        category,
+        status,
+        code,
+        parameter,
+        error_type,
+    )
+
+
 BOUNDARY = """
 ## モモトークの場面
 友人同士で楽しむ架空の人格チャットです。アロナ・プラナ・安倍晋三AIが、不在の質問者を話題に雑談します。
@@ -155,6 +229,7 @@ class OpenAIMomotalkGenerator:
             return result.output_parsed
         except (OpenAIError, ValueError, TypeError) as error:
             # Do not propagate provider messages, prompts, response content or credentials.
+            _log_provider_failure("text", error)
             raise MomotalkFailure("MOMOTALK_GENERATION_FAILED") from error
 
     @staticmethod
@@ -401,4 +476,5 @@ yourPreviousMessagesや他の人の感想を言い直すだけにはせず、相
                 raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
             return base64.b64decode(result.data[0].b64_json, validate=True)
         except (OpenAIError, ValueError, TypeError) as error:
+            _log_provider_failure("image", error)
             raise MomotalkFailure("MOMOTALK_GENERATION_FAILED") from error

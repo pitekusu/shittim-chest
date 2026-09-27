@@ -6,7 +6,9 @@ from collections import Counter
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx2
 import pytest
+from openai import OpenAI
 from PIL import Image
 from pydantic import ValidationError
 from tests.test_momotalk import WEEK, State, snapshot
@@ -24,6 +26,54 @@ from shittim_records.momotalk import (
 from shittim_records.momotalk_adapters import MomotalkAssets
 from shittim_records.momotalk_generation import collect_week
 from shittim_records.momotalk_openai import OpenAIMomotalkGenerator, requester_attitude
+
+
+@pytest.mark.parametrize(
+    "code,param", [("moderation_blocked", "prompt"), ("private-secret", "private-question")]
+)
+def test_image_failure_logs_only_allowlisted_diagnostics(caplog, code, param):
+    value = snapshot()
+    state = State(value)
+    boundary = cast(Any, state)
+    collect_week(WEEK, boundary, boundary, boundary, boundary)
+    room = state.room
+    assert room is not None
+    room.plan = state.prepare(
+        value, value.requesters[0], room, value.requesters[0].questions, final=True
+    )
+
+    def reject(_request):
+        return httpx2.Response(
+            400,
+            json={
+                "error": {
+                    "message": "private provider message and prompt",
+                    "code": code,
+                    "param": param,
+                }
+            },
+        )
+
+    client = OpenAI(
+        api_key="fictional-key",
+        max_retries=0,
+        http_client=httpx2.Client(transport=httpx2.MockTransport(reject)),
+    )
+    generator = OpenAIMomotalkGenerator(
+        cast(Any, None),
+        cast(Any, SimpleNamespace(load_participant_reference=lambda _: b"fixture")),
+        client=client,
+    )
+    try:
+        with pytest.raises(MomotalkFailure):
+            generator.selfie(value, value.requesters[0], room.images[0], room.plan.images[0])
+    finally:
+        generator.close()
+    assert "operation=image category=api_status status=400" in caplog.text
+    assert f"code={code if code == 'moderation_blocked' else 'unclassified'}" in caplog.text
+    assert "private" not in caplog.text
+    assert "fictional-key" not in caplog.text
+    assert value.requesters[0].questions[0].text not in caplog.text
 
 
 @pytest.mark.parametrize(
