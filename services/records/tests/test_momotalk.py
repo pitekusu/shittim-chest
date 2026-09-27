@@ -29,6 +29,59 @@ from shittim_records.momotalk import (
 from shittim_records.momotalk_generation import MomotalkGenerationService, collect_week
 from shittim_records.momotalk_read import MomotalkReadService
 
+
+@pytest.mark.parametrize("failure,existing", [(False, False), (True, False), (False, True)])
+def test_operator_image_repair_is_one_attempt_and_preserves_published_chat(failure, existing):
+    state = State()
+    state.image_failures.add("unhappy")
+    boundary = cast(Any, state)
+    collect_week(WEEK, boundary, boundary, boundary, boundary)
+    service = MomotalkGenerationService(boundary, boundary, boundary, boundary)
+    for _ in range(30):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+        assert state.room is not None
+        if state.room.complete:
+            break
+    assert state.room is not None
+    before = state.room.model_copy(deep=True)
+    state.calls.clear()
+    state.jobs.clear()
+    if not failure:
+        state.image_failures.clear()
+    if existing:
+        boundary.image_exists = lambda *_: True
+    succeeded = service.retry_failed_image(WEEK.week_id, ROOM_ID, "unhappy", boundary, now=START)
+    assert succeeded is (not failure)
+    assert state.calls == ([] if existing else ["unhappy"])
+    assert state.jobs == []
+    assert state.room is not None
+    assert state.room.messages == before.messages
+    assert state.room.plan == before.plan
+    assert state.room.images[0] == before.images[0]
+    assert state.room.images[1].state == ("failed" if failure else "ready")
+    assert state.room.complete and state.room.state == "ready" and state.room.attempts == 0
+
+
+def test_image_repair_rejects_missing_original_question_before_generating():
+    state = State()
+    state.image_failures.add("unhappy")
+    boundary = cast(Any, state)
+    collect_week(WEEK, boundary, boundary, boundary, boundary)
+    service = MomotalkGenerationService(boundary, boundary, boundary, boundary)
+    for _ in range(30):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+        assert state.room is not None
+        if state.room.complete:
+            break
+    state.snapshot.requesters[0].questions.clear()
+    state.calls.clear()
+    with pytest.raises(MomotalkFailure, match="MOMOTALK_REPAIR_INVALID"):
+        service.retry_failed_image(WEEK.week_id, ROOM_ID, "unhappy", boundary, now=START)
+    assert state.calls == []
+    assert state.room is not None
+    assert state.room.images[1].state == "failed"
+
+
 START = datetime(2026, 9, 13, 9, tzinfo=UTC)
 WEEK = week_for_schedule(START)
 ROOM_ID = "a" * 43
