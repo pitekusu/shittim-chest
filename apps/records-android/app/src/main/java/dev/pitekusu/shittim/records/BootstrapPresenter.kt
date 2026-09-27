@@ -26,6 +26,7 @@ import dev.pitekusu.shittim.records.auth.MobileSessionModel
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.delay
 
 internal enum class ThemeChoice {
   System,
@@ -43,6 +44,8 @@ internal data object BootstrapScreen : Screen {
     val selectedRecordId: String? = null,
     val sync: RecordSyncState = RecordSyncState.Idle,
     val canReadRecords: Boolean = session is SessionState.SignedIn,
+    val listQuery: RecordListQuery = RecordListQuery(),
+    val searching: Boolean = false,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -55,6 +58,10 @@ internal data object BootstrapScreen : Screen {
     data object RecordsAuthRequired : Event
     data class OpenRecord(val recordId: String) : Event
     data object CloseRecord : Event
+    data class SearchRecords(val text: String) : Event
+    data class SelectWinner(val winner: RecordWinner) : Event
+    data class SelectOrder(val order: RecordOrder) : Event
+    data object ClearRecordQuery : Event
   }
 }
 
@@ -92,6 +99,10 @@ internal class BootstrapPresenter(
     var recordRetry by remember { mutableStateOf(0) }
     var listRetry by remember { mutableStateOf(0) }
     var recordList by remember { mutableStateOf<RecordListState>(RecordListState.Idle) }
+    // Search text and decrypted snapshots are account-bound memory, never SavedState.
+    var listQuery by remember(cacheAccountId) { mutableStateOf(RecordListQuery()) }
+    var savedEntries by remember(cacheAccountId) { mutableStateOf<List<RecordListEntry>?>(null) }
+    var searching by remember(cacheAccountId) { mutableStateOf(false) }
     var listOwner by remember { mutableStateOf<String?>(null) }
     var syncState by remember { mutableStateOf<RecordSyncState>(RecordSyncState.Idle) }
     LaunchedEffect(cacheAccountId, signedIn) {
@@ -132,14 +143,37 @@ internal class BootstrapPresenter(
           return@collect
         }
         if (!session.isCacheAuthorized(cacheAccountId)) return@collect
-        // Network reconciliation belongs to the worker, not ordinary screen navigation.
-        recordList = if (currentSessionState == SessionState.Unavailable) {
-          RecordListState.Ready.fromSaved(saved, recordList as? RecordListState.Ready)
-        } else if (saved.isEmpty() && syncState is RecordSyncState.Failed) {
-          RecordListState.Error((syncState as RecordSyncState.Failed).reason)
-        } else if (saved.isEmpty() && syncState != RecordSyncState.Completed) RecordListState.Idle
-        else RecordListState.Ready.fromSaved(saved, recordList as? RecordListState.Ready)
+        savedEntries = saved
       }
+    }
+    LaunchedEffect(cacheAccountId, listQuery) {
+      if (cacheAccountId == null) return@LaunchedEffect
+      val query = listQuery
+      searching = query.searchesText
+      try {
+        if (query.searchesText) delay(250) // Coalesce typing without any network request.
+        // Progress may queue a new snapshot, but must not continually cancel a decrypted search.
+        snapshotFlow { savedEntries to syncState }.conflate().collect { (saved, status) ->
+          if (saved == null) return@collect
+          searching = query.searchesText
+          val selected = try {
+            records?.queryCachedRecords(cacheAccountId, saved, query)
+              ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
+          } catch (error: RecordReadException) {
+            if (session.isCacheAuthorized(cacheAccountId)) recordList = RecordListState.Error(error.failure)
+            searching = false
+            return@collect
+          }
+          if (!session.isCacheAuthorized(cacheAccountId)) return@collect
+          recordList = if (saved.isEmpty() && query.isDefault &&
+            currentSessionState != SessionState.Unavailable && status is RecordSyncState.Failed) {
+            RecordListState.Error(status.reason)
+          } else if (saved.isEmpty() && query.isDefault &&
+            currentSessionState != SessionState.Unavailable && status != RecordSyncState.Completed) RecordListState.Idle
+          else RecordListState.Ready.fromSaved(selected, recordList as? RecordListState.Ready, saved.size)
+          searching = false
+        }
+      } finally { searching = false }
     }
     LaunchedEffect(cacheAccountId, selectedRecordId) {
       if (cacheAccountId != null && selectedRecordId != null) {
@@ -173,7 +207,7 @@ internal class BootstrapPresenter(
     }
     val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId) recordList else RecordListState.Idle
     return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId, syncState,
-      canReadRecords = cacheAccountId != null) { event ->
+      canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin()) {
@@ -193,6 +227,10 @@ internal class BootstrapPresenter(
           event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
         ) session.openDestination("/records/${event.recordId}")
         BootstrapScreen.Event.CloseRecord -> session.closeDestination()
+        is BootstrapScreen.Event.SearchRecords -> listQuery = listQuery.copy(text = event.text)
+        is BootstrapScreen.Event.SelectWinner -> listQuery = listQuery.copy(winner = event.winner)
+        is BootstrapScreen.Event.SelectOrder -> listQuery = listQuery.copy(order = event.order)
+        BootstrapScreen.Event.ClearRecordQuery -> listQuery = RecordListQuery()
       }
     }
   }

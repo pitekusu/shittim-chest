@@ -9,6 +9,11 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.pitekusu.shittim.records.ui.ShittimTheme
 import java.time.Instant
@@ -64,12 +69,13 @@ class RecordListPanelTest {
       activity.setContent { ShittimTheme(false) {
         val current = state.value
         val items = (current as? RecordListState.Ready)?.pages?.collectAsLazyPagingItems()
-        LazyColumn { recordListItems(current, items, events::add) }
+        LazyColumn(Modifier.testTag("record-list")) { recordListItems(current, items, events::add) }
       } }
     }
     compose.waitUntil(5_000) {
       compose.onAllNodesWithText("架空の議題").fetchSemanticsNodes().isNotEmpty()
     }
+    compose.onNodeWithTag("record-list").performScrollToNode(hasText("架空の議題"))
     compose.onNodeWithText("架空の依頼者").assertIsDisplayed()
     compose.onNodeWithText("架空の議題").performClick()
     assertEquals(id, (events.single() as BootstrapScreen.Event.OpenRecord).recordId)

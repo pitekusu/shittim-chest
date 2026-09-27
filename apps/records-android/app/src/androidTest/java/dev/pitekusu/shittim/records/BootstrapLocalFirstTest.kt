@@ -106,6 +106,14 @@ class BootstrapLocalFirstTest {
       compose.waitUntil(10_000) { rendered?.records is RecordListState.Ready }
       compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("通信前に見える架空の記録"))
       compose.onNodeWithText("通信前に見える架空の記録").assertIsDisplayed()
+      compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.SearchRecords("一致しない語句")) }
+      compose.waitUntil(10_000) { rendered?.let { !it.searching &&
+        (it.records as? RecordListState.Ready)?.loadedIds?.isEmpty() == true } == true }
+      compose.onNodeWithTag("bootstrap-content").performScrollToNode(
+        hasText(compose.activity.getString(R.string.record_search_empty)))
+      compose.onNodeWithText("通信前に見える架空の記録").assertDoesNotExist()
+      compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.ClearRecordQuery) }
+      compose.waitUntil(10_000) { (rendered?.records as? RecordListState.Ready)?.loadedIds?.contains(recordId) == true }
       val logout = compose.activity.getString(R.string.session_local_logout_action)
       compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(logout))
       compose.onNodeWithText(logout).assertIsDisplayed()
@@ -122,6 +130,7 @@ class BootstrapLocalFirstTest {
       compose.onNodeWithText("通信前に見える架空の記録").assertDoesNotExist()
       compose.runOnIdle {
         assertNull(SingletonImageLoader.get(context).memoryCache?.get(MemoryCache.Key("restored-avatar-test")))
+        assertEquals(RecordListQuery(), rendered!!.listQuery)
       }
     } finally {
       compose.activityRule.scenario.onActivity { it.setContent {}; owner.clear() }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -72,7 +73,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
             (it.error as? RecordReadException)?.failure == RecordReadFailure.AUTH_REQUIRED
           }) state.eventSink(BootstrapScreen.Event.RecordsAuthRequired)
       }
-      BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+      BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
         val detailScrollState = rememberSaveable(state.selectedRecordId, saver = LazyListState.Saver) {
           LazyListState()
@@ -161,7 +162,8 @@ private fun BootstrapControls(
         Text(stringResource(R.string.record_offline))
       }
       if (state.selectedRecordId == null) recordListItems(state.records, pagingItems, state.eventSink,
-        sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle)
+        sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
+        query = state.listQuery, searching = state.searching)
       else item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink) }
     }
   }

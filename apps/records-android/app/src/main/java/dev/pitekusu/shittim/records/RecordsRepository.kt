@@ -20,6 +20,8 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Keeps the existing authenticated API boundary and writes only encrypted, validated records. */
 internal class RecordsRepository(
@@ -103,6 +105,18 @@ internal class RecordsRepository(
   suspend fun syncIndex(token: String, accountId: String, cursor: String?): RecordSyncIndex {
     requireActive(accountId)
     return remote.syncIndex(token, cursor).also { requireActive(accountId) }
+  }
+
+  suspend fun queryCachedRecords(accountId: String, entries: List<RecordListEntry>,
+    query: RecordListQuery): List<RecordListEntry> = withContext(Dispatchers.Default) {
+    requireActive(accountId)
+    val matches = entries.filter { entry ->
+      requireActive(accountId)
+      query.acceptsWinner(entry) && (!query.searchesText || query.matches(entry) ||
+        query.matches(entry, cachedRecord(accountId, entry.recordId)))
+    }
+    requireActive(accountId)
+    query.sorted(matches)
   }
 
   suspend fun cachedRevision(accountId: String, recordId: String): String? = accountLock.withLock {
