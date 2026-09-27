@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -18,35 +19,36 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ShittimBackdrop(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
   val colors = MaterialTheme.colorScheme
-  Box(
-    modifier
-      .fillMaxSize()
-      .background(
-        Brush.linearGradient(listOf(colors.background, colors.primaryContainer, colors.surface))
-      )
-  ) {
-    // Decoration only: no accessibility nodes, perpetual motion, blur, or image assets.
-    Canvas(Modifier.matchParentSize()) {
-      val step = 56.dp.toPx()
-      val line = colors.outlineVariant.copy(alpha = 0.32f)
-      for (column in 0..(size.width / step).toInt()) {
-        val x = column * step
-        drawLine(line, Offset(x, 0f), Offset(x, size.height))
+  Surface(modifier.fillMaxSize(), color = colors.background, contentColor = colors.onBackground) {
+    Box(
+      Modifier.fillMaxSize()
+        .background(
+          Brush.linearGradient(listOf(colors.background, colors.primaryContainer, colors.surface))
+        )
+    ) {
+      // Decoration only: no accessibility nodes, perpetual motion, blur, or image assets.
+      Canvas(Modifier.matchParentSize()) {
+        val step = 56.dp.toPx()
+        val line = colors.outlineVariant.copy(alpha = 0.32f)
+        for (column in 0..(size.width / step).toInt()) {
+          val x = column * step
+          drawLine(line, Offset(x, 0f), Offset(x, size.height))
+        }
+        for (row in 0..(size.height / step).toInt()) {
+          val y = row * step
+          drawLine(line, Offset(0f, y), Offset(size.width, y))
+        }
+        val radius = size.width * 0.65f
+        drawCircle(line, radius, Offset(size.width, size.height * 0.12f), style = Stroke(1.dp.toPx()))
+        drawCircle(
+          line,
+          radius + 16.dp.toPx(),
+          Offset(size.width, size.height * 0.12f),
+          style = Stroke(1.dp.toPx()),
+        )
       }
-      for (row in 0..(size.height / step).toInt()) {
-        val y = row * step
-        drawLine(line, Offset(0f, y), Offset(size.width, y))
-      }
-      val radius = size.width * 0.65f
-      drawCircle(line, radius, Offset(size.width, size.height * 0.12f), style = Stroke(1.dp.toPx()))
-      drawCircle(
-        line,
-        radius + 16.dp.toPx(),
-        Offset(size.width, size.height * 0.12f),
-        style = Stroke(1.dp.toPx()),
-      )
+      content()
     }
-    content()
   }
 }
 
