@@ -22,9 +22,10 @@ internal sealed interface RecordPreviewState {
 }
 
 @Composable
-internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapScreen.Event) -> Unit) {
+internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapScreen.Event) -> Unit,
+  showCloseButton: Boolean = true) {
   ShittimPanel {
-    TextButton(onClick = { onEvent(BootstrapScreen.Event.CloseRecord) }) {
+    if (showCloseButton) TextButton(onClick = { onEvent(BootstrapScreen.Event.CloseRecord) }) {
       Text(stringResource(R.string.record_close))
     }
     ShittimSectionHeading(stringResource(R.string.record_title), kicker = "DISCUSSION RECORD",

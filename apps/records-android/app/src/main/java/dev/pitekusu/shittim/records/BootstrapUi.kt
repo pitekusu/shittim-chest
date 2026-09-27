@@ -34,7 +34,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.paging.LoadState
-import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
 import dev.pitekusu.shittim.records.ui.ShittimBackdrop
 import dev.pitekusu.shittim.records.ui.ShittimDisplayFont
@@ -80,14 +79,10 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           LazyListState()
         }
         val transientScrollState = rememberLazyListState()
-        val scrollState = when {
-          !state.canReadRecords -> transientScrollState
-          state.selectedRecordId != null -> detailScrollState
-          state.records is RecordListState.Ready -> listScrollState
-          else -> transientScrollState
-        }
-        // Large text keeps a single readable column even in a wide window.
-        if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
+        if (state.canReadRecords) {
+          AdaptiveRecordsUi(state, pagingItems, listScrollState, detailScrollState,
+            Modifier.fillMaxSize())
+        } else if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
           Row(
             Modifier.fillMaxSize().padding(ShittimSpacing.Large),
             horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
@@ -95,13 +90,13 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           ) {
             BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp),
               compact = state.canReadRecords)
-            BootstrapControls(
-              state, pagingItems, scrollState, false,
+            BootstrapLoginControls(
+              state, transientScrollState, false,
               Modifier.weight(1f, fill = false).widthIn(max = 480.dp).fillMaxHeight(),
             )
           }
         } else {
-          BootstrapControls(state, pagingItems, scrollState, true,
+          BootstrapLoginControls(state, transientScrollState, true,
             Modifier.align(Alignment.TopCenter).widthIn(max = 560.dp).fillMaxSize())
         }
         // Overlay, not a list item: feedback cannot reset scroll or delay record access.
@@ -113,7 +108,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
 }
 
 @Composable
-private fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
+internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
   Column(modifier, verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
     ShittimEmblem(Modifier.size(if (compact) 40.dp else 72.dp))
     Text(
@@ -140,35 +135,24 @@ private fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
 }
 
 @Composable
-private fun BootstrapControls(
+private fun BootstrapLoginControls(
   state: BootstrapScreen.State,
-  pagingItems: LazyPagingItems<RecordListEntry>?,
   scrollState: LazyListState,
   showHeader: Boolean,
   modifier: Modifier,
 ) {
   LazyColumn(modifier.testTag("bootstrap-content"), state = scrollState,
     contentPadding = PaddingValues(if (showHeader) ShittimSpacing.Large else 0.dp),
-    verticalArrangement = if (state.canReadRecords) Arrangement.spacedBy(ShittimSpacing.Large)
-      else Arrangement.spacedBy(ShittimSpacing.ExtraLarge, Alignment.CenterVertically),
+    verticalArrangement = Arrangement.spacedBy(ShittimSpacing.ExtraLarge, Alignment.CenterVertically),
     horizontalAlignment = Alignment.CenterHorizontally) {
     if (showHeader) item(key = "brand") {
-      BootstrapHeader(Modifier.fillMaxWidth(), compact = state.canReadRecords)
+      BootstrapHeader(Modifier.fillMaxWidth(), compact = false)
     }
     item(key = "session") { SessionPanel(state.session, state.eventSink, canReadRecords = state.canReadRecords) }
     item(key = "theme") {
       BootstrapThemeSelector(state.themeChoice) {
         state.eventSink(BootstrapScreen.Event.SelectTheme(it))
       }
-    }
-    if (state.canReadRecords) {
-      if (state.session == SessionState.Unavailable) item(key = "offline-notice") {
-        Text(stringResource(R.string.record_offline))
-      }
-      if (state.selectedRecordId == null) recordListItems(state.records, pagingItems, state.eventSink,
-        sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
-        query = state.listQuery, searching = state.searching)
-      else item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink) }
     }
   }
 }

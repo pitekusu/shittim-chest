@@ -25,6 +25,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.paging.LoadState
 import androidx.paging.LoadStates
@@ -83,6 +86,7 @@ internal fun LazyListScope.recordListItems(
   sync: RecordSyncState = RecordSyncState.Idle,
   query: RecordListQuery = RecordListQuery(),
   searching: Boolean = false,
+  selectedRecordId: String? = null,
 ) {
   item(key = "records-heading") {
     ShittimSectionHeading(stringResource(R.string.record_title), kicker = "RECORDS ARCHIVE",
@@ -131,7 +135,9 @@ internal fun LazyListScope.recordListItems(
   }
   items(count = pagingItems.itemCount, key = pagingItems.itemKey { it.recordId }) { index ->
     pagingItems[index]?.let { entry ->
-      RecordListCard(entry) { onEvent(BootstrapScreen.Event.OpenRecord(entry.recordId)) }
+      RecordListCard(entry, entry.recordId == selectedRecordId) {
+        onEvent(BootstrapScreen.Event.OpenRecord(entry.recordId))
+      }
     }
   }
   when (val append = pagingItems.loadState.append) {
@@ -152,9 +158,11 @@ internal fun LazyListScope.recordListItems(
 }
 
 @Composable
-private fun RecordListCard(item: RecordListEntry, onClick: () -> Unit) {
-  OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium,
-    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, onClick: () -> Unit) {
+  OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth().semantics { selected = isSelected },
+    shape = MaterialTheme.shapes.medium,
+    colors = CardDefaults.outlinedCardColors(containerColor = if (isSelected)
+      MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface)) {
     Column(Modifier.padding(ShittimSpacing.Medium), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
       Row(verticalAlignment = Alignment.CenterVertically,
@@ -169,6 +177,7 @@ private fun RecordListCard(item: RecordListEntry, onClick: () -> Unit) {
       }
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
       Text(item.questionPreview, style = MaterialTheme.typography.bodyLarge)
+      if (isSelected) Text(stringResource(R.string.record_selected), style = MaterialTheme.typography.labelMedium)
       Text(stringResource(R.string.record_list_winner, item.winnerName),
         style = MaterialTheme.typography.labelMedium,
         color = shittimParticipantColor(item.winnerName))
@@ -184,7 +193,7 @@ private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
     else -> MaterialTheme.colorScheme.primaryContainer
   }
   Box(Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-    .clip(CircleShape), contentAlignment = Alignment.Center) {
+    .clip(CircleShape).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
     Surface(color = background, shape = CircleShape, modifier = Modifier.size(48.dp)) {
       Box(contentAlignment = Alignment.Center) {
         Text(name.take(1), style = MaterialTheme.typography.titleMediumEmphasized)
