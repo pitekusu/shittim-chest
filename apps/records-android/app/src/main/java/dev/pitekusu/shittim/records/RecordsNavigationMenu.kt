@@ -22,6 +22,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -81,7 +82,8 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
       browserError = true
     }
   }
-  ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("records-menu")) {
+  ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("records-menu"),
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("records-menu-content")
       .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small),
       verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
@@ -99,7 +101,8 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
       BootstrapThemeSelector(state.themeChoice) {
         state.eventSink(BootstrapScreen.Event.SelectTheme(it))
       }
-      MenuItem(R.string.session_logout, R.drawable.ic_logout, onClick = {
+      MenuItem(R.string.session_logout, R.drawable.ic_logout,
+        modifier = Modifier.testTag("records-menu-logout"), onClick = {
         onDismiss()
         state.eventSink(BootstrapScreen.Event.Logout)
       })
@@ -108,8 +111,8 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
 }
 
 @Composable
-private fun MenuItem(label: Int, icon: Int, onClick: () -> Unit) {
-  Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+private fun MenuItem(label: Int, icon: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
+  Surface(onClick = onClick, modifier = modifier.fillMaxWidth().heightIn(min = 48.dp),
     shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
     ListItem(leadingContent = {
       Icon(painterResource(icon), contentDescription = null, Modifier.size(24.dp))

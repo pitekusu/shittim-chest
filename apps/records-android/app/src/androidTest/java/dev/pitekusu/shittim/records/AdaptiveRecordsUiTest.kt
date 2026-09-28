@@ -28,6 +28,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.then
@@ -71,7 +72,9 @@ class AdaptiveRecordsUiTest {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value)) { BootstrapUi(state.value) }
     } }
     val lastQuestion = entries.last().questionPreview
-    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(lastQuestion))
+    // The list has four fixed rows before its saved records; scroll by index so the
+    // test does not depend on off-screen card semantics during adaptive transitions.
+    compose.onNodeWithTag("bootstrap-content").performScrollToIndex(4 + entries.lastIndex)
     compose.runOnIdle { state.value = screen(entries.last().recordId) }
     compose.onNodeWithText(lastQuestion).assertIsDisplayed()
       .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
