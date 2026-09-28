@@ -26,6 +26,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.ColorUtils
@@ -122,8 +123,8 @@ class ShittimDesignTest {
     compose.onNodeWithTag("winner-Abe").assertIsDisplayed().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.SelectWinner(RecordWinner.Abe), events.last()) }
     capture("design-large-text")
-    list.performScrollToNode(hasText(compose.activity.getString(R.string.session_logout)))
-    compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).performClick()
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).performScrollTo().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.last()) }
 
     val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").map { name ->

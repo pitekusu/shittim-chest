@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.MobileAvatar
@@ -94,7 +95,8 @@ class LoginCompletionFeedbackTest {
     compose.runOnIdle { completion.intValue = 1 }
     compose.mainClock.advanceTimeBy(500)
     compose.onNodeWithTag("login-complete").assertIsDisplayed()
-    compose.onNodeWithText("ログアウト").performClick()
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithText("ログアウト").performScrollTo().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.last()) }
     capture()
     compose.mainClock.advanceTimeBy(2_100)

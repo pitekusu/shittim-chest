@@ -23,7 +23,7 @@ class SessionPanelTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
   @Test
-  fun expiryAndLogoutRemoveProfileAndExposeOnlyRelevantActions() {
+  fun expiryRemovesProfileAndExposesOnlyRelevantActions() {
     val state = mutableStateOf<SessionState>(SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "架空", "cyan")),
       "u".repeat(43), Instant.parse("2030-01-01T00:00:00Z"), "/"))
@@ -31,9 +31,8 @@ class SessionPanelTest {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) { SessionPanel(state.value, events::add) } }
     }
-    compose.onNodeWithText("架空の利用者").assertIsDisplayed()
-    compose.onNodeWithText(label(R.string.session_logout)).performClick()
-    assertEquals(listOf(BootstrapScreen.Event.Logout), events)
+    compose.onNodeWithText("架空の利用者").assertDoesNotExist()
+    compose.onNodeWithText(label(R.string.session_logout)).assertDoesNotExist()
     compose.runOnIdle { state.value = SessionState.SigningOut }
     compose.onNodeWithText("架空の利用者").assertDoesNotExist()
     compose.onNodeWithText(label(R.string.session_login)).assertDoesNotExist()

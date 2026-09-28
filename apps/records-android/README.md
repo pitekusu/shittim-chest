@@ -368,12 +368,19 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 ![一覧・スマートフォン](screenshots/adaptive-compact-dark.png)
 ![常時操作できる戻る・320dp文字2倍](screenshots/adaptive-large-text.png)
 
+## C37：Web機能メニューとログアウト
+
+- 認証済みの一覧・詳細の上部へメニューを追加。いろいろな記録、モモトーク、メモリアルロビー、サービス状態確認、プロンプト管理を固定URLでCustom Tabsへ開く。Web側の認可を使い、アプリのtokenはブラウザーへ渡さない。
+- ログアウト・自動／ライト／ダーク切替をメニューへ移し、記録一覧にあったログイン状態カードと表示切替を撤去。通信不調によるオフライン閲覧でも同じログアウト操作が可能。
+- ログイン前の常設説明文を削除。期限切れ・取消・失敗・ブラウザー不可の状態表示は残す。C35の短い完了通知は次の起動／ログイン演出PRで置き換える。
+- 架空データの画面試験でメニューの導線とログアウト操作、一覧・詳細のスクロール維持を確認する。実Webへの接続とブラウザーからの復帰は内部テスト版で確認する。
+
 ## C16の認証画面
 
 - `auth/MobileSessionModel.kt`：Activity再生成をまたぐ認証の寿命。保存tokenとsession APIを照合し、期限・失効・通信障害を区別する。
 - `MainActivity.kt`／`RecordsGraph.kt`：既存AndroidX ViewModelをMetroへ注入。新規依存やRepository層は追加しない。
 - `BootstrapPresenter.kt`：Circuitの表示状態・イベントと、C15のActivity Resultを接続する。
-- `SessionPanel.kt`：認証状態別の説明と操作。tokenは受け取らず、ログアウト開始時に本人情報を隠す。
+- `SessionPanel.kt`：ログイン前や認証不調時の説明と操作。tokenは受け取らず、閲覧中のログアウトはC37メニューへ移した。
 - ログアウトは端末削除を先に行い、サーバー失効は1回だけ試す。応答不明では端末削除済み／サーバー失効未確認を明示する。
 - 架空APIの状態遷移と画面操作をinstrumentation testで確認する。本番通信は行わず、実署名によるDiscordログインはC19に残す。
 

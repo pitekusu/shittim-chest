@@ -18,7 +18,7 @@ class BootstrapCircuitTest {
 
   @Test
   fun graphRendersScreenAndRoutesThemeEvents() {
-    compose.onNodeWithText(label(R.string.bootstrap_title)).assertIsDisplayed()
+    compose.onNodeWithText(label(R.string.app_name)).assertIsDisplayed()
     compose.onNodeWithText(label(R.string.session_login)).performScrollTo().assertIsDisplayed()
     compose.onNodeWithText(label(R.string.preview_system)).performScrollTo()
     compose.onNodeWithText(label(R.string.preview_system)).assertIsOn()
