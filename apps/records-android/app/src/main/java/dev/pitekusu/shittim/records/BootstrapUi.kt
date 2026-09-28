@@ -1,6 +1,12 @@
 package dev.pitekusu.shittim.records
 
 import android.content.res.Configuration
+import android.animation.ValueAnimator
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -29,6 +36,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -43,6 +51,7 @@ import dev.pitekusu.shittim.records.ui.ShittimEmblem
 import dev.pitekusu.shittim.records.ui.ShittimTheme
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import dev.pitekusu.shittim.records.auth.SessionState
+import androidx.lifecycle.Lifecycle
 
 @Preview(name = "Light", widthDp = 360, heightDp = 800)
 @Preview(name = "Dark", uiMode = Configuration.UI_MODE_NIGHT_YES, widthDp = 360, heightDp = 800)
@@ -102,20 +111,28 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
             BootstrapLoginControls(state, transientScrollState, true,
               Modifier.align(Alignment.TopCenter).widthIn(max = 560.dp).fillMaxSize())
           }
-          // Overlay, not a list item: feedback cannot reset scroll or delay record access.
-          LoginCompletionFeedback(state.loginCompletion, state.session is SessionState.SignedIn,
-            Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).padding(ShittimSpacing.Medium))
         }
       }
       if (menuOpen && state.canReadRecords) RecordsNavigationMenu(state, onDismiss = { menuOpen = false })
+      BrandIntroOverlay(state.loginCompletion, state.session is SessionState.SignedIn,
+        LocalStartupIntro.current)
     }
   }
 }
 
 @Composable
 internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
+  val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+  val ringRotation = if (!compact && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
+    ValueAnimator.areAnimatorsEnabled()) {
+    val spin = rememberInfiniteTransition(label = "brand ring")
+    val degrees by spin.animateFloat(0f, 360f,
+      animationSpec = infiniteRepeatable(tween(8_000, easing = LinearEasing)),
+      label = "brand ring rotation")
+    degrees
+  } else 0f
   Column(modifier, verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
-    ShittimEmblem(Modifier.size(if (compact) 40.dp else 72.dp))
+    ShittimEmblem(Modifier.size(if (compact) 40.dp else 72.dp), ringRotation)
     Text(
       stringResource(R.string.brand_title),
       fontFamily = ShittimDisplayFont,

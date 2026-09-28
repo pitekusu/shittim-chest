@@ -67,7 +67,7 @@ class AdaptiveRecordsUiTest {
         "天気と気分に合わせて、無理のない小さな楽しみを選びましょう。", "アロナ"), saved = true),
       eventSink = onEvent)
 
-  @Test fun resizeKeepsTheSelectedRecordAndListScrollAndRevocationHidesBothPanes() {
+  @Test fun resizeKeepsTheSelectedRecordAndListScrollAndRevocationHidesContent() {
     val window = mutableStateOf(DpSize(1000.dp, 700.dp))
     val state = mutableStateOf(screen())
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
@@ -81,18 +81,16 @@ class AdaptiveRecordsUiTest {
       .config[SemanticsProperties.VerticalScrollAxisRange].value()
     assertTrue(initialScroll > 0f)
     compose.runOnIdle { state.value = screen(entries.last().recordId) }
-    compose.waitUntil(10_000) { compose.onNodeWithTag("record-detail-content").isDisplayed() }
-    compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    compose.waitUntil(10_000) { compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").isDisplayed() }
     compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "議論詳細"))
       .assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
     capture("adaptive-wide-dark")
     compose.runOnIdle { window.value = DpSize(820.dp, 700.dp) }
     compose.waitUntil(10_000) { compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").isDisplayed() }
-    compose.onNodeWithTag("record-detail-content").assertDoesNotExist()
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
     compose.runOnIdle { window.value = DpSize(1000.dp, 700.dp) }
-    compose.waitUntil(10_000) { compose.onNodeWithTag("record-detail-content").isDisplayed() }
-    compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    compose.waitUntil(10_000) { compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").isDisplayed() }
+    compose.runOnIdle { state.value = screen() }
     val restoredScroll = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
       .config[SemanticsProperties.VerticalScrollAxisRange].value()
     assertTrue("The list must not jump back to its top on resize", restoredScroll > 0f)

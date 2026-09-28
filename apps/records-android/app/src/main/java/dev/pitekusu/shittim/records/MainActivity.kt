@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.slack.circuit.foundation.CircuitContent
@@ -37,6 +39,7 @@ class MainActivity : ComponentActivity() {
   private val graph by lazy { createGraphFactory<RecordsGraph.Factory>().create(session) }
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    installSplashScreen()
     super.onCreate(savedInstanceState)
     // Presigned requester avatars must not become plaintext files on the device.
     SingletonImageLoader.setSafe { context ->
@@ -45,7 +48,12 @@ class MainActivity : ComponentActivity() {
     // A recreated Activity must not replay an App Link the user already closed.
     if (savedInstanceState == null) openRecordLink(intent)
     enableEdgeToEdge()
-    setContent { CircuitContent(screen = BootstrapScreen, circuit = graph.circuit) }
+    val firstLaunch = savedInstanceState == null
+    setContent {
+      CompositionLocalProvider(LocalStartupIntro provides firstLaunch) {
+        CircuitContent(screen = BootstrapScreen, circuit = graph.circuit)
+      }
+    }
   }
 
   override fun onNewIntent(intent: Intent) {
