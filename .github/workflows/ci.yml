@@ -470,11 +470,14 @@ jobs:
           target: google_apis
           profile: pixel_2
           avd-name: ci-api36
-          force-avd-creation: false
+          force-avd-creation: true
           disable-animations: true
           # Always cold boot: a stale Quick Boot snapshot can hang instrumentation.
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swangle -camera-back none -camera-front none
-          script: apps/records-android/gradlew -p apps/records-android --no-daemon :app:connectedDebugAndroidTest
+          script: >-
+            timeout 12m apps/records-android/gradlew -p apps/records-android --no-daemon
+            -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            :app:connectedDebugAndroidTest
       - name: Retain Android reports, not an unsigned distribution
         if: ${{ steps.scope.outputs.required == 'true' && (!cancelled()) }}
         id: reports-android
