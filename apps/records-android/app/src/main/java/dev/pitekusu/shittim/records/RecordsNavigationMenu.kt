@@ -82,7 +82,7 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
     }
   }
   ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("records-menu")) {
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("records-menu-content")
       .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small),
       verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
       ShittimSectionHeading(stringResource(R.string.menu_web))

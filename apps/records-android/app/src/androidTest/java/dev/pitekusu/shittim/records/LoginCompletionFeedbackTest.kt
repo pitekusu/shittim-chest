@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -18,7 +19,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.MobileAvatar
@@ -96,7 +97,9 @@ class LoginCompletionFeedbackTest {
     compose.mainClock.advanceTimeBy(500)
     compose.onNodeWithTag("login-complete").assertIsDisplayed()
     compose.onNodeWithTag("records-menu-open").performClick()
-    compose.onNodeWithText("ログアウト").performScrollTo().performClick()
+    compose.mainClock.advanceTimeBy(500)
+    compose.onNodeWithTag("records-menu-content").performScrollToNode(hasText("ログアウト"))
+    compose.onNodeWithText("ログアウト").performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.last()) }
     capture()
     compose.mainClock.advanceTimeBy(2_100)
