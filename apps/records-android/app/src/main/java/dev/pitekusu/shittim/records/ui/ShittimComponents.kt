@@ -1,16 +1,13 @@
 package dev.pitekusu.shittim.records.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -72,20 +69,22 @@ internal fun ShittimSectionHeading(
 }
 
 @Composable
-internal fun shittimParticipantColor(name: String): Color = when (name) {
-  "アロナ" -> MaterialTheme.colorScheme.primary
-  "プラナ" -> MaterialTheme.colorScheme.secondary
-  "安倍晋三AI" -> MaterialTheme.colorScheme.tertiary
+internal fun shittimParticipantColor(name: String, slot: String? = null): Color = when (
+  participantVisualSlot(name, slot)) {
+  "participant-a" -> MaterialTheme.colorScheme.primary
+  "participant-b" -> MaterialTheme.colorScheme.secondary
+  "participant-c" -> MaterialTheme.colorScheme.tertiary
   else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 @Composable
-internal fun ShittimParticipantLabel(name: String, modifier: Modifier = Modifier) {
-  val accent = shittimParticipantColor(name)
+internal fun ShittimParticipantLabel(name: String, slot: String? = null,
+  modifier: Modifier = Modifier, crowned: Boolean = false) {
+  val accent = shittimParticipantColor(name, slot)
   Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small),
     verticalAlignment = Alignment.CenterVertically) {
-    Box(Modifier.size(8.dp).background(accent, CircleShape))
-    // A name accompanies the decorative accent so identity never depends on color.
+    ShittimParticipantAvatar(name, slot, size = 36.dp, crowned = crowned)
+    // A name accompanies the face so identity never depends only on the image or color.
     Text(name, style = MaterialTheme.typography.titleSmallEmphasized, color = accent,
       modifier = Modifier.weight(1f).semantics { heading() })
   }

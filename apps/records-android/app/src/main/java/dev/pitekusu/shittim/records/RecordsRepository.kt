@@ -66,7 +66,7 @@ internal class RecordsRepository(
         result.listEntry?.let { entry ->
           val savedEntry = RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
             RecordAvatar(entry.requesterAvatar.url, entry.requesterAvatar.fallbackVariant, revision = avatarRevision),
-            entry.completedAt, entry.winnerName)
+            entry.completedAt, entry.winnerName, entry.winnerSlot)
           save(accountId, recordId, CachedRecordPart.LIST) { json.encodeToString(CachedListEntry(1, savedEntry)) }
         }
         requireActive(accountId)
@@ -98,7 +98,7 @@ internal class RecordsRepository(
         RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
           RecordAvatar(null, entry.requesterAvatar.fallbackVariant,
             avatarCacheKey(entry)?.let { key -> icons.getOrPut(key) { cachedAvatar(accountId, entry) } }),
-          entry.completedAt, entry.winnerName)
+          entry.completedAt, entry.winnerName, entry.winnerSlot)
       }.also { requireActive(accountId) }
   }
 

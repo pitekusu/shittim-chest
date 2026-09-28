@@ -48,6 +48,7 @@ internal class RecordPreview(
   val actions: List<String> = emptyList(),
   val caveats: List<String> = emptyList(),
   val affection: RecordAffection? = null,
+  val winnerSlot: String? = null,
 )
 
 @Serializable
@@ -57,6 +58,7 @@ internal class RecordOpinion(
   val initialProposal: String,
   val finalTitle: String,
   val finalProposal: String,
+  val participantSlot: String? = null,
 )
 
 @Serializable
@@ -73,10 +75,13 @@ internal class RecordVote(
   val candidateName: String,
   val reason: String,
   val assessments: List<RecordAssessment>?,
+  val voterSlot: String? = null,
+  val candidateSlot: String? = null,
 )
 
 @Serializable
-internal class RecordVoteCount(val participantName: String, val count: Int)
+internal class RecordVoteCount(val participantName: String, val count: Int,
+  val participantSlot: String? = null)
 
 @Serializable
 internal class RecordAssessment(
@@ -88,6 +93,7 @@ internal class RecordAssessment(
   val interaction: Int,
   val reason: String,
   val total: Int,
+  val candidateSlot: String? = null,
 )
 
 @Serializable
@@ -109,6 +115,7 @@ internal class RecordAffectionChange(
   val questionScore: Int?,
   val appliedDelta: Int,
   val after: Int,
+  val participantSlot: String? = null,
 )
 
 internal sealed interface RecordReadResult {
@@ -124,6 +131,7 @@ internal class RecordListEntry(
   val requesterAvatar: RecordAvatar,
   @Serializable(with = CachedRecordInstantSerializer::class) val completedAt: Instant,
   val winnerName: String,
+  val winnerSlot: String? = null,
 )
 
 @Serializable
@@ -209,16 +217,17 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           val initial = detail.initialOpinions.first { it.participant == participant.slot }
           val final = detail.finalProposals.first { it.participant == participant.slot }
           RecordOpinion(participant.displayName, initial.summary, initial.proposal,
-            final.title, final.proposal)
+            final.title, final.proposal, participant.slot)
         }, voting, detail.finalDecision.victoryMessage, detail.finalDecision.actions,
-        detail.finalDecision.caveats, mapAffection(detail)),
+        detail.finalDecision.caveats, mapAffection(detail), winner.slot),
       if (detail.requester != null && detail.completedAt != null) {
         try {
           val question = detail.question.replace(Regex("[\\s\\p{Z}]+"), " ").trim()
           val end = question.offsetByCodePoints(0, minOf(160, question.codePointCount(0, question.length)))
           RecordListEntry(recordId, question.substring(0, end),
             detail.requester.displayName.also { check(it.isNotBlank()) },
-            mapAvatar(detail.requester.avatar), OffsetDateTime.parse(detail.completedAt).toInstant(), winner.displayName)
+            mapAvatar(detail.requester.avatar), OffsetDateTime.parse(detail.completedAt).toInstant(),
+            winner.displayName, winner.slot)
         } catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
       } else null)
   }
@@ -299,7 +308,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     return RecordAffection(status, detail.participants.map { participant ->
       val change = affection.participants.first { it.participant == participant.slot }
       RecordAffectionChange(names.getValue(participant.slot), change.before,
-        change.questionScore, change.appliedDelta, change.after)
+        change.questionScore, change.appliedDelta, change.after, participant.slot)
     })
   }
 
@@ -349,9 +358,10 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       }?.map { assessment ->
         RecordAssessment(names.getValue(assessment.candidate), assessment.entertainment,
           assessment.character, assessment.originality, assessment.responsiveness,
-          assessment.interaction, assessment.reason, assessment.total)
+          assessment.interaction, assessment.reason, assessment.total, assessment.candidate)
       }
-      RecordVote(participant.displayName, names.getValue(vote.candidate), vote.reason, assessments)
+      RecordVote(participant.displayName, names.getValue(vote.candidate), vote.reason, assessments,
+        participant.slot, vote.candidate)
     }
     if (decidedBy != null) {
       var possibleWinners = leaders
@@ -370,7 +380,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       }
     }
     return RecordVoting(mappedVotes, detail.participants.map { participant ->
-      RecordVoteCount(participant.displayName, counts.first { it.participant == participant.slot }.count)
+      RecordVoteCount(participant.displayName, counts.first { it.participant == participant.slot }.count,
+        participant.slot)
     }, decidedBy, legacyTieBreakApplied)
   }
 
@@ -411,7 +422,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
         }
         RecordListEntry(item.recordId, item.questionPreview, item.requester.displayName,
           RecordAvatar(avatarUrl, avatar.fallbackVariant),
-          OffsetDateTime.parse(item.completedAt).toInstant(), winner.displayName)
+          OffsetDateTime.parse(item.completedAt).toInstant(), winner.displayName, winner.slot)
       }, page.nextCursor)
     } catch (error: RecordReadException) {
       throw error

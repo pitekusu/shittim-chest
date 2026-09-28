@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import dev.pitekusu.shittim.records.ui.participantVisualSlot
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,5 +29,14 @@ class RecordListQueryTest {
     assertFalse(RecordListQuery("ＡＡＡ").matches(item)) // Internal IDs are not searchable text.
     assertFalse(RecordListQuery("　 ").searchesText)
     assertTrue(RecordListQuery("　 ").isDefault)
+  }
+
+  @Test fun participantSlotSurvivesNameChangesAndOldCacheUsesKnownNames() {
+    val stored = RecordListEntry("a".repeat(43), "架空の相談", "依頼者", RecordAvatar(null, "cyan"),
+      Instant.parse("2026-09-24T00:00:00Z"), "プラナの新しい名前", "participant-b")
+    assertTrue(RecordListQuery(winner = RecordWinner.Plana).acceptsWinner(stored))
+    assertEquals("participant-b", participantVisualSlot(stored.winnerName, stored.winnerSlot))
+    assertEquals("participant-a", participantVisualSlot("アロナ", null))
+    assertEquals(null, participantVisualSlot("不明な人格", null))
   }
 }

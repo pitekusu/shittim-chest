@@ -55,6 +55,8 @@ class RecordsReadClientTest {
       val result = client.firstRecord(token, "/") as RecordReadResult.Found
       assertEquals("夕飯は何がいい？", result.preview.question)
       assertEquals("アロナ", result.preview.winnerName)
+      assertEquals("participant-a", result.preview.winnerSlot)
+      assertEquals("participant-b", result.preview.opinions[1].participantSlot)
       assertEquals("今日は寿司にします。", result.preview.decision)
       assertEquals(listOf("アロナ", "プラナ", "安倍晋三AI"),
         result.preview.opinions.map { it.participantName })
@@ -77,6 +79,8 @@ class RecordsReadClientTest {
       assertEquals("アロナ", preview.winnerName)
       assertEquals(VoteDecisionMethod.MAJORITY, preview.voting?.decidedBy)
       assertEquals("アロナ", preview.voting?.votes?.get(1)?.candidateName)
+      assertEquals("participant-a", preview.voting?.votes?.get(1)?.candidateSlot)
+      assertEquals("participant-b", preview.voting?.votes?.get(1)?.voterSlot)
       assertEquals(2, preview.voting?.votes?.first()?.assessments?.size)
       assertEquals(67, preview.voting?.votes?.first()?.assessments?.first()?.total)
     }
@@ -218,6 +222,7 @@ class RecordsReadClientTest {
       assertEquals(1, page.items.size)
       assertEquals("架空の依頼者", page.items.single().requesterName)
       assertEquals("アロナ", page.items.single().winnerName)
+      assertEquals("participant-a", page.items.single().winnerSlot)
       assertEquals("cyan", page.items.single().requesterAvatar.fallbackVariant)
       assertEquals("next.cursor", page.nextCursor)
     }

@@ -3,8 +3,9 @@ package dev.pitekusu.shittim.records
 import java.text.Normalizer
 import java.util.Locale
 
-internal enum class RecordWinner(val nameInRecord: String?) {
-  All(null), Arona("アロナ"), Plana("プラナ"), Abe("安倍晋三AI"),
+internal enum class RecordWinner(val nameInRecord: String?, val slot: String?) {
+  All(null, null), Arona("アロナ", "participant-a"), Plana("プラナ", "participant-b"),
+  Abe("安倍晋三AI", "participant-c"),
 }
 
 internal enum class RecordOrder { Newest, Oldest }
@@ -19,8 +20,11 @@ internal data class RecordListQuery(
   val searchesText: Boolean get() = terms.isNotEmpty()
   val isDefault: Boolean get() = !searchesText && winner == RecordWinner.All && order == RecordOrder.Newest
 
-  fun acceptsWinner(entry: RecordListEntry): Boolean =
-    winner.nameInRecord?.let { it == entry.winnerName } ?: true
+  fun acceptsWinner(entry: RecordListEntry): Boolean = when {
+    winner == RecordWinner.All -> true
+    entry.winnerSlot != null -> winner.slot == entry.winnerSlot
+    else -> winner.nameInRecord == entry.winnerName
+  }
 
   fun matches(entry: RecordListEntry, detail: RecordPreview? = null): Boolean {
     // This temporary text is discarded after comparing one record; there is no plaintext index.
