@@ -11,6 +11,7 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.pitekusu.shittim.records.ui.ShittimTheme
@@ -85,14 +86,38 @@ class RecordPreviewPanelTest {
         RecordVoteCount("安倍晋三AI", 0)),
       VoteDecisionMethod.COMPOSITE_SCORE, true)
     compose.activityRule.scenario.onActivity { activity ->
-      activity.setContent { ShittimTheme(false) { RecordVotingPanel(voting) } }
+      activity.setContent { ShittimTheme(false) { RecordVotingPanel(voting, "プラナ", null) } }
     }
     compose.onNodeWithText("アロナ → プラナ").assertExists()
-    compose.onNodeWithText("プラナ：1票").assertExists()
     compose.onNodeWithText("同票のため、5項目の総合評価で決定しました。").assertExists()
-    compose.onNodeWithText("採点の内訳を見る").performClick()
+    compose.onNodeWithTag("vote-route-0").performClick()
     compose.onNodeWithText("プラナ：67 / 100点").assertExists()
     compose.onNodeWithText("プラナらしい視点です。").assertExists()
+    compose.onNodeWithText("面白さ・魅力：5 / 5").assertExists()
+  }
+
+  @Test
+  fun votingDiagramShowsAThreeWayCycleAndOpensTheSelectedBallot() {
+    val voting = RecordVoting(
+      listOf(
+        RecordVote("アロナ", "プラナ", "アロナの投票理由", null, "participant-a", "participant-b"),
+        RecordVote("プラナ", "安倍晋三AI", "プラナの投票理由", null, "participant-b", "participant-c"),
+        RecordVote("安倍晋三AI", "アロナ", "安倍晋三AIの投票理由", null, "participant-c", "participant-a"),
+      ),
+      listOf(RecordVoteCount("アロナ", 1, "participant-a"),
+        RecordVoteCount("プラナ", 1, "participant-b"),
+        RecordVoteCount("安倍晋三AI", 1, "participant-c")),
+      VoteDecisionMethod.TIE_LOTTERY, true,
+    )
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) {
+        RecordVotingPanel(voting, "アロナ", "participant-a")
+      } }
+    }
+    compose.onNodeWithTag("vote-person-1").performClick()
+    compose.onNodeWithText("プラナ → 安倍晋三AI").assertExists()
+    compose.onNodeWithText("プラナの投票理由").assertExists()
+    compose.onNodeWithText("得票数・総合評価が同じため、抽選で決定しました。").assertExists()
   }
 
   @Test

@@ -54,6 +54,8 @@ internal fun AdaptiveRecordsUi(
   listScrollState: LazyListState,
   detailScrollState: LazyListState,
   modifier: Modifier = Modifier,
+  playedSections: Set<String> = emptySet(),
+  onSectionSeen: (String) -> Unit = {},
 ) {
   val windowDirective = calculatePaneScaffoldDirective(currentWindowAdaptiveInfoV2())
   BoxWithConstraints(modifier) {
@@ -133,7 +135,9 @@ internal fun AdaptiveRecordsUi(
             LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize()
               .testTag(if (twoPanes) "record-detail-content" else "bootstrap-content"),
               state = detailScrollState, contentPadding = PaddingValues(ShittimSpacing.Large)) {
-              item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink, showCloseButton = false) }
+              item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink,
+                showCloseButton = false, recordId = state.selectedRecordId,
+                playedSections = playedSections, onSectionSeen = onSectionSeen) }
             }
           }
         }

@@ -82,6 +82,8 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           }) state.eventSink(BootstrapScreen.Event.RecordsAuthRequired)
       }
       var menuOpen by rememberSaveable { mutableStateOf(false) }
+      // Opaque record IDs only; animation state survives rotation without retaining record text.
+      var playedSections by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
       LaunchedEffect(state.canReadRecords) { if (!state.canReadRecords) menuOpen = false }
       Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         if (state.canReadRecords) RecordsAppBar { menuOpen = true }
@@ -93,7 +95,9 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           val transientScrollState = rememberLazyListState()
           if (state.canReadRecords) {
             AdaptiveRecordsUi(state, pagingItems, listScrollState, detailScrollState,
-              Modifier.fillMaxSize())
+              Modifier.fillMaxSize(), playedSections.toSet()) { key ->
+                if (key !in playedSections) playedSections = ArrayList(playedSections).apply { add(key) }
+              }
           } else if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
             Row(
               Modifier.fillMaxSize().padding(ShittimSpacing.Large),

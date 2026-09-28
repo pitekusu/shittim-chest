@@ -23,7 +23,8 @@ internal sealed interface RecordPreviewState {
 
 @Composable
 internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapScreen.Event) -> Unit,
-  showCloseButton: Boolean = true) {
+  showCloseButton: Boolean = true, recordId: String? = null,
+  playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {}) {
   ShittimPanel {
     if (showCloseButton) TextButton(onClick = { onEvent(BootstrapScreen.Event.CloseRecord) }) {
       Text(stringResource(R.string.record_close))
@@ -67,7 +68,8 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
             RecordMarkdown(opinion.finalProposal)
           }
         }
-        state.preview.voting?.let { RecordVotingPanel(it) }
+        state.preview.voting?.let { RecordVotingPanel(it, state.preview.winnerName,
+          state.preview.winnerSlot, recordId?.let { id -> "vote:$id" }, playedSections, onSectionSeen) }
         Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary)
         ShittimParticipantLabel(state.preview.winnerName, state.preview.winnerSlot, crowned = true)
