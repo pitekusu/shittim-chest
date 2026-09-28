@@ -12,7 +12,7 @@
     <string name="session_browser_hint">開いたブラウザーで認証してください。戻ると確認を続けます。</string>
     <string name="session_login">Discordでログイン</string>
     <string name="session_signed_in">ログインしました</string>
-    <string name="session_connected">接続完了。記録へアクセスできます。</string>
+    <string name="intro_skip">演出をスキップ</string>
     <string name="session_records_ready">以下に議論の記録を表示します。</string>
     <string name="record_title">議論の記録</string>
     <string name="record_list_loading">最近の記録を読み込んでいます</string>
