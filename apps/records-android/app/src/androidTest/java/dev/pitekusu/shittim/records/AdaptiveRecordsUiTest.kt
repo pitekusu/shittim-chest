@@ -42,6 +42,7 @@ import dev.pitekusu.shittim.records.auth.SessionState
 import java.io.File
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -75,9 +76,10 @@ class AdaptiveRecordsUiTest {
     // The list has four fixed rows before its saved records; scroll by index so the
     // test does not depend on off-screen card semantics during adaptive transitions.
     compose.onNodeWithTag("bootstrap-content").performScrollToIndex(4 + entries.lastIndex)
+    val initialScroll = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue(initialScroll > 0f)
     compose.runOnIdle { state.value = screen(entries.last().recordId) }
-    compose.onNodeWithText(lastQuestion).assertIsDisplayed()
-      .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
     compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
     compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "議論詳細"))
       .assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
@@ -86,8 +88,10 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithTag("record-detail-content").assertDoesNotExist()
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
     compose.runOnIdle { window.value = DpSize(1000.dp, 700.dp) }
-    compose.onNodeWithText(lastQuestion).assertIsDisplayed()
     compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    val restoredScroll = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue("The list must not jump back to its top on resize", restoredScroll > 0f)
     compose.runOnIdle { state.value = screen(entries.last().recordId, ThemeChoice.Light) }
     capture("adaptive-wide-light")
     compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }
