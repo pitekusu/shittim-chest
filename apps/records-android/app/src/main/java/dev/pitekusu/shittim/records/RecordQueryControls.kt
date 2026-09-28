@@ -24,6 +24,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 
 @Composable
 internal fun RecordQueryControls(query: RecordListQuery, onEvent: (BootstrapScreen.Event) -> Unit) {
@@ -50,7 +51,9 @@ internal fun RecordQueryControls(query: RecordListQuery, onEvent: (BootstrapScre
           onClick = { onEvent(BootstrapScreen.Event.SelectWinner(winner)) },
           label = { Text(winner.nameInRecord ?: stringResource(R.string.record_filter_all)) },
           shapes = FilterChipDefaults.shapes(),
-          leadingIcon = if (selected) {
+          leadingIcon = if (winner.slot != null) {
+            { ShittimParticipantAvatar(winner.nameInRecord.orEmpty(), winner.slot, size = 24.dp) }
+          } else if (selected) {
             { Icon(painterResource(R.drawable.ic_check), contentDescription = null, Modifier.size(18.dp)) }
           } else null,
           modifier = Modifier.heightIn(min = 48.dp).testTag("winner-${winner.name}"),

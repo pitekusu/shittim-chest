@@ -54,7 +54,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           ShittimSectionHeading(stringResource(R.string.record_opinions))
           state.preview.opinions.forEach { opinion ->
             HorizontalDivider()
-            ShittimParticipantLabel(opinion.participantName)
+            ShittimParticipantLabel(opinion.participantName, opinion.participantSlot)
             Text(stringResource(R.string.record_initial_opinion),
               style = MaterialTheme.typography.labelLarge,
               color = MaterialTheme.colorScheme.primary)
@@ -70,7 +70,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
         state.preview.voting?.let { RecordVotingPanel(it) }
         Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary)
-        ShittimParticipantLabel(state.preview.winnerName)
+        ShittimParticipantLabel(state.preview.winnerName, state.preview.winnerSlot, crowned = true)
         state.preview.victoryMessage?.let { message ->
           Text(stringResource(R.string.record_victory_message),
             style = MaterialTheme.typography.labelLarge,

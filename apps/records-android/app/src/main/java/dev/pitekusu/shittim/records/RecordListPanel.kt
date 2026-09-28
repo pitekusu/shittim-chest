@@ -37,6 +37,7 @@ import androidx.paging.compose.itemKey
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import dev.pitekusu.shittim.records.ui.ShittimProgress
+import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 import dev.pitekusu.shittim.records.ui.ShittimSectionHeading
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import dev.pitekusu.shittim.records.ui.shittimParticipantColor
@@ -178,9 +179,13 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, onClick: 
       HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
       Text(item.questionPreview, style = MaterialTheme.typography.bodyLarge)
       if (isSelected) Text(stringResource(R.string.record_selected), style = MaterialTheme.typography.labelMedium)
-      Text(stringResource(R.string.record_list_winner, item.winnerName),
-        style = MaterialTheme.typography.labelMedium,
-        color = shittimParticipantColor(item.winnerName))
+      Row(verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
+        ShittimParticipantAvatar(item.winnerName, item.winnerSlot, size = 32.dp, crowned = true)
+        Text(stringResource(R.string.record_list_winner, item.winnerName),
+          style = MaterialTheme.typography.labelMedium,
+          color = shittimParticipantColor(item.winnerName, item.winnerSlot))
+      }
     }
   }
 }
