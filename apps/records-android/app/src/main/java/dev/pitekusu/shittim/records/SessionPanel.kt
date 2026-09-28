@@ -20,6 +20,7 @@ import dev.pitekusu.shittim.records.ui.ShittimSectionHeading
 @Composable
 internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) -> Unit,
   canReadRecords: Boolean = false) {
+  if (state is SessionState.SignedIn) return
   val logoutColors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
   ShittimPanel {
     val title = when (state) {
@@ -31,7 +32,7 @@ internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) 
       is SessionState.SignedIn -> R.string.session_signed_in
       is SessionState.SignedOut -> R.string.session_signed_out
     }
-    ShittimSectionHeading(stringResource(title), kicker = "ACCOUNT",
+    ShittimSectionHeading(stringResource(title), kicker = "LOGIN",
       style = MaterialTheme.typography.titleLargeEmphasized,
       modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
     when (state) {
@@ -53,20 +54,14 @@ internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) 
           SessionNotice.LOGIN_FAILED -> R.string.session_login_failed
           SessionNotice.BROWSER_UNAVAILABLE -> R.string.session_no_browser
           SessionNotice.LOCAL_LOGOUT -> R.string.session_local_logout
-          null -> R.string.session_login_hint
+          null -> null
         }
-        Text(stringResource(explanation))
+        if (explanation != null) Text(stringResource(explanation))
         Button(onClick = { onEvent(BootstrapScreen.Event.Login) }) {
           Text(stringResource(R.string.session_login))
         }
       }
-      is SessionState.SignedIn -> {
-        Text(state.user.displayName, style = MaterialTheme.typography.titleMedium)
-        Text(stringResource(R.string.session_records_ready))
-        OutlinedButton(colors = logoutColors, onClick = { onEvent(BootstrapScreen.Event.Logout) }) {
-          Text(stringResource(R.string.session_logout))
-        }
-      }
+      is SessionState.SignedIn -> Unit
       SessionState.Unavailable -> {
         Text(stringResource(R.string.session_retry_hint))
         Button(onClick = { onEvent(BootstrapScreen.Event.Retry) }) {

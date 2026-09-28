@@ -202,8 +202,9 @@ def test_return_to_rejects_paths_outside_the_spa_allowlist(value: str) -> None:
     assert caught.value.code == "return_to_invalid"
 
 
-def test_admin_route_is_a_valid_oauth_return_path() -> None:
-    assert validate_return_to("/admin") == "/admin"
+@pytest.mark.parametrize("path", ("/admin", "/admin/prompts", "/memorial"))
+def test_menu_route_is_a_valid_oauth_return_path(path: str) -> None:
+    assert validate_return_to(path) == path
 
 
 def test_callback_claims_once_and_stores_only_hashed_session_values() -> None:

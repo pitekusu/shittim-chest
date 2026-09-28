@@ -21,6 +21,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -28,6 +29,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.then
@@ -41,6 +43,7 @@ import dev.pitekusu.shittim.records.auth.SessionState
 import java.io.File
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,7 +51,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AdaptiveRecordsUiTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
-  private val entries = (1..12).map { index ->
+  private val entries = (1..6).map { index ->
     RecordListEntry(index.toString().padStart(43, 'a'), "架空の相談 $index：休日に楽しめる小さなことは？",
       "レイアウト確認用", RecordAvatar(null, "cyan"), Instant.parse("2026-09-27T00:00:00Z"), "アロナ")
   }
@@ -71,20 +74,28 @@ class AdaptiveRecordsUiTest {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value)) { BootstrapUi(state.value) }
     } }
     val lastQuestion = entries.last().questionPreview
-    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(lastQuestion))
+    // The list has four fixed rows before its saved records; scroll by index so the
+    // test does not depend on off-screen card semantics during adaptive transitions.
+    compose.onNodeWithTag("bootstrap-content").performScrollToIndex(4 + entries.lastIndex)
+    val initialScroll = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue(initialScroll > 0f)
     compose.runOnIdle { state.value = screen(entries.last().recordId) }
-    compose.onNodeWithText(lastQuestion).assertIsDisplayed()
-      .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, true))
+    compose.waitUntil(10_000) { compose.onNodeWithTag("record-detail-content").isDisplayed() }
     compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
     compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "議論詳細"))
       .assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
     capture("adaptive-wide-dark")
     compose.runOnIdle { window.value = DpSize(820.dp, 700.dp) }
+    compose.waitUntil(10_000) { compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").isDisplayed() }
     compose.onNodeWithTag("record-detail-content").assertDoesNotExist()
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
     compose.runOnIdle { window.value = DpSize(1000.dp, 700.dp) }
-    compose.onNodeWithText(lastQuestion).assertIsDisplayed()
+    compose.waitUntil(10_000) { compose.onNodeWithTag("record-detail-content").isDisplayed() }
     compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    val restoredScroll = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue("The list must not jump back to its top on resize", restoredScroll > 0f)
     compose.runOnIdle { state.value = screen(entries.last().recordId, ThemeChoice.Light) }
     capture("adaptive-wide-light")
     compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }

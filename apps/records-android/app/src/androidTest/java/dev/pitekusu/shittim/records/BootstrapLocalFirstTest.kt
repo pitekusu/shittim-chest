@@ -115,9 +115,7 @@ class BootstrapLocalFirstTest {
       compose.onNodeWithText("通信前に見える架空の記録").assertDoesNotExist()
       compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.ClearRecordQuery) }
       compose.waitUntil(10_000) { (rendered?.records as? RecordListState.Ready)?.loadedIds?.contains(recordId) == true }
-      val logout = compose.activity.getString(R.string.session_local_logout_action)
-      compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(logout))
-      compose.onNodeWithText(logout).assertIsDisplayed()
+      compose.onNodeWithTag("records-menu-open").assertIsDisplayed()
       compose.runOnIdle {
         assertEquals(SessionState.Checking, model.state.value)
         assertFalse(responseGate.isCompleted)

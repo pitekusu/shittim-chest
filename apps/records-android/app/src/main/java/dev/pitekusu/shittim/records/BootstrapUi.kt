@@ -22,6 +22,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,36 +72,42 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
             (it.error as? RecordReadException)?.failure == RecordReadFailure.AUTH_REQUIRED
           }) state.eventSink(BootstrapScreen.Event.RecordsAuthRequired)
       }
-      BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-        val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-        val detailScrollState = rememberSaveable(state.selectedRecordId, saver = LazyListState.Saver) {
-          LazyListState()
-        }
-        val transientScrollState = rememberLazyListState()
-        if (state.canReadRecords) {
-          AdaptiveRecordsUi(state, pagingItems, listScrollState, detailScrollState,
-            Modifier.fillMaxSize())
-        } else if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
-          Row(
-            Modifier.fillMaxSize().padding(ShittimSpacing.Large),
-            horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp),
-              compact = state.canReadRecords)
-            BootstrapLoginControls(
-              state, transientScrollState, false,
-              Modifier.weight(1f, fill = false).widthIn(max = 480.dp).fillMaxHeight(),
-            )
+      var menuOpen by rememberSaveable { mutableStateOf(false) }
+      LaunchedEffect(state.canReadRecords) { if (!state.canReadRecords) menuOpen = false }
+      Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
+        if (state.canReadRecords) RecordsAppBar { menuOpen = true }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+          val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+          val detailScrollState = rememberSaveable(state.selectedRecordId, saver = LazyListState.Saver) {
+            LazyListState()
           }
-        } else {
-          BootstrapLoginControls(state, transientScrollState, true,
-            Modifier.align(Alignment.TopCenter).widthIn(max = 560.dp).fillMaxSize())
+          val transientScrollState = rememberLazyListState()
+          if (state.canReadRecords) {
+            AdaptiveRecordsUi(state, pagingItems, listScrollState, detailScrollState,
+              Modifier.fillMaxSize())
+          } else if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
+            Row(
+              Modifier.fillMaxSize().padding(ShittimSpacing.Large),
+              horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              BootstrapHeader(Modifier.weight(1f, fill = false).widthIn(max = 400.dp),
+                compact = state.canReadRecords)
+              BootstrapLoginControls(
+                state, transientScrollState, false,
+                Modifier.weight(1f, fill = false).widthIn(max = 480.dp).fillMaxHeight(),
+              )
+            }
+          } else {
+            BootstrapLoginControls(state, transientScrollState, true,
+              Modifier.align(Alignment.TopCenter).widthIn(max = 560.dp).fillMaxSize())
+          }
+          // Overlay, not a list item: feedback cannot reset scroll or delay record access.
+          LoginCompletionFeedback(state.loginCompletion, state.session is SessionState.SignedIn,
+            Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).padding(ShittimSpacing.Medium))
         }
-        // Overlay, not a list item: feedback cannot reset scroll or delay record access.
-        LoginCompletionFeedback(state.loginCompletion, state.session is SessionState.SignedIn,
-          Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).padding(ShittimSpacing.Medium))
       }
+      if (menuOpen && state.canReadRecords) RecordsNavigationMenu(state, onDismiss = { menuOpen = false })
     }
   }
 }
@@ -120,13 +129,6 @@ internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
       color = MaterialTheme.colorScheme.onSurface,
       modifier = Modifier.semantics { heading() },
     )
-    if (!compact) {
-      Text(
-        stringResource(R.string.bootstrap_title),
-        style = MaterialTheme.typography.titleLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
   }
 }
 
@@ -145,10 +147,8 @@ private fun BootstrapLoginControls(
       BootstrapHeader(Modifier.fillMaxWidth(), compact = false)
     }
     item(key = "session") { SessionPanel(state.session, state.eventSink, canReadRecords = state.canReadRecords) }
-    item(key = "theme") {
-      BootstrapThemeSelector(state.themeChoice) {
-        state.eventSink(BootstrapScreen.Event.SelectTheme(it))
-      }
+    if (state.session !is SessionState.SignedIn) item(key = "theme") {
+      BootstrapThemeSelector(state.themeChoice) { state.eventSink(BootstrapScreen.Event.SelectTheme(it)) }
     }
   }
 }

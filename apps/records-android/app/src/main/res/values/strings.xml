@@ -2,17 +2,14 @@
 <resources>
     <string name="app_name">シッテムの箱</string>
     <string name="brand_title">THE SHITTIM\nCHEST</string>
-    <string name="bootstrap_title">Discordで、記録の世界へ。</string>
     <string name="preview_theme">表示を選択</string>
     <string name="preview_system">自動</string>
     <string name="preview_light">ライト</string>
     <string name="preview_dark">ダーク</string>
-    <string name="preview_theme_hint">自動では、端末の明暗設定に合わせます。選択はこの画面内だけに反映されます。</string>
     <string name="session_signed_out">シッテムの箱へログイン</string>
     <string name="session_checking">ログイン状態を確認しています</string>
     <string name="session_browser">Discordで認証中</string>
     <string name="session_browser_hint">開いたブラウザーで認証してください。戻ると確認を続けます。</string>
-    <string name="session_login_hint">ブラウザーでDiscordのアカウントを確認します。</string>
     <string name="session_login">Discordでログイン</string>
     <string name="session_signed_in">ログインしました</string>
     <string name="session_connected">接続完了。記録へアクセスできます。</string>
@@ -89,6 +86,16 @@
     <string name="record_affection_transition">親愛度：%1$d → %2$d</string>
     <string name="record_affection_applied_delta">実増減：%1$s点</string>
     <string name="session_logout">ログアウト</string>
+    <string name="menu_open">メニューを開く</string>
+    <string name="menu_web">Webで開く</string>
+    <string name="menu_admin">Webの管理機能</string>
+    <string name="menu_insights">いろいろな記録</string>
+    <string name="menu_momotalk">モモトーク</string>
+    <string name="menu_memorial">メモリアルロビー</string>
+    <string name="menu_status">サービス状態確認</string>
+    <string name="menu_prompts">プロンプト管理</string>
+    <string name="menu_settings">アプリ設定</string>
+    <string name="menu_browser_unavailable">ブラウザーを開けませんでした。</string>
     <string name="session_signing_out">ログアウトしています</string>
     <string name="session_expired">ログインの有効期限が切れました。もう一度ログインしてください。</string>
     <string name="session_cancelled">ログインをキャンセルしました。</string>

@@ -8,8 +8,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.ButtonGroup
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -52,10 +50,5 @@ internal fun BootstrapThemeSelector(selected: ThemeChoice, onSelect: (ThemeChoic
         )
       }
     }
-    Text(
-      stringResource(R.string.preview_theme_hint),
-      style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
   }
 }

@@ -240,23 +240,26 @@ describe("App shell", () => {
     expect(screen.getByText("吹雪型JCのつどいサーバの先生であることを認証します。")).toBeVisible();
   });
 
-  it("returns an anonymous visitor to the requested insights page after login", async () => {
-    window.history.replaceState(null, "", "/insights");
-    mockApi({
-      schemaVersion: 1,
-      authenticated: false,
-      isAdmin: false,
-      user: null,
-      csrfToken: null,
-    });
+  it.each(["/insights", "/momotalk", "/memorial", "/admin", "/admin/prompts"])(
+    "returns an anonymous visitor to %s after login",
+    async (path) => {
+      window.history.replaceState(null, "", path);
+      mockApi({
+        schemaVersion: 1,
+        authenticated: false,
+        isAdmin: false,
+        user: null,
+        csrfToken: null,
+      });
 
-    render(<App />);
+      render(<App />);
 
-    expect(await screen.findByRole("link", { name: "AUTHENTICATE" })).toHaveAttribute(
-      "href",
-      "/api/v1/auth/discord/start?returnTo=%2Finsights",
-    );
-  });
+      expect(await screen.findByRole("link", { name: "AUTHENTICATE" })).toHaveAttribute(
+        "href",
+        `/api/v1/auth/discord/start?returnTo=${encodeURIComponent(path)}`,
+      );
+    },
+  );
 
   it("finishes goodbye cleanup even if the session refreshes during the transition", async () => {
     mockFixedMedia(false);

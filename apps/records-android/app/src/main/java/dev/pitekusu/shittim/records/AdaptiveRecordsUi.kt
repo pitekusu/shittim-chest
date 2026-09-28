@@ -105,12 +105,6 @@ internal fun AdaptiveRecordsUi(
               state = listScrollState, contentPadding = PaddingValues(ShittimSpacing.Large),
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Large)) {
               item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true) }
-              item(key = "session") { SessionPanel(state.session, state.eventSink, canReadRecords = true) }
-              item(key = "theme") {
-                BootstrapThemeSelector(state.themeChoice) {
-                  state.eventSink(BootstrapScreen.Event.SelectTheme(it))
-                }
-              }
               if (state.session == SessionState.Unavailable) item(key = "offline-notice") {
                 Text(stringResource(R.string.record_offline))
               }

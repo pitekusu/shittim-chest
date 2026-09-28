@@ -6,6 +6,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -23,6 +25,21 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BootstrapUiNavigationTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+  @Test fun menuContainsWebDestinationsAndMovesLogoutOutOfTheRecordList() {
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    compose.activityRule.scenario.onActivity { it.setContent {
+      BootstrapUi(BootstrapScreen.State(ThemeChoice.System, session, eventSink = events::add))
+    } }
+    compose.onNodeWithText("架空の依頼者").assertDoesNotExist()
+    compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).assertDoesNotExist()
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithText(compose.activity.getString(R.string.menu_momotalk)).assertIsDisplayed()
+    compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).performScrollTo().performClick()
+    compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.single()) }
+  }
 
   @Test fun systemBackClosesSelectedRecordInsteadOfFinishingActivity() {
     val events = mutableListOf<BootstrapScreen.Event>()
