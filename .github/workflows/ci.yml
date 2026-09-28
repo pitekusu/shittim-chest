@@ -472,7 +472,8 @@ jobs:
           avd-name: ci-api36
           force-avd-creation: false
           disable-animations: true
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save -gpu swangle -camera-back none -camera-front none
+          # Always cold boot: a stale Quick Boot snapshot can hang instrumentation.
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swangle -camera-back none -camera-front none
           script: apps/records-android/gradlew -p apps/records-android --no-daemon :app:connectedDebugAndroidTest
       - name: Retain Android reports, not an unsigned distribution
         if: ${{ steps.scope.outputs.required == 'true' && (!cancelled()) }}
