@@ -130,8 +130,8 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
 @Composable
 private fun VoteNode(count: RecordVoteCount, winnerName: String, winnerSlot: String?,
   pulse: Float, modifier: Modifier, onClick: () -> Unit) {
-  val isWinner = participantVisualSlot(count.participantName, count.participantSlot) ==
-    participantVisualSlot(winnerName, winnerSlot)
+  val isWinner = voteParticipantMatches(count.participantName, count.participantSlot,
+    winnerName, winnerSlot)
   Column(modifier.clickable(onClick = onClick).scale(1f + pulse * 0.11f),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -151,8 +151,8 @@ private fun VoteNode(count: RecordVoteCount, winnerName: String, winnerSlot: Str
 private fun VoteRows(voting: RecordVoting, winnerName: String, winnerSlot: String?,
   onClick: (RecordVote) -> Unit) {
   voting.votes.forEachIndexed { index, vote ->
-    val count = voting.counts.firstOrNull { participantVisualSlot(it.participantName,
-      it.participantSlot) == participantVisualSlot(vote.voterName, vote.voterSlot) }
+    val count = voting.counts.firstOrNull { voteParticipantMatches(it.participantName,
+      it.participantSlot, vote.voterName, vote.voterSlot) }
     Surface(onClick = { onClick(vote) }, modifier = Modifier.fillMaxWidth().testTag("vote-route-$index"),
       shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
       Row(Modifier.padding(ShittimSpacing.Small), verticalAlignment = Alignment.CenterVertically,
@@ -160,8 +160,8 @@ private fun VoteRows(voting: RecordVoting, winnerName: String, winnerSlot: Strin
         ShittimParticipantAvatar(vote.voterName, vote.voterSlot, size = 36.dp)
         Text("→", style = MaterialTheme.typography.titleMedium)
         ShittimParticipantAvatar(vote.candidateName, vote.candidateSlot, size = 36.dp,
-          crowned = participantVisualSlot(vote.candidateName, vote.candidateSlot) ==
-            participantVisualSlot(winnerName, winnerSlot))
+          crowned = voteParticipantMatches(vote.candidateName, vote.candidateSlot,
+            winnerName, winnerSlot))
         Column {
           Text(stringResource(R.string.record_vote_route, vote.voterName, vote.candidateName),
             style = MaterialTheme.typography.labelMedium)
@@ -171,6 +171,13 @@ private fun VoteRows(voting: RecordVoting, winnerName: String, winnerSlot: Strin
       }
     }
   }
+}
+
+internal fun voteParticipantMatches(firstName: String, firstSlot: String?,
+  secondName: String, secondSlot: String?): Boolean {
+  val first = participantVisualSlot(firstName, firstSlot)
+  val second = participantVisualSlot(secondName, secondSlot)
+  return if (first != null && second != null) first == second else firstName == secondName
 }
 
 @Composable

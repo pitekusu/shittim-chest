@@ -125,13 +125,16 @@ class RecordPreviewPanelTest {
     val voting = RecordVoting(
       listOf(RecordVote("未知A", "未知B", "理由A", null), RecordVote("未知B", "未知C", "理由B", null),
         RecordVote("未知C", "未知A", "理由C", null)),
-      listOf(RecordVoteCount("未知A", 1), RecordVoteCount("未知B", 1),
-        RecordVoteCount("未知C", 1)), VoteDecisionMethod.TIE_LOTTERY, true)
+      listOf(RecordVoteCount("未知A", 2), RecordVoteCount("未知B", 1),
+        RecordVoteCount("未知C", 0)), VoteDecisionMethod.MAJORITY, false)
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) { RecordVotingPanel(voting, "未知A", null) } }
     }
     compose.onNodeWithTag("vote-route-0").assertExists()
     compose.onNodeWithText("未知A → 未知B").assertExists()
+    for (count in listOf("2票", "1票", "0票")) compose.onNodeWithText(count).assertExists()
+    assertTrue(voteParticipantMatches("未知A", null, "未知A", null))
+    assertFalse(voteParticipantMatches("未知A", null, "未知B", null))
   }
 
   @Test
