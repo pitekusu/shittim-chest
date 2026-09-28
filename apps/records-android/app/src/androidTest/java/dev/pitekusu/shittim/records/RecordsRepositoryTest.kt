@@ -85,6 +85,7 @@ class RecordsRepositoryTest {
       .forEach { file -> assertFalse(file.readBytes().toString(Charsets.ISO_8859_1).contains(marker)) }
     repository(MockEngine { error("unexpected_network_request") }).use { reopened ->
       assertEquals("架空の議題", reopened.cachedListEntry(accountId, recordId)?.questionPreview)
+      assertEquals("participant-a", reopened.cachedListEntry(accountId, recordId)?.winnerSlot)
       assertEquals("アロナ", reopened.cachedRecord(accountId, recordId)?.winnerName)
       assertEquals("架空の結論", reopened.cachedRecord(accountId, recordId)?.decision)
     }
@@ -115,11 +116,13 @@ class RecordsRepositoryTest {
 
   @Test fun localSearchReadsEncryptedBodyWithoutNetworkAndHonorsFiltersAndPermission() = runBlocking {
     repository(MockEngine {
-      respond(detail().replace("架空の結論", "Ｐｙｔｈｏｎで月の観測"),
+      respond(detail().replace("架空の結論", "Ｐｙｔｈｏｎで月の観測")
+        .replace("\"displayName\":\"アロナ\"", "\"displayName\":\"Arona\""),
         headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { it.record(token, accountId, recordId) }
     repository(MockEngine { error("search_must_not_request_network") }).use { saved ->
       val entries = saved.cachedRecords(accountId)
+      assertEquals("participant-a", entries.single().winnerSlot)
       assertEquals(recordId, saved.queryCachedRecords(accountId, entries,
         RecordListQuery("python 観測")).single().recordId)
       assertEquals(recordId, saved.queryCachedRecords(accountId, entries,
