@@ -24,6 +24,7 @@ export function LoginPage({ session }: { readonly session: SessionResponse }): R
     requestedPath === "/insights" ||
     requestedPath === "/momotalk" ||
     requestedPath === "/admin" ||
+    requestedPath === "/admin/prompts" ||
     requestedPath === "/memorial" ||
     /^\/records\/[A-Za-z0-9_-]{43}$/.test(requestedPath)
       ? requestedPath

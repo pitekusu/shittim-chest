@@ -414,7 +414,7 @@ def require_csrf_submission(
 def validate_return_to(value: str | None) -> str:
     """Allow only explicitly owned SPA destinations, never external redirects."""
 
-    if value in (None, "", "/", "/insights", "/admin", "/momotalk"):
+    if value in (None, "", "/", "/insights", "/admin", "/admin/prompts", "/momotalk", "/memorial"):
         return value if value else "/"
     prefix = "/records/"
     if value.startswith(prefix) and _is_record_id(value.removeprefix(prefix)):
