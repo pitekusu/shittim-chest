@@ -1,20 +1,35 @@
 package dev.pitekusu.shittim.records
 
+import android.graphics.Bitmap
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.ui.ShittimTheme
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -110,14 +125,16 @@ class RecordPreviewPanelTest {
       VoteDecisionMethod.TIE_LOTTERY, true,
     )
     compose.activityRule.scenario.onActivity { activity ->
-      activity.setContent { ShittimTheme(false) {
+      activity.setContent { ShittimTheme(false) { Column {
         RecordVotingPanel(voting, "アロナ", "participant-a")
-      } }
+      } } }
     }
+    capture("voting-graph")
     compose.onNodeWithTag("vote-person-1").performClick()
     compose.onNodeWithText("プラナ → 安倍晋三AI").assertExists()
     compose.onNodeWithText("プラナの投票理由").assertExists()
     compose.onNodeWithText("得票数・総合評価が同じため、抽選で決定しました。").assertExists()
+    capture("voting-detail")
   }
 
   @Test
@@ -177,6 +194,56 @@ class RecordPreviewPanelTest {
   }
 
   @Test
+  fun affectionCardsKeepTheRealDeltaAtTheUpperBoundAndZero() {
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
+      RecordAffectionChange("アロナ", 995, 50, 5, 1_000, "participant-a"),
+      RecordAffectionChange("プラナ", 500, -20, -20, 480, "participant-b"),
+      RecordAffectionChange("安倍晋三AI", 100, 0, 0, 100, "participant-c"),
+    ))
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(true) {
+        Surface(color = MaterialTheme.colorScheme.background) {
+          Column { RecordAffectionPanel(affection) }
+        }
+      } }
+    }
+    compose.onNodeWithText("親愛度：995 → 1000").assertExists()
+    compose.onNodeWithText("実増減：+5点").assertExists()
+    compose.onNodeWithText("親愛度：500 → 480").assertExists()
+    compose.onNodeWithText("実増減：0点").assertExists()
+    capture("affection-cards")
+  }
+
+  @Test
+  fun largeTextUsesBallotRowsAndKeepsAffectionScoresReadable() {
+    val voting = RecordVoting(listOf(
+      RecordVote("アロナ", "プラナ", "理由A", null),
+      RecordVote("プラナ", "安倍晋三AI", "理由B", null),
+      RecordVote("安倍晋三AI", "アロナ", "理由C", null),
+    ), listOf(RecordVoteCount("アロナ", 1), RecordVoteCount("プラナ", 1),
+      RecordVoteCount("安倍晋三AI", 1)), VoteDecisionMethod.TIE_LOTTERY, true)
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
+      RecordAffectionChange("アロナ", 995, 50, 5, 1_000),
+      RecordAffectionChange("プラナ", 500, -20, -20, 480),
+      RecordAffectionChange("安倍晋三AI", 100, 0, 0, 100),
+    ))
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      ShittimTheme(false) {
+        val density = LocalDensity.current
+        CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+          Box(Modifier.width(320.dp)) { Column {
+            RecordVotingPanel(voting, "アロナ", null)
+            RecordAffectionPanel(affection)
+          } }
+        }
+      }
+    } }
+    compose.onNodeWithTag("vote-route-0").assertExists()
+    compose.onNodeWithText("親愛度：995 → 1000").assertExists()
+    compose.onNodeWithText("質問評価：+50点").assertExists()
+  }
+
+  @Test
   fun onlyAbsoluteHttpsLinksCanLeaveTheRecord() {
     assertTrue(allowedRecordLink("https://example.com/article?q=1"))
     for (url in listOf("http://example.com", "javascript:alert(1)", "intent://example.com",
@@ -206,6 +273,13 @@ class RecordPreviewPanelTest {
     compose.onAllNodesWithText("安全なリンク", substring = true).onFirst().performClick()
     compose.onAllNodesWithText("拒否するリンク", substring = true).onFirst().performClick()
     compose.runOnIdle { assertEquals(listOf("https://example.com"), opened) }
+  }
+
+  private fun capture(name: String) {
+    if (InstrumentationRegistry.getArguments().getString("shittimCaptureUi") != "true") return
+    File(compose.activity.cacheDir, "$name.png").outputStream().use {
+      compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
+    }
   }
 
   private fun label(id: Int): String = compose.activity.getString(id)

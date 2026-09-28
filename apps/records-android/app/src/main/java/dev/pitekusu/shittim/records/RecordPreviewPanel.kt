@@ -90,7 +90,8 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           ShittimSectionHeading(stringResource(R.string.record_caveats))
           state.preview.caveats.forEach { Text(stringResource(R.string.record_list_item, it)) }
         }
-        RecordAffectionPanel(state.preview.affection)
+        RecordAffectionPanel(state.preview.affection,
+          recordId?.let { id -> "affection:$id" }, playedSections, onSectionSeen)
       }
     }
   }
