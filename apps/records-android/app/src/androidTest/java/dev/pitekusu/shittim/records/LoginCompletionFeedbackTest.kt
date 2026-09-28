@@ -99,8 +99,10 @@ class LoginCompletionFeedbackTest {
     compose.onNodeWithTag("records-menu-open").performClick()
     compose.mainClock.advanceTimeBy(500)
     compose.onNodeWithTag("records-menu-content").performScrollToNode(hasText("ログアウト"))
-    compose.onNodeWithText("ログアウト").performClick()
-    compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.last()) }
+    compose.mainClock.advanceTimeBy(800)
+    compose.onNodeWithText("ログアウト").assertIsDisplayed().performClick()
+    compose.mainClock.advanceTimeByFrame()
+    compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.lastOrNull()) }
     capture()
     compose.mainClock.advanceTimeBy(2_100)
     compose.onNodeWithTag("login-complete").assertDoesNotExist()

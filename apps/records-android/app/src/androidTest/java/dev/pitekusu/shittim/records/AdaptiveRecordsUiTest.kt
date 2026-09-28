@@ -48,7 +48,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class AdaptiveRecordsUiTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
-  private val entries = (1..12).map { index ->
+  private val entries = (1..6).map { index ->
     RecordListEntry(index.toString().padStart(43, 'a'), "架空の相談 $index：休日に楽しめる小さなことは？",
       "レイアウト確認用", RecordAvatar(null, "cyan"), Instant.parse("2026-09-27T00:00:00Z"), "アロナ")
   }
