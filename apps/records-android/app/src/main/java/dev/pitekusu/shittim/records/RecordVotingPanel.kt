@@ -58,7 +58,15 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
   val progress by animateFloatAsState(if (played) 1f else 0f,
     animationSpec = tween(1_000), label = "vote routes")
   ShittimSectionHeading(stringResource(R.string.record_votes))
-  if (LocalDensity.current.fontScale >= 1.5f || voting.counts.size != 3 || voting.votes.size != 3) {
+  val countSlots = voting.counts.map { participantVisualSlot(it.participantName, it.participantSlot) }
+  val canDrawGraph = voting.counts.size == 3 && voting.votes.size == 3 &&
+    countSlots.none { it == null } && countSlots.toSet().size == 3 &&
+    voting.votes.all { vote ->
+      val voter = participantVisualSlot(vote.voterName, vote.voterSlot)
+      val candidate = participantVisualSlot(vote.candidateName, vote.candidateSlot)
+      voter != candidate && voter in countSlots && candidate in countSlots
+    }
+  if (LocalDensity.current.fontScale >= 1.5f || !canDrawGraph) {
     VoteRows(voting, winnerName, winnerSlot) { selectedVote = it }
   } else BoxWithConstraints(Modifier.fillMaxWidth()) {
     if (maxWidth < 300.dp) {

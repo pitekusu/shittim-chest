@@ -121,6 +121,20 @@ class RecordPreviewPanelTest {
   }
 
   @Test
+  fun unknownLegacyParticipantsKeepTheirVoteRoutesReadable() {
+    val voting = RecordVoting(
+      listOf(RecordVote("未知A", "未知B", "理由A", null), RecordVote("未知B", "未知C", "理由B", null),
+        RecordVote("未知C", "未知A", "理由C", null)),
+      listOf(RecordVoteCount("未知A", 1), RecordVoteCount("未知B", 1),
+        RecordVoteCount("未知C", 1)), VoteDecisionMethod.TIE_LOTTERY, true)
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) { RecordVotingPanel(voting, "未知A", null) } }
+    }
+    compose.onNodeWithTag("vote-route-0").assertExists()
+    compose.onNodeWithText("未知A → 未知B").assertExists()
+  }
+
+  @Test
   fun affectionSeparatesQuestionScoreFromRealChangeAndOptionalDecisionText() {
     val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
       RecordAffectionChange("アロナ", 995, 50, 5, 1000),
