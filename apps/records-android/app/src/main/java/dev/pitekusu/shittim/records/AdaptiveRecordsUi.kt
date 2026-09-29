@@ -27,11 +27,15 @@ import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.calculateThreePaneScaffoldValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -73,7 +77,18 @@ internal fun AdaptiveRecordsUi(
     val scaffoldState = remember { MutableThreePaneScaffoldState(value) }
     val currentState = rememberUpdatedState(state)
     val currentValue = rememberUpdatedState(value)
-    LaunchedEffect(value) { scaffoldState.animateTo(value) }
+    val focusManager = LocalFocusManager.current
+    var wasDetail by remember { mutableStateOf(state.selectedRecordId != null) }
+    LaunchedEffect(value, state.selectedRecordId) {
+      val returningToList = wasDetail && state.selectedRecordId == null
+      wasDetail = state.selectedRecordId != null
+      // A search field can regain focus when its pane re-enters after detail closes.
+      if (state.selectedRecordId != null) focusManager.clearFocus(force = true)
+      scaffoldState.animateTo(value)
+      if (returningToList && currentState.value.selectedRecordId == null) {
+        focusManager.clearFocus(force = true)
+      }
+    }
     PredictiveBackHandler(enabled = state.selectedRecordId != null) { progress ->
       val selectedAtStart = currentState.value.selectedRecordId
       try {
