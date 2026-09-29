@@ -102,7 +102,7 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
   }
 
-  @Test fun largeTextUsesOnePaneAndTheExitRemainsVisibleWhileReading() {
+  @Test fun largeTextUsesOnePaneAndSystemBackWorksWhileReading() {
     val window = mutableStateOf(DpSize(1000.dp, 700.dp))
     val state = mutableStateOf(screen(entries.first().recordId, ThemeChoice.Light))
     val events = mutableListOf<BootstrapScreen.Event>()
@@ -113,10 +113,10 @@ class AdaptiveRecordsUiTest {
       }
     } }
     compose.onNodeWithTag("record-detail-content").assertDoesNotExist()
-    compose.onNodeWithText("一覧に戻る").assertIsDisplayed()
+    compose.onNodeWithText("一覧に戻る").assertDoesNotExist()
     compose.runOnIdle { window.value = DpSize(320.dp, 640.dp) }
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("親愛度の変化"))
-    compose.onNodeWithText("一覧に戻る").assertIsDisplayed().performClick()
+    compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.CloseRecord, events.last()) }
     capture("adaptive-large-text")
   }
@@ -189,10 +189,11 @@ class AdaptiveRecordsUiTest {
     } }
     compose.onNodeWithTag("record-search").assertIsDisplayed().performClick().assertIsFocused()
     compose.onNodeWithText(entries.first().questionPreview).assertIsDisplayed().performClick()
-    compose.onNodeWithText("一覧に戻る").assertIsDisplayed()
+    compose.onNodeWithText("一覧に戻る").assertDoesNotExist()
+    val dispatcher = compose.activity.onBackPressedDispatcher
     compose.mainClock.autoAdvance = false
     try {
-      compose.onNodeWithText("一覧に戻る").assertIsDisplayed().performClick()
+      compose.runOnIdle { dispatcher.onBackPressed() }
       // The focus must never flash onto the search field during the returning pane animation.
       repeat(8) {
         compose.mainClock.advanceTimeBy(80)

@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.material3.adaptive.layout.AnimatedPane
@@ -139,11 +138,8 @@ internal fun AdaptiveRecordsUi(
               Text(stringResource(R.string.record_select), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
           } else Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-            // Keep the exit visible while reading a long record, including at enlarged text sizes.
+            // Keep the detail title visible while reading a long record; system Back returns to the list.
             Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = ShittimSpacing.Large)) {
-              TextButton(onClick = { state.eventSink(BootstrapScreen.Event.CloseRecord) }) {
-                Text(stringResource(R.string.record_close))
-              }
               Text(detailTitle, style = MaterialTheme.typography.titleLargeEmphasized,
                 modifier = Modifier.semantics { heading() })
             }
@@ -151,7 +147,7 @@ internal fun AdaptiveRecordsUi(
               .testTag(if (twoPanes) "record-detail-content" else "bootstrap-content"),
               state = detailScrollState, contentPadding = PaddingValues(ShittimSpacing.Large)) {
               item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink,
-                showCloseButton = false, recordId = state.selectedRecordId,
+                recordId = state.selectedRecordId,
                 playedSections = playedSections, onSectionSeen = onSectionSeen) }
             }
           }
