@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -27,7 +28,8 @@ import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 
 @Composable
-internal fun RecordQueryControls(query: RecordListQuery, onEvent: (BootstrapScreen.Event) -> Unit) {
+internal fun RecordQueryControls(query: RecordListQuery, canFocus: Boolean = true,
+  onEvent: (BootstrapScreen.Event) -> Unit) {
   val keyboard = LocalSoftwareKeyboardController.current
   Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     OutlinedTextField(
@@ -38,7 +40,7 @@ internal fun RecordQueryControls(query: RecordListQuery, onEvent: (BootstrapScre
       singleLine = true,
       keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Search),
       keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
-      modifier = Modifier.fillMaxWidth().testTag("record-search"),
+      modifier = Modifier.fillMaxWidth().focusProperties { this.canFocus = canFocus }.testTag("record-search"),
     )
     Text(stringResource(R.string.record_filter_winner), style = MaterialTheme.typography.labelLarge,
       color = MaterialTheme.colorScheme.onSurfaceVariant)
