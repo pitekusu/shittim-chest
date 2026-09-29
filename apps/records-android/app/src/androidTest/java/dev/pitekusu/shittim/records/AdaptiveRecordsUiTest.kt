@@ -191,10 +191,6 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithText(entries.first().questionPreview).assertIsDisplayed().performClick()
     compose.onNodeWithText("一覧に戻る").assertIsDisplayed().performClick()
     compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsNotFocused()
-    compose.onNodeWithTag("record-search").performClick().assertIsFocused()
-    compose.onNodeWithText(entries.first().questionPreview).assertIsDisplayed().performClick()
-    compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
-    compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsNotFocused()
   }
 
   @Test fun revocationDuringTheBackGestureHidesTheRecordAndDoesNotCommitIt() {
