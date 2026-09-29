@@ -30,7 +30,6 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.then
@@ -75,9 +74,8 @@ class AdaptiveRecordsUiTest {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value)) { BootstrapUi(state.value) }
     } }
     val lastQuestion = entries.last().questionPreview
-    // The list has four fixed rows before its saved records; scroll by index so the
-    // test does not depend on off-screen card semantics during adaptive transitions.
-    compose.onNodeWithTag("bootstrap-content").performScrollToIndex(4 + entries.lastIndex)
+    // Scroll to the record rather than depending on the number of fixed header rows.
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(lastQuestion))
     val initialScroll = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
       .config[SemanticsProperties.VerticalScrollAxisRange].value()
     assertTrue(initialScroll > 0f)
@@ -177,7 +175,7 @@ class AdaptiveRecordsUiTest {
     }
   }
 
-  @Test fun returningToAVisibleSearchFieldDoesNotFocusIt() {
+  @Test fun returningFromDetailKeepsSearchClosedAndUnfocused() {
     val state = mutableStateOf(screen())
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 1000.dp))) {
@@ -187,21 +185,26 @@ class AdaptiveRecordsUiTest {
         }))
       }
     } }
+    compose.onNodeWithTag("record-search").assertDoesNotExist()
+    compose.onNodeWithTag("records-search-toggle").performClick()
     compose.onNodeWithTag("record-search").assertIsDisplayed().performClick().assertIsFocused()
     compose.onNodeWithText(entries.first().questionPreview).assertIsDisplayed().performClick()
+    compose.onNodeWithTag("record-search").assertDoesNotExist()
     compose.onNodeWithText("一覧に戻る").assertDoesNotExist()
     val dispatcher = compose.activity.onBackPressedDispatcher
     compose.mainClock.autoAdvance = false
     try {
       compose.runOnIdle { dispatcher.onBackPressed() }
-      // The focus must never flash onto the search field during the returning pane animation.
+      // Closing the disclosure before the transition prevents the old focus flash.
       repeat(8) {
         compose.mainClock.advanceTimeBy(80)
-        compose.onNodeWithTag("record-search", useUnmergedTree = true).assertIsNotFocused()
+        compose.onNodeWithTag("record-search", useUnmergedTree = true).assertDoesNotExist()
       }
     } finally {
       compose.mainClock.autoAdvance = true
     }
+    compose.onNodeWithTag("record-search").assertDoesNotExist()
+    compose.onNodeWithTag("records-search-toggle").performClick()
     compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsNotFocused()
       .performClick().assertIsFocused()
   }

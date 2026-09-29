@@ -136,13 +136,16 @@ internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
     degrees
   } else 0f
   Column(modifier, verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
-    ShittimEmblem(Modifier.size(if (compact) 40.dp else 72.dp), ringRotation)
-    Text(
-      stringResource(R.string.brand_title),
-      fontFamily = ShittimDisplayFont,
-      style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineMedium,
-      color = MaterialTheme.colorScheme.primary,
-    )
+    Row(verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
+      ShittimEmblem(Modifier.size(if (compact) 44.dp else 72.dp), ringRotation)
+      Text(
+        stringResource(R.string.brand_title),
+        fontFamily = ShittimDisplayFont,
+        style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineMedium,
+        color = MaterialTheme.colorScheme.primary,
+      )
+    }
     Text(
       stringResource(R.string.app_name),
       style = if (compact) MaterialTheme.typography.titleLargeEmphasized

@@ -13,6 +13,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
@@ -24,6 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
@@ -80,6 +85,8 @@ internal sealed interface RecordListState {
 private val japanZone = ZoneId.of("Asia/Tokyo")
 private val recordDate = DateTimeFormatter.ofPattern("yyyy.MM.dd", Locale.JAPAN).withZone(japanZone)
 
+internal enum class RecordQueryMode { Closed, Search, Filters }
+
 internal fun LazyListScope.recordListItems(
   state: RecordListState,
   pagingItems: LazyPagingItems<RecordListEntry>?,
@@ -89,13 +96,55 @@ internal fun LazyListScope.recordListItems(
   searching: Boolean = false,
   selectedRecordId: String? = null,
   searchCanFocus: Boolean = true,
+  queryMode: RecordQueryMode = RecordQueryMode.Closed,
+  onQueryModeChange: (RecordQueryMode) -> Unit = {},
 ) {
+  val queryAvailable = (state is RecordListState.Ready && state.saved) || !query.isDefault
   item(key = "records-heading") {
-    ShittimSectionHeading(stringResource(R.string.record_title), kicker = "RECORDS ARCHIVE",
-      style = MaterialTheme.typography.headlineSmallEmphasized)
+    val focusManager = LocalFocusManager.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      ShittimSectionHeading(stringResource(R.string.record_list_heading),
+        modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLargeEmphasized)
+      if (queryAvailable) {
+        IconButton(onClick = {
+          focusManager.clearFocus(force = true)
+          onQueryModeChange(if (queryMode == RecordQueryMode.Search)
+            RecordQueryMode.Closed else RecordQueryMode.Search)
+        },
+          modifier = Modifier.testTag("records-search-toggle").semantics { selected = query.searchesText }) {
+          Icon(painterResource(R.drawable.ic_search),
+            contentDescription = stringResource(if (queryMode == RecordQueryMode.Search)
+              R.string.record_search_close else R.string.record_search_open),
+            tint = if (query.searchesText || queryMode == RecordQueryMode.Search)
+              MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = {
+          focusManager.clearFocus(force = true)
+          onQueryModeChange(if (queryMode == RecordQueryMode.Filters)
+            RecordQueryMode.Closed else RecordQueryMode.Filters)
+        },
+          modifier = Modifier.testTag("records-filter-toggle").semantics {
+            selected = query.winner != RecordWinner.All || query.order != RecordOrder.Newest
+          }) {
+          Icon(painterResource(R.drawable.ic_filter),
+            contentDescription = stringResource(if (queryMode == RecordQueryMode.Filters)
+              R.string.record_filter_close else R.string.record_filter_open),
+            tint = if (query.winner != RecordWinner.All || query.order != RecordOrder.Newest ||
+              queryMode == RecordQueryMode.Filters) MaterialTheme.colorScheme.primary
+              else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+      }
+    }
   }
-  if ((state is RecordListState.Ready && state.saved) || !query.isDefault) item(key = "records-query") {
-    RecordQueryControls(query, searchCanFocus, onEvent)
+  if (queryAvailable && queryMode != RecordQueryMode.Closed) item(key = "records-query") {
+    RecordQueryControls(query, searchCanFocus,
+      showSearch = queryMode == RecordQueryMode.Search,
+      showFilters = queryMode == RecordQueryMode.Filters,
+      onEvent = onEvent)
+  }
+  if (queryMode == RecordQueryMode.Closed && !query.isDefault) item(key = "records-query-active") {
+    Text(stringResource(R.string.record_query_active),
+      style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
   }
   if (sync == RecordSyncState.Running || sync is RecordSyncState.Failed) {
     item(key = "records-sync-status") { RecordSyncStatus(sync) }

@@ -78,8 +78,11 @@ internal fun AdaptiveRecordsUi(
     val currentValue = rememberUpdatedState(value)
     val focusManager = LocalFocusManager.current
     var searchFocusAllowed by remember { mutableStateOf(state.selectedRecordId == null) }
+    // Disclosure state is visual only; search text remains in Circuit's screen-lifetime state.
+    var queryMode by remember { mutableStateOf(RecordQueryMode.Closed) }
     LaunchedEffect(value, state.selectedRecordId) {
       if (state.selectedRecordId != null) {
+        queryMode = RecordQueryMode.Closed
         searchFocusAllowed = false
         focusManager.clearFocus(force = true)
       }
@@ -126,7 +129,9 @@ internal fun AdaptiveRecordsUi(
               recordListItems(state.records, pagingItems, state.eventSink,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
                 query = state.listQuery, searching = state.searching, selectedRecordId = state.selectedRecordId,
-                searchCanFocus = twoPanes || (state.selectedRecordId == null && searchFocusAllowed))
+                searchCanFocus = twoPanes || (state.selectedRecordId == null && searchFocusAllowed),
+                queryMode = if (state.selectedRecordId == null) queryMode else RecordQueryMode.Closed,
+                onQueryModeChange = { queryMode = it })
             }
           }
         }

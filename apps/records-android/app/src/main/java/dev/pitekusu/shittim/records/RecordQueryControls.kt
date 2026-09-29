@@ -29,10 +29,11 @@ import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 
 @Composable
 internal fun RecordQueryControls(query: RecordListQuery, canFocus: Boolean = true,
+  showSearch: Boolean = true, showFilters: Boolean = true,
   onEvent: (BootstrapScreen.Event) -> Unit) {
   val keyboard = LocalSoftwareKeyboardController.current
   Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    OutlinedTextField(
+    if (showSearch) OutlinedTextField(
       value = query.text,
       onValueChange = { onEvent(BootstrapScreen.Event.SearchRecords(it)) },
       label = { Text(stringResource(R.string.record_search_label)) },
@@ -42,29 +43,31 @@ internal fun RecordQueryControls(query: RecordListQuery, canFocus: Boolean = tru
       keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
       modifier = Modifier.fillMaxWidth().focusProperties { this.canFocus = canFocus }.testTag("record-search"),
     )
-    Text(stringResource(R.string.record_filter_winner), style = MaterialTheme.typography.labelLarge,
-      color = MaterialTheme.colorScheme.onSurfaceVariant)
-    // Wrap rather than clip or shrink labels at 320dp / large text.
-    FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      RecordWinner.entries.forEach { winner ->
-        val selected = query.winner == winner
-        FilterChip(selected = selected,
-          onClick = { onEvent(BootstrapScreen.Event.SelectWinner(winner)) },
-          label = { Text(winner.nameInRecord ?: stringResource(R.string.record_filter_all)) },
-          shapes = FilterChipDefaults.shapes(),
-          leadingIcon = if (winner.slot != null) {
-            { ShittimParticipantAvatar(winner.nameInRecord.orEmpty(), winner.slot, size = 24.dp) }
-          } else if (selected) {
-            { Icon(painterResource(R.drawable.ic_check), contentDescription = null, Modifier.size(18.dp)) }
-          } else null,
-          modifier = Modifier.heightIn(min = 48.dp).testTag("winner-${winner.name}"),
-        )
+    if (showFilters) {
+      Text(stringResource(R.string.record_filter_winner), style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+      // Wrap rather than clip or shrink labels at 320dp / large text.
+      FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        RecordWinner.entries.forEach { winner ->
+          val selected = query.winner == winner
+          FilterChip(selected = selected,
+            onClick = { onEvent(BootstrapScreen.Event.SelectWinner(winner)) },
+            label = { Text(winner.nameInRecord ?: stringResource(R.string.record_filter_all)) },
+            shapes = FilterChipDefaults.shapes(),
+            leadingIcon = if (winner.slot != null) {
+              { ShittimParticipantAvatar(winner.nameInRecord.orEmpty(), winner.slot, size = 24.dp) }
+            } else if (selected) {
+              { Icon(painterResource(R.drawable.ic_check), contentDescription = null, Modifier.size(18.dp)) }
+            } else null,
+            modifier = Modifier.heightIn(min = 48.dp).testTag("winner-${winner.name}"),
+          )
+        }
       }
+      Text(stringResource(R.string.record_sort_label), style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+      RecordOrderSwitch(query.order) { onEvent(BootstrapScreen.Event.SelectOrder(it)) }
     }
-    Text(stringResource(R.string.record_sort_label), style = MaterialTheme.typography.labelLarge,
-      color = MaterialTheme.colorScheme.onSurfaceVariant)
-    RecordOrderSwitch(query.order) { onEvent(BootstrapScreen.Event.SelectOrder(it)) }
     if (!query.isDefault || query.text.isNotEmpty()) {
       TextButton(onClick = { onEvent(BootstrapScreen.Event.ClearRecordQuery) }) {
         Text(stringResource(R.string.record_search_reset))
