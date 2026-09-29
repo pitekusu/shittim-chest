@@ -65,7 +65,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           }
         }
         state.preview.voting?.let { RecordVotingPanel(it, state.preview.winnerName,
-          state.preview.winnerSlot, recordId?.let { id -> "vote:$id" }, playedSections, onSectionSeen) }
+          state.preview.winnerSlot) }
         Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary)
         ShittimParticipantLabel(state.preview.winnerName, state.preview.winnerSlot, crowned = true)

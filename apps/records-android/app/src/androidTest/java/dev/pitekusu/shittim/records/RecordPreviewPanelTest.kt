@@ -155,7 +155,7 @@ class RecordPreviewPanelTest {
   }
 
   @Test
-  fun affectionSeparatesQuestionScoreFromRealChangeAndOptionalDecisionText() {
+  fun affectionShowsAppliedChangeAndOptionalDecisionTextWithoutQuestionScore() {
     val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
       RecordAffectionChange("アロナ", 995, 50, 5, 1000),
       RecordAffectionChange("プラナ", 500, -20, -20, 480),
@@ -170,9 +170,10 @@ class RecordPreviewPanelTest {
       } }
     }
     for (text in listOf("ありがとう！", "• まず確認する", "• 無理をしない",
-      "質問評価：+50点", "親愛度：995 → 1000", "実増減：+5点", "質問評価：-20点")) {
+      "親愛度：995 → 1000", "実増減：+5点")) {
       compose.onNodeWithText(text).assertExists()
     }
+    compose.onNodeWithText("質問評価：+50点").assertDoesNotExist()
   }
 
   @Test
@@ -188,7 +189,7 @@ class RecordPreviewPanelTest {
       ))
     }
     compose.onNodeWithText("質問の評価を完了できなかったため、親愛度は変更されませんでした。").assertExists()
-    compose.onNodeWithText("質問評価：未評価").assertExists()
+    compose.onNodeWithText("質問評価：未評価").assertDoesNotExist()
     compose.onNodeWithText("実増減：0点").assertExists()
     compose.onNodeWithText("この記録には親愛度データがありません。").assertDoesNotExist()
   }
@@ -240,7 +241,7 @@ class RecordPreviewPanelTest {
     } }
     compose.onNodeWithTag("vote-route-0").assertExists()
     compose.onNodeWithText("親愛度：995 → 1000").assertExists()
-    compose.onNodeWithText("質問評価：+50点").assertExists()
+    compose.onNodeWithText("質問評価：+50点").assertDoesNotExist()
   }
 
   @Test

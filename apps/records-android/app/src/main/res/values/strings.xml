@@ -86,9 +86,6 @@
     <string name="record_affection">親愛度の変化</string>
     <string name="record_affection_missing">この記録には親愛度データがありません。</string>
     <string name="record_affection_unavailable">質問の評価を完了できなかったため、親愛度は変更されませんでした。</string>
-    <string name="record_affection_unrated">未評価</string>
-    <string name="record_affection_score_points">%1$s点</string>
-    <string name="record_affection_question_score">質問評価：%1$s</string>
     <string name="record_affection_transition">親愛度：%1$d → %2$d</string>
     <string name="record_affection_applied_delta">実増減：%1$s点</string>
     <string name="session_logout">ログアウト</string>
