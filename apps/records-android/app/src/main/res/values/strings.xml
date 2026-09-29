@@ -15,6 +15,7 @@
     <string name="intro_skip">演出をスキップ</string>
     <string name="session_records_ready">以下に議論の記録を表示します。</string>
     <string name="record_title">議論の記録</string>
+    <string name="record_list_heading">記録一覧</string>
     <string name="record_list_loading">最近の記録を読み込んでいます</string>
     <string name="record_list_error">記録の一覧を読み込めませんでした。</string>
     <string name="record_list_more_loading">続きを読み込んでいます</string>
@@ -23,6 +24,11 @@
     <string name="record_list_restart">先頭から読み直す</string>
     <string name="record_list_winner">勝者：%1$s</string>
     <string name="record_search_label">記録を検索</string>
+    <string name="record_search_open">記録の検索を開く</string>
+    <string name="record_search_close">記録の検索を閉じる</string>
+    <string name="record_filter_open">絞り込みと並べ替えを開く</string>
+    <string name="record_filter_close">絞り込みと並べ替えを閉じる</string>
+    <string name="record_query_active">検索・絞り込み条件を適用中</string>
     <string name="record_search_hint">議題・依頼者・保存済み本文から検索。空白区切りで絞り込めます。</string>
     <string name="record_filter_winner">勝者で絞り込み</string>
     <string name="record_filter_all">すべて</string>
