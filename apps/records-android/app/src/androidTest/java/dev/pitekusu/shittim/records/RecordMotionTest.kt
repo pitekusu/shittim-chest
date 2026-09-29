@@ -62,7 +62,8 @@ class RecordMotionTest {
       activity.setContent { ShittimTheme(false) {
         Column(Modifier.height(300.dp).verticalScroll(rememberScrollState())) {
           Spacer(Modifier.height(250.dp))
-          RecordAffectionPanel(affection, "affection:sample", played.value) { key ->
+          RecordAffectionPanel(affection, "affection:sample", played.value,
+            animationsEnabled = true) { key ->
             calls.incrementAndGet()
             played.value = played.value + key
           }
@@ -89,7 +90,8 @@ class RecordMotionTest {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
         Column(Modifier.height(120.dp).verticalScroll(rememberScrollState())) {
-          RecordAffectionPanel(affection, "affection:oversize", played.value) { key ->
+          RecordAffectionPanel(affection, "affection:oversize", played.value,
+            animationsEnabled = true) { key ->
             played.value = played.value + key
           }
         }
