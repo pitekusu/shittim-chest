@@ -16,7 +16,6 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -36,7 +35,6 @@ class OfflineRecordsUiTest {
   @Test fun savedDetailAndUpdateFailureRemainReadableWithoutSyncControls() {
     val dark = mutableStateOf(false)
     val large = mutableStateOf(false)
-    val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent {
         val density = LocalDensity.current
@@ -46,7 +44,7 @@ class OfflineRecordsUiTest {
               item {
                 RecordPreviewPanel(RecordPreviewState.Ready(
                   RecordPreview("秋の休日をどう過ごす？", "近所の公園へ、散歩に出かけましょう。", "アロナ"),
-                  saved = true, refreshFailure = RecordReadFailure.UNAVAILABLE), events::add)
+                  saved = true, refreshFailure = RecordReadFailure.UNAVAILABLE), {})
               }
             }
           }
@@ -58,11 +56,10 @@ class OfflineRecordsUiTest {
       compose.runOnIdle { dark.value = isDark; large.value = isLarge }
       compose.onNodeWithText(label(R.string.record_saved)).assertIsDisplayed()
       compose.onNodeWithText(label(R.string.record_refresh_failed)).assertIsDisplayed()
-      compose.onAllNodes(hasClickAction()).assertCountEquals(1) // Only the return-to-list action.
+      compose.onAllNodes(hasClickAction()).assertCountEquals(0)
+      compose.onNodeWithText("一覧に戻る").assertDoesNotExist()
       capture(name)
     }
-    compose.onNodeWithText(label(R.string.record_close)).performClick()
-    assertEquals(listOf(BootstrapScreen.Event.CloseRecord), events)
   }
 
   @Test fun authorizedOfflineDetailClosesOnBackAndDisappearsWhenLocked() {

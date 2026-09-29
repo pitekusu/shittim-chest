@@ -43,7 +43,6 @@
     <string name="record_sync_auth_error">ログイン状態を確認できませんでした。再ログイン後に再開してください。</string>
     <string name="record_sync_storage_error">端末に保存できませんでした。空き容量を確認してください。保存済みの記録は保持しています。</string>
     <string name="record_sync_error">自動更新できませんでした。通信状況をご確認ください。次の自動同期で再試行します。</string>
-    <string name="record_close">一覧に戻る</string>
     <string name="record_detail_title">議論詳細</string>
     <string name="record_select">記録を選択してください。</string>
     <string name="record_selected">表示中の記録</string>

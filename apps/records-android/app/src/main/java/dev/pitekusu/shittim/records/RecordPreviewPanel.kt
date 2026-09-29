@@ -4,7 +4,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import dev.pitekusu.shittim.records.ui.ShittimPanel
@@ -23,12 +22,9 @@ internal sealed interface RecordPreviewState {
 
 @Composable
 internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapScreen.Event) -> Unit,
-  showCloseButton: Boolean = true, recordId: String? = null,
+  recordId: String? = null,
   playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {}) {
   ShittimPanel {
-    if (showCloseButton) TextButton(onClick = { onEvent(BootstrapScreen.Event.CloseRecord) }) {
-      Text(stringResource(R.string.record_close))
-    }
     ShittimSectionHeading(stringResource(R.string.record_title), kicker = "DISCUSSION RECORD",
       style = MaterialTheme.typography.titleLargeEmphasized)
     when (state) {

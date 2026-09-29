@@ -15,4 +15,5 @@ The source checksums are recorded in `apps/records-web/THIRD_PARTY_NOTICES.md`.
 
 Designer: Rasul Hasan. Source and license: https://befonts.com/delogy-typeface.html
 Commercial Use Allowed. Copied unchanged from the Records Web asset.
+The launcher icon's vector `S` outline is derived from this bundled glyph.
 SHA-256: `7e8c1c12ab4a537da2d0e558cf3cbb3f81f8b2d98420a7f6891a50cee4e01e63`
