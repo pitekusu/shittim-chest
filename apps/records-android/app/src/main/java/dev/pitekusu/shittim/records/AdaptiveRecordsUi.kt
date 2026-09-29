@@ -78,16 +78,15 @@ internal fun AdaptiveRecordsUi(
     val currentState = rememberUpdatedState(state)
     val currentValue = rememberUpdatedState(value)
     val focusManager = LocalFocusManager.current
-    var wasDetail by remember { mutableStateOf(state.selectedRecordId != null) }
+    var searchFocusAllowed by remember { mutableStateOf(state.selectedRecordId == null) }
     LaunchedEffect(value, state.selectedRecordId) {
-      val returningToList = wasDetail && state.selectedRecordId == null
-      wasDetail = state.selectedRecordId != null
-      // A search field can regain focus when its pane re-enters after detail closes.
-      if (state.selectedRecordId != null) focusManager.clearFocus(force = true)
-      scaffoldState.animateTo(value)
-      if (returningToList && currentState.value.selectedRecordId == null) {
+      if (state.selectedRecordId != null) {
+        searchFocusAllowed = false
         focusManager.clearFocus(force = true)
       }
+      scaffoldState.animateTo(value)
+      // Keep the returning pane's search field out of focus restoration until it is fully visible.
+      if (currentState.value.selectedRecordId == null) searchFocusAllowed = true
     }
     PredictiveBackHandler(enabled = state.selectedRecordId != null) { progress ->
       val selectedAtStart = currentState.value.selectedRecordId
@@ -127,7 +126,8 @@ internal fun AdaptiveRecordsUi(
               }
               recordListItems(state.records, pagingItems, state.eventSink,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
-                query = state.listQuery, searching = state.searching, selectedRecordId = state.selectedRecordId)
+                query = state.listQuery, searching = state.searching, selectedRecordId = state.selectedRecordId,
+                searchCanFocus = twoPanes || (state.selectedRecordId == null && searchFocusAllowed))
             }
           }
         }

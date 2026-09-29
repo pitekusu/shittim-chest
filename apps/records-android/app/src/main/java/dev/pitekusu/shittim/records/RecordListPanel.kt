@@ -88,13 +88,14 @@ internal fun LazyListScope.recordListItems(
   query: RecordListQuery = RecordListQuery(),
   searching: Boolean = false,
   selectedRecordId: String? = null,
+  searchCanFocus: Boolean = true,
 ) {
   item(key = "records-heading") {
     ShittimSectionHeading(stringResource(R.string.record_title), kicker = "RECORDS ARCHIVE",
       style = MaterialTheme.typography.headlineSmallEmphasized)
   }
   if ((state is RecordListState.Ready && state.saved) || !query.isDefault) item(key = "records-query") {
-    RecordQueryControls(query, onEvent)
+    RecordQueryControls(query, searchCanFocus, onEvent)
   }
   if (sync == RecordSyncState.Running || sync is RecordSyncState.Failed) {
     item(key = "records-sync-status") { RecordSyncStatus(sync) }

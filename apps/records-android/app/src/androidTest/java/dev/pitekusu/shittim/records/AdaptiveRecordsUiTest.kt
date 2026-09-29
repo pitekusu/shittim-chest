@@ -189,8 +189,20 @@ class AdaptiveRecordsUiTest {
     } }
     compose.onNodeWithTag("record-search").assertIsDisplayed().performClick().assertIsFocused()
     compose.onNodeWithText(entries.first().questionPreview).assertIsDisplayed().performClick()
-    compose.onNodeWithText("一覧に戻る").assertIsDisplayed().performClick()
+    compose.onNodeWithText("一覧に戻る").assertIsDisplayed()
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.onNodeWithText("一覧に戻る").assertIsDisplayed().performClick()
+      // The focus must never flash onto the search field during the returning pane animation.
+      repeat(8) {
+        compose.mainClock.advanceTimeBy(80)
+        compose.onNodeWithTag("record-search", useUnmergedTree = true).assertIsNotFocused()
+      }
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
     compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsNotFocused()
+      .performClick().assertIsFocused()
   }
 
   @Test fun revocationDuringTheBackGestureHidesTheRecordAndDoesNotCommitIt() {
