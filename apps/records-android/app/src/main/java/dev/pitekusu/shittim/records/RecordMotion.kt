@@ -16,6 +16,20 @@ import kotlin.math.abs
 internal fun Modifier.onRecordSectionVisibilityChanged(onVisibilityChanged: (Boolean) -> Unit): Modifier =
   onGloballyPositioned { onVisibilityChanged(it.isFullyVisibleInWindow()) }
 
+/** A section larger than any containing viewport can never satisfy full visibility. */
+internal fun Modifier.onRecordSectionCannotFit(onCannotFit: () -> Unit): Modifier =
+  onGloballyPositioned { coordinates ->
+    var parent = coordinates.parentLayoutCoordinates
+    while (parent != null) {
+      if (coordinates.size.width > parent.size.width + 1 ||
+        coordinates.size.height > parent.size.height + 1) {
+        onCannotFit()
+        break
+      }
+      parent = parent.parentLayoutCoordinates
+    }
+  }
+
 private fun LayoutCoordinates.isFullyVisibleInWindow(): Boolean {
   if (!isAttached) return false
   val bounds = boundsInWindow(clipBounds = false)

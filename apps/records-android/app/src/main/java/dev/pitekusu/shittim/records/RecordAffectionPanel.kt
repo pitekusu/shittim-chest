@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import android.animation.ValueAnimator
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -72,11 +73,13 @@ internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String
 @Composable
 private fun AffectionCard(change: RecordAffectionChange, cardKey: String?,
   playedSections: Set<String>, onSectionSeen: (String) -> Unit, modifier: Modifier = Modifier) {
-  val played = cardKey == null || cardKey in playedSections || !ValueAnimator.areAnimatorsEnabled()
+  var cannotFit by remember(cardKey) { mutableStateOf(false) }
+  val played = cardKey == null || cardKey in playedSections || cannotFit ||
+    !ValueAnimator.areAnimatorsEnabled()
   val accent = shittimParticipantColor(change.participantName, change.participantSlot)
   val current by animateIntAsState(if (played) change.after else change.before,
-    animationSpec = tween(1_100), label = "affection points")
-  val shouldPulse = remember(change, cardKey) { cardKey != null && !played }
+    animationSpec = if (cannotFit) snap() else tween(1_100), label = "affection points")
+  val shouldPulse = remember(change, cardKey) { cardKey != null && !played } && !cannotFit
   var pulse by remember(change, cardKey) { mutableStateOf(false) }
   LaunchedEffect(played) {
     if (shouldPulse && played && change.appliedDelta > 0) {
@@ -88,6 +91,12 @@ private fun AffectionCard(change: RecordAffectionChange, cardKey: String?,
   val scale by animateFloatAsState(if (pulse) 1.06f else 1f,
     animationSpec = tween(160), label = "affection increase")
   Surface(modifier.fillMaxWidth().heightIn(min = 208.dp)
+    .onRecordSectionCannotFit {
+      if (!cannotFit) {
+        cannotFit = true
+        cardKey?.let(onSectionSeen)
+      }
+    }
     .markRecordSectionSeen(cardKey, played, onSectionSeen),
     shape = MaterialTheme.shapes.medium,
     color = MaterialTheme.colorScheme.surfaceContainerHigh) {

@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -78,5 +79,23 @@ class RecordMotionTest {
       assertFalse(played.value.isEmpty())
       assertEquals(1, calls.get())
     }
+  }
+
+  @Test
+  fun affectionTooTallForViewportShowsSavedFinalValueWithoutAnimation() {
+    val played = mutableStateOf(emptySet<String>())
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
+      RecordAffectionChange("アロナ", 500, 10, 10, 510)))
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) {
+        Column(Modifier.height(120.dp).verticalScroll(rememberScrollState())) {
+          RecordAffectionPanel(affection, "affection:oversize", played.value) { key ->
+            played.value = played.value + key
+          }
+        }
+      } }
+    }
+    compose.waitUntil(5_000) { "affection:oversize:0" in played.value }
+    compose.onNodeWithText("親愛度：500 → 510", useUnmergedTree = true).assertExists()
   }
 }
