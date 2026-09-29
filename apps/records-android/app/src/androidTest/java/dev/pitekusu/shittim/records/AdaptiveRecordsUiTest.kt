@@ -19,6 +19,7 @@ import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDisplayed
@@ -174,6 +175,22 @@ class AdaptiveRecordsUiTest {
       assertEquals(null, state.value.selectedRecordId)
       assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
     }
+  }
+
+  @Test fun returningToAVisibleSearchFieldDoesNotFocusIt() {
+    val state = mutableStateOf(screen())
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 1000.dp))) {
+        BootstrapUi(screen(state.value.selectedRecordId, onEvent = { event ->
+          if (event is BootstrapScreen.Event.OpenRecord) state.value = screen(event.recordId)
+          if (event == BootstrapScreen.Event.CloseRecord) state.value = screen()
+        }))
+      }
+    } }
+    compose.onNodeWithTag("record-search").assertIsDisplayed().performClick().assertIsFocused()
+    compose.onNodeWithText(entries.first().questionPreview).assertIsDisplayed().performClick()
+    compose.onNodeWithText("一覧に戻る").assertIsDisplayed().performClick()
+    compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsNotFocused()
   }
 
   @Test fun revocationDuringTheBackGestureHidesTheRecordAndDoesNotCommitIt() {
