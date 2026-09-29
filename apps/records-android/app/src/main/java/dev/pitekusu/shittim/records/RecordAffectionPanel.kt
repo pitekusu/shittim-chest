@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import android.animation.ValueAnimator
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
@@ -34,7 +36,9 @@ import kotlinx.coroutines.delay
 
 @Composable
 internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String? = null,
-  playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {}) {
+  playedSections: Set<String> = emptySet(),
+  animationsEnabled: Boolean = ValueAnimator.areAnimatorsEnabled(),
+  onSectionSeen: (String) -> Unit = {}) {
   ShittimSectionHeading(stringResource(R.string.record_affection))
   if (affection == null) {
     Text(stringResource(R.string.record_affection_missing),
@@ -45,33 +49,40 @@ internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String
     Text(stringResource(R.string.record_affection_unavailable),
       color = MaterialTheme.colorScheme.onSurfaceVariant)
   }
-  val played = motionKey == null || motionKey in playedSections || !ValueAnimator.areAnimatorsEnabled()
-  BoxWithConstraints(Modifier.fillMaxWidth()
-    .markRecordSectionSeen(motionKey, played, onSectionSeen)) {
+  BoxWithConstraints(Modifier.fillMaxWidth()) {
     val wide = maxWidth >= 720.dp && LocalDensity.current.fontScale < 1.5f &&
       affection.changes.size == 3
     if (wide) {
       Row(horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-        affection.changes.forEach { change ->
-          AffectionCard(change, played, motionKey, Modifier.weight(1f))
+        affection.changes.forEachIndexed { index, change ->
+          val cardKey = motionKey?.let { "$it:$index" }
+          AffectionCard(change, cardKey, playedSections, animationsEnabled, onSectionSeen,
+            Modifier.weight(1f).testTag("affection-card-$index"))
         }
       }
     } else {
       Column(verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-        affection.changes.forEach { change -> AffectionCard(change, played, motionKey) }
+        affection.changes.forEachIndexed { index, change ->
+          val cardKey = motionKey?.let { "$it:$index" }
+          AffectionCard(change, cardKey, playedSections, animationsEnabled, onSectionSeen,
+            Modifier.testTag("affection-card-$index"))
+        }
       }
     }
   }
 }
 
 @Composable
-private fun AffectionCard(change: RecordAffectionChange, played: Boolean, motionKey: String?,
-  modifier: Modifier = Modifier) {
+private fun AffectionCard(change: RecordAffectionChange, cardKey: String?,
+  playedSections: Set<String>, animationsEnabled: Boolean,
+  onSectionSeen: (String) -> Unit, modifier: Modifier = Modifier) {
+  var cannotFit by remember(cardKey) { mutableStateOf(false) }
+  val played = cardKey == null || cardKey in playedSections || cannotFit || !animationsEnabled
   val accent = shittimParticipantColor(change.participantName, change.participantSlot)
   val current by animateIntAsState(if (played) change.after else change.before,
-    animationSpec = tween(700), label = "affection points")
-  val shouldPulse = remember(change, motionKey) { motionKey != null && !played }
-  var pulse by remember(change, motionKey) { mutableStateOf(false) }
+    animationSpec = if (cannotFit) snap() else tween(1_100), label = "affection points")
+  val shouldPulse = remember(change, cardKey) { cardKey != null && !played } && !cannotFit
+  var pulse by remember(change, cardKey) { mutableStateOf(false) }
   LaunchedEffect(played) {
     if (shouldPulse && played && change.appliedDelta > 0) {
       pulse = true
@@ -81,7 +92,14 @@ private fun AffectionCard(change: RecordAffectionChange, played: Boolean, motion
   }
   val scale by animateFloatAsState(if (pulse) 1.06f else 1f,
     animationSpec = tween(160), label = "affection increase")
-  Surface(modifier.fillMaxWidth().heightIn(min = 208.dp),
+  Surface(modifier.fillMaxWidth().heightIn(min = 208.dp)
+    .onRecordSectionCannotFit {
+      if (!cannotFit) {
+        cannotFit = true
+        cardKey?.let(onSectionSeen)
+      }
+    }
+    .markRecordSectionSeen(cardKey, played, onSectionSeen),
     shape = MaterialTheme.shapes.medium,
     color = MaterialTheme.colorScheme.surfaceContainerHigh) {
     Column(Modifier.padding(ShittimSpacing.Medium),
@@ -127,12 +145,6 @@ private fun AffectionCard(change: RecordAffectionChange, played: Boolean, motion
             style = MaterialTheme.typography.labelMedium)
         }
       }
-      val questionScore = change.questionScore?.let {
-        stringResource(R.string.record_affection_score_points, signedScore(it))
-      } ?: stringResource(R.string.record_affection_unrated)
-      Text(stringResource(R.string.record_affection_question_score, questionScore),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
   }
 }

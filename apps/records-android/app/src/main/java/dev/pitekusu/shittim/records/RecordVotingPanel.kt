@@ -1,7 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.animation.ValueAnimator
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -23,6 +23,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +42,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 import dev.pitekusu.shittim.records.ui.ShittimSectionHeading
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
@@ -47,16 +51,12 @@ import dev.pitekusu.shittim.records.ui.participantVisualSlot
 import dev.pitekusu.shittim.records.ui.shittimParticipantColor
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerSlot: String?,
-  motionKey: String? = null, playedSections: Set<String> = emptySet(),
-  onSectionSeen: (String) -> Unit = {}) {
+internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerSlot: String?) {
   var selectedVote by remember(voting) { mutableStateOf<RecordVote?>(null) }
-  val played = motionKey == null || motionKey in playedSections || !ValueAnimator.areAnimatorsEnabled()
-  val progress by animateFloatAsState(if (played) 1f else 0f,
-    animationSpec = tween(1_000), label = "vote routes")
   ShittimSectionHeading(stringResource(R.string.record_votes))
   val countSlots = voting.counts.map { participantVisualSlot(it.participantName, it.participantSlot) }
   val canDrawGraph = voting.counts.size == 3 && voting.votes.size == 3 &&
@@ -66,19 +66,33 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
       val candidate = participantVisualSlot(vote.candidateName, vote.candidateSlot)
       voter != candidate && voter in countSlots && candidate in countSlots
     }
-  if (LocalDensity.current.fontScale >= 1.5f || !canDrawGraph) {
-    VoteRows(voting, winnerName, winnerSlot) { selectedVote = it }
-  } else BoxWithConstraints(Modifier.fillMaxWidth()) {
-    if (maxWidth < 300.dp) {
+  val fontScale = LocalDensity.current.fontScale
+  BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val showGraph = canDrawGraph && fontScale < 1.5f && maxWidth >= 300.dp
+    if (!showGraph) {
       VoteRows(voting, winnerName, winnerSlot) { selectedVote = it }
     } else {
+      var fullyVisible by remember(voting) { mutableStateOf(false) }
+      val progress = remember(voting) { Animatable(1f) }
+      val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+      val play = fullyVisible && selectedVote == null &&
+        lifecycle.isAtLeast(Lifecycle.State.STARTED) && ValueAnimator.areAnimatorsEnabled()
+      LaunchedEffect(play, voting) {
+        if (play) {
+          while (true) {
+            progress.snapTo(0f)
+            progress.animateTo(1f, tween(1_800))
+            delay(900) // Leave the completed vote routes readable before replaying them.
+          }
+        } else progress.snapTo(1f)
+      }
       val nodes = listOf("participant-a", "participant-b", "participant-c").mapIndexed { index, slot ->
         voting.counts.firstOrNull { participantVisualSlot(it.participantName, it.participantSlot) == slot }
           ?: voting.counts[index]
       }
       val colors = nodes.map { shittimParticipantColor(it.participantName, it.participantSlot) }
       BoxWithConstraints(Modifier.fillMaxWidth().height(232.dp)
-        .markRecordSectionSeen(motionKey, played, onSectionSeen)) {
+        .onRecordSectionVisibilityChanged { fullyVisible = it }) {
         val x = listOf(maxWidth / 2, maxWidth * 0.2f, maxWidth * 0.8f)
         val y = listOf(36.dp, 162.dp, 162.dp)
         Canvas(Modifier.matchParentSize()) {
@@ -91,7 +105,7 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
               it.participantSlot) == participantVisualSlot(vote.candidateName, vote.candidateSlot) }
             if (source >= 0 && target >= 0 && source != target) {
               drawVoteArrow(centers[source], centers[target],
-                (progress * 3f - index).coerceIn(0f, 1f), colors[source],
+                (progress.value * 3f - index).coerceIn(0f, 1f), colors[source],
                 if (selectedVote == null || selectedVote === vote) 1f else 0.22f)
             }
           }
@@ -104,7 +118,7 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
             val candidate = voting.votes[voteIndex]
             if (participantVisualSlot(candidate.candidateName, candidate.candidateSlot) !=
               participantVisualSlot(node.participantName, node.participantSlot)) 0f
-            else (1f - kotlin.math.abs(progress * 3f - voteIndex - 1f) * 4f).coerceIn(0f, 1f)
+            else (1f - kotlin.math.abs(progress.value * 3f - voteIndex - 1f) * 4f).coerceIn(0f, 1f)
           }
           VoteNode(node, winnerName, winnerSlot, pulse,
             Modifier.offset(x = x[index] - 42.dp, y = y[index] - 28.dp)

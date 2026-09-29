@@ -65,7 +65,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           }
         }
         state.preview.voting?.let { RecordVotingPanel(it, state.preview.winnerName,
-          state.preview.winnerSlot, recordId?.let { id -> "vote:$id" }, playedSections, onSectionSeen) }
+          state.preview.winnerSlot) }
         Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary)
         ShittimParticipantLabel(state.preview.winnerName, state.preview.winnerSlot, crowned = true)
@@ -87,7 +87,8 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           state.preview.caveats.forEach { Text(stringResource(R.string.record_list_item, it)) }
         }
         RecordAffectionPanel(state.preview.affection,
-          recordId?.let { id -> "affection:$id" }, playedSections, onSectionSeen)
+          recordId?.let { id -> "affection:$id" }, playedSections,
+          onSectionSeen = onSectionSeen)
       }
     }
   }
