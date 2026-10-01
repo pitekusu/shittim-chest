@@ -46,8 +46,8 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun RecordAffectionControls(changes: List<RecordAffectionChange>, selected: Int,
-  onPerson: (Int) -> Unit) {
-  Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+  modifier: Modifier = Modifier, onPerson: (Int) -> Unit) {
+  Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxWidth()) {
     FlowRow(Modifier.padding(horizontal = ShittimSpacing.Medium).selectableGroup(),
       horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
       changes.forEachIndexed { index, change ->
@@ -73,7 +73,8 @@ internal fun RecordAffectionControls(changes: List<RecordAffectionChange>, selec
 internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String? = null,
   playedSections: Set<String> = emptySet(),
   animationsEnabled: Boolean = ValueAnimator.areAnimatorsEnabled(),
-  motionActive: Boolean = true, selectedIndex: Int = 0, onSectionSeen: (String) -> Unit = {}) {
+  motionActive: Boolean = true, selectedIndex: Int = 0,
+  minimumVisibleTop: () -> Float = { Float.NEGATIVE_INFINITY }, onSectionSeen: (String) -> Unit = {}) {
   ShittimSectionHeading(stringResource(R.string.record_affection))
   if (affection == null) {
     Text(stringResource(R.string.record_affection_missing),
@@ -87,7 +88,7 @@ internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String
   val change = affection.changes.getOrNull(selectedIndex) ?: return
   val cardKey = motionKey?.let { "$it:$selectedIndex" }
   key(cardKey, selectedIndex) {
-    AffectionCard(change, cardKey, playedSections, animationsEnabled, motionActive, onSectionSeen,
+    AffectionCard(change, cardKey, playedSections, animationsEnabled, motionActive, minimumVisibleTop, onSectionSeen,
       Modifier.testTag("affection-card-$selectedIndex"))
   }
 }
@@ -95,21 +96,25 @@ internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String
 @Composable
 private fun AffectionCard(change: RecordAffectionChange, cardKey: String?,
   playedSections: Set<String>, animationsEnabled: Boolean, motionActive: Boolean,
-  onSectionSeen: (String) -> Unit, modifier: Modifier = Modifier) {
+  minimumVisibleTop: () -> Float, onSectionSeen: (String) -> Unit, modifier: Modifier = Modifier) {
   var cannotFit by remember(cardKey) { mutableStateOf(false) }
   var fullyVisible by remember(cardKey) { mutableStateOf(false) }
   val progress = remember(cardKey) { Animatable(1f) }
   val played = cardKey == null || cardKey in playedSections
   val accent = shittimParticipantColor(change.participantName, change.participantSlot)
   var pulse by remember(cardKey) { mutableStateOf(false) }
+  // Capture eligibility in composition. Reading mutable geometry inside the effect can start
+  // before its visibility key updates; the next composition then cancels the just-started tween.
+  val canPlay = motionActive && animationsEnabled && fullyVisible && !cannotFit
+  val skipMotion = motionActive && !animationsEnabled
   // Do not key this effect on playedSections: saving "seen" must not cancel the animation.
-  // Mark before playback so interruption, refresh and rotation cannot replay a consumed card.
-  LaunchedEffect(cardKey, motionActive, animationsEnabled, fullyVisible, cannotFit) {
+  // Mark before playback so scroll/refresh/rotation cannot replay this selected visit.
+  LaunchedEffect(cardKey, canPlay, skipMotion) {
     pulse = false
-    if (motionActive && !played && (cannotFit || !animationsEnabled)) {
+    if (skipMotion && !played) {
       onSectionSeen(cardKey)
     }
-    if (motionActive && animationsEnabled && fullyVisible && !cannotFit && !played) {
+    if (canPlay && !played) {
       onSectionSeen(cardKey)
       progress.snapTo(0f)
       progress.animateTo(1f, tween(1_100))
@@ -127,8 +132,8 @@ private fun AffectionCard(change: RecordAffectionChange, cardKey: String?,
     animationSpec = if (motionActive && animationsEnabled) tween(160) else snap(),
     label = "affection increase")
   Surface(modifier.fillMaxWidth().heightIn(min = 240.dp)
-    .onRecordSectionCannotFit { cannotFit = true }
-    .onRecordSectionVisibilityChanged { fullyVisible = it },
+    .onRecordSectionCannotFit { cannotFit = it }
+    .onRecordSectionVisibilityChanged(minimumVisibleTop) { fullyVisible = it },
     shape = MaterialTheme.shapes.medium,
     color = MaterialTheme.colorScheme.surfaceContainerHigh) {
     Column(Modifier.padding(ShittimSpacing.Medium),

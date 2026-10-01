@@ -49,6 +49,7 @@ class RecordPreviewPanelTest {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) { RecordDetailScreen(state.value, "sample", events::add) } }
     }
+    compose.onNodeWithTag("detail-section-Result").performClick()
     // Markdown parsing is asynchronous; wait for both bodies before checking the ready screen.
     compose.waitUntil(10_000) {
       compose.onNodeWithText("架空の議題").isDisplayed() &&
@@ -174,6 +175,7 @@ class RecordPreviewPanelTest {
         )), "sample", {}, motionAllowed = false)
       } }
     }
+    compose.onNodeWithTag("detail-section-Result").performClick()
     compose.onNodeWithTag("detail-actions-expand").performClick()
     compose.onNodeWithTag("detail-caveats-expand").performClick()
     for (text in listOf("ありがとう！", "• まず確認する", "• 無理をしない")) {

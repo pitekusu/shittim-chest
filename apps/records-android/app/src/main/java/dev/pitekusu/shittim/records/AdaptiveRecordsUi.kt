@@ -100,7 +100,10 @@ internal fun AdaptiveRecordsUi(
         // A completed gesture must not close another record or act after authentication is lost.
         if (selectedAtStart != null && currentState.value.canReadRecords &&
           currentState.value.selectedRecordId == selectedAtStart) {
-          scaffoldState.animateTo(listValue, isPredictiveBackInProgress = true)
+          // Commit selection immediately, not after a long spatial spring. In particular a
+          // three-button Back has no gesture progress and must not spend half a second
+          // showing the selected list card while the panes settle.
+          scaffoldState.snapTo(listValue)
           if (currentState.value.canReadRecords && currentState.value.selectedRecordId == selectedAtStart) {
             currentState.value.eventSink(BootstrapScreen.Event.CloseRecord)
           } else scaffoldState.snapTo(currentValue.value)
@@ -129,7 +132,8 @@ internal fun AdaptiveRecordsUi(
               }
               recordListItems(state.records, pagingItems, state.eventSink,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
-                query = state.listQuery, searching = state.searching, selectedRecordId = state.selectedRecordId,
+                query = state.listQuery, searching = state.searching,
+                selectedRecordId = state.selectedRecordId.takeIf { twoPanes },
                 searchCanFocus = twoPanes || (state.selectedRecordId == null && searchFocusAllowed),
                 queryMode = if (state.selectedRecordId == null) queryMode else RecordQueryMode.Closed,
                 onQueryModeChange = { queryMode = it })

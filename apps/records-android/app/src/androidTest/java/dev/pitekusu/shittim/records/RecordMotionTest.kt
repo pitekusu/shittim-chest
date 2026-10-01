@@ -15,6 +15,7 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.pitekusu.shittim.records.ui.ShittimTheme
@@ -97,7 +98,7 @@ class RecordMotionTest {
         }
       } }
     }
-    compose.waitUntil(5_000) { "affection:oversize:0" in played.value }
+    compose.runOnIdle { assertTrue(played.value.isEmpty()) }
     compose.onNodeWithText("親愛度：500 → 510", useUnmergedTree = true).assertExists()
   }
 
@@ -128,5 +129,41 @@ class RecordMotionTest {
     compose.waitUntil(5_000) { "affection:disabled:0" in played.value }
     compose.runOnIdle { assertEquals(1, calls.get()) }
     compose.onNodeWithText("親愛度：5 → 0").assertExists()
+  }
+
+  @Test fun everyPersonAnimatesItsOwnScoreAndCanPlayAfterViewportGrows() {
+    val selected = mutableStateOf(0)
+    val height = mutableStateOf(120.dp)
+    val played = mutableStateOf(emptySet<String>())
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED,
+      listOf("アロナ", "プラナ", "安倍晋三AI").map { RecordAffectionChange(it, 500, 100, 100, 600) })
+    compose.activityRule.scenario.onActivity { it.setContent { ShittimTheme(false) {
+      Column(Modifier.height(height.value).verticalScroll(rememberScrollState())) {
+        RecordAffectionPanel(affection, "person", played.value,
+          animationsEnabled = true, selectedIndex = selected.value) {
+          played.value = played.value + it
+        }
+      }
+    } } }
+    compose.runOnIdle { assertTrue(played.value.isEmpty()) }
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.runOnIdle { height.value = 500.dp }
+      for (index in 0..2) {
+        compose.runOnIdle { selected.value = index }
+        compose.mainClock.advanceTimeByFrame()
+        // Global bounds are delivered by the Android layout pass, not the test animation clock.
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeBy(96)
+        assertTrue("Person $index should not already show the completed score; played=${played.value}",
+          compose.onNodeWithTag("affection-score").fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsProperties.Text].single().text != "親愛度：500 → 600")
+        compose.mainClock.advanceTimeBy(1_200)
+        compose.onNodeWithTag("affection-score").assertTextEquals("親愛度：500 → 600")
+        compose.runOnIdle { assertTrue("person:$index" in played.value) }
+      }
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
   }
 }

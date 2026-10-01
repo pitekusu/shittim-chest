@@ -3,7 +3,6 @@ package dev.pitekusu.shittim.records
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,27 +30,31 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import kotlinx.coroutines.launch
 import com.mikepenz.markdown.model.rememberMarkdownState
 
 internal enum class RecordDetailSection(@StringRes val title: Int, @DrawableRes val icon: Int) {
-  Result(R.string.detail_result, R.drawable.ic_crown),
   Opinions(R.string.detail_opinions, R.drawable.ic_person),
   Voting(R.string.detail_voting, R.drawable.ic_detail_vote),
+  Result(R.string.detail_result, R.drawable.ic_crown),
   Affection(R.string.detail_affection, R.drawable.ic_detail_heart),
 }
 
@@ -68,8 +71,15 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
     val scope = rememberCoroutineScope()
     var questionOpen by remember { mutableStateOf(false) }
     var opinionChoice by rememberSaveable { mutableIntStateOf(-1) }
-    var finalOpinion by rememberSaveable { mutableStateOf(true) }
+    var finalOpinion by rememberSaveable { mutableStateOf(false) }
     var affectionChoice by rememberSaveable { mutableIntStateOf(-1) }
+    // Playback belongs to this visit, not Bootstrap's lifetime-wide winner animation history.
+    var affectionPlayed by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    LaunchedEffect(pager.settledPage) {
+      if (RecordDetailSection.entries[pager.settledPage] != RecordDetailSection.Affection) {
+        affectionPlayed = arrayListOf()
+      }
+    }
     val preview = (state as? RecordPreviewState.Ready)?.preview
     val decisionMarkdown = rememberMarkdownState(preview?.decision.orEmpty())
     val opinions = preview?.opinions.orEmpty()
@@ -92,55 +102,70 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
     } }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     // States remain composed outside the lazy pager, so switching pages cannot reset reading position.
-    val scrollStates = listOf(resultScrollState, rememberLazyListState(),
-      rememberLazyListState(), rememberLazyListState())
+    val scrollStates = List(RecordDetailSection.entries.size) { rememberLazyListState() }
     // The API has three personas; each initial/final answer has its own small saved scroll state.
     val opinionScrollStates = List(3) { listOf(rememberLazyListState(), rememberLazyListState()) }
     val affectionScrollStates = List(3) { rememberLazyListState() }
     Column(modifier.fillMaxSize()) {
-      if (state is RecordPreviewState.Ready) {
-        Surface(onClick = { questionOpen = true }, color = MaterialTheme.colorScheme.surfaceContainer,
-          modifier = Modifier.fillMaxWidth().testTag("detail-question-open")) {
-          Row(Modifier.padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small),
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        Text(state.preview.question, maxLines = 2, overflow = TextOverflow.Ellipsis,
-          style = MaterialTheme.typography.titleSmall,
-          color = MaterialTheme.colorScheme.onSurface,
-          modifier = Modifier.weight(1f))
-            Icon(painterResource(R.drawable.ic_open_web), stringResource(R.string.detail_question_full),
-              Modifier.padding(start = 8.dp).size(20.dp))
-          }
-        }
-      }
       HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth().testTag("detail-pager"),
         userScrollEnabled = state is RecordPreviewState.Ready) { page ->
         val section = RecordDetailSection.entries[page]
+        var affectionControlsBottom by remember { mutableFloatStateOf(Float.NEGATIVE_INFINITY) }
         val active = motionAllowed && !questionOpen && !pager.isScrollInProgress && pager.settledPage == page &&
           lifecycle.isAtLeast(Lifecycle.State.STARTED)
-        Column(Modifier.fillMaxSize()) {
-        if (section == RecordDetailSection.Opinions && opinion != null) {
-          RecordOpinionControls(opinions, opinionIndex, finalOpinion,
-            onPerson = { opinionChoice = it }, onStage = { finalOpinion = it })
-        }
-        if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty()) {
-          RecordAffectionControls(affectionChanges, affectionIndex) { affectionChoice = it }
-        }
         val scrollState = if (section == RecordDetailSection.Opinions && opinion != null)
           opinionScrollStates[opinionIndex.coerceIn(0, 2)][if (finalOpinion) 1 else 0]
           else if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty())
             affectionScrollStates[affectionIndex.coerceIn(0, 2)]
+          else if (section == RecordDetailSection.Result) resultScrollState
           else scrollStates[page]
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag(if (pager.settledPage == page) scrollTag
-          else "detail-inactive-$page"), state = scrollState,
+        LazyColumn(Modifier.fillMaxSize().testTag(if (pager.settledPage == page) scrollTag
+          else "detail-inactive-$page")
+          .then(if (pager.settledPage == page) Modifier else Modifier.clearAndSetSemantics {}), state = scrollState,
           contentPadding = PaddingValues(ShittimSpacing.Medium)) {
+          if (state is RecordPreviewState.Ready) item(key = "question") {
+            // Long questions scroll with the page: no ellipsis, and no fixed header stealing
+            // the entire answer/animation viewport at large font sizes.
+            Surface(onClick = { questionOpen = true },
+              color = MaterialTheme.colorScheme.surfaceContainer,
+              shape = MaterialTheme.shapes.large,
+              modifier = Modifier.fillMaxWidth().padding(bottom = ShittimSpacing.Small)
+                .testTag("detail-question-open")) {
+              Column(Modifier.padding(ShittimSpacing.Medium)) {
+                Text(stringResource(R.string.record_question),
+                  style = MaterialTheme.typography.labelLarge,
+                  color = MaterialTheme.colorScheme.primary)
+                Text(state.preview.question, style = MaterialTheme.typography.bodyLarge,
+                  modifier = Modifier.testTag("detail-question-text"))
+              }
+            }
+          }
+          if (section == RecordDetailSection.Opinions && opinion != null) stickyHeader(key = "opinions") {
+            RecordOpinionControls(opinions, opinionIndex, finalOpinion,
+              onPerson = { opinionChoice = it }, onStage = { finalOpinion = it })
+          }
+          if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty()) stickyHeader(key = "affection") {
+            RecordAffectionControls(affectionChanges, affectionIndex,
+              Modifier.onGloballyPositioned { affectionControlsBottom = it.boundsInWindow().bottom }) {
+              if (it != affectionIndex) affectionPlayed = arrayListOf()
+              affectionChoice = it
+            }
+          }
           item(key = section) {
-            RecordPreviewPanel(state, onEvent, recordId, playedSections, onSectionSeen,
+            RecordPreviewPanel(state, onEvent, recordId,
+              if (section == RecordDetailSection.Affection) affectionPlayed.toSet() else playedSections,
+              onSectionSeen = { seen ->
+                if (section == RecordDetailSection.Affection && seen !in affectionPlayed) {
+                  affectionPlayed = ArrayList(affectionPlayed).apply { add(seen) }
+                }
+                onSectionSeen(seen)
+              },
               section = section, motionActive = active, opinion = opinion, finalOpinion = finalOpinion,
               opinionMarkdown = opinionMarkdown.getOrNull(opinionIndex)?.get(if (finalOpinion) 1 else 0),
               affectionIndex = affectionIndex,
+              minimumVisibleTop = { affectionControlsBottom },
               decisionMarkdown = decisionMarkdown)
           }
-        }
         }
       }
       if (state is RecordPreviewState.Ready) {
