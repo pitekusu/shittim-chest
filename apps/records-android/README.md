@@ -407,9 +407,9 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 ## 親愛度の表示
 
 - 3人の顔・名前と10個のハート、変更前後の正確な点数、実際の増減を示す。質問評価点はカードに出さない。100点につきハート1個とし、端数は数字で確認できる。
-- 広幅は横3枚、スマートフォンや文字拡大時は縦3枚。各カードが画面内へ完全に入った際に数値とハートを約1.1秒で一度だけ動かし、記録・カード単位で再演を抑える。画面内に収まりきらないカードとアニメーション無効時は最終値を即時表示する。
+- 詳細の親愛度タブは顔と実増減のChipで1人を選び、選択カードを大きく表示する。完全表示時に数値とハートを約1.1秒で一度だけ動かし、記録・カード単位で再演を抑える。画面内に収まりきらないカードとアニメーション無効時は最終値を即時表示する。
 - 上限・下限により質問評価と実増減が異なっても、表示する実増減には保存値を使う。増減0、評価不能、親愛度のない旧記録に架空の値を補わない。
-- 架空の上限・減少・増減0を並べた[親愛度カード](screenshots/affection-cards.png)。
+- 架空の上限・減少・増減0の選択はinstrumentation testで確認する。新配置は[親愛度カード](screenshots/detail-affection-dark.png)を参照する。
 
 ## C16の認証画面
 
@@ -469,3 +469,14 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 
 設計と実装範囲は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)を参照する。
 リファクタリングには指定の[Material Design 3 UI/UXスキル](https://github.com/skydashnet/material-design-3-ui-skill/tree/a7d28f28251b64740b74dd0046971f23fbe74758)を適用した。
+
+## 議論詳細の4画面
+
+- 下部の結果／意見／投票／親愛度と左右スワイプで切り替える。議題の全文と投票理由はBottom Sheetで読む。
+- 親愛度は顔と実増減のChipから1人を選ぶ。初期人物は勝者とし、選択・人物別の読位置・演出済み状態を同期や回転で保持する。
+- 投票理由の選択と人物別の読位置も保持し、Androidの戻る1回でシートを閉じる。旧記録の欠損情報を補完しない。
+- 投票図は完全表示時だけ描画1.8秒＋静止0.9秒を繰り返し、親愛度は完全表示時に約1.1秒で一度だけ動かす。非選択ページ・移動中・非表示・シート表示中は停止する。
+- API・認証・暗号化保存形式・差分同期・一覧の検索focus復帰抑止は変更しない。架空データによる画面確認と実機・Play配布は区別する。
+
+API 36・架空データで、[結果](screenshots/detail-result-dark.png)、[意見](screenshots/detail-opinions-light.png)、[投票](screenshots/detail-voting-light.png)、[親愛度](screenshots/detail-affection-dark.png)、[320dp・文字2倍](screenshots/detail-large-text.png)、[短い操作録画](screenshots/detail-pages.mp4)を確認する。
+プレビューは`RecordDetailVisualTest`に`shittimCaptureUi=true`を渡して再取得できる。録画時だけ`shittimRecordUi=true`も渡す。通常CIでは録画用の待機や実時間フレーム送りを行わない。

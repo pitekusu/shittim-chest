@@ -69,6 +69,7 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
     var questionOpen by remember { mutableStateOf(false) }
     var opinionChoice by rememberSaveable { mutableIntStateOf(-1) }
     var finalOpinion by rememberSaveable { mutableStateOf(true) }
+    var affectionChoice by rememberSaveable { mutableIntStateOf(-1) }
     val preview = (state as? RecordPreviewState.Ready)?.preview
     val decisionMarkdown = rememberMarkdownState(preview?.decision.orEmpty())
     val opinions = preview?.opinions.orEmpty()
@@ -78,6 +79,12 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
     }.coerceAtLeast(0)
     val opinionIndex = opinionChoice.takeIf { it in opinions.indices } ?: defaultOpinion
     val opinion = opinions.getOrNull(opinionIndex)
+    val affectionChanges = preview?.affection?.changes.orEmpty()
+    val defaultAffection = affectionChanges.indexOfFirst {
+      voteParticipantMatches(it.participantName, it.participantSlot,
+        preview?.winnerName.orEmpty(), preview?.winnerSlot)
+    }.coerceAtLeast(0)
+    val affectionIndex = affectionChoice.takeIf { it in affectionChanges.indices } ?: defaultAffection
     // Keep parsed answers in memory outside lazy pages. Re-parsing an empty placeholder on return
     // would temporarily shrink the list and clamp a saved reading position back to the top.
     val opinionMarkdown = opinions.mapIndexed { index, value -> key(index) {
@@ -89,6 +96,7 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
       rememberLazyListState(), rememberLazyListState())
     // The API has three personas; each initial/final answer has its own small saved scroll state.
     val opinionScrollStates = List(3) { listOf(rememberLazyListState(), rememberLazyListState()) }
+    val affectionScrollStates = List(3) { rememberLazyListState() }
     Column(modifier.fillMaxSize()) {
       if (state is RecordPreviewState.Ready) {
         Surface(onClick = { questionOpen = true }, color = MaterialTheme.colorScheme.surfaceContainer,
@@ -114,8 +122,13 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
           RecordOpinionControls(opinions, opinionIndex, finalOpinion,
             onPerson = { opinionChoice = it }, onStage = { finalOpinion = it })
         }
+        if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty()) {
+          RecordAffectionControls(affectionChanges, affectionIndex) { affectionChoice = it }
+        }
         val scrollState = if (section == RecordDetailSection.Opinions && opinion != null)
           opinionScrollStates[opinionIndex.coerceIn(0, 2)][if (finalOpinion) 1 else 0]
+          else if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty())
+            affectionScrollStates[affectionIndex.coerceIn(0, 2)]
           else scrollStates[page]
         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag(if (pager.settledPage == page) scrollTag
           else "detail-inactive-$page"), state = scrollState,
@@ -124,6 +137,7 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
             RecordPreviewPanel(state, onEvent, recordId, playedSections, onSectionSeen,
               section = section, motionActive = active, opinion = opinion, finalOpinion = finalOpinion,
               opinionMarkdown = opinionMarkdown.getOrNull(opinionIndex)?.get(if (finalOpinion) 1 else 0),
+              affectionIndex = affectionIndex,
               decisionMarkdown = decisionMarkdown)
           }
         }
@@ -144,7 +158,8 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
     }
     if (questionOpen && state is RecordPreviewState.Ready) {
       ModalBottomSheet(onDismissRequest = { questionOpen = false },
-        sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden),
+        sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
+          enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
         modifier = Modifier.testTag("detail-question-sheet")) {
         LazyColumn(contentPadding = PaddingValues(ShittimSpacing.Medium)) {
           item { Text(stringResource(R.string.record_question),

@@ -12,7 +12,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import kotlin.math.abs
 
-/** A long record is one LazyColumn item, so each animated part checks its clipped bounds. */
+/** A detail page is one lazy item; each animated part checks its own clipped viewport bounds. */
 internal fun Modifier.onRecordSectionVisibilityChanged(onVisibilityChanged: (Boolean) -> Unit): Modifier =
   onGloballyPositioned { onVisibilityChanged(it.isFullyVisibleInWindow()) }
 

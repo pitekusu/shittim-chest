@@ -214,13 +214,19 @@ class RecordPreviewPanelTest {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(true) {
         Surface(color = MaterialTheme.colorScheme.background) {
-          Column { RecordAffectionPanel(affection) }
+          RecordDetailScreen(RecordPreviewState.Ready(RecordPreview(
+            "架空の議題", "結論", "アロナ", affection = affection)),
+            "sample", {}, motionAllowed = false)
         }
       } }
     }
+    compose.onNodeWithTag("detail-section-Affection").performClick()
+    compose.waitForIdle()
     compose.onNodeWithText("親愛度：995 → 1000").assertExists()
     compose.onNodeWithText("実増減：+5点").assertExists()
+    compose.onNodeWithTag("affection-person-1").performClick()
     compose.onNodeWithText("親愛度：500 → 480").assertExists()
+    compose.onNodeWithTag("affection-person-2").performClick()
     compose.onNodeWithText("実増減：0点").assertExists()
     capture("affection-cards")
   }

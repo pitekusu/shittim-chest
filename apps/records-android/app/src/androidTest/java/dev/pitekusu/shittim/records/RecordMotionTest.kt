@@ -100,4 +100,33 @@ class RecordMotionTest {
     compose.waitUntil(5_000) { "affection:oversize:0" in played.value }
     compose.onNodeWithText("親愛度：500 → 510", useUnmergedTree = true).assertExists()
   }
+
+  @Test
+  fun disabledAnimationShowsTheLowerBoundAndDoesNotConsumeAnInactiveCard() {
+    val active = mutableStateOf(false)
+    val played = mutableStateOf(emptySet<String>())
+    val calls = AtomicInteger()
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
+      RecordAffectionChange("アロナ", 5, -10, -5, 0)))
+    compose.activityRule.scenario.onActivity { activity ->
+      activity.setContent { ShittimTheme(false) {
+        Column {
+          RecordAffectionPanel(affection, "affection:disabled", played.value,
+            animationsEnabled = false, motionActive = active.value) { key ->
+            calls.incrementAndGet()
+            played.value = played.value + key
+          }
+        }
+      } }
+    }
+    compose.onNodeWithText("親愛度：5 → 0").assertExists()
+    compose.onNodeWithText("実増減：-5点").assertExists()
+    compose.runOnIdle {
+      assertTrue(played.value.isEmpty())
+      active.value = true
+    }
+    compose.waitUntil(5_000) { "affection:disabled:0" in played.value }
+    compose.runOnIdle { assertEquals(1, calls.get()) }
+    compose.onNodeWithText("親愛度：5 → 0").assertExists()
+  }
 }

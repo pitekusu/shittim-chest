@@ -932,7 +932,7 @@ APIにある人格slotをAndroidの一覧・詳細表示モデルへ保持する
 
 人格ごとに顔・名前、10個のハート、変更前後の正確な点数、実際の増減チップをまとめる。質問評価点はカードに表示しない。ハートは100点単位の概略で、端数を切り捨てても数値は保存値をそのまま表示する。増加・減少・変化なしを矢印と色でも区別する。
 
-広幅は横3枚、スマートフォンや文字拡大時は縦3枚。各カードが画面内へ完全に入った際だけ約1.1秒で点数とハートを変化させ、演出済み状態はopaqueな記録IDとカード位置に結び付ける。スクロール・同期・回転で繰り返さない。画面内に収まりきらないカードとアニメーション無効設定では最終値を即時表示する。カードの配置は演出によって変えない。上限・下限の実増減0、評価不能、親愛度のない旧記録には架空の点数を作らない。
+3人の顔・名前と実増減を形状変化するChipへまとめ、選択した1人のカードを大きく表示する。初期人物は保存済みの勝者、該当データがなければ先頭とする。選択欄はカードのスクロール外に置き、狭幅・文字拡大では折り返す。各カードが画面内へ完全に入った際だけ約1.1秒で点数とハートを変化させ、演出済み状態はopaqueな記録IDとカード位置に結び付ける。スクロール・同期・回転で繰り返さない。非選択ページ・ページ移動中・画面非表示・シート表示中は完成形を表示し、未再生カードの演出を消費しない。画面内に収まりきらないカードとアニメーション無効設定では最終値を即時表示する。点数表示は最大値の文字領域を確保し、演出によって読み位置を動かさない。上限・下限の実増減0、評価不能、親愛度のない旧記録には架空の点数を作らない。
 
 ## UI・UXの設計方針
 
@@ -1066,10 +1066,9 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 
 共通ヘッダーは議題を2行まで表示し、全文はスクロールできるBottom Sheetで開く。戻る操作はまずシートを閉じる。結果は王冠付きの勝者・結論・勝利コメントを中心にし、実行案と注意点は件数付きの展開項目へ整理する。本文の省略・生成し直しは行わず、Markdownと外部リンクの安全処理を継続する。勝者の短い登場演出は記録単位で一度だけ行い、閲覧を待たせない。
 
-- [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
-- [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
-- [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)
 意見は顔付きの形状変化するChipで人物を選び、ButtonGroupで最終案／初回意見を切り替える。初期人物は保存された勝者、該当意見がない場合は先頭とし、初期段階は最終案とする。6本文を縦に積まず、選択欄を本文のスクロール外へ置く。人物・回答段階ごとに読位置を保持し、保存するのは選択番号・段階・スクロール位置だけとする。本文は保存済みデータから読み、SavedStateへ複製しない。
+
+投票ページは3人の関係図・得票数・保存された決定方式を中心にする。顔を押した理由・評価シートでは、人物ごとの読位置を保持し、取得応答が置き換わっても選択中の投票者を変えない。部分展開を使わず、Androidの戻る1回でシートを閉じる。採点のない旧記録は理由を表示し、採点データがないことを明示する。関係図は完全表示時だけ約1.8秒の描画と約0.9秒の静止を繰り返し、同期で再生周期を初期化しない。親愛度も人物ごとの読位置を保持し、表示する実増減と保存値の検証は従来どおり行う。
 
 ## 公式資料
 
@@ -1079,3 +1078,6 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 - [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin)
 - [Kotlin Gradle Pluginの版の指定](https://developer.android.com/build/releases/agp-9-0-0-release-notes#runtime-dependency-on-kotlin-gradle-plugin)
 - [Gradle Wrapper](https://docs.gradle.org/9.7.1/userguide/gradle_wrapper.html)
+- [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
+- [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
+- [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)

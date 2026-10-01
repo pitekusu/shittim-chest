@@ -24,6 +24,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
   playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {},
   section: RecordDetailSection = RecordDetailSection.Result, motionActive: Boolean = true,
   opinion: RecordOpinion? = null, finalOpinion: Boolean = true, opinionMarkdown: MarkdownState? = null,
+  affectionIndex: Int = 0,
   decisionMarkdown: MarkdownState = com.mikepenz.markdown.model.rememberMarkdownState(
     (state as? RecordPreviewState.Ready)?.preview?.decision.orEmpty())) {
   ShittimPanel {
@@ -55,7 +56,8 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
               ?: Text(stringResource(R.string.detail_voting_missing))
           RecordDetailSection.Affection ->
             RecordAffectionPanel(state.preview.affection, recordId?.let { "affection:$it" },
-              playedSections, onSectionSeen = onSectionSeen, motionActive = motionActive)
+              playedSections, onSectionSeen = onSectionSeen, motionActive = motionActive,
+              selectedIndex = affectionIndex)
         }
       }
     }
