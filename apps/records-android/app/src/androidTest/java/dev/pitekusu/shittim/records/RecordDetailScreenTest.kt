@@ -48,6 +48,11 @@ class RecordDetailScreenTest {
       ShittimTheme(false) { RecordDetailScreen(state, id.value, {}) }
     } }
     compose.waitUntil(10_000) { compose.onNodeWithText("アロナ").isDisplayed() }
+    // Markdown is parsed asynchronously. The winner can appear before the long body is laid out.
+    compose.waitUntil(10_000) {
+      compose.onNodeWithTag("record-detail-content").fetchSemanticsNode()
+        .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
+    }
     compose.onNodeWithTag("record-detail-content").performTouchInput { swipeUp() }
     val position = compose.onNodeWithTag("record-detail-content").fetchSemanticsNode()
       .config[SemanticsProperties.VerticalScrollAxisRange].value()
