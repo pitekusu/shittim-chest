@@ -55,7 +55,8 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerSlot: String?) {
+internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerSlot: String?,
+  motionActive: Boolean = true) {
   var selectedVote by remember(voting) { mutableStateOf<RecordVote?>(null) }
   ShittimSectionHeading(stringResource(R.string.record_votes))
   val countSlots = voting.counts.map { participantVisualSlot(it.participantName, it.participantSlot) }
@@ -75,7 +76,7 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
       var fullyVisible by remember(voting) { mutableStateOf(false) }
       val progress = remember(voting) { Animatable(1f) }
       val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
-      val play = fullyVisible && selectedVote == null &&
+      val play = motionActive && fullyVisible && selectedVote == null &&
         lifecycle.isAtLeast(Lifecycle.State.STARTED) && ValueAnimator.areAnimatorsEnabled()
       LaunchedEffect(play, voting) {
         if (play) {

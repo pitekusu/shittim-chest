@@ -1,0 +1,8 @@
+<resources>
+    <string name="detail_result">結果</string>
+    <string name="detail_opinions">意見</string>
+    <string name="detail_voting">投票</string>
+    <string name="detail_affection">親愛度</string>
+    <string name="detail_opinions_missing">この記録には意見データがありません。</string>
+    <string name="detail_voting_missing">この記録には投票データがありません。</string>
+</resources>
