@@ -113,6 +113,8 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithTag("record-detail-content").assertDoesNotExist()
     compose.onNodeWithText("一覧に戻る").assertDoesNotExist()
     compose.runOnIdle { window.value = DpSize(320.dp, 640.dp) }
+    compose.onNodeWithTag("detail-section-Affection").performClick()
+    compose.waitUntil(5_000) { compose.onNodeWithText("親愛度の変化").isDisplayed() }
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("親愛度の変化"))
     compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.CloseRecord, events.last()) }
