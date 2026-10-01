@@ -28,10 +28,13 @@ import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import dev.pitekusu.shittim.records.ui.shittimParticipantColor
+import com.mikepenz.markdown.model.MarkdownState
+import com.mikepenz.markdown.model.rememberMarkdownState
 
 @Composable
 internal fun RecordResultContent(preview: RecordPreview, recordId: String?,
-  motionActive: Boolean, playedSections: Set<String>, onSectionSeen: (String) -> Unit) {
+  motionActive: Boolean, playedSections: Set<String>, onSectionSeen: (String) -> Unit,
+  decisionMarkdown: MarkdownState = rememberMarkdownState(preview.decision)) {
   val motionKey = recordId?.let { "result:$it" }
   val played = motionKey == null || motionKey in playedSections
   val animated = motionActive && ValueAnimator.areAnimatorsEnabled()
@@ -55,7 +58,7 @@ internal fun RecordResultContent(preview: RecordPreview, recordId: String?,
   }
   Text(stringResource(R.string.record_decision), style = MaterialTheme.typography.titleMediumEmphasized,
     color = MaterialTheme.colorScheme.onSurface)
-  RecordMarkdown(preview.decision)
+  RecordMarkdown(preview.decision, markdownState = decisionMarkdown)
   preview.victoryMessage?.let { message ->
     Surface(color = accent.copy(alpha = 0.1f), shape = MaterialTheme.shapes.large) {
       Column(Modifier.padding(ShittimSpacing.Medium),

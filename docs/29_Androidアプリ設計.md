@@ -1058,14 +1058,6 @@ ADBの接続先を明示し、制御ポートは外部公開しない。取得�
 端末内の秘密鍵保護にAndroid Keystoreを使用する計画とする。C01にはこれらの依存を追加しない。
 HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置き換えない。
 
-## 公式資料
-
-2026年9月16日に確認。依存の具体的な版は実装の固定設定を正とする。
-
-- [AGP 9.4の互換性](https://developer.android.com/build/releases/agp-9-4-0-release-notes)
-- [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin)
-- [Kotlin Gradle Pluginの版の指定](https://developer.android.com/build/releases/agp-9-0-0-release-notes#runtime-dependency-on-kotlin-gradle-plugin)
-- [Gradle Wrapper](https://docs.gradle.org/9.7.1/userguide/gradle_wrapper.html)
 ## 議論詳細の4画面化
 
 詳細は下部の「結果／意見／投票／親愛度」と左右スワイプで切り替える。初期表示は結果とし、人物色・配色・フォントを継続する。Material 3のShortNavigationBarとCompose標準HorizontalPagerを使用し、ページごとの読位置を保持する。新しい記録は結果から開き、同期による応答の置換では選択ページやスクロールを初期化しない。
@@ -1077,3 +1069,13 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
 - [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
 - [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)
+意見は顔付きの形状変化するChipで人物を選び、ButtonGroupで最終案／初回意見を切り替える。初期人物は保存された勝者、該当意見がない場合は先頭とし、初期段階は最終案とする。6本文を縦に積まず、選択欄を本文のスクロール外へ置く。人物・回答段階ごとに読位置を保持し、保存するのは選択番号・段階・スクロール位置だけとする。本文は保存済みデータから読み、SavedStateへ複製しない。
+
+## 公式資料
+
+2026年9月16日に確認。依存の具体的な版は実装の固定設定を正とする。
+
+- [AGP 9.4の互換性](https://developer.android.com/build/releases/agp-9-4-0-release-notes)
+- [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin)
+- [Kotlin Gradle Pluginの版の指定](https://developer.android.com/build/releases/agp-9-0-0-release-notes#runtime-dependency-on-kotlin-gradle-plugin)
+- [Gradle Wrapper](https://docs.gradle.org/9.7.1/userguide/gradle_wrapper.html)

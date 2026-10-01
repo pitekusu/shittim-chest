@@ -10,6 +10,8 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.model.NoOpImageTransformerImpl
+import com.mikepenz.markdown.model.MarkdownState
+import com.mikepenz.markdown.model.rememberMarkdownState
 import java.net.URI
 import java.net.URISyntaxException
 
@@ -23,7 +25,8 @@ internal fun allowedRecordLink(url: String): Boolean = try {
 }
 
 @Composable
-internal fun RecordMarkdown(content: String, modifier: Modifier = Modifier) {
+internal fun RecordMarkdown(content: String, modifier: Modifier = Modifier,
+  markdownState: MarkdownState = rememberMarkdownState(content)) {
   val platformUriHandler = LocalUriHandler.current
   val safeUriHandler = remember(platformUriHandler) {
     object : UriHandler {
@@ -39,7 +42,7 @@ internal fun RecordMarkdown(content: String, modifier: Modifier = Modifier) {
   }
   CompositionLocalProvider(LocalUriHandler provides safeUriHandler) {
     // No image loader is connected: Markdown image URLs never fetch private or remote data.
-    Markdown(content = content, modifier = modifier.fillMaxWidth(),
+    Markdown(markdownState = markdownState, modifier = modifier.fillMaxWidth(),
       imageTransformer = NoOpImageTransformerImpl())
   }
 }

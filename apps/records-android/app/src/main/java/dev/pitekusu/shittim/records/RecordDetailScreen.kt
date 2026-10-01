@@ -30,6 +30,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,6 +46,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.collectAsState
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import kotlinx.coroutines.launch
+import com.mikepenz.markdown.model.rememberMarkdownState
 
 internal enum class RecordDetailSection(@StringRes val title: Int, @DrawableRes val icon: Int) {
   Result(R.string.detail_result, R.drawable.ic_crown),
@@ -64,10 +67,28 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
     val pager = rememberPagerState(pageCount = { RecordDetailSection.entries.size })
     val scope = rememberCoroutineScope()
     var questionOpen by remember { mutableStateOf(false) }
+    var opinionChoice by rememberSaveable { mutableIntStateOf(-1) }
+    var finalOpinion by rememberSaveable { mutableStateOf(true) }
+    val preview = (state as? RecordPreviewState.Ready)?.preview
+    val decisionMarkdown = rememberMarkdownState(preview?.decision.orEmpty())
+    val opinions = preview?.opinions.orEmpty()
+    val defaultOpinion = opinions.indexOfFirst {
+      voteParticipantMatches(it.participantName, it.participantSlot,
+        preview?.winnerName.orEmpty(), preview?.winnerSlot)
+    }.coerceAtLeast(0)
+    val opinionIndex = opinionChoice.takeIf { it in opinions.indices } ?: defaultOpinion
+    val opinion = opinions.getOrNull(opinionIndex)
+    // Keep parsed answers in memory outside lazy pages. Re-parsing an empty placeholder on return
+    // would temporarily shrink the list and clamp a saved reading position back to the top.
+    val opinionMarkdown = opinions.mapIndexed { index, value -> key(index) {
+      listOf(rememberMarkdownState(value.initialProposal), rememberMarkdownState(value.finalProposal))
+    } }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     // States remain composed outside the lazy pager, so switching pages cannot reset reading position.
     val scrollStates = listOf(resultScrollState, rememberLazyListState(),
       rememberLazyListState(), rememberLazyListState())
+    // The API has three personas; each initial/final answer has its own small saved scroll state.
+    val opinionScrollStates = List(3) { listOf(rememberLazyListState(), rememberLazyListState()) }
     Column(modifier.fillMaxSize()) {
       if (state is RecordPreviewState.Ready) {
         Surface(onClick = { questionOpen = true }, color = MaterialTheme.colorScheme.surfaceContainer,
@@ -88,13 +109,24 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
         val section = RecordDetailSection.entries[page]
         val active = motionAllowed && !questionOpen && !pager.isScrollInProgress && pager.settledPage == page &&
           lifecycle.isAtLeast(Lifecycle.State.STARTED)
-        LazyColumn(Modifier.fillMaxSize().testTag(if (pager.settledPage == page) scrollTag
-          else "detail-inactive-$page"), state = scrollStates[page],
+        Column(Modifier.fillMaxSize()) {
+        if (section == RecordDetailSection.Opinions && opinion != null) {
+          RecordOpinionControls(opinions, opinionIndex, finalOpinion,
+            onPerson = { opinionChoice = it }, onStage = { finalOpinion = it })
+        }
+        val scrollState = if (section == RecordDetailSection.Opinions && opinion != null)
+          opinionScrollStates[opinionIndex.coerceIn(0, 2)][if (finalOpinion) 1 else 0]
+          else scrollStates[page]
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag(if (pager.settledPage == page) scrollTag
+          else "detail-inactive-$page"), state = scrollState,
           contentPadding = PaddingValues(ShittimSpacing.Medium)) {
           item(key = section) {
             RecordPreviewPanel(state, onEvent, recordId, playedSections, onSectionSeen,
-              section = section, motionActive = active)
+              section = section, motionActive = active, opinion = opinion, finalOpinion = finalOpinion,
+              opinionMarkdown = opinionMarkdown.getOrNull(opinionIndex)?.get(if (finalOpinion) 1 else 0),
+              decisionMarkdown = decisionMarkdown)
           }
+        }
         }
       }
       if (state is RecordPreviewState.Ready) {
