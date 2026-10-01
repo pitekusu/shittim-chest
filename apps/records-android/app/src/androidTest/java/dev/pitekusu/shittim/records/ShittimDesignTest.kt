@@ -142,7 +142,7 @@ class ShittimDesignTest {
     }
     compose.onNodeWithTag("detail-section-Opinions").performClick()
     compose.waitForIdle()
-    list.performScrollToNode(hasText("プラナ"))
+    compose.onNodeWithTag("opinion-person-1").performClick()
     compose.onNodeWithText("プラナ").assertIsDisplayed()
     capture("design-detail-dark")
   }

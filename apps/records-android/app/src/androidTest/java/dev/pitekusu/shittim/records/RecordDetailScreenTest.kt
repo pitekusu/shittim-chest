@@ -91,4 +91,35 @@ class RecordDetailScreenTest {
     compose.onNodeWithTag("detail-section-Result").assertIsSelected()
     compose.onNodeWithText("• 散歩する").assertExists()
   }
+
+  @Test fun opinionsDefaultToWinnerAndKeepEachAnswerReadingPositionDuringRefresh() {
+    val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
+      RecordOpinion(name, "初回の要約$index", "初回の本文$index\n\n".repeat(60),
+        "最終案の題名$index", "最終案の本文$index\n\n".repeat(60))
+    }
+    val preview = RecordPreview("架空の議題", "結論", "プラナ", opinions)
+    val state = mutableStateOf<RecordPreviewState>(RecordPreviewState.Ready(preview))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      ShittimTheme(true) { RecordDetailScreen(state.value, "sample", {}) }
+    } }
+    compose.onNodeWithTag("detail-section-Opinions").performClick()
+    compose.waitForIdle()
+    compose.onNodeWithTag("opinion-person-1").assertIsSelected()
+    compose.onNodeWithText("最終案の題名1").assertExists()
+    compose.onNodeWithText(compose.activity.getString(R.string.record_initial_opinion)).performClick()
+    compose.waitUntil(10_000) { compose.onNodeWithText("初回の要約1").isDisplayed() }
+    compose.onNodeWithTag("record-detail-content").performTouchInput { swipeUp() }
+    val position = compose.onNodeWithTag("record-detail-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue(position > 0f)
+    compose.onNodeWithTag("opinion-person-0").performClick()
+    compose.onNodeWithText("初回の要約0").assertExists()
+    compose.onNodeWithTag("opinion-person-1").performClick()
+    compose.runOnIdle { state.value = RecordPreviewState.Ready(preview, updating = true) }
+    compose.waitForIdle()
+    val restored = compose.onNodeWithTag("record-detail-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertEquals(position, restored, 0.01f)
+    compose.onNodeWithTag("opinion-person-1").assertIsSelected()
+  }
 }
