@@ -13,6 +13,8 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import android.view.KeyEvent
 import dev.pitekusu.shittim.records.ui.ShittimTheme
 import org.junit.Rule
 import org.junit.Assert.assertTrue
@@ -68,5 +70,25 @@ class RecordDetailScreenTest {
     compose.waitUntil(5_000) { compose.onNodeWithText("この記録には親愛度データがありません。").isDisplayed() }
     compose.runOnIdle { id.value = "second" }
     compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+  }
+
+  @Test fun questionSheetAndResultDisclosuresKeepEverySavedFieldReachable() {
+    val state = RecordPreviewState.Ready(RecordPreview("架空の長い議題：".repeat(40),
+      "架空の結論", "アロナ", victoryMessage = "一緒に楽しみましょう！",
+      actions = listOf("散歩する"), caveats = listOf("天気を確認する")))
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      ShittimTheme(true) { RecordDetailScreen(state, "sample", {}) }
+    } }
+    compose.onNodeWithText("• 散歩する").assertDoesNotExist()
+    compose.onNodeWithTag("detail-actions-expand").performClick()
+    compose.onNodeWithText("• 散歩する").assertExists()
+    compose.onNodeWithTag("detail-question-open").performClick()
+    compose.waitUntil(5_000) { compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
+    InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+    compose.waitUntil(5_000) {
+      !compose.onNodeWithTag("detail-question-sheet").isDisplayed()
+    }
+    compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+    compose.onNodeWithText("• 散歩する").assertExists()
   }
 }

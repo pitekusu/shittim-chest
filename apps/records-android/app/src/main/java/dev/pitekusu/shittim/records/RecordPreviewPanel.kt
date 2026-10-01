@@ -76,6 +76,9 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           ?: Text(stringResource(R.string.detail_voting_missing))
         }
         if (section == null || section == RecordDetailSection.Result) {
+        if (section != null) {
+          RecordResultContent(state.preview, recordId, motionActive, playedSections, onSectionSeen)
+        } else {
         Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary)
         ShittimParticipantLabel(state.preview.winnerName, state.preview.winnerSlot, crowned = true)
@@ -95,6 +98,7 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
         if (state.preview.caveats.isNotEmpty()) {
           ShittimSectionHeading(stringResource(R.string.record_caveats))
           state.preview.caveats.forEach { Text(stringResource(R.string.record_list_item, it)) }
+        }
         }
         }
         if (section == null || section == RecordDetailSection.Affection) RecordAffectionPanel(state.preview.affection,
