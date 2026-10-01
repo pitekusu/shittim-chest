@@ -3,24 +3,57 @@
   "maximum_validity_days": 90,
   "acceptances": [
     {
-      "vulnerability_id": "CVE-2026-93990",
-      "package": "libexpat1",
+      "vulnerability_id": "CVE-2026-102010",
+      "package": "gcc-14-base",
       "image_config_digests": {
         "production": [
-          "sha256:aa164dc1f8672e5618a64f88075ce213b2789d88016c2afa8883682ce46c7fa1",
-          "sha256:62a52c09c91d8b0e79b3daa7685537b18a195ef5e88c24c85dd089e3d0c28b33",
-          "sha256:21406cae47bd4e48824ad11e9c25c8b21ae1cd1e78b7a30eb4951bb1d250770b",
-          "sha256:c95174770c00a7b62e56555549bd19860e84e09f88fff757d9320defbfe9473a"
+          "sha256:1fe5cf9c11327d0c15f7c1c1a8c4a098e76f33afe74aa193be3a6682567e714c"
         ]
       },
       "status": "under_investigation",
-      "justification": "Debian 13 has no fixed expat package yet, and the verified DHI VEX does not mark this finding not affected.",
-      "impact": "Malformed UTF-16 XML may hide markup from Expat and permit XML injection if untrusted XML reaches a parser.",
-      "exploitability": "The production debate service accepts signed Discord JSON and has no XML request endpoint; SDK XML parsing remains a possible indirect path.",
-      "evidence": "Debian tracker https://security-tracker.debian.org/tracker/CVE-2026-93990 and PR 423/424/430/466 Grype ARM64 reports show libexpat1 2.8.3-1~deb13u1+dhi3 as not-fixed without a DHI VEX exemption.",
-      "approved_on": "2026-09-23",
-      "expires_on": "2026-09-30",
-      "reevaluation_conditions": "Remove this acceptance when Debian or DHI ships a fix, a verified VEX changes status, the image digest changes, or XML exposure changes.",
+      "justification": "The service owner approved a seven-day acceptance on 2026-10-01 for this measured ARM64 image and this package only. Debian still lists GCC 14 as unfixed; verified DHI VEX does not suppress this CVE. This is not a remediation or a not_affected claim.",
+      "impact": "GCC's libstdc++ PBDS binary-heap erase_if can retain a freed entry pointer after reallocating storage, causing a process crash or memory corruption when invoked. Grype associates this GCC-source CVE with this installed binary package; the package match alone does not prove service reachability.",
+      "exploitability": "Use of the affected C++ template by every bundled native dependency has not been ruled out. Non-root execution, a read-only root filesystem and the absence of arbitrary-code execution features constrain exposure but do not remove memory-corruption risk.",
+      "evidence": "CI https://github.com/pitekusu/shittim-chest/actions/runs/36851626558 supplied the measured production digest, final ARM64 SBOM, raw Grype report and signature-verified DHI VEX report. Installed version: 14.2.0-19+dhi3; residual severity: High; fix state: not-fixed. Debian: https://security-tracker.debian.org/tracker/CVE-2026-102010 ; upstream fix: https://github.com/gcc-mirror/gcc/commit/aaa8351f4d2e636f9680a1f0a8ebc2f0a60611e6 .",
+      "approved_on": "2026-10-01",
+      "expires_on": "2026-10-08",
+      "reevaluation_conditions": "Reevaluate on expiry, any image digest, package, native dependency or exposure change, a Debian/DHI fix, new exploitability evidence, or verified vendor VEX. Remove a superseded acceptance; any changed digest needs fresh SBOM, scan and VEX review. Do not extend automatically. Fixable High/Critical and other unaccepted residual findings remain blocking.",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-102010",
+      "package": "libgcc-s1",
+      "image_config_digests": {
+        "production": [
+          "sha256:1fe5cf9c11327d0c15f7c1c1a8c4a098e76f33afe74aa193be3a6682567e714c"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "The service owner approved a seven-day acceptance on 2026-10-01 for this measured ARM64 image and this package only. Debian still lists GCC 14 as unfixed; verified DHI VEX does not suppress this CVE. This is not a remediation or a not_affected claim.",
+      "impact": "GCC's libstdc++ PBDS binary-heap erase_if can retain a freed entry pointer after reallocating storage, causing a process crash or memory corruption when invoked. Grype associates this GCC-source CVE with this installed binary package; the package match alone does not prove service reachability.",
+      "exploitability": "Use of the affected C++ template by every bundled native dependency has not been ruled out. Non-root execution, a read-only root filesystem and the absence of arbitrary-code execution features constrain exposure but do not remove memory-corruption risk.",
+      "evidence": "CI https://github.com/pitekusu/shittim-chest/actions/runs/36851626558 supplied the measured production digest, final ARM64 SBOM, raw Grype report and signature-verified DHI VEX report. Installed version: 14.2.0-19+dhi3; residual severity: High; fix state: not-fixed. Debian: https://security-tracker.debian.org/tracker/CVE-2026-102010 ; upstream fix: https://github.com/gcc-mirror/gcc/commit/aaa8351f4d2e636f9680a1f0a8ebc2f0a60611e6 .",
+      "approved_on": "2026-10-01",
+      "expires_on": "2026-10-08",
+      "reevaluation_conditions": "Reevaluate on expiry, any image digest, package, native dependency or exposure change, a Debian/DHI fix, new exploitability evidence, or verified vendor VEX. Remove a superseded acceptance; any changed digest needs fresh SBOM, scan and VEX review. Do not extend automatically. Fixable High/Critical and other unaccepted residual findings remain blocking.",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-102010",
+      "package": "libstdc++6",
+      "image_config_digests": {
+        "production": [
+          "sha256:1fe5cf9c11327d0c15f7c1c1a8c4a098e76f33afe74aa193be3a6682567e714c"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "The service owner approved a seven-day acceptance on 2026-10-01 for this measured ARM64 image and this package only. Debian still lists GCC 14 as unfixed; verified DHI VEX does not suppress this CVE. This is not a remediation or a not_affected claim.",
+      "impact": "GCC's libstdc++ PBDS binary-heap erase_if can retain a freed entry pointer after reallocating storage, causing a process crash or memory corruption when invoked. Grype associates this GCC-source CVE with this installed binary package; the package match alone does not prove service reachability.",
+      "exploitability": "Use of the affected C++ template by every bundled native dependency has not been ruled out. Non-root execution, a read-only root filesystem and the absence of arbitrary-code execution features constrain exposure but do not remove memory-corruption risk.",
+      "evidence": "CI https://github.com/pitekusu/shittim-chest/actions/runs/36851626558 supplied the measured production digest, final ARM64 SBOM, raw Grype report and signature-verified DHI VEX report. Installed version: 14.2.0-19+dhi3; residual severity: High; fix state: not-fixed. Debian: https://security-tracker.debian.org/tracker/CVE-2026-102010 ; upstream fix: https://github.com/gcc-mirror/gcc/commit/aaa8351f4d2e636f9680a1f0a8ebc2f0a60611e6 .",
+      "approved_on": "2026-10-01",
+      "expires_on": "2026-10-08",
+      "reevaluation_conditions": "Reevaluate on expiry, any image digest, package, native dependency or exposure change, a Debian/DHI fix, new exploitability evidence, or verified vendor VEX. Remove a superseded acceptance; any changed digest needs fresh SBOM, scan and VEX review. Do not extend automatically. Fixable High/Critical and other unaccepted residual findings remain blocking.",
       "owner": "pitekusu"
     }
   ]
