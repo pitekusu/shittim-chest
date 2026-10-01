@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -89,7 +90,12 @@ class RecordDetailVisualTest {
     compose.mainClock.autoAdvance = false
     compose.runOnIdle { active.value = true }
     compose.mainClock.advanceTimeBy(64)
-    compose.onNodeWithText("親愛度：200 → 185").assertDoesNotExist()
+    // CI disables system animations. Both settings must preserve the saved final value.
+    if (ValueAnimator.areAnimatorsEnabled()) {
+      compose.onNodeWithText("親愛度：200 → 185").assertDoesNotExist()
+    } else {
+      compose.onNodeWithText("親愛度：200 → 185").assertExists()
+    }
     compose.mainClock.advanceTimeBy(1_200)
     compose.onNodeWithText("親愛度：200 → 185").assertExists()
     compose.mainClock.autoAdvance = true
