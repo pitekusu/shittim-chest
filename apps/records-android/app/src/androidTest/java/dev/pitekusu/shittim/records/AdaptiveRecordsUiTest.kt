@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDisplayed
@@ -209,6 +210,40 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithTag("records-search-toggle").performClick()
     compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsNotFocused()
       .performClick().assertIsFocused()
+  }
+
+  @Test fun threeButtonBackClearsSelectionWithoutWaitingForThePaneAnimation() {
+    val state = mutableStateOf(screen())
+    val events = mutableListOf<BootstrapScreen.Event>()
+    compose.activityRule.scenario.onActivity { it.setContent {
+      BootstrapUi(screen(state.value.selectedRecordId, onEvent = { event ->
+        events += event
+        if (event is BootstrapScreen.Event.OpenRecord) state.value = screen(event.recordId)
+        if (event == BootstrapScreen.Event.CloseRecord) state.value = screen()
+      }))
+    } }
+    val question = entries.last().questionPreview
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(question))
+    val position = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    compose.onNodeWithText(question).performClick()
+    compose.waitForIdle()
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+      compose.mainClock.advanceTimeBy(64)
+      compose.runOnIdle {
+        assertEquals(null, state.value.selectedRecordId)
+        assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
+      }
+      compose.onNodeWithText(question).assertIsDisplayed().assertIsNotSelected()
+      compose.onNodeWithText(compose.activity.getString(R.string.record_selected)).assertDoesNotExist()
+      val restored = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+        .config[SemanticsProperties.VerticalScrollAxisRange].value()
+      assertEquals(position, restored, .01f)
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
   }
 
   @Test fun revocationDuringTheBackGestureHidesTheRecordAndDoesNotCommitIt() {

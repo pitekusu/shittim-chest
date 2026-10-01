@@ -47,10 +47,10 @@ internal fun RecordOpinionControls(opinions: List<RecordOpinion>, selected: Int,
       }
       ButtonGroup(overflowIndicator = { ButtonGroupDefaults.OverflowIndicator(it) },
         modifier = Modifier.selectableGroup().padding(bottom = 8.dp)) {
-        toggleableItem(checked = final, label = finalLabel,
-          onCheckedChange = { if (it) onStage(true) })
         toggleableItem(checked = !final, label = initialLabel,
           onCheckedChange = { if (it) onStage(false) })
+        toggleableItem(checked = final, label = finalLabel,
+          onCheckedChange = { if (it) onStage(true) })
       }
     }
   }

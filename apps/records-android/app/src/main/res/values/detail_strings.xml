@@ -7,7 +7,7 @@
     <string name="detail_voting_missing">この記録には投票データがありません。</string>
     <string name="detail_question_full">議題の全文を読む</string>
     <string name="detail_close">閉じる</string>
-    <string name="detail_disclosure">%1$s（%2$d件）　%3$s</string>
+    <string name="detail_item_count">%1$d件</string>
     <string name="detail_expand">開く</string>
     <string name="detail_collapse">閉じる</string>
 </resources>

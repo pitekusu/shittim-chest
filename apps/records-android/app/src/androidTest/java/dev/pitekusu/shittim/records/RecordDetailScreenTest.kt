@@ -4,11 +4,17 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
@@ -19,6 +25,8 @@ import dev.pitekusu.shittim.records.ui.ShittimTheme
 import org.junit.Rule
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import androidx.compose.ui.text.TextLayoutResult
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -32,7 +40,11 @@ class RecordDetailScreenTest {
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       ShittimTheme(true) { RecordDetailScreen(state.value, "sample", {}) }
     } }
-    compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+    compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
+    val navigation = RecordDetailSection.entries.map { section ->
+      compose.onNodeWithTag("detail-section-${section.name}").fetchSemanticsNode().boundsInRoot.left
+    }
+    assertTrue(navigation.zipWithNext().all { (left, right) -> left < right })
     compose.onNodeWithTag("detail-section-Voting").performClick()
     compose.waitUntil(5_000) { compose.onNodeWithText("この記録には投票データがありません。").isDisplayed() }
     compose.runOnIdle { state.value = RecordPreviewState.Ready(preview(), updating = true) }
@@ -42,13 +54,14 @@ class RecordDetailScreenTest {
     compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
   }
 
-  @Test fun switchingPagesRestoresResultReadingPositionAndAnotherRecordStartsAtResult() {
+  @Test fun switchingPagesRestoresResultReadingPositionAndAnotherRecordStartsAtOpinions() {
     val id = mutableStateOf("first")
     val state = RecordPreviewState.Ready(RecordPreview("架空の議題", "結論です。\n\n".repeat(70),
       "アロナ", actions = listOf("末尾の実行案")))
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       ShittimTheme(false) { RecordDetailScreen(state, id.value, {}) }
     } }
+    compose.onNodeWithTag("detail-section-Result").performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("アロナ").isDisplayed() }
     // Markdown is parsed asynchronously. The winner can appear before the long body is laid out.
     compose.waitUntil(10_000) {
@@ -69,7 +82,7 @@ class RecordDetailScreenTest {
     compose.onNodeWithTag("detail-section-Affection").performClick()
     compose.waitUntil(5_000) { compose.onNodeWithText("この記録には親愛度データがありません。").isDisplayed() }
     compose.runOnIdle { id.value = "second" }
-    compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+    compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
   }
 
   @Test fun questionSheetAndResultDisclosuresKeepEverySavedFieldReachable() {
@@ -79,9 +92,11 @@ class RecordDetailScreenTest {
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       ShittimTheme(true) { RecordDetailScreen(state, "sample", {}) }
     } }
+    compose.onNodeWithTag("detail-section-Result").performClick()
     compose.onNodeWithText("• 散歩する").assertDoesNotExist()
-    compose.onNodeWithTag("detail-actions-expand").performClick()
+    compose.onNodeWithTag("detail-actions-expand").performScrollTo().performClick()
     compose.onNodeWithText("• 散歩する").assertExists()
+    compose.onNodeWithTag("record-detail-content").performScrollToNode(hasTestTag("detail-question-open"))
     compose.onNodeWithTag("detail-question-open").performClick()
     compose.waitUntil(5_000) { compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
     InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
@@ -89,7 +104,30 @@ class RecordDetailScreenTest {
       !compose.onNodeWithTag("detail-question-sheet").isDisplayed()
     }
     compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+    compose.onNodeWithTag("detail-actions-expand").performScrollTo()
     compose.onNodeWithText("• 散歩する").assertExists()
+    compose.onNodeWithTag("detail-actions-expand").performClick()
+    compose.onNodeWithText("• 散歩する").assertDoesNotExist()
+    compose.onNodeWithTag("detail-caveats-expand").performScrollTo().performClick()
+    compose.onNodeWithText("• 天気を確認する").assertExists()
+  }
+
+  @Test fun longQuestionIsNotEllipsizedAndScrollsWithTheAnswer() {
+    val question = "長い架空の議題について、順番に読み進められるように考えてください。\n".repeat(30)
+    compose.activityRule.scenario.onActivity { it.setContent {
+      ShittimTheme(false) { RecordDetailScreen(RecordPreviewState.Ready(
+        RecordPreview(question, "結論", "アロナ")), "long-question", {}) }
+    } }
+    val layouts = mutableListOf<TextLayoutResult>()
+    compose.onNodeWithTag("detail-question-text", useUnmergedTree = true)
+      .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+    assertEquals(question, layouts.single().layoutInput.text.text)
+    assertTrue(layouts.single().lineCount > 2)
+    assertFalse(layouts.single().hasVisualOverflow)
+    assertFalse((0 until layouts.single().lineCount).any { layouts.single().isLineEllipsized(it) })
+    compose.onNodeWithTag("record-detail-content")
+      .performScrollToNode(hasText("この記録には意見データがありません。"))
+    compose.onNodeWithText("この記録には意見データがありません。").assertExists()
   }
 
   @Test fun opinionsDefaultToWinnerAndKeepEachAnswerReadingPositionDuringRefresh() {
@@ -105,6 +143,8 @@ class RecordDetailScreenTest {
     compose.onNodeWithTag("detail-section-Opinions").performClick()
     compose.waitForIdle()
     compose.onNodeWithTag("opinion-person-1").assertIsSelected()
+    compose.onNodeWithText("初回の要約1").assertExists()
+    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
     compose.onNodeWithText("最終案の題名1").assertExists()
     compose.onNodeWithText(compose.activity.getString(R.string.record_initial_opinion)).performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("初回の要約1").isDisplayed() }

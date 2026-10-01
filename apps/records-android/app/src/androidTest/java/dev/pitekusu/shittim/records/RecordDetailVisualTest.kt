@@ -27,6 +27,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.Density
@@ -72,13 +73,14 @@ class RecordDetailVisualTest {
     compose.onNodeWithText("親愛度：1000 → 1000").assertExists()
   }
 
-  @Test fun inactivePageDoesNotConsumeAffectionAndEachSelectedCardPlaysOnlyOnce() {
+  @Test fun eachPersonAndReopenedAffectionPagePlayAgainButRefreshDoesNot() {
     val active = mutableStateOf(false)
+    val open = mutableStateOf(true)
     val played = mutableStateOf(emptySet<String>())
     val state = mutableStateOf<RecordPreviewState>(RecordPreviewState.Ready(visualPreview()))
     val seen = mutableListOf<String>()
     compose.activityRule.scenario.onActivity { it.setContent { ShittimTheme(false) {
-      RecordDetailScreen(state.value, "visual-sample", {}, motionAllowed = active.value,
+      if (open.value) RecordDetailScreen(state.value, "visual-sample", {}, motionAllowed = active.value,
         playedSections = played.value, onSectionSeen = { key ->
           seen += key
           played.value = played.value + key
@@ -100,7 +102,11 @@ class RecordDetailVisualTest {
     compose.onNodeWithText("親愛度：200 → 185").assertExists()
     compose.mainClock.autoAdvance = true
     compose.onNodeWithTag("affection-person-0").performClick()
+    compose.onNodeWithTag("affection-card-0").performScrollTo()
     compose.waitUntil(5_000) { "affection:visual-sample:0" in played.value }
+    compose.onNodeWithTag("affection-person-2").performClick()
+    compose.onNodeWithTag("affection-card-2").performScrollTo()
+    compose.waitUntil(5_000) { "affection:visual-sample:2" in played.value }
     compose.onNodeWithTag("affection-person-1").performClick()
     compose.onNodeWithTag("detail-section-Opinions").performClick()
     compose.waitForIdle()
@@ -109,9 +115,16 @@ class RecordDetailVisualTest {
     compose.runOnIdle { state.value = RecordPreviewState.Ready(visualPreview(), updating = true) }
     compose.onNodeWithText("親愛度：200 → 185").assertExists()
     compose.runOnIdle {
-      assertEquals(1, seen.count { it == "affection:visual-sample:1" })
+      assertEquals(3, seen.count { it == "affection:visual-sample:1" })
       assertEquals(1, seen.count { it == "affection:visual-sample:0" })
+      assertEquals(1, seen.count { it == "affection:visual-sample:2" })
     }
+    compose.runOnIdle { open.value = false }
+    compose.runOnIdle { open.value = true }
+    compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
+    compose.onNodeWithTag("detail-section-Affection").performClick()
+    compose.waitForIdle()
+    compose.runOnIdle { assertEquals(4, seen.count { it == "affection:visual-sample:1" }) }
   }
 
   @Test fun voteSheetPreservesVoterAndReadingPositionAcrossRefreshAndReopening() {
@@ -155,14 +168,14 @@ class RecordDetailVisualTest {
     compose.onNodeWithTag("detail-section-Voting").performClick()
     compose.waitForIdle()
     compose.onNodeWithTag("vote-graph").assertDoesNotExist()
-    compose.onNodeWithTag("vote-route-0").performClick()
+    compose.onNodeWithTag("vote-route-0").performScrollTo().performClick()
     compose.waitUntil(5_000) { compose.onNodeWithTag("vote-detail-sheet").isDisplayed() }
     InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
     compose.waitUntil(5_000) { !compose.onNodeWithTag("vote-detail-sheet").isDisplayed() }
     compose.onNodeWithTag("detail-section-Affection").performClick()
     compose.waitForIdle()
     for (index in 0..2) {
-      compose.onNodeWithTag("affection-person-$index").performClick().assertIsSelected()
+      compose.onNodeWithTag("affection-person-$index").performScrollTo().performClick().assertIsSelected()
       compose.onNodeWithTag("affection-card-$index").assertExists()
     }
     capture("detail-large-text")
@@ -178,7 +191,7 @@ class RecordDetailVisualTest {
     compose.waitUntil(5_000) { compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
     InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
     compose.waitUntil(5_000) { !compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
-    compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+    compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
   }
 
   /** Optional, synthetic-only preview used for screenshots and the short interaction recording. */
@@ -197,6 +210,13 @@ class RecordDetailVisualTest {
         compose.onNodeWithTag("detail-section-${section.name}").performClick()
         compose.waitForIdle()
         capture("detail-${section.name.lowercase()}-${if (mode) "dark" else "light"}")
+        if (section == RecordDetailSection.Result) {
+          compose.onNodeWithTag("detail-actions-expand").performScrollTo().performClick()
+          compose.onNodeWithTag("detail-caveats-expand").performScrollTo().performClick()
+          capture("detail-result-expanded-${if (mode) "dark" else "light"}")
+          compose.onNodeWithTag("detail-actions-expand").performClick()
+          compose.onNodeWithTag("detail-caveats-expand").performClick()
+        }
       }
     }
     if (InstrumentationRegistry.getArguments().getString("shittimRecordUi") == "true") {

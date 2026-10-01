@@ -13,29 +13,36 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import kotlin.math.abs
 
 /** A detail page is one lazy item; each animated part checks its own clipped viewport bounds. */
-internal fun Modifier.onRecordSectionVisibilityChanged(onVisibilityChanged: (Boolean) -> Unit): Modifier =
-  onGloballyPositioned { onVisibilityChanged(it.isFullyVisibleInWindow()) }
+internal fun Modifier.onRecordSectionVisibilityChanged(
+  minimumVisibleTop: () -> Float = { Float.NEGATIVE_INFINITY },
+  onVisibilityChanged: (Boolean) -> Unit,
+): Modifier = onGloballyPositioned { onVisibilityChanged(it.isFullyVisibleInWindow(minimumVisibleTop())) }
 
 /** A section larger than any containing viewport can never satisfy full visibility. */
-internal fun Modifier.onRecordSectionCannotFit(onCannotFit: () -> Unit): Modifier =
+internal fun Modifier.onRecordSectionCannotFit(onCannotFit: (Boolean) -> Unit): Modifier =
   onGloballyPositioned { coordinates ->
     var parent = coordinates.parentLayoutCoordinates
+    var cannotFit = false
     while (parent != null) {
       if (coordinates.size.width > parent.size.width + 1 ||
         coordinates.size.height > parent.size.height + 1) {
-        onCannotFit()
+        cannotFit = true
         break
       }
       parent = parent.parentLayoutCoordinates
     }
+    // Layout can grow after a page/selection change. A transient small viewport must not
+    // permanently mark every subsequent card as unable to animate.
+    onCannotFit(cannotFit)
   }
 
-private fun LayoutCoordinates.isFullyVisibleInWindow(): Boolean {
+private fun LayoutCoordinates.isFullyVisibleInWindow(minimumVisibleTop: Float = Float.NEGATIVE_INFINITY): Boolean {
   if (!isAttached) return false
   val bounds = boundsInWindow(clipBounds = false)
   val visibleBounds = boundsInWindow(clipBounds = true)
   val tolerance = 1f // Fractional pixels must not prevent a fully visible section from playing.
   return bounds.width > 0f && bounds.height > 0f &&
+    bounds.top >= minimumVisibleTop - tolerance &&
     abs(bounds.left - visibleBounds.left) <= tolerance &&
     abs(bounds.top - visibleBounds.top) <= tolerance &&
     abs(bounds.right - visibleBounds.right) <= tolerance &&
