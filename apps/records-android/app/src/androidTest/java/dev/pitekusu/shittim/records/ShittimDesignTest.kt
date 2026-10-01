@@ -140,6 +140,8 @@ class ShittimDesignTest {
         record = RecordPreviewState.Ready(RecordPreview("架空の相談：休日をどう過ごそう？",
           "気分に合わせて、小さな楽しみを選びましょう。", "アロナ", opinions)), eventSink = events::add)
     }
+    compose.onNodeWithTag("detail-section-Opinions").performClick()
+    compose.waitForIdle()
     list.performScrollToNode(hasText("プラナ"))
     compose.onNodeWithText("プラナ").assertIsDisplayed()
     capture("design-detail-dark")

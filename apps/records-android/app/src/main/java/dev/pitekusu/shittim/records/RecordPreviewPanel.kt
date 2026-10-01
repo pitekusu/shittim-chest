@@ -23,9 +23,10 @@ internal sealed interface RecordPreviewState {
 @Composable
 internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapScreen.Event) -> Unit,
   recordId: String? = null,
-  playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {}) {
+  playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {},
+  section: RecordDetailSection? = null, motionActive: Boolean = true) {
   ShittimPanel {
-    ShittimSectionHeading(stringResource(R.string.record_title), kicker = "DISCUSSION RECORD",
+    if (section == null) ShittimSectionHeading(stringResource(R.string.record_title), kicker = "DISCUSSION RECORD",
       style = MaterialTheme.typography.titleLargeEmphasized)
     when (state) {
       RecordPreviewState.Idle, RecordPreviewState.Loading -> {
@@ -44,9 +45,12 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
         if (state.updating) Text(stringResource(R.string.record_refreshing))
         if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
           R.string.record_save_failed else R.string.record_refresh_failed))
+        if (section == null) {
         Text(stringResource(R.string.record_question), style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary)
         RecordMarkdown(state.preview.question)
+        }
+        if (section == null || section == RecordDetailSection.Opinions) {
         if (state.preview.opinions.isNotEmpty()) {
           ShittimSectionHeading(stringResource(R.string.record_opinions))
           state.preview.opinions.forEach { opinion ->
@@ -64,8 +68,14 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
             RecordMarkdown(opinion.finalProposal)
           }
         }
+        if (state.preview.opinions.isEmpty()) Text(stringResource(R.string.detail_opinions_missing))
+        }
+        if (section == null || section == RecordDetailSection.Voting) {
         state.preview.voting?.let { RecordVotingPanel(it, state.preview.winnerName,
-          state.preview.winnerSlot) }
+          state.preview.winnerSlot, motionActive) }
+          ?: Text(stringResource(R.string.detail_voting_missing))
+        }
+        if (section == null || section == RecordDetailSection.Result) {
         Text(stringResource(R.string.record_winner), style = MaterialTheme.typography.labelLarge,
           color = MaterialTheme.colorScheme.primary)
         ShittimParticipantLabel(state.preview.winnerName, state.preview.winnerSlot, crowned = true)
@@ -86,9 +96,10 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
           ShittimSectionHeading(stringResource(R.string.record_caveats))
           state.preview.caveats.forEach { Text(stringResource(R.string.record_list_item, it)) }
         }
-        RecordAffectionPanel(state.preview.affection,
+        }
+        if (section == null || section == RecordDetailSection.Affection) RecordAffectionPanel(state.preview.affection,
           recordId?.let { id -> "affection:$id" }, playedSections,
-          onSectionSeen = onSectionSeen)
+          onSectionSeen = onSectionSeen, motionActive = motionActive)
       }
     }
   }

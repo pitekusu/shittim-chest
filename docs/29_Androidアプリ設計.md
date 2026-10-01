@@ -1066,6 +1066,12 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 - [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin)
 - [Kotlin Gradle Pluginの版の指定](https://developer.android.com/build/releases/agp-9-0-0-release-notes#runtime-dependency-on-kotlin-gradle-plugin)
 - [Gradle Wrapper](https://docs.gradle.org/9.7.1/userguide/gradle_wrapper.html)
+## 議論詳細の4画面化
+
+詳細は下部の「結果／意見／投票／親愛度」と左右スワイプで切り替える。初期表示は結果とし、人物色・配色・フォントを継続する。Material 3のShortNavigationBarとCompose標準HorizontalPagerを使用し、ページごとの読位置を保持する。新しい記録は結果から開き、同期による応答の置換では選択ページやスクロールを初期化しない。
+
+選択中のページが停止し、Activityが表示中で、メニューなどのシートが閉じている場合にだけ装飾演出を許可する。Pagerの先読みで親愛度の一度限り演出を消費しない。既存の認可、暗号化保存、差分同期、一覧へのPredictive Backと検索のfocus復帰抑止は維持する。本文を画面状態やログへ保存しない。
+
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
 - [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
 - [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)

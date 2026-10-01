@@ -95,7 +95,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
           val transientScrollState = rememberLazyListState()
           if (state.canReadRecords) {
             AdaptiveRecordsUi(state, pagingItems, listScrollState, detailScrollState,
-              Modifier.fillMaxSize(), playedSections.toSet()) { key ->
+              Modifier.fillMaxSize(), playedSections.toSet(), motionAllowed = !menuOpen) { key ->
                 if (key !in playedSections) playedSections = ArrayList(playedSections).apply { add(key) }
               }
           } else if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {

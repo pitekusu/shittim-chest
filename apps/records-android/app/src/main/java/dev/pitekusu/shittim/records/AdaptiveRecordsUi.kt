@@ -58,6 +58,7 @@ internal fun AdaptiveRecordsUi(
   detailScrollState: LazyListState,
   modifier: Modifier = Modifier,
   playedSections: Set<String> = emptySet(),
+  motionAllowed: Boolean = true,
   onSectionSeen: (String) -> Unit = {},
 ) {
   val windowDirective = calculatePaneScaffoldDirective(currentWindowAdaptiveInfoV2())
@@ -142,19 +143,12 @@ internal fun AdaptiveRecordsUi(
             Box(Modifier.fillMaxSize().padding(ShittimSpacing.Large), contentAlignment = Alignment.Center) {
               Text(stringResource(R.string.record_select), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-          } else Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-            // Keep the detail title visible while reading a long record; system Back returns to the list.
-            Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = ShittimSpacing.Large)) {
-              Text(detailTitle, style = MaterialTheme.typography.titleLargeEmphasized,
-                modifier = Modifier.semantics { heading() })
-            }
-            LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize()
-              .testTag(if (twoPanes) "record-detail-content" else "bootstrap-content"),
-              state = detailScrollState, contentPadding = PaddingValues(ShittimSpacing.Large)) {
-              item(key = "record-detail") { RecordPreviewPanel(state.record, state.eventSink,
-                recordId = state.selectedRecordId,
-                playedSections = playedSections, onSectionSeen = onSectionSeen) }
-            }
+          } else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            RecordDetailScreen(state.record, state.selectedRecordId, state.eventSink,
+              Modifier.widthIn(max = 760.dp).fillMaxSize(), detailScrollState,
+              scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
+              motionAllowed = motionAllowed, playedSections = playedSections,
+              onSectionSeen = onSectionSeen)
           }
         }
       })
