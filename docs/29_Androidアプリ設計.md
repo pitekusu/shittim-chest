@@ -1072,6 +1072,8 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 
 選択中のページが停止し、Activityが表示中で、メニューなどのシートが閉じている場合にだけ装飾演出を許可する。Pagerの先読みで親愛度の一度限り演出を消費しない。既存の認可、暗号化保存、差分同期、一覧へのPredictive Backと検索のfocus復帰抑止は維持する。本文を画面状態やログへ保存しない。
 
+共通ヘッダーは議題を2行まで表示し、全文はスクロールできるBottom Sheetで開く。戻る操作はまずシートを閉じる。結果は王冠付きの勝者・結論・勝利コメントを中心にし、実行案と注意点は件数付きの展開項目へ整理する。本文の省略・生成し直しは行わず、Markdownと外部リンクの安全処理を継続する。勝者の短い登場演出は記録単位で一度だけ行い、閲覧を待たせない。
+
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
 - [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
 - [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)
