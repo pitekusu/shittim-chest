@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
@@ -22,11 +23,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberBottomSheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,7 +63,10 @@ import kotlinx.coroutines.delay
 @Composable
 internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerSlot: String?,
   motionActive: Boolean = true) {
-  var selectedVote by remember(voting) { mutableStateOf<RecordVote?>(null) }
+  // Save only the selected index and scroll offsets, never a vote/reason in SavedState.
+  var selectedVoteIndex by rememberSaveable { mutableIntStateOf(-1) }
+  val selectedVote = voting.votes.getOrNull(selectedVoteIndex)
+  val detailScrollStates = List(3) { rememberScrollState() }
   ShittimSectionHeading(stringResource(R.string.record_votes))
   val countSlots = voting.counts.map { participantVisualSlot(it.participantName, it.participantSlot) }
   val canDrawGraph = voting.counts.size == 3 && voting.votes.size == 3 &&
@@ -71,14 +80,14 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
   BoxWithConstraints(Modifier.fillMaxWidth()) {
     val showGraph = canDrawGraph && fontScale < 1.5f && maxWidth >= 300.dp
     if (!showGraph) {
-      VoteRows(voting, winnerName, winnerSlot) { selectedVote = it }
+      VoteRows(voting, winnerName, winnerSlot) { selectedVoteIndex = voting.votes.indexOf(it) }
     } else {
-      var fullyVisible by remember(voting) { mutableStateOf(false) }
-      val progress = remember(voting) { Animatable(1f) }
+      var fullyVisible by remember { mutableStateOf(false) }
+      val progress = remember { Animatable(1f) }
       val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
       val play = motionActive && fullyVisible && selectedVote == null &&
         lifecycle.isAtLeast(Lifecycle.State.STARTED) && ValueAnimator.areAnimatorsEnabled()
-      LaunchedEffect(play, voting) {
+      LaunchedEffect(play) {
         if (play) {
           while (true) {
             progress.snapTo(0f)
@@ -93,6 +102,7 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
       }
       val colors = nodes.map { shittimParticipantColor(it.participantName, it.participantSlot) }
       BoxWithConstraints(Modifier.fillMaxWidth().height(232.dp)
+        .testTag("vote-graph")
         .onRecordSectionVisibilityChanged { fullyVisible = it }) {
         val x = listOf(maxWidth / 2, maxWidth * 0.2f, maxWidth * 0.8f)
         val y = listOf(36.dp, 162.dp, 162.dp)
@@ -124,7 +134,7 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
           VoteNode(node, winnerName, winnerSlot, pulse,
             Modifier.offset(x = x[index] - 42.dp, y = y[index] - 28.dp)
               .width(84.dp).testTag("vote-person-$index")) {
-            selectedVote = vote
+            selectedVoteIndex = voting.votes.indexOf(vote)
           }
         }
       }
@@ -138,7 +148,14 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
   }
   if (explanation != null) Text(stringResource(explanation), style = MaterialTheme.typography.bodyMedium)
   selectedVote?.let { vote ->
-    ModalBottomSheet(onDismissRequest = { selectedVote = null }) { VoteDetail(vote) }
+    ModalBottomSheet(onDismissRequest = { selectedVoteIndex = -1 },
+      sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
+        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
+      modifier = Modifier.testTag("vote-detail-sheet")) {
+      VoteDetail(vote, detailScrollStates[selectedVoteIndex.coerceIn(0, 2)]) {
+        selectedVoteIndex = -1
+      }
+    }
   }
 }
 
@@ -196,8 +213,8 @@ internal fun voteParticipantMatches(firstName: String, firstSlot: String?,
 }
 
 @Composable
-private fun VoteDetail(vote: RecordVote) {
-  Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+private fun VoteDetail(vote: RecordVote, scrollState: ScrollState, onClose: () -> Unit) {
+  Column(Modifier.fillMaxWidth().verticalScroll(scrollState).testTag("vote-detail-content")
     .padding(horizontal = ShittimSpacing.Large, vertical = ShittimSpacing.Medium),
     verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
     Row(verticalAlignment = Alignment.CenterVertically,
@@ -205,10 +222,12 @@ private fun VoteDetail(vote: RecordVote) {
       ShittimParticipantAvatar(vote.voterName, vote.voterSlot)
       Text("→", style = MaterialTheme.typography.titleMedium)
       ShittimParticipantAvatar(vote.candidateName, vote.candidateSlot)
-      Text(stringResource(R.string.record_vote_route, vote.voterName, vote.candidateName),
-        style = MaterialTheme.typography.titleSmallEmphasized)
     }
+    Text(stringResource(R.string.record_vote_route, vote.voterName, vote.candidateName),
+      style = MaterialTheme.typography.titleSmallEmphasized)
     Text(vote.reason, style = MaterialTheme.typography.bodyLarge)
+    if (vote.assessments == null) Text(stringResource(R.string.detail_assessments_missing),
+      color = MaterialTheme.colorScheme.onSurfaceVariant)
     vote.assessments?.forEach { assessment ->
       ShittimSectionHeading(stringResource(R.string.record_assessment_total,
         assessment.candidateName, assessment.total), style = MaterialTheme.typography.titleSmallEmphasized)
@@ -227,6 +246,7 @@ private fun VoteDetail(vote: RecordVote) {
       }
       Text(assessment.reason, style = MaterialTheme.typography.bodyMedium)
     }
+    TextButton(onClick = onClose) { Text(stringResource(R.string.detail_close)) }
   }
 }
 
