@@ -174,9 +174,10 @@ class RecordDetailScreenTest {
     compose.onNodeWithTag("detail-section-Opinions").performClick()
     compose.waitForIdle()
     compose.onNodeWithTag("opinion-person-1").assertIsSelected()
-    compose.onNodeWithText("初回の要約1").assertExists()
+    // Async Markdown parsing is independent of Compose idleness; await the real answer list.
+    compose.waitUntil(10_000) { compose.onNodeWithText("初回の要約1").isDisplayed() }
     compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
-    compose.onNodeWithText("最終案の題名1").assertExists()
+    compose.waitUntil(10_000) { compose.onNodeWithText("最終案の題名1").isDisplayed() }
     compose.onNodeWithText(compose.activity.getString(R.string.record_initial_opinion)).performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("初回の要約1").isDisplayed() }
     compose.onNodeWithTag("record-detail-content").performTouchInput { swipeUp() }
@@ -184,7 +185,7 @@ class RecordDetailScreenTest {
       .config[SemanticsProperties.VerticalScrollAxisRange].value()
     assertTrue(position > 0f)
     compose.onNodeWithTag("opinion-person-0").performClick()
-    compose.onNodeWithText("初回の要約0").assertExists()
+    compose.waitUntil(10_000) { compose.onNodeWithText("初回の要約0").isDisplayed() }
     compose.onNodeWithTag("opinion-person-1").performClick()
     compose.runOnIdle { state.value = RecordPreviewState.Ready(preview, updating = true) }
     compose.waitForIdle()
