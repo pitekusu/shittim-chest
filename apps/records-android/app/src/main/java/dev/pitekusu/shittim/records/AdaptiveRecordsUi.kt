@@ -56,7 +56,7 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun AdaptiveRecordsUi(
   state: BootstrapScreen.State,
-  pagingItems: LazyPagingItems<RecordListEntry>?,
+  pagingItems: LazyPagingItems<RecordJournalRow>?,
   listScrollState: LazyListState,
   detailScrollState: LazyListState,
   modifier: Modifier = Modifier,
@@ -132,13 +132,11 @@ internal fun AdaptiveRecordsUi(
           Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             LazyColumn(Modifier.widthIn(max = 560.dp).fillMaxSize().testTag("bootstrap-content"),
               state = listScrollState, contentPadding = PaddingValues(ShittimSpacing.Large),
-              verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Large)) {
+              verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
               item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true) }
-              if (state.session == SessionState.Unavailable) item(key = "offline-notice") {
-                Text(stringResource(R.string.record_offline))
-              }
               recordListItems(state.records, pagingItems, state.eventSink,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
+                offline = state.session == SessionState.Unavailable,
                 query = state.listQuery, searching = state.searching,
                 selectedRecordId = state.selectedRecordId.takeIf { twoPanes },
                 searchCanFocus = twoPanes || (state.selectedRecordId == null && searchFocusAllowed),

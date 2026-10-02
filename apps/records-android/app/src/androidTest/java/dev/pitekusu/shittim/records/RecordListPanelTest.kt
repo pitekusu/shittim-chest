@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
@@ -37,7 +38,8 @@ class RecordListPanelTest {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
         val current = state.value
-        val items = current.pages.collectAsLazyPagingItems()
+        val pages = remember(current.pages) { current.pages.asRecordJournal() }
+        val items = pages.collectAsLazyPagingItems()
         LazyColumn { recordListItems(current, items, {}, sync.value) }
       } }
     }
@@ -46,7 +48,7 @@ class RecordListPanelTest {
     }
     compose.onNodeWithText(compose.activity.getString(R.string.record_list_loading)).assertDoesNotExist()
     compose.runOnIdle { sync.value = RecordSyncState.Running }
-    compose.onNodeWithText(compose.activity.getString(R.string.record_sync_running)).assertIsDisplayed()
+    compose.onNodeWithText(compose.activity.getString(R.string.journal_sync_running)).assertIsDisplayed()
     compose.onNodeWithText(compose.activity.getString(R.string.record_list_loading)).assertDoesNotExist()
     compose.runOnIdle {
       sync.value = RecordSyncState.Completed
@@ -56,7 +58,7 @@ class RecordListPanelTest {
       compose.onAllNodesWithText(compose.activity.getString(R.string.record_empty)).fetchSemanticsNodes().isNotEmpty()
     }
     compose.onNodeWithText(compose.activity.getString(R.string.record_list_loading)).assertDoesNotExist()
-    compose.onNodeWithText(compose.activity.getString(R.string.record_sync_running)).assertDoesNotExist()
+    compose.onNodeWithText(compose.activity.getString(R.string.journal_sync_running)).assertDoesNotExist()
   }
 
   @Test
@@ -70,7 +72,9 @@ class RecordListPanelTest {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
         val current = state.value
-        val items = (current as? RecordListState.Ready)?.pages?.collectAsLazyPagingItems()
+        val rawPages = (current as? RecordListState.Ready)?.pages
+        val pages = remember(rawPages) { rawPages?.asRecordJournal() }
+        val items = pages?.collectAsLazyPagingItems()
         LazyColumn(Modifier.testTag("record-list")) { recordListItems(current, items, events::add) }
       } }
     }
@@ -96,7 +100,8 @@ class RecordListPanelTest {
     val query = mutableStateOf(RecordListQuery())
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
-        val items = records.pages.collectAsLazyPagingItems()
+        val pages = remember(records.pages) { records.pages.asRecordJournal() }
+        val items = pages.collectAsLazyPagingItems()
         LazyColumn { recordListItems(records, items, onEvent = { event ->
           query.value = when (event) {
             is BootstrapScreen.Event.SearchRecords -> query.value.copy(text = event.text)
