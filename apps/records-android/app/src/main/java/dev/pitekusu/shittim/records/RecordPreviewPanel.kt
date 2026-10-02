@@ -1,7 +1,6 @@
 package dev.pitekusu.shittim.records
 
 import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
@@ -41,7 +40,6 @@ internal fun RecordPreviewPanel(state: RecordPreviewState, onEvent: (BootstrapSc
         }
       }
       is RecordPreviewState.Ready -> {
-        if (state.saved) Text(stringResource(R.string.record_saved), color = MaterialTheme.colorScheme.primary)
         if (state.updating) Text(stringResource(R.string.record_refreshing))
         if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
           R.string.record_save_failed else R.string.record_refresh_failed))
