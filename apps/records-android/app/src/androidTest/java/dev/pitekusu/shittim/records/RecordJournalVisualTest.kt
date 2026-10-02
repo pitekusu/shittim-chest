@@ -10,8 +10,11 @@ import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -63,7 +66,7 @@ class RecordJournalVisualTest {
     compose.onNodeWithText("RECORDS ARCHIVE").assertDoesNotExist()
   }
 
-  @Test fun metadataOnlyCardsAcceptEveryWinnerAndMissingAvatarWithoutCompactSelection() {
+  @Test fun requesterLeadsMetadataOnlyCardsWhileEveryWinnerAndMissingAvatarRemainReadable() {
     val entries = journalSamples()
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { it.setContent {
@@ -72,6 +75,20 @@ class RecordJournalVisualTest {
     for (entry in entries.take(4)) {
       val tag = "journal-card-${entry.recordId}"
       compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasTestTag(tag))
+      val requesterAvatar = compose.onNodeWithTag("journal-requester-avatar-${entry.recordId}", useUnmergedTree = true)
+      val requesterName = compose.onNodeWithTag("journal-requester-name-${entry.recordId}", useUnmergedTree = true)
+      val winnerAvatar = compose.onNodeWithTag("journal-winner-avatar-${entry.recordId}", useUnmergedTree = true)
+      requesterAvatar.assertIsDisplayed()
+      requesterName.assertIsDisplayed().assertTextEquals(entry.requesterName)
+      winnerAvatar.assertIsDisplayed()
+      compose.onNode(hasText(compose.activity.getString(R.string.record_list_winner, entry.winnerName)) and
+        hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true).assertIsDisplayed()
+      assertTrue("The requester is the card's primary face; the winner is supplementary",
+        requesterAvatar.fetchSemanticsNode().boundsInRoot.height > winnerAvatar.fetchSemanticsNode().boundsInRoot.height)
+      val nameLayouts = mutableListOf<TextLayoutResult>()
+      requesterName.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(nameLayouts) }
+      assertTrue("Long requester names must remain bounded without replacing the question",
+        nameLayouts.single().lineCount in 1..2)
       compose.onNodeWithTag(tag).assertIsDisplayed().assertIsNotSelected().performClick()
     }
     assertEquals(entries.take(4).map { BootstrapScreen.Event.OpenRecord(it.recordId) }, events)
@@ -140,7 +157,11 @@ class RecordJournalVisualTest {
     val scale = mutableStateOf(1f)
     val dark = mutableStateOf(false)
     val selected = mutableStateOf<String?>(null)
-    val entries = journalSamples()
+    // Bundled character art stands in for a synthetic requester's saved offline thumbnail.
+    val localAvatar = compose.activity.resources.openRawResource(R.drawable.participant_b).use {
+      RecordAvatar(null, "cyan", bytes = it.readBytes())
+    }
+    val entries = journalSamples(localAvatar)
     val records = RecordListState.Ready.fromSaved(entries)
     compose.activityRule.scenario.onActivity { it.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value) then
@@ -209,10 +230,10 @@ class RecordJournalVisualTest {
       record = RecordPreviewState.Ready(RecordPreview("架空の議題の全文です。", "架空の結論", "アロナ")),
       eventSink = onEvent)
 
-  private fun journalSamples(): List<RecordListEntry> = listOf(
+  private fun journalSamples(firstAvatar: RecordAvatar = RecordAvatar(null, "cyan")): List<RecordListEntry> = listOf(
     RecordListEntry("a".repeat(43),
       "3人が休日に小さなカフェを開くなら、接客や準備はどう分担しますか。".repeat(6).take(160),
-      "架空の依頼者・とても長い名前の表示も確認します", RecordAvatar(null, "cyan"),
+      "架空の依頼者・とても長い名前の表示も確認します", firstAvatar,
       Instant.parse("2026-10-02T15:00:00Z"), "アロナ", "participant-a"),
     RecordListEntry("p".repeat(43), "雨の日も気分転換できる、静かな過ごし方を考えてください。",
       "架空の読書好き", RecordAvatar(null, "pink"), Instant.parse("2026-10-02T14:59:59Z"),
