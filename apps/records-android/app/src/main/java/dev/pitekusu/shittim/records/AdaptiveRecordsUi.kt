@@ -30,6 +30,7 @@ import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.calculateThreePaneScaffoldValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +49,8 @@ import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.paging.compose.LazyPagingItems
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
@@ -87,6 +90,10 @@ internal fun AdaptiveRecordsUi(
     val focusManager = LocalFocusManager.current
     // Disclosure state is visual only; search text remains in Circuit's screen-lifetime state.
     var queryMode by remember { mutableStateOf(RecordQueryMode.Closed) }
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    val visibleMotion = motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
+      ValueAnimator.areAnimatorsEnabled()
+    val listMotion = visibleMotion && queryMode == RecordQueryMode.Closed && state.selectedRecordId == null
     val searchScrollState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -148,7 +155,7 @@ internal fun AdaptiveRecordsUi(
                 start = ShittimSpacing.Large, end = ShittimSpacing.Large,
                 top = ShittimSpacing.Medium, bottom = 104.dp),
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
-              item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true) }
+              item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true, motionAllowed = listMotion) }
               if (!state.listQuery.isDefault) item(key = "records-query-active") {
                 RecordActiveQueryChips(state.listQuery, onEvent = state.eventSink)
               }
@@ -156,14 +163,16 @@ internal fun AdaptiveRecordsUi(
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
                 offline = state.session == SessionState.Unavailable,
                 query = state.listQuery, searching = state.searching,
-                selectedRecordId = state.selectedRecordId.takeIf { twoPanes })
+                selectedRecordId = state.selectedRecordId.takeIf { twoPanes }, motionAllowed = listMotion)
             }
             val queryAvailable = (state.records as? RecordListState.Ready)?.saved == true || !state.listQuery.isDefault
             if (queryAvailable && state.selectedRecordId == null && queryMode == RecordQueryMode.Closed && motionAllowed) {
-              RecordQueryToolbar(state.listQuery,
-                Modifier.align(Alignment.BottomEnd).padding(ShittimSpacing.Medium),
-                onSearch = { queryMode = RecordQueryMode.Search },
-                onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+              Box(Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).fillMaxWidth(),
+                contentAlignment = Alignment.BottomEnd) {
+                RecordQueryToolbar(state.listQuery, Modifier.padding(ShittimSpacing.Medium),
+                  onSearch = { queryMode = RecordQueryMode.Search },
+                  onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+              }
             }
           }
         }
@@ -207,10 +216,14 @@ internal fun AdaptiveRecordsUi(
             LazyColumn(Modifier.fillMaxSize().testTag("records-search-results"),
               state = searchScrollState, contentPadding = PaddingValues(ShittimSpacing.Medium),
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
+              val filters = state.listQuery.copy(text = "")
+              if (!filters.isDefault) item(key = "search-query-active") {
+                RecordActiveQueryChips(filters, onEvent = state.eventSink)
+              }
               recordListItems(state.records, pagingItems, resultEvent,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
                 offline = state.session == SessionState.Unavailable,
-                query = state.listQuery, searching = state.searching)
+                query = state.listQuery, searching = state.searching, motionAllowed = visibleMotion)
             }
           }
         RecordQueryMode.Closed -> Unit

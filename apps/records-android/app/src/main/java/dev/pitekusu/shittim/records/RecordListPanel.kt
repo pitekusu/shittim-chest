@@ -1,6 +1,9 @@
 package dev.pitekusu.shittim.records
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -96,13 +100,14 @@ internal fun LazyListScope.recordListItems(
   searching: Boolean = false,
   selectedRecordId: String? = null,
   offline: Boolean = false,
+  motionAllowed: Boolean = true,
 ) {
   item(key = "records-context") {
     val ready = state as? RecordListState.Ready
     val shownCount = if (ready?.saved == true) ready.loadedIds.size
       else pagingItems?.itemSnapshotList?.items?.count { it is RecordJournalRow.Record } ?: 0
     RecordJournalContext(ready, shownCount, sync, searching, offline,
-      filtered = query.searchesText || query.winner != RecordWinner.All)
+      filtered = query.searchesText || query.winner != RecordWinner.All, motionAllowed = motionAllowed)
   }
   if (state !is RecordListState.Ready || pagingItems == null) {
     item(key = "records-waiting") {
@@ -138,7 +143,11 @@ internal fun LazyListScope.recordListItems(
         style = MaterialTheme.typography.titleSmallEmphasized,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.fillMaxWidth().testTag("journal-date-${row.date}").semantics { heading() })
-      is RecordJournalRow.Record -> RecordListCard(row.entry, row.entry.recordId == selectedRecordId) {
+      is RecordJournalRow.Record -> RecordListCard(row.entry, row.entry.recordId == selectedRecordId,
+        modifier = if (motionAllowed) Modifier.animateItem(
+          fadeInSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+          placementSpec = null, fadeOutSpec = null) else Modifier,
+        motionAllowed = motionAllowed) {
         onEvent(BootstrapScreen.Event.OpenRecord(row.entry.recordId))
       }
       null -> Unit
@@ -163,7 +172,7 @@ internal fun LazyListScope.recordListItems(
 
 @Composable
 private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
-  sync: RecordSyncState, searching: Boolean, offline: Boolean, filtered: Boolean) {
+  sync: RecordSyncState, searching: Boolean, offline: Boolean, filtered: Boolean, motionAllowed: Boolean) {
   val failure = (sync as? RecordSyncState.Failed)?.reason ?: ready?.refreshFailure
   val status = when {
     failure == RecordReadFailure.AUTH_REQUIRED -> R.string.journal_auth_error
@@ -179,9 +188,12 @@ private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
   Column(Modifier.fillMaxWidth().height(lineHeight * 3 + 8.dp).testTag("journal-context"),
     verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Box(Modifier.fillMaxWidth().height(lineHeight)) {
-      ready?.savedTotal?.let { total ->
-        Text(stringResource(if (!filtered && shownCount == total) R.string.journal_saved_count
-          else R.string.journal_filtered_count, if (!filtered && shownCount == total) total else shownCount, total),
+      if (ready != null) {
+        val total = ready.savedTotal
+        val count = if (total == null) stringResource(R.string.journal_loaded_count, shownCount)
+          else stringResource(if (!filtered && shownCount == total) R.string.journal_saved_count
+            else R.string.journal_filtered_count, if (!filtered && shownCount == total) total else shownCount, total)
+        Text(count,
           style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
           color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
@@ -189,7 +201,8 @@ private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
     Row(Modifier.fillMaxWidth().height(lineHeight * 2),
       horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
       if (sync == RecordSyncState.Running && !searching && !offline && failure == null) {
-        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        if (motionAllowed) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        else CircularProgressIndicator(progress = { 1f }, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
       }
       if (status != null) Text(stringResource(status), style = MaterialTheme.typography.bodySmall,
         color = if (failure != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -200,12 +213,18 @@ private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
 }
 
 @Composable
-private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, onClick: () -> Unit) {
-  OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth().testTag("journal-card-${item.recordId}")
+private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier: Modifier = Modifier,
+  motionAllowed: Boolean = true, onClick: () -> Unit) {
+  val accent = shittimParticipantColor(item.winnerName, item.winnerSlot)
+  val container by animateColorAsState(if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+    else MaterialTheme.colorScheme.surfaceContainerLow,
+    animationSpec = if (motionAllowed) MaterialTheme.motionScheme.fastEffectsSpec() else snap(),
+    label = "journal selection")
+  OutlinedCard(onClick = onClick, modifier = modifier.fillMaxWidth().testTag("journal-card-${item.recordId}")
     .semantics { selected = isSelected },
     shape = MaterialTheme.shapes.large,
-    colors = CardDefaults.outlinedCardColors(containerColor = if (isSelected)
-      MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+    border = BorderStroke(if (isSelected) 2.dp else 1.dp, accent.copy(alpha = if (isSelected) 1f else .4f)),
+    colors = CardDefaults.outlinedCardColors(containerColor = container,
       contentColor = MaterialTheme.colorScheme.onSurface)) {
     Column(Modifier.padding(ShittimSpacing.Medium), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
       Row(verticalAlignment = Alignment.CenterVertically,
