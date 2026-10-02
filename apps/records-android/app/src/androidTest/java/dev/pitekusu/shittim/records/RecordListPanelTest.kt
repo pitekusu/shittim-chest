@@ -6,12 +6,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
@@ -91,40 +89,4 @@ class RecordListPanelTest {
     assertEquals(1, events.size)
   }
 
-  @Test
-  fun searchAndFiltersStayCollapsedUntilRequestedAndKeepActiveCriteriaVisible() {
-    val entry = RecordListEntry("r".repeat(43), "架空の議題", "架空の依頼者",
-      RecordAvatar(null, "cyan"), Instant.parse("2026-09-24T00:00:00Z"), "アロナ")
-    val records = RecordListState.Ready.fromSaved(listOf(entry))
-    val mode = mutableStateOf(RecordQueryMode.Closed)
-    val query = mutableStateOf(RecordListQuery())
-    compose.activityRule.scenario.onActivity { activity ->
-      activity.setContent { ShittimTheme(false) {
-        val pages = remember(records.pages) { records.pages.asRecordJournal() }
-        val items = pages.collectAsLazyPagingItems()
-        LazyColumn { recordListItems(records, items, onEvent = { event ->
-          query.value = when (event) {
-            is BootstrapScreen.Event.SearchRecords -> query.value.copy(text = event.text)
-            is BootstrapScreen.Event.SelectWinner -> query.value.copy(winner = event.winner)
-            is BootstrapScreen.Event.SelectOrder -> query.value.copy(order = event.order)
-            BootstrapScreen.Event.ClearRecordQuery -> RecordListQuery()
-            else -> error("unexpected_control_event")
-          }
-        }, query = query.value, queryMode = mode.value, onQueryModeChange = { mode.value = it }) }
-      } }
-    }
-    compose.onNodeWithTag("record-search").assertDoesNotExist()
-    compose.onNodeWithTag("winner-All").assertDoesNotExist()
-    compose.onNodeWithTag("records-search-toggle").performClick()
-    compose.onNodeWithTag("record-search").performTextInput("架空")
-    compose.onNodeWithTag("records-search-toggle").assertIsSelected().performClick()
-    compose.onNodeWithTag("record-search").assertDoesNotExist()
-    compose.onNodeWithText(compose.activity.getString(R.string.record_query_active)).assertIsDisplayed()
-    compose.onNodeWithTag("records-filter-toggle").performClick()
-    compose.onNodeWithTag("winner-Plana").performClick()
-    compose.onNodeWithTag("records-filter-toggle").assertIsSelected().performClick()
-    compose.onNodeWithTag("winner-Plana").assertDoesNotExist()
-    compose.onNodeWithText("架空の議題").assertIsDisplayed()
-    compose.runOnIdle { assertEquals("架空", query.value.text); assertEquals(RecordWinner.Plana, query.value.winner) }
-  }
 }

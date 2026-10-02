@@ -14,8 +14,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
@@ -27,10 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
@@ -99,62 +95,14 @@ internal fun LazyListScope.recordListItems(
   query: RecordListQuery = RecordListQuery(),
   searching: Boolean = false,
   selectedRecordId: String? = null,
-  searchCanFocus: Boolean = true,
-  queryMode: RecordQueryMode = RecordQueryMode.Closed,
-  onQueryModeChange: (RecordQueryMode) -> Unit = {},
   offline: Boolean = false,
 ) {
-  val queryAvailable = (state is RecordListState.Ready && state.saved) || !query.isDefault
-  item(key = "records-heading") {
-    val focusManager = LocalFocusManager.current
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.End) {
-      if (queryAvailable) {
-        IconButton(onClick = {
-          focusManager.clearFocus(force = true)
-          onQueryModeChange(if (queryMode == RecordQueryMode.Search)
-            RecordQueryMode.Closed else RecordQueryMode.Search)
-        },
-          modifier = Modifier.testTag("records-search-toggle").semantics { selected = query.searchesText }) {
-          Icon(painterResource(R.drawable.ic_search),
-            contentDescription = stringResource(if (queryMode == RecordQueryMode.Search)
-              R.string.record_search_close else R.string.record_search_open),
-            tint = if (query.searchesText || queryMode == RecordQueryMode.Search)
-              MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        IconButton(onClick = {
-          focusManager.clearFocus(force = true)
-          onQueryModeChange(if (queryMode == RecordQueryMode.Filters)
-            RecordQueryMode.Closed else RecordQueryMode.Filters)
-        },
-          modifier = Modifier.testTag("records-filter-toggle").semantics {
-            selected = query.winner != RecordWinner.All || query.order != RecordOrder.Newest
-          }) {
-          Icon(painterResource(R.drawable.ic_filter),
-            contentDescription = stringResource(if (queryMode == RecordQueryMode.Filters)
-              R.string.record_filter_close else R.string.record_filter_open),
-            tint = if (query.winner != RecordWinner.All || query.order != RecordOrder.Newest ||
-              queryMode == RecordQueryMode.Filters) MaterialTheme.colorScheme.primary
-              else MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-      }
-    }
-  }
-  if (queryAvailable && queryMode != RecordQueryMode.Closed) item(key = "records-query") {
-    RecordQueryControls(query, searchCanFocus,
-      showSearch = queryMode == RecordQueryMode.Search,
-      showFilters = queryMode == RecordQueryMode.Filters,
-      onEvent = onEvent)
-  }
-  if (queryMode == RecordQueryMode.Closed && !query.isDefault) item(key = "records-query-active") {
-    Text(stringResource(R.string.record_query_active),
-      style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-  }
   item(key = "records-context") {
     val ready = state as? RecordListState.Ready
     val shownCount = if (ready?.saved == true) ready.loadedIds.size
       else pagingItems?.itemSnapshotList?.items?.count { it is RecordJournalRow.Record } ?: 0
-    RecordJournalContext(ready, shownCount, sync, searching, offline)
+    RecordJournalContext(ready, shownCount, sync, searching, offline,
+      filtered = query.searchesText || query.winner != RecordWinner.All)
   }
   if (state !is RecordListState.Ready || pagingItems == null) {
     item(key = "records-waiting") {
@@ -215,7 +163,7 @@ internal fun LazyListScope.recordListItems(
 
 @Composable
 private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
-  sync: RecordSyncState, searching: Boolean, offline: Boolean) {
+  sync: RecordSyncState, searching: Boolean, offline: Boolean, filtered: Boolean) {
   val failure = (sync as? RecordSyncState.Failed)?.reason ?: ready?.refreshFailure
   val status = when {
     failure == RecordReadFailure.AUTH_REQUIRED -> R.string.journal_auth_error
@@ -232,8 +180,8 @@ private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
     verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Box(Modifier.fillMaxWidth().height(lineHeight)) {
       ready?.savedTotal?.let { total ->
-        Text(stringResource(if (shownCount == total) R.string.journal_saved_count
-          else R.string.journal_filtered_count, if (shownCount == total) total else shownCount, total),
+        Text(stringResource(if (!filtered && shownCount == total) R.string.journal_saved_count
+          else R.string.journal_filtered_count, if (!filtered && shownCount == total) total else shownCount, total),
           style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
           color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
