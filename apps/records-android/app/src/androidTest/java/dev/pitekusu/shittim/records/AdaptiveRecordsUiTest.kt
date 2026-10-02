@@ -234,6 +234,8 @@ class AdaptiveRecordsUiTest {
     compose.waitForIdle()
     val detailQuestion = "架空の議題：休日に楽しむ散歩と読書"
     val detailLeft = compose.onNodeWithText(detailQuestion).fetchSemanticsNode().boundsInRoot.left
+    val navigationHeight = compose.onNodeWithTag("detail-section-Opinions", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot.height
     compose.mainClock.autoAdvance = false
     try {
       compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
@@ -246,6 +248,10 @@ class AdaptiveRecordsUiTest {
         // A moving outgoing pane, not a frozen selected card or a placeholder flash.
         assertTrue(compose.onNodeWithText(detailQuestion, useUnmergedTree = true)
           .fetchSemanticsNode().boundsInRoot.left > detailLeft + 1f)
+        // Button Back slides horizontally; it must not shrink the entire scaffold
+        // and leave a separate scale-settle animation after the list appears.
+        assertEquals(navigationHeight, compose.onNodeWithTag("detail-section-Opinions", useUnmergedTree = true)
+          .fetchSemanticsNode().boundsInRoot.height, 1f)
         compose.onNodeWithText(compose.activity.getString(R.string.record_select)).assertDoesNotExist()
         capture("adaptive-back-slide-middle")
       }

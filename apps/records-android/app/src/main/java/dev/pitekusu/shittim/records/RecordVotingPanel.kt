@@ -68,6 +68,10 @@ internal fun RecordVotingPanel(voting: RecordVoting, winnerName: String, winnerS
   val selectedVote = voting.votes.getOrNull(selectedVoteIndex)
   val detailScrollStates = List(3) { rememberScrollState() }
   ShittimSectionHeading(stringResource(R.string.record_votes))
+  Text(stringResource(if (voting.votes.any { !it.assessments.isNullOrEmpty() })
+    R.string.record_vote_tap_details else R.string.record_vote_tap_reason),
+    style = MaterialTheme.typography.bodySmall,
+    color = MaterialTheme.colorScheme.onSurfaceVariant)
   val countSlots = voting.counts.map { participantVisualSlot(it.participantName, it.participantSlot) }
   val canDrawGraph = voting.counts.size == 3 && voting.votes.size == 3 &&
     countSlots.none { it == null } && countSlots.toSet().size == 3 &&
