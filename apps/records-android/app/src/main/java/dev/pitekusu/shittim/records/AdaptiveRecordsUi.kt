@@ -1,6 +1,9 @@
 package dev.pitekusu.shittim.records
 
+import android.animation.ValueAnimator
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -100,10 +103,14 @@ internal fun AdaptiveRecordsUi(
         // A completed gesture must not close another record or act after authentication is lost.
         if (selectedAtStart != null && currentState.value.canReadRecords &&
           currentState.value.selectedRecordId == selectedAtStart) {
-          // Commit selection immediately, not after a long spatial spring. In particular a
-          // three-button Back has no gesture progress and must not spend half a second
-          // showing the selected list card while the panes settle.
-          scaffoldState.snapTo(listValue)
+          // Keep the outgoing detail until its short slide finishes, rather than swapping
+          // it for a placeholder. A bounded tween avoids the old long spring tail;
+          // the compact list never renders a selected-card highlight during the return.
+          if (ValueAnimator.areAnimatorsEnabled()) {
+            scaffoldState.animateTo(listValue,
+              animationSpec = tween(280, easing = FastOutSlowInEasing),
+              isPredictiveBackInProgress = true)
+          } else scaffoldState.snapTo(listValue)
           if (currentState.value.canReadRecords && currentState.value.selectedRecordId == selectedAtStart) {
             currentState.value.eventSink(BootstrapScreen.Event.CloseRecord)
           } else scaffoldState.snapTo(currentValue.value)

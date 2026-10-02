@@ -44,7 +44,7 @@ class RecordPreviewPanelTest {
   @Test
   fun oneRecordAndRetryAreVisibleWithoutShowingOldBodyInErrorState() {
     val state = mutableStateOf<RecordPreviewState>(RecordPreviewState.Ready(
-      RecordPreview("架空の議題", "架空の結論", "アロナ")))
+      RecordPreview("架空の議題", "架空の結論", "アロナ"), saved = true))
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) { RecordDetailScreen(state.value, "sample", events::add) } }
@@ -58,6 +58,7 @@ class RecordPreviewPanelTest {
     compose.onNodeWithText("架空の議題").assertIsDisplayed()
     compose.onNodeWithText("アロナ").assertIsDisplayed()
     compose.onNodeWithText("架空の結論").assertIsDisplayed()
+    compose.onNodeWithText(label(R.string.record_saved)).assertDoesNotExist()
     compose.runOnIdle { state.value = RecordPreviewState.Error(RecordReadFailure.UNAVAILABLE) }
     compose.onNodeWithText("架空の議題").assertDoesNotExist()
     compose.onNodeWithText(label(R.string.record_retry)).performClick()
@@ -94,6 +95,14 @@ class RecordPreviewPanelTest {
         }
       }
       compose.onNodeWithText("要約${index + 1}").assertExists()
+      val slot = listOf("participant-a", "participant-b", "participant-c")[index]
+      compose.onNodeWithTag("opinion-avatar-$slot").assertExists()
+      val avatar = compose.onNodeWithTag("opinion-avatar-$slot").fetchSemanticsNode()
+      val expectedSize = with(compose.density) { 96.dp.toPx() }
+      assertEquals(expectedSize, avatar.size.width.toFloat(), 1f)
+      assertEquals(expectedSize, avatar.size.height.toFloat(), 1f)
+      compose.onNodeWithText(label(R.string.record_final_proposal)).performClick()
+      compose.onNodeWithTag("opinion-avatar-$slot").assertExists()
     }
   }
 

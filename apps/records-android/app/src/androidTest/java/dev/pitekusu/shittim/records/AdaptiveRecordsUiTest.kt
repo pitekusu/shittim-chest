@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.setContent
@@ -212,7 +213,7 @@ class AdaptiveRecordsUiTest {
       .performClick().assertIsFocused()
   }
 
-  @Test fun threeButtonBackClearsSelectionWithoutWaitingForThePaneAnimation() {
+  @Test fun threeButtonBackSlidesBeforeClosingWithoutLeavingASelectedListCard() {
     val state = mutableStateOf(screen())
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { it.setContent {
@@ -228,10 +229,24 @@ class AdaptiveRecordsUiTest {
       .config[SemanticsProperties.VerticalScrollAxisRange].value()
     compose.onNodeWithText(question).performClick()
     compose.waitForIdle()
+    val detailQuestion = "架空の議題：休日に楽しむ散歩と読書"
+    val detailLeft = compose.onNodeWithText(detailQuestion).fetchSemanticsNode().boundsInRoot.left
     compose.mainClock.autoAdvance = false
     try {
       compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
-      compose.mainClock.advanceTimeBy(64)
+      compose.mainClock.advanceTimeBy(96)
+      if (ValueAnimator.areAnimatorsEnabled()) {
+        compose.runOnIdle {
+          assertEquals(entries.last().recordId, state.value.selectedRecordId)
+          assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
+        }
+        // A moving outgoing pane, not a frozen selected card or a placeholder flash.
+        assertTrue(compose.onNodeWithText(detailQuestion, useUnmergedTree = true)
+          .fetchSemanticsNode().boundsInRoot.left > detailLeft + 1f)
+        compose.onNodeWithText(compose.activity.getString(R.string.record_select)).assertDoesNotExist()
+        capture("adaptive-back-slide-middle")
+      }
+      compose.mainClock.advanceTimeBy(320)
       compose.runOnIdle {
         assertEquals(null, state.value.selectedRecordId)
         assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
@@ -241,6 +256,26 @@ class AdaptiveRecordsUiTest {
       val restored = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
         .config[SemanticsProperties.VerticalScrollAxisRange].value()
       assertEquals(position, restored, .01f)
+      capture("adaptive-back-slide-complete")
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
+  }
+
+  @Test fun revocationDuringTheReturnSlideHidesTheRecordWithoutClosingANewDestination() {
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val state = mutableStateOf(screen(entries.first().recordId, onEvent = events::add))
+    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+      compose.mainClock.advanceTimeBy(64)
+      compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }
+      compose.mainClock.advanceTimeBy(400)
+      compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
+      if (ValueAnimator.areAnimatorsEnabled()) {
+        compose.runOnIdle { assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord }) }
+      }
     } finally {
       compose.mainClock.autoAdvance = true
     }

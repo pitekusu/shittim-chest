@@ -54,7 +54,7 @@ class OfflineRecordsUiTest {
     for ((name, isDark, isLarge) in listOf(Triple("offline-light", false, false),
       Triple("offline-dark", true, false), Triple("offline-large-text", true, true))) {
       compose.runOnIdle { dark.value = isDark; large.value = isLarge }
-      compose.onNodeWithText(label(R.string.record_saved)).assertIsDisplayed()
+      compose.onNodeWithText(label(R.string.record_saved)).assertDoesNotExist()
       compose.onNodeWithText(label(R.string.record_refresh_failed)).assertIsDisplayed()
       compose.onAllNodes(hasClickAction()).assertCountEquals(0)
       compose.onNodeWithText("一覧に戻る").assertDoesNotExist()

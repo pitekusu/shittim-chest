@@ -395,7 +395,7 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 
 議題は各ページの先頭に全文を表示し、本文と一緒にスクロールする。押すと全文シートでも読める。結果は王冠付きの勝者と結論を主役に、勝利コメントと件数付きの実行案・注意点を表示する。実行案・注意点はアイコン、件数バッジ、回転矢印と展開アニメーション付きのカードで開閉でき、本文を削らない。演出完了を閲覧条件にせず、戻る操作では先にシートを閉じる。
 
-意見ページは顔付きChipと初回意見／最終案のButtonGroupで選択する。勝者の初回意見を初期表示し、人物・回答段階ごとに読み位置を保持する。選択欄は議題の後に置き、スクロール時には上部へ固定する。長文の本文をSavedStateへ保存しない。
+意見ページは顔付きChipと初回意見／最終案のButtonGroupで選択する。勝者の初回意見を初期表示し、選択した人物の96dpの顔アイコンを意見カード内へ表示する。人物・回答段階ごとに読み位置を保持する。選択欄は議題の後に置き、スクロール時には上部へ固定する。詳細の「保存済みの記録」は表示せず、更新中・更新失敗の通知は維持する。長文の本文をSavedStateへ保存しない。
 
 ## 投票の表示
 
@@ -477,7 +477,9 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 - 投票理由の選択と人物別の読位置も保持し、Androidの戻る1回でシートを閉じる。旧記録の欠損情報を補完しない。
 - 投票図は完全表示時だけ描画1.8秒＋静止0.9秒を繰り返し、親愛度は完全表示時に約1.1秒で一度だけ動かす。非選択ページ・移動中・非表示・シート表示中は停止する。
 - API・認証・暗号化保存形式・差分同期・一覧の検索focus復帰抑止は変更しない。架空データによる画面確認と実機・Play配布は区別する。
-- Androidの戻り確定時はpaneのspring完了を待たず、選択を即時解除する。狭幅の一覧に選択色を残さず、広幅では2ペインの選択強調を維持する。
+- Androidの戻り確定後は、約280msのスライドで詳細を退場させてから選択を解除する。長いspringの余韻や退場中の空欄への切替を避ける。アニメーション無効時は即時に戻る。狭幅の一覧に選択色を残さず、広幅では2ペインの選択強調を維持する。戻るジェスチャーの追従・取消、認可喪失時の非表示、一覧の読位置と検索focus抑止も維持する。
 
 API 36・架空データで、[意見](screenshots/detail-opinions-light.png)、[投票](screenshots/detail-voting-light.png)、[結果](screenshots/detail-result-dark.png)、[開閉カード](screenshots/detail-result-expanded-dark.png)、[親愛度](screenshots/detail-affection-dark.png)、[320dp・文字2倍](screenshots/detail-large-text.png)を確認する。[前版の操作録画](screenshots/detail-pages.mp4)とは画面順と初期段階が異なる。
 プレビューは`RecordDetailVisualTest`に`shittimCaptureUi=true`を渡して再取得できる。録画時だけ`shittimRecordUi=true`も渡す。通常CIでは録画用の待機や実時間フレーム送りを行わない。
+
+戻りスライドの[途中](screenshots/adaptive-back-slide-middle.png)と[完了後](screenshots/adaptive-back-slide-complete.png)も架空データで確認する。`AdaptiveRecordsUiTest.threeButtonBackSlidesBeforeClosingWithoutLeavingASelectedListCard`へ`shittimCaptureAdaptive=true`を渡して再取得できる。
