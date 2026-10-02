@@ -116,8 +116,10 @@ internal fun AdaptiveRecordsUi(
     }
     PredictiveBackHandler(enabled = state.selectedRecordId != null) { progress ->
       val selectedAtStart = currentState.value.selectedRecordId
+      var gestureInProgress = false
       try {
         progress.collect { event ->
+          gestureInProgress = true
           scaffoldState.seekTo(event.progress, listValue, isPredictiveBackInProgress = true)
         }
         // A completed gesture must not close another record or act after authentication is lost.
@@ -129,7 +131,9 @@ internal fun AdaptiveRecordsUi(
           if (ValueAnimator.areAnimatorsEnabled()) {
             scaffoldState.animateTo(listValue,
               animationSpec = tween(280, easing = FastOutSlowInEasing),
-              isPredictiveBackInProgress = true)
+              // A button-only Back has no predictive preview. Marking it as one
+              // shrinks the list, then adds a separate scale-restoring spring.
+              isPredictiveBackInProgress = gestureInProgress)
           } else scaffoldState.snapTo(listValue)
           if (currentState.value.canReadRecords && currentState.value.selectedRecordId == selectedAtStart) {
             currentState.value.eventSink(BootstrapScreen.Event.CloseRecord)

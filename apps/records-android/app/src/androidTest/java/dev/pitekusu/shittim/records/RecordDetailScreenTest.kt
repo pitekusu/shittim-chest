@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.isDisplayed
@@ -11,9 +12,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeRight
@@ -52,6 +50,30 @@ class RecordDetailScreenTest {
     compose.onNodeWithTag("detail-pager").performTouchInput { swipeRight() }
     compose.waitUntil(5_000) { compose.onNodeWithText("この記録には意見データがありません。").isDisplayed() }
     compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
+  }
+
+  @Test fun questionStaysFixedWhileTabsSlideAndThePageChanges() {
+    compose.activityRule.scenario.onActivity { it.setContent {
+      ShittimTheme(false) { RecordDetailScreen(RecordPreviewState.Ready(preview()), "sample", {}) }
+    } }
+    val questionBounds = compose.onNodeWithTag("detail-question-open").fetchSemanticsNode().boundsInRoot
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.onNodeWithTag("detail-section-Voting").performClick()
+      compose.mainClock.advanceTimeBy(96)
+      val duringSlide = compose.onNodeWithTag("detail-question-open").fetchSemanticsNode().boundsInRoot
+      assertEquals(questionBounds.left, duringSlide.left, 1f)
+      assertEquals(questionBounds.top, duringSlide.top, 1f)
+      assertEquals(questionBounds.width, duringSlide.width, 1f)
+      assertEquals(questionBounds.height, duringSlide.height, 1f)
+      compose.mainClock.advanceTimeBy(1_000)
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
+    compose.onNodeWithTag("detail-section-Voting").assertIsSelected()
+    compose.onNodeWithTag("detail-pager").performTouchInput { swipeRight() }
+    compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
+    assertEquals(questionBounds, compose.onNodeWithTag("detail-question-open").fetchSemanticsNode().boundsInRoot)
   }
 
   @Test fun switchingPagesRestoresResultReadingPositionAndAnotherRecordStartsAtOpinions() {
@@ -96,7 +118,6 @@ class RecordDetailScreenTest {
     compose.onNodeWithText("• 散歩する").assertDoesNotExist()
     compose.onNodeWithTag("detail-actions-expand").performScrollTo().performClick()
     compose.onNodeWithText("• 散歩する").assertExists()
-    compose.onNodeWithTag("record-detail-content").performScrollToNode(hasTestTag("detail-question-open"))
     compose.onNodeWithTag("detail-question-open").performClick()
     compose.waitUntil(5_000) { compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
     InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
@@ -112,7 +133,7 @@ class RecordDetailScreenTest {
     compose.onNodeWithText("• 天気を確認する").assertExists()
   }
 
-  @Test fun longQuestionIsNotEllipsizedAndScrollsWithTheAnswer() {
+  @Test fun longQuestionScrollsIndependentlyWithoutEllipsisOrHidingTheAnswer() {
     val question = "長い架空の議題について、順番に読み進められるように考えてください。\n".repeat(30)
     compose.activityRule.scenario.onActivity { it.setContent {
       ShittimTheme(false) { RecordDetailScreen(RecordPreviewState.Ready(
@@ -125,9 +146,19 @@ class RecordDetailScreenTest {
     assertTrue(layouts.single().lineCount > 2)
     assertFalse(layouts.single().hasVisualOverflow)
     assertFalse((0 until layouts.single().lineCount).any { layouts.single().isLineEllipsized(it) })
-    compose.onNodeWithTag("record-detail-content")
-      .performScrollToNode(hasText("この記録には意見データがありません。"))
-    compose.onNodeWithText("この記録には意見データがありません。").assertExists()
+    compose.onNodeWithText("この記録には意見データがありません。").assertIsDisplayed()
+    val questionScroll = compose.onNodeWithTag("detail-question-scroll", useUnmergedTree = true)
+    assertTrue(questionScroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f)
+    questionScroll.performTouchInput { swipeUp() }
+    val position = questionScroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue(position > 0f)
+    compose.onNodeWithTag("detail-section-Voting").performClick()
+    assertEquals(position, questionScroll.fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value(), 0.01f)
+    compose.onNodeWithTag("detail-section-Opinions").performClick()
+    compose.onNodeWithText("この記録には意見データがありません。").assertIsDisplayed()
+    assertEquals(position, questionScroll.fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value(), 0.01f)
   }
 
   @Test fun opinionsDefaultToWinnerAndKeepEachAnswerReadingPositionDuringRefresh() {
