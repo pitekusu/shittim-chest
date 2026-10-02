@@ -119,12 +119,11 @@ class ShittimDesignTest {
     list.performScrollToNode(hasText("勝者：プラナ"))
     compose.onNodeWithText("勝者：プラナ").assertIsDisplayed()
     compose.runOnIdle { large.value = true }
-    list.performScrollToNode(hasTestTag("records-filter-toggle"))
-    compose.onNodeWithTag("records-filter-toggle").performClick()
-    list.performScrollToNode(hasTestTag("winner-Abe"))
-    compose.onNodeWithTag("winner-Abe").assertIsDisplayed().performClick()
+    compose.onNodeWithTag("records-filter-toggle").assertIsDisplayed().performClick()
+    compose.onNodeWithTag("winner-Abe").performScrollTo().assertIsDisplayed().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.SelectWinner(RecordWinner.Abe), events.last()) }
     capture("design-large-text")
+    compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
     compose.onNodeWithTag("records-menu-open").performClick()
     compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).performScrollTo().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.last()) }
