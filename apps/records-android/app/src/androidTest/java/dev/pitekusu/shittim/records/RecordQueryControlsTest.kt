@@ -42,15 +42,17 @@ import org.junit.runner.RunWith
 class RecordQueryControlsTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
-  @Test fun searchWinnerOrderAndResetAreImmediateAndHaveSelectionSemantics() {
+  @Test fun searchRequesterWinnerOrderAndResetAreImmediateAndHaveSelectionSemantics() {
     val query = mutableStateOf(RecordListQuery())
+    val requesters = requesterChoices()
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(24.dp)) {
-          RecordQueryControls(query.value) { event ->
+          RecordQueryControls(query.value, requesters = requesters) { event ->
             query.value = when (event) {
               is BootstrapScreen.Event.SearchRecords -> query.value.copy(text = event.text)
               is BootstrapScreen.Event.SelectWinner -> query.value.copy(winner = event.winner)
+              is BootstrapScreen.Event.SelectRequester -> query.value.copy(requesterName = event.displayName)
               is BootstrapScreen.Event.SelectOrder -> query.value.copy(order = event.order)
               BootstrapScreen.Event.ClearRecordQuery -> RecordListQuery()
               else -> error("unexpected_control_event")
@@ -61,14 +63,17 @@ class RecordQueryControlsTest {
     }
     compose.onNodeWithTag("record-search").performTextInput("架空の相談")
     compose.onNodeWithTag("record-search").performImeAction()
+    compose.onNodeWithTag("requester-0").performScrollTo().performClick().assertIsSelected()
     compose.onNodeWithTag("winner-Plana").performScrollTo().performClick().assertIsSelected()
     compose.onNodeWithTag("order-Oldest").performScrollTo().performClick().assertIsOn()
     compose.onNodeWithTag("order-Newest").assertIsOff()
     compose.runOnIdle {
-      assertEquals(RecordListQuery("架空の相談", RecordWinner.Plana, RecordOrder.Oldest), query.value)
+      assertEquals(RecordListQuery("架空の相談", RecordWinner.Plana, RecordOrder.Oldest,
+        requesters.first().displayName), query.value)
     }
     compose.onNodeWithText(label(R.string.record_search_reset)).performScrollTo().performClick()
     compose.runOnIdle { assertEquals(RecordListQuery(), query.value) }
+    compose.onNodeWithTag("requester-all").performScrollTo().assertIsSelected()
     compose.onNodeWithTag("winner-All").performScrollTo().assertIsSelected()
   }
 
@@ -76,6 +81,7 @@ class RecordQueryControlsTest {
     val dark = mutableStateOf(false)
     val large = mutableStateOf(false)
     val query = mutableStateOf(RecordListQuery(winner = RecordWinner.Plana))
+    val requesters = requesterChoices()
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent {
         val density = LocalDensity.current
@@ -83,8 +89,12 @@ class RecordQueryControlsTest {
           ShittimTheme(dark.value) { ShittimBackdrop {
             Column(Modifier.width(if (large.value) 320.dp else 360.dp)
               .verticalScroll(rememberScrollState()).padding(24.dp).testTag("query-preview")) {
-              RecordQueryControls(query.value) { event ->
-                if (event is BootstrapScreen.Event.SelectOrder) query.value = query.value.copy(order = event.order)
+              RecordQueryControls(query.value, requesters = requesters) { event ->
+                query.value = when (event) {
+                  is BootstrapScreen.Event.SelectOrder -> query.value.copy(order = event.order)
+                  is BootstrapScreen.Event.SelectRequester -> query.value.copy(requesterName = event.displayName)
+                  else -> query.value
+                }
               }
             }
           } }
@@ -98,12 +108,29 @@ class RecordQueryControlsTest {
     compose.onNodeWithTag("order-Oldest").performClick().assertIsOn()
     capture("motion-order-dark")
     compose.runOnIdle { large.value = true }
+    requesters.forEachIndexed { index, requester ->
+      compose.onNodeWithTag("requester-$index").performScrollTo().assertIsDisplayed()
+        .performClick().assertIsSelected()
+      compose.onNodeWithTag("requester-avatar-$index", useUnmergedTree = true).assertIsDisplayed()
+      compose.runOnIdle { assertEquals(requester.displayName, query.value.requesterName) }
+    }
+    capture("query-requesters-large-text")
+    compose.onNodeWithTag("requester-all").performScrollTo().performClick().assertIsSelected()
     compose.onNodeWithTag("winner-Abe").performScrollTo().assertIsDisplayed()
     compose.onNodeWithTag("order-Oldest").performScrollTo().assertIsOn().assertIsDisplayed()
     compose.onNodeWithTag("order-Newest").performClick().assertIsOn()
     capture("motion-order-large-text")
     compose.onNodeWithText(label(R.string.record_sort_label)).performScrollTo().assertIsDisplayed()
     compose.onNodeWithText(label(R.string.record_search_reset)).performScrollTo().assertIsDisplayed()
+  }
+
+  private fun requesterChoices(): List<RecordRequesterChoice> {
+    val bytes = compose.activity.resources.openRawResource(R.drawable.participant_b).use { it.readBytes() }
+    return listOf(
+      RecordRequesterChoice("架空の依頼者A", RecordAvatar(null, "cyan", bytes = bytes)),
+      RecordRequesterChoice("架空の依頼者B", RecordAvatar(null, "pink")),
+      RecordRequesterChoice("架空の依頼者C：表示名が長い場合も選べる確認用プロフィール", RecordAvatar(null, "lavender")),
+    )
   }
 
   private fun label(id: Int): String = compose.activity.getString(id)

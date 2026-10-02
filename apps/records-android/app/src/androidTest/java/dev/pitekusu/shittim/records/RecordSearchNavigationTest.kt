@@ -9,6 +9,7 @@ import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -110,6 +111,45 @@ class RecordSearchNavigationTest {
     compose.runOnIdle { assertEquals("架空", host.query.text) }
   }
 
+  @Test fun requesterAppliesWithWinnerAndSearchAndCanBeRemovedFromEitherScreen() {
+    val host = Host()
+    show(host)
+    compose.onNodeWithTag("records-filter-toggle").performClick()
+    compose.onNodeWithTag("requester-0").performClick().assertIsSelected()
+    compose.onNodeWithTag("winner-Plana").performScrollTo().performClick()
+    compose.runOnIdle {
+      assertEquals("架空の依頼者A", host.query.requesterName)
+      assertEquals(listOf("架空の依頼者A", "架空の依頼者B"), host.state.value.requesters.map { it.displayName })
+      assertEquals(setOf(5, 11, 17, 23).map { it.toString().padStart(43, 'q') }.toSet(),
+        (host.state.value.records as RecordListState.Ready).loadedIds)
+    }
+    compose.onNodeWithTag("requester-1").performScrollTo().assertIsDisplayed()
+    compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
+    compose.onNodeWithTag("records-query-requester-chip").assertIsDisplayed()
+    compose.onNodeWithTag("records-filter-toggle").assertIsSelected()
+    compose.onNodeWithTag("records-search-toggle").performClick()
+    compose.onNodeWithTag("record-search").performTextInput("散歩 2")
+    compose.runOnIdle {
+      assertEquals(setOf("23".padStart(43, 'q')), (host.state.value.records as RecordListState.Ready).loadedIds)
+    }
+    compose.onNode(hasTestTag("records-query-requester-chip") and
+      hasAnyAncestor(hasTestTag("records-search-results"))).assertIsDisplayed().performClick()
+    compose.runOnIdle {
+      assertEquals(null, host.query.requesterName)
+      assertEquals("散歩 2", host.query.text)
+      assertEquals(RecordWinner.Plana, host.query.winner)
+      assertEquals(setOf(2, 20, 23).map { it.toString().padStart(43, 'q') }.toSet(),
+        (host.state.value.records as RecordListState.Ready).loadedIds)
+    }
+    compose.onNodeWithTag("records-search-close").performClick()
+    compose.onNodeWithTag("records-query-requester-chip").assertDoesNotExist()
+    compose.onNodeWithTag("records-filter-toggle").performClick()
+    compose.onNodeWithTag("requester-1").performClick().assertIsSelected()
+    compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
+    compose.onNodeWithTag("records-query-requester-chip").assertIsDisplayed().performClick()
+    compose.runOnIdle { assertEquals(null, host.query.requesterName) }
+  }
+
   @Test fun authorizationLossRemovesSearchAndFilterContentImmediately() {
     val host = Host()
     show(host)
@@ -123,9 +163,11 @@ class RecordSearchNavigationTest {
     compose.onNodeWithTag("record-search").assertDoesNotExist()
     compose.onNodeWithTag("records-filter-toggle").performClick()
     compose.onNodeWithTag("records-filter-sheet").assertIsDisplayed()
+    compose.onNodeWithTag("requester-0").assertIsDisplayed()
     compose.runOnIdle { host.setAuthorized(false) }
     compose.onNodeWithTag("records-filter-sheet", useUnmergedTree = true).assertDoesNotExist()
     compose.onNodeWithTag("winner-All", useUnmergedTree = true).assertDoesNotExist()
+    compose.onNodeWithTag("requester-0", useUnmergedTree = true).assertDoesNotExist()
   }
 
   @Test fun narrowLargeTextKeepsToolbarAndAllWinnerChoicesReachable() {
@@ -136,6 +178,10 @@ class RecordSearchNavigationTest {
     } }
     compose.onNodeWithTag("records-search-toggle").assertIsDisplayed()
     compose.onNodeWithTag("records-filter-toggle").assertIsDisplayed().performClick()
+    for (index in 0..1) {
+      compose.onNodeWithTag("requester-$index").performScrollTo().performClick().assertIsSelected()
+    }
+    compose.onNodeWithTag("requester-all").performScrollTo().performClick().assertIsSelected()
     for (winner in listOf(RecordWinner.Arona, RecordWinner.Plana, RecordWinner.Abe, RecordWinner.All)) {
       compose.onNodeWithTag("winner-${winner.name}").performScrollTo().performClick()
       compose.runOnIdle { assertEquals(winner, host.query.winner) }
@@ -146,11 +192,17 @@ class RecordSearchNavigationTest {
 
   @Test fun captureSearchAndFilterPreview() {
     if (InstrumentationRegistry.getArguments().getString("shittimCaptureJournal") != "true") return
-    val host = Host()
+    val bytes = compose.activity.resources.openRawResource(R.drawable.participant_b).use { it.readBytes() }
+    val host = Host(bytes)
     show(host)
     compose.onNodeWithTag("records-filter-toggle").performClick()
+    compose.onNodeWithTag("requester-0").performClick()
+    capture("requester-filter-dark", "records-filter-sheet")
+    compose.runOnIdle { host.setTheme(ThemeChoice.Light) }
+    capture("requester-filter-light", "records-filter-sheet")
+    compose.runOnIdle { host.setTheme(ThemeChoice.Dark) }
     capture("journal-filter-sheet", "records-filter-sheet")
-    compose.onNodeWithTag("winner-Plana").performClick()
+    compose.onNodeWithTag("winner-Plana").performScrollTo().performClick()
     capture("journal-filter-selected", "records-filter-sheet")
     compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
     compose.onNodeWithTag("records-search-toggle").performClick()
@@ -178,18 +230,20 @@ class RecordSearchNavigationTest {
   }
 
   /** The fake API boundary publishes the same saved Paging Flow, like the real repository. */
-  private class Host {
+  private class Host(avatarBytes: ByteArray? = null) {
     val entries = (1..24).map { index ->
       val slot = (index - 1) % 3
       RecordListEntry(index.toString().padStart(43, 'q'),
-        "架空の散歩 $index：休日に無理なく気分転換するには？", "架空の依頼者",
-        RecordAvatar(null, "cyan"), Instant.parse("2026-10-02T14:00:00Z").minusSeconds(index.toLong()),
+        "架空の散歩 $index：休日に無理なく気分転換するには？", "架空の依頼者${if (index % 2 == 1) "A" else "B"}",
+        RecordAvatar(null, "cyan", bytes = avatarBytes.takeIf { index % 2 == 1 }),
+        Instant.parse("2026-10-02T14:00:00Z").minusSeconds(index.toLong()),
         listOf("アロナ", "プラナ", "安倍晋三AI")[slot], listOf("participant-a", "participant-b", "participant-c")[slot])
     }
     var query = RecordListQuery()
       private set
     private var selected: String? = null
     private var authorized = true
+    private var theme = ThemeChoice.Dark
     private var records = RecordListState.Ready.fromSaved(entries)
     private val session = SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "確認用", "cyan")),
@@ -202,16 +256,23 @@ class RecordSearchNavigationTest {
       state.value = screen()
     }
 
-    private fun screen() = BootstrapScreen.State(ThemeChoice.Dark, session,
+    fun setTheme(value: ThemeChoice) {
+      theme = value
+      state.value = screen()
+    }
+
+    private fun screen() = BootstrapScreen.State(theme, session,
       records = records, record = RecordPreviewState.Ready(
         RecordPreview("架空の議題全文", "架空の結論", "アロナ")), selectedRecordId = selected,
-      canReadRecords = authorized, listQuery = query, eventSink = ::event)
+      canReadRecords = authorized, listQuery = query,
+      requesters = if (authorized) recordRequesterChoices(entries) else emptyList(), eventSink = ::event)
 
     private fun event(event: BootstrapScreen.Event) {
       val old = query
       when (event) {
         is BootstrapScreen.Event.SearchRecords -> query = query.copy(text = event.text)
         is BootstrapScreen.Event.SelectWinner -> query = query.copy(winner = event.winner)
+        is BootstrapScreen.Event.SelectRequester -> query = query.copy(requesterName = event.displayName)
         is BootstrapScreen.Event.SelectOrder -> query = query.copy(order = event.order)
         BootstrapScreen.Event.ClearRecordQuery -> query = RecordListQuery()
         is BootstrapScreen.Event.OpenRecord -> selected = event.recordId
@@ -219,7 +280,9 @@ class RecordSearchNavigationTest {
         else -> Unit
       }
       if (old != query) {
-        val filtered = query.sorted(entries.filter { query.acceptsWinner(it) && query.matches(it) })
+        val filtered = query.sorted(entries.filter {
+          query.acceptsWinner(it) && query.acceptsRequester(it) && query.matches(it)
+        })
         records = RecordListState.Ready.fromSaved(filtered, records, total = entries.size)
       }
       state.value = screen()

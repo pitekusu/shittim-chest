@@ -9,4 +9,8 @@
     <string name="journal_auth_error">ログイン状態をご確認ください。</string>
     <string name="journal_offline">オフライン閲覧中</string>
     <string name="journal_searching">保存済みの記録を検索しています…</string>
+    <string name="record_filter_requester">依頼者で絞り込み</string>
+    <string name="record_filter_requester_hint">記録に保存された表示名で絞り込みます。</string>
+    <string name="record_query_requester_chip">依頼者：%1$s</string>
+    <string name="record_query_remove_requester">%1$sの依頼者絞り込みを解除</string>
 </resources>

@@ -45,6 +45,7 @@ internal data object BootstrapScreen : Screen {
     val sync: RecordSyncState = RecordSyncState.Idle,
     val canReadRecords: Boolean = session is SessionState.SignedIn,
     val listQuery: RecordListQuery = RecordListQuery(),
+    val requesters: List<RecordRequesterChoice> = emptyList(),
     val searching: Boolean = false,
     val loginCompletion: Int = 0,
     val eventSink: (Event) -> Unit,
@@ -56,12 +57,13 @@ internal data object BootstrapScreen : Screen {
     data object Logout : Event
     data object Retry : Event
     data object RetryRecord : Event
-    data object RecordsAuthRequired : Event
     data object RefreshRecords : Event
+    data object RecordsAuthRequired : Event
     data class OpenRecord(val recordId: String) : Event
     data object CloseRecord : Event
     data class SearchRecords(val text: String) : Event
     data class SelectWinner(val winner: RecordWinner) : Event
+    data class SelectRequester(val displayName: String?) : Event
     data class SelectOrder(val order: RecordOrder) : Event
     data object ClearRecordQuery : Event
   }
@@ -105,6 +107,7 @@ internal class BootstrapPresenter(
     // Search text and decrypted snapshots are account-bound memory, never SavedState.
     var listQuery by remember(cacheAccountId) { mutableStateOf(RecordListQuery()) }
     var savedEntries by remember(cacheAccountId) { mutableStateOf<List<RecordListEntry>?>(null) }
+    val requesters = remember(savedEntries) { recordRequesterChoices(savedEntries.orEmpty()) }
     var searching by remember(cacheAccountId) { mutableStateOf(false) }
     var listOwner by remember { mutableStateOf<String?>(null) }
     var syncState by remember { mutableStateOf<RecordSyncState>(RecordSyncState.Idle) }
@@ -235,6 +238,7 @@ internal class BootstrapPresenter(
     val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId) recordList else RecordListState.Idle
     return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId, syncState,
       canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
+      requesters = if (cacheAccountId != null) requesters else emptyList(),
       loginCompletion = loginCompletion) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
@@ -250,10 +254,6 @@ internal class BootstrapPresenter(
           recordRetry++
           if (!signedIn) session.retry() else RecordSyncScheduler.syncNow(context)
         }
-        BootstrapScreen.Event.RecordsAuthRequired -> session.onAuthenticationRequired()
-        is BootstrapScreen.Event.OpenRecord -> if (
-          event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
-        ) session.openDestination("/records/${event.recordId}")
         BootstrapScreen.Event.RefreshRecords -> if (
           cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) &&
           session.destination.value == "/" && syncState != RecordSyncState.Running
@@ -262,9 +262,14 @@ internal class BootstrapPresenter(
           // Check the live destination/permit even when an older UI callback is retained.
           RecordSyncScheduler.syncNow(context)
         }
+        BootstrapScreen.Event.RecordsAuthRequired -> session.onAuthenticationRequired()
+        is BootstrapScreen.Event.OpenRecord -> if (
+          event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
+        ) session.openDestination("/records/${event.recordId}")
         BootstrapScreen.Event.CloseRecord -> session.closeDestination()
         is BootstrapScreen.Event.SearchRecords -> listQuery = listQuery.copy(text = event.text)
         is BootstrapScreen.Event.SelectWinner -> listQuery = listQuery.copy(winner = event.winner)
+        is BootstrapScreen.Event.SelectRequester -> listQuery = listQuery.copy(requesterName = event.displayName)
         is BootstrapScreen.Event.SelectOrder -> listQuery = listQuery.copy(order = event.order)
         BootstrapScreen.Event.ClearRecordQuery -> listQuery = RecordListQuery()
       }

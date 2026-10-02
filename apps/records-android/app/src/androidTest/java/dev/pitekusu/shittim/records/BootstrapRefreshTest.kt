@@ -131,6 +131,22 @@ class BootstrapRefreshTest {
         rendered?.let { !it.searching && it.listQuery.text == "架空" &&
           (it.records as? RecordListState.Ready)?.loadedIds == setOf(recordId) } == true
       }
+      compose.runOnIdle {
+        assertEquals(listOf("架空の依頼者"), rendered!!.requesters.map { it.displayName })
+        rendered!!.eventSink(BootstrapScreen.Event.SelectRequester("記録のない架空の依頼者"))
+      }
+      compose.waitUntil(10_000) {
+        rendered?.let { !it.searching && it.listQuery.requesterName == "記録のない架空の依頼者" &&
+          (it.records as? RecordListState.Ready)?.loadedIds == emptySet<String>() } == true
+      }
+      compose.runOnIdle {
+        assertEquals(listOf("架空の依頼者"), rendered!!.requesters.map { it.displayName })
+        rendered!!.eventSink(BootstrapScreen.Event.SelectRequester("架空の依頼者"))
+      }
+      compose.waitUntil(10_000) {
+        rendered?.let { !it.searching && it.listQuery.requesterName == "架空の依頼者" &&
+          (it.records as? RecordListState.Ready)?.loadedIds == setOf(recordId) } == true
+      }
       val savedList = rendered!!.records
       val query = rendered!!.listQuery
       val retainedSink = rendered!!.eventSink
@@ -176,6 +192,7 @@ class BootstrapRefreshTest {
         rendered?.let { it.session is SessionState.SignedOut && !it.canReadRecords } == true
       }
       compose.runOnIdle {
+        assertTrue(rendered!!.requesters.isEmpty())
         assertEquals(RecordListQuery(), rendered!!.listQuery)
       }
       compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.RefreshRecords) }

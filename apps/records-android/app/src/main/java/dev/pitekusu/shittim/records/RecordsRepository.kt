@@ -211,7 +211,7 @@ internal class RecordsRepository(
     requireActive(accountId)
     val matches = entries.filter { entry ->
       requireActive(accountId)
-      query.acceptsWinner(entry) && (!query.searchesText || query.matches(entry) ||
+      query.acceptsWinner(entry) && query.acceptsRequester(entry) && (!query.searchesText || query.matches(entry) ||
         query.matches(entry, cachedRecord(accountId, entry.recordId)))
     }
     requireActive(accountId)

@@ -1110,6 +1110,8 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 
 - [AGP 9.4の互換性](https://developer.android.com/build/releases/agp-9-4-0-release-notes)
 - [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin)
+依頼者フィルターは保存済みの全一覧メタ情報から候補を作り、Discordディスプレイネームと保存済みアイコンのChipで単一選択する。「すべて」または有効条件Chipで解除でき、検索・勝者条件とはANDで組み合わせる。候補は絞り込み結果や現在のPagingページから作らず、選択中も全候補を維持する。新しい記録のアイコンがまだ保存されていなければ既存の保存済み画像を優先し、欠損時は代替表示を使う。オフライン表示の追加通信は行わない。既存読取APIには依頼者IDがないため保存された表示名の完全一致を使い、同名は同一候補、改名前後は別候補とする。内部Discord IDやアイコンURLから本人を推測しない。条件・候補は認可されたアカウントのメモリだけに保持し、API・保存形式・DB schemaは変更しない。
+
 - [Kotlin Gradle Pluginの版の指定](https://developer.android.com/build/releases/agp-9-0-0-release-notes#runtime-dependency-on-kotlin-gradle-plugin)
 - [Gradle Wrapper](https://docs.gradle.org/9.7.1/userguide/gradle_wrapper.html)
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)

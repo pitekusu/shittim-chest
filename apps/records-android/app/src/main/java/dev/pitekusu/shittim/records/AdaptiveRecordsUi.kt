@@ -181,7 +181,7 @@ internal fun AdaptiveRecordsUi(
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
               item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true, motionAllowed = listMotion) }
               if (!state.listQuery.isDefault) item(key = "records-query-active") {
-                RecordActiveQueryChips(state.listQuery, onEvent = state.eventSink)
+                RecordActiveQueryChips(state.listQuery, requesters = state.requesters, onEvent = state.eventSink)
               }
               recordListItems(state.records, pagingItems, state.eventSink,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
@@ -219,6 +219,7 @@ internal fun AdaptiveRecordsUi(
     if (state.canReadRecords && state.selectedRecordId == null) {
       when (queryMode) {
         RecordQueryMode.Filters -> RecordFilterSheet(state.listQuery,
+          requesters = state.requesters,
           onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = state.eventSink)
         RecordQueryMode.Search -> RecordFullScreenSearch(state.listQuery,
           onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = { event ->
@@ -242,7 +243,7 @@ internal fun AdaptiveRecordsUi(
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
               val filters = state.listQuery.copy(text = "")
               if (!filters.isDefault) item(key = "search-query-active") {
-                RecordActiveQueryChips(filters, onEvent = state.eventSink)
+                RecordActiveQueryChips(filters, requesters = state.requesters, onEvent = state.eventSink)
               }
               recordListItems(state.records, pagingItems, resultEvent,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
