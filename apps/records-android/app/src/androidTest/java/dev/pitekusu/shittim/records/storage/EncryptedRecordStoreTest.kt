@@ -107,6 +107,19 @@ class EncryptedRecordStoreTest {
   }
 
   @Test
+  fun bulkCiphertextReadsAndDecryptionRemainScopedToTheAccountAndPart() = runBlocking {
+    val payload = "synthetic list".toByteArray()
+    store.save(account, record, CachedRecordPart.LIST, payload)
+    store.save(account, record, CachedRecordPart.DETAIL, "synthetic detail".toByteArray())
+    val rows = store.rows(account, CachedRecordPart.LIST)
+    assertEquals(listOf(record), rows.map { it.recordId })
+    assertEquals(emptyList<EncryptedRecordRow>(), store.rows("different_account", CachedRecordPart.LIST))
+    assertArrayEquals(payload, store.decryptRow(account, rows.single(), CachedRecordPart.LIST))
+    assertCacheFailure { store.decryptRow("different_account", rows.single(), CachedRecordPart.LIST) }
+    assertCacheFailure { store.decryptRow(account, rows.single(), CachedRecordPart.DETAIL) }
+  }
+
+  @Test
   fun largestAcceptedPayloadCanBeReadAndOversizeDoesNotReplaceIt() = runBlocking {
     val payload = ByteArray(1024 * 1024) { (it % 251).toByte() }
     store.save(account, record, CachedRecordPart.DETAIL, payload)
