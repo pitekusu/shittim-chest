@@ -15,6 +15,10 @@ internal data class RecordSyncCheckpoint(
   val removalCandidates: Set<String>? = null,
   val indexBased: Boolean = false,
   val pendingReferences: List<RecordSyncReference> = emptyList(),
+  // An authenticated manifest avoids unwrapping every unchanged record's data key.
+  val committedRevisions: Map<String, String> = emptyMap(),
+  val pendingAvatars: Set<String> = emptySet(),
+  val needsAvatarPrune: Boolean = false,
 ) {
   fun validate() {
     check(schemaVersion == 1 && (cursor == null || validRecordCursor(cursor)))
@@ -25,6 +29,9 @@ internal data class RecordSyncCheckpoint(
     check(!complete || (pageLoaded && cursor == null && pendingIds.isEmpty()))
     check(!indexBased || pendingReferences.map { it.recordId } == pendingIds)
     check(pendingReferences.all { mobileOpaqueValue.matches(it.revision) && mobileOpaqueValue.matches(it.avatarRevision) })
+    check(committedRevisions.all { (id, revision) -> mobileOpaqueValue.matches(id) && mobileOpaqueValue.matches(revision) })
+    check(pendingAvatars.all(mobileOpaqueValue::matches))
+    check(!complete || pendingAvatars.isEmpty())
   }
 
   override fun toString(): String = "RecordSyncCheckpoint(<redacted>)"

@@ -35,6 +35,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -267,10 +268,11 @@ class RecordsRepositoryTest {
       repository(MockEngine { request ->
         val id = request.url.encodedPath.substringAfterLast('/')
         resumed.add(id)
-        respond(detail(id), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        respond(if (id == "sync-index") index(listOf(recordId, nextId)) else detail(id),
+          headers = headersOf(HttpHeaders.ContentType, "application/json"))
       }).use { records ->
         records.synchronize(token, accountId)
-        assertEquals(listOf(nextId), resumed)
+        assertEquals(listOf("sync-index", nextId), resumed)
         assertEquals(true, records.syncCheckpoint(accountId)?.complete)
       }
       val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
@@ -350,8 +352,134 @@ class RecordsRepositoryTest {
       records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(cursor = "old.signature", removalCandidates = emptySet(), indexBased = true))
       try { records.synchronize(token, accountId); fail("a second invalid cursor must stop sync") }
       catch (error: RecordReadException) { assertEquals(RecordReadFailure.CURSOR_INVALID, error.failure) }
-      assertEquals(listOf("old.signature", "first", "new.signature"), calls)
+      assertEquals(listOf("first", "old.signature", "first", "new.signature"), calls)
       assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+    }
+  }
+
+  @Test fun unchangedPassCheckpointsPagesInsteadOfEveryRecordAfterReopen() = runBlocking {
+    val ids = (1..12).map { it.toString().padEnd(43, 'r') }
+    val responses = { MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      respond(if (id == "sync-index") index(ids) else detail(id),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    } }
+    repository(responses()).use { it.synchronize(token, accountId) }
+    AndroidSQLiteDriver().open(app.getDatabasePath(databaseName).path).use { connection ->
+      for (sql in listOf(
+        "CREATE TABLE checkpoint_writes (count INTEGER NOT NULL)",
+        "INSERT INTO checkpoint_writes VALUES (0)",
+        "CREATE TRIGGER count_checkpoint_write AFTER UPDATE ON encrypted_records WHEN NEW.part = 'sync-progress' BEGIN UPDATE checkpoint_writes SET count = count + 1; END",
+      )) connection.prepare(sql).use { it.step() }
+    }
+    repository(MockEngine { request ->
+      assertEquals("sync-index", request.url.encodedPath.substringAfterLast('/'))
+      respond(index(ids), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.synchronize(token, accountId)
+      assertEquals(ids.toSet(), records.syncCheckpoint(accountId)?.committedRevisions?.keys)
+    }
+    AndroidSQLiteDriver().open(app.getDatabasePath(databaseName).path).use { connection ->
+      connection.prepare("SELECT count FROM checkpoint_writes").use { query ->
+        query.step()
+        assertTrue("unchanged records must not each rewrite the encrypted checkpoint", query.getLong(0) <= 4)
+      }
+    }
+  }
+
+  @Test fun resumedTailFetchesTheLatestHeadBeforeItsPendingRecord() = runBlocking {
+    val older = "o".repeat(43)
+    val newest = "n".repeat(43)
+    repository(MockEngine { request ->
+      if (request.url.encodedPath.endsWith("/$older")) throw IOException("synthetic_failure")
+      respond(index(listOf(older), "tail.signature"),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      try { records.synchronize(token, accountId); fail("pending work must remain resumable") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
+    }
+    val calls = mutableListOf<String>()
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      calls += if (id == "sync-index") "index:${request.url.parameters["cursor"] ?: "head"}" else id
+      respond(if (id != "sync-index") detail(id)
+        else if (request.url.parameters["cursor"] == null) index(listOf(newest), "different.signature")
+        else index(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.synchronize(token, accountId)
+      assertEquals(listOf("index:head", newest, older, "index:tail.signature"), calls)
+      assertEquals(setOf(newest, older), records.cachedCompleteRecordIds(accountId))
+    }
+  }
+
+  @Test fun aCheckpointWriteFailureStillNotifiesAboutTheSavedResult() = runBlocking {
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      respond(when (id) { "records" -> list(); "sync-index" -> index(); else -> detail(id) },
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.recentRecords(token, accountId, null)
+      AndroidSQLiteDriver().open(app.getDatabasePath(databaseName).path).use { connection ->
+        connection.prepare("CREATE TRIGGER reject_checkpoint AFTER INSERT ON encrypted_records WHEN NEW.part = 'sync-progress' AND EXISTS (SELECT 1 FROM encrypted_records WHERE part = 'detail') BEGIN SELECT RAISE(ABORT, 'synthetic_checkpoint_failure'); END")
+          .use { it.step() }
+        connection.prepare("CREATE TRIGGER reject_checkpoint_update AFTER UPDATE ON encrypted_records WHEN NEW.part = 'sync-progress' AND EXISTS (SELECT 1 FROM encrypted_records WHERE part = 'detail') BEGIN SELECT RAISE(ABORT, 'synthetic_checkpoint_failure'); END")
+          .use { it.step() }
+      }
+      var notifications = 0
+      try { records.synchronize(token, accountId) { notifications++ }; fail("checkpoint failure must be reported") }
+      catch (error: RecordReadException) { assertEquals(RecordReadFailure.STORAGE_UNAVAILABLE, error.failure) }
+      assertEquals(1, notifications)
+      assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+      assertEquals(listOf(recordId), records.syncCheckpoint(accountId)?.pendingIds)
+    }
+  }
+
+  @Test fun newResultsArePublishedBeforeAnAvatarCompletesAndImageRetryKeepsBodies() = runBlocking {
+    val ids = listOf(recordId, "n".repeat(43))
+    var failImage = true
+    val entered = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val calls = mutableListOf<String>()
+    val bodyNotifications = mutableListOf<Set<String>>()
+    val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+    val png = ByteArrayOutputStream().use { output ->
+      bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+      output.toByteArray()
+    }
+    bitmap.recycle()
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      calls += id
+      if (id == "avatar.png") {
+        if (failImage) {
+          entered.complete(Unit)
+          release.await()
+          throw IOException("synthetic_failure")
+        }
+        respond(png, headers = headersOf(HttpHeaders.ContentType, "image/png"))
+      } else respond(if (id == "sync-index") index(ids) else detail(id).replace(
+        "\"kind\":\"placeholder\",\"url\":null",
+        "\"kind\":\"image\",\"url\":\"https://fixture.s3.ap-northeast-1.amazonaws.com/requesters/fake/avatar.png\""),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      val pending = async {
+        try { records.synchronize(token, accountId) { bodyNotifications += records.cachedCompleteRecordIds(accountId) }; null }
+        catch (error: RecordReadException) { error.failure }
+      }
+      try {
+        entered.await()
+        assertEquals(ids.toSet(), records.cachedRecords(accountId).map { it.recordId }.toSet())
+        assertEquals(ids.toSet(), bodyNotifications.last())
+        assertEquals(listOf("sync-index", ids[0], ids[1], "avatar.png"), calls)
+      } finally { release.complete(Unit) }
+      assertEquals(RecordReadFailure.UNAVAILABLE, pending.await())
+      assertEquals(ids.toSet(), records.syncCheckpoint(accountId)?.pendingAvatars)
+      calls.clear()
+      failImage = false
+      records.synchronize(token, accountId)
+      assertEquals(listOf("sync-index", "avatar.png"), calls)
+      assertEquals(true, records.syncCheckpoint(accountId)?.complete)
+      assertTrue(records.cachedRecords(accountId).all { it.requesterAvatar.bytes != null })
     }
   }
 
@@ -463,12 +591,13 @@ class RecordsRepositoryTest {
     val calls = mutableListOf<String>()
     repository(MockEngine { request ->
       calls.add(request.url.encodedPath.substringAfterLast('/'))
-      // A newer response must not replace the surviving cache during existence confirmation.
-      respond(detail().replace("架空の結論", "別の結論"),
+      // Head refresh may find no result, but existence confirmation must not replace a live cache.
+      respond(if (request.url.encodedPath.endsWith("/sync-index")) index(emptyList())
+        else detail().replace("架空の結論", "別の結論"),
         headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       records.synchronize(token, accountId)
-      assertEquals(listOf(recordId), calls)
+      assertEquals(listOf("sync-index", recordId), calls)
       assertEquals(listOf(recordId), records.cachedRecords(accountId).map { it.recordId })
       assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
       assertEquals(true, records.syncCheckpoint(accountId)?.complete)

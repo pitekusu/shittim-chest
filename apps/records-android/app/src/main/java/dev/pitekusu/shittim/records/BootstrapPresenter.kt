@@ -115,11 +115,21 @@ internal class BootstrapPresenter(
       if (cacheAccountId != null) {
         RecordSyncScheduler.states(context).collect { status ->
           syncState = status
-          // Periodic work resets to ENQUEUED without retaining its result output.
-          // Observe work/progress changes as well, including deletion-only completion.
-          listRetry++
           if ((status as? RecordSyncState.Failed)?.reason == RecordReadFailure.AUTH_REQUIRED) {
             session.onSyncAuthenticationRequired()
+          }
+        }
+      }
+    }
+    LaunchedEffect(cacheAccountId) {
+      if (cacheAccountId != null) {
+        // Initial local loading already includes older saves. Only new committed changes,
+        // not WorkManager start/progress/end bookkeeping, invalidate the current snapshot.
+        var observed = RecordSyncScheduler.cacheChanges.value
+        RecordSyncScheduler.cacheChanges.collect { generation ->
+          if (generation != observed) {
+            observed = generation
+            listRetry++
           }
         }
       }
@@ -137,7 +147,7 @@ internal class BootstrapPresenter(
       listOwner = cacheAccountId
       // Finish the current local read; progress only queues the latest reload.
       // collectLatest / effect keys based on progress would starve a slow decrypted read.
-      snapshotFlow { listRetry to (currentSessionState == SessionState.Unavailable) }.conflate().collect {
+      snapshotFlow { listRetry }.conflate().collect {
         val saved = try { records?.cachedRecords(cacheAccountId)
           ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
         catch (error: RecordReadException) {
@@ -155,7 +165,7 @@ internal class BootstrapPresenter(
       try {
         if (query.searchesText) delay(250) // Coalesce typing without any network request.
         // Progress may queue a new snapshot, but must not continually cancel a decrypted search.
-        snapshotFlow { savedEntries to syncState }.conflate().collect { (saved, status) ->
+        snapshotFlow { savedEntries }.conflate().collect { saved ->
           if (saved == null) return@collect
           searching = query.searchesText
           val selected = try {
@@ -167,6 +177,7 @@ internal class BootstrapPresenter(
             return@collect
           }
           if (!session.isCacheAuthorized(cacheAccountId)) return@collect
+          val status = syncState
           recordList = if (saved.isEmpty() && query.isDefault &&
             currentSessionState != SessionState.Unavailable && status is RecordSyncState.Failed) {
             RecordListState.Error(status.reason)
@@ -176,6 +187,19 @@ internal class BootstrapPresenter(
           searching = false
         }
       } finally { searching = false }
+    }
+    // Empty-list completion/errors must still change the presentation, without decrypting or
+    // searching the same saved entries again just because worker/session state changed.
+    LaunchedEffect(cacheAccountId, syncState, currentSessionState == SessionState.Unavailable,
+      savedEntries?.isEmpty(), listQuery) {
+      if (cacheAccountId == null || !session.isCacheAuthorized(cacheAccountId) ||
+        savedEntries?.isEmpty() != true || !listQuery.isDefault) return@LaunchedEffect
+      recordList = when {
+        currentSessionState == SessionState.Unavailable || syncState == RecordSyncState.Completed ->
+          RecordListState.Ready.fromSaved(emptyList(), recordList as? RecordListState.Ready)
+        syncState is RecordSyncState.Failed -> RecordListState.Error((syncState as RecordSyncState.Failed).reason)
+        else -> RecordListState.Idle
+      }
     }
     LaunchedEffect(cacheAccountId, selectedRecordId) {
       if (cacheAccountId != null && selectedRecordId != null) {

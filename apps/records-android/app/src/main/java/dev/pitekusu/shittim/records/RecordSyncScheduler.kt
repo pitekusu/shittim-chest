@@ -13,11 +13,20 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 internal object RecordSyncScheduler {
   private const val PERIODIC = "records-periodic-sync-v1"
   private const val IMMEDIATE = "records-immediate-sync-v1"
   private val network = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+  private val mutableCacheChanges = MutableStateFlow(0L)
+  // Workers and the Activity share one process. A sticky generation cannot lose the last save
+  // when periodic WorkManager clears its progress/output; process restart reads the cache first.
+  val cacheChanges = mutableCacheChanges.asStateFlow()
+
+  fun cacheChanged() { mutableCacheChanges.update { it + 1 } }
 
   fun schedule(context: Context) {
     val manager = WorkManager.getInstance(context)

@@ -107,6 +107,26 @@ class BootstrapLocalFirstTest {
       compose.waitUntil(10_000) { rendered?.records is RecordListState.Ready }
       compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("通信前に見える架空の記録"))
       compose.onNodeWithText("通信前に見える架空の記録").assertIsDisplayed()
+      val newRecordId = "n".repeat(43)
+      runBlocking {
+        val database = EncryptedRecordsDatabase.open(context)
+        try {
+          val cache = EncryptedRecordStore(database, RecordDataKeyProtector(KeystorePrivateKeyStore(context)))
+          val entry = RecordListEntry(newRecordId, "保存直後に見える新しい架空の記録", "架空の依頼者",
+            RecordAvatar(null, "cyan"), now.plusSeconds(1), "プラナ")
+          val payload = """{"schemaVersion":1,"entry":${Json.encodeToString(entry)}}""".toByteArray()
+          try { cache.save(accountId, newRecordId, CachedRecordPart.LIST, payload) }
+          finally { payload.fill(0) }
+        } finally { database.close() }
+      }
+      // A committed save, not a WorkManager state transition, wakes the local-first presenter.
+      RecordSyncScheduler.cacheChanged()
+      compose.waitUntil(10_000) {
+        (rendered?.records as? RecordListState.Ready)?.loadedIds?.contains(newRecordId) == true
+      }
+      compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("保存直後に見える新しい架空の記録"))
+      compose.onNodeWithText("保存直後に見える新しい架空の記録").assertIsDisplayed()
+      assertFalse(responseGate.isCompleted)
       compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.SearchRecords("一致しない語句")) }
       compose.waitUntil(10_000) { rendered?.let { !it.searching &&
         (it.records as? RecordListState.Ready)?.loadedIds?.isEmpty() == true } == true }

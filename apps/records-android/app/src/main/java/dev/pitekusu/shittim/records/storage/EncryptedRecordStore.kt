@@ -39,12 +39,35 @@ internal class EncryptedRecordStore(
   suspend fun load(accountId: String, recordId: String, part: CachedRecordPart): ByteArray? = guarded {
     validateIds(accountId, recordId)
     val row = database.records().get(accountKey(accountId), recordId, part.code) ?: return@guarded null
+    decodeRow(accountId, row, part)
+  }
+
+  /** Bulk ciphertext reads let an authorized reader decrypt only rows that actually changed. */
+  suspend fun rows(accountId: String, part: CachedRecordPart): List<EncryptedRecordRow> = guarded {
+    check(accountId.matches(OPAQUE_ID))
+    database.records().rows(accountKey(accountId), part.code).also { rows ->
+      rows.forEach { validateRow(accountId, it, part) }
+    }
+  }
+
+  suspend fun decryptRow(accountId: String, row: EncryptedRecordRow, part: CachedRecordPart): ByteArray = guarded {
+    decodeRow(accountId, row, part)
+  }
+
+  private fun decodeRow(accountId: String, row: EncryptedRecordRow, part: CachedRecordPart): ByteArray {
+    validateRow(accountId, row, part)
+    val recordId = row.recordId
     val dataKey = keyProtector.unwrap(accountId, recordId, row.wrappedKey)
-    try {
+    return try {
       decrypt(accountId, recordId, part, dataKey, row.encryptedPayload)
     } finally {
       dataKey.fill(0)
     }
+  }
+
+  private fun validateRow(accountId: String, row: EncryptedRecordRow, part: CachedRecordPart) {
+    validateIds(accountId, row.recordId)
+    check(row.accountKey == accountKey(accountId) && row.part == part.code)
   }
 
   suspend fun recordIds(accountId: String, part: CachedRecordPart): List<String> = guarded {
