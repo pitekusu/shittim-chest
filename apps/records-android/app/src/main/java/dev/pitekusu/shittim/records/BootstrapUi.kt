@@ -129,9 +129,9 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
 }
 
 @Composable
-internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
+internal fun BootstrapHeader(modifier: Modifier, compact: Boolean, motionAllowed: Boolean = true) {
   val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
-  val ringRotation = if (lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
+  val ringRotation = if (motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
     ValueAnimator.areAnimatorsEnabled()) {
     val spin = rememberInfiniteTransition(label = "brand ring")
     val degrees by spin.animateFloat(0f, 360f,

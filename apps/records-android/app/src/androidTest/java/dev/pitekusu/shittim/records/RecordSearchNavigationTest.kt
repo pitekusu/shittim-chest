@@ -9,7 +9,7 @@ import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotSelected
-import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -20,7 +20,6 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.then
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.MobileAvatar
@@ -75,8 +74,14 @@ class RecordSearchNavigationTest {
     compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
     compose.onNodeWithTag("records-query-winner-chip").assertIsDisplayed()
     compose.onNodeWithTag("records-query-order-chip").assertIsDisplayed()
-    compose.onNodeWithTag("records-query-reset").performClick()
+    compose.onNodeWithTag("records-search-toggle").performClick()
+    compose.onNode(hasTestTag("records-query-winner-chip") and
+      hasAnyAncestor(hasTestTag("records-search-results"))).assertIsDisplayed().performClick()
+    compose.runOnIdle { assertEquals(RecordWinner.All, host.query.winner) }
+    compose.onNode(hasTestTag("records-query-order-chip") and
+      hasAnyAncestor(hasTestTag("records-search-results"))).assertIsDisplayed().performClick()
     compose.runOnIdle { assertTrue(host.query.isDefault) }
+    compose.onNodeWithTag("records-search-close").performClick()
     compose.onNodeWithTag("records-active-query").assertDoesNotExist()
   }
 
@@ -156,8 +161,10 @@ class RecordSearchNavigationTest {
 
   private fun capture(name: String, tag: String) {
     compose.waitForIdle()
+    compose.onNodeWithTag(tag).assertIsDisplayed()
     File(compose.activity.cacheDir, "$name.png").outputStream().use {
-      compose.onNodeWithTag(tag).captureToImage().asAndroidBitmap()
+      // Dialog roots are translated surfaces; capture the composed screen, not cropped local bounds.
+      InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
         .compress(Bitmap.CompressFormat.PNG, 100, it)
     }
   }
