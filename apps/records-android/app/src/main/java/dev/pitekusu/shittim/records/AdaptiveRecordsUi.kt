@@ -40,6 +40,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -61,6 +63,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -75,6 +78,15 @@ internal fun AdaptiveRecordsUi(
   onSectionSeen: (String) -> Unit = {},
 ) {
   val windowDirective = calculatePaneScaffoldDirective(currentWindowAdaptiveInfoV2())
+  // AnimatedPane retains its role bucket while hidden. Own a bounded detail bucket outside
+  // that pane so reopening resets the reader and old visits do not accumulate in SavedState.
+  val detailStateHolder = rememberSaveableStateHolder()
+  val detailVisit = rememberSaveable(state.selectedRecordId) { UUID.randomUUID().toString() }
+  var previousDetailVisit by rememberSaveable { mutableStateOf(detailVisit) }
+  LaunchedEffect(detailVisit) {
+    if (previousDetailVisit != detailVisit) detailStateHolder.removeState(previousDetailVisit)
+    previousDetailVisit = detailVisit
+  }
   BoxWithConstraints(modifier) {
     // Use the available content width, not physical screen size; preserve standard hinge avoidance.
     val twoPanes = maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f
@@ -97,6 +109,11 @@ internal fun AdaptiveRecordsUi(
     val visibleMotion = motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
       ValueAnimator.areAnimatorsEnabled()
     val listMotion = visibleMotion && queryMode == RecordQueryMode.Closed && state.selectedRecordId == null
+    val refreshAvailable = state.canReadRecords && state.selectedRecordId == null &&
+      queryMode == RecordQueryMode.Closed && motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED)
+    // WorkManager owns the operation. Queued/offline work must not keep the gesture spinner alive.
+    val refreshing = refreshAvailable && state.sync == RecordSyncState.Running
+    val refreshState = rememberPullToRefreshState()
     val searchScrollState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -109,11 +126,6 @@ internal fun AdaptiveRecordsUi(
         searchScrollState.scrollToItem(0)
       }
     }
-    val refreshAvailable = state.canReadRecords && state.selectedRecordId == null &&
-      queryMode == RecordQueryMode.Closed && motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED)
-    // WorkManager owns the operation. Queued/offline work must not keep the gesture spinner alive.
-    val refreshing = refreshAvailable && state.sync == RecordSyncState.Running
-    val refreshState = rememberPullToRefreshState()
     LaunchedEffect(value, state.selectedRecordId) {
       if (state.selectedRecordId != null) {
         queryMode = RecordQueryMode.Closed
@@ -208,11 +220,13 @@ internal fun AdaptiveRecordsUi(
               Text(stringResource(R.string.record_select), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
           } else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-            RecordDetailScreen(state.record, state.selectedRecordId, state.eventSink,
-              Modifier.widthIn(max = 760.dp).fillMaxSize(), detailScrollState,
-              scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
-              motionAllowed = motionAllowed, playedSections = playedSections,
-              onSectionSeen = onSectionSeen)
+            detailStateHolder.SaveableStateProvider(detailVisit) {
+              RecordDetailScreen(state.record, state.selectedRecordId, state.eventSink,
+                Modifier.widthIn(max = 760.dp).fillMaxSize(), detailScrollState,
+                scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
+                motionAllowed = motionAllowed, playedSections = playedSections,
+                onSectionSeen = onSectionSeen)
+            }
           }
         }
       })

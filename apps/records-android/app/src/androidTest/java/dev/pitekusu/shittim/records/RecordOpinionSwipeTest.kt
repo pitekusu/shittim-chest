@@ -5,7 +5,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
@@ -16,7 +15,6 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeLeft
@@ -63,54 +61,58 @@ class RecordOpinionSwipeTest {
   private fun assertAnswer(person: Int, final: Boolean) {
     val title = "${names[person]}の${if (final) "最終案" else "初回意見"}"
     compose.waitUntil(5_000) { compose.onNodeWithText(title).isDisplayed() }
+    compose.waitForIdle()
     assertSelection(person, final)
   }
 
   private fun swipeAnswer(forward: Boolean) {
-    compose.onNodeWithTag("opinion-pager").performTouchInput {
+    compose.onNodeWithTag("detail-pager").performTouchInput {
       if (forward) swipeLeft() else swipeRight()
     }
     compose.waitForIdle()
   }
 
-  @Test fun shuffledPersonasLoopThroughAllSixAnswersInBothDirectionsWithoutLeavingOpinions() {
+  @Test fun shuffledPersonasReadInOrderAndReachVotingWithoutLoopingAtTheFirstAnswer() {
     compose.activityRule.scenario.onActivity { it.setContent { ShittimTheme(true) {
       RecordDetailScreen(RecordPreviewState.Ready(preview()), "swipe-sample", {}, motionAllowed = false)
     } } }
-    // Winner starts at their initial answer, not the first item in the response.
-    var step = 2
-    assertAnswer(step / 2, step % 2 == 1)
-    repeat(6) {
-      swipeAnswer(forward = true)
-      step = (step + 1) % 6
-      assertAnswer(step / 2, step % 2 == 1)
-    }
-    repeat(6) {
-      swipeAnswer(forward = false)
-      step = (step + 5) % 6
-      assertAnswer(step / 2, step % 2 == 1)
-    }
-    // Cross both ends of the SDK's bounded virtual window, not only a middle cycle.
-    val answers = compose.onNodeWithTag("opinion-pager")
-    answers.performSemanticsAction(SemanticsActions.ScrollToIndex) { it(6) }
+    // A new visit starts with Arona's initial answer, regardless of winner or response order.
     assertAnswer(0, false)
+    compose.onNodeWithTag("opinion-pager").assertExists()
+    swipeAnswer(forward = false)
+    assertAnswer(0, false)
+    for (step in 1..5) {
+      swipeAnswer(forward = true)
+      assertAnswer(step / 2, step % 2 == 1)
+    }
+    swipeAnswer(forward = true)
+    compose.onNodeWithTag("detail-section-Voting").assertIsSelected()
+    compose.onNodeWithText("この記録には投票データがありません。").assertExists()
     swipeAnswer(forward = false)
     assertAnswer(2, true)
-    val pageCount = answers.fetchSemanticsNode().config[SemanticsProperties.CollectionInfo].columnCount
-    answers.performSemanticsAction(SemanticsActions.ScrollToIndex) { it(pageCount - 7) }
-    assertAnswer(2, true)
-    swipeAnswer(forward = true)
+    for (step in 4 downTo 0) {
+      swipeAnswer(forward = false)
+      assertAnswer(step / 2, step % 2 == 1)
+    }
+    swipeAnswer(forward = false)
     assertAnswer(0, false)
   }
 
-  @Test fun tappingAnyPersonaResetsToInitialAndStageButtonsStayInSyncWithSwipes() {
+  @Test fun personaTapsResetToInitialAndReopeningTheSameRecordStartsWithArona() {
+    val open = mutableStateOf(true)
     compose.activityRule.scenario.onActivity { it.setContent { ShittimTheme(false) {
-      RecordDetailScreen(RecordPreviewState.Ready(preview()), "swipe-sample", {}, motionAllowed = false)
+      if (open.value) RecordDetailScreen(RecordPreviewState.Ready(preview()), "swipe-sample", {}, motionAllowed = false)
     } } }
+    assertAnswer(0, false)
+    stage(true).performClick()
+    assertAnswer(0, true)
+    // Tapping the currently selected persona must also reset the answer stage.
+    compose.onNodeWithTag("opinion-person-0").performClick()
+    assertAnswer(0, false)
+    compose.onNodeWithTag("opinion-person-1").performClick()
     assertAnswer(1, false)
     swipeAnswer(forward = true)
     assertAnswer(1, true)
-    // Tapping the currently selected persona must also reset the answer stage.
     compose.onNodeWithTag("opinion-person-1").performClick()
     assertAnswer(1, false)
     stage(true).performClick()
@@ -120,11 +122,15 @@ class RecordOpinionSwipeTest {
     stage(true).performClick()
     assertAnswer(2, true)
     swipeAnswer(forward = true)
-    assertAnswer(0, false)
+    compose.onNodeWithTag("detail-section-Voting").assertIsSelected()
     swipeAnswer(forward = false)
     assertAnswer(2, true)
     stage(false).performClick()
     assertAnswer(2, false)
+    compose.runOnIdle { open.value = false }
+    compose.onNodeWithTag("detail-pager").assertDoesNotExist()
+    compose.runOnIdle { open.value = true }
+    assertAnswer(0, false)
   }
 
   private fun readingPosition(): Float = compose.onNodeWithTag("record-detail-content")
@@ -144,7 +150,7 @@ class RecordOpinionSwipeTest {
     return readingPosition().also { assertTrue(it > 0f) }
   }
 
-  @Test fun refreshingAndRestoringRetainTheStageAndEachAnswersIndependentReadingPosition() {
+  @Test fun refreshAndRestoreKeepTheCurrentReaderButChangingAnswersReturnsToTheTop() {
     val state = mutableStateOf<RecordPreviewState>(RecordPreviewState.Ready(preview(longAnswers = true)))
     val restoration = StateRestorationTester(compose)
     // MainActivity installs a normal UI first; give the standard helper an empty host.
@@ -159,9 +165,10 @@ class RecordOpinionSwipeTest {
     compose.onNodeWithTag("opinion-person-2").performClick()
     stage(true).performClick()
     assertAnswer(2, true)
-    val finalPosition = readPartway(2, true)
+    readPartway(2, true)
     stage(false).performClick()
     assertAnswer(2, false)
+    assertEquals(0f, readingPosition(), 0.01f)
     val initialPosition = readPartway(2, false)
     compose.runOnIdle {
       state.value = RecordPreviewState.Ready(preview(longAnswers = true), updating = true)
@@ -175,18 +182,14 @@ class RecordOpinionSwipeTest {
     assertSelection(2, false)
     assertEquals(initialPosition, readingPosition(), 0.01f)
     stage(true).performClick()
-    compose.waitForIdle()
-    assertSelection(2, true)
-    assertEquals(finalPosition, readingPosition(), 0.01f)
-    compose.onNodeWithTag("detail-section-Voting").performClick()
-    compose.waitUntil(5_000) { compose.onNodeWithText("この記録には投票データがありません。").isDisplayed() }
-    compose.onNodeWithTag("detail-section-Opinions").performClick()
-    compose.waitForIdle()
-    assertSelection(2, true)
-    assertEquals(finalPosition, readingPosition(), 0.01f)
+    assertAnswer(2, true)
+    assertEquals(0f, readingPosition(), 0.01f)
+    swipeAnswer(forward = false)
+    assertAnswer(2, false)
+    assertEquals(0f, readingPosition(), 0.01f)
   }
 
-  @Test fun aLegacyRecordWithOneAvailablePersonaLoopsOnlyTheirTwoAnswers() {
+  @Test fun aLegacyRecordWithOnePersonaHasTwoAnswersThenVotingAndABoundedFirstPage() {
     val legacy = RecordPreview("古い架空の議題", "架空の結論", "アロナ", opinions = listOf(
       RecordOpinion("プラナ", "昔の初回意見", "昔の初回本文", "昔の最終案", "昔の最終本文")))
     compose.activityRule.scenario.onActivity { it.setContent { ShittimTheme(false) {
@@ -201,11 +204,17 @@ class RecordOpinionSwipeTest {
       compose.onNodeWithTag("opinion-person-2").assertDoesNotExist()
     }
     assertLegacy(false)
-    for (forward in listOf(true, false)) {
-      swipeAnswer(forward)
-      assertLegacy(true)
-      swipeAnswer(forward)
-      assertLegacy(false)
-    }
+    swipeAnswer(forward = false)
+    assertLegacy(false)
+    swipeAnswer(forward = true)
+    assertLegacy(true)
+    swipeAnswer(forward = true)
+    compose.onNodeWithTag("detail-section-Voting").assertIsSelected()
+    swipeAnswer(forward = false)
+    assertLegacy(true)
+    swipeAnswer(forward = false)
+    assertLegacy(false)
+    swipeAnswer(forward = false)
+    assertLegacy(false)
   }
 }
