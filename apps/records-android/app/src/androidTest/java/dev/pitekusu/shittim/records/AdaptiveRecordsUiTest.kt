@@ -24,6 +24,8 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -192,7 +194,8 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithTag("record-search").assertDoesNotExist()
     compose.onNodeWithTag("records-search-toggle").performClick()
     compose.onNodeWithTag("record-search").assertIsDisplayed().performClick().assertIsFocused()
-    compose.onNodeWithText(entries.first().questionPreview).assertIsDisplayed().performClick()
+    compose.onNode(hasText(entries.first().questionPreview) and
+      hasAnyAncestor(hasTestTag("records-search-results"))).assertIsDisplayed().performClick()
     compose.onNodeWithTag("record-search").assertDoesNotExist()
     compose.onNodeWithText("一覧に戻る").assertDoesNotExist()
     val dispatcher = compose.activity.onBackPressedDispatcher
@@ -209,8 +212,8 @@ class AdaptiveRecordsUiTest {
     }
     compose.onNodeWithTag("record-search").assertDoesNotExist()
     compose.onNodeWithTag("records-search-toggle").performClick()
-    compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsNotFocused()
-      .performClick().assertIsFocused()
+    // Explicitly opening the dedicated search is the only automatic-focus path.
+    compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsFocused()
   }
 
   @Test fun threeButtonBackSlidesBeforeClosingWithoutLeavingASelectedListCard() {

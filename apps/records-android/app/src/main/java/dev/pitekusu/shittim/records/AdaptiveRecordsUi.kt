@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
@@ -32,12 +33,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -50,6 +53,7 @@ import dev.pitekusu.shittim.records.auth.SessionState
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
@@ -81,18 +85,27 @@ internal fun AdaptiveRecordsUi(
     val currentState = rememberUpdatedState(state)
     val currentValue = rememberUpdatedState(value)
     val focusManager = LocalFocusManager.current
-    var searchFocusAllowed by remember { mutableStateOf(state.selectedRecordId == null) }
     // Disclosure state is visual only; search text remains in Circuit's screen-lifetime state.
     var queryMode by remember { mutableStateOf(RecordQueryMode.Closed) }
+    val searchScrollState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
+    var previousQuery by remember { mutableStateOf(state.listQuery) }
+    LaunchedEffect(state.listQuery) {
+      if (previousQuery != state.listQuery) {
+        previousQuery = state.listQuery
+        // Criteria changes are intentional navigation; sync snapshots must never enter this path.
+        listScrollState.scrollToItem(0)
+        searchScrollState.scrollToItem(0)
+      }
+    }
     LaunchedEffect(value, state.selectedRecordId) {
       if (state.selectedRecordId != null) {
         queryMode = RecordQueryMode.Closed
-        searchFocusAllowed = false
         focusManager.clearFocus(force = true)
+        keyboard?.hide()
       }
       scaffoldState.animateTo(value)
-      // Keep the returning pane's search field out of focus restoration until it is fully visible.
-      if (currentState.value.selectedRecordId == null) searchFocusAllowed = true
     }
     PredictiveBackHandler(enabled = state.selectedRecordId != null) { progress ->
       val selectedAtStart = currentState.value.selectedRecordId
@@ -131,17 +144,26 @@ internal fun AdaptiveRecordsUi(
         }) {
           Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             LazyColumn(Modifier.widthIn(max = 560.dp).fillMaxSize().testTag("bootstrap-content"),
-              state = listScrollState, contentPadding = PaddingValues(ShittimSpacing.Large),
+              state = listScrollState, contentPadding = PaddingValues(
+                start = ShittimSpacing.Large, end = ShittimSpacing.Large,
+                top = ShittimSpacing.Medium, bottom = 104.dp),
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
               item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true) }
+              if (!state.listQuery.isDefault) item(key = "records-query-active") {
+                RecordActiveQueryChips(state.listQuery, onEvent = state.eventSink)
+              }
               recordListItems(state.records, pagingItems, state.eventSink,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
                 offline = state.session == SessionState.Unavailable,
                 query = state.listQuery, searching = state.searching,
-                selectedRecordId = state.selectedRecordId.takeIf { twoPanes },
-                searchCanFocus = twoPanes || (state.selectedRecordId == null && searchFocusAllowed),
-                queryMode = if (state.selectedRecordId == null) queryMode else RecordQueryMode.Closed,
-                onQueryModeChange = { queryMode = it })
+                selectedRecordId = state.selectedRecordId.takeIf { twoPanes })
+            }
+            val queryAvailable = (state.records as? RecordListState.Ready)?.saved == true || !state.listQuery.isDefault
+            if (queryAvailable && state.selectedRecordId == null && queryMode == RecordQueryMode.Closed && motionAllowed) {
+              RecordQueryToolbar(state.listQuery,
+                Modifier.align(Alignment.BottomEnd).padding(ShittimSpacing.Medium),
+                onSearch = { queryMode = RecordQueryMode.Search },
+                onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
             }
           }
         }
@@ -161,5 +183,38 @@ internal fun AdaptiveRecordsUi(
           }
         }
       })
+    if (state.canReadRecords && state.selectedRecordId == null) {
+      when (queryMode) {
+        RecordQueryMode.Filters -> RecordFilterSheet(state.listQuery,
+          onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = state.eventSink)
+        RecordQueryMode.Search -> RecordFullScreenSearch(state.listQuery,
+          onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = { event ->
+            if (event is BootstrapScreen.Event.OpenRecord) {
+              // Translate the stable result anchor, not its index: the main list also has a brand/criteria row.
+              val anchor = searchScrollState.layoutInfo.visibleItemsInfo.firstOrNull()
+              val index = pagingItems?.itemSnapshotList?.items?.indexOfFirst { it.stableKey == anchor?.key } ?: -1
+              val prefix = 2 + if (state.listQuery.isDefault) 0 else 1 // brand, optional chips, context
+              val offset = searchScrollState.firstVisibleItemScrollOffset
+              scope.launch {
+                if (index >= 0) listScrollState.scrollToItem(prefix + index, offset)
+                else listScrollState.scrollToItem(0)
+                if (currentState.value.canReadRecords && currentState.value.selectedRecordId == null) {
+                  currentState.value.eventSink(event)
+                }
+              }
+            } else state.eventSink(event)
+          }) { resultEvent ->
+            LazyColumn(Modifier.fillMaxSize().testTag("records-search-results"),
+              state = searchScrollState, contentPadding = PaddingValues(ShittimSpacing.Medium),
+              verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
+              recordListItems(state.records, pagingItems, resultEvent,
+                sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
+                offline = state.session == SessionState.Unavailable,
+                query = state.listQuery, searching = state.searching)
+            }
+          }
+        RecordQueryMode.Closed -> Unit
+      }
+    }
   }
 }
