@@ -53,20 +53,25 @@ internal object RecordSyncScheduler {
     val manager = WorkManager.getInstance(context)
     return combine(manager.getWorkInfosForUniqueWorkFlow(PERIODIC),
       manager.getWorkInfosForUniqueWorkFlow(IMMEDIATE)) { periodic, immediate ->
-      val all = periodic + immediate
-      when {
-        all.any { it.state == WorkInfo.State.RUNNING } -> RecordSyncState.Running
-        immediate.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED } -> RecordSyncState.Idle
-        else -> {
-          val finished = all.maxByOrNull { it.outputData.getLong("finishedAt", 0) }
-          val failure = finished?.outputData?.getString("failure")?.let { name ->
-            RecordReadFailure.entries.firstOrNull { it.name == name }
-          }
-          when {
-            failure != null -> RecordSyncState.Failed(failure)
-            (finished?.outputData?.getLong("finishedAt", 0) ?: 0) > 0 -> RecordSyncState.Completed
-            else -> RecordSyncState.Idle
-          }
+      state(periodic, immediate)
+    }
+  }
+
+  internal fun state(periodic: List<WorkInfo>, immediate: List<WorkInfo>): RecordSyncState {
+    val all = periodic + immediate
+    return when {
+      all.any { it.state == WorkInfo.State.RUNNING } -> RecordSyncState.Running
+      // A request waiting for connectivity/backoff is queued, not an active refresh.
+      immediate.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED } -> RecordSyncState.Idle
+      else -> {
+        val finished = all.maxByOrNull { it.outputData.getLong("finishedAt", 0) }
+        val failure = finished?.outputData?.getString("failure")?.let { name ->
+          RecordReadFailure.entries.firstOrNull { it.name == name }
+        }
+        when {
+          failure != null -> RecordSyncState.Failed(failure)
+          (finished?.outputData?.getLong("finishedAt", 0) ?: 0) > 0 -> RecordSyncState.Completed
+          else -> RecordSyncState.Idle
         }
       }
     }

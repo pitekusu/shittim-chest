@@ -28,6 +28,9 @@ import androidx.compose.material3.adaptive.layout.MutableThreePaneScaffoldState
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.calculateThreePaneScaffoldValue
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -106,6 +109,11 @@ internal fun AdaptiveRecordsUi(
         searchScrollState.scrollToItem(0)
       }
     }
+    val refreshAvailable = state.canReadRecords && state.selectedRecordId == null &&
+      queryMode == RecordQueryMode.Closed && motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED)
+    // WorkManager owns the operation. Queued/offline work must not keep the gesture spinner alive.
+    val refreshing = refreshAvailable && state.sync == RecordSyncState.Running
+    val refreshState = rememberPullToRefreshState()
     LaunchedEffect(value, state.selectedRecordId) {
       if (state.selectedRecordId != null) {
         queryMode = RecordQueryMode.Closed
@@ -153,7 +161,19 @@ internal fun AdaptiveRecordsUi(
           paneTitle = listTitle
           isTraversalGroup = true
         }) {
-          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+          PullToRefreshBox(isRefreshing = refreshing,
+            onRefresh = { if (refreshAvailable) state.eventSink(BootstrapScreen.Event.RefreshRecords) },
+            enabled = refreshAvailable && !refreshing,
+            state = refreshState,
+            modifier = Modifier.fillMaxSize().testTag("records-pull-refresh"),
+            contentAlignment = Alignment.TopCenter,
+            indicator = {
+              if (refreshAvailable) PullToRefreshDefaults.Indicator(
+                state = refreshState, isRefreshing = refreshing,
+                modifier = Modifier.align(Alignment.TopCenter).testTag("records-refresh-indicator"),
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }) {
             LazyColumn(Modifier.widthIn(max = 560.dp).fillMaxSize().testTag("bootstrap-content"),
               state = listScrollState, contentPadding = PaddingValues(
                 start = ShittimSpacing.Large, end = ShittimSpacing.Large,

@@ -3,8 +3,8 @@
     <string name="journal_saved_count">保存 %1$d件</string>
     <string name="journal_loaded_count">表示 %1$d件</string>
     <string name="journal_filtered_count">表示 %1$d件 / 保存 %2$d件</string>
-    <string name="journal_sync_running">記録を自動更新しています…</string>
-    <string name="journal_sync_error">自動更新できません。通信をご確認ください。</string>
+    <string name="journal_sync_running">記録を更新しています…</string>
+    <string name="journal_sync_error">更新できません。通信をご確認ください。</string>
     <string name="journal_storage_error">保存できません。空き容量をご確認ください。</string>
     <string name="journal_auth_error">ログイン状態をご確認ください。</string>
     <string name="journal_offline">オフライン閲覧中</string>

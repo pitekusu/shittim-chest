@@ -57,6 +57,7 @@ internal data object BootstrapScreen : Screen {
     data object Retry : Event
     data object RetryRecord : Event
     data object RecordsAuthRequired : Event
+    data object RefreshRecords : Event
     data class OpenRecord(val recordId: String) : Event
     data object CloseRecord : Event
     data class SearchRecords(val text: String) : Event
@@ -253,6 +254,14 @@ internal class BootstrapPresenter(
         is BootstrapScreen.Event.OpenRecord -> if (
           event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
         ) session.openDestination("/records/${event.recordId}")
+        BootstrapScreen.Event.RefreshRecords -> if (
+          cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) &&
+          session.destination.value == "/" && syncState != RecordSyncState.Running
+        ) {
+          // Queue the existing delta sync; keep the saved list, query, and scroll position.
+          // Check the live destination/permit even when an older UI callback is retained.
+          RecordSyncScheduler.syncNow(context)
+        }
         BootstrapScreen.Event.CloseRecord -> session.closeDestination()
         is BootstrapScreen.Event.SearchRecords -> listQuery = listQuery.copy(text = event.text)
         is BootstrapScreen.Event.SelectWinner -> listQuery = listQuery.copy(winner = event.winner)
