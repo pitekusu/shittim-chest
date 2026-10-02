@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -73,7 +74,10 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
     }
   ShittimTheme(darkTheme) {
     ShittimBackdrop(modifier) {
-      val pagingItems = (state.records as? RecordListState.Ready)?.pages?.collectAsLazyPagingItems()
+      val pages = (state.records as? RecordListState.Ready)?.pages
+      // Keep both the source Flow and its UI-only Paging transform stable during sync.
+      val journal = remember(pages) { pages?.asRecordJournal() }
+      val pagingItems = journal?.collectAsLazyPagingItems()
       val refreshError = pagingItems?.loadState?.refresh as? LoadState.Error
       val appendError = pagingItems?.loadState?.append as? LoadState.Error
       LaunchedEffect(refreshError, appendError) {
@@ -146,10 +150,9 @@ internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
         color = MaterialTheme.colorScheme.primary,
       )
     }
-    Text(
+    if (!compact) Text(
       stringResource(R.string.app_name),
-      style = if (compact) MaterialTheme.typography.titleLargeEmphasized
-        else MaterialTheme.typography.headlineLargeEmphasized,
+      style = MaterialTheme.typography.headlineLargeEmphasized,
       color = MaterialTheme.colorScheme.onSurface,
       modifier = Modifier.semantics { heading() },
     )

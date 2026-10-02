@@ -89,7 +89,7 @@ class BootstrapUiNavigationTest {
       SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/"),
       sync = RecordSyncState.Running, eventSink = {}))
     compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
-    val status = compose.activity.getString(R.string.record_sync_running)
+    val status = compose.activity.getString(R.string.journal_sync_running)
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(status))
     compose.onNodeWithText(status).assertIsDisplayed()
     compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.System) {} }

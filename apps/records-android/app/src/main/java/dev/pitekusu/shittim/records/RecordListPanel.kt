@@ -6,13 +6,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -27,13 +28,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.paging.LoadState
 import androidx.paging.LoadStates
 import androidx.paging.PagingData
@@ -43,10 +49,8 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import dev.pitekusu.shittim.records.ui.ShittimProgress
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
-import dev.pitekusu.shittim.records.ui.ShittimSectionHeading
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import dev.pitekusu.shittim.records.ui.shittimParticipantColor
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
@@ -82,14 +86,14 @@ internal sealed interface RecordListState {
   }
 }
 
-private val japanZone = ZoneId.of("Asia/Tokyo")
-private val recordDate = DateTimeFormatter.ofPattern("yyyy.MM.dd", Locale.JAPAN).withZone(japanZone)
+private val journalDate = DateTimeFormatter.ofPattern("yyyy.MM.dd EEEE", Locale.JAPAN)
+private val journalTime = DateTimeFormatter.ofPattern("HH:mm", Locale.JAPAN).withZone(recordJournalZone)
 
 internal enum class RecordQueryMode { Closed, Search, Filters }
 
 internal fun LazyListScope.recordListItems(
   state: RecordListState,
-  pagingItems: LazyPagingItems<RecordListEntry>?,
+  pagingItems: LazyPagingItems<RecordJournalRow>?,
   onEvent: (BootstrapScreen.Event) -> Unit,
   sync: RecordSyncState = RecordSyncState.Idle,
   query: RecordListQuery = RecordListQuery(),
@@ -98,13 +102,13 @@ internal fun LazyListScope.recordListItems(
   searchCanFocus: Boolean = true,
   queryMode: RecordQueryMode = RecordQueryMode.Closed,
   onQueryModeChange: (RecordQueryMode) -> Unit = {},
+  offline: Boolean = false,
 ) {
   val queryAvailable = (state is RecordListState.Ready && state.saved) || !query.isDefault
   item(key = "records-heading") {
     val focusManager = LocalFocusManager.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      ShittimSectionHeading(stringResource(R.string.record_list_heading),
-        modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLargeEmphasized)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.End) {
       if (queryAvailable) {
         IconButton(onClick = {
           focusManager.clearFocus(force = true)
@@ -146,8 +150,11 @@ internal fun LazyListScope.recordListItems(
     Text(stringResource(R.string.record_query_active),
       style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
   }
-  if (sync == RecordSyncState.Running || sync is RecordSyncState.Failed) {
-    item(key = "records-sync-status") { RecordSyncStatus(sync) }
+  item(key = "records-context") {
+    val ready = state as? RecordListState.Ready
+    val shownCount = if (ready?.saved == true) ready.loadedIds.size
+      else pagingItems?.itemSnapshotList?.items?.count { it is RecordJournalRow.Record } ?: 0
+    RecordJournalContext(ready, shownCount, sync, searching, offline)
   }
   if (state !is RecordListState.Ready || pagingItems == null) {
     item(key = "records-waiting") {
@@ -156,18 +163,6 @@ internal fun LazyListScope.recordListItems(
       } else ShittimProgress(stringResource(R.string.record_list_loading))
     }
     return
-  }
-  if (state.saved || state.refreshFailure != null) item(key = "records-source") {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      if (state.saved) Text(stringResource(R.string.record_saved), color = MaterialTheme.colorScheme.primary)
-      if (searching) Text(stringResource(R.string.record_searching), color = MaterialTheme.colorScheme.onSurfaceVariant)
-      else state.savedTotal?.let { total ->
-        Text(stringResource(R.string.record_search_count, pagingItems.itemCount, total),
-          color = MaterialTheme.colorScheme.onSurfaceVariant)
-      }
-      if (state.refreshFailure != null) Text(stringResource(if (state.refreshFailure == RecordReadFailure.STORAGE_UNAVAILABLE)
-        R.string.record_save_failed else R.string.record_refresh_failed))
-    }
   }
   when (pagingItems.loadState.refresh) {
     is LoadState.Loading -> item(key = "records-loading") {
@@ -184,11 +179,21 @@ internal fun LazyListScope.recordListItems(
         R.string.record_empty else R.string.record_search_empty)) }
     }
   }
-  items(count = pagingItems.itemCount, key = pagingItems.itemKey { it.recordId }) { index ->
-    pagingItems[index]?.let { entry ->
-      RecordListCard(entry, entry.recordId == selectedRecordId) {
-        onEvent(BootstrapScreen.Event.OpenRecord(entry.recordId))
+  items(count = pagingItems.itemCount, key = pagingItems.itemKey { it.stableKey },
+    contentType = { index -> when (pagingItems.peek(index)) {
+      is RecordJournalRow.DateHeading -> "journal-date"
+      is RecordJournalRow.Record -> "journal-record"
+      null -> null
+    } }) { index ->
+    when (val row = pagingItems[index]) {
+      is RecordJournalRow.DateHeading -> Text(journalDate.format(row.date),
+        style = MaterialTheme.typography.titleSmallEmphasized,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().testTag("journal-date-${row.date}").semantics { heading() })
+      is RecordJournalRow.Record -> RecordListCard(row.entry, row.entry.recordId == selectedRecordId) {
+        onEvent(BootstrapScreen.Event.OpenRecord(row.entry.recordId))
       }
+      null -> Unit
     }
   }
   when (val append = pagingItems.loadState.append) {
@@ -209,32 +214,73 @@ internal fun LazyListScope.recordListItems(
 }
 
 @Composable
+private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
+  sync: RecordSyncState, searching: Boolean, offline: Boolean) {
+  val failure = (sync as? RecordSyncState.Failed)?.reason ?: ready?.refreshFailure
+  val status = when {
+    failure == RecordReadFailure.AUTH_REQUIRED -> R.string.journal_auth_error
+    failure == RecordReadFailure.STORAGE_UNAVAILABLE -> R.string.journal_storage_error
+    failure != null -> R.string.journal_sync_error
+    offline -> R.string.journal_offline
+    searching -> R.string.journal_searching
+    sync == RecordSyncState.Running -> R.string.journal_sync_running
+    else -> null
+  }
+  val lineHeight = with(LocalDensity.current) { MaterialTheme.typography.bodySmall.lineHeight.toDp() }
+  // Reserve the same text-scaled area in every state; finishing sync must not move a reading card.
+  Column(Modifier.fillMaxWidth().height(lineHeight * 3 + 8.dp).testTag("journal-context"),
+    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Box(Modifier.fillMaxWidth().height(lineHeight)) {
+      ready?.savedTotal?.let { total ->
+        Text(stringResource(if (shownCount == total) R.string.journal_saved_count
+          else R.string.journal_filtered_count, if (shownCount == total) total else shownCount, total),
+          style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+          color = MaterialTheme.colorScheme.onSurfaceVariant)
+      }
+    }
+    Row(Modifier.fillMaxWidth().height(lineHeight * 2),
+      horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+      if (sync == RecordSyncState.Running && !searching && !offline && failure == null) {
+        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+      }
+      if (status != null) Text(stringResource(status), style = MaterialTheme.typography.bodySmall,
+        color = if (failure != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite })
+    }
+  }
+}
+
+@Composable
 private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, onClick: () -> Unit) {
-  OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth().semantics { selected = isSelected },
-    shape = MaterialTheme.shapes.medium,
+  OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth().testTag("journal-card-${item.recordId}")
+    .semantics { selected = isSelected },
+    shape = MaterialTheme.shapes.large,
     colors = CardDefaults.outlinedCardColors(containerColor = if (isSelected)
       MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
       contentColor = MaterialTheme.colorScheme.onSurface)) {
-    Column(Modifier.padding(ShittimSpacing.Medium), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
+    Column(Modifier.padding(ShittimSpacing.Medium), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
       Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        RequesterAvatar(item.requesterName, item.requesterAvatar)
+        ShittimParticipantAvatar(item.winnerName, item.winnerSlot, size = 56.dp, crowned = true)
         Column(Modifier.weight(1f)) {
-          Text(item.requesterName, style = MaterialTheme.typography.titleSmallEmphasized)
-          Text(recordDate.format(item.completedAt),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text(stringResource(R.string.record_list_winner, item.winnerName),
+            style = MaterialTheme.typography.titleSmallEmphasized,
+            color = shittimParticipantColor(item.winnerName, item.winnerSlot))
+          if (isSelected) Text(stringResource(R.string.record_selected), style = MaterialTheme.typography.labelMedium)
         }
       }
-      HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-      Text(item.questionPreview, style = MaterialTheme.typography.bodyLarge)
-      if (isSelected) Text(stringResource(R.string.record_selected), style = MaterialTheme.typography.labelMedium)
+      Text(item.questionPreview, style = MaterialTheme.typography.titleMedium,
+        maxLines = 4, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.testTag("journal-question-${item.recordId}"))
       Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-        ShittimParticipantAvatar(item.winnerName, item.winnerSlot, size = 32.dp, crowned = true)
-        Text(stringResource(R.string.record_list_winner, item.winnerName),
-          style = MaterialTheme.typography.labelMedium,
-          color = shittimParticipantColor(item.winnerName, item.winnerSlot))
+        RequesterAvatar(item.requesterName, item.requesterAvatar)
+        Text(item.requesterName, style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(journalTime.format(item.completedAt), style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
     }
   }
@@ -247,11 +293,11 @@ private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
     "lavender" -> MaterialTheme.colorScheme.tertiaryContainer
     else -> MaterialTheme.colorScheme.primaryContainer
   }
-  Box(Modifier.size(48.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+  Box(Modifier.size(24.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
     .clip(CircleShape).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
-    Surface(color = background, shape = CircleShape, modifier = Modifier.size(48.dp)) {
+    Surface(color = background, shape = CircleShape, modifier = Modifier.size(24.dp)) {
       Box(contentAlignment = Alignment.Center) {
-        Text(name.take(1), style = MaterialTheme.typography.titleMediumEmphasized)
+        Text(name.take(1), style = MaterialTheme.typography.labelSmall)
       }
     }
     val context = LocalContext.current
@@ -260,7 +306,7 @@ private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
     }
     if (request != null) {
       AsyncImage(model = request, contentDescription = null,
-        modifier = Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+        modifier = Modifier.size(24.dp).clip(CircleShape), contentScale = ContentScale.Crop)
     }
   }
 }
