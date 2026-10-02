@@ -30,6 +30,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.platform.testTag
@@ -47,24 +49,29 @@ import kotlin.math.roundToInt
 @Composable
 internal fun RecordAffectionControls(changes: List<RecordAffectionChange>, selected: Int,
   modifier: Modifier = Modifier, onPerson: (Int) -> Unit) {
-  Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxWidth()) {
-    FlowRow(Modifier.padding(horizontal = ShittimSpacing.Medium).selectableGroup(),
-      horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-      changes.forEachIndexed { index, change ->
-        val accent = shittimParticipantColor(change.participantName, change.participantSlot)
-        FilterChip(selected = index == selected, onClick = { onPerson(index) },
-          label = { Column {
-            Text(change.participantName)
-            Text(signedScore(change.appliedDelta), style = MaterialTheme.typography.labelSmall,
-              color = if (change.appliedDelta < 0) MaterialTheme.colorScheme.error else accent)
-          } },
-          leadingIcon = { ShittimParticipantAvatar(change.participantName,
-            change.participantSlot, size = 28.dp) },
-          shapes = FilterChipDefaults.shapes(),
-          colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = accent.copy(alpha = .15f), selectedLabelColor = accent),
-          modifier = Modifier.heightIn(min = 56.dp).testTag("affection-person-$index"))
-      }
+  FlowRow(modifier.fillMaxWidth().padding(horizontal = ShittimSpacing.Medium, vertical = 8.dp)
+    .selectableGroup(), horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small),
+    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    changes.forEachIndexed { index, change ->
+      val accent = shittimParticipantColor(change.participantName, change.participantSlot)
+      FilterChip(selected = index == selected, onClick = { onPerson(index) },
+        label = { Column {
+          Text(change.participantName)
+          Text(signedScore(change.appliedDelta), style = MaterialTheme.typography.labelSmall,
+            color = if (change.appliedDelta < 0) MaterialTheme.colorScheme.error else accent)
+        } },
+        leadingIcon = { ShittimParticipantAvatar(change.participantName,
+          change.participantSlot, size = 28.dp) },
+        shapes = FilterChipDefaults.shapes(shape = CircleShape,
+          selectedShape = RoundedCornerShape(percent = 40), pressedShape = RoundedCornerShape(20.dp)),
+        colors = FilterChipDefaults.filterChipColors(
+          containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = .65f),
+          labelColor = MaterialTheme.colorScheme.onSurface,
+          selectedContainerColor = accent.copy(alpha = .22f), selectedLabelColor = accent),
+        border = FilterChipDefaults.filterChipBorder(enabled = true, selected = index == selected,
+          borderColor = accent.copy(alpha = .45f), selectedBorderColor = accent.copy(alpha = .9f),
+          selectedBorderWidth = 1.5.dp),
+        modifier = Modifier.heightIn(min = 56.dp).testTag("affection-person-$index"))
     }
   }
 }
