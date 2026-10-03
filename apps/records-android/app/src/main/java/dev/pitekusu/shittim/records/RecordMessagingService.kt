@@ -16,7 +16,7 @@ import dev.pitekusu.shittim.records.auth.RECORDS_ORIGIN
 import java.time.Instant
 
 internal const val RECORD_NOTIFICATION_BINDING = "record_notification_binding"
-private const val RECORD_NOTIFICATION_CHANNEL = "record-published-v1"
+internal const val RECORD_NOTIFICATION_CHANNEL = "record-published-v1"
 
 internal fun recordNotificationIntent(context: Context, hint: RecordPublishedHint): Intent =
   Intent(context, MainActivity::class.java).setAction(Intent.ACTION_VIEW)

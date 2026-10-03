@@ -28,7 +28,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class RecordNotificationRegistrationTest {
-  @Test fun callbackDuringRegistrationKeepsTheRunningWorkerAndLetsItComplete() {
+  @Test fun callbackKeepsRunningRegistrationAndForegroundRefreshWaitsItsCompletion() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val originalManager = WorkManager.getInstance(context) as WorkManagerImpl
     // Only the configured-state check needs a Firebase app. No SDK registration/network is run.
@@ -77,11 +77,22 @@ class RecordNotificationRegistrationTest {
       assertFalse(checkNotNull(running).isStopped)
       assertEquals(1, starts.get())
 
+      // A permission change on foreground must run after, not cancel or race, a pending DELETE.
+      RecordNotificationRegistration.schedule(context, afterCurrent = true)
+      val followUp = requests().single { it.id != request.id }
+      assertFalse(checkNotNull(running).isStopped)
+      assertEquals(1, starts.get())
       gate.complete(Unit)
       val completed = runBlocking { withTimeout(10_000) {
         workManager.getWorkInfoByIdFlow(request.id).first { it?.state?.isFinished == true }
       } }
       assertEquals(WorkInfo.State.SUCCEEDED, completed?.state)
+      checkNotNull(WorkManagerTestInitHelper.getTestDriver(context)).setAllConstraintsMet(followUp.id)
+      val refreshed = runBlocking { withTimeout(10_000) {
+        workManager.getWorkInfoByIdFlow(followUp.id).first { it?.state?.isFinished == true }
+      } }
+      assertEquals(WorkInfo.State.SUCCEEDED, refreshed?.state)
+      assertEquals(2, starts.get())
     } finally {
       gate.complete(Unit)
       try {

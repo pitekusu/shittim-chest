@@ -36,10 +36,14 @@ internal object RecordNotificationRegistration {
     if (changed) schedule(context)
   }
 
-  fun schedule(context: Context, replace: Boolean = false) {
+  fun schedule(context: Context, replace: Boolean = false, afterCurrent: Boolean = false) {
     if (!RecordNotifications.configured(context)) return
     WorkManager.getInstance(context).enqueueUniqueWork(WORK,
-      if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+      when {
+        replace -> ExistingWorkPolicy.REPLACE
+        afterCurrent -> ExistingWorkPolicy.APPEND_OR_REPLACE
+        else -> ExistingWorkPolicy.KEEP
+      },
       OneTimeWorkRequestBuilder<RecordNotificationWorker>()
         .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
@@ -71,14 +75,14 @@ internal class RecordNotificationWorker(context: Context, parameters: WorkerPara
       // Refresh explicitly in this authorized worker instead, including each foreground entry.
       messaging.isAutoInitEnabled = false
       if (!enabled) {
-        // Disabling in Android settings is also a local opt-out and a server unregister.
+        // OS denial suppresses delivery and unregisters without changing the app's ON/OFF choice.
         val binding = synchronized(RecordNotifications.lock) {
           val settings = RecordNotificationSettings(context)
           // An older worker must not disable a generation explicitly enabled meanwhile.
           if (!current(store, stored) || (settings.optedIn && RecordNotifications.permitted(context))) {
             return@synchronized null
           }
-          settings.disable()
+          settings.clearRegistration()
           settings.binding.takeIf { settings.sessionFingerprint == notificationSessionFingerprint(stored.accessToken) }
         } ?: return@withContext Result.success()
         val fcm = FirebaseInstallations.getInstance().id.await()

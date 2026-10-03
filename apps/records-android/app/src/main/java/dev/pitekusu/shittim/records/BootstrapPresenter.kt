@@ -84,6 +84,7 @@ internal class BootstrapPresenter(
     val cacheAccountId = cachePermit?.accountId?.takeIf(session::isCacheAuthorized)
     val context = LocalContext.current
     val signedIn = sessionState is SessionState.SignedIn
+    RecordNotificationPermissionEffect(authorized = cacheAccountId != null && signedIn)
     val currentSignedIn by rememberUpdatedState(signedIn)
     val currentSessionState by rememberUpdatedState(sessionState)
     DisposableEffect(cacheAccountId) {
@@ -114,7 +115,6 @@ internal class BootstrapPresenter(
     LaunchedEffect(cacheAccountId, signedIn) {
       if (cacheAccountId != null && signedIn) {
         RecordSyncScheduler.schedule(context)
-        if (RecordNotificationSettings(context).optedIn) RecordNotificationRegistration.schedule(context)
       }
     }
     LaunchedEffect(cacheAccountId) {

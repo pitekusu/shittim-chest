@@ -1,6 +1,9 @@
 package dev.pitekusu.shittim.records
 
 import android.content.Intent
+import android.content.Context
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.CacheAuthorization
@@ -85,13 +88,14 @@ class RecordNotificationsTest {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     synchronized(RecordNotifications.lock) {
       val settings = RecordNotificationSettings(context)
-      settings.revoke()
+      val preferences = context.getSharedPreferences("record-notification-v1", Context.MODE_PRIVATE)
+      check(preferences.edit().clear().commit())
       try {
         settings.denyPermission()
         assertTrue(settings.permissionDenied)
-        assertFalse(settings.optedIn)
+        assertTrue(settings.optedIn)
         settings.optIn()
-        assertFalse(settings.permissionDenied)
+        assertTrue(settings.permissionRequested)
         val first = settings.bindingFor(stored.accessToken, "fake-fcm-token")
         assertEquals(43, first.length)
         assertEquals(first, settings.bindingFor(stored.accessToken, "fake-fcm-token"))
@@ -110,7 +114,78 @@ class RecordNotificationsTest {
         settings.revoke()
         assertNull(settings.binding)
         assertNull(settings.sessionFingerprint)
-      } finally { settings.revoke() }
+      } finally { check(preferences.edit().clear().commit()) }
     }
+  }
+
+  @Test fun defaultOnRequestsPermissionOnceButExplicitOffSurvivesSessionCleanupAndRestart() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    synchronized(RecordNotifications.lock) {
+      val preferences = context.getSharedPreferences("record-notification-v1", Context.MODE_PRIVATE)
+      check(preferences.edit().clear().commit())
+      val settings = RecordNotificationSettings(context)
+      try {
+        assertTrue(settings.optedIn)
+        // Firebase absent, signed out or background are all ineligible; none consumes the request.
+        assertFalse(settings.claimPermissionRequest(eligible = false, alreadyGranted = false))
+        assertFalse(settings.permissionRequested)
+        assertTrue(settings.claimPermissionRequest(eligible = true, alreadyGranted = false))
+        // The attempt is durable even if the OS dialog is dismissed without granting permission.
+        assertFalse(RecordNotificationSettings(context).claimPermissionRequest(true, false))
+        settings.permissionResult(false)
+        assertTrue(settings.optedIn)
+        settings.disable()
+        settings.permissionResult(true) // A late grant must not override a user's OFF selection.
+        assertFalse(settings.optedIn)
+        settings.revoke()
+        val restored = RecordNotificationSettings(context)
+        assertFalse(restored.optedIn)
+        assertTrue(restored.permissionRequested)
+        assertFalse(restored.claimPermissionRequest(true, false))
+        restored.optIn()
+        assertTrue(restored.optedIn)
+        assertFalse(restored.claimPermissionRequest(true, false))
+        restored.permissionResult(true)
+        val first = restored.bindingFor(stored.accessToken, "fake-fid")
+        restored.registered(first, now, now.plusSeconds(60))
+        restored.clearRegistration() // OS permission revocation is not an app-side OFF.
+        assertTrue(restored.optedIn)
+        assertNull(restored.expiresAt)
+        assertEquals(first, RecordNotificationSettings(context).bindingFor(stored.accessToken, "fake-fid"))
+        restored.revoke()
+        assertNull(restored.binding)
+        assertTrue(restored.permissionRequested)
+        assertTrue(restored.optedIn)
+      } finally { check(preferences.edit().clear().commit()) }
+    }
+  }
+
+  @Test fun preGrantedPermissionAndLegacyOffNeverTriggerAnAutomaticRequest() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    synchronized(RecordNotifications.lock) {
+      val preferences = context.getSharedPreferences("record-notification-v1", Context.MODE_PRIVATE)
+      check(preferences.edit().clear().commit())
+      try {
+        val settings = RecordNotificationSettings(context)
+        assertFalse(settings.claimPermissionRequest(true, true))
+        assertTrue(settings.permissionRequested)
+        assertFalse(settings.claimPermissionRequest(true, false))
+        check(preferences.edit().clear().putBoolean("enabled", false).commit())
+        assertFalse(settings.optedIn)
+        assertFalse(settings.claimPermissionRequest(true, false))
+        check(preferences.edit().clear().putBoolean("permissionDenied", true).commit())
+        assertTrue(settings.permissionRequested) // Existing denial migrates without a new dialog.
+        assertFalse(settings.claimPermissionRequest(true, false))
+      } finally { check(preferences.edit().clear().commit()) }
+    }
+  }
+
+  @Test fun absentChannelIsAllowedButBlockedRecordChannelPreventsDelivery() {
+    assertTrue(notificationChannelAllowed(null))
+    assertTrue(notificationChannelAllowed(NotificationChannel(RECORD_NOTIFICATION_CHANNEL,
+      "架空の議論結果", NotificationManager.IMPORTANCE_DEFAULT)))
+    assertFalse(notificationChannelAllowed(NotificationChannel(RECORD_NOTIFICATION_CHANNEL,
+      "架空の議論結果", NotificationManager.IMPORTANCE_NONE)))
+    // Do not create a blocked OS channel: its user-controlled state cannot be reset by the app.
   }
 }

@@ -1,6 +1,8 @@
 package dev.pitekusu.shittim.records
 
 import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -17,10 +19,14 @@ import kotlinx.coroutines.flow.update
 
 internal enum class RecordNotificationStatus { PREPARING, DISABLED, PERMISSION_DENIED, REGISTERING, ENABLED, FAILED }
 
-/** Only opt-in, opaque binding and bounded dedup IDs are saved; never auth/FCM tokens or text. */
+internal fun notificationChannelAllowed(channel: NotificationChannel?): Boolean =
+  channel?.importance != NotificationManager.IMPORTANCE_NONE
+
+/** Only device choices, opaque binding and bounded dedup IDs are saved; never tokens or text. */
 internal class RecordNotificationSettings(context: Context) {
   private val preferences = context.getSharedPreferences("record-notification-v1", Context.MODE_PRIVATE)
-  val optedIn: Boolean get() = preferences.getBoolean("enabled", false)
+  // An absent preference is ON; a user-selected OFF is never reset on resume/login.
+  val optedIn: Boolean get() = preferences.getBoolean("enabled", true)
   val binding: String? get() = preferences.getString("binding", null)
   val sessionFingerprint: String? get() = preferences.getString("session", null)
   val deliveryFingerprint: String? get() = preferences.getString("fcm", null)
@@ -28,10 +34,11 @@ internal class RecordNotificationSettings(context: Context) {
   val expiresAt: Instant? get() = date("expires")
   val failed: Boolean get() = preferences.getBoolean("failed", false)
   val permissionDenied: Boolean get() = preferences.getBoolean("permissionDenied", false)
+  val permissionRequested: Boolean get() = preferences.getBoolean("permissionRequested", false) || permissionDenied
 
   fun optIn() {
     // Explicitly re-enabling always creates a new generation, rejecting older queued messages.
-    check(preferences.edit().clear().putBoolean("enabled", true).commit())
+    check(clearBinding(preferences.edit()).putBoolean("enabled", true).commit())
     RecordNotifications.changed()
   }
 
@@ -41,14 +48,36 @@ internal class RecordNotificationSettings(context: Context) {
   }
 
   fun denyPermission() {
-    check(preferences.edit().putBoolean("permissionDenied", true).commit())
+    permissionResult(false)
+  }
+
+  fun permissionResult(granted: Boolean) {
+    check(preferences.edit().putBoolean("permissionRequested", true).putBoolean("permissionDenied", !granted).commit())
+    RecordNotifications.changed()
+  }
+
+  /** Commit before launching the OS dialog, so cancellation/rotation never requests it twice. */
+  fun claimPermissionRequest(eligible: Boolean, alreadyGranted: Boolean): Boolean {
+    if (!eligible || !optedIn || permissionRequested) return false
+    check(preferences.edit().putBoolean("permissionRequested", true).commit())
+    RecordNotifications.changed()
+    return !alreadyGranted
+  }
+
+  fun clearRegistration() {
+    check(preferences.edit().remove("registered").remove("expires").putBoolean("failed", false).commit())
     RecordNotifications.changed()
   }
 
   fun revoke() {
-    check(preferences.edit().clear().commit())
+    // Session cleanup must not undo an explicit OFF or repeat an already-dismissed OS dialog.
+    check(clearBinding(preferences.edit()).commit())
     RecordNotifications.changed()
   }
+
+  private fun clearBinding(editor: android.content.SharedPreferences.Editor) = editor
+    .remove("binding").remove("session").remove("fcm").remove("registered").remove("expires")
+    .remove("seen").remove("failed")
 
   fun bindingFor(session: String, fcmToken: String): String {
     val fingerprint = notificationSessionFingerprint(session)
@@ -95,13 +124,14 @@ internal object RecordNotifications {
   fun permitted(context: Context): Boolean =
     (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context,
       Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
-      NotificationManagerCompat.from(context).areNotificationsEnabled()
+      NotificationManagerCompat.from(context).let { manager ->
+        manager.areNotificationsEnabled() && notificationChannelAllowed(manager.getNotificationChannel(RECORD_NOTIFICATION_CHANNEL))
+      }
 
   fun status(context: Context): RecordNotificationStatus = synchronized(lock) {
     val settings = RecordNotificationSettings(context)
     when {
       !configured(context) -> RecordNotificationStatus.PREPARING
-      settings.permissionDenied && !permitted(context) -> RecordNotificationStatus.PERMISSION_DENIED
       !settings.optedIn -> RecordNotificationStatus.DISABLED
       !permitted(context) -> RecordNotificationStatus.PERMISSION_DENIED
       settings.failed -> RecordNotificationStatus.FAILED
@@ -125,16 +155,32 @@ internal object RecordNotifications {
   }
 
   fun enable(context: Context) = synchronized(lock) {
-    if (!configured(context) || !permitted(context)) return@synchronized
+    if (!configured(context)) return@synchronized
     RecordNotificationSettings(context).optIn()
-    locallyRevoked = false
     RecordNotificationRegistration.schedule(context, replace = true)
+  }
+
+  fun resumeAuthorizedSession(context: Context) = synchronized(lock) {
+    if (!configured(context)) return@synchronized
+    locallyRevoked = false
+    changed()
+    // A foreground permission grant must not be lost behind an in-flight server DELETE.
+    // Wait for that worker, rather than racing a replacement PUT with its old binding DELETE.
+    val settings = RecordNotificationSettings(context)
+    val registrationNeeded = settings.optedIn && permitted(context) &&
+      settings.expiresAt?.isAfter(Instant.now()) != true
+    RecordNotificationRegistration.schedule(context, afterCurrent = registrationNeeded)
+  }
+
+  fun permissionResult(context: Context, granted: Boolean) = synchronized(lock) {
+    RecordNotificationSettings(context).permissionResult(granted)
+    // Never re-enable an OFF setting or revive a session invalidated while the dialog was open.
+    if (!locallyRevoked) RecordNotificationRegistration.schedule(context, replace = true)
   }
 
   fun disable(context: Context) = synchronized(lock) {
     RecordNotificationSettings(context).disable()
     NotificationManagerCompat.from(context).cancelAll()
-    if (configured(context)) FirebaseMessaging.getInstance().isAutoInitEnabled = false
     RecordNotificationRegistration.schedule(context, replace = true)
   }
 }
