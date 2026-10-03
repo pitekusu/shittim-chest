@@ -212,12 +212,12 @@ C16のログイン画面（API 36、未認証・実データなし）：
 - trackは`internal`、statusは`completed`、版番号競合は`FAIL`。提出後に番号を自動変更したり競合を成功扱いしない。直前の全track・提出済みbundleの最大番号検査、AABのSHA-256／署名／package／versionCode検証、反映後のtrack再取得はC39が担当する。
 - GPPの`commit=false`でAABのアップロード・internal trackへの配置・edit検証までを行う。固定したGPP版は[commitの安全な審査条件](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)に未対応のため、C39が同じeditを`changesInReviewBehavior=ERROR_IF_IN_REVIEW`付きで1回だけcommitする。既存審査の取消や条件を弱めた自動再送は行わない。GPPの成功だけでは配布完了としない。
 
-資格情報を使わない接続確認は、1個の架空`.aab`を置いたディスク上のdirectoryを指定して行う。ファイル内容の署名検証や実際のPlay提出の代替ではない。
+資格情報を使わない接続確認は、一時ビルド管理ツールを取り込み、リポジトリrootから実行する。1個の架空`.aab`を置いたディスク上のdirectoryを指定する。ファイル内容の署名検証や実際のPlay提出の代替ではない。
 
 ```sh
-shittim-android-build -- :app:verifyInternalTestPublishing \
+uv run --frozen python -m tools.run_android_build -- :app:verifyInternalTestPublishing \
   -PshittimAndroidPublishArtifactDir="$SHITTIM_ANDROID_VERIFIED_ARTIFACT_DIR"
-shittim-android-build -- :app:publishReleaseBundle --dry-run \
+uv run --frozen python -m tools.run_android_build -- :app:publishReleaseBundle --dry-run \
   -PshittimAndroidPublishArtifactDir="$SHITTIM_ANDROID_VERIFIED_ARTIFACT_DIR"
 ```
 
