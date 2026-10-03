@@ -13,9 +13,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import dev.pitekusu.shittim.records.R
@@ -119,7 +122,47 @@ private val LineSeed =
     Font(R.font.line_seed_jp_bold, FontWeight.Bold),
   )
 val ShittimDisplayFont = FontFamily(Font(R.font.delogy_regular))
-private val ShittimTypography = Typography(fontFamily = LineSeed)
+// Keep content unchanged; Android chooses phrase boundaries for the current width/font scale.
+// Phrase/Strict are supported from API 33; Compose safely retains HighQuality on older devices.
+private fun TextStyle.japaneseWrapping() = copy(
+  lineBreak = LineBreak.Paragraph.copy(wordBreak = LineBreak.WordBreak.Phrase),
+  localeList = LocaleList("ja-JP"),
+)
+
+private val ShittimTypography = Typography(fontFamily = LineSeed).let { type ->
+  type.copy(
+    displayLarge = type.displayLarge.japaneseWrapping(),
+    displayMedium = type.displayMedium.japaneseWrapping(),
+    displaySmall = type.displaySmall.japaneseWrapping(),
+    headlineLarge = type.headlineLarge.japaneseWrapping(),
+    headlineMedium = type.headlineMedium.japaneseWrapping(),
+    headlineSmall = type.headlineSmall.japaneseWrapping(),
+    titleLarge = type.titleLarge.japaneseWrapping(),
+    titleMedium = type.titleMedium.japaneseWrapping(),
+    titleSmall = type.titleSmall.japaneseWrapping(),
+    bodyLarge = type.bodyLarge.japaneseWrapping(),
+    bodyMedium = type.bodyMedium.japaneseWrapping(),
+    bodySmall = type.bodySmall.japaneseWrapping(),
+    labelLarge = type.labelLarge.japaneseWrapping(),
+    labelMedium = type.labelMedium.japaneseWrapping(),
+    labelSmall = type.labelSmall.japaneseWrapping(),
+    displayLargeEmphasized = type.displayLargeEmphasized.japaneseWrapping(),
+    displayMediumEmphasized = type.displayMediumEmphasized.japaneseWrapping(),
+    displaySmallEmphasized = type.displaySmallEmphasized.japaneseWrapping(),
+    headlineLargeEmphasized = type.headlineLargeEmphasized.japaneseWrapping(),
+    headlineMediumEmphasized = type.headlineMediumEmphasized.japaneseWrapping(),
+    headlineSmallEmphasized = type.headlineSmallEmphasized.japaneseWrapping(),
+    titleLargeEmphasized = type.titleLargeEmphasized.japaneseWrapping(),
+    titleMediumEmphasized = type.titleMediumEmphasized.japaneseWrapping(),
+    titleSmallEmphasized = type.titleSmallEmphasized.japaneseWrapping(),
+    bodyLargeEmphasized = type.bodyLargeEmphasized.japaneseWrapping(),
+    bodyMediumEmphasized = type.bodyMediumEmphasized.japaneseWrapping(),
+    bodySmallEmphasized = type.bodySmallEmphasized.japaneseWrapping(),
+    labelLargeEmphasized = type.labelLargeEmphasized.japaneseWrapping(),
+    labelMediumEmphasized = type.labelMediumEmphasized.japaneseWrapping(),
+    labelSmallEmphasized = type.labelSmallEmphasized.japaneseWrapping(),
+  )
+}
 private val ShittimShapes =
   Shapes(
     extraSmall = RoundedCornerShape(6.dp),

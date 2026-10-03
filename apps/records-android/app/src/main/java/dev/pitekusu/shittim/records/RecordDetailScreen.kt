@@ -67,6 +67,16 @@ internal enum class RecordDetailSection(@StringRes val title: Int, @DrawableRes 
   Affection(R.string.detail_affection, R.drawable.ic_detail_heart),
 }
 
+private data class DetailPage(val section: RecordDetailSection, val person: Int = 0,
+  val finalOpinion: Boolean = false)
+
+private fun personaOrder(name: String, slot: String?): Int = when (participantVisualSlot(name, slot)) {
+  "participant-a" -> 0
+  "participant-b" -> 1
+  "participant-c" -> 2
+  else -> 3
+}
+
 /** Page state belongs to one open record, never to its refreshed response instance. */
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -76,80 +86,102 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
   scrollTag: String = "record-detail-content", motionAllowed: Boolean = true,
   playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {}) {
   key(recordId) {
-    val pager = rememberPagerState(pageCount = { RecordDetailSection.entries.size })
-    val scope = rememberCoroutineScope()
-    var questionOpen by remember { mutableStateOf(false) }
-    var affectionChoice by rememberSaveable { mutableIntStateOf(-1) }
-    // Playback belongs to this visit, not Bootstrap's lifetime-wide winner animation history.
-    var affectionPlayed by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
-    LaunchedEffect(pager.settledPage) {
-      if (RecordDetailSection.entries[pager.settledPage] != RecordDetailSection.Affection) {
-        affectionPlayed = arrayListOf()
+    // The presenter reloads decrypted text after recreation. Attaching a smaller placeholder
+    // pager would clamp its saved page (or ask for a now-missing page key) before Ready arrives.
+    // Leave the saved reader states unconsumed until the actual finite sequence is available.
+    if (state !is RecordPreviewState.Ready) {
+      LazyColumn(modifier.fillMaxSize().testTag(scrollTag),
+        contentPadding = PaddingValues(ShittimSpacing.Medium)) {
+        item(key = "status") { RecordPreviewPanel(state, onEvent, recordId) }
       }
-    }
-    val preview = (state as? RecordPreviewState.Ready)?.preview
-    val decisionMarkdown = rememberMarkdownState(preview?.decision.orEmpty())
-    // Live responses need not arrive in persona order; old caches can lack slots.
-    val opinions = preview?.opinions.orEmpty().sortedBy {
-      when (participantVisualSlot(it.participantName, it.participantSlot)) {
-        "participant-a" -> 0
-        "participant-b" -> 1
-        "participant-c" -> 2
-        else -> 3
+    } else {
+      val scope = rememberCoroutineScope()
+      var questionOpen by remember { mutableStateOf(false) }
+      var opinionChoice by rememberSaveable { mutableIntStateOf(0) }
+      var affectionChoice by rememberSaveable { mutableIntStateOf(-1) }
+      // Playback belongs to this visit, not Bootstrap's lifetime-wide winner animation history.
+      var affectionPlayed by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+      val preview = state.preview
+      val decisionMarkdown = rememberMarkdownState(preview.decision)
+      // Live responses need not arrive in persona order; old caches can lack slots.
+      val opinions = preview.opinions.sortedBy {
+        personaOrder(it.participantName, it.participantSlot)
       }
-    }
-    val defaultOpinion = opinions.indexOfFirst {
-      voteParticipantMatches(it.participantName, it.participantSlot,
-        preview?.winnerName.orEmpty(), preview?.winnerSlot)
-    }.coerceAtLeast(0)
-    val opinionSteps = opinions.size * 2
-    // Standard lazy pages repeat the available answers in both directions without a custom
-    // gesture recognizer. Keep the pager outside the tab so refresh/rotation retain selection.
-    val opinionPager = if (opinionSteps == 0) null else key(opinions.map {
-      participantVisualSlot(it.participantName, it.participantSlot) ?: it.participantName
-    }) {
-      rememberPagerState(initialPage = opinionSteps * 50 + defaultOpinion * 2,
-        pageCount = { opinionSteps * 101 })
-    }
-    // Recenter only at rest near the window edges. The logical answer and its reading position
-    // remain identical, while SDK collection/scroll indices stay bounded rather than Int.MAX_VALUE.
-    LaunchedEffect(opinionPager, opinionPager?.settledPage, opinionPager?.isScrollInProgress) {
-      val answers = opinionPager ?: return@LaunchedEffect
-      if (!answers.isScrollInProgress && (answers.settledPage < opinionSteps ||
-        answers.settledPage >= answers.pageCount - opinionSteps)) {
-        answers.scrollToPage(opinionSteps * 50 + answers.settledPage % opinionSteps)
+      val affectionChanges = preview.affection?.changes.orEmpty()
+      val affectionOrder = affectionChanges.indices.sortedBy {
+        personaOrder(affectionChanges[it].participantName, affectionChanges[it].participantSlot)
       }
-    }
-    val opinionStep = opinionPager?.currentPage?.rem(opinionSteps) ?: 0
-    val opinionIndex = opinionStep / 2
-    val finalOpinion = opinionStep % 2 == 1
-    val affectionChanges = preview?.affection?.changes.orEmpty()
-    val defaultAffection = affectionChanges.indexOfFirst {
-      voteParticipantMatches(it.participantName, it.participantSlot,
-        preview?.winnerName.orEmpty(), preview?.winnerSlot)
-    }.coerceAtLeast(0)
-    val affectionIndex = affectionChoice.takeIf { it in affectionChanges.indices } ?: defaultAffection
-    // Keep parsed answers in memory outside lazy pages. Re-parsing an empty placeholder on return
-    // would temporarily shrink the list and clamp a saved reading position back to the top.
-    val opinionMarkdown = opinions.mapIndexed { index, value -> key(index) {
-      listOf(rememberMarkdownState(value.initialProposal), rememberMarkdownState(value.finalProposal))
-    } }
-    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
-    // States remain composed outside the lazy pager, so switching pages cannot reset reading position.
-    val scrollStates = List(RecordDetailSection.entries.size) { rememberLazyListState() }
-    // The API has three personas; each initial/final answer has its own small saved scroll state.
-    val opinionScrollStates = opinions.map { value -> key(
-      participantVisualSlot(value.participantName, value.participantSlot) ?: value.participantName) {
-      listOf(rememberLazyListState(), rememberLazyListState())
-    } }
-    val affectionScrollStates = List(3) { rememberLazyListState() }
-    val questionScrollState = rememberScrollState()
-    BoxWithConstraints(modifier.fillMaxSize()) {
-      // The shared question stays outside the pager. Bound only its viewport, never its text,
-      // so long questions and large fonts cannot consume all of the answer/navigation space.
-      val questionMaximumHeight = maxHeight * 0.35f
-      Column(Modifier.fillMaxSize()) {
-        if (state is RecordPreviewState.Ready) {
+      val defaultAffection = affectionChanges.indexOfFirst {
+        voteParticipantMatches(it.participantName, it.participantSlot,
+          preview.winnerName, preview.winnerSlot)
+      }.coerceAtLeast(0)
+      val affectionIndex = affectionChoice.takeIf { it in affectionChanges.indices } ?: defaultAffection
+      // One standard pager owns all horizontal gestures, including the opinion/voting boundary.
+      // Its finite endpoints provide normal overscroll without loops or custom gesture handling.
+      val pages = buildList {
+        repeat((opinions.size * 2).coerceAtLeast(1)) { step ->
+          add(DetailPage(RecordDetailSection.Opinions, step / 2, step % 2 == 1))
+        }
+        add(DetailPage(RecordDetailSection.Voting))
+        add(DetailPage(RecordDetailSection.Result))
+        if (affectionOrder.isEmpty()) add(DetailPage(RecordDetailSection.Affection))
+        else affectionOrder.forEach { add(DetailPage(RecordDetailSection.Affection, it)) }
+      }
+      val pager = rememberPagerState(pageCount = { pages.size })
+      val selected = pages[pager.currentPage.coerceIn(pages.indices)]
+      var previousPage by rememberSaveable { mutableIntStateOf(pager.settledPage) }
+      // Keep parsed answers in memory outside lazy pages. Re-parsing an empty placeholder on return
+      // would temporarily shrink the list and clamp a saved reading position back to the top.
+      val opinionMarkdown = opinions.mapIndexed { index, value -> key(index) {
+        listOf(rememberMarkdownState(value.initialProposal), rememberMarkdownState(value.finalProposal))
+      } }
+      val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+      // Result/voting positions survive tab changes; opinions restart on a deliberate answer change.
+      val scrollStates = List(RecordDetailSection.entries.size) { rememberLazyListState() }
+      // The API has three personas; each initial/final answer has its own small saved scroll state.
+      val opinionScrollStates = opinions.map { value -> key(
+        participantVisualSlot(value.participantName, value.participantSlot) ?: value.participantName) {
+        listOf(rememberLazyListState(), rememberLazyListState())
+      } }
+      val affectionScrollStates = affectionChanges.map { value -> key(
+        participantVisualSlot(value.participantName, value.participantSlot) ?: value.participantName) {
+        rememberLazyListState()
+      } }
+      val questionScrollState = rememberScrollState()
+      fun resetOpinion(page: DetailPage) {
+        if (page.section == RecordDetailSection.Opinions) {
+          // Incoming lazy pages may not have a first layout yet. Request the next layout's
+          // position without suspending navigation until that offscreen list is attached.
+          opinionScrollStates.getOrNull(page.person)?.get(if (page.finalOpinion) 1 else 0)?.requestScrollToItem(0)
+        }
+      }
+      suspend fun openPage(index: Int, animate: Boolean = false) {
+        resetOpinion(pages[index])
+        if (animate) pager.animateScrollToPage(index) else pager.scrollToPage(index)
+      }
+      // Reset the incoming answer during the swipe, before its old offset can become visible.
+      // A cancelled swipe leaves the outgoing answer untouched. Rotation/sync are not navigation.
+      LaunchedEffect(pager.targetPage) {
+        if (pager.targetPage != pager.settledPage) resetOpinion(pages[pager.targetPage.coerceIn(pages.indices)])
+      }
+      LaunchedEffect(pager.settledPage) {
+        val settled = pages[pager.settledPage.coerceIn(pages.indices)]
+        if (previousPage != pager.settledPage) resetOpinion(settled)
+        previousPage = pager.settledPage
+        if (settled.section == RecordDetailSection.Opinions) {
+          opinionChoice = settled.person * 2 + if (settled.finalOpinion) 1 else 0
+        }
+        if (settled.section != RecordDetailSection.Affection || affectionChoice != settled.person) {
+          affectionPlayed = arrayListOf()
+        }
+        if (settled.section == RecordDetailSection.Affection) affectionChoice = settled.person
+      }
+      var affectionControlsBottom by remember { mutableFloatStateOf(Float.NEGATIVE_INFINITY) }
+      BoxWithConstraints(modifier.fillMaxSize()) {
+        // The shared question stays outside the pager. Bound only its viewport, never its text,
+        // so long questions and large fonts cannot consume all of the answer/navigation space.
+        val questionMaximumHeight = maxHeight * 0.35f
+        Column(Modifier.fillMaxSize()) {
           Surface(onClick = { questionOpen = true },
             color = MaterialTheme.colorScheme.surfaceContainer,
             shape = MaterialTheme.shapes.large,
@@ -165,35 +197,33 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                 modifier = Modifier.testTag("detail-question-text"))
             }
           }
-        }
-        HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth().testTag("detail-pager"),
-          // The opinion pager owns horizontal swipes while this tab is selected. The bottom
-          // navigation still switches tabs, and other tabs retain their normal swipe behavior.
-          userScrollEnabled = state is RecordPreviewState.Ready &&
-            (opinionPager == null || pager.settledPage != RecordDetailSection.Opinions.ordinal)) { page ->
-          val section = RecordDetailSection.entries[page]
-          var affectionControlsBottom by remember { mutableFloatStateOf(Float.NEGATIVE_INFINITY) }
-          val active = motionAllowed && !questionOpen && !pager.isScrollInProgress && pager.settledPage == page &&
-            lifecycle.isAtLeast(Lifecycle.State.STARTED)
-          if (section == RecordDetailSection.Opinions && opinionPager != null) {
-            Column(Modifier.fillMaxSize()) {
-              RecordOpinionControls(opinions, opinionIndex, finalOpinion,
-                onPerson = { index -> scope.launch {
-                  // Even tapping the already selected persona returns to their initial answer.
-                  val cycleStart = opinionPager.currentPage - opinionPager.currentPage % opinionSteps
-                  opinionPager.scrollToPage(cycleStart + index * 2)
-                } },
-                onStage = { final -> scope.launch {
-                  val cycleStart = opinionPager.currentPage - opinionPager.currentPage % opinionSteps
-                  opinionPager.scrollToPage(cycleStart + opinionIndex * 2 + if (final) 1 else 0)
-                } })
-              HorizontalPager(opinionPager, Modifier.weight(1f).fillMaxWidth().testTag("opinion-pager"),
-                userScrollEnabled = !questionOpen && !pager.isScrollInProgress && pager.settledPage == page) { answerPage ->
-                val answerStep = answerPage % opinionSteps
-                val person = answerStep / 2
-                val final = answerStep % 2 == 1
-                val selectedAnswer = opinionPager.settledPage == answerPage && pager.settledPage == page
-                val markdown = opinionMarkdown[person][if (final) 1 else 0]
+          if (selected.section == RecordDetailSection.Opinions && opinions.isNotEmpty()) {
+            RecordOpinionControls(opinions, selected.person, selected.finalOpinion,
+              onPerson = { index -> scope.launch { openPage(index * 2) } },
+              onStage = { final -> scope.launch { openPage(selected.person * 2 + if (final) 1 else 0) } })
+          }
+          if (selected.section == RecordDetailSection.Affection && affectionChanges.isNotEmpty()) {
+            RecordAffectionControls(affectionOrder.map { affectionChanges[it] },
+              affectionOrder.indexOf(selected.person),
+              Modifier.onGloballyPositioned { affectionControlsBottom = it.boundsInWindow().bottom }) { index ->
+              scope.launch { openPage(pages.indexOf(DetailPage(RecordDetailSection.Affection, affectionOrder[index]))) }
+            }
+          }
+          Box(Modifier.weight(1f).fillMaxWidth().then(when (selected.section) {
+            RecordDetailSection.Opinions -> Modifier.testTag("opinion-pager")
+            RecordDetailSection.Affection -> Modifier.testTag("affection-pager")
+            else -> Modifier
+          })) {
+            HorizontalPager(pager, Modifier.fillMaxSize().testTag("detail-pager"),
+              key = { pages[it].let { entry -> "${entry.section}:${entry.person}:${entry.finalOpinion}" } },
+              userScrollEnabled = !questionOpen) { page ->
+              val entry = pages[page]
+              val section = entry.section
+              val selectedPage = pager.settledPage == page
+              val active = motionAllowed && !questionOpen && !pager.isScrollInProgress && selectedPage &&
+                lifecycle.isAtLeast(Lifecycle.State.STARTED)
+              if (section == RecordDetailSection.Opinions && opinions.isNotEmpty()) {
+                val markdown = opinionMarkdown[entry.person][if (entry.finalOpinion) 1 else 0]
                 val parsed by markdown.state.collectAsState()
                 // On restoration, an empty Markdown placeholder would clamp the saved list
                 // offset to zero. Attach the real list only after local asynchronous parsing.
@@ -203,59 +233,57 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                   }
                 } else {
                   LazyColumn(Modifier.fillMaxSize()
-                    .testTag(if (selectedAnswer) scrollTag else "opinion-inactive-$answerPage")
-                    .then(if (selectedAnswer) Modifier else Modifier.clearAndSetSemantics {}),
-                    state = opinionScrollStates[person][if (final) 1 else 0],
+                    .testTag(if (selectedPage) scrollTag else "detail-inactive-$page")
+                    .then(if (selectedPage) Modifier else Modifier.clearAndSetSemantics {}),
+                    state = opinionScrollStates[entry.person][if (entry.finalOpinion) 1 else 0],
                     contentPadding = PaddingValues(ShittimSpacing.Medium)) {
                     item(key = "answer") {
                       RecordPreviewPanel(state, onEvent, recordId, playedSections, onSectionSeen,
-                        section = section, motionActive = active && selectedAnswer && !opinionPager.isScrollInProgress,
-                        opinion = opinions[person], finalOpinion = final,
+                        section = section, motionActive = active,
+                        opinion = opinions[entry.person], finalOpinion = entry.finalOpinion,
                         opinionMarkdown = markdown)
                     }
                   }
                 }
-              }
-            }
-          } else {
-            val scrollState = if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty())
-              affectionScrollStates[affectionIndex.coerceIn(0, 2)]
-              else if (section == RecordDetailSection.Result) resultScrollState
-              else scrollStates[page]
-            LazyColumn(Modifier.fillMaxSize().testTag(if (pager.settledPage == page) scrollTag
-              else "detail-inactive-$page")
-              .then(if (pager.settledPage == page) Modifier else Modifier.clearAndSetSemantics {}), state = scrollState,
-              contentPadding = PaddingValues(ShittimSpacing.Medium)) {
-              if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty()) stickyHeader(key = "affection") {
-                RecordAffectionControls(affectionChanges, affectionIndex,
-                  Modifier.onGloballyPositioned { affectionControlsBottom = it.boundsInWindow().bottom }) {
-                  if (it != affectionIndex) affectionPlayed = arrayListOf()
-                  affectionChoice = it
+              } else {
+                val scrollState = if (section == RecordDetailSection.Affection && affectionChanges.isNotEmpty())
+                  affectionScrollStates[entry.person]
+                  else if (section == RecordDetailSection.Result) resultScrollState
+                  else scrollStates[section.ordinal]
+                LazyColumn(Modifier.fillMaxSize().testTag(if (selectedPage) scrollTag
+                  else "detail-inactive-$page")
+                  .then(if (selectedPage) Modifier else Modifier.clearAndSetSemantics {}), state = scrollState,
+                  contentPadding = PaddingValues(ShittimSpacing.Medium)) {
+                  item(key = section) {
+                    RecordPreviewPanel(state, onEvent, recordId,
+                      if (section == RecordDetailSection.Affection) affectionPlayed.toSet() else playedSections,
+                      onSectionSeen = { seen ->
+                        if (section == RecordDetailSection.Affection && seen !in affectionPlayed) {
+                          affectionPlayed = ArrayList(affectionPlayed).apply { add(seen) }
+                        }
+                        onSectionSeen(seen)
+                      },
+                      section = section, motionActive = active,
+                      affectionIndex = entry.person,
+                      minimumVisibleTop = { affectionControlsBottom },
+                      decisionMarkdown = decisionMarkdown)
+                  }
                 }
-              }
-              item(key = section) {
-                RecordPreviewPanel(state, onEvent, recordId,
-                  if (section == RecordDetailSection.Affection) affectionPlayed.toSet() else playedSections,
-                  onSectionSeen = { seen ->
-                    if (section == RecordDetailSection.Affection && seen !in affectionPlayed) {
-                      affectionPlayed = ArrayList(affectionPlayed).apply { add(seen) }
-                    }
-                    onSectionSeen(seen)
-                  },
-                  section = section, motionActive = active,
-                  affectionIndex = affectionIndex,
-                  minimumVisibleTop = { affectionControlsBottom },
-                  decisionMarkdown = decisionMarkdown)
               }
             }
           }
-        }
-        if (state is RecordPreviewState.Ready) {
           // The parent already owns safe-drawing insets; don't reserve navigation-bar space twice.
           ShortNavigationBar(windowInsets = WindowInsets(0, 0, 0, 0)) {
-            RecordDetailSection.entries.forEachIndexed { page, section ->
-              ShortNavigationBarItem(selected = pager.currentPage == page,
-                onClick = { scope.launch { pager.animateScrollToPage(page) } },
+            RecordDetailSection.entries.forEach { section ->
+              ShortNavigationBarItem(selected = selected.section == section,
+                onClick = { scope.launch {
+                  val target = when (section) {
+                    RecordDetailSection.Opinions -> opinionChoice.coerceIn(0, (opinions.size * 2 - 1).coerceAtLeast(0))
+                    RecordDetailSection.Affection -> pages.indexOf(DetailPage(section, affectionIndex))
+                    else -> pages.indexOf(DetailPage(section))
+                  }
+                  openPage(target.coerceAtLeast(0), animate = true)
+                } },
                 icon = { Icon(painterResource(section.icon), null, Modifier.size(24.dp)) },
                 label = { Text(stringResource(section.title)) },
                 modifier = Modifier.testTag("detail-section-${section.name}"))
@@ -263,19 +291,19 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
           }
         }
       }
-    }
-    if (questionOpen && state is RecordPreviewState.Ready) {
-      ModalBottomSheet(onDismissRequest = { questionOpen = false },
-        sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
-          enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
-        modifier = Modifier.testTag("detail-question-sheet")) {
-        LazyColumn(contentPadding = PaddingValues(ShittimSpacing.Medium)) {
-          item { Text(stringResource(R.string.record_question),
-            style = MaterialTheme.typography.titleLargeEmphasized) }
-          item { RecordMarkdown(state.preview.question) }
-          item { TextButton(onClick = { questionOpen = false }) {
-            Text(stringResource(R.string.detail_close))
-          } }
+      if (questionOpen) {
+        ModalBottomSheet(onDismissRequest = { questionOpen = false },
+          sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
+            enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
+          modifier = Modifier.testTag("detail-question-sheet")) {
+          LazyColumn(contentPadding = PaddingValues(ShittimSpacing.Medium)) {
+            item { Text(stringResource(R.string.record_question),
+              style = MaterialTheme.typography.titleLargeEmphasized) }
+            item { RecordMarkdown(state.preview.question) }
+            item { TextButton(onClick = { questionOpen = false }) {
+              Text(stringResource(R.string.detail_close))
+            } }
+          }
         }
       }
     }

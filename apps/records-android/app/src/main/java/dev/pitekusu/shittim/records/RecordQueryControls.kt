@@ -24,12 +24,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 
 @Composable
 internal fun RecordQueryControls(query: RecordListQuery, canFocus: Boolean = true,
   showSearch: Boolean = true, showFilters: Boolean = true,
+  requesters: List<RecordRequesterChoice> = emptyList(),
   onEvent: (BootstrapScreen.Event) -> Unit) {
   val keyboard = LocalSoftwareKeyboardController.current
   Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -44,6 +46,32 @@ internal fun RecordQueryControls(query: RecordListQuery, canFocus: Boolean = tru
       modifier = Modifier.fillMaxWidth().focusProperties { this.canFocus = canFocus }.testTag("record-search"),
     )
     if (showFilters) {
+      Text(stringResource(R.string.record_filter_requester), style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+      Text(stringResource(R.string.record_filter_requester_hint), style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+      FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FilterChip(selected = query.requesterName == null,
+          onClick = { onEvent(BootstrapScreen.Event.SelectRequester(null)) },
+          label = { Text(stringResource(R.string.record_filter_all)) },
+          shapes = FilterChipDefaults.shapes(),
+          leadingIcon = if (query.requesterName == null) {
+            { Icon(painterResource(R.drawable.ic_check), null, Modifier.size(18.dp)) }
+          } else null,
+          modifier = Modifier.heightIn(min = 48.dp).testTag("requester-all"))
+        requesters.forEachIndexed { index, requester ->
+          FilterChip(selected = query.requesterName == requester.displayName,
+            onClick = { onEvent(BootstrapScreen.Event.SelectRequester(requester.displayName)) },
+            label = { Text(requester.displayName, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            shapes = FilterChipDefaults.shapes(),
+            leadingIcon = {
+              RequesterAvatar(requester.displayName, requester.avatar,
+                Modifier.testTag("requester-avatar-$index"), size = 24.dp)
+            },
+            modifier = Modifier.heightIn(min = 48.dp).testTag("requester-$index"))
+        }
+      }
       Text(stringResource(R.string.record_filter_winner), style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
       // Wrap rather than clip or shrink labels at 320dp / large text.

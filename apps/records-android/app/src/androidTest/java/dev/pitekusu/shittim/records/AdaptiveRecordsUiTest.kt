@@ -2,8 +2,10 @@ package dev.pitekusu.shittim.records
 
 import android.animation.ValueAnimator
 import android.graphics.Bitmap
+import android.view.ViewGroup
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -11,6 +13,7 @@ import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DeviceConfigurationOverride
@@ -22,12 +25,16 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -35,8 +42,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.then
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -214,6 +223,141 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithTag("records-search-toggle").performClick()
     // Explicitly opening the dedicated search is the only automatic-focus path.
     compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsFocused()
+  }
+
+  @Test fun reopeningTheSameCompactRecordStartsAtAronasInitialAnswerAndKeepsListPosition() {
+    val selected = mutableStateOf<String?>(null)
+    val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
+      RecordOpinion(name, "再入場試験の初回意見$index",
+        "架空の初回本文$index。読み位置の確認用です。\n\n".repeat(40) + "初回本文の末尾$index",
+        "再入場試験の最終案$index",
+        "架空の最終本文$index。読み位置の確認用です。\n\n".repeat(40) + "最終本文の末尾$index",
+        participantSlot = "participant-${('a'.code + index).toChar()}")
+    }
+    val preview = RecordPreviewState.Ready(RecordPreview("再入場試験の架空の議題", "架空の結論", "プラナ",
+      opinions = listOf(opinions[2], opinions[0], opinions[1]), winnerSlot = "participant-b"), saved = true)
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 850.dp))) {
+        BootstrapUi(BootstrapScreen.State(ThemeChoice.Dark, session, records = records,
+          selectedRecordId = selected.value, record = preview, eventSink = { event ->
+            when (event) {
+              is BootstrapScreen.Event.OpenRecord -> selected.value = event.recordId
+              BootstrapScreen.Event.CloseRecord -> selected.value = null
+              else -> Unit
+            }
+          }))
+      }
+    } }
+    val question = entries.last().questionPreview
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(question))
+    fun readingPosition() = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    val listPosition = readingPosition()
+    assertTrue(listPosition > 0f)
+    fun assertInitialAnswer() {
+      compose.waitUntil(10_000) { compose.onNodeWithText("再入場試験の初回意見0").isDisplayed() }
+      compose.waitForIdle()
+      compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
+      compose.onNodeWithTag("opinion-person-0").assertIsSelected()
+      compose.onNodeWithText(compose.activity.getString(R.string.record_initial_opinion)).assertIsOn()
+      assertEquals(0f, readingPosition(), .01f)
+    }
+    fun readPartway(tail: String) {
+      // Wait for the actual parsed answer, not its empty asynchronous placeholder.
+      compose.waitUntil(10_000) {
+        compose.onAllNodesWithText(tail, substring = true).fetchSemanticsNodes().isNotEmpty() &&
+          compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
+      }
+      compose.onNodeWithTag("bootstrap-content").performTouchInput {
+        swipe(center, center.copy(y = center.y - 120f), durationMillis = 1_000)
+      }
+      assertTrue(readingPosition() > 0f)
+    }
+    fun closeAndReopen() {
+      compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+      compose.waitUntil(10_000) { selected.value == null && compose.onNodeWithText(question).isDisplayed() }
+      compose.waitForIdle()
+      compose.onNodeWithTag("detail-pager").assertDoesNotExist()
+      assertEquals(listPosition, readingPosition(), .01f)
+      compose.onNodeWithText(question).performClick()
+      assertInitialAnswer()
+    }
+    compose.onNodeWithText(question).performClick()
+    assertInitialAnswer()
+    readPartway("初回本文の末尾0")
+    // Exercise AnimatedPane's saved role bucket even when the current page is already Arona.
+    closeAndReopen()
+    compose.onNodeWithTag("opinion-person-2").performClick()
+    compose.waitUntil(10_000) { compose.onNodeWithText("再入場試験の初回意見2").isDisplayed() }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
+    compose.waitUntil(10_000) { compose.onNodeWithText("再入場試験の最終案2").isDisplayed() }
+    readPartway("最終本文の末尾2")
+    // A later answer must not be restored when the same record is entered again.
+    closeAndReopen()
+  }
+
+  @Test fun restoredDetailWaitsForTheSavedBodyBeforeRestoringItsAnswerAndReadingPosition() {
+    val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
+      RecordOpinion(name, "復元試験の初回意見$index", "架空の初回本文$index",
+        "復元試験の最終案$index", "架空の最終本文$index。読み位置の確認用です。\n\n".repeat(40) + "復元本文の末尾$index",
+        participantSlot = "participant-${('a'.code + index).toChar()}")
+    }
+    val ready = RecordPreviewState.Ready(RecordPreview("復元試験の架空の議題", "架空の結論", "プラナ",
+      opinions = listOf(opinions[2], opinions[0], opinions[1]), winnerSlot = "participant-b"), saved = true)
+    // The real presenter holds decrypted text only in memory, then reads its encrypted cache
+    // asynchronously after recreation. Preserve only the reader's local SavedState here too.
+    val record = mutableStateOf<RecordPreviewState>(ready)
+    var restoreWithLoading = false
+    val restoration = StateRestorationTester(compose)
+    compose.activityRule.scenario.onActivity { activity ->
+      val host = activity.findViewById<ViewGroup>(android.R.id.content)
+      (host.getChildAt(0) as? ComposeView)?.disposeComposition()
+      host.removeAllViews()
+    }
+    restoration.setContent {
+      DisposableEffect(Unit) {
+        onDispose { if (restoreWithLoading) record.value = RecordPreviewState.Loading }
+      }
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 850.dp))) {
+        BootstrapUi(BootstrapScreen.State(ThemeChoice.Dark, session, records = records,
+          selectedRecordId = entries.last().recordId, record = record.value, eventSink = {}))
+      }
+    }
+    compose.waitUntil(10_000) { compose.onNodeWithText("復元試験の初回意見0").isDisplayed() }
+    compose.onNodeWithTag("opinion-person-2").performClick()
+    compose.waitUntil(10_000) { compose.onNodeWithText("復元試験の初回意見2").isDisplayed() }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
+    compose.waitUntil(10_000) {
+      compose.onNodeWithText("復元試験の最終案2").isDisplayed() &&
+        compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+          .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
+    }
+    compose.onNodeWithTag("bootstrap-content").performTouchInput {
+      swipe(center, center.copy(y = center.y - 120f), durationMillis = 1_000)
+    }
+    fun readingPosition() = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    val position = readingPosition()
+    assertTrue(position > 0f)
+    compose.runOnIdle { restoreWithLoading = true }
+    restoration.emulateSavedInstanceStateRestore()
+    compose.runOnIdle {
+      restoreWithLoading = false
+      assertTrue(record.value is RecordPreviewState.Loading)
+    }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_loading)).assertIsDisplayed()
+    compose.waitForIdle() // A real Loading layout must occur before the cache read completes.
+    compose.runOnIdle { record.value = ready }
+    compose.waitUntil(10_000) { compose.onNodeWithText("復元試験の架空の議題").isDisplayed() }
+    compose.waitForIdle()
+    compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
+    compose.onNodeWithTag("opinion-person-2").assertIsSelected()
+    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).assertIsOn()
+    compose.waitUntil(10_000) {
+      compose.onAllNodesWithText("復元本文の末尾2", substring = true).fetchSemanticsNodes().isNotEmpty()
+    }
+    assertEquals(position, readingPosition(), .01f)
   }
 
   @Test fun threeButtonBackSlidesBeforeClosingWithoutLeavingASelectedListCard() {

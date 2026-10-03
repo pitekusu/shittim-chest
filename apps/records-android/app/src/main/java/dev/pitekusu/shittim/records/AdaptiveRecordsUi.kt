@@ -28,6 +28,9 @@ import androidx.compose.material3.adaptive.layout.MutableThreePaneScaffoldState
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.calculateThreePaneScaffoldValue
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -37,6 +40,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -58,6 +63,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -72,6 +78,15 @@ internal fun AdaptiveRecordsUi(
   onSectionSeen: (String) -> Unit = {},
 ) {
   val windowDirective = calculatePaneScaffoldDirective(currentWindowAdaptiveInfoV2())
+  // AnimatedPane retains its role bucket while hidden. Own a bounded detail bucket outside
+  // that pane so reopening resets the reader and old visits do not accumulate in SavedState.
+  val detailStateHolder = rememberSaveableStateHolder()
+  val detailVisit = rememberSaveable(state.selectedRecordId) { UUID.randomUUID().toString() }
+  var previousDetailVisit by rememberSaveable { mutableStateOf(detailVisit) }
+  LaunchedEffect(detailVisit) {
+    if (previousDetailVisit != detailVisit) detailStateHolder.removeState(previousDetailVisit)
+    previousDetailVisit = detailVisit
+  }
   BoxWithConstraints(modifier) {
     // Use the available content width, not physical screen size; preserve standard hinge avoidance.
     val twoPanes = maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f
@@ -94,6 +109,11 @@ internal fun AdaptiveRecordsUi(
     val visibleMotion = motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
       ValueAnimator.areAnimatorsEnabled()
     val listMotion = visibleMotion && queryMode == RecordQueryMode.Closed && state.selectedRecordId == null
+    val refreshAvailable = state.canReadRecords && state.selectedRecordId == null &&
+      queryMode == RecordQueryMode.Closed && motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED)
+    // WorkManager owns the operation. Queued/offline work must not keep the gesture spinner alive.
+    val refreshing = refreshAvailable && state.sync == RecordSyncState.Running
+    val refreshState = rememberPullToRefreshState()
     val searchScrollState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -153,7 +173,19 @@ internal fun AdaptiveRecordsUi(
           paneTitle = listTitle
           isTraversalGroup = true
         }) {
-          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+          PullToRefreshBox(isRefreshing = refreshing,
+            onRefresh = { if (refreshAvailable) state.eventSink(BootstrapScreen.Event.RefreshRecords) },
+            enabled = refreshAvailable && !refreshing,
+            state = refreshState,
+            modifier = Modifier.fillMaxSize().testTag("records-pull-refresh"),
+            contentAlignment = Alignment.TopCenter,
+            indicator = {
+              if (refreshAvailable) PullToRefreshDefaults.Indicator(
+                state = refreshState, isRefreshing = refreshing,
+                modifier = Modifier.align(Alignment.TopCenter).testTag("records-refresh-indicator"),
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }) {
             LazyColumn(Modifier.widthIn(max = 560.dp).fillMaxSize().testTag("bootstrap-content"),
               state = listScrollState, contentPadding = PaddingValues(
                 start = ShittimSpacing.Large, end = ShittimSpacing.Large,
@@ -161,7 +193,7 @@ internal fun AdaptiveRecordsUi(
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
               item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true, motionAllowed = listMotion) }
               if (!state.listQuery.isDefault) item(key = "records-query-active") {
-                RecordActiveQueryChips(state.listQuery, onEvent = state.eventSink)
+                RecordActiveQueryChips(state.listQuery, requesters = state.requesters, onEvent = state.eventSink)
               }
               recordListItems(state.records, pagingItems, state.eventSink,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,
@@ -188,17 +220,20 @@ internal fun AdaptiveRecordsUi(
               Text(stringResource(R.string.record_select), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
           } else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-            RecordDetailScreen(state.record, state.selectedRecordId, state.eventSink,
-              Modifier.widthIn(max = 760.dp).fillMaxSize(), detailScrollState,
-              scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
-              motionAllowed = motionAllowed, playedSections = playedSections,
-              onSectionSeen = onSectionSeen)
+            detailStateHolder.SaveableStateProvider(detailVisit) {
+              RecordDetailScreen(state.record, state.selectedRecordId, state.eventSink,
+                Modifier.widthIn(max = 760.dp).fillMaxSize(), detailScrollState,
+                scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
+                motionAllowed = motionAllowed, playedSections = playedSections,
+                onSectionSeen = onSectionSeen)
+            }
           }
         }
       })
     if (state.canReadRecords && state.selectedRecordId == null) {
       when (queryMode) {
         RecordQueryMode.Filters -> RecordFilterSheet(state.listQuery,
+          requesters = state.requesters,
           onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = state.eventSink)
         RecordQueryMode.Search -> RecordFullScreenSearch(state.listQuery,
           onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = { event ->
@@ -222,7 +257,7 @@ internal fun AdaptiveRecordsUi(
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
               val filters = state.listQuery.copy(text = "")
               if (!filters.isDefault) item(key = "search-query-active") {
-                RecordActiveQueryChips(filters, onEvent = state.eventSink)
+                RecordActiveQueryChips(filters, requesters = state.requesters, onEvent = state.eventSink)
               }
               recordListItems(state.records, pagingItems, resultEvent,
                 sync = if (state.session is SessionState.SignedIn) state.sync else RecordSyncState.Idle,

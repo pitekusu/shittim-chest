@@ -157,15 +157,67 @@ class RecordsRepositoryCacheTest {
     }
   }
 
+  @Test fun offlineRequesterWinnerAndTextFiltersSkipExcludedBodiesAndKeepAuthorizationChecks() = runBlocking {
+    val requester = "架空の依頼者A"
+    val otherRequesterId = "c".repeat(43)
+    val otherWinnerId = "d".repeat(43)
+    val similarNameId = "e".repeat(43)
+    val otherTextId = "f".repeat(43)
+    val entries = listOf(
+      entry(firstId, "架空料理を含む見出し", requesterName = requester),
+      entry(secondId, "本文だけで一致する見出し", requesterName = requester),
+      entry(otherRequesterId, "別の依頼者の見出し", requesterName = "架空の依頼者B"),
+      entry(otherWinnerId, "別の勝者の見出し", requesterName = requester,
+        winnerName = "プラナ", winnerSlot = "participant-b"),
+      entry(similarNameId, "似た名前の依頼者の見出し", requesterName = "${requester}追加"),
+      entry(otherTextId, "検索語を含まない見出し", requesterName = requester),
+    )
+    entries.forEach { saveList(it) }
+    saveDetail(secondId, RecordPreview("架空の議題", "本文にだけある架空料理", "アロナ"))
+    saveDetail(otherTextId, RecordPreview("架空の議題", "別の本文", "アロナ"))
+    RecordCacheAccount.lock.withLock {
+      // Decrypting/parsing any of these excluded bodies would fail the query.
+      for (id in listOf(firstId, otherRequesterId, otherWinnerId, similarNameId)) {
+        store.save(accountId, id, CachedRecordPart.DETAIL, byteArrayOf(1))
+      }
+    }
+    repository().use { records ->
+      val saved = records.cachedRecords(accountId)
+      val query = RecordListQuery(text = "架空料理", winner = RecordWinner.Arona, requesterName = requester)
+      assertEquals(listOf(firstId, secondId),
+        records.queryCachedRecords(accountId, saved, query).map { it.recordId })
+      assertEquals(setOf(firstId, secondId, otherWinnerId, otherTextId),
+        records.queryCachedRecords(accountId, saved, RecordListQuery(requesterName = requester))
+          .map { it.recordId }.toSet())
+      assertEquals(entries.map { it.recordId }.toSet(),
+        records.queryCachedRecords(accountId, saved, RecordListQuery()).map { it.recordId }.toSet())
+      assertReadFailure(RecordReadFailure.STORAGE_UNAVAILABLE) {
+        records.queryCachedRecords(accountId, saved, query.copy(requesterName = "架空の依頼者B"))
+      }
+      activeAccountId = ""
+      assertReadFailure(RecordReadFailure.AUTH_REQUIRED) { records.queryCachedRecords(accountId, saved, query) }
+      assertReadFailure(RecordReadFailure.AUTH_REQUIRED) {
+        records.queryCachedRecords(accountId, emptyList(), RecordListQuery())
+      }
+    }
+  }
+
   private fun entry(id: String, question: String = "架空の議題",
-    avatar: RecordAvatar = RecordAvatar(null, "cyan")): RecordListEntry =
-    RecordListEntry(id, question, "架空の依頼者", avatar, Instant.parse("2026-09-24T00:00:00Z"),
-      "アロナ", "participant-a")
+    avatar: RecordAvatar = RecordAvatar(null, "cyan"), requesterName: String = "架空の依頼者",
+    winnerName: String = "アロナ", winnerSlot: String? = "participant-a"): RecordListEntry =
+    RecordListEntry(id, question, requesterName, avatar, Instant.parse("2026-09-24T00:00:00Z"),
+      winnerName, winnerSlot)
 
   private suspend fun saveList(entry: RecordListEntry) = RecordCacheAccount.lock.withLock {
     val encoded = Json.encodeToString(entry)
     store.save(accountId, entry.recordId, CachedRecordPart.LIST,
       """{"schemaVersion":1,"entry":$encoded}""".toByteArray())
+  }
+
+  private suspend fun saveDetail(id: String, preview: RecordPreview) = RecordCacheAccount.lock.withLock {
+    val payload = """{"schemaVersion":1,"preview":${Json.encodeToString(preview)}}""".toByteArray()
+    try { store.save(accountId, id, CachedRecordPart.DETAIL, payload) }
+    finally { payload.fill(0) }
   }
 
   private fun openDatabase(): EncryptedRecordsDatabase =

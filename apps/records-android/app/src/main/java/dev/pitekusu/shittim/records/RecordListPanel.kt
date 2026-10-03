@@ -39,6 +39,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.paging.LoadState
 import androidx.paging.LoadStates
@@ -229,11 +230,13 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier:
     Column(Modifier.padding(ShittimSpacing.Medium), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
       Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        ShittimParticipantAvatar(item.winnerName, item.winnerSlot, size = 56.dp, crowned = true)
+        RequesterAvatar(item.requesterName, item.requesterAvatar,
+          Modifier.testTag("journal-requester-avatar-${item.recordId}"))
         Column(Modifier.weight(1f)) {
-          Text(stringResource(R.string.record_list_winner, item.winnerName),
+          Text(item.requesterName,
             style = MaterialTheme.typography.titleSmallEmphasized,
-            color = shittimParticipantColor(item.winnerName, item.winnerSlot))
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("journal-requester-name-${item.recordId}"))
           if (isSelected) Text(stringResource(R.string.record_selected), style = MaterialTheme.typography.labelMedium)
         }
       }
@@ -242,9 +245,10 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier:
         modifier = Modifier.testTag("journal-question-${item.recordId}"))
       Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-        RequesterAvatar(item.requesterName, item.requesterAvatar)
-        Text(item.requesterName, style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        ShittimParticipantAvatar(item.winnerName, item.winnerSlot, size = 24.dp, crowned = true,
+          modifier = Modifier.testTag("journal-winner-avatar-${item.recordId}"))
+        Text(stringResource(R.string.record_list_winner, item.winnerName),
+          style = MaterialTheme.typography.labelMedium, color = accent,
           modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(journalTime.format(item.completedAt), style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -254,17 +258,19 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier:
 }
 
 @Composable
-private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
+internal fun RequesterAvatar(name: String, avatar: RecordAvatar, modifier: Modifier = Modifier,
+  size: Dp = 56.dp) {
   val background = when (avatar.fallbackVariant) {
     "pink" -> MaterialTheme.colorScheme.secondaryContainer
     "lavender" -> MaterialTheme.colorScheme.tertiaryContainer
     else -> MaterialTheme.colorScheme.primaryContainer
   }
-  Box(Modifier.size(24.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+  Box(modifier.size(size).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
     .clip(CircleShape).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
-    Surface(color = background, shape = CircleShape, modifier = Modifier.size(24.dp)) {
+    Surface(color = background, shape = CircleShape, modifier = Modifier.size(size)) {
       Box(contentAlignment = Alignment.Center) {
-        Text(name.take(1), style = MaterialTheme.typography.labelSmall)
+        Text(name.take(1), style = if (size < 40.dp) MaterialTheme.typography.labelSmall
+          else MaterialTheme.typography.titleLarge)
       }
     }
     val context = LocalContext.current
@@ -273,7 +279,7 @@ private fun RequesterAvatar(name: String, avatar: RecordAvatar) {
     }
     if (request != null) {
       AsyncImage(model = request, contentDescription = null,
-        modifier = Modifier.size(24.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+        modifier = Modifier.size(size).clip(CircleShape), contentScale = ContentScale.Crop)
     }
   }
 }

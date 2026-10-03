@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -175,7 +176,8 @@ class RecordDetailVisualTest {
     compose.onNodeWithTag("detail-section-Affection").performClick()
     compose.waitForIdle()
     for (index in 0..2) {
-      compose.onNodeWithTag("affection-person-$index").performScrollTo().performClick().assertIsSelected()
+      // Persona controls now stay above the pager, not inside a scrolling/sticky list.
+      compose.onNodeWithTag("affection-person-$index").assertIsDisplayed().performClick().assertIsSelected()
       compose.onNodeWithTag("affection-card-$index").assertExists()
     }
     capture("detail-large-text")

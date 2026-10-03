@@ -75,7 +75,7 @@ internal fun RecordQueryToolbar(query: RecordListQuery, modifier: Modifier = Mod
     RecordQueryTool(R.drawable.ic_search, stringResource(R.string.record_search_open),
       query.searchesText, "records-search-toggle", onSearch)
     RecordQueryTool(R.drawable.ic_filter, stringResource(R.string.record_filter_open),
-      query.winner != RecordWinner.All || query.order != RecordOrder.Newest,
+      query.winner != RecordWinner.All || query.order != RecordOrder.Newest || query.requesterName != null,
       "records-filter-toggle", onFilters)
   }
 }
@@ -96,6 +96,7 @@ private fun RecordQueryTool(@DrawableRes icon: Int, label: String, active: Boole
 
 @Composable
 internal fun RecordActiveQueryChips(query: RecordListQuery, modifier: Modifier = Modifier,
+  requesters: List<RecordRequesterChoice> = emptyList(),
   onEvent: (BootstrapScreen.Event) -> Unit) {
   if (query.isDefault) return
   FlowRow(modifier.fillMaxWidth().testTag("records-active-query"),
@@ -108,6 +109,17 @@ internal fun RecordActiveQueryChips(query: RecordListQuery, modifier: Modifier =
         label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         trailingIcon = { Icon(painterResource(R.drawable.ic_close), null, Modifier.size(18.dp)) },
         modifier = Modifier.heightIn(min = 48.dp).testTag("records-query-text-chip")
+          .semantics { contentDescription = removeLabel })
+    }
+    query.requesterName?.let { name ->
+      val avatar = requesters.firstOrNull { it.displayName == name }?.avatar ?: RecordAvatar(null, "cyan")
+      val removeLabel = stringResource(R.string.record_query_remove_requester, name)
+      InputChip(selected = true, onClick = { onEvent(BootstrapScreen.Event.SelectRequester(null)) },
+        label = { Text(stringResource(R.string.record_query_requester_chip, name),
+          maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        leadingIcon = { RequesterAvatar(name, avatar, size = 24.dp) },
+        trailingIcon = { Icon(painterResource(R.drawable.ic_close), null, Modifier.size(18.dp)) },
+        modifier = Modifier.heightIn(min = 48.dp).testTag("records-query-requester-chip")
           .semantics { contentDescription = removeLabel })
     }
     if (query.winner != RecordWinner.All) {
@@ -138,6 +150,7 @@ internal fun RecordActiveQueryChips(query: RecordListQuery, modifier: Modifier =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun RecordFilterSheet(query: RecordListQuery, onDismiss: () -> Unit,
+  requesters: List<RecordRequesterChoice> = emptyList(),
   onEvent: (BootstrapScreen.Event) -> Unit) {
   ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("records-filter-sheet"),
     sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
@@ -145,7 +158,7 @@ internal fun RecordFilterSheet(query: RecordListQuery, onDismiss: () -> Unit,
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("records-filter-content")
       .padding(ShittimSpacing.Medium), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
       ShittimSectionHeading(stringResource(R.string.record_filter_sheet_title))
-      RecordQueryControls(query, showSearch = false, showFilters = true, onEvent = onEvent)
+      RecordQueryControls(query, showSearch = false, showFilters = true, requesters = requesters, onEvent = onEvent)
       TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End).testTag("records-filter-done")) {
         Text(stringResource(R.string.record_filter_sheet_done))
       }
