@@ -1245,6 +1245,9 @@ Google Cloud管理者が既存Play用サービスアカウントへのWorkload I
 
 WIFの条件は数値のリポジトリ／所有者ID、`main`、この配布Workflow、`workflow_dispatch`、`android-internal`のsubjectに限定する。サービスアカウントへの委譲は`roles/iam.workloadIdentityUser`だけとし、Owner／Editorや汎用Token Creatorは付けない。Play Consoleでは対象アプリの読取・テストトラック配信に限定する。内部トラックへの限定は、Play権限だけに頼らずWorkflowとGPPでも固定する。
 
+subjectはGitHubのOIDC設定APIが返す`sub_claim_prefix`とEnvironmentから組み立て、provider条件と照合する。immutable subjectが有効な場合は、所有者名・リポジトリ名のそれぞれに`@数値ID`が入るため、旧形式の名前だけを固定しない。[GitHubのOIDC仕様](https://docs.github.com/en/actions/reference/security/oidc)を参照する。
+認証拒否時もJWT・token本文は取得・記録せず、GitHub設定とprovider条件を確認する。subjectの不一致なら、その一致条件だけを実際の形式へ合わせ、他の制限・mapping・IAM権限は緩めない。
+
 GitHub Environmentには次を登録し、`main`以外から利用できないbranch policyを設ける。登録値や実際のプロジェクト識別子は公開文書へ載せない。
 
 | 種別 | 名前 | 用途 |
