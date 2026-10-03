@@ -34,8 +34,10 @@ Release配布のヘルパーもこの入口へ接続し、`--output-dir`の出�
 - 中間生成物、project cache、Kotlinのpersistent project data、JVM／nativeの一時ファイルは、`XDG_CACHE_HOME`配下の専用ディスク領域で作る。Kotlin公式の`kotlin.project.persistent.dir`を使い、checkoutの`.kotlin`にも蓄積させない。`/tmp`のtmpfsや使い捨てソースコピーには蓄積させない。
 - 標準の`TemporaryDirectory`とGradle init-scriptを使い、処理終了を確認してから一時領域を削除する。強制終了の残骸は、次回実行時にこの入口が作った非使用領域だけを回収する。同時ビルドによる衝突を防ぐ。Gradleの単発JVMも使用権ロックを持ち、起動途中の中断などで終了を保証できなければ`android_build_cleanup_needed`で止める。使用中・状態不明の領域を自動削除して新しいビルドを重ねない。
 - Wrapper取得失敗などinit前の通常終了は、launcherとprocess groupの終了を確認した記録がある場合だけ回収する。終了確認のない中断は従来どおり保持し、記録があってもJVMの使用権ロックを優先する。
+- 所有マーカーだけを作成して起動前に中断した領域は次回実行で回収する。使用権ロックのリンクや他の状態・ファイルが残る領域は、起動前と決めつけず保持する。
 - この入口だけはKotlin標準の`in-process`実行を指定し、コンパイラを使用権ロックのあるGradle JVM内で動かす。共有SDK・依存バージョン・CIの実行方式は変更しない。
 - 出力先の既定値は`$XDG_CACHE_HOME/shittim-chest/android-artifacts`（未指定時は`$HOME/.cache`配下）。APK／AAB、必要なLint報告とprivate logを固定名で残し、実行ごとの大きな履歴ディレクトリは増やさない。`--output-dir`でリポジトリ外の保存先を指定できる。
+- `assembleDebug`・`bundleRelease`・`build`など既知の生成taskを完全な名前で指定したビルドでは、開始前に固定出力先のmodule直下にある旧APK／AABだけを消去し、成功した今回の成果物だけを配置する。失敗・中断後に旧版を今回の成果物として残さず、リンク・別の保存階層・再送防止記録は消去しない。help・Lint・単体試験・dry-run・検証済みAABの提出は保持し、生成taskの省略名やtask除外は使わない。
 - SDK・JDK・共有Gradle cache・秘密鍵は保持する。完了した使い捨てworktree／仮想環境は、未保存変更や実行中の参照がないことを確認して片付ける。署名済みの大きな配布成果物は直近2版に限定し、Play反映結果・SHAなどの小さな再送防止記録は残す。
 - ビルド失敗と後片付け失敗は成功扱いにしない。OS／CI全体のtemp設定は変更せず、このローカルAndroid処理だけを管理する。
 

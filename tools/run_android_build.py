@@ -92,6 +92,15 @@ def _remove_idle_run(directory: Path, *, wait_seconds: float = 0) -> bool:
     if (directory / LAUNCH_STARTED).exists() and not confirmed_exit:
         raise AndroidBuildError("android_build_cleanup_needed")
     lock_path = directory / LIFETIME_LOCK
+    # Under the global build lock, OWNER alone proves setup stopped before any
+    # launcher could start. Do not treat a broken link or unknown entry as absent.
+    if (
+        not lock_path.is_symlink()
+        and not lock_path.exists()
+        and set(directory.iterdir()) == {directory / OWNER}
+    ):
+        shutil.rmtree(directory)
+        return True
     if lock_path.is_symlink() or not lock_path.is_file():
         raise AndroidBuildError("android_build_cleanup_needed")
     descriptor = os.open(lock_path, os.O_WRONLY | os.O_NOFOLLOW)
@@ -259,6 +268,48 @@ def _gradle(
             signal.signal(sig, handler)
 
 
+def builds_artifacts(arguments: list[str]) -> bool:
+    # Exact tasks for this project's debug/release variants, not Gradle task
+    # abbreviations or publishing tasks that consume an already verified AAB.
+    generating = {
+        "assemble",
+        "assembleDebug",
+        "assembleRelease",
+        "assembleDebugAndroidTest",
+        "bundle",
+        "bundleDebug",
+        "bundleRelease",
+        "build",
+        "connectedAndroidTest",
+        "connectedDebugAndroidTest",
+    }
+    reporting = {"--dry-run", "-m", "--help", "-h", "--task", "-x", "--exclude-task"}
+    if os.environ.get("ORG_GRADLE_PROJECT_shittimAndroidPublishArtifactDir") or any(  # noqa: SIM112 - Gradle property is case-sensitive.
+        arg in reporting
+        or arg.startswith(("-x", "--exclude-task="))
+        or "shittimAndroidPublishArtifactDir" in arg
+        for arg in arguments
+    ):
+        return False
+    return any(
+        not arg.startswith("-") and arg.rsplit(":", 1)[-1] in generating for arg in arguments
+    )
+
+
+def clear_artifacts(output: Path) -> None:
+    """Clear only regular APK/AAB files in the tool's fixed module output layout."""
+    for module in output.iterdir():
+        if module.is_symlink() or not module.is_dir():
+            continue
+        for artifact in module.iterdir():
+            if (
+                artifact.suffix in {".apk", ".aab"}
+                and not artifact.is_symlink()
+                and artifact.is_file()
+            ):
+                artifact.unlink()
+
+
 def copy_outputs(build: Path, output: Path, *, successful: bool) -> int:
     copied = 0
     for source in build.rglob("*"):
@@ -309,6 +360,8 @@ def run_build(*, project: Path, output: Path, arguments: list[str], cache: Path)
         except BlockingIOError:
             raise AndroidBuildError("android_build_already_running") from None
         cleanup_stale_runs(cache)
+        if builds_artifacts(arguments):
+            clear_artifacts(output)
         with tempfile.TemporaryDirectory(prefix="run-", dir=cache, delete=False) as directory:
             scratch = Path(directory)
             (scratch / OWNER).write_text(OWNER_VALUE)

@@ -28,9 +28,15 @@ def paths(tmp_path: Path) -> tuple[Path, Path, Path]:
 @pytest.mark.parametrize("failure", [None, runner.AndroidBuildError, KeyboardInterrupt])
 def test_run_scratch_removed_on_success_failure_and_cancellation(paths, monkeypatch, failure):
     project, output, cache = paths
+    (output / "app").mkdir(parents=True)
+    old_bundle = output / "app/app-release.aab"
+    old_apk = output / "app/app-debug.apk"
+    old_bundle.write_bytes(b"previous bundle")
+    old_apk.write_bytes(b"previous APK")
     observed = []
 
     def gradle(command, *, project, env, output, scratch, lock_descriptor):
+        assert not old_bundle.exists() and not old_apk.exists()
         build = Path(
             next(
                 arg.split("=", 1)[1]
@@ -72,6 +78,9 @@ def test_run_scratch_removed_on_success_failure_and_cancellation(paths, monkeypa
     assert not list(cache.glob("run-*"))
     assert (output / "app/lint-results-release.xml").exists()
     assert (output / "app/app-release.aab").exists() == (failure is None)
+    assert not old_apk.exists()
+    if failure is None:
+        assert old_bundle.read_bytes() == b"invented signed artifact"
     assert (project / "gradlew").read_text() == "invented wrapper"
 
 
@@ -184,6 +193,47 @@ def test_wrapper_failure_before_init_is_reclaimed_and_next_build_can_start(paths
                 project=project, output=output, cache=cache, arguments=[":app:assembleDebug"]
             )
         assert not list(cache.glob("run-*"))
+
+
+def test_owner_only_interrupted_setup_is_reclaimed_before_next_build(paths):
+    project, output, cache = paths
+    stale = cache / "run-before-lock"
+    stale.mkdir(parents=True)
+    (stale / runner.OWNER).write_text(runner.OWNER_VALUE)
+    wrapper = project / "gradlew"
+    wrapper.write_text("#!/bin/sh\nexit 0\n")
+    wrapper.chmod(0o700)
+
+    runner.run_build(project=project, output=output, cache=cache, arguments=[":app:assembleDebug"])
+
+    assert not stale.exists() and not list(cache.glob("run-*"))
+
+
+@pytest.mark.parametrize(
+    "entry", [runner.LAUNCH_STARTED, runner.LIFETIME_STARTED, runner.LAUNCH_FINISHED, "unknown"]
+)
+def test_missing_lifetime_lock_with_other_state_remains_uncertain(tmp_path, entry):
+    directory = tmp_path / "run-uncertain"
+    directory.mkdir()
+    (directory / runner.OWNER).write_text(runner.OWNER_VALUE)
+    (directory / entry).touch()
+
+    with pytest.raises(runner.AndroidBuildError, match="android_build_cleanup_needed"):
+        runner.cleanup_stale_runs(tmp_path)
+
+    assert directory.exists()
+
+
+def test_broken_lifetime_lock_link_is_not_owner_only_setup(tmp_path):
+    directory = tmp_path / "run-uncertain"
+    directory.mkdir()
+    (directory / runner.OWNER).write_text(runner.OWNER_VALUE)
+    (directory / runner.LIFETIME_LOCK).symlink_to(tmp_path / "missing-lock")
+
+    with pytest.raises(runner.AndroidBuildError, match="android_build_cleanup_needed"):
+        runner.cleanup_stale_runs(tmp_path)
+
+    assert (directory / runner.LIFETIME_LOCK).is_symlink()
 
 
 @pytest.mark.parametrize("proof", ["valid", "partial", "symlink"])
@@ -451,6 +501,65 @@ def test_fixed_artifact_names_overwrite_and_do_not_copy_other_build_data(tmp_pat
     copied = output / "app/app-debug.apk"
     assert copied.read_bytes() == b"second" and copied.stat().st_mode & 0o077 == 0
     assert len(list(output.rglob("*.*"))) == 1
+
+
+def test_clearing_artifacts_preserves_links_and_files_outside_fixed_layout(tmp_path):
+    output, outside = tmp_path / "output", tmp_path / "outside"
+    module = output / "app"
+    module.mkdir(parents=True)
+    outside.mkdir()
+    outside_artifact = outside / "saved.aab"
+    outside_artifact.write_bytes(b"saved artifact")
+    (output / "linked-module").symlink_to(outside, target_is_directory=True)
+    (module / "linked.aab").symlink_to(outside_artifact)
+    preserved = [output / "saved.aab", module / "receipt.json", module / "lint-results.xml"]
+    nested = module / "archive/saved.apk"
+    nested.parent.mkdir()
+    preserved.append(nested)
+    for path in preserved:
+        path.write_bytes(b"preserved")
+    for name in ("app-debug.apk", "app-release.aab"):
+        (module / name).write_bytes(b"previous artifact")
+
+    runner.clear_artifacts(output)
+
+    assert not (module / "app-debug.apk").exists()
+    assert not (module / "app-release.aab").exists()
+    assert outside_artifact.read_bytes() == b"saved artifact"
+    assert (module / "linked.aab").is_symlink()
+    assert all(path.read_bytes() == b"preserved" for path in preserved)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["help"],
+        [":app:bundleRelease", "--dry-run"],
+        [":app:verifyInternalTestPublishing", "-PshittimAndroidPublishArtifactDir=prebuilt"],
+        [":app:publishReleaseBundle", "-PshittimAndroidPublishArtifactDir=prebuilt"],
+        [":app:bundleRelease", "-PshittimAndroidPublishArtifactDir=prebuilt"],
+    ],
+)
+def test_non_generating_tasks_preserve_prebuilt_artifact_input(paths, monkeypatch, arguments):
+    project, output, cache = paths
+    prebuilt = output / "app/app-release.aab"
+    prebuilt.parent.mkdir(parents=True)
+    prebuilt.write_bytes(b"previous verified bundle")
+    arguments = [arg.replace("=prebuilt", f"={prebuilt.parent}") for arg in arguments]
+
+    def gradle(*args, scratch, **kwargs):
+        assert prebuilt.read_bytes() == b"previous verified bundle"
+        runner._record_launch_finished(scratch)
+
+    monkeypatch.setattr(runner, "_gradle", gradle)
+    runner.run_build(project=project, output=output, cache=cache, arguments=arguments)
+
+    assert prebuilt.read_bytes() == b"previous verified bundle"
+
+
+@pytest.mark.parametrize("task", [":app:assembleDebug", ":app:bundleRelease", "build"])
+def test_explicit_artifact_generating_tasks_are_recognized(task):
+    assert runner.builds_artifacts([task, "--console=plain"])
 
 
 @pytest.mark.parametrize(
