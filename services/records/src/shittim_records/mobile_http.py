@@ -21,12 +21,14 @@ from shittim_records.mobile_auth import (
     MobileAuthorizeRequest,
     MobileExchangeRequest,
     MobileModel,
+    MobileNotificationDeviceRequest,
     MobileStartRequest,
     parse_mobile_request,
 )
 from shittim_records.mobile_callback import MobileCallbackService
 from shittim_records.mobile_exchange import MobileExchangeService
 from shittim_records.mobile_login import MOBILE_OAUTH_COOKIE_NAME, MobileLoginService
+from shittim_records.mobile_notifications import MobileNotificationRegistrationService
 from shittim_records.mobile_session import MobileSessionService
 
 MOBILE_API_PREFIX = "/api/v1/auth/mobile/"
@@ -43,12 +45,14 @@ class MobileAuthHttpController:
         exchange: MobileExchangeService,
         sessions: MobileSessionService,
         allowed_origin: str,
+        notifications: MobileNotificationRegistrationService | None = None,
     ) -> None:
         self._login = login
         self._callback = callback
         self._exchange = exchange
         self._sessions = sessions
         self._allowed_origin = allowed_origin
+        self._notifications = notifications
 
     def handle(self, event: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
         request = parse_request(event)
@@ -105,6 +109,24 @@ class MobileAuthHttpController:
                 else:
                     response = self._exchange.exchange(_body(event, request, MobileExchangeRequest))
                 return json_response(200, response.model_dump(by_alias=True, mode="json"))
+            if request.route_key in {
+                f"PUT {MOBILE_API_PREFIX}notifications/device",
+                f"DELETE {MOBILE_API_PREFIX}notifications/device",
+            }:
+                token = _read_bearer_token(event.get("headers") or {}, has_cookies=False)
+                payload = _body(event, request, MobileNotificationDeviceRequest)
+                if self._notifications is None:
+                    raise AuthFailure("mobile_registration_unavailable")
+                response = self._notifications.update(
+                    raw_token=token,
+                    request=payload,
+                    delete=request.route_key.startswith("DELETE "),
+                )
+                return (
+                    {"statusCode": 204, "headers": JSON_HEADERS, "body": ""}
+                    if response is None
+                    else json_response(200, response.model_dump(by_alias=True, mode="json"))
+                )
             if request.route_key in {
                 f"GET {MOBILE_API_PREFIX}session",
                 f"POST {MOBILE_API_PREFIX}logout",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -423,7 +424,7 @@ def source(**clients: Any) -> AwsAdminStatusSource:
     empty = Empty()
     cloudwatch = clients.get("cloudwatch", CloudWatch())
     return AwsAdminStatusSource(
-        configuration=configuration(),
+        configuration=clients.get("configuration", configuration()),
         ecs=clients.get("ecs", empty),
         cloudformation=clients.get("cloudformation", empty),
         ecr=clients.get("ecr", empty),
@@ -1577,6 +1578,56 @@ def test_sqs_memorial_inflight_is_healthy_but_dlq_or_stale_work_warns() -> None:
     assert metrics(warning)["memorial_dlq_visible_messages"] == 1
 
 
+@pytest.mark.parametrize(
+    ("dlq_visible", "age", "expected"),
+    ((0, 300, "healthy"), (1, 30, "warning"), (0, 301, "warning")),
+)
+def test_sqs_android_notification_inflight_and_recovery_threshold(
+    dlq_visible: int,
+    age: int,
+    expected: str,
+) -> None:
+    class Sqs:
+        def get_queue_attributes(self, *, QueueUrl: str, **_kwargs: Any) -> dict[str, Any]:
+            dlq = QueueUrl.endswith("dlq") or QueueUrl.endswith("dlq.fifo")
+            mobile = QueueUrl.endswith("/private-mobile-push.fifo")
+            return {
+                "Attributes": {
+                    "ApproximateNumberOfMessages": str(
+                        dlq_visible if QueueUrl.endswith("mobile-push-dlq.fifo") else 0
+                    ),
+                    "ApproximateNumberOfMessagesNotVisible": "1" if mobile else "0",
+                    "ApproximateNumberOfMessagesDelayed": "0",
+                    "SqsManagedSseEnabled": "true",
+                    "MessageRetentionPeriod": "1209600" if dlq else "86400",
+                }
+            }
+
+    class NotificationCloudWatch(CloudWatch):
+        def get_metric_statistics(self, **kwargs: Any) -> dict[str, Any]:
+            self.statistics_calls.append(kwargs)
+            return {"Datapoints": [{"Timestamp": NOW, "Maximum": float(age)}]}
+
+    config = replace(
+        configuration(),
+        mobile_push_queue_url=(
+            f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/private-mobile-push.fifo"
+        ),
+        mobile_push_dlq_url=(
+            f"https://sqs.ap-northeast-1.amazonaws.com/{AWS_ACCOUNT_ID}/private-mobile-push-dlq.fifo"
+        ),
+    )
+    section = source(
+        configuration=config, sqs=Sqs(), cloudwatch=NotificationCloudWatch()
+    )._sqs_section(NOW)
+    values = metrics(section)
+    assert section.state == expected
+    assert values["mobile_push_inflight_messages"] == 1
+    assert values["mobile_push_dlq_visible_messages"] == dlq_visible
+    assert "private-mobile-push" not in section.model_dump_json()
+    assert AWS_ACCOUNT_ID not in section.model_dump_json()
+
+
 def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
     class ApiGateway:
         def get_api(self, *, ApiId: str) -> dict[str, Any]:
@@ -1692,6 +1743,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
         "stop-rule": descriptions["abnormal_stop"],
         "momotalk-rule": descriptions["momotalk_weekly"],
         "momotalk-announcement-rule": descriptions["momotalk_announcement"],
+        "mobile-push-rule": descriptions["mobile_push_sweep"],
     }
 
     class Events:
@@ -1742,6 +1794,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
             "translation-rule",
             "momotalk-rule",
             "momotalk-announcement-rule",
+            "mobile-push-rule",
         )
         if stack == "records_application"
         else ("stop-rule",)

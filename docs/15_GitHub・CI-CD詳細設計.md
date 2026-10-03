@@ -180,6 +180,26 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 公式情報の取得失敗・不正な形式・インシデント不明は拒否し、監査で検出された脆弱性や通常の非0終了を省略理由にしない。
 ビルド、試験、CodeQL、Grype、依存レビュー等は継続する。省略した監査を成功として記録しない。
 
+### CDK依存の期限付きリスク受容
+
+2026-10-03、所有者の明示承認により、`brace-expansion`の次の3件だけを一時受容する。
+ID・パッケージ・重大度・理由・期限の正は`infra/npm-audit-exceptions.json`とする。
+既存の監査checkerを使用し、未知ID、パッケージ／重大度の不一致、期限切れ、未使用の例外は拒否する。
+期限は2026-10-10 00:00 UTC（日本時間09:00）であり、その時刻以降は再びCIを拒否する。自動延長しない。
+
+| 対象 | 重大度 | 残るリスク |
+|---|---|---|
+| [GHSA-q2hr-2g5m-vwhr](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-q2hr-2g5m-vwhr) | moderate | globの処理時間増大によるCPU停止 |
+| [GHSA-qhr7-859c-m2p7](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-qhr7-859c-m2p7) | high | 入れ子globによるstack枯渇 |
+| [GHSA-6j4f-fj2g-mc7p](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-6j4f-fj2g-mc7p) | high | comma-group globによるstack枯渇 |
+
+承認時の検出箇所はCDK内包の開発・CI依存だけで、本番のPython討論runtime・Records Lambdaへは含めない。
+アプリやDiscord入力からこのglob処理へ到達する経路は確認されていないが、安全性の完全な証明とは扱わない。
+例外の照合はパッケージ単位であり、CDKのpathだけに限定する機能ではない。依存経路が変わった場合は受容根拠を再確認する。
+公式CDKの[上流修正](https://github.com/aws/aws-cdk/pull/38929)を含む配布物が公開されたら、内包依存の実体を確認して更新し、
+3件の例外を削除して通常の監査と関連検証を実施する。CIの成功は「脆弱性0件」や「修復済み」を意味しない。
+Webの`fast-uri`は修正版へ更新し、同じリスク受容へ混ぜない。他の監査・必須試験・CodeQLは維持する。
+
 ## 3. 依存と配信ツールの更新
 
 正確なバージョンは各ロックファイル、`pyproject.toml`、`package.json`、`.node-version`、Gradle Wrapper、Version Catalog、ワークフローを正とする。

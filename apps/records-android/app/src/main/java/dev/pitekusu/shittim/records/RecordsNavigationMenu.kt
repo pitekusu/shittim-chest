@@ -91,6 +91,7 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
       if (browserError) Text(stringResource(R.string.menu_browser_unavailable),
         color = MaterialTheme.colorScheme.error)
       ShittimSectionHeading(stringResource(R.string.menu_settings))
+      RecordNotificationControls()
       BootstrapThemeSelector(state.themeChoice) {
         state.eventSink(BootstrapScreen.Event.SelectTheme(it))
       }

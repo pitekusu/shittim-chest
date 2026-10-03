@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import Protocol, cast
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from shittim_chest.adapters.dynamodb.serializer import (
@@ -35,6 +36,10 @@ PARTICIPANT_SLOTS = ("participant-a", "participant-b", "participant-c")
 OPAQUE_KEY_LENGTH = 43
 
 
+class MobileNotificationQueue(Protocol):
+    def enqueue(self, record_id: str) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectionResult:
     created: bool
@@ -50,18 +55,30 @@ class ProjectorService:
         archive: ArchiveRepository,
         configuration: ConfigurationRepository,
         record_link_notifications: RecordLinkNotificationService | None = None,
+        mobile_notifications: MobileNotificationQueue | None = None,
     ) -> None:
         self._source = source
         self._archive = archive
         self._configuration = configuration
         self._record_link_notifications = record_link_notifications
+        self._mobile_notifications = mobile_notifications
 
     def project_partition(self, partition_key: str, *, now: datetime) -> ProjectionResult:
         projection, snapshot = self._prepare_partition(partition_key, now=now)
         created = self._archive.put_projection(
             projection,
             notification_created_at=(now if self._record_link_notifications is not None else None),
+            mobile_notification_created_at=(
+                now if self._mobile_notifications is not None else None
+            ),
         )
+        if created and self._mobile_notifications is not None:
+            try:
+                self._mobile_notifications.enqueue(projection.record_id)
+            except Exception:
+                # The minute sweep recovers the durable outbox; never fail Web/Discord
+                # publication because the independent push queue is unavailable.
+                logging.getLogger(__name__).warning("MOBILE_PUSH_ENQUEUE_FAILED")
         if self._record_link_notifications is not None:
             self._record_link_notifications.publish(
                 snapshot=snapshot,

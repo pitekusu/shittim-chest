@@ -13,6 +13,8 @@ metro = "1.4.4"
 ktor = "3.6.0"
 serialization = "1.11.0"
 coroutines = "1.11.0"
+firebase-bom = "34.19.0"
+google-services = "4.5.0"
 coil = "3.6.3"
 paging = "3.5.1"
 markdown = "0.45.0"
@@ -64,6 +66,10 @@ ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-play-services = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "coroutines" }
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebase-bom" }
+firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
+firebase-installations = { module = "com.google.firebase:firebase-installations" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 androidx-paging-runtime = { module = "androidx.paging:paging-runtime", version.ref = "paging" }
@@ -83,3 +89,4 @@ serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref 
 metro = { id = "dev.zacsweers.metro", version.ref = "metro" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 room3 = { id = "androidx.room3", version.ref = "room3" }
+google-services = { id = "com.google.gms.google-services", version.ref = "google-services" }

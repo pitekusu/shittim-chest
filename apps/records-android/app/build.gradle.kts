@@ -9,6 +9,25 @@ plugins {
 
 room3 { schemaDirectory("$projectDir/schemas") }
 
+// The official plugin validates each variant's package and creates Firebase resources.
+// Keep its input outside Git; no configuration means a usable app with notifications disabled.
+val firebaseConfig = providers.environmentVariable("SHITTIM_ANDROID_FIREBASE_CONFIG").orNull
+  ?.takeIf { it.isNotBlank() }?.let { file(it).canonicalFile }
+if (firebaseConfig != null) {
+  val repository = rootDir.resolve("../..").canonicalFile
+  if (!firebaseConfig.isFile || firebaseConfig.toPath().startsWith(repository.toPath())) {
+    throw GradleException("Firebase client configuration must be an existing file outside the repository")
+  }
+  apply(plugin = "com.google.gms.google-services")
+  // Set after the plugin's variant callback, which otherwise replaces early task configuration.
+  extensions.getByType<com.android.build.api.variant.ApplicationAndroidComponentsExtension>().onVariants { variant ->
+    val task = "process${variant.name.replaceFirstChar { it.uppercaseChar() }}GoogleServices"
+    tasks.named<com.google.gms.googleservices.GoogleServicesTask>(task).configure {
+      googleServicesJsonFiles.set(listOf(firebaseConfig))
+    }
+  }
+}
+
 val appVersionCode = providers.gradleProperty("shittimAndroidVersionCode").orElse("1").get()
   .toIntOrNull()?.takeIf { it > 0 }
   ?: throw GradleException("shittimAndroidVersionCode must be a positive integer")
@@ -106,6 +125,10 @@ dependencies {
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.kotlinx.coroutines.core)
+  implementation(libs.kotlinx.coroutines.play.services)
+  implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.messaging)
+  implementation(libs.firebase.installations)
   implementation(libs.coil.compose)
   implementation(libs.coil.network.okhttp)
   implementation(libs.androidx.paging.runtime)

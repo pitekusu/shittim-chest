@@ -41,6 +41,9 @@ const MEMORIAL_WORKER_FUNCTION_NAME = "shittim-chest-production-records-memorial
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 const OGP_FUNCTION_NAME = "shittim-chest-production-records-ogp";
+const MOBILE_PUSH_FUNCTION_NAME = "shittim-chest-production-records-mobile-push-worker";
+const FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME =
+  "/shittim-chest/production/records/firebase/service-account";
 const MODERATOR_TOKEN_PARAMETER_NAME =
   "/shittim-chest/production/discord/moderator/token";
 
@@ -57,6 +60,7 @@ export class RecordsApplicationStack extends Stack {
   public readonly rankingFunction: lambda.Function;
   public readonly readFunction: lambda.Function;
   public readonly ogpFunction: lambda.Function;
+  public readonly mobilePushFunction: lambda.Function;
 
   public constructor(
     scope: Construct,
@@ -176,6 +180,12 @@ export class RecordsApplicationStack extends Stack {
     const momotalkDlq = sqs.Queue.fromQueueArn(this, "MomotalkGenerationDlq", this.formatArn({
       service: "sqs", resource: "shittim-chest-production-records-momotalk-generation-dlq",
     }));
+    const mobilePushQueue = sqs.Queue.fromQueueArn(this, "MobilePushQueue", this.formatArn({
+      service: "sqs", resource: "shittim-chest-production-records-mobile-push.fifo",
+    }));
+    const mobilePushDlq = sqs.Queue.fromQueueArn(this, "MobilePushDlq", this.formatArn({
+      service: "sqs", resource: "shittim-chest-production-records-mobile-push-dlq.fifo",
+    }));
     const code = lambda.Code.fromBucket(
       bundleBucket,
       bundleObjectKey.valueAsString,
@@ -275,6 +285,17 @@ export class RecordsApplicationStack extends Stack {
         moderatorTokenParameterName: MODERATOR_TOKEN_PARAMETER_NAME,
       },
     });
+    this.projectorFunction.addEnvironment("MOBILE_PUSH_QUEUE_URL", mobilePushQueue.queueUrl);
+    mobilePushQueue.grantSendMessages(this.projectorFunction);
+    this.projectorFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:PutItem"],
+      resources: [statisticsTable.tableArn],
+      conditions: {
+        StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+        "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["MOBILE_PUSH_OUTBOX"] },
+        Null: { "dynamodb:LeadingKeys": "false" },
+      },
+    }));
     this.projectorFunction.addEventSource(
       new eventSources.DynamoEventSource(sourceTable, {
         startingPosition: lambda.StartingPosition.TRIM_HORIZON,
@@ -347,6 +368,7 @@ export class RecordsApplicationStack extends Stack {
       reservedConcurrentExecutions: 2,
       environment: {
         SESSION_TABLE_NAME: sessionTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         IDENTITY_HMAC_PARAMETER_NAME: identityParameter.parameterName,
         ADMIN_DISCORD_USER_ID_PARAMETER_NAME: adminDiscordIdParameter.parameterName,
@@ -364,6 +386,22 @@ export class RecordsApplicationStack extends Stack {
             "dynamodb:TransactWriteItems",
           ],
           resources: [sessionTable.tableArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:ConditionCheckItem"],
+          resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["MOBILE_PUSH_DEVICE"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
         }),
         new iam.PolicyStatement({
           actions: ["ssm:GetParameters"],
@@ -391,6 +429,82 @@ export class RecordsApplicationStack extends Stack {
         ]),
       ),
     );
+    this.mobilePushFunction = this.httpFunctionWithRole({
+      id: "MobilePushFunction",
+      functionName: MOBILE_PUSH_FUNCTION_NAME,
+      handler: "shittim_records.mobile_notification_handlers.handler",
+      code,
+      timeout: Duration.minutes(2),
+      memorySize: 1024,
+      reservedConcurrentExecutions: 1,
+      environment: {
+        MOBILE_PUSH_QUEUE_URL: mobilePushQueue.queueUrl,
+        FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        SESSION_TABLE_NAME: sessionTable.tableName,
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["MOBILE_PUSH_DEVICE", "MOBILE_PUSH_OUTBOX", "MOBILE_PUSH_DELIVERY#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_PUSH_DELIVERY#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": [
+              "PK", "SK", "record_id", "record_type", "requester_display_name",
+            ] },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter"],
+          resources: [this.formatArn({
+            service: "ssm", resource: "parameter",
+            resourceName: FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME.slice(1),
+          })],
+        }),
+      ],
+    });
+    mobilePushQueue.grantSendMessages(this.mobilePushFunction);
+    this.mobilePushFunction.addEventSource(new eventSources.SqsEventSource(mobilePushQueue, {
+      batchSize: 1,
+      reportBatchItemFailures: true,
+      // FIFO uses a single message group; SQS maximumConcurrency cannot be set below 2.
+    }));
+    this.mobilePushFunction.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: Duration.minutes(1) });
+    const mobilePushSweepRule = new events.Rule(this, "MobilePushSweepRule", {
+      description: "Recover pending Android record notifications every minute",
+      schedule: events.Schedule.rate(Duration.minutes(1)),
+      targets: [new eventTargets.LambdaFunction(this.mobilePushFunction, {
+        retryAttempts: 0, maxEventAge: Duration.minutes(1),
+      })],
+    });
     this.rankingFunction = this.httpFunctionWithRole({
       id: "RankingFunction",
       functionName: RANKING_FUNCTION_NAME,
@@ -1370,6 +1484,7 @@ export class RecordsApplicationStack extends Stack {
       account: "shittim-chest-production-account",
     } as const;
     const statusFunctionNames = {
+      records_mobile_push_worker: MOBILE_PUSH_FUNCTION_NAME,
       records_momotalk_collector: MOMOTALK_COLLECTOR_FUNCTION_NAME,
       records_momotalk_worker: MOMOTALK_WORKER_FUNCTION_NAME,
       records_momotalk_announcement: MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME,
@@ -1396,6 +1511,7 @@ export class RecordsApplicationStack extends Stack {
       MOMOTALK_COLLECTOR_FUNCTION_NAME,
       MOMOTALK_WORKER_FUNCTION_NAME,
       MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME,
+      MOBILE_PUSH_FUNCTION_NAME,
     ] as const;
     const memorialStatusFunctionArns = memorialStatusFunctionNames.map((functionName) =>
       this.formatArn({
@@ -1453,6 +1569,8 @@ export class RecordsApplicationStack extends Stack {
         MEMORIAL_GENERATION_DLQ_URL: memorialGenerationDlq.queueUrl,
         MOMOTALK_GENERATION_QUEUE_URL: momotalkQueue.queueUrl,
         MOMOTALK_GENERATION_DLQ_URL: momotalkDlq.queueUrl,
+        MOBILE_PUSH_QUEUE_URL: mobilePushQueue.queueUrl,
+        MOBILE_PUSH_DLQ_URL: mobilePushDlq.queueUrl,
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
         ECS_CONTAINER_NAME: "application",
@@ -1721,6 +1839,7 @@ export class RecordsApplicationStack extends Stack {
               inspectorTranslationSchedule.ruleArn,
               momotalkWeeklyRule.ruleArn,
               momotalkAnnouncementRule.ruleArn,
+              mobilePushSweepRule.ruleArn,
               this.formatArn({
                 service: "events",
                 resource: "rule",
@@ -1744,7 +1863,7 @@ export class RecordsApplicationStack extends Stack {
           }),
           new iam.PolicyStatement({
             actions: ["sqs:GetQueueAttributes"],
-            resources: [memorialGenerationQueue.queueArn, memorialGenerationDlq.queueArn, momotalkQueue.queueArn, momotalkDlq.queueArn],
+            resources: [memorialGenerationQueue.queueArn, memorialGenerationDlq.queueArn, momotalkQueue.queueArn, momotalkDlq.queueArn, mobilePushQueue.queueArn, mobilePushDlq.queueArn],
           }),
         ],
       }),
@@ -1909,6 +2028,11 @@ export class RecordsApplicationStack extends Stack {
     ]) {
       api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.POST], integration: authIntegration });
     }
+    api.addRoutes({
+      path: "/api/v1/auth/mobile/notifications/device",
+      methods: [apigatewayv2.HttpMethod.PUT, apigatewayv2.HttpMethod.DELETE],
+      integration: authIntegration,
+    });
     api.addRoutes({
       path: "/api/v1/records",
       methods: [apigatewayv2.HttpMethod.GET],

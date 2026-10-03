@@ -115,4 +115,18 @@
     <string name="session_storage_error">保存情報を利用できません</string>
     <string name="session_storage_hint">ログイン情報の読み取りまたは削除に失敗しました。保存情報を削除してやり直してください。</string>
     <string name="session_reset_storage">保存情報を削除してやり直す</string>
+    <string name="notification_channel">議論結果</string>
+    <string name="notification_title">議論結果が投稿されました</string>
+    <string name="notification_body">依頼者：%1$s\nタップして議論の記録を確認できます。</string>
+    <string name="notification_privacy">Androidで通知を許可すると、Googleの通知配信を通じて依頼者名が端末通知に表示されます。</string>
+    <string name="notification_setting">新しい議論の通知</string>
+    <string name="notification_preparing">通知設定の準備中</string>
+    <string name="notification_disabled">オフ</string>
+    <string name="notification_denied">Androidの通知設定で許可してください</string>
+    <string name="notification_registering">通知を登録しています</string>
+    <string name="notification_enabled">オン・閲覧できるすべての新しい議論</string>
+    <string name="notification_failed">通知を登録できませんでした</string>
+    <string name="notification_open_settings">Androidの通知設定を開く</string>
+    <string name="notification_enable">通知をオンにする</string>
+    <string name="notification_disable">通知をオフにする</string>
 </resources>

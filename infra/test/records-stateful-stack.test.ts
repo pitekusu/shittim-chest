@@ -26,6 +26,50 @@ function synthesize(): {
 }
 
 describe("RecordsStatefulStack", () => {
+  test("retains isolated encrypted FIFO notification queues with bounded delivery retries", () => {
+    const { template } = synthesize();
+    template.resourceCountIs("AWS::DynamoDB::Table", 3);
+    template.resourceCountIs("AWS::SQS::Queue", 7);
+    template.hasResource("AWS::SQS::Queue", {
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+      Properties: {
+        QueueName: "shittim-chest-production-records-mobile-push.fifo",
+        FifoQueue: true,
+        ContentBasedDeduplication: false,
+        SqsManagedSseEnabled: true,
+        MessageRetentionPeriod: 86400,
+        VisibilityTimeout: 720,
+        RedrivePolicy: {
+          deadLetterTargetArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^MobilePushDlq"), "Arn"] },
+          maxReceiveCount: 4,
+        },
+      },
+    });
+    template.hasResource("AWS::SQS::Queue", {
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+      Properties: {
+        QueueName: "shittim-chest-production-records-mobile-push-dlq.fifo",
+        FifoQueue: true,
+        SqsManagedSseEnabled: true,
+        MessageRetentionPeriod: 1209600,
+      },
+    });
+    for (const id of ["MobilePushQueue", "MobilePushDlq"]) {
+      template.hasResourceProperties("AWS::SQS::QueuePolicy", {
+        PolicyDocument: {
+          Statement: Match.arrayWith([Match.objectLike({
+            Action: "sqs:*",
+            Condition: { Bool: { "aws:SecureTransport": "false" } },
+            Effect: "Deny",
+            Resource: { "Fn::GetAtt": [Match.stringLikeRegexp(`^${id}`), "Arn"] },
+          })]),
+        },
+      });
+    }
+  });
+
   test("adds isolated encrypted weekly generation queues without changing the tables", () => {
     const { template } = synthesize();
     template.resourceCountIs("AWS::DynamoDB::Table", 3);

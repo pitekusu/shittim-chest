@@ -2409,6 +2409,51 @@
         "title": "MobileExchangeResponse",
         "type": "object"
       },
+      "MobileNotificationDeviceRequest": {
+        "additionalProperties": false,
+        "description": "Private FCM address, never echoed in responses or validation errors.",
+        "properties": {
+          "bindingId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Bindingid",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9:_\\-.]+$",
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "bindingId"
+        ],
+        "title": "MobileNotificationDeviceRequest",
+        "type": "object"
+      },
+      "MobileNotificationDeviceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "title": "Expiresat",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "expiresAt"
+        ],
+        "title": "MobileNotificationDeviceResponse",
+        "type": "object"
+      },
       "MobileSessionResponse": {
         "additionalProperties": false,
         "description": "An invalid/expired Bearer session returns 401, not this success DTO.",
@@ -4965,6 +5010,163 @@
         "responses": {
           "204": {
             "description": "Presented token revoked"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "mobileBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mobile/notifications/device": {
+      "delete": {
+        "description": "モバイルBearerのみ。Cookie・queryを拒否し、既存セッションの絶対期限へ束縛。token・bindingIdは応答へ含めず、全応答private, no-store。DELETEは自身のbindingId/sessionと一致する登録だけ削除。",
+        "operationId": "deleteMobileNotificationDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileNotificationDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Presented device binding removed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "mobileBearer": []
+          }
+        ]
+      },
+      "put": {
+        "description": "モバイルBearerのみ。Cookie・queryを拒否し、既存セッションの絶対期限へ束縛。token・bindingIdは応答へ含めず、全応答private, no-store。DELETEは自身のbindingId/sessionと一致する登録だけ削除。",
+        "operationId": "putMobileNotificationDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileNotificationDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileNotificationDeviceResponse"
+                }
+              }
+            },
+            "description": "Device registered"
           },
           "400": {
             "content": {

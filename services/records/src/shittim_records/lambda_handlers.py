@@ -94,6 +94,11 @@ from shittim_records.mobile_callback import MobileCallbackService
 from shittim_records.mobile_exchange import MobileExchangeService
 from shittim_records.mobile_http import MobileAuthHttpController
 from shittim_records.mobile_login import MobileLoginService
+from shittim_records.mobile_notification_adapters import (
+    DynamoMobileNotificationStore,
+    SqsMobileNotificationQueue,
+)
+from shittim_records.mobile_notifications import MobileNotificationRegistrationService
 from shittim_records.mobile_session import MobileSessionService
 from shittim_records.ogp_adapters import LambdaPreviewPreparer
 from shittim_records.projector import (
@@ -568,6 +573,15 @@ def _auth_controller() -> AuthHttpController:
                 admin_requester_key=configuration.admin_requester_key,
             ),
             allowed_origin=configuration.oauth.allowed_origin,
+            notifications=MobileNotificationRegistrationService(
+                sessions=mobile_store,
+                store=DynamoMobileNotificationStore(
+                    boto3.resource("dynamodb", config=SDK_CONFIG),
+                    statistics=_environment("STATISTICS_TABLE_NAME"),
+                    sessions=_environment("SESSION_TABLE_NAME"),
+                ),
+                session_key=configuration.session_hmac_key,
+            ),
         )
         _AUTH_CONTROLLER = AuthHttpController(service, mobile)
     return _AUTH_CONTROLLER
@@ -676,6 +690,8 @@ def _admin_status_controller() -> AdminStatusHttpController:
             memorial_generation_dlq_url=_environment("MEMORIAL_GENERATION_DLQ_URL"),
             momotalk_generation_queue_url=_environment("MOMOTALK_GENERATION_QUEUE_URL"),
             momotalk_generation_dlq_url=_environment("MOMOTALK_GENERATION_DLQ_URL"),
+            mobile_push_queue_url=_environment("MOBILE_PUSH_QUEUE_URL"),
+            mobile_push_dlq_url=_environment("MOBILE_PUSH_DLQ_URL"),
             stacks=ADMIN_STATUS_STACK_NAMES,
             static_parameters=ADMIN_STATUS_PARAMETER_NAMES,
             runtime_scheduler_name=_environment("RUNTIME_SCHEDULER_NAME"),
@@ -903,6 +919,13 @@ def _build_projector(
             presentation_parameter_name=_environment("PRESENTATION_PARAMETER_NAME"),
         ),
         record_link_notifications=record_link_notifications,
+        mobile_notifications=(
+            SqsMobileNotificationQueue(
+                boto3.client("sqs", config=SDK_CONFIG), _environment("MOBILE_PUSH_QUEUE_URL")
+            )
+            if enable_record_link_notifications
+            else None
+        ),
     )
 
 
