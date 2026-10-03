@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-10-03
+updated: 2026-10-04
 ---
 
 # Androidアプリ設計
@@ -57,7 +57,7 @@ updated: 2026-10-03
 | C37 | Web機能への導線・アカウントメニュー | 記録閲覧中のメニューから固定Web機能を開き、ログアウトと表示切替を行う |
 | C38 | Gradle Play Publisher・短寿命API認証の接続 | 既存署名と分離し、検証済みAABをinternalへ配置する。外部認証設定・配布確認はC39で行う |
 | C39 | 検証済み同一AABの内部テスト配布Workflow | mainの必須CIと署名を確認し、WIFで一回だけ公開する。外部設定未完了では起動しない |
-| C40（未実装） | Android依存の更新検知 | Gradle依存と関連Actionを対象に、既存の依存更新処理と重複しない検知を追加する |
+| C40 | Android依存の更新検知 | 既存のDependabot・Dependency Graph・固定ツール監視の担当範囲を整理。監視の重複追加や依存更新は行わない |
 | C41（未実施） | 利用者向け導入・更新・復旧手順 | インストール、更新、再認証、問題版の配布停止を案内する。機能文書をこの工程へ後回しにしない |
 | 後続 | 起動演出・人格アイコン・投票／親愛度表示・友人向け配布 | C37後に小さなPRで分けて進める。起動演出はAndroid SplashScreenからComposeへ接続する |
 | 後続：Navigation 3 | 一覧／詳細の画面遷移・戻る・状態寿命の標準化 | 未実装。ネイティブ画面を増やす前の独立工程として、後述の3つの通常PRに分ける。既存の配布工程は変更しない |
@@ -1275,6 +1275,23 @@ GPPを起動する前にも、非秘密の`stage-attempt.json`へSHA・版番号
 試験は全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、既存配信・競合、他トラック不変、単一commitと応答不明時の読取照合、公開ライフサイクルの審査待ち・却下・欠損・未知・API障害を架空データで確認する。既存API認証による現行公開版の公開状態読取のみ確認済みで、WIF提出・配布の受入とは区別する。最初のWIF実配布は外部設定・mainの検証完了後、別の配布依頼で行い、Playからの再取得と実機更新を確認する。
 
 公式仕様：[WIFとDeployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)、[GitHub認証Action](https://github.com/google-github-actions/auth)、[Play editsと同時編集](https://developers.google.com/android-publisher/edits)、[安全なcommitパラメーター](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)、[公開ライフサイクル](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases)、[トラックのrelease一覧](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases/list)。
+
+## C40：Android依存の更新検知
+
+新しい監視基盤を追加せず、既存のDependabot・Dependency Graph・Release Tool VersionsへC38／C39の配布依存も含める。更新の担当範囲と固定値の正本を明確にし、同じ依存を複数の監視へ重複登録しない。
+
+| 対象 | 既存の検知先 | 固定値の正本 |
+|---|---|---|
+| Gradle Wrapper・プラグイン・ライブラリ（GPPを含む） | DependabotのGradle設定 | Wrapper・Version Catalog・Gradle設定 |
+| CI／配布のAction | DependabotのGitHub Actions設定 | Workflowの完全SHA付き`uses:` |
+| JDK・SDK Platform／Build Tools・bundletool | Release Tool Versionsの単一Issue | `apps/records-android/.java-version`、アプリのGradle設定、`.github/tool-versions.json` |
+| 推移的依存の脆弱性 | Dependency GraphへのGradle解決結果の送信 | 実際の解決結果。更新には親依存・制約の確認が必要 |
+
+Gradleは月曜09:15、Actionsは月曜09:00、固定ツールは水曜13:29（日本時間）の既存予約を維持する。Version Catalogで監視するライブラリは固定ツール側へ複製しない。Emulator・system image・SDK command-line toolsは今回の固定ツール監視に含めない。
+
+検知は自動採用やPlay配布ではない。更新PRごとに互換性、関連するビルド・Lint・試験、必須CIとCodeQLを確認する。Kotlin・Compose・Materialの既定版、Actionの完全SHA、配布ツールのchecksum・署名条件を無断で変更しない。取得失敗は未確認として残し、古い成功で更新Issueを閉じない。推移的依存の警告から修正PRが自動生成されるとは保証しない。
+
+C40の確認は既存設定と担当表、C38／C39・Android READMEの参照、正本とmirror・公開情報の整合を対象とする。既存設定を採用する文書整理であり、依存更新、新Workflow、追加権限、Play提出は行わない。実配布はC39のWorkflowによる別の操作として扱う。
 
 ## 公式資料
 

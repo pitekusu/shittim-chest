@@ -484,6 +484,29 @@ WIF提出の実確認は別の配布依頼で行う。
 
 詳しい外部設定と検証境界は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。
 
+## C40：依存と配布ツールの更新検知
+
+Android専用の監視を増やさず、既存のDependabot・Dependency Graph・Release Tool Versionsを使用する。
+
+| 対象 | 更新を確認する仕組み | 固定値の正本 |
+|---|---|---|
+| Gradle Wrapper・プラグイン・ライブラリ（GPPを含む） | Dependabotの既存Gradle設定 | Wrapper・Version Catalog・Gradle設定 |
+| CI／配布のAction | Dependabotの既存GitHub Actions設定 | Workflowの`uses:`（完全SHA） |
+| JDK・SDK Platform／Build Tools・bundletool | 既存Release Tool Versionsの単一Issue | `apps/records-android/.java-version`・アプリのGradle設定・`.github/tool-versions.json` |
+| 推移的依存の脆弱性 | 既存Dependency GraphへのGradle依存送信 | 実際に解決された依存。更新には親依存や制約の確認が必要 |
+
+Gradleは月曜09:15、Actionsは月曜09:00、固定ツールは水曜13:29（日本時間）の既存予約を維持する。
+Version Catalogの更新と同じライブラリを固定ツール側へ重複登録しない。
+Emulator・system image・SDK command-line toolsはこの固定ツール監視の対象ではない。
+
+検知は自動採用やPlay配布ではない。更新PRでは互換性、関連するビルド・Lint・試験、必須CIとCodeQLを確認する。
+Kotlin・Compose・Materialの既定版、Actionの完全SHA、配布ツールのchecksum／署名条件を無断で変更しない。
+固定ツールの取得失敗は未確認として残し、古い成功で更新Issueを閉じない。
+依存グラフへ送信された推移的依存に警告があっても、Dependabotによる修正PRの生成は保証されない。
+
+既存の検知設定とC38／C39の参照を確認した文書整理であり、依存更新・新Workflow・追加権限・Play提出は行わない。
+詳しい担当範囲は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c40android依存の更新検知)を参照する。
+
 ## 起動・ログインのブランド演出
 
 - Android標準SplashScreenから全画面のシッテム演出につなぐ。起動は約1秒、対話的ログインが確認・保存まで成功したときは約1.5秒。認可確認や保存済み記録の表示は演出と並行して進む。
