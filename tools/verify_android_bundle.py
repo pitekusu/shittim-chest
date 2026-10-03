@@ -8,12 +8,14 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 from xml.etree import ElementTree
 
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.serialization import pkcs7
+from cryptography.hazmat.primitives.serialization import Encoding, pkcs7
 
 PACKAGE = "dev.pitekusu.shittim.records"
 ANDROID = "{http://schemas.android.com/apk/res/android}"
@@ -34,16 +36,6 @@ def verify_bundle(
     if re.fullmatch(r"[0-9a-f]{64}", expected) is None:
         raise ValueError("android_upload_certificate_missing")
     java_home = Path(os.environ["JAVA_HOME"]) / "bin"
-    # A pinned self-signed upload certificate raises jarsigner's trust-chain bit
-    # (4); unsigned entries use a different bit and are never accepted.
-    verified = subprocess.run(  # noqa: S603 - fixed JDK tool, no signing inputs.
-        [str(java_home / "jarsigner"), "-J-Duser.language=en", "-verify", "-strict", str(bundle)],
-        capture_output=True,
-        timeout=90,
-        check=False,
-    )
-    if verified.returncode not in {0, 4} or b"jar verified" not in verified.stdout:
-        raise ValueError("android_bundle_signature_invalid")
     with zipfile.ZipFile(bundle) as archive:
         signatures = [
             name
@@ -57,6 +49,57 @@ def verify_bundle(
         # certificate merely appended to an unrelated signer's certificate set.
         if len(certs) != 1 or certs[0].fingerprint(hashes.SHA256()).hex() != expected:
             raise ValueError("android_bundle_signer_invalid")
+    signer = certs[0]
+    if not signer.not_valid_before_utc <= datetime.now(UTC) <= signer.not_valid_after_utc:
+        raise ValueError("android_bundle_certificate_validity_invalid")
+    # Trust only the pinned public certificate, not all strict exit-code-4
+    # warnings (which also include expiry and disabled algorithms). This store
+    # contains no private key or credentials; its fixed password is not a secret.
+    # Keep it on the artifact's disk and remove it even when verification fails.
+    with tempfile.TemporaryDirectory(prefix="aab-verify-", dir=bundle.parent) as directory:
+        public = Path(directory) / "upload.der"
+        truststore = Path(directory) / "trusted.p12"
+        public.write_bytes(signer.public_bytes(Encoding.DER))
+        store_options = [
+            "-keystore",
+            str(truststore),
+            "-storetype",
+            "PKCS12",
+            "-storepass",
+            "public-only",
+        ]
+        imported = subprocess.run(  # noqa: S603 - fixed JDK tool; public certificate only.
+            [
+                str(java_home / "keytool"),
+                "-importcert",
+                "-noprompt",
+                "-alias",
+                "upload",
+                "-file",
+                str(public),
+                *store_options,
+            ],
+            capture_output=True,
+            timeout=90,
+            check=False,
+        )
+        if imported.returncode != 0:
+            raise ValueError("android_bundle_truststore_invalid")
+        verified = subprocess.run(  # noqa: S603 - fixed JDK tool, no signing inputs.
+            [
+                str(java_home / "jarsigner"),
+                "-J-Duser.language=en",
+                "-verify",
+                "-strict",
+                *store_options,
+                str(bundle),
+            ],
+            capture_output=True,
+            timeout=90,
+            check=False,
+        )
+        if verified.returncode != 0 or b"jar verified." not in verified.stdout:
+            raise ValueError("android_bundle_signature_invalid")
     pins = json.loads(
         (Path(__file__).resolve().parents[1] / ".github/tool-versions.json").read_text()
     )

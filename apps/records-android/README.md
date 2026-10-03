@@ -436,6 +436,8 @@ Environmentはmain限定とし、次を安全に登録する。
 固定SHAの最新main CI・Records CI・既存CodeQL成功を確認し、全トラック/bundle/APKの最大版番号より
 大きいAABを一度ビルドする。Release Lint、JDK署名、固定bundletoolのmanifest、upload証明書とhashを検証し、
 検証した同一AABだけをGPPでstageする。安全なREST commitを一度行い、Play再取得が一致してから完了とする。
+署名検証はpinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreでJDKの厳格検証を行う。
+自己署名を理由にexit code 4全体を許可せず、期限切れ・未有効やその他の重大警告は拒否する。一時truststoreは回収する。
 edit内の`completed`だけでは審査済みと判断しない。`GET /tracks/internal/releases`の`activeArtifacts`に
 同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。
 既存の同一AABもこの公開確認を省略しない。審査・公開待ちは`pending`かつ`verified=false`のreceiptを残し、

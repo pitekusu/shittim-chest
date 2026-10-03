@@ -1212,7 +1212,7 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 
 1. 固定SHAの最新main CI・Records CI・既存CodeQLが成功したことを確認する。新しい失敗・実行中の試行を古い成功で置き換えない。
 2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
-3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。
+3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。pinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreを使ってJDKの厳格検証を行う。自己署名を理由に重大警告全体を許可せず、一時truststoreは検証後に回収する。
 4. 検証した同一AABだけをprivate directoryへ置き、hashを再照合する。WIF認証を配信直前に更新し、C38の固定GPP taskで内部トラックへのstage／validateを一度行う。
 5. GPPのprivateなeditを読み、bundle hashと内部トラック、他トラックに変更がないことを確認する。公式APIのcommitは一度だけ行い、`ERROR_IF_IN_REVIEW`で既存審査の取消を防ぎ、`changesNotSentForReview=true`で未送信のConsole変更を審査へ送らない。
 6. 新しい読取editで版番号・hash・内部トラックの`completed`を再取得する。これはstageの配置確認であり公開完了とは区別する。さらに`GET /tracks/internal/releases`の`activeArtifacts`に同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。既存の同一AABもこの公開確認を省略しない。

@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -45,9 +46,13 @@ def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path,
     )
     certificate = MagicMock()
     certificate.fingerprint.return_value = bytes.fromhex(CERTIFICATE)
+    certificate.not_valid_before_utc = datetime.now(UTC) - timedelta(days=1)
+    certificate.not_valid_after_utc = datetime.now(UTC) + timedelta(days=1)
+    certificate.public_bytes.return_value = b"synthetic public certificate"
     monkeypatch.setattr(verifier.pkcs7, "load_der_pkcs7_certificates", lambda _: [certificate])
     run = MagicMock(
         side_effect=[
+            subprocess.CompletedProcess([], 0, stdout=b"", stderr=b""),
             subprocess.CompletedProcess([], 0, stdout=b"jar verified.", stderr=b""),
             subprocess.CompletedProcess([], 0, stdout=MANIFEST.encode(), stderr=b""),
         ]
@@ -56,15 +61,10 @@ def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path,
     return bundle, bundletool, run
 
 
-@pytest.mark.parametrize("jdk_code", (0, 4))
 def test_signed_bundle_binds_manifest_source_and_digest(
-    inputs: tuple[Path, Path, MagicMock], jdk_code: int
+    inputs: tuple[Path, Path, MagicMock],
 ) -> None:
     bundle, bundletool, run = inputs
-    run.side_effect = [
-        subprocess.CompletedProcess([], jdk_code, stdout=b"jar verified.", stderr=b""),
-        subprocess.CompletedProcess([], 0, stdout=MANIFEST.encode(), stderr=b""),
-    ]
 
     result = verifier.verify_bundle(
         bundle, bundletool, code=7, sha=SHA, certificate=CERTIFICATE.upper()
@@ -76,27 +76,78 @@ def test_signed_bundle_binds_manifest_source_and_digest(
         "bundleSha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
         "track": "internal",
     }
-    assert run.call_args_list[0].args[0][1:4] == [
+    imported = run.call_args_list[0].args[0]
+    assert imported[1:4] == ["-importcert", "-noprompt", "-alias"]
+    truststore = Path(imported[imported.index("-keystore") + 1])
+    assert truststore.parent.parent == bundle.parent
+    assert not truststore.parent.exists()
+    assert run.call_args_list[1].args[0][1:4] == [
         "-J-Duser.language=en",
         "-verify",
         "-strict",
     ]
-    assert run.call_args_list[1].args[0][-3:] == ["dump", "manifest", f"--bundle={bundle}"]
+    verified = run.call_args_list[1].args[0]
+    assert verified[verified.index("-keystore") + 1] == str(truststore)
+    assert run.call_args_list[2].args[0][-3:] == ["dump", "manifest", f"--bundle={bundle}"]
 
 
 @pytest.mark.parametrize(
-    "jdk_code,output", ((16, b"jar verified."), (20, b"jar verified."), (0, b""))
+    "jdk_code,output",
+    (
+        (4, b"jar verified, with signer errors."),
+        (16, b"jar verified."),
+        (20, b"jar verified."),
+        (0, b""),
+    ),
 )
 def test_unsigned_entries_or_missing_verification_cannot_pass(
     inputs: tuple[Path, Path, MagicMock], jdk_code: int, output: bytes
 ) -> None:
     bundle, bundletool, run = inputs
-    run.side_effect = [subprocess.CompletedProcess([], jdk_code, stdout=output, stderr=b"")]
+    run.side_effect = [
+        subprocess.CompletedProcess([], 0, stdout=b"", stderr=b""),
+        subprocess.CompletedProcess([], jdk_code, stdout=output, stderr=b""),
+    ]
 
     with pytest.raises(ValueError, match="android_bundle_signature_invalid"):
         verifier.verify_bundle(bundle, bundletool, code=7, sha=SHA, certificate=CERTIFICATE)
 
+    assert run.call_count == 2
+    assert not list(bundle.parent.glob("aab-verify-*"))
+
+
+@pytest.mark.parametrize("expired", (True, False))
+def test_pinned_certificate_must_be_currently_valid(
+    inputs: tuple[Path, Path, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+    expired: bool,
+) -> None:
+    bundle, bundletool, run = inputs
+    certificate = MagicMock()
+    certificate.fingerprint.return_value = bytes.fromhex(CERTIFICATE)
+    start = datetime.now(UTC) + timedelta(days=-2 if expired else 1)
+    certificate.not_valid_before_utc = start
+    certificate.not_valid_after_utc = start + timedelta(days=1)
+    monkeypatch.setattr(verifier.pkcs7, "load_der_pkcs7_certificates", lambda _: [certificate])
+
+    with pytest.raises(ValueError, match="android_bundle_certificate_validity_invalid"):
+        verifier.verify_bundle(bundle, bundletool, code=7, sha=SHA, certificate=CERTIFICATE)
+
+    run.assert_not_called()
+    assert not list(bundle.parent.glob("aab-verify-*"))
+
+
+def test_truststore_import_failure_is_rejected_and_cleaned(
+    inputs: tuple[Path, Path, MagicMock],
+) -> None:
+    bundle, bundletool, run = inputs
+    run.side_effect = [subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"synthetic failure")]
+
+    with pytest.raises(ValueError, match="android_bundle_truststore_invalid"):
+        verifier.verify_bundle(bundle, bundletool, code=7, sha=SHA, certificate=CERTIFICATE)
+
     assert run.call_count == 1
+    assert not list(bundle.parent.glob("aab-verify-*"))
 
 
 @pytest.mark.parametrize("count,fingerprint", ((0, CERTIFICATE), (2, CERTIFICATE), (1, "cd" * 32)))
@@ -132,6 +183,7 @@ def test_manifest_must_be_the_fixed_non_debuggable_release(
 ) -> None:
     bundle, bundletool, run = inputs
     run.side_effect = [
+        subprocess.CompletedProcess([], 0, stdout=b"", stderr=b""),
         subprocess.CompletedProcess([], 0, stdout=b"jar verified.", stderr=b""),
         subprocess.CompletedProcess([], 0, stdout=MANIFEST.replace(before, after).encode()),
     ]
@@ -149,7 +201,7 @@ def test_changed_bundletool_is_rejected_before_execution(
     with pytest.raises(ValueError, match="android_bundletool_digest_invalid"):
         verifier.verify_bundle(bundle, bundletool, code=7, sha=SHA, certificate=CERTIFICATE)
 
-    assert run.call_count == 1
+    assert run.call_count == 2
 
 
 def test_symlink_and_unpinned_source_fail_before_tools_run(
