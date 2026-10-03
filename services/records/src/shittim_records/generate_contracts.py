@@ -284,6 +284,27 @@ def _mobile_auth_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 },
             }
         }
+    result["/api/v1/auth/mobile/notifications/device"] = {
+        method: {
+            "operationId": f"{method}MobileNotificationDevice",
+            "security": [{"mobileBearer": []}],
+            "description": (
+                "モバイルBearerのみ。Cookie・queryを拒否し、既存セッションの絶対期限へ束縛。"
+                "token・bindingIdは応答へ含めず、全応答private, no-store。"
+                "DELETEは自身のbindingId/sessionと一致する登録だけ削除。"
+            ),
+            "requestBody": _request_body("MobileNotificationDeviceRequest"),
+            "responses": {
+                **(
+                    {"200": _response("MobileNotificationDeviceResponse", "Device registered")}
+                    if method == "put"
+                    else {"204": {"description": "Presented device binding removed"}}
+                ),
+                **errors,
+            },
+        }
+        for method in ("put", "delete")
+    }
     return result
 
 

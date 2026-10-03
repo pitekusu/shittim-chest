@@ -163,6 +163,51 @@
       "title": "MobileExchangeResponse",
       "type": "object"
     },
+    "MobileNotificationDeviceRequest": {
+      "additionalProperties": false,
+      "description": "Private FCM address, never echoed in responses or validation errors.",
+      "properties": {
+        "bindingId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Bindingid",
+          "type": "string"
+        },
+        "token": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_\\-.]+$",
+          "title": "Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "token",
+        "bindingId"
+      ],
+      "title": "MobileNotificationDeviceRequest",
+      "type": "object"
+    },
+    "MobileNotificationDeviceResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "expiresAt"
+      ],
+      "title": "MobileNotificationDeviceResponse",
+      "type": "object"
+    },
     "MobileSessionResponse": {
       "additionalProperties": false,
       "description": "An invalid/expired Bearer session returns 401, not this success DTO.",
@@ -355,6 +400,12 @@
     },
     {
       "$ref": "#/$defs/MobileExchangeResponse"
+    },
+    {
+      "$ref": "#/$defs/MobileNotificationDeviceRequest"
+    },
+    {
+      "$ref": "#/$defs/MobileNotificationDeviceResponse"
     }
   ],
   "title": "Records mobile authentication"
