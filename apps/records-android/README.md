@@ -516,3 +516,31 @@ API 36・架空データで、[意見](screenshots/detail-opinions-light.png)、
 プレビューは`RecordDetailVisualTest`に`shittimCaptureUi=true`を渡して再取得できる。録画時だけ`shittimRecordUi=true`も渡す。通常CIでは録画用の待機や実時間フレーム送りを行わない。
 
 戻りスライドの[途中](screenshots/adaptive-back-slide-middle.png)と[完了後](screenshots/adaptive-back-slide-complete.png)も架空データで確認する。`AdaptiveRecordsUiTest.threeButtonBackSlidesBeforeClosingWithoutLeavingASelectedListCard`へ`shittimCaptureAdaptive=true`を渡して再取得できる。
+
+## 新しい議論の通知
+
+- 閲覧可能なすべての新しい議論がWebへ公開された後、FCMのdata-onlyメッセージを受信する。タイトルは「議論結果が投稿されました」、本文は依頼者のディスプレイネームと固定の案内を表示する。依頼者名は最大100文字の検証済み表示名だけをFCMへ送り、議題・本文・Discord IDは送信しない。改行・制御文字・不正な表示名は端末でも拒否し、名前をログ・永続キャッシュへ残さない。
+- メニューの「新しい議論の通知」から明示的にオンにする。Androidの通知許可はこの操作時だけ要求し、拒否しても記録を閲覧できる。オフ・ログアウト・認可喪失では端末の通知を即時に消去し、遅延到着した旧bindingの通知を表示しない。
+- 通知タップは既存の記録App Linkへ接続する。本文取得は既存の認証・認可に従う。通知到着後の保存は既存WorkManager差分同期へ任せ、通知前のネットワーク取得や常駐サービスは追加しない。
+- FCMの現行`register()`／Firebase Installation ID（FID）を使用し、旧`getToken()`は使わない。自サービスAPIの`token`項目にはFIDを渡す。SDK auto-initは常に無効とし、許可済みの現行セッションと明示opt-inを確認したWorkerだけが手動登録する。SDKの自動収集・通知代理表示・BigQuery出力は無効で、Analyticsは導入しない。
+- 通知許可やFCMは到着時刻を保証しない。通知が届かなくても起動時・定期同期で記録を取得できる。通知の再送重複は端末の最大128件のopaque IDで抑える。
+
+### Firebaseが未作成の場合
+
+設定がないビルドも従来どおり起動・ログイン・閲覧でき、メニューは「通知設定の準備中」と無効表示になる。架空のプロジェクト設定を同梱しない。
+
+1. Firebase Consoleでプロジェクトを作成する。Google Analyticsの追加は不要。Androidアプリを`dev.pitekusu.shittim.records`で登録し、開発ビルドも使う場合は`.dev`付きの別Androidアプリを同じプロジェクトへ登録する。
+2. Android用の`google-services.json`をリポジトリ外へ保管する。これはクライアント用の設定で、サーバーの秘密鍵・サービスアカウントJSONを代わりに指定してはいけない。
+3. ビルド時だけ`SHITTIM_ANDROID_FIREBASE_CONFIG`へそのファイルを指定する。公式Google Services pluginがapplicationIdを検証してリソースを生成する。不一致・不存在・リポジトリ内の入力は拒否する。
+4. サーバー側のFCM送信用認証と機能有効化はAndroidの設定とは別に行う。Play配布用サービスアカウントを流用したり、FCM送信鍵をAPKへ入れたりしない。
+
+```bash
+SHITTIM_ANDROID_FIREBASE_CONFIG=/path/outside-repository/google-services.json \
+  ./gradlew :app:assembleDebug :app:lintDebug
+```
+
+[FCM公式Androidガイド](https://firebase.google.com/docs/cloud-messaging/android/get-started)、[data-only受信とWorkManager](https://firebase.google.com/docs/cloud-messaging/android/receive-messages)、[公式Google Services plugin](https://firebase.google.com/docs/android/google-services-plugin-and-file)に従う。SDKはVersion CatalogのFirebase BoMで固定し、Messaging以外のFirebase製品を先行追加しない。
+
+### 確認する操作
+
+設定なしは準備中表示と既存閲覧を確認する。接続後は、許可→新記録1件→通知タップ→対象の記録表示、拒否・オフ・オフラインログアウト→通知が出ないこと、同じイベントの再送→再通知しないこと、アカウント切替→以前のセッションの通知が出ないことを確認する。Firebase Consoleの通知キャンペーンはOSが自動表示するnotification payloadを送るため、このアプリのdata-only経路の検証には使用しない。実際のサーバー公開イベントで確認し、端末tokenをログや共有資料へ出さない。

@@ -19,6 +19,7 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readBuffer
 import java.io.Closeable
 import java.io.IOException
+import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.io.readByteArray
 import kotlinx.serialization.Serializable
@@ -71,6 +72,26 @@ internal class MobileAuthClient(private val engine: HttpClientEngine = OkHttp.cr
   suspend fun logout(accessToken: String): Unit =
     call("logout", HttpMethod.Post, accessToken = accessToken, expectedStatus = 204) { }
 
+  suspend fun registerNotifications(accessToken: String, token: String, bindingId: String): Instant {
+    val request = notificationRequest(token, bindingId)
+    return call("notifications/device", HttpMethod.Put, body = json.encodeToString(request),
+      accessToken = accessToken) {
+      val response = json.decodeFromString<NotificationRegistration>(it)
+      check(response.schemaVersion == 1 && response.expiresAt.endsWith("Z"))
+      Instant.parse(response.expiresAt)
+    }
+  }
+
+  suspend fun unregisterNotifications(accessToken: String, token: String, bindingId: String): Unit =
+    call("notifications/device", HttpMethod.Delete, body = json.encodeToString(notificationRequest(token, bindingId)),
+      accessToken = accessToken, expectedStatus = 204) { }
+
+  private fun notificationRequest(token: String, bindingId: String): NotificationDevice {
+    if (token.length !in 1..4096 || token.any { it.isWhitespace() || it.isISOControl() } ||
+      !mobileOpaqueValue.matches(bindingId)) throw MobileAuthException(MobileAuthFailure.REQUEST_REJECTED)
+    return NotificationDevice(token, bindingId)
+  }
+
   private suspend fun <T> call(
     route: String,
     method: HttpMethod,
@@ -88,7 +109,7 @@ internal class MobileAuthClient(private val engine: HttpClientEngine = OkHttp.cr
         accept(ContentType.Application.Json)
         header(HttpHeaders.CacheControl, "no-store")
         if (accessToken != null) bearerAuth(accessToken)
-        if (method == HttpMethod.Post) {
+        if (method != HttpMethod.Get) {
           val payload = body?.encodeToByteArray() ?: ByteArray(0)
           // Ktor maps channel content to OkHttp's one-shot body, including empty logout.
           // retryOnConnectionFailure alone does not prevent a 503 Retry-After: 0 replay.
@@ -140,4 +161,6 @@ internal class MobileAuthClient(private val engine: HttpClientEngine = OkHttp.cr
 
   @Serializable private class ErrorEnvelope(val error: ErrorCode)
   @Serializable private class ErrorCode(val code: String)
+  @Serializable private class NotificationDevice(val token: String, val bindingId: String)
+  @Serializable private class NotificationRegistration(val schemaVersion: Int, val expiresAt: String)
 }

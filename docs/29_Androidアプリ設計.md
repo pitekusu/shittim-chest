@@ -135,6 +135,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C26〜29：暗号化保存（導入予定） | Bouncy Castle、Android Keystore、[Room](https://developer.android.com/training/data-storage/room) | 独自暗号方式・DBアクセス基盤は作らない。保存形式・鍵の取り扱いを管理し、Roomには暗号化済み本文を保存 |
 | C31〜C32：同期 | Coroutines、WorkManager、保存済み進捗からの再開 | バックグラウンド継続を新要件として受け、予約・制約・再試行をWorkManagerへ任せる。差分照合・本人認可・暗号化の再開点だけをサービス側で管理 |
 | C36：可変幅の一覧／詳細と戻る | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane、ActivityのPredictiveBackHandler | 配置・遷移・pane focus・hinge回避とgesture配信を利用。選択先は既存Circuitを正とし、別のnavigation履歴は増やさない。確定時のCloseRecord接続と認可再確認だけをアプリ側で扱う |
+| 議論公開通知 | Firebase Cloud Messaging、Firebase Admin SDK、NotificationCompat、Activity Result、WorkManager | 配送・通知表示・権限要求・登録再試行を既存APIへ任せる。セッションへの束縛、公開済み記録の確認、重複防止とログアウト時の抑止をサービス側で管理 |
 
 ### C15までの独自処理を残す理由
 
@@ -802,7 +803,7 @@ Room schema 1と一覧・詳細の暗号形式は維持する。削除候補はo
 
 ### C32追加：アイコン保存・バックグラウンド自動同期・差分読取
 
-新要件を受け、WorkManagerを採用する。既定のKotlin・Compose・Materialバージョンは維持し、予約・制約・プロセス再起動・再試行を独自に実装しない。ログイン／アプリ復帰後に即時ジョブ、15分間隔の定期ジョブを一意な名前で予約する。ネットワーク接続が条件で、Doze・省電力設定・強制停止等により遅れる。新規記録の瞬時push通知は追加しない。
+新要件を受け、WorkManagerを採用する。既定のKotlin・Compose・Materialバージョンは維持し、予約・制約・プロセス再起動・再試行を独自に実装しない。ログイン／アプリ復帰後に即時ジョブ、15分間隔の定期ジョブを一意な名前で予約する。ネットワーク接続が条件で、Doze・省電力設定・強制停止等により遅れる。この同期とは別に、後述の議論公開通知を追加する。
 
 同期は起動・復帰後に自動実行する。追加の手動操作として、記録一覧の先頭で下方向へ引っ張ると同じ差分同期を予約する。専用の同期メニュー・同期ボタンや保存済み詳細の手動更新操作は設けない。通常時・完了時は同期UIを表示せず、同期中・失敗時だけ一覧へ小さな状態通知を置く。通信障害では次の自動同期または一覧の引っ張る操作で再試行し、保存失敗では空き容量の確認を案内する。ログインや未保存詳細の取得失敗に対する既存の再試行操作は維持する。
 
@@ -1116,6 +1117,57 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 
 画面資料は架空のメタ情報だけで作成する。明暗、320dp・文字2倍、広幅、検索、絞り込みと短い詳細往復を確認し、同期時のanchor、認可喪失、戻るの取消・確定を関連Android試験で検証する。エミュレーター・検証用署名のビルドと、内部テスト配布・実機受入は区別する。今回Play配布は行わない。
 
+## Android議論公開通知
+
+### 対象と公開時点
+
+通知を許可した認証済み端末へ、閲覧可能な全利用者の新しい議論を通知する。自分の依頼だけには限定しない。
+単一の起点は、完了した議論をWebのArchiveへ保存した時点とする。DiscordのCOMPLETEを別の起点にはせず、二重通知を防ぐ。
+過去の記録、Backfill、再投影には通知を作らない。端末登録より前に公開された記録も遡って通知しない。
+
+```text
+完了記録のProjector
+  → Archiveと本文を含まない通知outboxを同一transactionで保存
+  → 専用FIFO SQS
+  → 送信Lambda：端末登録とモバイルセッションを再確認
+  → FCM data message
+  → Android：許可・本人セッション・binding・期限を確認して通知表示
+```
+
+Archive保存後にキューへ送れなかった場合は1分ごとのsweepで回収する。通知失敗でWeb公開や既存Discord処理を取り消さない。
+専用FIFOの固定group、batch size 1、送信Lambdaの同時実行1を使い、他の生成キューを塞がない。
+再試行は端末ごとに制限し、送信結果不明・古い通知・失効した端末へ無制限に再送しない。完全な一度限りの配送や即時到着は保証しない。
+
+### 端末登録と表示
+
+既存Auth Lambdaへ`PUT`／`DELETE /api/v1/auth/mobile/notifications/device`を追加する。
+Cookieを受け付けず、本人のモバイルBearerでFCM宛先とopaqueなbindingを登録・解除する。登録期限はセッションの絶対期限を超えない。
+登録の上書きは条件付き更新とセッション確認を同時に行い、遅延した旧端末処理が新しい登録を削除しないようにする。
+公式SDKの`register()`／`onRegistered()`でFIDを取得し、FCM宛先として使用する。APIの`token`フィールドはこの宛先を保持する。
+
+メニューに通知設定を置き、明示的な有効化操作から標準の通知許可を要求する。起動のたびに許可ダイアログを出さない。
+Firebase未設定時は「通知設定の準備中」とし、有効化済みとは表示しない。FCM auto-initは無効のまま、許可されたセッションだけ手動登録する。
+通知の見出しは「議論結果が投稿されました」、本文は「依頼者：表示名」と「タップして議論の記録を確認できます。」とする。
+FCMには種別・schema版・opaqueな記録ID・binding・公開日時・依頼者のDiscordディスプレイネームを送り、議題・回答・Discord IDは送らない。
+表示名はArchiveの保存値から取り、改行・制御文字を除いて100文字以内に整える。端末でも検証し、命令・リンクとして解釈しない。
+
+端末側でも保存済み認可の期限、現セッションへの束縛、通知許可、binding、公開日時を検証してから表示する。
+ログアウト・切替・認可喪失ではネットワーク処理より先に端末の通知束縛と表示中通知を無効化し、遅延したメッセージを捨てる。
+通知表示にAPI応答は待たず、既存の差分同期を予約する。通知タップは固定の議論App Linkへ進み、本文取得には通常の認可を再適用する。
+拒否・通信失敗・OSの配送遅延があっても、起動／定期／引っ張る操作による既存同期は維持する。
+
+### Firebase設定と有効化
+
+Firebase Android設定と送信用サービスアカウントは別物とする。Analyticsは導入しない。
+Android設定はリポジトリ外の`google-services.json`を`SHITTIM_ANDROID_FIREBASE_CONFIG`で指定し、公式Google Services pluginを利用する。
+設定なしの開発・CIビルドも可能だが、実通知は利用できない。
+送信用JSONは固定SSM SecureString `/shittim-chest/production/records/firebase/service-account`へ安全に登録する。
+取得権限は送信Lambdaだけに付け、値をCloudFormation・環境変数・Git・ログ・artifactへ出さない。Play Developer API用のJSONやupload keyは流用しない。
+
+有効化はFirebaseプロジェクト作成 → Androidアプリ登録 → FCM送信資格情報の安全な登録 → Records配信 → Firebase設定付きAndroid版配布 → 実機受入の順とする。
+Firebase未作成のため、コード試験と実FCM配送の確認を区別する。実機で前景・背景・アプリ終了中の通知、タップ先、通知拒否、ログアウト後の抑止を確認してから有効化完了とする。
+端末の強制停止やOS制限による遅延・未配送はアプリ内の同期で補い、到着時刻の保証とは扱わない。
+
 ## 公式資料
 
 2026年9月16日に確認。依存の具体的な版は実装の固定設定を正とする。
@@ -1127,3 +1179,7 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
 - [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
 - [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)
+- [FCM Androidの導入と通知許可](https://firebase.google.com/docs/cloud-messaging/android/get-started)
+- [FCMメッセージ受信](https://firebase.google.com/docs/cloud-messaging/android/receive-messages)
+- [Firebase Admin SDKの送信](https://firebase.google.com/docs/cloud-messaging/send/admin-sdk)
+- [FCM宛先のFID移行](https://firebase.google.com/docs/reference/android/com/google/firebase/messaging/FirebaseMessaging)

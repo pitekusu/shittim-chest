@@ -47,6 +47,7 @@ internal class RecordSyncWorker(context: Context, parameters: WorkerParameters,
       }
       val verified = verifySession(stored.accessToken)
       if (verified.cacheAccountId != permit.accountId || !verified.expiresAt.isAfter(Instant.now())) {
+        RecordNotifications.revokeMatchingSession(applicationContext, stored.accessToken)
         store.invalidateCacheAuthorization(stored.accessToken)
         return@coroutineScope stopped(RecordReadFailure.AUTH_REQUIRED)
       }
@@ -67,6 +68,7 @@ internal class RecordSyncWorker(context: Context, parameters: WorkerParameters,
     } catch (error: CancellationException) { throw error }
     catch (error: MobileAuthException) {
       if (error.failure in setOf(MobileAuthFailure.AUTHENTICATION_REQUIRED, MobileAuthFailure.FORBIDDEN)) {
+        observedToken?.let { RecordNotifications.revokeMatchingSession(applicationContext, it.accessToken) }
         try { observedToken?.let { store.invalidateCacheAuthorization(it.accessToken) } }
         catch (_: Exception) { return@coroutineScope stopped(RecordReadFailure.STORAGE_UNAVAILABLE) }
         stopped(RecordReadFailure.AUTH_REQUIRED)
@@ -75,6 +77,7 @@ internal class RecordSyncWorker(context: Context, parameters: WorkerParameters,
         else RecordReadFailure.INVALID_RESPONSE)
     } catch (error: RecordReadException) {
       if (error.failure == RecordReadFailure.AUTH_REQUIRED) {
+        observedToken?.let { RecordNotifications.revokeMatchingSession(applicationContext, it.accessToken) }
         try { observedToken?.let { store.invalidateCacheAuthorization(it.accessToken) } }
         catch (_: Exception) { return@coroutineScope stopped(RecordReadFailure.STORAGE_UNAVAILABLE) }
       }

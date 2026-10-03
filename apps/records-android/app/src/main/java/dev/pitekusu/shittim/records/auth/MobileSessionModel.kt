@@ -47,6 +47,7 @@ internal class MobileSessionModel(
   private val activateCacheAccount: suspend (String) -> Unit,
   private val clearRecords: suspend () -> Unit,
   private val clock: Clock = Clock.systemUTC(),
+  private val revokeNotifications: () -> Unit = {},
 ) : ViewModel() {
   private val mutableState = MutableStateFlow<SessionState>(SessionState.Checking)
   val state = mutableState.asStateFlow()
@@ -97,6 +98,7 @@ internal class MobileSessionModel(
     // A rejected request blocks saved reads immediately, even during an ongoing check.
     // Only a successful server check may issue a new permit; connectivity failure cannot.
     cacheAccessBlocked = true
+    revokeNotifications()
     mutableCachePermit.value = null
     offlineAllowed = false
     mutableState.value = SessionState.Checking
@@ -217,6 +219,7 @@ internal class MobileSessionModel(
     expiry?.cancel()
     val previous = pendingLogoutToken ?: token
     pendingLogoutToken = previous
+    revokeNotifications()
     token = null
     mutableCachePermit.value = null
     offlineAllowed = false
@@ -232,6 +235,7 @@ internal class MobileSessionModel(
   }
 
   private suspend fun finishLogout(previous: StoredToken?, verification: Job? = null) {
+    revokeNotifications()
     pendingLogoutToken = previous // A failed local deletion can retry without losing revocation.
     token = null
     mutableCachePermit.value = null
@@ -293,6 +297,9 @@ internal class MobileSessionModel(
           if (!deadline.isAfter(clock.instant())) expire()
           else {
             // Switch/erase before issuing a new permit, even when no record is fetched afterward.
+            if (stored.cacheAuthorization?.accountId != response.cacheAccountId) {
+              revokeNotifications()
+            }
             if (mutableCachePermit.value?.accountId != response.cacheAccountId) mutableCachePermit.value = null
             activateCacheAccount(response.cacheAccountId)
             val authorized = StoredToken(stored.accessToken, deadline,
@@ -311,10 +318,12 @@ internal class MobileSessionModel(
         }
       } catch (error: CancellationException) { throw error }
       catch (_: TokenStorageException) {
+        revokeNotifications()
         mutableCachePermit.value = null
         mutableState.value = SessionState.StorageError
       }
       catch (_: RecordCacheException) {
+        revokeNotifications()
         mutableCachePermit.value = null
         mutableState.value = SessionState.StorageError
       }
@@ -351,6 +360,7 @@ internal class MobileSessionModel(
   }
 
   private suspend fun expire() {
+    revokeNotifications()
     offlineAllowed = false
     token = null
     mutableCachePermit.value = null

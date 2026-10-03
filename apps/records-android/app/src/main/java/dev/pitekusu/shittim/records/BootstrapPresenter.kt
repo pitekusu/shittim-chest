@@ -112,7 +112,10 @@ internal class BootstrapPresenter(
     var listOwner by remember { mutableStateOf<String?>(null) }
     var syncState by remember { mutableStateOf<RecordSyncState>(RecordSyncState.Idle) }
     LaunchedEffect(cacheAccountId, signedIn) {
-      if (cacheAccountId != null && signedIn) RecordSyncScheduler.schedule(context)
+      if (cacheAccountId != null && signedIn) {
+        RecordSyncScheduler.schedule(context)
+        if (RecordNotificationSettings(context).optedIn) RecordNotificationRegistration.schedule(context)
+      }
     }
     LaunchedEffect(cacheAccountId) {
       syncState = RecordSyncState.Idle

@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
           {
             RecordSyncScheduler.cancel(applicationContext)
             RecordCacheAccount.clear(applicationContext)
-          })
+          }, revokeNotifications = { RecordNotifications.revoke(applicationContext) })
       }
     }
   }
@@ -68,6 +68,11 @@ class MainActivity : ComponentActivity() {
 
   private fun openRecordLink(intent: Intent?) {
     if (intent?.action == Intent.ACTION_VIEW) {
+      // A PendingIntent left from an earlier login must not select a record for another account.
+      intent.getStringExtra(RECORD_NOTIFICATION_BINDING)?.let { binding ->
+        if (binding != RecordNotificationSettings(applicationContext).binding ||
+          !hasLocalNotificationPermit(applicationContext)) return
+      }
       recordDestination(intent.dataString)?.let(session::openDestination)
     }
   }

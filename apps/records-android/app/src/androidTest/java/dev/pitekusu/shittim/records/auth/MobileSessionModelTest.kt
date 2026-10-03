@@ -26,6 +26,28 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun notificationsAreRevokedBeforeOfflineLogoutWaitsForNetwork(): Unit = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.logoutGate = CompletableDeferred()
+        val before = fixture.notificationRevocations
+        model.logout()
+        assertTrue(fixture.notificationRevocations > before)
+        assertEquals(SessionState.SigningOut, model.state.value)
+        withTimeout(5_000) { fixture.postStarted.await() }
+        assertNull(fixture.stored)
+        fixture.logoutGate!!.complete(Unit)
+        model.await<SessionState.SignedOut>()
+        Unit
+      }
+    }
+  }
+
+  @Test
   fun knownDenialStaysLockedAfterNetworkFailureAndOfflineRestart() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
@@ -599,6 +621,7 @@ class MobileSessionModelTest {
     var cacheClearFails = false
     var logoutPending = false
     var cacheClears = 0
+    var notificationRevocations = 0
     val activatedAccounts = mutableListOf<String>()
     var gets = 0
     var posts = 0
@@ -650,7 +673,8 @@ class MobileSessionModelTest {
     }, { activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it) }, {
       cacheClears++
       if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()
-    }, Clock.fixed(now, ZoneOffset.UTC)).also { owner.put("session", it) }
+    }, Clock.fixed(now, ZoneOffset.UTC), revokeNotifications = { notificationRevocations++ })
+      .also { owner.put("session", it) }
 
     override fun close() { owner.clear(); client.close() }
   }
