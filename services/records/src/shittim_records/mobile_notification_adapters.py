@@ -24,6 +24,8 @@ from shittim_records.mobile_notifications import (
     timestamp,
 )
 
+_FIREBASE_CREDENTIAL_FINGERPRINT: str | None = None
+
 
 class DynamoMobileNotificationStore:
     """Use resource/native types; CAS transaction only where a session race matters."""
@@ -207,12 +209,18 @@ class DynamoMobileNotificationStore:
             return False
         return True
 
-    def finish_event(self, record_id: str, *, state: str) -> None:
+    def finish_event(self, record_id: str, *, state: str, wait_only: bool = False) -> None:
+        update = "SET #state = :state REMOVE lease_until"
+        values: dict[str, str | int] = {":state": state}
+        if wait_only:
+            # Refund only normally completed wait-only sweeps, never a crashed lease.
+            update += " ADD runs :refund"
+            values[":refund"] = -1
         self._table.update_item(
             Key={"PK": OUTBOX_PK, "SK": record_id},
-            UpdateExpression="SET #state = :state REMOVE lease_until",
+            UpdateExpression=update,
             ExpressionAttributeNames={"#state": "state"},
-            ExpressionAttributeValues={":state": state},
+            ExpressionAttributeValues=values,
             ConditionExpression=Attr("state").eq("processing"),
         )
 
@@ -382,6 +390,8 @@ class FirebaseNotificationSender:
 
 def load_firebase_sender(ssm: Any, parameter_name: str) -> FirebaseNotificationSender | None:
     """Resolve only at Lambda runtime; the agent/operator never fetches this value."""
+    global _FIREBASE_CREDENTIAL_FINGERPRINT
+
     try:
         raw = ssm.get_parameter(Name=parameter_name, WithDecryption=True)["Parameter"]["Value"]
     except ssm.exceptions.ParameterNotFound:
@@ -395,14 +405,25 @@ def load_firebase_sender(ssm: Any, parameter_name: str) -> FirebaseNotificationS
             or re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", payload.get("project_id", "")) is None
         ):
             raise ValueError
+        fingerprint = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         try:
             app = firebase_admin.get_app("records-mobile-notifications")
         except ValueError:
+            app = None
+        if app is None or fingerprint != _FIREBASE_CREDENTIAL_FINGERPRINT:
+            # Validate before replacing the warm app, but never send with stale credentials.
+            # JSON formatting alone must not recreate the SDK app or its HTTP client.
+            credential = credentials.Certificate(payload)
+            if app is not None:
+                firebase_admin.delete_app(app)
             app = firebase_admin.initialize_app(
-                credentials.Certificate(payload),
+                credential,
                 options={"httpTimeout": 5},
                 name="records-mobile-notifications",
             )
+            _FIREBASE_CREDENTIAL_FINGERPRINT = fingerprint
     except KeyError, ValueError, TypeError:
         raise RuntimeError("mobile_push_configuration_invalid") from None
     return FirebaseNotificationSender(app)

@@ -71,7 +71,7 @@ class NotificationStore(Protocol):
 
     def claim_event(self, record_id: str, *, now_epoch: int) -> bool: ...
 
-    def finish_event(self, record_id: str, *, state: str) -> None: ...
+    def finish_event(self, record_id: str, *, state: str, wait_only: bool = False) -> None: ...
 
     def devices(self, *, after: str | None = None) -> Iterable[NotificationDevice]: ...
 
@@ -210,6 +210,7 @@ class MobileNotificationDispatchService:
         sent = failed = 0
         pending = event.get("retry_needed") is True
         interrupted = False
+        waiting = send_attempted = False
         cursor = event.get("cursor")
         for device in self._store.devices(after=cursor if isinstance(cursor, str) else None):
             if remaining_seconds() < 35:
@@ -247,6 +248,7 @@ class MobileNotificationDispatchService:
                 continue
             decision = self._store.claim_delivery(record_id, device, now_epoch=now_epoch)
             if decision == "wait":
+                waiting = True
                 pending = True
                 self._store.checkpoint(record_id, cursor=device.token_hash, retry_needed=pending)
                 continue
@@ -271,6 +273,7 @@ class MobileNotificationDispatchService:
                 "publishedAt": published_at,
                 "requesterName": safe_requester_name(requester_name),
             }
+            send_attempted = True
             try:
                 self._sender.send(token=device.token, data=data)
             except PushDeliveryFailed as error:
@@ -301,7 +304,13 @@ class MobileNotificationDispatchService:
             self._store.checkpoint(record_id, cursor=device.token_hash, retry_needed=pending)
         if not interrupted:
             self._store.checkpoint(record_id, cursor=None, retry_needed=False)
-        self._store.finish_event(record_id, state="pending" if pending else "complete")
+        # A completed, send-free Retry-After sweep is not a delivery attempt. Refund
+        # its claimed run atomically; crashes and interrupted work still use the cap.
+        self._store.finish_event(
+            record_id,
+            state="pending" if pending else "complete",
+            wait_only=waiting and not send_attempted and not interrupted,
+        )
         return NotificationSummary(sent=sent, failed=failed, pending=pending)
 
 

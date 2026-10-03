@@ -22,6 +22,7 @@ from shittim_records.mobile_http import MobileAuthHttpController
 from shittim_records.mobile_login import MobileLoginService
 from shittim_records.mobile_notifications import (
     MAX_DELIVERY_ATTEMPTS,
+    MAX_EVENT_RUNS,
     MobileNotificationDispatchService,
     MobileNotificationRegistrationService,
     NotificationDevice,
@@ -65,14 +66,20 @@ class PushStore:
 
     def claim_event(self, record_id, *, now_epoch):
         value = self.events[record_id]
-        if value["state"] != "pending":
+        if value["state"] != "pending" and not (
+            value["state"] == "processing" and value["lease_until"] <= now_epoch
+        ):
             return False
         value["state"] = "processing"
+        value["lease_until"] = now_epoch + 180
         value["runs"] += 1
         return True
 
-    def finish_event(self, record_id, *, state):
+    def finish_event(self, record_id, *, state, wait_only=False):
         self.events[record_id]["state"] = state
+        self.events[record_id].pop("lease_until", None)
+        if wait_only:
+            self.events[record_id]["runs"] -= 1
 
     def devices(self, *, after=None):
         return [
@@ -112,6 +119,7 @@ class Sender:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.failures: dict[str, str] = {}
+        self.retry_after = 60
 
     def send(self, *, token, data):
         self.calls.append({"token": token, "data": data})
@@ -119,7 +127,7 @@ class Sender:
         if failure == "unknown":
             raise TimeoutError("do not log this private request")
         if failure:
-            raise PushDeliveryFailed(failure)
+            raise PushDeliveryFailed(failure, retry_after=self.retry_after)
 
 
 @pytest.fixture
@@ -257,6 +265,63 @@ def test_known_transient_failure_waits_and_is_bounded(setup):
         dispatch.dispatch(RECORD_ID)
     assert len(sender.calls) == MAX_DELIVERY_ATTEMPTS
     assert store.events[RECORD_ID]["state"] == "complete"
+
+
+def test_retry_after_wait_only_sweeps_do_not_exhaust_run_cap(setup):
+    _sessions, store, clock, _registration, sender, dispatch = setup
+    device = next(iter(store.registry.values()))
+    sender.failures[device.token] = "retryable"
+    sender.retry_after = 2 * 60 * 60
+    assert dispatch.dispatch(RECORD_ID).pending
+    for _ in range(119):
+        clock[0] += timedelta(minutes=1)
+        assert dispatch.dispatch(RECORD_ID).pending
+    assert len(sender.calls) == 1
+    assert store.events[RECORD_ID]["runs"] == 1
+    sender.failures.clear()
+    clock[0] += timedelta(minutes=1)
+    assert dispatch.dispatch(RECORD_ID).sent == 1
+    assert store.events[RECORD_ID]["state"] == "complete"
+    assert store.events[RECORD_ID]["runs"] == 2
+
+
+def test_retry_after_waiting_still_expires_at_event_deadline(setup):
+    _sessions, store, clock, _registration, sender, dispatch = setup
+    device = next(iter(store.registry.values()))
+    sender.failures[device.token] = "retryable"
+    sender.retry_after = 24 * 60 * 60
+    assert dispatch.dispatch(RECORD_ID).pending
+    clock[0] += timedelta(days=1)
+    assert dispatch.dispatch(RECORD_ID) == NotificationSummary()
+    assert len(sender.calls) == 1
+    assert store.events[RECORD_ID]["state"] == "expired"
+
+
+def test_interrupted_runs_still_exhaust_run_cap_without_sending(setup):
+    _sessions, store, _clock, _registration, sender, dispatch = setup
+    for _ in range(MAX_EVENT_RUNS):
+        assert dispatch.dispatch(RECORD_ID, remaining_seconds=lambda: 10).pending
+    assert store.events[RECORD_ID]["runs"] == MAX_EVENT_RUNS
+    assert dispatch.dispatch(RECORD_ID).failed == 1
+    assert not sender.calls
+    assert store.events[RECORD_ID]["state"] == "failed"
+
+
+def test_crashed_runs_still_exhaust_run_cap_after_lease_recovery(setup):
+    _sessions, store, clock, _registration, sender, dispatch = setup
+
+    def interrupted(_record_id):
+        raise RuntimeError("invented worker failure")
+
+    store.record_requester_name = interrupted
+    for _ in range(MAX_EVENT_RUNS):
+        with pytest.raises(RuntimeError, match="invented worker failure"):
+            dispatch.dispatch(RECORD_ID)
+        clock[0] += timedelta(minutes=3)
+    assert store.events[RECORD_ID]["runs"] == MAX_EVENT_RUNS
+    assert dispatch.dispatch(RECORD_ID).failed == 1
+    assert not sender.calls
+    assert store.events[RECORD_ID]["state"] == "failed"
 
 
 def test_crash_after_sending_receipt_and_deadline_do_not_resend(setup):

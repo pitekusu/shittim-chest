@@ -240,6 +240,12 @@ def test_mobile_push_native_resource_registration_leases_receipts_and_cleanup(
     assert list(store.pending_events(now_epoch=int(NOW.timestamp()))) == [record_id]
     assert store.claim_event(record_id, now_epoch=int(NOW.timestamp()))
     assert not store.claim_event(record_id, now_epoch=int(NOW.timestamp()))
+    store.finish_event(record_id, state="pending", wait_only=True)
+    waiting = store.get_event(record_id)
+    assert waiting is not None and waiting["runs"] == 0 and "lease_until" not in waiting
+    with pytest.raises(resource.meta.client.exceptions.ConditionalCheckFailedException):
+        store.finish_event(record_id, state="pending", wait_only=True)
+    assert store.claim_event(record_id, now_epoch=int(NOW.timestamp()))
     assert store.claim_delivery(record_id, device, now_epoch=int(NOW.timestamp())) == "send"
     assert store.claim_delivery(record_id, device, now_epoch=int(NOW.timestamp())) == "done"
     store.finish_delivery(record_id, device, state="retry", now_epoch=int(NOW.timestamp()))

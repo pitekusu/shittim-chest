@@ -1,15 +1,21 @@
 """Actual boto resource document marshalling and Firebase public API boundaries."""
 
+import json
+from contextlib import suppress
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
 import boto3
+import firebase_admin
 import pytest
 from botocore.stub import ANY, Stubber
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from firebase_admin import exceptions, messaging
 from shittim_chest.adapters.dynamodb.codec import marshal_item
 
+from shittim_records import mobile_notification_adapters as adapters
 from shittim_records.mobile_notification_adapters import (
     DynamoMobileNotificationStore,
     FirebaseNotificationSender,
@@ -151,6 +157,97 @@ def test_uncreated_firebase_parameter_is_explicitly_disabled():
         get_parameter=missing, exceptions=SimpleNamespace(ParameterNotFound=Missing)
     )
     assert load_firebase_sender(ssm, "/invented/firebase") is None
+
+
+@pytest.fixture
+def firebase_credential(monkeypatch):
+    monkeypatch.setattr(adapters, "_FIREBASE_CREDENTIAL_FINGERPRINT", None)
+    # This key is generated only for the in-process SDK test; no cloud calls or saved files.
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    yield {
+        "type": "service_account",
+        "project_id": "invented-project",
+        "private_key_id": "invented-key",
+        "private_key": key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode(),
+        "client_email": "notifications@invented-project.iam.gserviceaccount.com",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    with suppress(ValueError):
+        firebase_admin.delete_app(firebase_admin.get_app("records-mobile-notifications"))
+
+
+def ssm_client():
+    return boto3.client(
+        "ssm",
+        region_name="ap-northeast-1",
+        aws_access_key_id="invented",
+        aws_secret_access_key="invented",  # noqa: S106 - Stubber-only credential.
+    )
+
+
+def add_firebase_parameter(stub, value):
+    stub.add_response(
+        "get_parameter",
+        {"Parameter": {"Value": value}},
+        {"Name": "/invented/firebase", "WithDecryption": True},
+    )
+
+
+def test_warm_firebase_app_reused_for_equivalent_parameter_json(firebase_credential):
+    ssm = ssm_client()
+    with Stubber(ssm) as stub:
+        add_firebase_parameter(stub, json.dumps(firebase_credential))
+        first = load_firebase_sender(ssm, "/invented/firebase")
+        add_firebase_parameter(stub, json.dumps(firebase_credential, sort_keys=True, indent=2))
+        second = load_firebase_sender(ssm, "/invented/firebase")
+        assert first is not None and second is not None
+        assert first._app is second._app
+        stub.assert_no_pending_responses()
+
+
+def test_warm_firebase_app_replaced_after_credential_rotation(firebase_credential, monkeypatch):
+    deleted = []
+    delete_app = firebase_admin.delete_app
+
+    def delete(app):
+        deleted.append(app)
+        delete_app(app)
+
+    monkeypatch.setattr(firebase_admin, "delete_app", delete)
+    ssm = ssm_client()
+    rotated = firebase_credential | {"private_key_id": "rotated-invented-key"}
+    with Stubber(ssm) as stub:
+        add_firebase_parameter(stub, json.dumps(firebase_credential))
+        first = load_firebase_sender(ssm, "/invented/firebase")
+        add_firebase_parameter(stub, json.dumps(rotated))
+        second = load_firebase_sender(ssm, "/invented/firebase")
+        add_firebase_parameter(stub, json.dumps(rotated))
+        third = load_firebase_sender(ssm, "/invented/firebase")
+        assert first is not None and second is not None and third is not None
+        assert first._app is not second._app
+        assert deleted == [first._app]
+        assert second._app is third._app is firebase_admin.get_app("records-mobile-notifications")
+        stub.assert_no_pending_responses()
+
+
+def test_invalid_rotated_firebase_credential_does_not_return_stale_sender(firebase_credential):
+    ssm = ssm_client()
+    invalid = firebase_credential | {"private_key": "invented-invalid-key"}
+    with Stubber(ssm) as stub:
+        add_firebase_parameter(stub, json.dumps(firebase_credential))
+        first = load_firebase_sender(ssm, "/invented/firebase")
+        add_firebase_parameter(stub, json.dumps(invalid))
+        with pytest.raises(RuntimeError, match=r"^mobile_push_configuration_invalid$"):
+            load_firebase_sender(ssm, "/invented/firebase")
+        # A bad rotation is rejected before deleting the previous valid SDK app.
+        add_firebase_parameter(stub, json.dumps(firebase_credential))
+        restored = load_firebase_sender(ssm, "/invented/firebase")
+        assert first is not None and restored is not None and first._app is restored._app
+        stub.assert_no_pending_responses()
 
 
 def test_queue_contains_only_record_id_with_fifo_deduplication():
