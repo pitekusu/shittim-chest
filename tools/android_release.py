@@ -252,6 +252,10 @@ def publish(state: Path) -> None:
                 raise ValueError("play_stale_edit_do_not_resend")
             # GPP owns upload/staging, with commit=false. Never retry an unknown
             # upload response; only this boundary commits the verified edit once.
+            write_json(
+                state / "stage-attempt.json",
+                {**result, "phase": "stage_started", "verified": False, "doNotResend": True},
+            )
             with (state / "publish.log").open("xb") as log:
                 stage_result = subprocess.run(  # noqa: S603 - fixed Wrapper and internal-only GPP task.
                     [

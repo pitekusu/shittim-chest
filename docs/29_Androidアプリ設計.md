@@ -57,7 +57,10 @@ updated: 2026-10-03
 | C37 | Web機能への導線・アカウントメニュー | 記録閲覧中のメニューから固定Web機能を開き、ログアウトと表示切替を行う |
 | C38 | Gradle Play Publisher・短寿命API認証の接続 | 既存署名と分離し、検証済みAABをinternalへ配置する。外部認証設定・配布確認はC39で行う |
 | C39 | 検証済み同一AABの内部テスト配布Workflow | mainの必須CIと署名を確認し、WIFで一回だけ公開する。外部設定未完了では起動しない |
+| C40（未実装） | Android依存の更新検知 | Gradle依存と関連Actionを対象に、既存の依存更新処理と重複しない検知を追加する |
+| C41（未実施） | 利用者向け導入・更新・復旧手順 | インストール、更新、再認証、問題版の配布停止を案内する。機能文書をこの工程へ後回しにしない |
 | 後続 | 起動演出・人格アイコン・投票／親愛度表示・友人向け配布 | C37後に小さなPRで分けて進める。起動演出はAndroid SplashScreenからComposeへ接続する |
+| 後続：Navigation 3 | 一覧／詳細の画面遷移・戻る・状態寿命の標準化 | 未実装。ネイティブ画面を増やす前の独立工程として、後述の3つの通常PRに分ける。既存の配布工程は変更しない |
 
 ### PRの分割単位
 
@@ -137,6 +140,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C26〜29：暗号化保存（導入予定） | Bouncy Castle、Android Keystore、[Room](https://developer.android.com/training/data-storage/room) | 独自暗号方式・DBアクセス基盤は作らない。保存形式・鍵の取り扱いを管理し、Roomには暗号化済み本文を保存 |
 | C31〜C32：同期 | Coroutines、WorkManager、保存済み進捗からの再開 | バックグラウンド継続を新要件として受け、予約・制約・再試行をWorkManagerへ任せる。差分照合・本人認可・暗号化の再開点だけをサービス側で管理 |
 | C36：可変幅の一覧／詳細と戻る | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane、ActivityのPredictiveBackHandler | 配置・遷移・pane focus・hinge回避とgesture配信を利用。選択先は既存Circuitを正とし、別のnavigation履歴は増やさない。確定時のCloseRecord接続と認可再確認だけをアプリ側で扱う |
+| 後続：画面遷移（導入予定） | Navigation 3のNavDisplay・NavEntry、Material 3 AdaptiveのListDetailSceneStrategy | Circuit／Metroを維持し、閲覧先の管理だけを単一back stackへ移す。認可、検証済みの認証復帰先、通知・App Linksの検証はアプリ側に残す。C36の現行遷移処理を段階的に置き換える |
 | 議論公開通知 | Firebase Cloud Messaging、Firebase Admin SDK、NotificationCompat、Activity Result、WorkManager | 配送・通知表示・権限要求・登録再試行を既存APIへ任せる。セッションへの束縛、公開済み記録の確認、重複防止とログアウト時の抑止をサービス側で管理 |
 
 ### C15までの独自処理を残す理由
@@ -163,6 +167,14 @@ FastAPIへの全面移行、新しい認証基盤、ORMの導入もこの方針�
 - Markdownは長文・リンク・主要構文に加え、Releaseビルドでの表示を確認する。
 - 方針・文書だけの変更は文書整合・mirror・公開情報・差分を確認する。関連変更のない成功済み試験は繰り返さない。
 - 実署名・App Links・実Discordログインの確認は引き続きC19で行い、今回の文書整備の完了条件へ追加しない。
+
+## ローカル開発・配布の一時ビルド領域
+
+Androidのローカルビルドは、Git管理した`tools/run_android_build.py`を入口にする。標準の`TemporaryDirectory`とGradle init-scriptにより、ビルド出力・project cache・Kotlinのpersistent project data・JVM／native tempを専用ディスク領域へまとめる。Kotlin公式の`kotlin.project.persistent.dir`を使い、checkoutの`.kotlin`にも蓄積させない。`/tmp`のtmpfsや使い捨てworktreeには大きな中間生成物を残さず、処理終了を確認してから回収する。同時実行を排他し、強制終了の残骸は次回実行時に同じ入口の非使用領域だけを削除する。Wrapper取得失敗などinit前の通常終了は、launcherとprocess groupの終了を確認した記録がある場合だけ回収する。Gradleの単発JVMも使用権ロックを保持し、記録のある終了でも使用中の領域は削除しない。中断・状態不明の領域も自動削除せず、新たなビルドを止める。このローカル入口だけKotlin標準の`in-process`実行を使い、コンパイラを同じGradle JVMの使用権の中へ収める。依存バージョンやCIの実行方式は変更しない。
+
+完成したAPK／AAB、必要なLint報告とprivate logはリポジトリ外の固定出力先へ残し、ビルドごとの大きな履歴ディレクトリを作らない。配布ヘルパーもこの入口を使う。署名・versionCode・Play反映の確認は従来どおりとし、大きな配布成果物は直近2版に限定する。SHA・署名・反映結果などの小さな再送防止記録は保持する。
+
+ソースは既存worktreeを再利用する。配布専用の使い捨てworktreeと仮想環境は反映確認後に片付け、応答不明の状態ファイル・未コミット変更・実行中の参照は保護する。過去領域の掃除は、正確なpath・Git未追跡・非使用を確認できた生成物に限定する。SDK・JDK・共有Gradle cache・署名鍵・API認証JSONを削除せず、OS全体やCIのtemp設定も変更しない。具体的な実行方法はAndroid READMEを正とする。
 
 ## C02：CircuitとMetroの接続
 
@@ -903,6 +915,8 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 ## C36：可変幅レイアウト・画面操作の仕上げ
 
+この節はNavigation 3導入前の現行実装を記載する。今後の遷移管理の移行は「Navigation 3への段階的移行」で扱い、移行完了までは現在の動作を維持する。
+
 認証後の記録画面は、標準`ListDetailPaneScaffold`と`AnimatedPane`で一覧／詳細を配置する。利用できる幅840dp以上かつ文字倍率1.5未満では左右2ペインとし、それ以外は選択先だけを1ペインで表示する。幅の判定は物理画面ではなく、system bar・IMEを避けた内容領域を使う。標準のwindow postureからhingeの除外領域を取り込み、本文は詳細760dp・単独一覧560dpまでに制限する。ログイン前は従来のブランドと操作の配置を維持する。
 
 上部アプリバーは画面名とメニューに絞り、重複する左側の装飾アイコンを置かない。一覧・ログインのブランド見出しはWeb版と同じ二重円枠と斜め四角のマークを使用し、`THE SHITTIM CHEST`をその右側に配置する。日本語アプリ名はログイン前だけ下段に残す。
@@ -938,6 +952,41 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 - 固定版GPPは安全な審査条件付きcommitに対応していないため、`commit=false`でアップロード・internal track配置・edit検証までを行う。C39が同じeditとAABを検証し、公式REST APIへ`changesInReviewBehavior=ERROR_IF_IN_REVIEW`を指定して1回だけcommitする。既存審査を取り消さず、条件を弱めて再送しない。GPP成功だけでは配布完了としない。
 
 関連確認は、通常ビルドでGPPが動かないこと、単一AABの指定、未指定・複数AAB・禁止task・CLI上書きの拒否、dry-runのtask graphにAAB再ビルドがないことを対象とする。架空AABによる接続確認は実署名・WIF・Play配布の受入とは区別する。手順と外部設定の詳細はAndroid READMEとC39に集約し、公開設計書へ実project ID・認証アカウント・ローカル保管場所を記載しない。
+
+## Navigation 3への段階的移行
+
+### 位置付けと範囲
+
+今後の工程としてNavigation 3を導入し、まず記録一覧と議論詳細の遷移を標準化する。現在のCircuit／MetroはPresenter・UI・依存接続として残す。Material 3 Expressive、配色・書体、詳細内のHorizontalPager・人物選択も維持し、画面全体を作り直さない。
+
+目的は、個別に制御している戻るアニメーション、画面状態の寿命、1ペイン／2ペインの切替を高レベルAPIへ寄せ、今後のランキング・モモトーク・討論開始などのネイティブ画面追加をしやすくすることとする。通信・復号の高速化や、既存の引っかかりの解消を導入だけで保証しない。
+
+この工程は未実装であり、今回の計画追記では依存を追加しない。ネイティブ画面を増やす前に独立した工程として進め、冒頭の工程表にあるC38〜C41の配布工程・番号・順序や、現在の内部テスト配布の条件は変更しない。Nav3とAdaptiveの依存は実装時に互換性・保守状況・安全性を確認してVersion Catalogで固定し、Kotlin・Compose・Materialの既定版を無断で変更しない。
+
+### 実装単位
+
+レビュー可能な目的別コミットと3つの通常PRに分け、関連する境界試験と文書更新を各PRへ含める。安全条件を最後のPRまで後回しにせず、移行途中も動作する状態を保つ。
+
+| PR | 内容 | 主な確認点 |
+|---|---|---|
+| 1 | 型付きrouteと単一back stack、一覧／詳細のNavDisplay接続 | 閲覧先を二重管理しない。既存の認可・ログイン復帰・外部リンク処理へ安全に接続し、Circuit／Metroを維持する |
+| 2 | AdaptiveのSceneStrategy、1ペイン／2ペイン、戻る演出 | 標準のListDetailSceneStrategyを優先する。約280msのスライド、予測型Backの確定・取消、幅変更時の選択と読位置を維持する |
+| 3 | 状態寿命と復帰経路の仕上げ、代表画面・実機確認 | 詳細の再訪と回転を区別する。一覧・検索・通知タップ・認証／Web復帰を横断確認し、完了後に不要な旧遷移処理を取り除く |
+
+### 維持する境界
+
+- 閲覧routeはNav3の単一back stackを正とし、既存の選択先・履歴と二重に同期する基盤は作らない。検証済みログイン復帰先は別の認証状態として扱い、期限切れでは保持し、明示ログアウト・アカウント切替では破棄する。
+- 固定App Linksの検証、通知のアカウント束縛・ローカル許可確認、Activity再生成時のIntent二重実行防止を維持する。認可喪失時は全entry・全ペインの実記録を直ちに非表示にし、進行中の戻る処理で別記録や別アカウントを操作しない。
+- 一覧のPaging Flow・検索条件・読位置を維持する。詳細を閉じて同じ記録を開き直した場合も新しい閲覧としてアロナの初回意見から開始し、同じ閲覧中の回転・同期・シート／Web復帰では読位置を維持する。検索画面・フォーカス・キーボードを一覧復帰時に自動再表示しない。
+- Nav3のSavedStateにはopaqueな記録IDなど必要最小限のroute識別子だけを入れる。質問・回答・検索語・token・private Discord IDは入れない。検索語は既存どおりアカウントに結び付くメモリだけで保持する。
+- 公開API、認証方式・認可範囲、暗号化保存形式、差分同期、Web機能メニューの固定URLは変更しない。独自のnavigationフレームワークや汎用wrapperを追加しない。
+- ListDetailSceneStrategyは、現行と同じく内容幅840dp以上かつ文字倍率1.5未満の場合だけ2ペインへ接続し、それ以外は1ペインにする。標準の幅区分によって既存の表示条件を広げず、境界試験も維持する。
+
+### 検証と完了条件
+
+関連Android試験・Lint・Debug／Releaseビルド・必須CIで、一覧／詳細往復、戻る確定・取消、認可喪失、通知／App Links／ログイン復帰、詳細再訪の初期化と検索フォーカス抑止を確認する。ローカル先行表示と同期中の読位置、狭幅・文字拡大・2ペイン・回転・アニメーション無効も維持し、内部テスト版で主要経路を短く実機確認する。ライブラリ内部の再試験や新しい件数・カバレッジ目標は追加しない。
+
+完了は、一覧／詳細の閲覧先と遷移がNav3へ一本化され、既存の閲覧・認証・通知・状態保持を維持したまま不要な旧遷移管理を取り除けた状態とする。
 
 ## 起動・ログインのブランド演出
 
@@ -1220,6 +1269,8 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 commitの応答不明時は再送せず、Play側の状態を最大4回の読取だけで照合する。HTTP 401によるcommitの自動再送も無効とする。審査・公開待ちは`pending`かつ`verified=false`の安全なreceiptを残し、`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も配布完了にせず、固定カテゴリと`doNotResend=true`のreceiptを残す。GPP stage失敗・応答不明や照合不一致は失敗として終了する。Workflowの「再実行」は拒否し、Play Consoleとreceiptで状態と副作用を確認してから新しい手動実行を判断する。実行中は同じアプリのPlay Console編集を避ける。
 
 公開artifactはSHA・版番号・AAB hash・検証結果とcommit試行の小さなreceiptだけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、GPP edit、Gradleログ、AABそのものを公開artifactへ含めない。秘密の入力とログは終了時に回収する。
+GPPを起動する前にも、非秘密の`stage-attempt.json`へSHA・版番号・hash・`doNotResend=true`を保存する。失敗・タイムアウト・取消後もupload開始記録を保持し、同じstateに試行記録があればアップロードを再送しない。
+通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。
 
 試験は全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、既存配信・競合、他トラック不変、単一commitと応答不明時の読取照合、公開ライフサイクルの審査待ち・却下・欠損・未知・API障害を架空データで確認する。既存API認証による現行公開版の公開状態読取のみ確認済みで、WIF提出・配布の受入とは区別する。最初のWIF実配布は外部設定・mainの検証完了後、別の配布依頼で行い、Playからの再取得と実機更新を確認する。
 
@@ -1236,6 +1287,10 @@ commitの応答不明時は再送せず、Play側の状態を最大4回の読取
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
 - [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
 - [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)
+- [Navigation 3の概要](https://developer.android.com/guide/navigation/navigation-3)
+- [Nav3の画面遷移・予測型Back演出](https://developer.android.com/guide/navigation/navigation-3/animate-destinations)
+- [Nav3の状態保持](https://developer.android.com/guide/navigation/navigation-3/save-state)
+- [Nav3のSceneとAdaptiveレイアウト](https://developer.android.com/guide/navigation/navigation-3/scenes)
 - [FCM Androidの導入と通知許可](https://firebase.google.com/docs/cloud-messaging/android/get-started)
 - [FCMメッセージ受信](https://firebase.google.com/docs/cloud-messaging/android/receive-messages)
 - [Firebase Admin SDKの送信](https://firebase.google.com/docs/cloud-messaging/send/admin-sdk)

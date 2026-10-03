@@ -20,6 +20,27 @@ CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダ�
   Android Studioが作る`local.properties`でもSDKを指定できるが、Gitへ追加しない。
 - Gradleは同梱Wrapperを使う。プラグイン・ライブラリは`gradle/libs.versions.toml`を正とする。
 
+### ローカルの一時ビルドをため込まない
+
+ローカルではリポジトリのrootから管理用の入口を使う。設定済みの`JAVA_HOME`と`ANDROID_HOME`、署名・Firebaseの環境変数は引き継ぐ。
+
+```sh
+uv run --frozen python -m tools.run_android_build -- :app:assembleDebug :app:lintDebug
+```
+
+Android projectを明示する場合は`--project apps/records-android`を指定する。この端末に配置した`shittim-android-build`も同じ入口である。
+Release配布のヘルパーもこの入口へ接続し、`--output-dir`の出力から検証済みAABを取り出す。実署名・versionCode確認・Playへの提出手順は変えない。
+
+- 中間生成物、project cache、Kotlinのpersistent project data、JVM／nativeの一時ファイルは、`XDG_CACHE_HOME`配下の専用ディスク領域で作る。Kotlin公式の`kotlin.project.persistent.dir`を使い、checkoutの`.kotlin`にも蓄積させない。`/tmp`のtmpfsや使い捨てソースコピーには蓄積させない。
+- 標準の`TemporaryDirectory`とGradle init-scriptを使い、処理終了を確認してから一時領域を削除する。強制終了の残骸は、次回実行時にこの入口が作った非使用領域だけを回収する。同時ビルドによる衝突を防ぐ。Gradleの単発JVMも使用権ロックを持ち、起動途中の中断などで終了を保証できなければ`android_build_cleanup_needed`で止める。使用中・状態不明の領域を自動削除して新しいビルドを重ねない。
+- Wrapper取得失敗などinit前の通常終了は、launcherとprocess groupの終了を確認した記録がある場合だけ回収する。終了確認のない中断は従来どおり保持し、記録があってもJVMの使用権ロックを優先する。
+- 所有マーカーだけを作成して起動前に中断した領域は次回実行で回収する。使用権ロックのリンクや他の状態・ファイルが残る領域は、起動前と決めつけず保持する。
+- この入口だけはKotlin標準の`in-process`実行を指定し、コンパイラを使用権ロックのあるGradle JVM内で動かす。共有SDK・依存バージョン・CIの実行方式は変更しない。
+- 出力先の既定値は`$XDG_CACHE_HOME/shittim-chest/android-artifacts`（未指定時は`$HOME/.cache`配下）。APK／AAB、必要なLint報告とprivate logを固定名で残し、実行ごとの大きな履歴ディレクトリは増やさない。`--output-dir`でリポジトリ外の保存先を指定できる。
+- `assembleDebug`・`bundleRelease`・`build`など既知の生成taskを完全な名前で指定したビルドでは、開始前に固定出力先のmodule直下にある旧APK／AABだけを消去し、成功した今回の成果物だけを配置する。失敗・中断後に旧版を今回の成果物として残さず、リンク・別の保存階層・再送防止記録は消去しない。help・Lint・単体試験・dry-run・検証済みAABの提出は保持し、生成taskの省略名やtask除外は使わない。
+- SDK・JDK・共有Gradle cache・秘密鍵は保持する。完了した使い捨てworktree／仮想環境は、未保存変更や実行中の参照がないことを確認して片付ける。署名済みの大きな配布成果物は直近2版に限定し、Play反映結果・SHAなどの小さな再送防止記録は残す。
+- ビルド失敗と後片付け失敗は成功扱いにしない。OS／CI全体のtemp設定は変更せず、このローカルAndroid処理だけを管理する。
+
 ### Kotlin Compiler Native Image（単体CLI）
 
 Kotlin 2.4.20の公式Native Image版を、単体ソースのコンパイルに利用する。
@@ -45,16 +66,18 @@ Linux版で単体Kotlinのコンパイル・実行と、Compose Compiler 2.4.20�
 
 ## 確認
 
+ビルドコマンドはリポジトリのrootで実行する。
+
 ```sh
-./gradlew :app:assembleDebug :app:lintDebug
+uv run --frozen python -m tools.run_android_build -- :app:assembleDebug :app:lintDebug
 ```
 
-APKは`app/build/outputs/apk/debug/app-debug.apk`に出力する。
+APKは既定の成果物ディレクトリの`app/app-debug.apk`に出力する。
 debug版のapplication IDは`dev.pitekusu.shittim.records.dev`であり、配布版と分離する。
 C02の接続確認は、専用エミュレーターまたはテスト端末で次を実行する。
 
 ```sh
-./gradlew :app:connectedDebugAndroidTest
+uv run --frozen python -m tools.run_android_build -- :app:connectedDebugAndroidTest
 ```
 
 実Activityを起動する2件でMetro→Circuit→UIの接続、表示切替、Activity再生成後の復元を確認する。
@@ -89,11 +112,13 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 以下は`apps/records-android`で実行する。接続先を明示し、実機や別AVDへ誤操作しない。
 
 ```sh
+SHITTIM_ANDROID_ARTIFACTS="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/android-artifacts"
+umask 077
 "$ANDROID_HOME/platform-tools/adb" -s emulator-5580 shell getprop sys.boot_completed
-"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 install -r app/build/outputs/apk/debug/app-debug.apk
+"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 install -r "$SHITTIM_ANDROID_ARTIFACTS/app/app-debug.apk"
 "$ANDROID_HOME/platform-tools/adb" -s emulator-5580 shell am start -W \
   -n dev.pitekusu.shittim.records.dev/dev.pitekusu.shittim.records.MainActivity
-"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 exec-out screencap -p > /tmp/shittim-preview.png
+"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 exec-out screencap -p > "$SHITTIM_ANDROID_ARTIFACTS/shittim-preview.png"
 ```
 
 操作は`adb -s emulator-5580 shell input`、画面要素の確認は`uiautomator dump`で行える。
@@ -181,7 +206,7 @@ C16のログイン画面（API 36、未認証・実データなし）：
      -storetype PKCS12
    ```
 
-3. Play Consoleの「内部テスト」で本人のGoogleアカウントだけをテスターに追加する。提出済みの最大`versionCode`より大きい番号を選び、秘密値を対話入力して同じ端末で署名済みAABを作る。この手順で作るPKCS12では鍵パスワードに保管庫と同じ値を使う。パスワードをコマンド引数、`gradle.properties`、シェル履歴へ書かない。
+3. Play Consoleの「内部テスト」で本人のGoogleアカウントだけをテスターに追加する。提出済みの最大`versionCode`より大きい番号を選び、秘密値を対話入力して同じ端末で署名済みAABを作る。以下のビルドはリポジトリrootから実行する。この手順で作るPKCS12では鍵パスワードに保管庫と同じ値を使う。パスワードをコマンド引数、`gradle.properties`、シェル履歴へ書かない。
 
    ```bash
    # 保管庫のパスワードを入力してEnter（入力内容は表示されない）
@@ -189,12 +214,13 @@ C16のログイン画面（API 36、未認証・実データなし）：
    SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD=$SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD
    export SHITTIM_ANDROID_UPLOAD_KEYSTORE SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD
    export SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD
-   SHITTIM_ANDROID_UPLOAD_KEY_ALIAS=shittim-upload ./gradlew :app:bundleRelease \
+   SHITTIM_ANDROID_UPLOAD_KEY_ALIAS=shittim-upload \
+     uv run --frozen python -m tools.run_android_build -- :app:bundleRelease \
      -PshittimAndroidVersionCode=1 -PshittimAndroidVersionName=0.0.1
    unset SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD
    ```
 
-   番号`1`と`0.0.1`は初回・未使用の場合の例。成果物は`app/build/outputs/bundle/release/app-release.aab`に作られる。Play Consoleの「内部テスト」→「リリースを作成」でこのAABを提出し、パッケージ名`dev.pitekusu.shittim.records`、版番号、配布対象が本人のみであることを確認して公開する。Playが配布用APKをアプリ署名鍵で署名するため、upload keyのSHA-256を`assetlinks.json`へ追加しない。
+   番号`1`と`0.0.1`は初回・未使用の場合の例。成果物は既定の成果物ディレクトリの`app/app-release.aab`に作られる。Play Consoleの「内部テスト」→「リリースを作成」でこのAABを提出し、パッケージ名`dev.pitekusu.shittim.records`、版番号、配布対象が本人のみであることを確認して公開する。Playが配布用APKをアプリ署名鍵で署名するため、upload keyのSHA-256を`assetlinks.json`へ追加しない。
 
 4. 本人の実機でテスター参加リンクからPlay版をインストールする。debug版や「内部アプリ共有」版で代用しない。Androidの設定で対象ドメインが「検証済み」か確認する。開発者向けADBが使える場合は、`adb shell pm get-app-links dev.pitekusu.shittim.records`の`shittim.pitekusu.dev: verified`でも確認できる。確認時に端末の既定アプリ設定を手動変更して検証成功を装わない。
 5. 実Discordログイン後に記録1件が表示されること、ログアウト後に記録リンクを開いて再ログインすると同じ記録へ戻ることを確認する。callback URLの一回限りコードやBearer tokenをスクリーンショット・ログへ残さない。
@@ -447,7 +473,11 @@ Play Consoleとreceiptを確認する。照合は最大4回の読取だけとし
 実行中は同じアプリのPlay Consoleを編集しない。既存審査を取り消したり、未送信の掲載情報を審査へ送ったりしない。
 失敗・応答不明では無条件にWorkflowを「再実行」しない。Play側の版番号・hash・internal trackとreceiptを確認し、
 副作用を把握してから新しい手動実行を判断する。自動再送・自動再番号付けは行わない。
+GPPを起動する前に非機密の`stage-attempt.json`を保存し、失敗・タイムアウト・取消後も保持する。
+同じstateに試行記録がある場合は、アップロードを再送しない。
 artifactは非機密receiptだけ7日保持し、鍵・資格情報・Firebase設定・GPP edit・AAB・Gradleログは含めない。
+通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、
+commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。
 
 既存API認証による現行公開版の公開状態読取は確認済み。これはWIFによる提出・配布の受入とは区別し、
 WIF提出の実確認は別の配布依頼で行う。
@@ -598,8 +628,9 @@ API 36・架空データで、[意見](screenshots/detail-opinions-light.png)、
 4. サーバー側のFCM送信用認証と機能有効化はAndroidの設定とは別に行う。Play配布用サービスアカウントを流用したり、FCM送信鍵をAPKへ入れたりしない。
 
 ```bash
+# リポジトリrootから実行する
 SHITTIM_ANDROID_FIREBASE_CONFIG=/path/outside-repository/google-services.json \
-  ./gradlew :app:assembleDebug :app:lintDebug
+  uv run --frozen python -m tools.run_android_build -- :app:assembleDebug :app:lintDebug
 ```
 
 [FCM公式Androidガイド](https://firebase.google.com/docs/cloud-messaging/android/get-started)、[data-only受信とWorkManager](https://firebase.google.com/docs/cloud-messaging/android/receive-messages)、[公式Google Services plugin](https://firebase.google.com/docs/android/google-services-plugin-and-file)に従う。SDKはVersion CatalogのFirebase BoMで固定し、Messaging以外のFirebase製品を先行追加しない。

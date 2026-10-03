@@ -67,6 +67,13 @@ ANDROID_SHARED_FILES = frozenset(
         "tests/unit/tools/test_classify_ci_paths.py",
     }
 )
+ANDROID_BUILD_TOOL_FILES = frozenset(
+    {
+        "tools/run_android_build.py",
+        "tools/android_build.init.gradle.kts",
+        "tests/unit/tools/test_run_android_build.py",
+    }
+)
 SCOPES = (
     "core_tests",
     "core_package",
@@ -116,6 +123,8 @@ def _path_scopes(path: str) -> set[str]:
         return set()
     if path.startswith(ANDROID_PREFIX):
         return {"android"}
+    if path in ANDROID_BUILD_TOOL_FILES:
+        return {"core_tests", "android"}
     if path.startswith("services/records/"):
         return {"records_python", "records_contract"}
     if path.startswith("contracts/records/"):

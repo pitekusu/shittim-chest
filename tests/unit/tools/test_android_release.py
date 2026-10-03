@@ -298,6 +298,34 @@ def test_stage_then_safe_single_commit_is_confirmed_by_fresh_edit_and_lifecycle(
     assert not any(method == "DELETE" and "gpp-new-edit" in path for method, path in stub.calls)
 
 
+@pytest.mark.parametrize("failure", ("nonzero", "timeout"))
+def test_failed_staging_keeps_attempt_receipt_and_prevents_resending(
+    state: Path, publishing: tuple[PlayStub, MagicMock], failure: str
+) -> None:
+    stub, run = publishing
+
+    def fail_stage(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        receipt = json.loads((state / "stage-attempt.json").read_text())
+        assert receipt["phase"] == "stage_started"
+        assert receipt["verified"] is False and receipt["doNotResend"] is True
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("synthetic Gradle timeout", 600)
+        return subprocess.CompletedProcess(args, 1)
+
+    run.side_effect = fail_stage
+    expected = subprocess.TimeoutExpired if failure == "timeout" else ValueError
+    with pytest.raises(expected):
+        release.publish(state)
+
+    receipt = json.loads((state / "stage-attempt.json").read_text())
+    assert receipt["bundleSha256"] == stub.checksum and receipt["versionCode"] == 7
+    assert not (state / "commit-attempt.json").exists()
+    assert not any(":commit?" in path for _, path in stub.calls)
+    with pytest.raises(FileExistsError):
+        release.publish(state)
+    assert run.call_count == 1
+
+
 def test_unknown_commit_never_resends_when_fresh_reads_cannot_confirm(
     state: Path, publishing: tuple[PlayStub, MagicMock]
 ) -> None:

@@ -350,7 +350,7 @@ def _validate_android_release(directory: Path) -> None:
     paths = re.search(r"(?m)^          path: \|\n((?: {12}.+\n)+)", receipts)
     expected_paths = tuple(
         f"${{{{ runner.temp }}}}/android-release/{name}.json"
-        for name in ("verification", "commit-attempt", "receipt")
+        for name in ("verification", "stage-attempt", "commit-attempt", "receipt")
     )
     if (
         text.count("uses: actions/upload-artifact@") != 1
@@ -358,6 +358,8 @@ def _validate_android_release(directory: Path) -> None:
         or tuple(line.strip() for line in paths.group(1).splitlines()) != expected_paths
     ):
         raise WorkflowPolicyError("Android Release may retain only its non-secret JSON receipts")
+    if "        if: always()" not in receipts.splitlines():
+        raise WorkflowPolicyError("Android Release must retain receipts even after cancellation")
 
 
 def _validate_release_main_checks(text: str) -> None:
