@@ -54,6 +54,21 @@ Androidアプリと、それを支えるPythonの認証・閲覧APIに適用す�
   同じupload keyで署名されたことを確認して内部テストだけへ提出し、Play APIで反映後のtrackを再取得する。
   API認証だけ成功しても署名可能とは判断しない。署名情報が不足すれば提出を止め、未配布と報告する。
 
+## Androidのローカル一時ビルド
+
+- この端末の`/tmp`はtmpfsであり、Androidのworktree・中間生成物・配布用の仮想環境を置かない。
+  ソースは既存worktreeを再利用し、必要な作業コピーもディスク上へ作る。
+- ローカルGradle実行は`tools/run_android_build.py`を入口とする。
+  ビルド・project cache・JVM／native tempを専用ディスク領域へまとめ、成功・失敗・中断後に回収する。
+  SDK・JDK・共有Gradle cache・署名鍵・API認証JSONは一時領域へ複製しない。
+- この端末では同じ入口を`shittim-android-build`として配置する。repoのrootから実行するか、
+  `--project`でAndroid projectを指定する。配布ヘルパーもこの入口を使い、独自の`mktemp`ビルドを増やさない。
+- APK／AAB・必要な報告とprivate logだけを固定の出力先へ残す。毎回別ディレクトリへ履歴を増やさず、
+  配布後の大きな成果物は直近2版に限定する。versionCode・SHA・署名・Play反映結果の小さな記録は保持する。
+- 配布用の使い捨てworktreeは反映を確認してから`git worktree remove`で片付ける。
+  失敗・応答不明時は再送防止の状態ファイルを保護し、実行中の処理や未コミット変更を勝手に削除しない。
+  既存領域の掃除は生成物の正確なpath・Git未追跡・非使用を確認し、`/tmp`やcache全体を削除しない。
+
 ## 必要な場所だけ読む
 
 | 対象 | 場所 |
