@@ -19,7 +19,8 @@ val publishArtifactDirectory = providers.gradleProperty("shittimAndroidPublishAr
 val publishTask = ":app:publishReleaseBundle"
 val verifyPublishTask = ":app:verifyInternalTestPublishing"
 if (publishArtifactDirectory != null) {
-  if (gradle.startParameter.taskNames.any { it !in setOf(publishTask, verifyPublishTask) } ||
+  if (gradle.startParameter.excludedTaskNames.isNotEmpty() ||
+    gradle.startParameter.taskNames.any { it !in setOf(publishTask, verifyPublishTask) } ||
     gradle.startParameter.taskRequests.flatMap { it.args }.any { it.startsWith("--") }) {
     throw GradleException("Only the fixed internal-test bundle task is allowed; Play CLI overrides are disabled")
   }
