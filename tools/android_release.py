@@ -101,7 +101,7 @@ def inventory(
     return max(codes, default=0), tracks, bundles
 
 
-def published(
+def staged(
     tracks: list[dict[str, Any]], bundles: list[dict[str, Any]], code: int, checksum: str
 ) -> bool:
     matching = [b for b in bundles if version_code(b["versionCode"]) == code]
@@ -113,6 +113,55 @@ def published(
         if t.get("track") == "internal"
         for r in t.get("releases", [])
     )
+
+
+def publication_state(api: AuthorizedSession, code: int) -> str:
+    # Edit-track "completed" describes rollout configuration, not whether Play
+    # review has finished. This non-edit resource reports actual availability.
+    releases = request(api, "GET", "/tracks/internal/releases").get("releases", [])
+    if not isinstance(releases, list):
+        return "unknown"
+    states: set[str] = set()
+    for release in releases:
+        if not isinstance(release, dict):
+            return "unknown"
+        if release.get("track") != "internal":
+            continue
+        artifacts = release.get("activeArtifacts", [])
+        if not isinstance(artifacts, list) or any(not isinstance(a, dict) for a in artifacts):
+            return "unknown"
+        try:
+            matching = any(version_code(a.get("versionCode")) == code for a in artifacts)
+        except ValueError:
+            return "unknown"
+        if matching:
+            lifecycle = release.get("releaseLifecycleState")
+            if not isinstance(lifecycle, str):
+                return "unknown"
+            states.add(lifecycle)
+    if not states:
+        return "missing"
+    if len(states) != 1:
+        return "unknown"
+    return {
+        "RELEASE_LIFECYCLE_STATE_PUBLISHED": "published",
+        "RELEASE_LIFECYCLE_STATE_DRAFT": "pending",
+        "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW": "pending",
+        "RELEASE_LIFECYCLE_STATE_IN_REVIEW": "pending",
+        "RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED": "pending",
+        "RELEASE_LIFECYCLE_STATE_NOT_APPROVED": "rejected",
+    }.get(states.pop(), "unknown")
+
+
+def published(
+    tracks: list[dict[str, Any]],
+    bundles: list[dict[str, Any]],
+    code: int,
+    checksum: str,
+    *,
+    publication: str,
+) -> bool:
+    return publication == "published" and staged(tracks, bundles, code, checksum)
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
@@ -193,7 +242,7 @@ def publish(state: Path) -> None:
     with client() as api:
         with edit(api) as path:
             maximum, tracks, bundles = inventory(api, path)
-        if not published(tracks, bundles, code, checksum):
+        if not staged(tracks, bundles, code, checksum):
             if maximum >= code:
                 raise ValueError("play_version_code_conflict")
             gpp = Path("apps/records-android/app/build/gpp")
@@ -204,7 +253,7 @@ def publish(state: Path) -> None:
             # GPP owns upload/staging, with commit=false. Never retry an unknown
             # upload response; only this boundary commits the verified edit once.
             with (state / "publish.log").open("xb") as log:
-                staged = subprocess.run(  # noqa: S603 - fixed Wrapper and internal-only GPP task.
+                stage_result = subprocess.run(  # noqa: S603 - fixed Wrapper and internal-only GPP task.
                     [
                         "./gradlew",
                         "--no-daemon",
@@ -218,7 +267,7 @@ def publish(state: Path) -> None:
                     timeout=600,
                     check=False,
                 )
-            if staged.returncode != 0:
+            if stage_result.returncode != 0:
                 raise ValueError("play_stage_failed_do_not_resend")
             # GPP 4.1.1's documented --no-commit state is private, never an artifact.
             edit_file = gpp / f"{PACKAGE}.txt"
@@ -229,7 +278,7 @@ def publish(state: Path) -> None:
                 raise ValueError("play_staged_edit_invalid")
             path = f"/edits/{identifier}"
             _, staged_tracks, staged_bundles = inventory(api, path)
-            if not published(staged_tracks, staged_bundles, code, checksum) or (
+            if not staged(staged_tracks, staged_bundles, code, checksum) or (
                 [t for t in staged_tracks if t.get("track") != "internal"]
                 != [t for t in tracks if t.get("track") != "internal"]
             ):
@@ -246,15 +295,31 @@ def publish(state: Path) -> None:
                     path + ":commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
                     "&changesNotSentForReview=true",
                 )
-            for attempt in range(4):
+        # Even an identical already-committed bundle must pass lifecycle checks.
+        # Only reads are repeated: commit and upload are never resent for review.
+        for attempt in range(4):
+            artifact_ready = False
+            try:
                 with edit(api) as path:
                     _, tracks, bundles = inventory(api, path)
-                if published(tracks, bundles, code, checksum):
-                    break
-                if attempt < 3:
-                    time.sleep(5)
-            else:
-                raise ValueError("play_publish_unconfirmed_do_not_resend")
+                artifact_ready = staged(tracks, bundles, code, checksum)
+                publication = publication_state(api, code)
+                confirmed = published(tracks, bundles, code, checksum, publication=publication)
+            except Exception:
+                publication, confirmed = "unavailable", False
+            if confirmed:
+                break
+            if attempt < 3:
+                time.sleep(5)
+        else:
+            outcome = (
+                publication if artifact_ready or publication == "unavailable" else "unconfirmed"
+            )
+            write_json(
+                state / "receipt.json",
+                {**result, "status": outcome, "verified": False, "doNotResend": True},
+            )
+            raise ValueError(f"play_publication_{outcome}_do_not_resend")
     write_json(state / "receipt.json", {**result, "status": "completed", "verified": True})
     print(f"play_internal_published_and_verified versionCode={code}")
 

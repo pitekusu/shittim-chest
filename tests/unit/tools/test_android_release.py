@@ -197,6 +197,10 @@ class PlayStub:
         self.conflict = False
         self.change_other_track = False
         self.reads = 0
+        self.lifecycle = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
+        self.lifecycle_error = False
+        self.release_code = 7
+        self.release_track = "internal"
 
     def request(self, _api: AuthorizedSession, method: str, path: str) -> dict[str, Any]:
         self.calls.append((method, path))
@@ -210,6 +214,18 @@ class PlayStub:
             return {}
         if method == "DELETE":
             return {}
+        if path == "/tracks/internal/releases":
+            if self.lifecycle_error:
+                raise TimeoutError("synthetic lifecycle transport failure")
+            return {
+                "releases": [
+                    {
+                        "track": self.release_track,
+                        "activeArtifacts": [{"versionCode": self.release_code}],
+                        "releaseLifecycleState": self.lifecycle,
+                    }
+                ]
+            }
         staged = path.startswith("/edits/gpp-new-edit/")
         ready = staged or self.committed
         code = 7 if ready or self.conflict else 6
@@ -258,7 +274,7 @@ def publishing(state: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[PlayStub, 
 
 
 @pytest.mark.parametrize("lost_response", (False, True))
-def test_stage_then_safe_single_commit_is_confirmed_by_a_fresh_edit(
+def test_stage_then_safe_single_commit_is_confirmed_by_fresh_edit_and_lifecycle(
     state: Path, publishing: tuple[PlayStub, MagicMock], lost_response: bool
 ) -> None:
     stub, run = publishing
@@ -278,6 +294,7 @@ def test_stage_then_safe_single_commit_is_confirmed_by_a_fresh_edit(
     assert run.call_args.args[0][2] == ":app:publishReleaseBundle"
     assert run.call_args.kwargs["cwd"] == "apps/records-android"
     assert json.loads((state / "receipt.json").read_text())["verified"] is True
+    assert stub.calls.count(("GET", "/tracks/internal/releases")) == 1
     assert not any(method == "DELETE" and "gpp-new-edit" in path for method, path in stub.calls)
 
 
@@ -288,13 +305,14 @@ def test_unknown_commit_never_resends_when_fresh_reads_cannot_confirm(
     stub.commit_error = True
     stub.confirm_commit = False
 
-    with pytest.raises(ValueError, match="play_publish_unconfirmed_do_not_resend"):
+    with pytest.raises(ValueError, match="play_publication_unconfirmed_do_not_resend"):
         release.publish(state)
 
     assert sum(":commit?" in path for _, path in stub.calls) == 1
     assert stub.reads == 5
     assert run.call_count == 1
-    assert not (state / "receipt.json").exists()
+    receipt = json.loads((state / "receipt.json").read_text())
+    assert receipt["verified"] is False and receipt["doNotResend"] is True
 
 
 def test_already_published_digest_skips_gpp_and_commit(
@@ -308,6 +326,97 @@ def test_already_published_digest_skips_gpp_and_commit(
     run.assert_not_called()
     assert not any(":commit?" in path for _, path in stub.calls)
     assert (state / "receipt.json").is_file()
+    assert ("GET", "/tracks/internal/releases") in stub.calls
+
+
+@pytest.mark.parametrize("already_committed", (False, True))
+@pytest.mark.parametrize(
+    "lifecycle,outcome",
+    (
+        ("RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW", "pending"),
+        ("RELEASE_LIFECYCLE_STATE_DRAFT", "pending"),
+        ("RELEASE_LIFECYCLE_STATE_IN_REVIEW", "pending"),
+        ("RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED", "pending"),
+        ("RELEASE_LIFECYCLE_STATE_NOT_APPROVED", "rejected"),
+        ("RELEASE_LIFECYCLE_STATE_UNSPECIFIED", "unknown"),
+        ("UNRECOGNIZED_FUTURE_STATE", "unknown"),
+    ),
+)
+def test_completed_edit_rollout_is_not_publication_until_lifecycle_is_published(
+    state: Path,
+    publishing: tuple[PlayStub, MagicMock],
+    already_committed: bool,
+    lifecycle: str,
+    outcome: str,
+) -> None:
+    stub, run = publishing
+    stub.committed = already_committed
+    stub.lifecycle = lifecycle
+
+    with pytest.raises(ValueError, match=f"play_publication_{outcome}_do_not_resend"):
+        release.publish(state)
+
+    receipt = json.loads((state / "receipt.json").read_text())
+    assert receipt["status"] == outcome and receipt["verified"] is False
+    assert receipt["doNotResend"] is True
+    assert run.call_count == (0 if already_committed else 1)
+    assert sum(":commit?" in path for _, path in stub.calls) == (0 if already_committed else 1)
+    assert stub.calls.count(("GET", "/tracks/internal/releases")) == 4
+
+
+@pytest.mark.parametrize("missing", ("version", "track"))
+def test_published_lifecycle_requires_same_active_artifact_on_internal_track(
+    state: Path, publishing: tuple[PlayStub, MagicMock], missing: str
+) -> None:
+    stub, run = publishing
+    stub.committed = True
+    if missing == "version":
+        stub.release_code = 6
+    else:
+        stub.release_track = "production"
+
+    with pytest.raises(ValueError, match="play_publication_missing_do_not_resend"):
+        release.publish(state)
+
+    assert json.loads((state / "receipt.json").read_text())["verified"] is False
+    run.assert_not_called()
+    assert not any(":commit?" in path for _, path in stub.calls)
+
+
+def test_lifecycle_api_failure_never_confirms_or_resends_release(
+    state: Path, publishing: tuple[PlayStub, MagicMock]
+) -> None:
+    stub, run = publishing
+    stub.lifecycle_error = True
+
+    with pytest.raises(ValueError, match="play_publication_unavailable_do_not_resend"):
+        release.publish(state)
+
+    assert json.loads((state / "receipt.json").read_text())["verified"] is False
+    assert sum(":commit?" in path for _, path in stub.calls) == 1
+    assert run.call_count == 1
+
+
+def test_review_transition_to_published_is_reconciled_with_reads_only(
+    state: Path,
+    publishing: tuple[PlayStub, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub, run = publishing
+
+    def delayed(api: AuthorizedSession, method: str, path: str) -> dict[str, Any]:
+        result = stub.request(api, method, path)
+        if path == "/tracks/internal/releases" and stub.calls.count((method, path)) == 1:
+            result["releases"][0]["releaseLifecycleState"] = "RELEASE_LIFECYCLE_STATE_IN_REVIEW"
+        return result
+
+    monkeypatch.setattr(release, "request", delayed)
+    release.publish(state)
+
+    assert json.loads((state / "receipt.json").read_text())["verified"] is True
+    assert stub.calls.count(("GET", "/tracks/internal/releases")) == 2
+    assert sum(":commit?" in path for _, path in stub.calls) == 1
+    assert run.call_count == 1
 
 
 @pytest.mark.parametrize("conflict", (False, True))

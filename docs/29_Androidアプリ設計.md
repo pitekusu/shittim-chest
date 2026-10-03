@@ -1215,15 +1215,15 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。
 4. 検証した同一AABだけをprivate directoryへ置き、hashを再照合する。WIF認証を配信直前に更新し、C38の固定GPP taskで内部トラックへのstage／validateを一度行う。
 5. GPPのprivateなeditを読み、bundle hashと内部トラック、他トラックに変更がないことを確認する。公式APIのcommitは一度だけ行い、`ERROR_IF_IN_REVIEW`で既存審査の取消を防ぎ、`changesNotSentForReview=true`で未送信のConsole変更を審査へ送らない。
-6. 新しい読取editで版番号・hash・内部トラックの`completed`を再取得し、一致した場合だけ配布完了とする。
+6. 新しい読取editで版番号・hash・内部トラックの`completed`を再取得する。これはstageの配置確認であり公開完了とは区別する。さらに`GET /tracks/internal/releases`の`activeArtifacts`に同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。既存の同一AABもこの公開確認を省略しない。
 
-commitの応答不明時は再送せず、Play側の状態を照合する。HTTP 401によるcommitの自動再送も無効とする。GPP stage失敗・応答不明や照合不一致は失敗として終了する。Workflowの「再実行」は拒否し、状態と副作用を確認してから新しい手動実行を判断する。実行中は同じアプリのPlay Console編集を避ける。
+commitの応答不明時は再送せず、Play側の状態を最大4回の読取だけで照合する。HTTP 401によるcommitの自動再送も無効とする。審査・公開待ちは`pending`かつ`verified=false`の安全なreceiptを残し、`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も配布完了にせず、固定カテゴリと`doNotResend=true`のreceiptを残す。GPP stage失敗・応答不明や照合不一致は失敗として終了する。Workflowの「再実行」は拒否し、Play Consoleとreceiptで状態と副作用を確認してから新しい手動実行を判断する。実行中は同じアプリのPlay Console編集を避ける。
 
 公開artifactはSHA・版番号・AAB hash・検証結果とcommit試行の小さなreceiptだけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、GPP edit、Gradleログ、AABそのものを公開artifactへ含めない。秘密の入力とログは終了時に回収する。
 
-試験は全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、既存配信・競合、他トラック不変、単一commitと応答不明時の読取照合を架空データで確認する。最初の実配布は外部設定・mainの検証完了後、別の配布依頼で行い、Playからの再取得と実機更新を確認する。
+試験は全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、既存配信・競合、他トラック不変、単一commitと応答不明時の読取照合、公開ライフサイクルの審査待ち・却下・欠損・未知・API障害を架空データで確認する。既存API認証による現行公開版の公開状態読取のみ確認済みで、WIF提出・配布の受入とは区別する。最初のWIF実配布は外部設定・mainの検証完了後、別の配布依頼で行い、Playからの再取得と実機更新を確認する。
 
-公式仕様：[WIFとDeployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)、[GitHub認証Action](https://github.com/google-github-actions/auth)、[Play editsと同時編集](https://developers.google.com/android-publisher/edits)、[安全なcommitパラメーター](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)。
+公式仕様：[WIFとDeployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)、[GitHub認証Action](https://github.com/google-github-actions/auth)、[Play editsと同時編集](https://developers.google.com/android-publisher/edits)、[安全なcommitパラメーター](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)、[公開ライフサイクル](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases)、[トラックのrelease一覧](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases/list)。
 
 ## 公式資料
 

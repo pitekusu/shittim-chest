@@ -436,11 +436,19 @@ Environmentはmain限定とし、次を安全に登録する。
 固定SHAの最新main CI・Records CI・既存CodeQL成功を確認し、全トラック/bundle/APKの最大版番号より
 大きいAABを一度ビルドする。Release Lint、JDK署名、固定bundletoolのmanifest、upload証明書とhashを検証し、
 検証した同一AABだけをGPPでstageする。安全なREST commitを一度行い、Play再取得が一致してから完了とする。
+edit内の`completed`だけでは審査済みと判断しない。`GET /tracks/internal/releases`の`activeArtifacts`に
+同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。
+既存の同一AABもこの公開確認を省略しない。審査・公開待ちは`pending`かつ`verified=false`のreceiptを残し、
+`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も完了扱いにせず、
+Play Consoleとreceiptを確認する。照合は最大4回の読取だけとし、uploadやcommitを再送しない。
 
 実行中は同じアプリのPlay Consoleを編集しない。既存審査を取り消したり、未送信の掲載情報を審査へ送ったりしない。
 失敗・応答不明では無条件にWorkflowを「再実行」しない。Play側の版番号・hash・internal trackとreceiptを確認し、
 副作用を把握してから新しい手動実行を判断する。自動再送・自動再番号付けは行わない。
 artifactは非機密receiptだけ7日保持し、鍵・資格情報・Firebase設定・GPP edit・AAB・Gradleログは含めない。
+
+既存API認証による現行公開版の公開状態読取は確認済み。これはWIFによる提出・配布の受入とは区別し、
+WIF提出の実確認は別の配布依頼で行う。
 
 詳しい外部設定と検証境界は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。
 
