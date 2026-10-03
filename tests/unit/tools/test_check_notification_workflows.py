@@ -177,6 +177,10 @@ def test_android_release_cannot_hide_floating_action_in_an_unnamed_step(
             "",
         ),
         (
+            "            ${{ runner.temp }}/android-release/commit-result.json\n",
+            "",
+        ),
+        (
             'run: uv run --frozen python -m tools.android_release publish --state "${STATE}"',
             'run: echo "${{ github.event.inputs.untrusted }}"',
         ),

@@ -122,6 +122,89 @@ def test_request_rejects_redirects_and_non_object_responses(
         release.request(api, "GET", "/edits/read/tracks")
 
 
+@pytest.mark.parametrize(
+    "payload,expected",
+    (
+        (
+            {
+                "error": {
+                    "status": "FAILED_PRECONDITION",
+                    "message": "private synthetic response text",
+                    "details": [
+                        {
+                            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                            "reason": "CHANGES_ALREADY_IN_REVIEW",
+                            "metadata": {"editId": "private-synthetic-edit"},
+                        }
+                    ],
+                }
+            },
+            {
+                "httpStatus": 400,
+                "apiStatus": "FAILED_PRECONDITION",
+                "reason": "CHANGES_ALREADY_IN_REVIEW",
+                "category": "changes_already_in_review",
+            },
+        ),
+        (
+            {
+                "error": {
+                    "status": "INVALID_ARGUMENT",
+                    "message": "Changes are sent for review automatically. The query parameter "
+                    "changesNotSentForReview must not be set.",
+                }
+            },
+            {
+                "httpStatus": 400,
+                "apiStatus": "INVALID_ARGUMENT",
+                "category": "changes_not_sent_for_review_not_allowed",
+            },
+        ),
+        (
+            {
+                "error": {
+                    "status": "PRIVATE_SYNTHETIC_STATUS",
+                    "message": "Bearer private-synthetic-token",
+                    "details": [{"reason": "PRIVATE_SYNTHETIC_REASON"}],
+                }
+            },
+            {"httpStatus": 400, "apiStatus": "UNKNOWN", "category": "api_rejected"},
+        ),
+        ([], {"httpStatus": 400, "apiStatus": "UNKNOWN", "category": "api_rejected"}),
+    ),
+)
+def test_http_diagnostic_preserves_only_known_status_reason_and_category(
+    payload: object, expected: dict[str, Any]
+) -> None:
+    error = release.PlayHttpError(400, payload)
+
+    assert error.diagnostic == expected
+    assert str(error) == "play_http_400"
+    saved = json.dumps(error.diagnostic)
+    assert "private" not in saved.lower() and "Bearer" not in saved
+
+
+@pytest.mark.parametrize("invalid_body", ("malformed", "oversized"))
+def test_error_response_parse_is_bounded_and_cannot_leak_invalid_body(invalid_body: str) -> None:
+    api = MagicMock(spec=AuthorizedSession)
+    response = api.request.return_value
+    response.status_code = 400
+    response.content = b"private malformed body" if invalid_body == "malformed" else b"x" * 65537
+    response.json.side_effect = ValueError("private JSON parser text")
+
+    with pytest.raises(release.PlayHttpError) as caught:
+        release.request(api, "POST", "/edits/private-fixture:commit")
+
+    assert caught.value.diagnostic == {
+        "httpStatus": 400,
+        "apiStatus": "UNKNOWN",
+        "category": "api_rejected",
+    }
+    assert "private" not in str(caught.value)
+    if invalid_body == "oversized":
+        response.json.assert_not_called()
+
+
 def test_rerun_stops_before_remote_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -133,6 +216,52 @@ def test_rerun_stops_before_remote_preflight(
         release.preflight(tmp_path)
 
     client.assert_not_called()
+
+
+@pytest.mark.parametrize("floor,maximum,expected", (("", 27, 28), ("29", 27, 29), ("29", 41, 42)))
+def test_preflight_version_floor_avoids_reusing_an_attempted_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    floor: str,
+    maximum: int,
+    expected: int,
+) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_SHA", SHA)
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("MINIMUM_VERSION_CODE", floor)
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    api = MagicMock(spec=AuthorizedSession)
+    api.__enter__.return_value = api
+    monkeypatch.setattr(release, "client", lambda: api)
+    inspection = MagicMock()
+    inspection.__enter__.return_value = "/edits/fixture"
+    monkeypatch.setattr(release, "edit", lambda _api: inspection)
+    monkeypatch.setattr(release, "inventory", lambda _api, _path: (maximum, [], []))
+
+    release.preflight(tmp_path)
+
+    assert json.loads((tmp_path / "plan.json").read_text())["versionCode"] == expected
+    assert output.read_text() == f"version_code={expected}\n"
+
+
+@pytest.mark.parametrize("floor", ("0", "01", " 29", "1e3", "2100000001", "private-fixture"))
+def test_invalid_version_floor_stops_before_remote_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, floor: str
+) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_SHA", SHA)
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("MINIMUM_VERSION_CODE", floor)
+    client = MagicMock()
+    monkeypatch.setattr(release, "client", client)
+
+    with pytest.raises(ValueError, match="play_version_code_invalid"):
+        release.preflight(tmp_path)
+
+    client.assert_not_called()
+    assert not (tmp_path / "plan.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -193,6 +322,8 @@ class PlayStub:
         self.calls: list[tuple[str, str]] = []
         self.committed = False
         self.commit_error = False
+        self.commit_http_status: int | None = None
+        self.commit_payload: object = None
         self.confirm_commit = True
         self.conflict = False
         self.change_other_track = False
@@ -209,6 +340,8 @@ class PlayStub:
             return {"id": f"read-{self.reads}"}
         if method == "POST" and ":commit?" in path:
             self.committed = self.confirm_commit
+            if self.commit_http_status is not None:
+                raise release.PlayHttpError(self.commit_http_status, self.commit_payload)
             if self.commit_error:
                 raise TimeoutError("synthetic transport failure")
             return {}
@@ -294,7 +427,12 @@ def test_stage_then_safe_single_commit_is_confirmed_by_fresh_edit_and_lifecycle(
     assert run.call_args.args[0][2] == ":app:publishReleaseBundle"
     assert run.call_args.kwargs["cwd"] == "apps/records-android"
     assert json.loads((state / "receipt.json").read_text())["verified"] is True
+    result = json.loads((state / "commit-result.json").read_text())
+    assert result["outcome"] == ("unknown" if lost_response else "accepted")
     assert stub.calls.count(("GET", "/tracks/internal/releases")) == 1
+    assert stub.calls.index(("GET", "/tracks/internal/releases")) < stub.calls.index(
+        ("POST", "/edits"), stub.calls.index(commits[0])
+    )
     assert not any(method == "DELETE" and "gpp-new-edit" in path for method, path in stub.calls)
 
 
@@ -332,15 +470,81 @@ def test_unknown_commit_never_resends_when_fresh_reads_cannot_confirm(
     stub, run = publishing
     stub.commit_error = True
     stub.confirm_commit = False
+    stub.release_code = 6
 
-    with pytest.raises(ValueError, match="play_publication_unconfirmed_do_not_resend"):
+    with pytest.raises(ValueError, match="play_publication_missing_do_not_resend"):
         release.publish(state)
 
     assert sum(":commit?" in path for _, path in stub.calls) == 1
-    assert stub.reads == 5
+    assert stub.reads == 1
     assert run.call_count == 1
+    result = json.loads((state / "commit-result.json").read_text())
+    assert result["outcome"] == "unknown"
+    assert "synthetic transport failure" not in json.dumps(result)
     receipt = json.loads((state / "receipt.json").read_text())
     assert receipt["verified"] is False and receipt["doNotResend"] is True
+
+
+@pytest.mark.parametrize("status", (400, 401, 403, 409, 429))
+def test_known_commit_rejection_keeps_guards_without_resending_or_invalidating_edit(
+    state: Path, publishing: tuple[PlayStub, MagicMock], status: int
+) -> None:
+    stub, run = publishing
+    stub.commit_http_status = status
+    stub.confirm_commit = False
+    stub.commit_payload = {
+        "error": {
+            "status": "FAILED_PRECONDITION",
+            "message": "private synthetic response",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "CHANGES_ALREADY_IN_REVIEW",
+                    "metadata": {"editId": "private synthetic edit"},
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(ValueError, match="play_commit_rejected_do_not_resend"):
+        release.publish(state)
+
+    assert sum(":commit?" in path for _, path in stub.calls) == 1
+    commit = next(path for _, path in stub.calls if ":commit?" in path)
+    assert "changesInReviewBehavior=ERROR_IF_IN_REVIEW" in commit
+    assert "changesNotSentForReview=true" in commit
+    assert stub.reads == 1 and run.call_count == 1
+    result = json.loads((state / "commit-result.json").read_text())
+    assert result["outcome"] == "rejected"
+    assert result["httpStatus"] == status
+    assert result["category"] == "changes_already_in_review"
+    receipt = json.loads((state / "receipt.json").read_text())
+    assert receipt["status"] == "commit_rejected"
+    assert receipt["verified"] is False and receipt["doNotResend"] is True
+    assert "private" not in json.dumps(result).lower()
+    assert not any(
+        method == "POST" for method, _ in stub.calls[stub.calls.index(("POST", commit)) + 1 :]
+    )
+
+
+@pytest.mark.parametrize("status", (408, 503))
+def test_uncertain_http_commit_retains_diagnostic_and_only_reconciles_reads(
+    state: Path, publishing: tuple[PlayStub, MagicMock], status: int
+) -> None:
+    stub, run = publishing
+    stub.commit_http_status = status
+    stub.confirm_commit = False
+    stub.release_code = 6
+    stub.commit_payload = {"error": {"status": "UNAVAILABLE", "message": "private response"}}
+
+    with pytest.raises(ValueError, match="play_publication_missing_do_not_resend"):
+        release.publish(state)
+
+    result = json.loads((state / "commit-result.json").read_text())
+    assert result["outcome"] == "unknown" and result["httpStatus"] == status
+    assert "private" not in json.dumps(result).lower()
+    assert sum(":commit?" in path for _, path in stub.calls) == 1
+    assert stub.reads == 1 and run.call_count == 1
 
 
 def test_already_published_digest_skips_gpp_and_commit(
@@ -390,6 +594,7 @@ def test_completed_edit_rollout_is_not_publication_until_lifecycle_is_published(
     assert run.call_count == (0 if already_committed else 1)
     assert sum(":commit?" in path for _, path in stub.calls) == (0 if already_committed else 1)
     assert stub.calls.count(("GET", "/tracks/internal/releases")) == 4
+    assert stub.reads == 1
 
 
 @pytest.mark.parametrize("missing", ("version", "track"))
