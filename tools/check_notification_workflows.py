@@ -16,6 +16,7 @@ DRIFT_WORKFLOW = "drift.yml"
 RECORDS_CI_WORKFLOW = "records-ci.yml"
 RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
+ANDROID_RELEASE_WORKFLOW = "android-release.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.37.0"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
@@ -101,6 +102,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_ci_container_risk(directory)
     _validate_ci_path_isolation(directory)
     _validate_records_workflows(directory)
+    _validate_android_release(directory)
     _validate_drift(directory)
     _validate_aws_capability_boundary(directory)
     _validate_workflow_run_allowlist(directory)
@@ -228,10 +230,134 @@ def _validate_aws_capability_boundary(directory: Path) -> None:
         if path.name in approved:
             continue
         text = path.read_text(encoding="utf-8")
-        if _contains_forbidden_non_guard_permissions(text) or AWS_OR_DEPLOY_CAPABILITY.search(text):
+        forbidden_permissions = (
+            path.name != ANDROID_RELEASE_WORKFLOW
+            and _contains_forbidden_non_guard_permissions(text)
+        )
+        if forbidden_permissions or AWS_OR_DEPLOY_CAPABILITY.search(text):
             raise WorkflowPolicyError(
                 f"workflow {path.name} contains AWS or deployment capability outside Deploy Guard"
             )
+
+
+def _validate_android_release(directory: Path) -> None:
+    """Allow narrowly scoped Play OIDC without exempting the workflow from AWS policy."""
+
+    path = directory / ANDROID_RELEASE_WORKFLOW
+    if not path.is_file():
+        return
+    text = path.read_text(encoding="utf-8")
+    if _top_level_triggers(text) != ("workflow_dispatch",):
+        raise WorkflowPolicyError("Android Release must use exactly workflow_dispatch")
+    if (
+        _permission_blocks(text)
+        != (
+            (),
+            (("actions", "read"), ("contents", "read"), ("id-token", "write")),
+        )
+        or re.search(r"(?m)^permissions: \{\}$", text) is None
+    ):
+        raise WorkflowPolicyError("Android Release permissions are not canonical")
+    _require_full_action_pins(text, "Android Release")
+    job_names = re.findall(r"(?m)^  ([a-zA-Z0-9_-]+):\s*$", text.split("jobs:\n", 1)[-1])
+    if job_names != ["release"]:
+        raise WorkflowPolicyError("Android Release must have one literal release job")
+    job = _workflow_job_block(text, "release")
+    if any(
+        marker not in job.splitlines()
+        for marker in (
+            "    if: github.repository == 'pitekusu/shittim-chest' "
+            "&& github.ref == 'refs/heads/main'",
+            "    environment: android-internal",
+        )
+    ):
+        raise WorkflowPolicyError("Android Release must retain its trusted main-only boundary")
+    required = (
+        "cancel-in-progress: false",
+        "ref: ${{ github.sha }}",
+        "persist-credentials: false",
+    )
+    if any(marker not in text for marker in required) or "continue-on-error:" in text:
+        raise WorkflowPolicyError("Android Release must retain its trusted main-only boundary")
+    if _contains_untrusted_run_expression(text) or _contains_run_expression(text, "${{ inputs."):
+        raise WorkflowPolicyError("Android Release must pass untrusted inputs through env")
+    protected_steps = (
+        "Require successful same-SHA main CI and CodeQL",
+        "Authenticate only to inspect current Play versions",
+        "Verify signature certificate package version and immutable bundle digest",
+        "Renew federated credentials immediately before publishing",
+        "Publish the verified AAB only to internal and read back Play state",
+        "Retain only non-secret verification and attempt receipts",
+    )
+    if any(text.count(f"      - name: {name}\n") != 1 for name in protected_steps):
+        raise WorkflowPolicyError("Android Release must retain its mandatory trust-boundary steps")
+    positions = [text.index(f"      - name: {name}\n") for name in protected_steps]
+    if positions != sorted(positions):
+        raise WorkflowPolicyError(
+            "Android Release must verify its bundle before renewed auth and publish"
+        )
+    for name, action in ((protected_steps[2], "verify"), (protected_steps[4], "publish")):
+        block = _workflow_step_block(text, name)
+        command = (
+            f'run: uv run --frozen python -m tools.android_release {action} --state "${{STATE}}"'
+        )
+        if block.count(command) != 1 or "        if:" in block:
+            raise WorkflowPolicyError(
+                "Android Release must unconditionally verify and publish through its guard"
+            )
+    gate = _workflow_step_block(text, "Require successful same-SHA main CI and CodeQL")
+    if (
+        gate.count("uv run --frozen python tools/check_release_ci.py") != 1
+        or "GH_TOKEN: ${{ github.token }}" not in gate
+        or 'test "${RELEASE_ENABLED}" = true' not in gate
+        or 'test "${GITHUB_RUN_ATTEMPT}" = 1' not in gate
+        or "        if:" in gate
+    ):
+        raise WorkflowPolicyError(
+            "Android Release must unconditionally require same-SHA main gates"
+        )
+    auth_action = "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093"
+    if text.count(f"uses: {auth_action}") != 2 or re.search(
+        r"credentials_json:|token_format:|\.outputs\.(?:auth|access|id)_token\b|"
+        r"ANDROID_PUBLISHER_CREDENTIALS",
+        text,
+    ):
+        raise WorkflowPolicyError("Android Release must use only two federated ADC authentications")
+    for name in (
+        "Authenticate only to inspect current Play versions",
+        "Renew federated credentials immediately before publishing",
+    ):
+        block = _workflow_step_block(text, name)
+        if (
+            any(
+                marker not in block
+                for marker in (
+                    f"uses: {auth_action}",
+                    "workload_identity_provider: ${{ vars.PLAY_WORKLOAD_IDENTITY_PROVIDER }}",
+                    "service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}",
+                    "create_credentials_file: true",
+                    "export_environment_variables: true",
+                )
+            )
+            or "        if:" in block
+        ):
+            raise WorkflowPolicyError(
+                "Android Release must use the fixed WIF and Play service account"
+            )
+    receipts = _workflow_step_block(
+        text, "Retain only non-secret verification and attempt receipts"
+    )
+    paths = re.search(r"(?m)^          path: \|\n((?: {12}.+\n)+)", receipts)
+    expected_paths = tuple(
+        f"${{{{ runner.temp }}}}/android-release/{name}.json"
+        for name in ("verification", "commit-attempt", "receipt")
+    )
+    if (
+        text.count("uses: actions/upload-artifact@") != 1
+        or paths is None
+        or tuple(line.strip() for line in paths.group(1).splitlines()) != expected_paths
+    ):
+        raise WorkflowPolicyError("Android Release may retain only its non-secret JSON receipts")
 
 
 def _validate_release_main_checks(text: str) -> None:
@@ -1760,7 +1886,7 @@ def _validate_grype_database_action(directory: Path) -> None:
 
 
 def _require_full_action_pins(text: str, label: str) -> None:
-    for action in re.findall(r"(?m)^\s*uses:\s*([^\s#]+)", text):
+    for action in re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*([^\s#]+)", text):
         # This one local action is bound to the workflow's immutable checkout SHA.
         if action == "./.github/actions/prepare-grype-db":
             continue
